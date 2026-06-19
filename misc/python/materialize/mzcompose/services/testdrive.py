@@ -61,6 +61,9 @@ class Testdrive(Service):
         external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
         external_blob_store: bool = False,
         blob_store_is_azure: bool = False,
+        fivetran_destination: bool = False,
+        fivetran_destination_url: str = "http://fivetran-destination:6874",
+        fivetran_destination_files_path: str = "/share/tmp",
         mz_service: str = "materialized",
         metadata_store: str = METADATA_STORE,
         stop_grace_period: str = "120s",
@@ -170,6 +173,12 @@ class Testdrive(Service):
 
         if check_statement_logging:
             entrypoint.append("--check-statement-logging")
+
+        if fivetran_destination:
+            entrypoint.append(f"--fivetran-destination-url={fivetran_destination_url}")
+            entrypoint.append(
+                f"--fivetran-destination-files-path={fivetran_destination_files_path}"
+            )
 
         if set_persist_urls:
             if external_blob_store:

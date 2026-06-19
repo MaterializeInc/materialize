@@ -1070,7 +1070,7 @@ fn humanize_sql_for_show_create(
     redacted: bool,
 ) -> Result<String, PlanError> {
     use mz_sql_parser::ast::{
-        CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName,
+        CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName, TableFromSourceColumns,
         TableFromSourceOptionName,
     };
 
@@ -1095,6 +1095,19 @@ fn humanize_sql_for_show_create(
                 TableFromSourceOptionName::PartitionBy => true,
                 TableFromSourceOptionName::RetainHistory => true,
             });
+            // The `Defined` column list and constraints are populated during
+            // purification (from the upstream schema), and `CREATE TABLE ... FROM
+            // SOURCE` rejects them as input. Omit them so the statement
+            // roundtrips; purification re-derives them from the source on replay,
+            // and the schema-affecting `TEXT COLUMNS` / `EXCLUDE COLUMNS` options
+            // are retained above so the re-derived schema matches. A user-typed
+            // `Named` column list is left intact, since it does roundtrip.
+            if matches!(stmt.columns, TableFromSourceColumns::Defined(_)) {
+                stmt.columns = TableFromSourceColumns::NotSpecified;
+            }
+            // Constraints are never valid input here (purification populates them
+            // alongside `Defined` columns), so always drop them.
+            stmt.constraints = Vec::new();
         }
         // `CREATE SOURCE` statements should roundtrip. However, sources and
         // their subsources have a complex relationship, so we need to do a lot

@@ -74,7 +74,13 @@ materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f
 materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f2 pg_catalog.text, f3 pg_catalog.text)\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (\n    TEXT COLUMNS = (f1, f2, f3),\n    <DETAILS>\n);"
 
 >[version>=2603000] SHOW CREATE TABLE t1;
-materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f2 pg_catalog.text, f3 pg_catalog.text)\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (TEXT COLUMNS = (f1, f2, f3));"
+materialize.public.t1 "CREATE TABLE materialize.public.t1\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (TEXT COLUMNS = (f1, f2, f3));"
+
+# Regression test for SQL-392: the full `SHOW CREATE TABLE` output (no derived
+# column list, bare `TEXT COLUMNS`, `REFERENCE = ...`) must round-trip.
+>[version>=2603000] CREATE TABLE t1_roundtrip FROM SOURCE da (REFERENCE = public.t1) WITH (TEXT COLUMNS = (f1, f2, f3));
+
+>[version>=2603000] DROP TABLE t1_roundtrip;
 
 > DROP SOURCE da CASCADE;
 

@@ -323,7 +323,11 @@ pub(crate) fn render<'scope>(
             // Note that we need to fetch the probe LSN _after_ having created the replication
             // slot, to make sure the fetched LSN will be included in the replication stream.
             let probe_ts = (config.now_fn)().into();
-            let max_lsn = mz_postgres_util::fetch_max_lsn(&*metadata_client).await?;
+            let max_lsn = mz_postgres_util::fetch_max_lsn(
+                &*metadata_client,
+                connection.publication_details.get_is_physical_replica(),
+            )
+            .await?;
             let probe = Probe {
                 probe_ts,
                 upstream_frontier: Antichain::from_elem(MzOffset::from(max_lsn)),
@@ -385,6 +389,7 @@ pub(crate) fn render<'scope>(
                 committed_uppers.as_mut(),
                 &probe_output,
                 &probe_cap[0],
+                connection.publication_details.get_is_physical_replica(),
             )
             .await?;
 
@@ -429,6 +434,7 @@ pub(crate) fn render<'scope>(
                 &config,
                 connection.publication.clone(),
                 table_info.clone(),
+                connection.publication_details.get_is_physical_replica(),
             );
 
             // Instead of downgrading the capability for every transaction we process we only do it
@@ -521,6 +527,38 @@ pub(crate) fn render<'scope>(
                                     return Ok(());
                                 }
                                 Postgres(pg_error) => Err(TransientError::from(pg_error))?,
+                                PhysicalReplicaChanged { expected, actual } => {
+                                    // The upstream is no longer the kind of node the
+                                    // source was created against (e.g. a physical
+                                    // replica was promoted to a primary). Logical
+                                    // decoding cannot safely continue, so stall with a
+                                    // definite, non-retryable error.
+                                    let err =
+                                        DefiniteError::InvalidPhysicalReplica { expected, actual };
+                                    for (oid, outputs) in table_info.iter() {
+                                        for output_index in outputs.keys() {
+                                            let update = (
+                                                (
+                                                    *oid,
+                                                    *output_index,
+                                                    Err(DataflowError::from(err.clone())),
+                                                ),
+                                                // We don't have a clean way to align on when the replica changed so jump straight to u64::MAX to avoid conflicts.
+                                                MzOffset::from(u64::MAX),
+                                                Diff::ONE,
+                                            );
+                                            let size = update.fuel_size();
+                                            data_output
+                                                .give_fueled(&data_cap_set[0], update, size)
+                                                .await;
+                                        }
+                                    }
+                                    definite_error_handle.give(
+                                        &definite_error_cap_set[0],
+                                        ReplicationError::Definite(Rc::new(err)),
+                                    );
+                                    return Ok(());
+                                }
                                 Schema {
                                     oid,
                                     output_index,
@@ -628,6 +666,7 @@ async fn raw_stream<'a>(
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
+    is_physical_replica: bool,
 ) -> Result<
     Result<impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a, DefiniteError>,
     TransientError,
@@ -635,6 +674,17 @@ async fn raw_stream<'a>(
     if let Err(err) = ensure_publication_exists(&*metadata_client, publication).await? {
         // If the publication gets deleted there is nothing else to do. These errors
         // are not retractable.
+        return Ok(Err(err));
+    }
+
+    // Ensure the upstream server's physical replica status hasn't changed since the source was
+    // created. We use the metadata client here for the same reason as "SHOW wal_sender_timeout" below.
+    //
+    // This runs before the timeline ID check on purpose. Promoting a physical replica to a primary
+    // both flips pg_is_in_recovery() and switches the timeline, so either check could fire. Running
+    // this one first means a promotion always surfaces as the specific InvalidPhysicalReplica error
+    // (rather than the more generic timeline mismatch), which is the clearer signal for an operator.
+    if let Err(err) = ensure_physical_replica(&*metadata_client, is_physical_replica).await? {
         return Ok(Err(err));
     }
 
@@ -741,12 +791,13 @@ async fn raw_stream<'a>(
 
             while !probe_tx.is_closed() {
                 let probe_ts = probe_ticker.tick().await;
-                let probe_or_err = mz_postgres_util::fetch_max_lsn(&*metadata_client)
-                    .await
-                    .map(|lsn| Probe {
-                        probe_ts,
-                        upstream_frontier: Antichain::from_elem(MzOffset::from(lsn)),
-                    });
+                let probe_or_err =
+                    mz_postgres_util::fetch_max_lsn(&*metadata_client, is_physical_replica)
+                        .await
+                        .map(|lsn| Probe {
+                            probe_ts,
+                            upstream_frontier: Antichain::from_elem(MzOffset::from(lsn)),
+                        });
                 let _ = probe_tx.send(Some(probe_or_err));
             }
         })
@@ -1098,12 +1149,34 @@ async fn ensure_replication_timeline_id(
     }
 }
 
+async fn ensure_physical_replica(
+    metadata_client: &Client,
+    expected_is_physical_replica: bool,
+) -> Result<Result<(), DefiniteError>, TransientError> {
+    let is_physical_replica = mz_postgres_util::get_is_in_recovery(metadata_client).await?;
+    if is_physical_replica == expected_is_physical_replica {
+        Ok(Ok(()))
+    } else {
+        Ok(Err(DefiniteError::InvalidPhysicalReplica {
+            expected: expected_is_physical_replica,
+            actual: is_physical_replica,
+        }))
+    }
+}
+
 enum SchemaValidationError {
     Postgres(PostgresError),
     Schema {
         oid: u32,
         output_index: usize,
         error: DefiniteError,
+    },
+    /// The upstream's physical-replica status changed out from under us (e.g. a
+    /// physical replica was promoted to a primary). `expected` is the status the
+    /// source was created against; `actual` is what the upstream reports now.
+    PhysicalReplicaChanged {
+        expected: bool,
+        actual: bool,
     },
 }
 
@@ -1112,6 +1185,7 @@ fn spawn_schema_validator(
     config: &RawSourceCreationConfig,
     publication: String,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
+    is_physical_replica: bool,
 ) -> mpsc::UnboundedReceiver<SchemaValidationError> {
     let (tx, rx) = mpsc::unbounded_channel();
     let source_id = config.id;
@@ -1122,6 +1196,24 @@ fn spawn_schema_validator(
             trace!(%source_id, "validating schemas");
 
             let validation_start = Instant::now();
+
+            // Detect a physical replica being promoted to a primary (or vice
+            // versa) while the stream is live. The startup check in raw_stream
+            // only catches this across a restart, so we re-check periodically
+            // here to surface a definite error proactively.
+            match mz_postgres_util::get_is_in_recovery(&*client).await {
+                Ok(actual) if actual != is_physical_replica => {
+                    let _ = tx.send(SchemaValidationError::PhysicalReplicaChanged {
+                        expected: is_physical_replica,
+                        actual,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = tx.send(SchemaValidationError::Postgres(error));
+                    continue;
+                }
+            }
 
             let upstream_info = match mz_postgres_util::publication_info(
                 &*client,

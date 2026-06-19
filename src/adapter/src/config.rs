@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::ReplicaId;
+use mz_controller_types::ClusterId;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_ore::now::NowFn;
@@ -26,6 +28,41 @@ pub use backend::SystemParameterBackend;
 pub use frontend::SystemParameterFrontend;
 pub use params::{ModifiedParameter, SynchronizedParameters};
 pub use sync::system_parameter_sync;
+
+/// Scoped (per-cluster and per-replica) system-parameter overrides, keyed by
+/// object id. Each value is the raw (unparsed) string for a parameter whose
+/// scoped value differs from the environment-wide value; an absent entry means
+/// no override. Empty maps mean no scoped overrides at all.
+///
+/// This is the in-memory mirror of the durable `cluster_system_configurations`
+/// and `replica_system_configurations` catalog collections.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScopedParameters {
+    /// Cluster-coherent overrides, keyed by cluster id.
+    pub cluster: BTreeMap<ClusterId, BTreeMap<String, String>>,
+    /// Replica-local overrides, keyed by replica id.
+    pub replica: BTreeMap<ReplicaId, BTreeMap<String, String>>,
+}
+
+impl ScopedParameters {
+    /// Returns `true` if there are no cluster or replica overrides.
+    pub fn is_empty(&self) -> bool {
+        self.cluster.is_empty() && self.replica.is_empty()
+    }
+
+    /// Returns a copy of `self` with `other`'s entries merged in, replacing any
+    /// existing entry for the same object. Expresses no removals.
+    pub fn merge(&self, other: &ScopedParameters) -> ScopedParameters {
+        let mut merged = self.clone();
+        merged
+            .cluster
+            .extend(other.cluster.iter().map(|(id, v)| (*id, v.clone())));
+        merged
+            .replica
+            .extend(other.replica.iter().map(|(id, v)| (*id, v.clone())));
+        merged
+    }
+}
 
 /// A factory for [SystemParameterFrontend] instances.
 #[derive(Clone, Debug)]
@@ -109,5 +146,59 @@ impl Metrics {
                 help: "The number of parameter changes pulled from the LaunchDarkly frontend.",
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use mz_cluster_client::ReplicaId;
+    use mz_controller_types::ClusterId;
+
+    use super::ScopedParameters;
+
+    fn cfg(name: &str, value: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([(name.to_string(), value.to_string())])
+    }
+
+    #[mz_ore::test]
+    fn test_scoped_parameters_is_empty() {
+        assert!(ScopedParameters::default().is_empty());
+
+        let mut params = ScopedParameters::default();
+        params.cluster.insert(ClusterId::User(1), cfg("f", "true"));
+        assert!(!params.is_empty());
+
+        let mut params = ScopedParameters::default();
+        params.replica.insert(ReplicaId::User(1), cfg("f", "true"));
+        assert!(!params.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_scoped_parameters_merge() {
+        let mut base = ScopedParameters::default();
+        base.cluster.insert(ClusterId::User(1), cfg("f", "old"));
+        base.cluster.insert(ClusterId::User(2), cfg("f", "keep"));
+        base.replica.insert(ReplicaId::User(1), cfg("g", "old"));
+
+        let mut incoming = ScopedParameters::default();
+        // Overrides the existing entry for the same object...
+        incoming.cluster.insert(ClusterId::User(1), cfg("f", "new"));
+        // ...and adds a new object, leaving others untouched.
+        incoming.replica.insert(ReplicaId::User(2), cfg("g", "new"));
+
+        let merged = base.merge(&incoming);
+
+        // Replaced.
+        assert_eq!(merged.cluster[&ClusterId::User(1)], cfg("f", "new"));
+        // Untouched object retained (merge does not express removals).
+        assert_eq!(merged.cluster[&ClusterId::User(2)], cfg("f", "keep"));
+        // Pre-existing replica retained, new replica added.
+        assert_eq!(merged.replica[&ReplicaId::User(1)], cfg("g", "old"));
+        assert_eq!(merged.replica[&ReplicaId::User(2)], cfg("g", "new"));
+
+        // The original is unchanged (merge returns a copy).
+        assert_eq!(base.cluster[&ClusterId::User(1)], cfg("f", "old"));
     }
 }

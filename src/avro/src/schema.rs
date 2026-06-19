@@ -2765,6 +2765,61 @@ mod tests {
         assert!(reader.is_empty()); // all bytes should have been consumed
     }
 
+    /// Union variant matching decides on its own which numeric promotions are
+    /// legal, separately from the schema resolver that actually decodes a
+    /// writer value into a reader type. The two must agree: if matching accepts
+    /// a promotion the resolver rejects, a union variant can match but then
+    /// fail to decode at read time. This test pins that agreement over the
+    /// primitive types so they cannot drift apart.
+    #[mz_ore::test]
+    fn test_union_promotion_agrees_with_resolution() {
+        // Resolving two bare primitives drives exactly the resolution path that
+        // union matching consults, so it is the right oracle.
+        fn resolves(writer: &str, reader: &str) -> bool {
+            let writer = Schema::from_str(&format!("\"{writer}\"")).unwrap();
+            let reader = Schema::from_str(&format!("\"{reader}\"")).unwrap();
+            resolve_schemas(&writer, &reader).is_ok()
+        }
+        fn promotes(writer: &str, reader: &str) -> bool {
+            can_promote(
+                &Schema::parse_primitive(writer).unwrap(),
+                &Schema::parse_primitive(reader).unwrap(),
+            )
+        }
+
+        // The dangerous direction, over every primitive pair: any promotion
+        // matching accepts must actually be decodable by resolution.
+        let primitives = [
+            "null", "boolean", "int", "long", "float", "double", "bytes", "string",
+        ];
+        for w in primitives {
+            for r in primitives {
+                if promotes(w, r) {
+                    assert!(
+                        resolves(w, r),
+                        "{w} -> {r} is accepted for matching but cannot be resolved",
+                    );
+                }
+            }
+        }
+
+        // Over the numeric kinds, for distinct kinds the two must agree
+        // exactly. (Identical kinds resolve trivially but are not promotions,
+        // so matching reports false for them; exclude `w == r`.)
+        let numeric = ["int", "long", "float", "double"];
+        for w in numeric {
+            for r in numeric {
+                if w != r {
+                    assert_eq!(
+                        promotes(w, r),
+                        resolves(w, r),
+                        "matching and resolution disagree on {w} -> {r}",
+                    );
+                }
+            }
+        }
+    }
+
     #[mz_ore::test]
     fn default_non_nums() {
         let reader = r#"{

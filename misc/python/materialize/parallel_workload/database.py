@@ -507,10 +507,25 @@ class KafkaSource(DBObject):
                 Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True)
             )
         for i in range(rng.randint(0, 20)):
-            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
+            # Value columns are randomly nullable so their Avro type becomes a
+            # `["null", T]` union, exercising union schema resolution in the
+            # source decode path. Keys stay non-nullable.
+            fields.append(
+                Field(
+                    f"value{i}",
+                    rng.choice(DATA_TYPES_FOR_AVRO),
+                    False,
+                    nullable=rng.choice([True, False]),
+                )
+            )
         self.columns = [
-            KafkaColumn(field.name, field.data_type, False, self) for field in fields
+            KafkaColumn(field.name, field.data_type, field.nullable, self)
+            for field in fields
         ]
+        # Sometimes evolve the schema before creating the source: write records
+        # under a narrower (promotable) writer schema first, so the source must
+        # promote them through union schema resolution. See
+        # KafkaExecutor._write_promotion_preamble.
         self.executor = KafkaExecutor(
             self.source_id,
             ports,
@@ -518,6 +533,7 @@ class KafkaSource(DBObject):
             schema.db.name(),
             schema.name(),
             cluster.name(),
+            evolve_schema=rng.choice([True, False]),
         )
         workload = rng.choice(list(WORKLOADS))(azurite=False)
         for transaction_def in workload.cycle:

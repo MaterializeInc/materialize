@@ -1,0 +1,28 @@
+{
+  "create_table": {
+    "test_deletes_no_primary": {
+      "columns": {
+        "v1": "INT",
+        "v2": "STRING"
+      }
+    }
+  },
+  "ops": [
+    {
+      "upsert": {
+        "test_deletes_no_primary": [
+          {"v1": "1", "v2": "a", "_fivetran_id": "1a" },
+          {"v1": "1", "v2": "b", "_fivetran_id": "1b" },
+          {"v1": "2", "v2": "a", "_fivetran_id": "2a" }
+        ]
+      }
+    },
+    {
+      "soft_delete": {
+        "test_deletes_no_primary": [
+          {"v1": "2", "v2": "a", "_fivetran_id": "2a"}
+        ]
+      }
+    }
+  ]
+}

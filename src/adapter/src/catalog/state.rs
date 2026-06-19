@@ -54,7 +54,7 @@ use mz_repr::namespaces::{
     UNSTABLE_SCHEMAS,
 };
 use mz_repr::network_policy_id::NetworkPolicyId;
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
@@ -98,6 +98,7 @@ use tracing::{debug, warn};
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
 use crate::catalog::{Catalog, ConnCatalog};
+use crate::config::ScopedParameters;
 use crate::coord::{ConnMeta, infer_sql_type_for_catalog};
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
@@ -139,6 +140,15 @@ pub struct CatalogState {
 
     #[serde(skip)]
     pub(super) system_configuration: Arc<SystemVars>,
+    /// In-memory mirror of the durable scoped (per-cluster and per-replica)
+    /// system-parameter cache, maintained by `apply.rs` from the durable
+    /// collections. Resolution reads from here: the optimizer's per-cluster
+    /// feature overrides (`cluster_scoped_optimizer_overrides`) and the
+    /// coordinator's per-replica dyncfg push. See the scoped feature flags
+    /// design. Skipped in the consistency-check snapshot because it is fully
+    /// derived from the durable catalog.
+    #[serde(skip)]
+    pub(super) scoped_system_parameters: ScopedParameters,
     pub(super) default_privileges: Arc<DefaultPrivileges>,
     pub(super) system_privileges: Arc<PrivilegeMap>,
     pub(super) comments: Arc<CommentsMap>,
@@ -319,6 +329,7 @@ impl CatalogState {
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             availability_zones: Default::default(),
             system_configuration: Arc::new(SystemVars::default()),
+            scoped_system_parameters: Default::default(),
             egress_addresses: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
@@ -2297,6 +2308,27 @@ impl CatalogState {
     /// Return current system configuration.
     pub fn system_config(&self) -> &SystemVars {
         &self.system_configuration
+    }
+
+    /// Returns the cluster-coherent scoped optimizer-feature overrides for
+    /// `cluster_id` from the in-memory scoped-parameter working copy, or empty
+    /// if the cluster has none.
+    pub fn cluster_scoped_optimizer_overrides(
+        &self,
+        cluster_id: ClusterId,
+    ) -> OptimizerFeatureOverrides {
+        self.scoped_system_parameters
+            .cluster
+            .get(&cluster_id)
+            .cloned()
+            .map(OptimizerFeatureOverrides::from)
+            .unwrap_or_default()
+    }
+
+    /// Returns the entire scoped system-parameter working copy, read by the
+    /// coordinator's scoped-parameter reconcile path.
+    pub fn scoped_system_parameters(&self) -> &ScopedParameters {
+        &self.scoped_system_parameters
     }
 
     /// Return a mutable reference to the current system configuration.

@@ -972,6 +972,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: gcp
+        skip: "https://linear.app/materializeinc/issue/SS-279"
 
   - group: "Platform checks"
     key: platform-checks
@@ -2461,6 +2462,32 @@ steps:
               composition: orchestratord
               run: clusterd-generation-scheduling
               args: [--recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-v1-opt-in
+        label: "Orchestratord v1 opt-in tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: v1-opt-in
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-manually-promote
+        label: "Orchestratord ManuallyPromote tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: manually-promote
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

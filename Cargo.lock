@@ -235,6 +235,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f3647c145568cec02c42054e07bdf9a5a698e15b466fb2341bfc393cd24aa5"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "archery"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1332,6 +1341,28 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum-server"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1df331683d982a0b9492b38127151e6453639cd34926eb9c07d4cd8c6d22bfc"
+dependencies = [
+ "arc-swap",
+ "bytes",
+ "either",
+ "fs-err",
+ "http 1.4.2",
+ "http-body 1.0.1",
+ "hyper 1.9.0",
+ "hyper-util",
+ "pin-project-lite",
+ "rustls",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls",
+ "tower-service",
 ]
 
 [[package]]
@@ -3553,6 +3584,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "fivetran_destination"
+version = "0.0.0"
+dependencies = [
+ "async-compression",
+ "bytes",
+ "clap",
+ "csv-async",
+ "futures",
+ "insta",
+ "itertools 0.14.0",
+ "mz-build-tools",
+ "mz-ore",
+ "mz-pgrepr",
+ "mz-sql-parser",
+ "openssl",
+ "postgres-openssl",
+ "postgres-protocol",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2 0.6.4",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-postgres",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3690,6 +3760,16 @@ checksum = "a8cd42c159de9b90a91efc0ce350e3142099571ef498e7fa1a1dcc1d1eeccd9d"
 dependencies = [
  "memchr",
  "uuid",
+]
+
+[[package]]
+name = "fs-err"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73fde052dbfc920003cfd2c8e2c6e6d4cc7c1091538c3a24226cec0665ab08c0"
+dependencies = [
+ "autocfg",
+ "tokio",
 ]
 
 [[package]]
@@ -6018,7 +6098,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.30.0-dev.0"
+version = "26.31.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6155,7 +6235,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.30.0-dev.0"
+version = "26.31.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6268,6 +6348,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "tracing",
  "uuid",
 ]
@@ -6309,7 +6390,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.30.0-dev.0"
+version = "26.31.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6346,6 +6427,34 @@ dependencies = [
  "tokio",
  "tower 0.5.3",
  "tracing",
+]
+
+[[package]]
+name = "mz-clusterd-test-driver"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "mz-compute-client",
+ "mz-compute-types",
+ "mz-dyncfg",
+ "mz-expr",
+ "mz-expr-parser",
+ "mz-orchestrator-tracing",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-repr",
+ "mz-service",
+ "mz-storage-types",
+ "mz-transform",
+ "serde",
+ "tempfile",
+ "timely",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -6662,7 +6771,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.30.0-dev.0"
+version = "26.31.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -7118,7 +7227,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.30.0-dev.0"
+version = "26.31.0-dev.0"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -7338,11 +7447,12 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.30.0-dev.0"
+version = "26.31.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "axum-server",
  "clap",
  "futures",
  "http 1.4.2",
@@ -7365,6 +7475,7 @@ dependencies = [
  "prometheus",
  "rand 0.9.4",
  "reqwest 0.12.28",
+ "rustls",
  "semver",
  "serde",
  "serde_json",
@@ -7522,7 +7633,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.30.0-dev.0"
+version = "26.31.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -8344,7 +8455,6 @@ dependencies = [
  "columnar",
  "columnation",
  "crossbeam-channel",
- "csv-core",
  "dec",
  "differential-dataflow",
  "fail",
@@ -8561,6 +8671,7 @@ dependencies = [
  "bytes",
  "columnation",
  "criterion",
+ "csv-core",
  "dec",
  "derivative",
  "differential-dataflow",
@@ -8639,7 +8750,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.30.0-dev.0"
+version = "26.31.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -8690,6 +8801,7 @@ dependencies = [
  "postgres-protocol",
  "postgres_array",
  "prost",
+ "prost-build",
  "prost-reflect",
  "prost-types",
  "rand 0.9.4",
@@ -8708,6 +8820,9 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tokio-util",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -11237,6 +11352,8 @@ version = "0.23.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
 dependencies = [
+ "aws-lc-rs",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -11272,6 +11389,7 @@ version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
+ "aws-lc-rs",
  "ring",
  "rustls-pki-types",
  "untrusted 0.9.0",

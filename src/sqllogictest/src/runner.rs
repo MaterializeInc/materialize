@@ -1229,6 +1229,7 @@ impl<'a> RunnerInner<'a> {
             cloud_resource_controller: None,
             tls: None,
             frontegg: None,
+            frontegg_oauth_issuer_url: None,
             cors_allowed_origin: AllowOrigin::list([]),
             cors_allowed_origin_list: Vec::new(),
             unsafe_mode: true,

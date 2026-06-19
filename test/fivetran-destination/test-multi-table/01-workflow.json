@@ -1,0 +1,89 @@
+{
+    "create_table": {
+        "green": {
+            "columns": {
+                "k": "INT",
+                "v1": "STRING",
+                "v2": "STRING"
+            },
+            "primary_key": [
+                "k"
+            ]
+        },
+        "blue": {
+            "columns": {
+                "a": "INT",
+                "b": "STRING",
+                "c": "STRING"
+            },
+            "primary_key": [
+                "a"
+            ]
+        }
+    },
+    "ops": [
+        {
+            "upsert": {
+                "green": [
+                    {
+                        "k": "1",
+                        "v1": "hello",
+                        "v2": "world"
+                    },
+                    {
+                        "k": "2",
+                        "v1": "foo",
+                        "v2": "bar"
+                    },
+                    {
+                        "k": "3",
+                        "v1": "bing!",
+                        "v2": "bang!"
+                    }
+                ],
+                "blue": [
+                    {
+                        "a": "100",
+                        "b": "hem",
+                        "c": "haw"
+                    },
+                    {
+                        "a": "200",
+                        "b": "vice",
+                        "c": "versa"
+                    }
+                ]
+            }
+        },
+        {
+            "update": {
+                "green": [
+                    {
+                        "k": "3",
+                        "v2": "whomp whomp"
+                    }
+                ],
+                "blue": [
+                    {
+                        "a": "100",
+                        "b": "eek!"
+                    }
+                ]
+            }
+        },
+        {
+            "soft_truncate_before": [
+                "blue"
+            ]
+        },
+        {
+            "delete": {
+                "green": [
+                    {
+                        "k": "2"
+                    }
+                ]
+            }
+        }
+    ]
+}

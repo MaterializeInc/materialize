@@ -29,7 +29,6 @@ clap = { workspace = true, features = ["env"] }
 columnar.workspace = true
 columnation.workspace = true
 crossbeam-channel.workspace = true
-csv-core.workspace = true
 dec.workspace = true
 differential-dataflow.workspace = true
 fail.workspace = true

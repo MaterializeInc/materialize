@@ -1022,6 +1022,98 @@ impl DurableType for SystemConfiguration {
     }
 }
 
+/// A single cluster-coherent scoped system-parameter override: parameter `name`
+/// has value `value` on the cluster `cluster_id`.
+///
+/// This is the in-memory shape of the durable `cluster_system_configurations`
+/// collection that backs cluster-coherent scoped feature flags. The collection
+/// — keyed by `(ClusterId, name)` — is the analog of `system_configurations`
+/// (`ALTER SYSTEM`), but for per-cluster values; it is written solely by the
+/// system-parameter sync loop, and the coordinator's in-memory working copy is
+/// maintained from it on every catalog update.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClusterSystemConfiguration {
+    pub cluster_id: ClusterId,
+    pub name: String,
+    pub value: String,
+}
+
+impl DurableType for ClusterSystemConfiguration {
+    type Key = ClusterSystemConfigurationKey;
+    type Value = ClusterSystemConfigurationValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ClusterSystemConfigurationKey {
+                cluster_id: self.cluster_id,
+                name: self.name,
+            },
+            ClusterSystemConfigurationValue { value: self.value },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            cluster_id: key.cluster_id,
+            name: key.name,
+            value: value.value,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ClusterSystemConfigurationKey {
+            cluster_id: self.cluster_id,
+            name: self.name.clone(),
+        }
+    }
+}
+
+/// A single replica-local scoped system-parameter override: parameter `name`
+/// has value `value` on the replica `replica_id`.
+///
+/// This is the in-memory shape of the durable `replica_system_configurations`
+/// collection that backs replica-local scoped feature flags. The collection —
+/// keyed by `(ReplicaId, name)` — is the analog of `system_configurations`
+/// (`ALTER SYSTEM`), but for per-replica values; it is written solely by the
+/// system-parameter sync loop, and the coordinator's in-memory working copy is
+/// maintained from it on every catalog update.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ReplicaSystemConfiguration {
+    pub replica_id: ReplicaId,
+    pub name: String,
+    pub value: String,
+}
+
+impl DurableType for ReplicaSystemConfiguration {
+    type Key = ReplicaSystemConfigurationKey;
+    type Value = ReplicaSystemConfigurationValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ReplicaSystemConfigurationKey {
+                replica_id: self.replica_id,
+                name: self.name,
+            },
+            ReplicaSystemConfigurationValue { value: self.value },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            replica_id: key.replica_id,
+            name: key.name,
+            value: value.value,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ReplicaSystemConfigurationKey {
+            replica_id: self.replica_id,
+            name: self.name.clone(),
+        }
+    }
+}
+
 impl DurableType for MzAclItem {
     type Key = SystemPrivilegesKey;
     type Value = SystemPrivilegesValue;
@@ -1155,6 +1247,10 @@ pub struct Snapshot {
     pub system_object_mappings: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
     pub system_configurations:
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
+    pub cluster_system_configurations:
+        BTreeMap<proto::ClusterSystemConfigurationKey, proto::ClusterSystemConfigurationValue>,
+    pub replica_system_configurations:
+        BTreeMap<proto::ReplicaSystemConfigurationKey, proto::ReplicaSystemConfigurationValue>,
     pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
     pub source_references: BTreeMap<proto::SourceReferencesKey, proto::SourceReferencesValue>,
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
@@ -1456,6 +1552,28 @@ pub struct ServerConfigurationKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ServerConfigurationValue {
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct ClusterSystemConfigurationKey {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterSystemConfigurationValue {
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct ReplicaSystemConfigurationKey {
+    pub(crate) replica_id: ReplicaId,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReplicaSystemConfigurationValue {
     pub(crate) value: String,
 }
 

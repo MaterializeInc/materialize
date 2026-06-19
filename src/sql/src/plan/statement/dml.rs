@@ -978,7 +978,9 @@ GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
                             from.push("LEFT JOIN per_worker_memory pwm USING (global_id, lir_id)");
 
                             if let Some(worker_id) = worker_id {
-                                predicates.push(format!("pwm.worker_id = {worker_id}"));
+                                predicates.push(format!(
+                                    "(pwm.worker_id = {worker_id} OR pwm.worker_id IS NULL OR {worker_id} IS NULL)"
+                                ));
                             } else {
                                 worker_id = Some("pwm.worker_id");
                                 columns.push("pwm.worker_id AS worker_id");
@@ -1035,7 +1037,9 @@ GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
                             from.push("LEFT JOIN per_worker_cpu pwc USING (global_id, lir_id)");
 
                             if let Some(worker_id) = worker_id {
-                                predicates.push(format!("pwc.worker_id = {worker_id}"));
+                                predicates.push(format!(
+                                    "(pwc.worker_id = {worker_id} OR pwc.worker_id IS NULL OR {worker_id} IS NULL)"
+                                ));
                             } else {
                                 worker_id = Some("pwc.worker_id");
                                 columns.push("pwc.worker_id AS worker_id");
@@ -1159,7 +1163,9 @@ pub fn plan_explain_analyze_cluster(
                     let mut set_worker_id = false;
                     if let Some(worker_id) = worker_id {
                         // join condition if we're showing skew for more than one property
-                        predicates.push(format!("om.worker_id = {worker_id}"));
+                        predicates.push(format!(
+                            "(om.worker_id = {worker_id} OR om.worker_id IS NULL OR {worker_id} IS NULL)"
+                        ));
                     } else {
                         worker_id = Some("om.worker_id");
                         columns.push("om.worker_id AS worker_id");
@@ -1308,7 +1314,9 @@ GROUP BY pomt.global_id
                     let mut set_worker_id = false;
                     if let Some(worker_id) = worker_id {
                         // join condition if we're showing skew for more than one property
-                        predicates.push(format!("oc.worker_id = {worker_id}"));
+                        predicates.push(format!(
+                            "(oc.worker_id = {worker_id} OR oc.worker_id IS NULL OR {worker_id} IS NULL)"
+                        ));
                     } else {
                         worker_id = Some("oc.worker_id");
                         columns.push("oc.worker_id AS worker_id");
