@@ -99,7 +99,7 @@ class StartMz(MzcomposeAction):
             name=self.mz_service,
             image=image,
             # TODO: Switch to default (CockroachOrPostgresMetadata) when
-            # https://github.com/MaterializeInc/database-issues/issues/10047 is solved
+            # https://linear.app/materializeinc/issue/SS-284 is solved
             metadata_store="postgres-metadata",
             external_metadata_store=True,
             external_blob_store=True,

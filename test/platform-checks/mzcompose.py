@@ -63,7 +63,7 @@ def create_mzs(
         Materialized(
             name=mz_name,
             # TODO: Switch to default (CockroachOrPostgresMetadata) when
-            # https://github.com/MaterializeInc/database-issues/issues/10047 is solved
+            # https://linear.app/materializeinc/issue/SS-284 is solved
             metadata_store="postgres-metadata",
             external_metadata_store=external_metadata_store,
             external_blob_store=external_blob_store,
