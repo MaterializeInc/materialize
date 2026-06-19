@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/apply.rs
-revision: 190baa2a1b
+revision: 3953456a45
 ---
 
 # adapter::catalog::apply
@@ -8,9 +8,10 @@ revision: 190baa2a1b
 Implements the logic for applying `StateUpdate` diffs from the durable catalog store to the in-memory `CatalogState`.
 `apply_updates` processes a batch of `StateUpdate` values grouped by timestamp; within each timestamp group, updates are sorted into a pseudo-topological order before being applied.
 An `InProgressRetractions` struct caches denormalized state stripped during retractions so that the corresponding additions can reuse it without rebuilding from scratch.
-The `ApplyState` state machine batches consecutive updates of the same type when beneficial, then delegates to `apply_updates_inner`, which calls per-type `apply_*_update` methods for roles, role auth, databases, schemas, clusters, network policies, items, system configuration, and more.
+The `ApplyState` state machine batches consecutive updates of the same type when beneficial, then delegates to `apply_updates_inner`, which calls per-type `apply_*_update` methods for roles, role auth, databases, schemas, clusters, network policies, items, system configuration, scoped system configuration, and more.
 After processing retractions that are not replaced by a corresponding addition (i.e., truly dropped items), `apply_updates` calls `drop_optimizer_notices` to clean up any optimizer notices associated with the dropped items and emits the corresponding `mz_notices` retractions.
 `CatalogState` methods defined in this module (`set_optimized_plan`, `set_physical_plan`, `set_dataflow_metainfo`, `drop_optimizer_notices`) mutate the plan and notice fields stored directly on `Index` and `MaterializedView` catalog items.
 `StateUpdateKind::Role`, `StateUpdateKind::DefaultPrivilege`, and `StateUpdateKind::SystemPrivilege` updates do not produce builtin table updates; `mz_roles`, `mz_role_parameters`, `mz_default_privileges`, and `mz_system_privileges` are materialized views backed by `mz_internal.mz_catalog_raw` rather than builtin tables.
+`StateUpdateKind::ClusterSystemConfiguration` and `StateUpdateKind::ReplicaSystemConfiguration` updates maintain the in-memory `CatalogState::scoped_system_parameters` working copy via `apply_scoped_system_configuration_update`; they produce no builtin table updates because `mz_internal.mz_cluster_system_parameters` and `mz_internal.mz_replica_system_parameters` are materialized views backed by `mz_internal.mz_catalog_raw`. Retraction is conditional on the stored value matching, so a value change (retraction of the old value followed by addition of the new) is order-independent and correct regardless of the order the two updates arrive. Both update kinds are sorted alongside `Cluster` and `ClusterReplica` updates in the pseudo-topological ordering applied before processing.
 `concretize_replica_location` accepts an `allow_disabled` boolean that, when `true`, permits replica sizes that are marked disabled in the size map; this is used during catalog apply so that existing replicas with disabled sizes can remain registered in memory (and return sensible SQL results via the `mz_cluster_replicas` MV) without panicking. A `soft_panic_or_log!` is emitted when a managed cluster or replica references an unknown size that is absent from the in-memory map.
 This is the central reconciliation path used both during initial catalog open and when reacting to concurrent remote catalog mutations.

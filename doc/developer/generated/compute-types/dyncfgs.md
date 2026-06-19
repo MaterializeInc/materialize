@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/dyncfgs.rs
-revision: a8f4526d28
+revision: 0d67fec095
 ---
 
 # compute-types::dyncfgs

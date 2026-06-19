@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/reduce/variadic.rs
-revision: ed05cf7584
+revision: 0251567b59
 ---
 
 # mz-expr::scalar::reduce::variadic
@@ -28,7 +28,7 @@ If the function is `Coalesce`, control is handed off to `simplify_coalesce` and 
 
 - **Constant folding** — if all arguments are literals, evaluate and replace with a literal.
 - **Null propagation** — if the function propagates nulls and any argument is `NULL`, replace with a typed `NULL`.
-- **Error propagation** — if any argument is a literal error, propagate that error.
+- **Error propagation** — if the function is strict (i.e., `func.propagates_nulls()` is true) and any argument is a literal error, propagate that error. Non-strict functions such as `And`/`Or` are exempt: their dominating operand (`false`/`true`) absorbs an operand's error at runtime (e.g. `false AND <error>` evaluates to `false`), so folding unconditionally to the error would introduce failures the evaluated expression never raises. (`Coalesce`, also non-strict, already bailed out earlier.)
 
 ### Per-function specializations
 
