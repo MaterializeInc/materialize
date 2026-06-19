@@ -62,6 +62,14 @@ builder.build(move |capabilities| {
 });
 ```
 
+`new_output::<C>()` on `OperatorBuilderRc` takes the **container** type (e.g.
+`Vec<T>`) and wraps it in a `CapacityContainerBuilder` itself. This differs from
+`AsyncOperatorBuilder::new_output::<CB>()`, which takes the container *builder*.
+Porting async to sync, drop the wrapper: write `new_output::<Vec<T>>()`, not
+`new_output::<CapacityContainerBuilder<Vec<T>>>()`. Passing the builder
+double-wraps it and fails to compile with an opaque
+`CapacityContainerBuilder<CapacityContainerBuilder<..>>: Accountable` error.
+
 ### Frontier timing in build_reschedule
 
 `build_reschedule` (which `build` delegates to) drains frontier changes FROM the
@@ -145,6 +153,12 @@ inputs" below; that case is semantic, not mechanical.
    let sync_activator = scope.sync_activator_for(info.address.to_vec());
    // Task calls sync_activator.activate() to wake the operator.
    ```
+5. **Add `Send` bounds for the spawned work.** The async builder polls on the
+   local Timely thread, so its future need not be `Send`. `mz_ore::task::spawn`
+   requires `Send + 'static`, so every resource the task captures (client
+   futures, handles, schemas) must be `Send`. This often means adding `+ Send`
+   to an `impl Future` or generic bound on the operator fn, which can propagate
+   to callers.
 
 ### Task handle lifetime -- critical pitfall
 
@@ -177,6 +191,13 @@ builder.build(move |capabilities| {
 
 Alternatively, spawn before `builder.build()` and capture in the schedule closure
 with the same `let _ = &task_handle` pattern.
+
+The `let _ = &task_handle` trick is only for a *standalone* handle the schedule
+closure would not otherwise touch. If the handle lives inside state the closure
+already captures (a struct, `Option`, or tuple, e.g. per-worker `Some((rx, ack,
+task))`), it is already kept alive, so a `let _ = &task` line is a misleading
+no-op. Bind it in the owning structure instead and document the abort contract
+there.
 
 ### Channel error handling
 
@@ -409,6 +430,17 @@ builder.build_reschedule(move |caps| {
 cross-worker channel). If the operator does NOT return a button (shutdown is
 just "drop caps and inputs"), the plain `build` is fine — this only applies to
 coordinated-shutdown operators.
+
+A **single-worker-output** operator (only the chosen worker holds a capability;
+the others drop theirs at construction) still returns a button and still needs
+the full handshake on every worker. The non-chosen workers must stay scheduled
+to reach `all_pressed()`: return `false` (which keeps the operator alive and
+lets the button channel re-activate it), not a "done" early-return. A non-chosen
+worker that finishes early never observes `all_pressed()`, which can wedge the
+chosen worker waiting on a handshake that never completes. This path is easy to
+miss: single-process unit tests often run `scope.peers() == 1`, so the
+non-chosen branch never executes — exercise it with a multi-worker test if you
+can.
 
 ## Testing operator conversions
 
