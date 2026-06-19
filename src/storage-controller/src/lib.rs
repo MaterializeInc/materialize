@@ -1171,9 +1171,15 @@ impl StorageController for Controller {
         for id in to_execute {
             match &self.collection(id)?.data_source {
                 DataSource::Ingestion(ingestion) => {
-                    if !self.read_only
-                        || (ENABLE_0DT_DEPLOYMENT_SOURCES.get(self.config.config_set())
-                            && ingestion.desc.connection.supports_read_only())
+                    // A source whose ingestion is disabled at registration
+                    // (for example, a branched source whose data is the fork
+                    // shard's contents) has nothing to write to its shard;
+                    // skip spawning the ingestion task.
+                    let ingestion_enabled = ingestion.ingestion_enabled;
+                    if ingestion_enabled
+                        && (!self.read_only
+                            || (ENABLE_0DT_DEPLOYMENT_SOURCES.get(self.config.config_set())
+                                && ingestion.desc.connection.supports_read_only()))
                     {
                         self.run_ingestion(id)?;
                     }
@@ -1186,8 +1192,10 @@ impl StorageController for Controller {
                 | DataSource::Table
                 | DataSource::Progress
                 | DataSource::Other => {}
-                DataSource::Sink { .. } => {
-                    if !self.read_only {
+                DataSource::Sink { desc } => {
+                    // Same shape for sinks: registration can disable emission
+                    // and leave the persist output shard readable.
+                    if desc.sink.emission_enabled && !self.read_only {
                         self.run_export(id)?;
                     }
                 }
@@ -1601,6 +1609,7 @@ impl StorageController for Controller {
                 with_snapshot,
                 to_storage_metadata,
                 commit_interval: new_description.sink.commit_interval,
+                emission_enabled: new_description.sink.emission_enabled,
             },
         };
 
@@ -1681,6 +1690,7 @@ impl StorageController for Controller {
                     from_storage_metadata,
                     to_storage_metadata,
                     commit_interval: new_export_description.sink.commit_interval,
+                    emission_enabled: new_export_description.sink.emission_enabled,
                 },
             };
 
@@ -3413,6 +3423,7 @@ where
             desc: ingestion_description.desc.clone(),
             instance_id: ingestion_description.instance_id,
             remap_collection_id: ingestion_description.remap_collection_id,
+            ingestion_enabled: ingestion_description.ingestion_enabled,
         };
 
         let storage_instance_id = description.instance_id;
@@ -3474,6 +3485,7 @@ where
                 with_snapshot,
                 to_storage_metadata,
                 commit_interval: description.sink.commit_interval,
+                emission_enabled: description.sink.emission_enabled,
             },
         };
 

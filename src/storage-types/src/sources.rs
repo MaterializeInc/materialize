@@ -104,6 +104,17 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     pub remap_collection_id: GlobalId,
     /// The storage metadata for the remap/progress collection
     pub remap_metadata: S,
+    /// If false, the storage controller does not start an ingestion task
+    /// against this source's external system and does not write to its
+    /// persist shard. Reads of the shard still work and return whatever
+    /// data the shard already holds. Older catalog data that predates this
+    /// field decodes as true via the serde default.
+    #[serde(default = "default_ingestion_enabled")]
+    pub ingestion_enabled: bool,
+}
+
+fn default_ingestion_enabled() -> bool {
+    true
 }
 
 impl IngestionDescription {
@@ -118,6 +129,7 @@ impl IngestionDescription {
             source_exports: BTreeMap::new(),
             instance_id,
             remap_collection_id,
+            ingestion_enabled: true,
         }
     }
 }
@@ -136,6 +148,7 @@ impl<S> IngestionDescription<S> {
             source_exports,
             instance_id: _,
             remap_collection_id,
+            ingestion_enabled: _,
         } = &self;
 
         source_exports
@@ -160,6 +173,9 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
             source_exports,
             instance_id,
             remap_collection_id,
+            // `ingestion_enabled` flipping does not invalidate an existing
+            // ingestion: toggling it is the activation path itself.
+            ingestion_enabled: _,
         } = self;
 
         let compatibility_checks = [
@@ -230,6 +246,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
             source_exports,
             instance_id,
             remap_collection_id,
+            ingestion_enabled,
         } = self;
 
         IngestionDescription {
@@ -238,6 +255,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
             source_exports,
             instance_id,
             remap_collection_id,
+            ingestion_enabled,
         }
     }
 }

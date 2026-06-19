@@ -53,6 +53,16 @@ pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     /// support it in the future (ahem, kafka) users might
     /// not want to set it.
     pub commit_interval: Option<Duration>,
+    /// If false, the storage controller does not run this sink's emission
+    /// process. Reads of the sink's persist output shard still work and
+    /// return whatever data is already there. Older catalog data that
+    /// predates this field decodes as true via the serde default.
+    #[serde(default = "default_emission_enabled")]
+    pub emission_enabled: bool,
+}
+
+fn default_emission_enabled() -> bool {
+    true
 }
 
 impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
@@ -85,6 +95,9 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
             with_snapshot,
             to_storage_metadata,
             commit_interval: _,
+            // Toggling `emission_enabled` is the activation path itself, not
+            // an incompatible change to an existing sink.
+            emission_enabled: _,
         } = self;
 
         let compatibility_checks = [

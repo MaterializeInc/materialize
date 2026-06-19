@@ -3544,6 +3544,7 @@ impl Coordinator {
             from_storage_metadata: (),
             to_storage_metadata: (),
             commit_interval: sink_plan.commit_interval,
+            emission_enabled: true,
         };
 
         self.controller
