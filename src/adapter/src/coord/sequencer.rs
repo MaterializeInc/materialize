@@ -93,6 +93,7 @@ use crate::util::ClientTransmitter;
 //   by both the old and new peek sequencing. TODO(peek-seq): We plan to eliminate this with a
 //   big refactoring after the old peek sequencing is removed.
 
+mod branch;
 mod inner;
 
 impl Coordinator {
@@ -690,16 +691,23 @@ impl Coordinator {
                         ctx.retire(res);
                     });
                 }
-                // BRANCH plans land in a later commit; planner-side gating
-                // by `enable_branching` keeps these arms unreachable when
-                // the flag is off, but rustc still demands they exist.
-                Plan::CreateBranch(_)
-                | Plan::DropBranch(_)
-                | Plan::ShowBranches
-                | Plan::ShowBranchStatus(_) => {
-                    ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
-                        "BRANCH plans are not yet wired through the sequencer"
-                    ))));
+                Plan::CreateBranch(plan) => {
+                    let result = self.sequence_create_branch(ctx.session(), plan).await;
+                    ctx.retire(result);
+                }
+                Plan::DropBranch(plan) => {
+                    let result = self.sequence_drop_branch(ctx.session(), plan).await;
+                    ctx.retire(result);
+                }
+                Plan::ShowBranches => {
+                    let result = self.sequence_show_branches(ctx.session()).await;
+                    ctx.retire(result);
+                }
+                Plan::ShowBranchStatus(plan) => {
+                    let result = self
+                        .sequence_show_branch_status(ctx.session(), plan)
+                        .await;
+                    ctx.retire(result);
                 }
             }
         }

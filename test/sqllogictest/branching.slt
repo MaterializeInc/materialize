@@ -1,0 +1,126 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# End-to-end tests for the BRANCH DDL surface. Validates that CREATE BRANCH
+# forks each table in the source schema, that SELECT and INSERT against the
+# branched table flow through the fork shard, and that DROP BRANCH cleans
+# up.
+
+mode cockroach
+
+# Default: flag off → all BRANCH statements error with a message naming the
+# flag.
+
+query error enable_branching.*off
+CREATE BRANCH nightly FROM SCHEMA public
+
+query error enable_branching.*off
+DROP BRANCH nightly
+
+query error enable_branching.*off
+DROP BRANCH IF EXISTS nightly
+
+query error enable_branching.*off
+SHOW BRANCHES
+
+query error enable_branching.*off
+SHOW BRANCH STATUS nightly
+
+# Turn the flag on for the rest of the file.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_branching = on
+----
+COMPLETE 0
+
+# Set up a source table in the public schema and seed it.
+
+statement ok
+CREATE TABLE t (i int)
+
+statement ok
+INSERT INTO t VALUES (1), (2), (3)
+
+# CREATE BRANCH forks `public.t` into `nightly.t`. The branch's table
+# should see the seeded source rows.
+
+statement ok
+CREATE BRANCH nightly FROM SCHEMA public
+
+query I rowsort
+SELECT * FROM nightly.t
+----
+1
+2
+3
+
+# Inserts to the branch land on the fork shard only — the source table is
+# unaffected.
+
+statement ok
+INSERT INTO nightly.t VALUES (99)
+
+query I rowsort
+SELECT * FROM nightly.t
+----
+1
+2
+3
+99
+
+query I rowsort
+SELECT * FROM public.t
+----
+1
+2
+3
+
+# Inserts to the source land on the source shard only — the branch is
+# unaffected (cutoff_ts pins the branch's view to branch_ts).
+
+statement ok
+INSERT INTO public.t VALUES (4)
+
+query I rowsort
+SELECT * FROM public.t
+----
+1
+2
+3
+4
+
+query I rowsort
+SELECT * FROM nightly.t
+----
+1
+2
+3
+99
+
+# DROP BRANCH IF EXISTS on a missing branch is a no-op.
+
+statement ok
+DROP BRANCH IF EXISTS does_not_exist
+
+# DROP BRANCH on the real branch succeeds.
+
+statement ok
+DROP BRANCH nightly
+
+# Dropping it again without IF EXISTS errors.
+
+query error branch "nightly" does not exist
+DROP BRANCH nightly
+
+# Reset the flag so this file doesn't pollute later tests.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_branching
+----
+COMPLETE 0
