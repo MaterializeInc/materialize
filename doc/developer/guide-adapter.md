@@ -7,7 +7,62 @@ decisions.
 
 ## Architecture & Key Concepts
 
-<!-- TODO: fill in -->
+### Catalog changes and their implications
+
+A DDL or system change flows through three conceptual phases:
+
+1. The sequencer (`src/adapter/src/coord/sequencer/`) decides *what to write
+   durably*. It builds a `Vec<catalog::Op>` and calls one of the
+   `catalog_transact*` entry points. It should not reach into controllers or
+   mutate downstream in-memory state directly.
+2. `catalog_transact` (via `catalog_transact_inner`) commits the ops durably and
+   applies them to the in-memory `CatalogState`, producing the committed catalog
+   diff.
+3. The implications phase (`apply_catalog_implications` in
+   `src/adapter/src/coord/catalog_implications.rs`) derives downstream effects
+   from that committed diff and applies them: in-memory coordinator state,
+   compute/storage controller commands, builtin-table updates. The flow is
+   `StateUpdateKind -> ParsedStateUpdate -> CatalogImplication`.
+
+The guiding principle: the sequencer decides durable writes, and applying the
+catalog implications is when we update everything downstream of those writes.
+Implications are derived from the committed diff, not from the input ops and not
+from sequencer closures.
+
+Why derive from the diff? So a side effect fires identically whether this node
+applied the change or whether it is following a catalog change made by another
+writer. This is the same distributed stance as "No local-only assumptions"
+below, and a more scalable multi-`environmentd` coordinator depends on it (PR
+#29673, `database-issues#8488`). No code applies another node's diff today, but
+the framework is built so that capability is achievable.
+
+Two contracts on the implications phase:
+
+- It is treated as infallible. `catalog_transact_with_context` does
+  `.expect("cannot fail to apply catalog implications")`, because a committed
+  catalog with unapplied downstream effects cannot be recovered in-process and
+  is left to restart and bootstrap.
+- It requires consolidated updates: at most one addition and one retraction per
+  item. See the `apply_catalog_implications` doc comment.
+
+#### Legacy paths being migrated away from
+
+The migration into the implications framework is incremental and unfinished.
+These older patterns still exist and are legacy. Do not add new side-effect
+logic to them. Extend the implications framework instead.
+
+- `catalog_transact_with_side_effects` runs a sequencer-provided side-effect
+  closure. It carries a `TODO(aljoscha)` to migrate its call sites to
+  `catalog_transact_with_context`.
+- The op-scan plus the block guarded by "No error returns are allowed after this
+  point" in `catalog_transact_inner` (for example `update_compute_config` /
+  `update_storage_config`) is keyed off the input ops, so it cannot fire for a
+  follower observing a committed diff. It is not where new controller pushes
+  belong, even though existing system-config pushes happen there today.
+- Several `StateUpdateKind`s are not yet represented as implications.
+  `parse_state_update` returns `None` for them via its catch-all arm (this
+  covers the system-config kinds, among others). Representing a new kind may
+  require extending `ParsedStateUpdate` / `ParsedStateUpdateKind` first.
 
 ## Correctness Invariants
 
@@ -117,6 +172,32 @@ same one strict serializable already pays).
 The current implementation rejects bounded-staleness queries whose timeline
 is not `EpochMilliseconds`, in `determine_timestamp_for_inner`. The freshness
 math is currently scoped to that timeline.
+
+### The catalog is the source of truth for state that gets rebuilt from it
+
+If a reconcile or refresh path rebuilds downstream state (for example a
+controller's per-replica configuration) from the catalog working copy, then the
+values it must preserve have to already be in that working copy. Do not leave
+authoritative state only in a controller or in-process structure while a
+working-copy-driven rebuild can run. The two diverge, and the next rebuild
+silently clears the out-of-band state.
+
+Running the side effect inside the implications phase is necessary but not
+sufficient. If an implication sources a value from a fresh evaluation and pushes
+it straight to a controller without that value also being in the catalog (and
+therefore in the diff a rebuild reads), a later rebuild from the working copy
+will still drop it.
+
+Concrete shape of the bug. A create-time implication evaluates a per-replica
+controller override and pushes it into a controller's per-replica layer, but
+does not write it into the catalog working copy. A later reconcile rebuilds the
+complete per-replica map from the working copy, which lacks the new replica, and
+the controller clears every replica absent from that map, reverting the
+override. The override only reappears on the next periodic sync that reconciles
+the replica into the working copy. For render-frozen settings that window is a
+correctness gap, not just a delay. The fix is to make the catalog the source of
+truth: write the value through the create transaction so the diff, and any later
+rebuild, include it.
 
 ## Rejected Optimizations
 
