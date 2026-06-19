@@ -571,6 +571,14 @@ impl Catalog {
         self.storage.lock().await
     }
 
+    /// Access the durable catalog storage. Exposed for branch orchestration
+    /// which writes `BranchDescriptor` rows outside the normal `Op` pipeline.
+    pub(crate) async fn storage_mut<'a>(
+        &'a self,
+    ) -> MutexGuard<'a, Box<dyn mz_catalog::durable::DurableCatalogState>> {
+        self.storage.lock().await
+    }
+
     pub async fn current_upper(&self) -> mz_repr::Timestamp {
         self.storage().await.current_upper().await
     }

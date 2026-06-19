@@ -223,6 +223,7 @@ pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
+pub mod branch;
 pub mod catalog_implications;
 mod caught_up;
 mod command_handler;
@@ -1844,6 +1845,12 @@ pub struct Coordinator {
     /// A client for persist. Initially, this is only used for reading stashed
     /// peek responses out of batches.
     persist_client: PersistClient,
+
+    /// The reference-count store backing `CREATE BRANCH` / `DROP BRANCH`.
+    /// Pins source blobs against persist GC while the branch is live.
+    /// Defaults to an in-memory implementation; production deployments
+    /// replace it with the Postgres-backed [`mz_persist::fork_blob_refs::ForkBlobRefs`].
+    fork_blob_refs: Arc<dyn mz_persist::fork_blob_refs::ForkBlobRefsStore>,
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
@@ -4751,6 +4758,9 @@ pub fn serve(
                     license_key,
                     user_id_pool: IdPool::empty(),
                     persist_client,
+                    fork_blob_refs: Arc::new(
+                        mz_persist::fork_blob_refs::InMemoryForkBlobRefs::default(),
+                    ),
                 };
                 let bootstrap = handle.block_on(async {
                     coord
