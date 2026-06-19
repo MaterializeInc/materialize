@@ -2302,21 +2302,40 @@ async fn test_auth_oidc_fetch_error() {
     .unwrap();
 
     let oidc_user = "user@example.com";
-    let issuer = oidc_server.issuer.clone();
-    // Generate a JWT while the server is still up (correct issuer, valid signature).
+    // Point the issuer at a loopback port that is guaranteed to refuse
+    // connections instead of at the mock server's just-freed ephemeral port.
+    // Under high test parallelism (`--test-threads=48`) the OS could reassign
+    // that freed port to another OIDC test's mock server before environmentd
+    // performed the discovery fetch. environmentd would then fetch a valid JWKS
+    // for the shared `kid` ("test-key-1") from the wrong server and fail JWT
+    // signature validation, so this assertion intermittently saw "failed to
+    // validate JWT" instead of the expected fetch error. Port 1 is privileged
+    // and is never bound by the ephemeral-port mock servers, so it cannot be
+    // hijacked.
+    let unreachable_issuer = "http://127.0.0.1:1";
+
+    // Mint a validly-signed JWT whose issuer matches the (unreachable)
+    // configured issuer. The mock server is only needed to sign the token; the
+    // discovery fetch fails before the signature or issuer is ever checked.
     let jwt_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
+            issuer: Some(unreachable_issuer),
             ..Default::default()
         },
     );
 
-    // Stop the OIDC server so the JWKS endpoint becomes unreachable.
+    // The mock server has served its purpose; shut it down.
     oidc_server.handle.abort_and_wait().await;
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(issuer), Some("sub".to_string()), None, None)
+        .with_oidc_auth(
+            Some(unreachable_issuer.to_string()),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
         .start()
         .await;
 
