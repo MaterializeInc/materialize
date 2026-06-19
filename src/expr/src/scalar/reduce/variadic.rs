@@ -509,7 +509,11 @@ mod case_literal_tests {
             scalar_type: ReprScalarType::Int64,
             nullable: true,
         }];
-        crate::scalar::reduce::reduce(&mut expr, &col_types);
+        crate::scalar::reduce::reduce(
+            &mut expr,
+            &col_types,
+            &mz_repr::optimize::OptimizerFeatures::default(),
+        );
         // Must remain a CaseLiteral, not collapse to the error literal.
         assert!(
             matches!(
@@ -558,7 +562,11 @@ mod case_literal_tests {
             scalar_type: ReprScalarType::Int64,
             nullable: true,
         }];
-        crate::scalar::reduce::reduce(&mut expr, &col_types);
+        crate::scalar::reduce::reduce(
+            &mut expr,
+            &col_types,
+            &mz_repr::optimize::OptimizerFeatures::default(),
+        );
         let MirScalarExpr::CallVariadic {
             func: VariadicFunc::CaseLiteral(cl),
             exprs,

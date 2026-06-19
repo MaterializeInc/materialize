@@ -16,13 +16,25 @@
 
 use std::collections::BTreeSet;
 
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{ReprColumnType, ReprScalarType, Row, SqlColumnType};
 
 use crate::scalar::func::CaseLiteral;
 use crate::{BinaryFunc, MirScalarExpr, VariadicFunc};
 
 /// Entry point invoked from `reduce_post` for surviving `If` nodes.
-pub(super) fn try_build(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
+///
+/// Gated on `enable_case_literal_transform` (a default-on kill-switch): when the
+/// flag is cleared, `If`-chains are left untouched so this rewrite can be
+/// disabled in production without a code change.
+pub(super) fn try_build(
+    expr: &mut MirScalarExpr,
+    column_types: &[ReprColumnType],
+    features: &OptimizerFeatures,
+) {
+    if !features.enable_case_literal_transform {
+        return;
+    }
     try_fold_into_case_literal(expr, column_types);
     try_create_case_literal(expr, column_types);
 }
@@ -332,6 +344,15 @@ mod tests {
         l.call_binary(r, BinaryFunc::Eq(Eq))
     }
 
+    /// Optimizer features with the CaseLiteral kill-switch enabled, so these
+    /// construction tests exercise the rewrite regardless of its default.
+    fn features_on() -> mz_repr::optimize::OptimizerFeatures {
+        mz_repr::optimize::OptimizerFeatures {
+            enable_case_literal_transform: true,
+            ..Default::default()
+        }
+    }
+
     #[mz_ore::test]
     fn float_chain_is_not_folded() {
         // CASE WHEN x = 0.0 THEN 1 WHEN x = 1.0 THEN 2 ELSE 0 END over a float8 column.
@@ -350,7 +371,7 @@ mod tests {
             scalar_type: ReprScalarType::Float64,
             nullable: true,
         }];
-        crate::scalar::reduce::reduce(&mut expr, &col_types);
+        crate::scalar::reduce::reduce(&mut expr, &col_types, &features_on());
         assert!(
             matches!(expr, MirScalarExpr::If { .. }),
             "float chain must NOT fold, got {expr:?}"
@@ -374,7 +395,7 @@ mod tests {
             scalar_type: ReprScalarType::Int64,
             nullable: true,
         }];
-        crate::scalar::reduce::reduce(&mut expr, &col_types);
+        crate::scalar::reduce::reduce(&mut expr, &col_types, &features_on());
         assert!(
             matches!(
                 expr,
@@ -413,7 +434,7 @@ mod tests {
             nullable: true,
         }];
         let original_type = expr.typ(&col_types);
-        crate::scalar::reduce::reduce(&mut expr, &col_types);
+        crate::scalar::reduce::reduce(&mut expr, &col_types, &features_on());
         // Sanity: it actually folded into a CaseLiteral.
         assert!(
             matches!(
@@ -480,7 +501,7 @@ mod tests {
                 scalar_type: ReprScalarType::Int64,
                 nullable: true,
             }];
-            crate::scalar::reduce::reduce(&mut reduced, &col_types);
+            crate::scalar::reduce::reduce(&mut reduced, &col_types, &features_on());
 
             // Probe NULL, every literal used in the chain, and random values.
             let mut inputs: Vec<Option<i64>> = vec![None];
