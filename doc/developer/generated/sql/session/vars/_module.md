@@ -1,12 +1,13 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: 26c2af5130
+revision: a8f4526d28
 ---
 
 # mz-sql::session::vars
 
 Implements the full session and system variable system.
 `vars.rs` defines `SessionVars` (per-session parameters), `SystemVars` (system-wide settings), `Var`/`ServerVar`/`SystemVar` traits, and the `SET`/`RESET`/`SHOW` logic.
+The `Var` trait includes a `scope()` method returning a `ParameterScope` (from `mz_dyncfg`) indicating the scope at which a variable's value may be overridden by the LaunchDarkly sync loop; the default is `ParameterScope::Environment`. Dyncfg-backed system variables carry their declared `ParameterScope` from the dyncfg entry into the `VarDefinition`.
 Children provide supporting infrastructure: `value` (the `Value` trait and all type implementations), `definitions` (all variable declarations and defaults), `constraints` (value constraint types), `errors` (`VarError`/`VarParseError`), and `polyfill` (macro helpers for const-time defaults).
 `set_default` (called for `ALTER ROLE ... SET`) bypasses `check_read_only` for variables returned by `allow_role_default`; `allow_role_default` currently admits only `restrict_to_user_objects`.
 The public `check_transaction_isolation_feature_flag(name, input, system_vars)` function gates feature-flagged isolation levels (`bounded staleness` requires `ENABLE_BOUNDED_STALENESS_ISOLATION`; `strong session serializable` requires `ENABLE_SESSION_TIMELINES`) and is shared across all assignment paths so the gate cannot be bypassed by choosing a different syntax.

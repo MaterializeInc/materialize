@@ -1,19 +1,19 @@
 ---
 source: src/catalog/src/builtin/mz_catalog.rs
-revision: 4ec14fa5c7
+revision: 190baa2a1b
 ---
 
 # catalog::builtin::mz_catalog
 
 Defines all built-in catalog objects for the `mz_catalog` SQL schema.
 
-This module exports 78 public items: types, tables, materialized views, views, sources, and indexes.
+This module exports 76 public items: types, tables, materialized views, views, sources, and indexes.
 
 **Types** — Materialize-specific pseudo-types and their array forms: `TYPE_LIST`, `TYPE_MAP`, `TYPE_ANYCOMPATIBLELIST`, `TYPE_ANYCOMPATIBLEMAP`; unsigned integer types `TYPE_UINT2/4/8` and their arrays; `TYPE_MZ_TIMESTAMP`, `TYPE_MZ_TIMESTAMP_ARRAY`; `TYPE_MZ_ACL_ITEM`, `TYPE_MZ_ACL_ITEM_ARRAY`.
 
 **Tables** — `BuiltinTable` statics covering connector-specific metadata: `MZ_ICEBERG_SINKS`, `MZ_KAFKA_SINKS`, `MZ_KAFKA_CONNECTIONS`, `MZ_KAFKA_SOURCES`, and more.
 
-**Materialized views** — Core catalog entities backed by queries over `mz_internal.mz_catalog_raw`: `MZ_DATABASES`, `MZ_SCHEMAS`, `MZ_CONNECTIONS`, `MZ_SECRETS`, `MZ_TABLES`, `MZ_COLUMNS`, `MZ_VIEWS`, `MZ_SOURCES`, `MZ_SINKS`, `MZ_CLUSTERS`, `MZ_CLUSTER_REPLICAS`, `MZ_ROLES`, `MZ_ROLE_PARAMETERS`, `MZ_OBJECTS`, `MZ_ALL_OBJECTS`, and others. `MZ_CLUSTERS` and `MZ_CLUSTER_REPLICAS` are `BuiltinMaterializedView` objects that derive cluster and replica metadata from the durable catalog raw source; `MZ_CLUSTER_REPLICAS` resolves the `disk` column via a LEFT JOIN against `mz_cluster_replica_size_internal` (which retains rows for disabled sizes), so replicas with unknown sizes return `NULL` for `disk` rather than causing an error. These carry `Ontology` annotations with entity names, descriptions, and `OntologyLink` relationships for the catalog graph. `MZ_INDEXES` is also a `BuiltinMaterializedView` but is generated dynamically via the `pub(super) make_mz_indexes` function rather than declared as a static, so it is not counted among the module's exported statics.
+**Materialized views** — Core catalog entities backed by queries over `mz_internal.mz_catalog_raw`: `MZ_DATABASES`, `MZ_SCHEMAS`, `MZ_CONNECTIONS`, `MZ_SECRETS`, `MZ_TABLES`, `MZ_COLUMNS`, `MZ_VIEWS`, `MZ_SOURCES`, `MZ_SINKS`, `MZ_CLUSTERS`, `MZ_CLUSTER_REPLICAS`, `MZ_ROLES`, `MZ_ROLE_PARAMETERS`, `MZ_OBJECTS`, `MZ_ALL_OBJECTS`, `MZ_DEFAULT_PRIVILEGES`, `MZ_SYSTEM_PRIVILEGES`, and others. `MZ_CLUSTERS` and `MZ_CLUSTER_REPLICAS` are `BuiltinMaterializedView` objects that derive cluster and replica metadata from the durable catalog raw source; `MZ_CLUSTER_REPLICAS` resolves the `disk` column via a LEFT JOIN against `mz_cluster_replica_size_internal` (which retains rows for disabled sizes), so replicas with unknown sizes return `NULL` for `disk` rather than causing an error. `MZ_DEFAULT_PRIVILEGES` decodes `DefaultPrivileges` rows from `mz_catalog_raw`, mapping the proto enum numeric `object_type` to its SQL display name via a CASE expression. `MZ_SYSTEM_PRIVILEGES` decodes `SystemPrivileges` rows and unnests them into `mz_aclitem` values. These carry `Ontology` annotations with entity names, descriptions, and `OntologyLink` relationships for the catalog graph. `MZ_INDEXES` is also a `BuiltinMaterializedView` but is generated dynamically via the `pub(super) make_mz_indexes` function rather than declared as a static, so it is not counted among the module's exported statics.
 
 **Views** — Additional SQL views for derived catalog information such as `MZ_TIMEZONE_ABBREVIATIONS` and `MZ_TIMEZONE_NAMES`.
 

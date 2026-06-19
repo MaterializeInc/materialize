@@ -1,6 +1,6 @@
 ---
 source: src/avro/src/decode.rs
-revision: aeab441868
+revision: e6b08eaf07
 ---
 
 Implements schema-driven binary decoding via a visitor-style trait hierarchy.

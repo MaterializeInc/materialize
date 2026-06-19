@@ -1,12 +1,13 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: 26c2af5130
+revision: a8f4526d28
 ---
 
 # mz-sql::session::vars
 
 Implements `SessionVars` (per-session configuration parameters accessed via `SET`/`RESET`/`SHOW`) and `SystemVars` (system-wide parameters accessed via `ALTER SYSTEM`), following PostgreSQL's configuration model.
 Defines `Var`, `ServerVar`, and `SystemVar` traits; `FeatureFlag` for feature-gating planner behavior; and the `OwnedVarInput`/`VarInput` types for passing values.
+The `Var` trait includes a `scope()` method returning a `ParameterScope` (from `mz_dyncfg`) that indicates the scope at which a variable's value may be overridden by the LaunchDarkly sync loop; the default is `ParameterScope::Environment`. `SystemVar` delegates `scope()` to its `VarDefinition`. Dyncfg-backed system variables propagate their declared `ParameterScope` from the dyncfg entry into the corresponding `VarDefinition` via `VarDefinition::scoped`.
 Delegates to `definitions` for all variable declarations, `value` for parsing/formatting, `constraints` for validation, and `errors` for error types.
 `set_default` (used by `ALTER ROLE ... SET`) skips `check_read_only` for variables listed in `allow_role_default`; currently only `restrict_to_user_objects` is listed there, pairing with a superuser RBAC check in `rbac.rs`.
 `restrict_to_user_objects()` returns the value of the `restrict_to_user_objects` session variable.
