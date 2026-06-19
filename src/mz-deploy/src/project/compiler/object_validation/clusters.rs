@@ -69,6 +69,44 @@ pub(super) fn validate_index_clusters(
     }
 }
 
+/// Validates that indexes are only defined on views and materialized views.
+///
+/// Tables and sources are storage objects whose lifecycle `mz-deploy` manages
+/// through `apply`; an index on one is not supported.
+pub(super) fn validate_indexes_supported(
+    fqn: &FullyQualifiedName,
+    stmt: &Statement,
+    indexes: &[CreateIndexStatement<Raw>],
+    offsets: &[usize],
+    errors: &mut Vec<ValidationError>,
+) {
+    let object_type = match stmt {
+        Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => "table",
+        Statement::CreateSource(_) => "source",
+        _ => return,
+    };
+
+    for (i, index) in indexes.iter().enumerate() {
+        let index_name = index
+            .name
+            .as_ref()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "<unnamed>".to_string());
+        let index_sql = format!("{};", index);
+
+        errors.push(ValidationError::with_file_sql_and_offset(
+            ValidationErrorKind::IndexOnStorageObject {
+                object_type: object_type.to_string(),
+                object_name: fqn.object().to_string(),
+                index_name,
+            },
+            fqn.path.clone(),
+            index_sql,
+            offsets[i],
+        ));
+    }
+}
+
 /// Validates that a materialized view specifies a cluster.
 ///
 /// Materialized views in Materialize must specify which cluster they run on using the IN CLUSTER clause.

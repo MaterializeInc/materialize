@@ -46,7 +46,8 @@ mod references;
 mod schema_constraints;
 
 use clusters::{
-    validate_index_clusters, validate_mv_cluster, validate_sink_cluster, validate_source_cluster,
+    validate_index_clusters, validate_indexes_supported, validate_mv_cluster,
+    validate_sink_cluster, validate_source_cluster,
 };
 use identifiers::{validate_fqn_identifiers, validate_ident};
 use references::{
@@ -383,6 +384,7 @@ fn validate_single_variant(
 
     // Validate cluster requirements
     validate_index_clusters(&fqn, &indexes, &index_offsets, &mut errors);
+    validate_indexes_supported(&fqn, &stmt, &indexes, &index_offsets, &mut errors);
     validate_mv_cluster(&fqn, &stmt, main_offset, &mut errors);
     validate_sink_cluster(&fqn, &stmt, main_offset, &mut errors);
     validate_source_cluster(&fqn, &stmt, main_offset, &mut errors);

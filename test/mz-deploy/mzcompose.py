@@ -1341,6 +1341,28 @@ def workflow_reserved_words(c: Composition, parser: WorkflowArgumentParser) -> N
         assert len(rows) == 1, f"expected reserved-word table 'table', got {rows}"
 
 
+def workflow_index_on_storage(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Indexes on tables and sources are rejected at compile time.
+
+    Compute objects (views, materialized views) can carry indexes; storage
+    objects (tables, sources) cannot. `compile` must fail with a clean error
+    that points the user at indexing a view instead.
+    """
+    setup_base(c)
+
+    result = run_mz_deploy(c, "index-on-storage/v1", "compile", check=False)
+    assert (
+        result.returncode != 0
+    ), f"compile should reject an index on a table, got rc=0: {result.stdout}"
+    combined = result.stdout + result.stderr
+    assert (
+        "is not supported on table" in combined
+    ), f"expected index-on-table error, got:\n{combined}"
+    assert (
+        "create a view" in combined
+    ), f"expected hint to suggest indexing a view, got:\n{combined}"
+
+
 def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Exercise `apply` re-runs for CONNECTION objects.
 

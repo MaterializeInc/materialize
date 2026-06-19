@@ -1,8 +1,8 @@
 # apply sources — Create missing sources
 
 Reads source definitions from the project and creates any that don't
-exist in the database. Existing sources are skipped. Associated indexes,
-grants, and comments are applied for newly created sources.
+exist in the database. Existing sources are skipped. Associated grants and
+comments are applied for newly created sources.
 
 ## Usage
 
@@ -16,8 +16,7 @@ grants, and comments are applied for newly created sources.
 4. Creates missing schemas if needed.
 5. For each source that does not exist:
    - Executes the `CREATE SOURCE` statement.
-   - Applies associated `CREATE INDEX`, `GRANT`, and `COMMENT`
-     statements.
+   - Applies associated `GRANT` and `COMMENT` statements.
 6. Reconciles grants on sources that already exist.
 
 The command is **idempotent** — running it multiple times produces the
