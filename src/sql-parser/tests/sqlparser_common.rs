@@ -759,9 +759,9 @@ fn cast_operand_reparenthesized_after_nested_stripped() {
         }
     }
 
-    // `CAST(-0 AS int4)` parses to `Cast(Nested(- 0))`; the unary minus is not
+    // `CAST(-0 AS int4)` parses to `Cast(Nested(- 0))`. The unary minus is not
     // self-delimiting, so the printer must re-add parens once the `Nested` is
-    // gone — otherwise it prints `- 0::int4`, which reparses as `- (0::int4)`
+    // gone. Otherwise it prints `- 0::int4`, which reparses as `- (0::int4)`
     // (a structurally different, semantically different expression).
     let mut ast = mz_sql_parser::parser::parse_statements("SELECT CAST(-0 AS int4) + a")
         .unwrap()
@@ -852,7 +852,7 @@ fn binary_op_operand_reparenthesized_after_nested_stripped() {
     // A binary operator must parenthesize an operand that re-associates on
     // reparse once the parser's protective `Expr::Nested` is stripped. The left
     // operand is decided by its *right* edge (the operator reaches into its right
-    // spine), the right operand by its *left* edge — and an operand's top operator
+    // spine), the right operand by its *left* edge. An operand's top operator
     // is not enough, because a left-/right-nested chain can bury a looser operator
     // down the spine. `(a + b) * c` -> `Op(*, Op(+), c)` must still print
     // `(a + b) * c`, not `a + b * c`.
@@ -869,10 +869,23 @@ fn binary_op_operand_reparenthesized_after_nested_stripped() {
         // the `NOT` unless the whole left is parenthesized.
         "SELECT (- NOT a IN (b)) = ANY (SELECT c FROM t)",
         // The right operand's *top* operator (`IN`, binds tighter than `<>`) hides
-        // a looser `= ANY` (`Cmp`, equal to `<>`) on its left spine; without
+        // a looser `= ANY` (`Cmp`, equal to `<>`) on its left spine. Without
         // parens the `<>` would re-associate into that `= ANY`'s left, so the
         // right operand must be parenthesized by its left edge, not its top.
         "SELECT a <> (b = ANY (ARRAY[c]) IN (SELECT d FROM t))",
+        // The quantified `<op>` is an ordinary binary infix and can bind *tighter*
+        // than its left's right spine: `*` (`MultiplyDivide`) over a `+`
+        // (`PlusMinus`) left must keep the parens, or `(a + b) * ANY (...)` prints
+        // `a + b * ANY (...)` and reparses as `a + (b * ANY (...))`. Decided by the
+        // left's right edge vs `<op>`'s own precedence, not a fixed `Like` cutoff.
+        "SELECT (a + b) * ANY (ARRAY[c])",
+        "SELECT (a + b) * ANY (SELECT c FROM t)",
+        "SELECT (a - b) / ALL (ARRAY[c])",
+        "SELECT (a - b) % ALL (SELECT c FROM t)",
+        // Prefix `~` binds at `Other`, looser than `*`, so it is right-transparent
+        // for a tighter quantified `*`: `~ a * ANY (...)` would bind the `* ANY`
+        // into the `~`'s operand without the parens.
+        "SELECT (~ a) * ANY (ARRAY[c])",
     ] {
         let mut ast = mz_sql_parser::parser::parse_statements(sql)
             .unwrap()
@@ -888,6 +901,70 @@ fn binary_op_operand_reparenthesized_after_nested_stripped() {
         assert_eq!(
             ast, reparsed,
             "binary-op display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn quantified_left_minimal_parens_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // The quantified `<op>` binds at its own precedence, so a left whose right
+    // edge is *equal to or tighter than* `<op>` needs no parens. The old fixed
+    // `Like` threshold wrapped every `Cmp`/`Like`-edged left. Assert the minimal
+    // form now prints bare (and still round-trips). The `(left)` in each input is
+    // the parser's protective `Nested`, which we strip so `write_quantified_left`
+    // alone decides the parens.
+    for (sql, expected) in [
+        // Equal precedence on the left's right edge: the left's own `=` (`Cmp`)
+        // closes before the quantified `=` (`Cmp`), left-associatively.
+        (
+            "SELECT (a = b) = ANY (ARRAY[c])",
+            "SELECT a = b = ANY (ARRAY[c])",
+        ),
+        // Tighter left edge (`Like` > `Cmp`) under a looser quantified `=`.
+        (
+            "SELECT (a LIKE b) = ANY (ARRAY[c])",
+            "SELECT a LIKE b = ANY (ARRAY[c])",
+        ),
+        // Much tighter arithmetic left under a looser quantified `=`.
+        (
+            "SELECT (a + b) = ANY (ARRAY[c])",
+            "SELECT a + b = ANY (ARRAY[c])",
+        ),
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        assert_eq!(
+            displayed, expected,
+            "quantified-left over-parenthesized after Nested was stripped: {sql:?}"
+        );
+        // The bare form must still reparse to the same AST.
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "minimal quantified-left did not round-trip: {sql:?}"
         );
     }
 }
@@ -911,7 +988,7 @@ fn is_distinct_from_rhs_reparenthesized_after_nested_stripped() {
     // `IS DISTINCT FROM` parses its right-hand side at the `IS` precedence (see
     // `Parser::parse_is`), so a RHS whose left spine binds at or below `IS`
     // (`OR`/`AND`/`IS`) is wrapped in `Expr::Nested`. Once stripped, the printer
-    // must re-add the parens — otherwise `a IS DISTINCT FROM b OR c` reparses as
+    // must re-add the parens. Otherwise `a IS DISTINCT FROM b OR c` reparses as
     // `(a IS DISTINCT FROM b) OR c`. This drift is invisible to a stable-string
     // round trip (both ASTs print to the same string), so it is checked
     // structurally here.
@@ -1011,9 +1088,9 @@ fn postfix_access_receiver_reparenthesized_after_nested_stripped() {
     // self-delimiting once `Expr::Nested` is stripped, or the trailing token
     // re-binds. A bare-name `FieldAccess`/`WildcardAccess` receiver prints as a
     // dotted name and collides with a qualified identifier (`(a).b` -> `a.b` is
-    // `Identifier([a, b])`); a `Cast` subscript receiver lets the type parser eat
-    // the `[…]` as an array suffix (`(a::int4)[1]` -> `a::int4[1]` is `a::int4[]`);
-    // and a nested `Subscript` receiver flattens (`(a[1])[2]` -> `a[1][2]` is one
+    // `Identifier([a, b])`). A `Cast` subscript receiver lets the type parser eat
+    // the `[…]` as an array suffix (`(a::int4)[1]` -> `a::int4[1]` is `a::int4[]`).
+    // A nested `Subscript` receiver flattens (`(a[1])[2]` -> `a[1][2]` is one
     // two-position subscript).
     for sql in [
         // dot receiver

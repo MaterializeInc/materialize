@@ -222,7 +222,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str("NOT ");
                 // `NOT` binds tighter than `AND`/`OR`, so an operand exposing a
                 // looser operator on its left spine (`NOT (a OR b)`) must keep its
-                // parens once `Nested` is stripped — use `left_edge`, since the
+                // parens once `Nested` is stripped. We use `left_edge`, since the
                 // `NOT` sits to the operand's left.
                 write_binary_operand(f, expr, left_edge(expr) < prec::NOT);
             }
@@ -305,7 +305,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 // The pattern and escape parse at `Like` precedence and sit to the
                 // right of the keyword, so an operand exposing a precedence at or
                 // below `Like` on its left spine (e.g. an `IN`/`LIKE`/`BETWEEN` at
-                // equal precedence) re-associates unless parenthesized —
+                // equal precedence) re-associates unless parenthesized.
                 // `a LIKE b IN (q)` parses as `(a LIKE b) IN (q)`. When an `ESCAPE`
                 // follows, the pattern is *also* immediately left of `ESCAPE`: a
                 // `[I]LIKE` exposed on the pattern's right spine would steal the
@@ -326,7 +326,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 high,
             } => {
                 // The subject is the LHS of the `BETWEEN` infix (parsed at
-                // `Like`); a spine exposed at or below `Like` on its right would
+                // `Like`). A spine exposed at or below `Like` on its right would
                 // pull `BETWEEN` inside it (`a OR b BETWEEN …` is `a OR (b BETWEEN
                 // …)`), so parenthesize via `right_edge`. Parser ASTs wrap such a
                 // subject in `Nested` (`ATOM`), so they're unaffected.
@@ -341,18 +341,12 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             }
             Expr::Op { op, expr1, expr2 } => {
                 if let Some(expr2) = expr2 {
-                    // Binary operators are left-associative, so an operand that
-                    // re-associates on reparse must be parenthesized. The left
-                    // operand needs parens when the operator (printed to its
-                    // right) reaches into its right spine at a strictly looser
-                    // precedence (`right_edge`); the right operand needs parens
-                    // when the operator (printed to its left) reaches into its
-                    // left spine at an equal-or-looser precedence (`left_edge`,
-                    // `<=` because equal precedence re-associates left, so
-                    // `a - (b - c)` must keep its parens). The parser wraps such
-                    // operands in `Expr::Nested` (which ranks `ATOM` on both
-                    // edges, so it never re-parenthesizes), leaving parser-produced
-                    // ASTs unchanged; this re-adds parens for ASTs that lost them.
+                    // Binary operators are left-associative: parenthesize an
+                    // operand that would re-associate once `Nested` is stripped.
+                    // The left by its `right_edge` (strictly looser than `op`), the
+                    // right by its `left_edge` (equal-or-looser, as equal
+                    // re-associates left). See those helpers for the spine
+                    // reasoning.
                     let p = binary_op_precedence(op);
                     write_binary_operand(f, expr1, right_edge(expr1) < p);
                     f.write_str(" ");
@@ -378,12 +372,12 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             }
             Expr::Cast { expr, data_type } => {
                 // `::` binds very tightly, so a non-self-delimiting operand must
-                // be parenthesized or the cast re-associates into its spine —
+                // be parenthesized or the cast re-associates into its spine.
                 // `CAST(-0 AS int4)` (i.e. `Cast(- 0)`) would otherwise print as
                 // `- 0::int4` and reparse as `- (0::int4)`. The parser wraps such
                 // operands in `Expr::Nested`, but `normalize` strips those, so the
-                // printer must re-add them (mirrors the `Collate` arm; `Nested` is
-                // itself self-delimiting, so parser-produced ASTs don't double up).
+                // printer must re-add them (mirroring the `Collate` arm). `Nested`
+                // is itself self-delimiting, so parser-produced ASTs don't double up.
                 if prints_self_delimiting(expr) {
                     f.write_node(&expr);
                 } else {
@@ -472,7 +466,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AnySubquery { left, op, right } => {
-                write_quantified_left(f, left);
+                write_quantified_left(f, left, op);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ANY (");
@@ -480,7 +474,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AnyExpr { left, op, right } => {
-                write_quantified_left(f, left);
+                write_quantified_left(f, left, op);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ANY (");
@@ -488,7 +482,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AllSubquery { left, op, right } => {
-                write_quantified_left(f, left);
+                write_quantified_left(f, left, op);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ALL (");
@@ -496,7 +490,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AllExpr { left, op, right } => {
-                write_quantified_left(f, left);
+                write_quantified_left(f, left, op);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ALL (");
@@ -562,13 +556,13 @@ impl_display_t!(Expr);
 /// number `1.` and leaves `x` as an alias, and `'a'::T.x` consumes `T.x` as a
 /// qualified type name. The whitelist below covers receivers that print as
 /// self-terminating syntax (parenthesized exprs, function calls, bracketed
-/// collections, etc.); anything else gets explicit parens.
+/// collections, etc.). Anything else gets explicit parens.
 ///
 /// A bare `Identifier`/`QualifiedWildcard` receiver is *not* safe: `a` then
 /// `.b`/`.*` prints as `a.b`/`a.*`, which reparses as the qualified identifier
 /// `Identifier([a, b])` / `QualifiedWildcard([a])` rather than a field/wildcard
 /// access. The parser only ever builds those accesses over a parenthesized
-/// receiver (`(a).b`), so it wraps the name in `Expr::Nested`; a bare name here
+/// receiver (`(a).b`), so it wraps the name in `Expr::Nested`. A bare name here
 /// is a `Nested`-stripped AST and must be re-parenthesized. A `FieldAccess` /
 /// `WildcardAccess` receiver *is* safe, because its own printing already
 /// parenthesizes a bare-name base (`(a).b.c`), so the chain stays self-delimiting.
@@ -617,15 +611,27 @@ fn write_dot_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: 
     }
 }
 
-/// Write `left` as the LHS of `<left> <op> ANY/ALL (...)`. The parser parses the
-/// left at `Cmp`, and the `<op>` printed to its right is a binary infix that will
-/// reach into any spine exposed at or below `Like` and reparse it as part of the
-/// quantified expression's left rather than as a wrapper around it. Use
-/// [`right_edge`] so a low-precedence spine hidden under right-transparent
-/// prefixes (`- NOT a IN (b) = ANY (...)`, which exposes the `NOT`'s `IN`) is
-/// caught; a normal tight infix `Op` prints bare.
-fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
-    let needs_parens = right_edge(expr) <= prec::LIKE;
+/// Write `left` as the LHS of `<left> <op> ANY/ALL (...)`. The printed `<op>` is an
+/// ordinary binary infix. It can be any operator the parser accepts here, from
+/// `=`/`<` (`Cmp`) all the way down to `*`/`/`/`%` (`MultiplyDivide`), and on
+/// reparse it binds into any operator exposed on `left`'s right spine that is
+/// *strictly looser* than `<op>` itself, stealing that suffix into the quantified
+/// expression's left rather than wrapping the whole `left`. So parenthesize
+/// exactly when `left`'s [`right_edge`] binds looser than `<op>`'s own precedence
+/// ([`binary_op_precedence`]), mirroring the binary-`Op` arm. Using the operator's
+/// real precedence (not a fixed `Like` threshold) both parenthesizes a
+/// tighter-binding `<op>` over a looser left and leaves an equal-or-tighter left
+/// bare (`a = b = ANY (…)`, `a LIKE b = ANY (…)`), which the old fixed threshold
+/// over-parenthesized. The tighter-binding case, `(a + b) * ANY (…)`, would
+/// otherwise print `a + b * ANY (…)` and reparse as the different
+/// `a + (b * ANY (…))`. [`right_edge`] also sees a looser spine hidden under
+/// right-transparent prefixes, e.g. the `NOT`'s `IN` in `- NOT a IN (b) = ANY (…)`.
+fn write_quantified_left<W: fmt::Write, T: AstInfo>(
+    f: &mut AstFormatter<W>,
+    expr: &Expr<T>,
+    op: &Op,
+) {
+    let needs_parens = right_edge(expr) < binary_op_precedence(op);
     if needs_parens {
         f.write_str("(");
         f.write_node(expr);
@@ -638,13 +644,13 @@ fn write_quantified_left<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, exp
 /// Write `bound` as a `BETWEEN … AND …` bound. The parser parses both bounds with
 /// `parse_subexpr(Precedence::Like)` (see `Parser::parse_between`), starting fresh
 /// with nothing to the bound's left, so it walks the bound's *left spine* and
-/// stops at the first operator binding at or below `Like` — leaving that operator
+/// stops at the first operator binding at or below `Like`, leaving that operator
 /// outside the bound (`x BETWEEN 1 IS NULL AND y` parses `1` as the bound, then
 /// expects `AND` but finds `IS`). A bound is therefore safe bare only when its
-/// left edge binds strictly above `Like`; use [`left_edge`] (not [`right_edge`],
+/// left edge binds strictly above `Like`. Use [`left_edge`] (not [`right_edge`],
 /// which closes at `ATOM` for the right-closing `IS NULL`/`= ANY (…)`/`IN (…)`
 /// forms whose looseness is on the left). The parser wraps these bounds in
-/// `Expr::Nested` (which is `ATOM`, so it prints bare); this re-adds the parens
+/// `Expr::Nested` (which is `ATOM`, so it prints bare). This re-adds the parens
 /// for ASTs where that wrapper is absent.
 fn write_between_bound<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, bound: &Expr<T>) {
     let needs_parens = left_edge(bound) <= prec::LIKE;
@@ -657,32 +663,41 @@ fn write_between_bound<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, bound
     }
 }
 
-/// Output-precedence ranks, ordered like `Parser::get_next_precedence` /
-/// `Parser::Precedence` (higher binds tighter). They classify the *top* operator
-/// an expr prints with, so the binary-operator printer can parenthesize an
-/// operand that would otherwise re-associate on reparse. Keep in sync with the
-/// parser. `ATOM` covers the self-delimiting primaries — they never need parens.
+/// Output-precedence ranks, derived directly from the parser's [`Precedence`]
+/// ladder (higher binds tighter) so it stays the single source of truth:
+/// reordering or inserting a parser level reranks these automatically, and only
+/// the variant each rank maps to is maintained by hand. They classify the *top*
+/// operator an expr prints with, so the binary-operator printer can parenthesize
+/// an operand that would otherwise re-associate on reparse. `ATOM`, the one rank
+/// with no parser counterpart, is layered one above the tightest parser level to
+/// mark the self-delimiting primaries. They never need parens.
+///
+/// [`Precedence`]: crate::parser::Precedence
+// `Precedence` is a fieldless enum with a handful of variants, so reading each
+// discriminant with `as u8` is exact and lossless.
+#[allow(clippy::as_conversions)]
 mod prec {
-    pub const OR: u8 = 1;
-    pub const AND: u8 = 2;
-    pub const NOT: u8 = 3;
-    pub const IS: u8 = 4;
-    pub const CMP: u8 = 5;
-    pub const LIKE: u8 = 6;
-    pub const OTHER: u8 = 7;
-    pub const PLUS_MINUS: u8 = 8;
-    pub const MULTIPLY_DIVIDE: u8 = 9;
-    // The `COLLATE` and postfix (`::`/`[…]`) parser levels (10 and 12) live
-    // between `MULTIPLY_DIVIDE` and `ATOM`, but neither edge function ever
-    // *returns* them: those forms are self-delimiting (their own operand is
-    // parenthesized when it isn't), so both their edges rank `ATOM`. The holes
-    // are kept so `PREFIX` keeps the parser's relative position.
+    use crate::parser::Precedence;
+
+    pub const OR: u8 = Precedence::Or as u8;
+    pub const AND: u8 = Precedence::And as u8;
+    pub const NOT: u8 = Precedence::PrefixNot as u8;
+    pub const IS: u8 = Precedence::Is as u8;
+    pub const CMP: u8 = Precedence::Cmp as u8;
+    pub const LIKE: u8 = Precedence::Like as u8;
+    pub const OTHER: u8 = Precedence::Other as u8;
+    pub const PLUS_MINUS: u8 = Precedence::PlusMinus as u8;
+    pub const MULTIPLY_DIVIDE: u8 = Precedence::MultiplyDivide as u8;
+    // The `COLLATE` and postfix (`::`/`[…]`) parser levels live between
+    // `MULTIPLY_DIVIDE` and `ATOM`, but neither edge function ever *returns* them:
+    // those forms are self-delimiting (their own operand is parenthesized when it
+    // isn't), so both their edges rank `ATOM`. Kept for parity with the ladder.
     #[allow(dead_code)]
-    pub const COLLATE: u8 = 10;
-    pub const PREFIX: u8 = 11;
+    pub const COLLATE: u8 = Precedence::PostfixCollateAt as u8;
+    pub const PREFIX: u8 = Precedence::PrefixPlusMinus as u8;
     #[allow(dead_code)]
-    pub const POSTFIX: u8 = 12;
-    pub const ATOM: u8 = 13;
+    pub const POSTFIX: u8 = Precedence::PostfixSubscriptCast as u8;
+    pub const ATOM: u8 = Precedence::PostfixSubscriptCast as u8 + 1;
 }
 
 /// The precedence of a binary operator, mirroring `Parser::get_next_precedence`.
@@ -702,7 +717,7 @@ fn binary_op_precedence(op: &Op) -> u8 {
 /// The precedence at which a prefix operator (`Op` with no second operand)
 /// parses its operand, mirroring `Parser::parse_prefix`: `-`/`+` at
 /// `PrefixPlusMinus`, but `~` (and namespaced prefixes) at `Other`, so `~ a + b`
-/// parses as `~ (a + b)` — `~` binds looser than `+`/`-`/`*`.
+/// parses as `~ (a + b)`. `~` binds looser than `+`/`-`/`*`.
 fn unary_prec(op: &Op) -> u8 {
     if op.namespace.is_none() && (op.op == "-" || op.op == "+") {
         prec::PREFIX
@@ -711,7 +726,7 @@ fn unary_prec(op: &Op) -> u8 {
     }
 }
 
-/// The loosest precedence exposed on `expr`'s *right spine* — the precedence at
+/// The loosest precedence exposed on `expr`'s *right spine*, the precedence at
 /// which an operator printed immediately to its right would bind *into* it
 /// rather than wrap it. For a left operand / subject of a construct that prints
 /// to its right, this is what decides parenthesization (its mirror, [`left_edge`],
@@ -736,12 +751,12 @@ fn right_edge<T: AstInfo>(expr: &Expr<T>) -> u8 {
             expr2: None,
         } => unary_prec(op).min(right_edge(expr1)),
         Expr::Not { expr } => prec::NOT.min(right_edge(expr)),
-        // `IS DISTINCT FROM x` exposes `x`; `IS NULL`/`TRUE`/… close.
+        // `IS DISTINCT FROM x` exposes `x`, while `IS NULL`/`TRUE`/… close.
         Expr::IsExpr {
             construct: IsExprConstruct::DistinctFrom(x),
             ..
         } => prec::IS.min(right_edge(x)),
-        // `… BETWEEN low AND high` exposes `high`; `… [I]LIKE pat [ESCAPE esc]`
+        // `… BETWEEN low AND high` exposes `high`. `… [I]LIKE pat [ESCAPE esc]`
         // exposes the rightmost of `esc`/`pat`.
         Expr::Between { high, .. } => prec::LIKE.min(right_edge(high)),
         Expr::Like {
@@ -756,7 +771,7 @@ fn right_edge<T: AstInfo>(expr: &Expr<T>) -> u8 {
     }
 }
 
-/// The loosest precedence exposed on `expr`'s *left spine* — the mirror of
+/// The loosest precedence exposed on `expr`'s *left spine*, the mirror of
 /// [`right_edge`]. For a *right* operand (an operator on its left), this is what
 /// decides parenthesization: a left-associative operator printed to its left
 /// reaches into the left spine and re-associates if that spine exposes a
@@ -788,10 +803,10 @@ fn left_edge<T: AstInfo>(expr: &Expr<T>) -> u8 {
         | Expr::Between { expr, .. }
         | Expr::InList { expr, .. }
         | Expr::InSubquery { expr, .. } => prec::LIKE.min(left_edge(expr)),
-        // Everything else leads with its own token on the left — a prefix
+        // Everything else leads with its own token on the left: a prefix
         // operator (`-`/`+`/`~`/`NOT`), a keyword, `(…)`, `ARRAY[…]`, a literal,
         // or a `COLLATE`/`::`/`[…]` whose own operand the printer parenthesizes
-        // when it isn't self-delimiting — so nothing to the left binds into it.
+        // when it isn't self-delimiting. Nothing to the left binds into it.
         _ => prec::ATOM,
     }
 }

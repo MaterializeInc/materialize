@@ -343,8 +343,12 @@ const SPECULATIVE_FAILURES_PER_TOKEN: usize = 100;
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
 /// precedence classes are ordered from weakest binding at the top to tightest binding at the
 /// bottom.
+///
+/// The expression printer's `ast::defs::expr::prec` ranks are derived from this
+/// ladder via `as u8`, so this enum is the single source of truth for output
+/// parenthesization precedence too. Keep the ordering authoritative.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-enum Precedence {
+pub(crate) enum Precedence {
     Zero,
     Or,
     And,
