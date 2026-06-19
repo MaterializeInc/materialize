@@ -262,6 +262,9 @@ FROM t WHERE y = 'null'
 0
 
 # Verify JSON serialization of a CaseLiteral plan succeeds.
+# Normalize the table's GlobalId so the golden is stable regardless of how many
+# catalog objects exist when this file runs (it embeds "User": <n> in the raw plan).
+replace "User": \d+  "User": <id>
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT
@@ -284,7 +287,7 @@ FROM t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": <id>
                     }
                   },
                   "typ": {
@@ -408,7 +411,7 @@ FROM t
   "sources": [
     {
       "id": {
-        "User": 1
+        "User": <id>
       },
       "op": null
     }
