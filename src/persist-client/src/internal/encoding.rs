@@ -384,13 +384,25 @@ impl RustType<String> for IdempotencyToken {
     }
 }
 
-impl RustType<String> for PartialBatchKey {
-    fn into_proto(&self) -> String {
-        self.0.clone()
+impl PartialBatchKey {
+    /// Encode this key as a `(path, absolute_key)` pair. The path is the
+    /// raw stored string; `absolute_key` is true for the `Absolute` variant
+    /// and false for `Relative`. The discriminator lives on the containing
+    /// proto message because proto3 default values keep older state, written
+    /// before `Absolute` existed, decoding unchanged.
+    fn into_proto_parts(&self) -> (String, bool) {
+        match self {
+            PartialBatchKey::Relative(s) => (s.clone(), false),
+            PartialBatchKey::Absolute(s) => (s.clone(), true),
+        }
     }
 
-    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        Ok(PartialBatchKey(proto))
+    fn from_proto_parts(path: String, absolute: bool) -> Self {
+        if absolute {
+            PartialBatchKey::Absolute(path)
+        } else {
+            PartialBatchKey::Relative(path)
+        }
     }
 }
 
@@ -1449,6 +1461,10 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
             runs: self.run_splits.into_proto(),
             run_meta,
             deprecated_keys: vec![],
+            cutoff_ts: self
+                .cutoff_ts
+                .as_ref()
+                .map(|t| i64::from_le_bytes(T::encode(t))),
         }
     }
 
@@ -1458,7 +1474,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
         // part.
         parts.extend(proto.deprecated_keys.into_iter().map(|key| {
             RunPart::Single(BatchPart::Hollow(HollowBatchPart {
-                key: PartialBatchKey(key),
+                key: PartialBatchKey::Relative(key),
                 meta: Default::default(),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
@@ -1480,12 +1496,14 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
         };
         let mut run_meta: Vec<RunMeta> = proto.run_meta.into_rust()?;
         run_meta.resize(num_runs, RunMeta::default());
+        let cutoff_ts = proto.cutoff_ts.map(|x| T::decode(x.to_le_bytes()));
         Ok(HollowBatch {
             desc: proto.desc.into_rust_if_some("desc")?,
             parts,
             len: proto.len.into_rust()?,
             run_splits,
             run_meta,
+            cutoff_ts,
         })
     }
 }
@@ -1558,10 +1576,12 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for RunPart<T> {
 
 impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> {
     fn into_proto(&self) -> ProtoHollowBatchPart {
+        let (key, absolute_key) = self.key.into_proto_parts();
         let part = ProtoHollowBatchPart {
             kind: Some(proto_hollow_batch_part::Kind::RunRef(ProtoHollowRunRef {
-                key: self.key.into_proto(),
+                key,
                 max_part_bytes: self.max_part_bytes.into_proto(),
+                absolute_key,
             })),
             encoded_size_bytes: self.hollow_bytes.into_proto(),
             key_lower: Bytes::copy_from_slice(&self.key_lower),
@@ -1573,6 +1593,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             structured_key_lower: self.structured_key_lower.into_proto(),
             deprecated_schema_id: None,
             metadata: BTreeMap::default(),
+            absolute_key: false,
         };
         part
     }
@@ -1585,7 +1606,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             ))?,
         };
         Ok(Self {
-            key: run_proto.key.into_rust()?,
+            key: PartialBatchKey::from_proto_parts(run_proto.key, run_proto.absolute_key),
             hollow_bytes: proto.encoded_size_bytes.into_rust()?,
             max_part_bytes: run_proto.max_part_bytes.into_rust()?,
             key_lower: proto.key_lower.to_vec(),
@@ -1599,19 +1620,26 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
 impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
     fn into_proto(&self) -> ProtoHollowBatchPart {
         match self {
-            BatchPart::Hollow(x) => ProtoHollowBatchPart {
-                kind: Some(proto_hollow_batch_part::Kind::Key(x.key.into_proto())),
-                encoded_size_bytes: x.encoded_size_bytes.into_proto(),
-                key_lower: Bytes::copy_from_slice(&x.key_lower),
-                structured_key_lower: x.structured_key_lower.as_ref().map(|lazy| lazy.buf.clone()),
-                key_stats: x.stats.into_proto(),
-                ts_rewrite: x.ts_rewrite.as_ref().map(|x| x.into_proto()),
-                diffs_sum: x.diffs_sum.as_ref().map(|x| i64::from_le_bytes(*x)),
-                format: x.format.map(|f| f.into_proto()),
-                schema_id: x.schema_id.into_proto(),
-                deprecated_schema_id: x.deprecated_schema_id.into_proto(),
-                metadata: BTreeMap::default(),
-            },
+            BatchPart::Hollow(x) => {
+                let (key, absolute_key) = x.key.into_proto_parts();
+                ProtoHollowBatchPart {
+                    kind: Some(proto_hollow_batch_part::Kind::Key(key)),
+                    encoded_size_bytes: x.encoded_size_bytes.into_proto(),
+                    key_lower: Bytes::copy_from_slice(&x.key_lower),
+                    structured_key_lower: x
+                        .structured_key_lower
+                        .as_ref()
+                        .map(|lazy| lazy.buf.clone()),
+                    key_stats: x.stats.into_proto(),
+                    ts_rewrite: x.ts_rewrite.as_ref().map(|x| x.into_proto()),
+                    diffs_sum: x.diffs_sum.as_ref().map(|x| i64::from_le_bytes(*x)),
+                    format: x.format.map(|f| f.into_proto()),
+                    schema_id: x.schema_id.into_proto(),
+                    deprecated_schema_id: x.deprecated_schema_id.into_proto(),
+                    metadata: BTreeMap::default(),
+                    absolute_key,
+                }
+            }
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
@@ -1629,6 +1657,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 schema_id: schema_id.into_proto(),
                 deprecated_schema_id: deprecated_schema_id.into_proto(),
                 metadata: BTreeMap::default(),
+                absolute_key: false,
             },
         }
     }
@@ -1640,10 +1669,11 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
         };
         let schema_id = proto.schema_id.into_rust()?;
         let deprecated_schema_id = proto.deprecated_schema_id.into_rust()?;
+        let absolute_key = proto.absolute_key;
         match proto.kind {
             Some(proto_hollow_batch_part::Kind::Key(key)) => {
                 Ok(BatchPart::Hollow(HollowBatchPart {
-                    key: key.into_rust()?,
+                    key: PartialBatchKey::from_proto_parts(key, absolute_key),
                     meta: proto.metadata.into_rust()?,
                     encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
                     key_lower: proto.key_lower.into(),
@@ -2038,7 +2068,7 @@ mod tests {
                 Antichain::from_elem(3u64),
             ),
             vec![RunPart::Single(BatchPart::Hollow(HollowBatchPart {
-                key: PartialBatchKey("a".into()),
+                key: PartialBatchKey::Relative("a".into()),
                 meta: Default::default(),
                 encoded_size_bytes: 5,
                 key_lower: vec![],
@@ -2066,7 +2096,7 @@ mod tests {
         expected
             .parts
             .push(RunPart::Single(BatchPart::Hollow(HollowBatchPart {
-                key: PartialBatchKey("b".into()),
+                key: PartialBatchKey::Relative("b".into()),
                 meta: Default::default(),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
@@ -2079,6 +2109,124 @@ mod tests {
                 deprecated_schema_id: None,
             })));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
+    }
+
+    #[mz_ore::test]
+    fn hollow_batch_absolute_key_round_trip() {
+        let absolute_path =
+            "s00000000-0000-0000-0000-000000000000/n0000000/p00000000-0000-0000-0000-000000000001";
+        let batch = HollowBatch::new_run(
+            Description::new(
+                Antichain::from_elem(1u64),
+                Antichain::from_elem(2u64),
+                Antichain::from_elem(3u64),
+            ),
+            vec![
+                RunPart::Single(BatchPart::Hollow(HollowBatchPart {
+                    key: PartialBatchKey::Relative("rel".into()),
+                    meta: Default::default(),
+                    encoded_size_bytes: 5,
+                    key_lower: vec![],
+                    structured_key_lower: None,
+                    stats: None,
+                    ts_rewrite: None,
+                    diffs_sum: None,
+                    format: None,
+                    schema_id: None,
+                    deprecated_schema_id: None,
+                })),
+                RunPart::Single(BatchPart::Hollow(HollowBatchPart {
+                    key: PartialBatchKey::Absolute(absolute_path.into()),
+                    meta: Default::default(),
+                    encoded_size_bytes: 6,
+                    key_lower: vec![],
+                    structured_key_lower: None,
+                    stats: None,
+                    ts_rewrite: None,
+                    diffs_sum: None,
+                    format: None,
+                    schema_id: None,
+                    deprecated_schema_id: None,
+                })),
+            ],
+            7,
+        );
+        let proto = batch.into_proto();
+        // The first part's discriminator is the proto default (false); the
+        // second part's is true.
+        assert!(!proto.parts[0].absolute_key);
+        assert!(proto.parts[1].absolute_key);
+        let round_tripped = <HollowBatch<u64>>::from_proto(proto).unwrap();
+        assert_eq!(batch, round_tripped);
+    }
+
+    #[mz_ore::test]
+    fn hollow_batch_cutoff_ts_round_trip() {
+        let mut batch = HollowBatch::<u64>::new_run(
+            Description::new(
+                Antichain::from_elem(1u64),
+                Antichain::from_elem(5u64),
+                Antichain::from_elem(0u64),
+            ),
+            vec![],
+            0,
+        );
+        // The unset case round-trips as None and is absent on the wire.
+        let proto_unset = batch.clone().into_proto();
+        assert_eq!(proto_unset.cutoff_ts, None);
+        assert_eq!(HollowBatch::from_proto(proto_unset).unwrap(), batch);
+
+        // The set case round-trips by value.
+        batch.cutoff_ts = Some(3u64);
+        let proto_set = batch.clone().into_proto();
+        assert_eq!(proto_set.cutoff_ts, Some(3));
+        assert_eq!(HollowBatch::from_proto(proto_set).unwrap(), batch);
+    }
+
+    #[mz_ore::test]
+    fn hollow_batch_legacy_proto_decodes_defaults() {
+        // A ProtoHollowBatch with absolute_key absent on its parts and no
+        // cutoff_ts field is what older state encodes. It must decode to
+        // PartialBatchKey::Relative and cutoff_ts = None.
+        let legacy = ProtoHollowBatch {
+            desc: Some(
+                Description::new(
+                    Antichain::from_elem(1u64),
+                    Antichain::from_elem(2u64),
+                    Antichain::from_elem(0u64),
+                )
+                .into_proto(),
+            ),
+            parts: vec![ProtoHollowBatchPart {
+                kind: Some(proto_hollow_batch_part::Kind::Key("legacy".into())),
+                encoded_size_bytes: 8,
+                key_lower: Bytes::new(),
+                structured_key_lower: None,
+                ts_rewrite: None,
+                diffs_sum: None,
+                format: None,
+                schema_id: None,
+                deprecated_schema_id: None,
+                metadata: BTreeMap::default(),
+                key_stats: None,
+                // absolute_key defaults to false; emulate older protos that
+                // did not set the field.
+                absolute_key: false,
+            }],
+            len: 1,
+            runs: vec![],
+            run_meta: vec![],
+            deprecated_keys: vec![],
+            cutoff_ts: None,
+        };
+        let decoded = <HollowBatch<u64>>::from_proto(legacy).unwrap();
+        assert_eq!(decoded.cutoff_ts, None);
+        match &decoded.parts[0] {
+            RunPart::Single(BatchPart::Hollow(part)) => {
+                assert_eq!(part.key, PartialBatchKey::Relative("legacy".into()));
+            }
+            other => panic!("expected hollow part, got {:?}", other),
+        }
     }
 
     #[mz_ore::test]

@@ -1423,7 +1423,7 @@ mod tests {
                             Some(PartialBatchKey::new(&writer_key, &id))
                         };
 
-                        let keys = key.as_ref().map(|k| k.0.as_str());
+                        let keys = key.as_ref().map(|k| k.as_str());
                         let reqs = leader.collections.trace.push_batch(
                             crate::internal::state::tests::hollow(
                                 lower,
@@ -1637,7 +1637,7 @@ mod tests {
             (2, 4, 0, 100),
             &[(0, 3, 0, 1), (3, 4, 0, 0)],
             Err(
-                "overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [], run_meta: [] }",
+                "overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([0], [3], [0]), parts: [], len: 1, runs: [], run_meta: [], cutoff_ts: None }",
             ),
         );
 
@@ -1667,7 +1667,7 @@ mod tests {
             (0, 2, 0, 100),
             &[(0, 1, 0, 0), (1, 4, 0, 1)],
             Err(
-                "overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [], run_meta: [] }",
+                "overlapping batch was unexpectedly non-empty: HollowBatch { desc: ([1], [4], [0]), parts: [], len: 1, runs: [], run_meta: [], cutoff_ts: None }",
             ),
         );
 

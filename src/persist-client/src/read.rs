@@ -936,6 +936,7 @@ where
             let blob = Arc::clone(&self.blob);
             let metrics = Arc::clone(&self.metrics);
             let desc = batch.desc.clone();
+            let cutoff_ts = batch.cutoff_ts.clone();
             for await part in batch.part_stream(self.shard_id(), &*blob, &*metrics) {
                 yield LeasedBatchPart {
                     metrics: Arc::clone(&self.metrics),
@@ -943,6 +944,7 @@ where
                     filter: filter.clone(),
                     desc: desc.clone(),
                     part: part.expect("leased part").into_owned(),
+                    cutoff_ts: cutoff_ts.clone(),
                     lease: lease.clone(),
                     reader_id: self.reader_id.clone(),
                     filter_pushdown_audit: false,
@@ -1230,10 +1232,12 @@ where
             memory_budget_bytes,
         );
         for batch in batches {
+            let cutoff_ts = batch.cutoff_ts.clone();
             for (meta, run) in batch.runs() {
                 consolidator.enqueue_run(
                     &batch.desc,
                     meta,
+                    cutoff_ts.clone(),
                     run.into_iter()
                         .filter(|p| should_fetch_part(p.stats()))
                         .cloned(),

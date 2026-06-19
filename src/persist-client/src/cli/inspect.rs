@@ -327,7 +327,7 @@ pub async fn blob_batch_part(
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
 
-    let key = PartialBatchKey(partial_key);
+    let key = PartialBatchKey::Relative(partial_key);
     let buf = blob
         .get(&*key.complete(&shard_id))
         .await
@@ -340,7 +340,7 @@ pub async fn blob_batch_part(
         &FetchConfig::from_persist_config(&cfg),
         metrics.read.snapshot.clone(),
         parsed.desc.clone(),
-        &key.0,
+        key.as_str(),
         None,
         parsed,
     );

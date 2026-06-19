@@ -38,6 +38,10 @@ message ProtoHollowRunRef {
   // The largest size in bytes of any part in the run.
   // This is useful to limit memory use during compaction.
   uint64 max_part_bytes = 2;
+  // If true, `key` is a full blob path used verbatim. If false (the default,
+  // which is what older state encodes), `key` is relative to the owning
+  // shard's id and gets resolved against it.
+  bool absolute_key = 3;
 }
 
 message ProtoHollowBatchPart {
@@ -61,6 +65,11 @@ message ProtoHollowBatchPart {
   optional uint64 schema_id = 12;
 
   map<string, bytes> metadata = 14;
+
+  // Discriminator for the `kind::key` variant. Same semantics as
+  // ProtoHollowRunRef.absolute_key: false (default) means the path is relative
+  // to the owning shard, true means it is a full blob path used verbatim.
+  bool absolute_key = 15;
 
   optional bytes key_stats = 536870906;
 
@@ -111,6 +120,11 @@ message ProtoHollowBatch {
   repeated ProtoRunMeta run_meta = 6;
 
   repeated string deprecated_keys = 2;
+
+  // If set, readers should drop updates with `time > cutoff_ts` when
+  // streaming this batch. Encoded with Codec64 (T::encode then
+  // i64::from_le_bytes).
+  optional int64 cutoff_ts = 7;
 }
 
 message ProtoSpineId {

@@ -54,6 +54,7 @@ use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{
     LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, Schemas,
 };
+use crate::internal::gc::{BlobRefCheck, NoopBlobRefCheck};
 use crate::internal::machine::retry_external;
 use crate::internal::merge::{MergeTree, Pending};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
@@ -175,6 +176,9 @@ where
         for part in self.batch.parts.drain(..) {
             deletes.add(&part);
         }
+        // The blobs we're deleting belong to a batch that was never
+        // committed, so no external manifest can reference them yet. Skip
+        // the ref-check by passing the noop gate.
         let () = deletes
             .delete(
                 &*self.blob,
@@ -182,6 +186,7 @@ where
                 usize::MAX,
                 &*self.metrics,
                 &*self.metrics.retries.external.batch_delete,
+                &NoopBlobRefCheck,
             )
             .await;
     }
@@ -892,7 +897,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                         let run_refs: Vec<_> = runs
                             .iter()
-                            .map(|(meta, run)| (&compact_desc, meta, run.as_slice()))
+                            .map(|(meta, run)| (&compact_desc, None, meta, run.as_slice()))
                             .collect();
 
                         let output_batch = Compactor::<K, V, T, D>::compact_runs(
@@ -1469,6 +1474,7 @@ impl<T: Timestamp> PartDeletes<T> {
         concurrency: usize,
         metrics: &Metrics,
         delete_metrics: &RetryMetrics,
+        blob_ref_check: &dyn BlobRefCheck,
     ) where
         T: Codec64,
     {
@@ -1477,6 +1483,12 @@ impl<T: Timestamp> PartDeletes<T> {
                 .map(|key| {
                     let key = key.complete(&shard_id);
                     async move {
+                        // Skip the delete if any external manifest still
+                        // references this blob; otherwise persist's GC
+                        // proceeds as it always has.
+                        if blob_ref_check.is_referenced(&key).await {
+                            return;
+                        }
                         retry_external(delete_metrics, || blob.delete(&key)).await;
                     }
                 })

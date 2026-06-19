@@ -552,6 +552,9 @@ where
                 for part in &res.output.parts {
                     part_deletes.add(part);
                 }
+                // The output that's being thrown away was never committed,
+                // so no external manifest can reference its blobs. Pass the
+                // noop gate.
                 part_deletes
                     .delete(
                         machine.applier.state_versions.blob.as_ref(),
@@ -559,6 +562,7 @@ where
                         GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg),
                         &*metrics,
                         &metrics.retries.external.compaction_noop_delete,
+                        &crate::internal::gc::NoopBlobRefCheck,
                     )
                     .await;
             }
@@ -651,7 +655,7 @@ where
                 .map(|x| x.batch.parts.len()).sum::<usize>();
             let parts_after = chunked_runs.iter()
                 .flat_map(|(_, _, runs, _)| {
-                    runs.iter().map(|(_, _, parts)| parts.len())
+                    runs.iter().map(|(_, _, _, parts)| parts.len())
                 })
                 .sum::<usize>();
             assert_eq!(
@@ -684,7 +688,7 @@ where
                 };
 
                 let runs = runs.iter()
-                    .map(|(desc, meta, run)| (*desc, *meta, *run))
+                    .map(|(desc, cutoff_ts, meta, run)| (*desc, cutoff_ts.clone(), *meta, *run))
                     .collect::<Vec<_>>();
 
                 let batch = Self::compact_runs(
@@ -772,7 +776,7 @@ where
     ) -> Vec<(
         CompactionInput,
         Description<T>,
-        Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
+        Vec<(&'a Description<T>, Option<T>, &'a RunMeta, &'a [RunPart<T>])>,
         usize,
     )> {
         // Assert that all of the inputs are contiguous / can be compacted together.
@@ -820,9 +824,16 @@ where
 
             let num_runs = batch.run_meta.len();
 
-            let runs = batch.runs().flat_map(|(meta, parts)| {
+            let batch_cutoff_ts = batch.cutoff_ts.clone();
+            let runs = batch.runs().flat_map(move |(meta, parts)| {
+                let cutoff_ts = batch_cutoff_ts.clone();
                 if meta.order.unwrap_or(RunOrder::Codec) == cfg.batch.preferred_order {
-                    Either::Left(std::iter::once((&batch.desc, meta, parts)))
+                    Either::Left(std::iter::once((
+                        &batch.desc,
+                        cutoff_ts,
+                        meta,
+                        parts,
+                    )))
                 } else {
                     // The downstream consolidation step will handle a long run that's not in
                     // the desired order by splitting it up into many single-element runs. This preserves
@@ -837,11 +848,17 @@ where
                         !parts.iter().any(|r| matches!(r, RunPart::Many(_))),
                         "unexpected out-of-order hollow run"
                     );
-                    Either::Right(
-                        parts
-                            .iter()
-                            .map(move |p| (&batch.desc, meta, std::slice::from_ref(p))),
-                    )
+                    Either::Right(parts.iter().map({
+                        let cutoff_ts = cutoff_ts.clone();
+                        move |p| {
+                            (
+                                &batch.desc,
+                                cutoff_ts.clone(),
+                                meta,
+                                std::slice::from_ref(p),
+                            )
+                        }
+                    }))
                 }
             });
 
@@ -892,13 +909,13 @@ where
             debug_assert_eq!(current_chunk_max_memory_usage, 0);
             let mut current_chunk_run_ids = BTreeSet::new();
 
-            while let Some((desc, meta, parts)) = run_iter.next() {
+            while let Some((desc, cutoff_ts, meta, parts)) = run_iter.next() {
                 let run_size = max_part_bytes(parts, cfg);
-                current_chunk_runs.push((desc, meta, parts));
+                current_chunk_runs.push((desc, cutoff_ts, meta, parts));
                 current_chunk_max_memory_usage += run_size;
                 current_chunk_run_ids.extend(meta.id);
 
-                if let Some((_, _meta, next_parts)) = run_iter.peek() {
+                if let Some((_, _cutoff, _meta, next_parts)) = run_iter.peek() {
                     let next_size = max_part_bytes(next_parts, cfg);
                     if current_chunk_max_memory_usage + next_size > run_reserved_memory_bytes {
                         // If the current chunk only has one run, record a memory violation metric.
@@ -952,7 +969,7 @@ where
         cfg: &CompactConfig,
         shard_id: &ShardId,
         desc: &Description<T>,
-        runs: Vec<(&Description<T>, &RunMeta, &[RunPart<T>])>,
+        runs: Vec<(&Description<T>, Option<T>, &RunMeta, &[RunPart<T>])>,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -1019,8 +1036,8 @@ where
             prefetch_budget_bytes,
         );
 
-        for (desc, meta, parts) in runs {
-            consolidator.enqueue_run(desc, meta, parts.iter().cloned());
+        for (desc, cutoff_ts, meta, parts) in runs {
+            consolidator.enqueue_run(desc, meta, cutoff_ts, parts.iter().cloned());
         }
 
         let remaining_budget = consolidator.start_prefetches();
@@ -1231,6 +1248,96 @@ mod tests {
         .await;
         assert_eq!(part.desc, res.output.desc);
         assert_eq!(updates, all_ok(&data, 10));
+    }
+
+    // When an input batch carries a `cutoff_ts`, updates strictly above the
+    // cutoff must be dropped during compaction. The compacted output is a
+    // normal batch with `cutoff_ts = None`: the filter has been baked into
+    // the materialized data.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn compaction_honors_cutoff_ts(dyncfgs: ConfigUpdates) {
+        let kept = [
+            (("a".to_owned(), "alpha".to_owned()), 0u64, 1i64),
+            (("b".to_owned(), "beta".to_owned()), 1u64, 1i64),
+        ];
+        let dropped = [(("c".to_owned(), "gamma".to_owned()), 2u64, 1i64)];
+
+        let cache = new_test_client_cache(&dyncfgs);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 100);
+        let (mut write, _) = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed")
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        // One batch covers [0, 2) with cutoff_ts=1, dropping the t=1 row's
+        // peer at t=2 if it existed (it doesn't here; only t=0 and t=1 are in
+        // this batch). A second batch covers [2, 3) with the same cutoff so
+        // its t=2 row must be filtered out.
+        let mut b0 = write
+            .expect_batch(&kept, 0, 2)
+            .await
+            .into_hollow_batch();
+        let mut b1 = write
+            .expect_batch(&dropped, 2, 3)
+            .await
+            .into_hollow_batch();
+        b0.cutoff_ts = Some(1);
+        b1.cutoff_ts = Some(1);
+
+        let req = CompactReq {
+            shard_id: write.machine.shard_id(),
+            desc: Description::new(
+                b0.desc.lower().clone(),
+                b1.desc.upper().clone(),
+                Antichain::from_elem(3u64),
+            ),
+            inputs: vec![
+                IdHollowBatch {
+                    batch: Arc::new(b0),
+                    id: SpineId(0, 1),
+                },
+                IdHollowBatch {
+                    batch: Arc::new(b1),
+                    id: SpineId(1, 2),
+                },
+            ],
+        };
+        let schemas = Schemas {
+            id: None,
+            key: Arc::new(StringSchema),
+            val: Arc::new(StringSchema),
+        };
+        let res = Compactor::<String, String, u64, i64>::compact(
+            CompactConfig::new(&write.cfg, write.shard_id()),
+            Arc::clone(&write.blob),
+            Arc::clone(&write.metrics),
+            write.metrics.shards.shard(&write.machine.shard_id(), ""),
+            Arc::new(IsolatedRuntime::new_for_tests()),
+            req.clone(),
+            schemas.clone(),
+        )
+        .await
+        .expect("compaction failed");
+
+        assert_eq!(res.output.desc, req.desc);
+        assert_eq!(
+            res.output.cutoff_ts, None,
+            "compacted output should not carry a cutoff: the filter has been applied"
+        );
+        // Only the rows at t <= 1 survive; the t=2 row is dropped by the cutoff.
+        assert_eq!(res.output.len, kept.len());
+        let part = res.output.parts[0].expect_hollow_part();
+        let (_part, updates) = expect_fetch_part(
+            write.blob.as_ref(),
+            &part.key.complete(&write.machine.shard_id()),
+            &write.metrics,
+            &schemas,
+        )
+        .await;
+        assert_eq!(updates, all_ok(&kept, 3));
     }
 
     #[mz_persist_proc::test(tokio::test)]

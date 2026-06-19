@@ -24,7 +24,7 @@ use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::{assert_none, soft_assert_no_log};
-use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
+use mz_persist::location::{CaSResult, ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
@@ -62,6 +62,33 @@ pub struct Machine<K, V, T, D> {
     pub(crate) applier: Applier<K, V, T, D>,
     pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
 }
+
+/// Failure modes for [`Machine::initialize_from_snapshot`].
+#[derive(Debug)]
+pub enum InitializeFromSnapshotError {
+    /// The shard already exists in consensus, so it could not be initialized
+    /// from a snapshot.
+    AlreadyInitialized,
+    /// The supplied arguments do not yield a valid initial state. The string
+    /// describes the specific mismatch.
+    InvalidArgs(String),
+    /// The shard exists but its codecs disagree with the requested K, V, T, D.
+    CodecMismatch(Box<CodecMismatch>),
+}
+
+impl std::fmt::Display for InitializeFromSnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InitializeFromSnapshotError::AlreadyInitialized => {
+                f.write_str("shard already initialized")
+            }
+            InitializeFromSnapshotError::InvalidArgs(msg) => write!(f, "invalid arguments: {msg}"),
+            InitializeFromSnapshotError::CodecMismatch(err) => write!(f, "codec mismatch: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for InitializeFromSnapshotError {}
 
 // Impl Clone regardless of the type params.
 impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
@@ -121,6 +148,91 @@ where
             diagnostics,
         )
         .await?;
+        Ok(Machine {
+            applier,
+            isolated_runtime,
+        })
+    }
+
+    /// Initializes a fresh shard whose initial trace already contains `batches`
+    /// and whose upper is `upper`, then opens a [`Machine`] over it.
+    ///
+    /// Like [`Machine::new`], but the trace starts pre-populated instead of
+    /// empty. This is the bootstrap primitive callers reach for when they need
+    /// a shard whose manifest references blobs the shard's own writes did not
+    /// produce.
+    ///
+    /// Returns [`InitializeFromSnapshotError::AlreadyInitialized`] if some
+    /// other process initialized the shard between when this call started and
+    /// when its CAS landed. Returns [`InitializeFromSnapshotError::InvalidArgs`]
+    /// if `upper` does not match the upper implied by `batches` after they are
+    /// pushed into a fresh trace.
+    pub async fn initialize_from_snapshot(
+        cfg: PersistConfig,
+        shard_id: ShardId,
+        batches: Vec<HollowBatch<T>>,
+        upper: Antichain<T>,
+        metrics: Arc<Metrics>,
+        state_versions: Arc<StateVersions>,
+        shared_states: Arc<StateCache>,
+        pubsub_sender: Arc<dyn PubSubSender>,
+        isolated_runtime: Arc<IsolatedRuntime>,
+        diagnostics: Diagnostics,
+    ) -> Result<Self, InitializeFromSnapshotError> {
+        let shard_metrics = metrics.shards.shard(&shard_id, &diagnostics.shard_name);
+
+        // Build the initial state and a self-referential rollup blob.
+        let (initial_state, initial_diff) = state_versions
+            .write_initial_rollup_from_snapshot::<K, V, T, D>(&shard_metrics, batches, upper)
+            .await
+            .map_err(InitializeFromSnapshotError::InvalidArgs)?;
+        assert_eq!(
+            initial_state.seqno(),
+            SeqNo::minimum(),
+            "initial state should have the initial seqno"
+        );
+
+        // Atomically install the initial state in consensus. A mismatch means
+        // someone else got there first, in which case this call cannot
+        // produce a fresh-from-snapshot shard and the caller has to decide
+        // what to do.
+        let (cas_res, _diff) = retry_external(
+            &metrics.retries.external.maybe_init_cas,
+            || async {
+                state_versions
+                    .try_compare_and_set_current(
+                        "initialize_from_snapshot",
+                        &shard_metrics,
+                        &initial_state,
+                        &initial_diff,
+                    )
+                    .await
+                    .map_err(|err| err.into())
+            },
+        )
+        .await;
+        match cas_res {
+            CaSResult::Committed => {}
+            CaSResult::ExpectationMismatch => {
+                // Clean up the rollup blob we wrote: nobody references it.
+                let (_, rollup) = initial_state.latest_rollup();
+                state_versions.delete_rollup(&shard_id, &rollup.key).await;
+                return Err(InitializeFromSnapshotError::AlreadyInitialized);
+            }
+        }
+
+        // Now open a normal Applier against the just-installed state.
+        let applier = Applier::new(
+            cfg,
+            shard_id,
+            metrics,
+            state_versions,
+            shared_states,
+            pubsub_sender,
+            diagnostics,
+        )
+        .await
+        .map_err(InitializeFromSnapshotError::CodecMismatch)?;
         Ok(Machine {
             applier,
             isolated_runtime,

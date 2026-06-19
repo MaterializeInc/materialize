@@ -28,7 +28,7 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use tracing::{Instrument, debug, debug_span, trace, warn};
 
 use crate::cfg::STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT;
@@ -37,10 +37,9 @@ use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
-#[cfg(debug_assertions)]
-use crate::internal::state::HollowBatch;
 use crate::internal::state::{
-    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, RunPart, State, TypedState,
+    BatchPart, HollowBatch, HollowBlobRef, HollowRollup, NoOpStateTransition, RunPart, State,
+    TypedState,
 };
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
@@ -368,8 +367,13 @@ impl StateVersions {
                             // TODO: Would be nice to include these too, but we lose the info atm.
                             RunPart::Single(BatchPart::Inline { .. }) => None,
                         }?;
+                        // Absolute keys point into another shard's blob namespace
+                        // and don't carry a local writer prefix; skip them here.
+                        if key.is_absolute() {
+                            return None;
+                        }
                         // Carefully avoid any String allocs by splitting.
-                        let (writer_key, _) = key.0.split_once('/')?;
+                        let (writer_key, _) = key.as_str().split_once('/')?;
                         match &writer_key[..1] {
                             "w" => Some(("old", part.encoded_size_bytes())),
                             "n" => Some((&writer_key[1..], part.encoded_size_bytes())),
@@ -766,6 +770,80 @@ impl StateVersions {
 
         let diff = StateDiff::from_diff(&empty_state.state, &initial_state.state);
         (initial_state, diff)
+    }
+
+    // Writes a self-referential rollup whose initial trace already contains
+    // `batches`, and returns the diff that should be compare_and_set into
+    // consensus to finish initializing the shard. The trace's upper after
+    // pushing the batches must equal `upper`; supply an empty bridging batch
+    // beforehand if there's a gap between the batches' coverage and the
+    // intended upper.
+    pub(crate) async fn write_initial_rollup_from_snapshot<K, V, T, D>(
+        &self,
+        shard_metrics: &ShardMetrics,
+        batches: Vec<HollowBatch<T>>,
+        upper: Antichain<T>,
+    ) -> Result<(TypedState<K, V, T, D>, StateDiff<T>), String>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Monoid + Codec64,
+    {
+        let empty_state = TypedState::new(
+            self.cfg.build_version.clone(),
+            shard_metrics.shard_id,
+            self.cfg.hostname.clone(),
+            (self.cfg.now)(),
+        );
+        let mut initial_state = empty_state.clone_for_rollup();
+
+        // Push the supplied batches into the trace. The spine's upper advances
+        // with each push.
+        for batch in batches {
+            let _merge_reqs = initial_state.collections.trace.push_batch(batch);
+        }
+        if initial_state.collections.trace.upper() != &upper {
+            return Err(format!(
+                "initial trace upper {:?} does not match requested upper {:?}",
+                initial_state.collections.trace.upper().elements(),
+                upper.elements(),
+            ));
+        }
+
+        let rollup_seqno = initial_state.seqno();
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            // Same chicken-and-egg as `write_initial_rollup`: the rollup
+            // references itself, so its encoded size isn't known until after
+            // we encode it.
+            encoded_size_bytes: None,
+        };
+        let applied = match initial_state
+            .collections
+            .add_rollup((rollup_seqno, &rollup))
+        {
+            Continue(x) => x,
+            Break(NoOpStateTransition(_)) => {
+                panic!("initial state transition should not be a no-op")
+            }
+        };
+        assert!(
+            applied,
+            "add_and_remove_rollups should apply to the empty state"
+        );
+
+        let rollup = self.encode_rollup_blob(
+            shard_metrics,
+            initial_state.clone_for_rollup(),
+            vec![],
+            rollup.key,
+        );
+        let () = self.write_rollup_blob(&rollup).await;
+        assert_eq!(initial_state.seqno, rollup.seqno);
+
+        let diff = StateDiff::from_diff(&empty_state.state, &initial_state.state);
+        Ok((initial_state, diff))
     }
 
     pub async fn write_rollup_for_state<K, V, T, D>(

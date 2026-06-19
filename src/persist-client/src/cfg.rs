@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use crate::async_runtime;
+use crate::internal::gc::{BlobRefCheck, NoopBlobRefCheck};
 use crate::internal::machine::{
     NEXT_LISTEN_BATCH_RETRYER_CLAMP, NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
     NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
@@ -137,6 +138,12 @@ pub struct PersistConfig {
     /// Number of worker threads to create for the [`crate::IsolatedRuntime`], defaults to the
     /// number of threads.
     pub isolated_runtime_worker_threads: usize,
+    /// Consulted by GC before deleting a blob. The default
+    /// [`NoopBlobRefCheck`] reports every key as unreferenced, so GC behaves
+    /// exactly as it did before this gate was introduced. Override at
+    /// `PersistClient` construction time to point at an external manifest
+    /// store.
+    pub blob_ref_check: Arc<dyn BlobRefCheck>,
 }
 
 // Impl Deref to ConfigSet for convenience of accessing the dynamic configs.
@@ -178,6 +185,7 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
             isolated_runtime_worker_threads: num_cpus::get(),
+            blob_ref_check: Arc::new(NoopBlobRefCheck),
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is

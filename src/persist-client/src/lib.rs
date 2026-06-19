@@ -104,6 +104,7 @@ mod internal {
     pub mod cache;
     pub mod compact;
     pub mod encoding;
+    pub mod fork;
     pub mod gc;
     pub mod machine;
     pub mod maintenance;
@@ -129,6 +130,15 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 pub use mz_persist_types::{PersistLocation, ShardId};
 
 pub use crate::internal::encoding::Schemas;
+pub use crate::internal::machine::InitializeFromSnapshotError;
+
+pub mod fork {
+    //! Branch-time shard fork primitive: snapshot a source shard, rewrite
+    //! its part keys to absolute form, stamp every inherited batch with a
+    //! cutoff timestamp, and bootstrap a fresh persist shard whose initial
+    //! state references the source's blobs.
+    pub use crate::internal::fork::{ForkShardError, ForkShardOutput};
+}
 
 /// Additional diagnostic information used within Persist
 /// e.g. for logging, metric labels, etc.
@@ -260,6 +270,57 @@ impl PersistClient {
         )
         .await?;
         Ok(machine)
+    }
+
+    /// Fork `source_shard` at `branch_ts`, returning a fresh shard whose
+    /// initial manifest references the source's blobs by absolute key and
+    /// whose inherited batches are stamped with `cutoff_ts = branch_ts`.
+    ///
+    /// Reads of the fork shard return source data at or below `branch_ts`
+    /// and exclude any straddling-batch updates above it. Writes on the
+    /// fork shard land under its own blob namespace.
+    ///
+    /// The returned `absolute_blob_keys` is the set of full blob paths the
+    /// fork shard's manifest now references; the caller must pin them
+    /// against persist garbage collection (see [`mz_persist::fork_blob_refs`]).
+    pub async fn fork_shard<K, V, T, D>(
+        &self,
+        source_shard: ShardId,
+        branch_ts: T,
+        diagnostics: Diagnostics,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
+    ) -> Result<fork::ForkShardOutput, fork::ForkShardError>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync + Ord,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let state_versions = Arc::new(StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        ));
+        let schemas = Schemas {
+            id: None,
+            key: key_schema,
+            val: val_schema,
+        };
+        crate::internal::fork::fork_shard::<K, V, T, D>(
+            self.cfg.clone(),
+            source_shard,
+            branch_ts,
+            Arc::clone(&self.metrics),
+            state_versions,
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics,
+            schemas,
+        )
+        .await
     }
 
     /// Provides capabilities for the durable TVC identified by `shard_id` at
@@ -2123,6 +2184,368 @@ mod tests {
             .await
             .expect("invalid persist usage");
         assert!(is_finalized, "shard must still be finalized");
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn initialize_from_snapshot_rejects_mismatched_upper(dyncfgs: ConfigUpdates) {
+        use crate::internal::machine::{InitializeFromSnapshotError, Machine};
+        use crate::rpc::NoopPubSubSender;
+
+        let cache = new_test_client_cache(&dyncfgs);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client");
+
+        let shard_id = ShardId::new();
+        let state_versions = Arc::new(StateVersions::new(
+            client.cfg.clone(),
+            Arc::clone(&client.consensus),
+            Arc::clone(&client.blob),
+            Arc::clone(&client.metrics),
+        ));
+
+        // Supplying an upper that doesn't match the supplied batches (here:
+        // no batches, but a non-minimum upper) must be a hard error so we
+        // catch bookkeeping mistakes at the call site rather than installing
+        // an inconsistent shard.
+        let err = Machine::<String, String, u64, i64>::initialize_from_snapshot(
+            client.cfg.clone(),
+            shard_id,
+            vec![],
+            Antichain::from_elem(5u64),
+            Arc::clone(&client.metrics),
+            Arc::clone(&state_versions),
+            Arc::new(StateCache::new(
+                &client.cfg,
+                Arc::clone(&client.metrics),
+                Arc::new(NoopPubSubSender),
+            )),
+            Arc::clone(&client.pubsub_sender),
+            Arc::clone(&client.isolated_runtime),
+            Diagnostics::for_tests(),
+        )
+        .await
+        .expect_err("should reject mismatched upper");
+        assert!(matches!(err, InitializeFromSnapshotError::InvalidArgs(_)));
+
+        // The empty/minimum case succeeds (no batches, default upper).
+        let _machine = Machine::<String, String, u64, i64>::initialize_from_snapshot(
+            client.cfg.clone(),
+            shard_id,
+            vec![],
+            Antichain::from_elem(u64::minimum()),
+            Arc::clone(&client.metrics),
+            Arc::clone(&state_versions),
+            Arc::new(StateCache::new(
+                &client.cfg,
+                Arc::clone(&client.metrics),
+                Arc::new(NoopPubSubSender),
+            )),
+            Arc::clone(&client.pubsub_sender),
+            Arc::clone(&client.isolated_runtime),
+            Diagnostics::for_tests(),
+        )
+        .await
+        .expect("empty bootstrap should succeed");
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn initialize_from_snapshot_round_trip(dyncfgs: ConfigUpdates) {
+        use crate::internal::machine::{InitializeFromSnapshotError, Machine};
+        use crate::internal::state::{BatchPart, RunPart};
+        use crate::internal::paths::PartialBatchKey;
+        use crate::rpc::NoopPubSubSender;
+
+        let data = [
+            (("a".to_owned(), "alpha".to_owned()), 1u64, 1i64),
+            (("b".to_owned(), "beta".to_owned()), 2u64, 1i64),
+            (("c".to_owned(), "gamma".to_owned()), 3u64, 1i64),
+        ];
+
+        // One PersistClient backs both shards so they share the same blob and
+        // consensus stores. That's what lets shard B's manifest reach shard A's
+        // blobs through absolute keys.
+        let cache = new_test_client_cache(&dyncfgs);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client");
+
+        let shard_a = ShardId::new();
+        let (mut write_a, read_a) = client
+            .expect_open::<String, String, u64, i64>(shard_a)
+            .await;
+        write_a.expect_compare_and_append(&data, 0, 4).await;
+
+        // Pull the trace's batches out of shard A. These have relative keys
+        // pointing at shard A's blob namespace.
+        let source_batches = read_a.machine.applier.all_batches();
+        assert!(
+            source_batches.iter().any(|b| !b.is_empty()),
+            "shard A should have at least one non-empty batch"
+        );
+
+        // Rewrite every part's key to an absolute path that includes shard A's
+        // id, and stamp every inherited batch with `cutoff_ts = Some(3)`.
+        // Bridging an upper of 4 means cutoff_ts = 3 keeps every update we
+        // wrote (the highest write was at ts=3).
+        let branch_ts = 3u64;
+        let mut snapshot_batches: Vec<_> = source_batches
+            .into_iter()
+            .map(|mut batch| {
+                for part in batch.parts.iter_mut() {
+                    if let RunPart::Single(BatchPart::Hollow(hollow)) = part {
+                        let absolute = format!("{}/{}", shard_a, hollow.key);
+                        hollow.key = PartialBatchKey::Absolute(absolute);
+                    }
+                }
+                batch.cutoff_ts = Some(branch_ts);
+                batch
+            })
+            .collect();
+        // Pad with an empty bridging batch if needed so the upper lines up.
+        let last_upper = snapshot_batches
+            .iter()
+            .map(|b| b.desc.upper().clone())
+            .max_by(|a, b| {
+                if PartialOrder::less_equal(a, b) {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            })
+            .unwrap_or_else(|| Antichain::from_elem(0u64));
+        let target_upper = Antichain::from_elem(4u64);
+        if last_upper != target_upper {
+            snapshot_batches.push(crate::internal::state::HollowBatch::new_run(
+                differential_dataflow::trace::Description::new(
+                    last_upper,
+                    target_upper.clone(),
+                    Antichain::from_elem(0u64),
+                ),
+                vec![],
+                0,
+            ));
+        }
+
+        // Initialize shard B from the rewritten batches.
+        let shard_b = ShardId::new();
+        let state_versions = Arc::new(StateVersions::new(
+            client.cfg.clone(),
+            Arc::clone(&client.consensus),
+            Arc::clone(&client.blob),
+            Arc::clone(&client.metrics),
+        ));
+        let _machine_b = Machine::<String, String, u64, i64>::initialize_from_snapshot(
+            client.cfg.clone(),
+            shard_b,
+            snapshot_batches,
+            target_upper,
+            Arc::clone(&client.metrics),
+            Arc::clone(&state_versions),
+            Arc::new(StateCache::new(
+                &client.cfg,
+                Arc::clone(&client.metrics),
+                Arc::new(NoopPubSubSender),
+            )),
+            Arc::clone(&client.pubsub_sender),
+            Arc::clone(&client.isolated_runtime),
+            Diagnostics::for_tests(),
+        )
+        .await
+        .expect("initialize_from_snapshot succeeds");
+
+        // Open a normal ReadHandle against shard B and confirm the data that
+        // was written to shard A is what comes back.
+        let (_write_b, mut read_b) = client
+            .expect_open::<String, String, u64, i64>(shard_b)
+            .await;
+        assert_eq!(
+            read_b.expect_snapshot_and_fetch(3).await,
+            all_ok(&data, 3)
+        );
+
+        // Calling initialize_from_snapshot a second time on an already-
+        // initialized shard fails.
+        let err = Machine::<String, String, u64, i64>::initialize_from_snapshot(
+            client.cfg.clone(),
+            shard_b,
+            vec![],
+            Antichain::from_elem(0u64),
+            Arc::clone(&client.metrics),
+            Arc::clone(&state_versions),
+            Arc::clone(&client.shared_states),
+            Arc::clone(&client.pubsub_sender),
+            Arc::clone(&client.isolated_runtime),
+            Diagnostics::for_tests(),
+        )
+        .await
+        .expect_err("re-init should fail");
+        assert!(matches!(
+            err,
+            InitializeFromSnapshotError::AlreadyInitialized
+        ));
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn cutoff_ts_filters_updates_above_threshold(dyncfgs: ConfigUpdates) {
+        let data = [
+            (("a".to_owned(), "one".to_owned()), 1u64, 1i64),
+            (("b".to_owned(), "two".to_owned()), 2u64, 1i64),
+            (("c".to_owned(), "three".to_owned()), 3u64, 1i64),
+        ];
+
+        let shard_id = ShardId::new();
+        let client = new_test_client(&dyncfgs).await;
+        let (mut write, mut read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        write.expect_compare_and_append(&data, 0, 4).await;
+
+        // Fetch all leased parts straight through the fetch path with no
+        // cutoff and confirm every row makes it out: this is the baseline
+        // before we tweak anything.
+        let baseline_parts = read
+            .snapshot(Antichain::from_elem(3))
+            .await
+            .expect("snapshot");
+        let mut baseline = fetch_all_via_batch_fetcher::<String, String, u64, i64>(
+            &client,
+            shard_id,
+            baseline_parts,
+        )
+        .await;
+        baseline.sort();
+        let mut expected_baseline = all_ok(&data, 3);
+        expected_baseline.sort();
+        assert_eq!(baseline, expected_baseline);
+
+        // Snapshot again, mutate each part's `cutoff_ts` so that any update
+        // beyond ts=2 is dropped on read, and verify the filter.
+        let mut cutoff_parts = read
+            .snapshot(Antichain::from_elem(3))
+            .await
+            .expect("snapshot");
+        for part in &mut cutoff_parts {
+            part.cutoff_ts = Some(2);
+        }
+        let mut cutoff_filtered = fetch_all_via_batch_fetcher::<String, String, u64, i64>(
+            &client,
+            shard_id,
+            cutoff_parts,
+        )
+        .await;
+        cutoff_filtered.sort();
+        let mut expected_filtered = all_ok(&data[..2], 3);
+        expected_filtered.sort();
+        assert_eq!(cutoff_filtered, expected_filtered);
+    }
+
+    /// Test helper: trade every `LeasedBatchPart` in `parts` for its decoded
+    /// updates by routing through `BatchFetcher`. The fetcher is the same path
+    /// `persist_source` uses, so this exercises the cutoff filter end-to-end.
+    async fn fetch_all_via_batch_fetcher<K, V, T, D>(
+        client: &PersistClient,
+        shard_id: ShardId,
+        parts: Vec<crate::fetch::LeasedBatchPart<T>>,
+    ) -> Vec<((K, V), T, D)>
+    where
+        K: Debug + Codec + Clone + Ord,
+        V: Debug + Codec + Clone + Ord,
+        T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
+        D: Monoid + Codec64 + Ord + Send + Sync,
+        K::Schema: Default,
+        V::Schema: Default,
+    {
+        let mut fetcher = client
+            .create_batch_fetcher::<K, V, T, D>(
+                shard_id,
+                Arc::new(K::Schema::default()),
+                Arc::new(V::Schema::default()),
+                false,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("batch fetcher");
+
+        let mut out = Vec::new();
+        let mut leases = Vec::new();
+        for part in parts {
+            let (exch, lease) = part.into_exchangeable_part();
+            leases.push(lease);
+            let blob = fetcher
+                .fetch_leased_part(exch)
+                .await
+                .expect("valid usage")
+                .expect("blob present");
+            let mut decoded = blob.parse().part;
+            while let Some(((k, v), t, d)) =
+                decoded.next_with_storage(&mut None, &mut None)
+            {
+                out.push(((k, v), t, d));
+            }
+        }
+        drop(leases);
+        out
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn fork_shard_reads_source_data_via_absolute_keys(dyncfgs: ConfigUpdates) {
+        let data = [
+            (("a".to_owned(), "alpha".to_owned()), 1u64, 1i64),
+            (("b".to_owned(), "beta".to_owned()), 2u64, 1i64),
+            (("c".to_owned(), "gamma".to_owned()), 3u64, 1i64),
+        ];
+
+        let client = new_test_client(&dyncfgs).await;
+
+        // Write three rows to a source shard at timestamps 1, 2, 3.
+        let source = ShardId::new();
+        let (mut write, _read) = client
+            .expect_open::<String, String, u64, i64>(source)
+            .await;
+        write.expect_compare_and_append(&data, 0, 4).await;
+
+        // Fork at branch_ts = 2: t=1, t=2 visible; t=3 dropped by cutoff.
+        let output = client
+            .fork_shard::<String, String, u64, i64>(
+                source,
+                2u64,
+                Diagnostics::for_tests(),
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+            )
+            .await
+            .expect("fork");
+        // Whenever the source shard has hollow parts, the absolute keys
+        // must point back into the source shard's namespace. Inline parts
+        // don't appear in this list (they live in the manifest itself),
+        // so the only correctness claim is "every emitted key has the
+        // source's prefix".
+        let source_prefix = source.to_string();
+        for key in &output.absolute_blob_keys {
+            assert!(
+                key.starts_with(&source_prefix),
+                "absolute key {key} should start with source shard id {source_prefix}",
+            );
+        }
+
+        // Open a ReadHandle on the fork shard and confirm we see exactly the
+        // rows at t <= 2.
+        let (_fork_write, mut fork_read) = client
+            .expect_open::<String, String, u64, i64>(output.fork_shard_id)
+            .await;
+        let mut rows = fork_read.expect_snapshot_and_fetch(3).await;
+        rows.sort();
+        let mut expected = all_ok(&data[..2], 3);
+        expected.sort();
+        assert_eq!(rows, expected);
     }
 
     proptest! {

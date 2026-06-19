@@ -310,7 +310,7 @@ impl<T> BatchPart<T> {
     // such).
     pub fn printable_name(&self) -> &str {
         match self {
-            BatchPart::Hollow(x) => x.key.0.as_str(),
+            BatchPart::Hollow(x) => x.key.as_str(),
             BatchPart::Inline { .. } => "<inline>",
         }
     }
@@ -611,7 +611,7 @@ impl<T> RunPart<T> {
     pub fn printable_name(&self) -> &str {
         match self {
             Self::Single(p) => p.printable_name(),
-            Self::Many(r) => r.key.0.as_str(),
+            Self::Many(r) => r.key.as_str(),
         }
     }
 
@@ -891,6 +891,11 @@ pub struct HollowBatch<T> {
     /// Run-level metadata: the first entry has metadata for the first run, and so on.
     /// If there's no corresponding entry for a particular run, it's assumed to be [RunMeta::default()].
     pub(crate) run_meta: Vec<RunMeta>,
+    /// If set, readers should drop updates from this batch whose time is
+    /// strictly greater than `cutoff_ts`. Ordinary writes carry no cutoff;
+    /// the field is `Some` only on batches inherited from another shard at
+    /// a snapshot point.
+    pub cutoff_ts: Option<T>,
 }
 
 impl<T: Debug> Debug for HollowBatch<T> {
@@ -901,6 +906,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
             len,
             run_splits: runs,
             run_meta,
+            cutoff_ts,
         } = self;
         f.debug_struct("HollowBatch")
             .field(
@@ -915,6 +921,7 @@ impl<T: Debug> Debug for HollowBatch<T> {
             .field("len", &len)
             .field("runs", &runs)
             .field("run_meta", &run_meta)
+            .field("cutoff_ts", &cutoff_ts)
             .finish()
     }
 }
@@ -928,13 +935,15 @@ impl<T: Serialize> serde::Serialize for HollowBatch<T> {
             parts: _,
             run_splits: _,
             run_meta: _,
+            cutoff_ts,
         } = self;
-        let mut s = s.serialize_struct("HollowBatch", 5)?;
+        let mut s = s.serialize_struct("HollowBatch", 6)?;
         let () = s.serialize_field("lower", &desc.lower().elements())?;
         let () = s.serialize_field("upper", &desc.upper().elements())?;
         let () = s.serialize_field("since", &desc.since().elements())?;
         let () = s.serialize_field("len", len)?;
         let () = s.serialize_field("part_runs", &self.runs().collect::<Vec<_>>())?;
+        let () = s.serialize_field("cutoff_ts", cutoff_ts)?;
         s.end()
     }
 }
@@ -955,6 +964,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             len: self_len,
             run_splits: self_runs,
             run_meta: self_run_meta,
+            cutoff_ts: self_cutoff_ts,
         } = self;
         let HollowBatch {
             desc: other_desc,
@@ -962,6 +972,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             len: other_len,
             run_splits: other_runs,
             run_meta: other_run_meta,
+            cutoff_ts: other_cutoff_ts,
         } = other;
         (
             self_desc.lower().elements(),
@@ -971,6 +982,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
             self_len,
             self_runs,
             self_run_meta,
+            self_cutoff_ts,
         )
             .cmp(&(
                 other_desc.lower().elements(),
@@ -980,6 +992,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_len,
                 other_runs,
                 other_run_meta,
+                other_cutoff_ts,
             ))
     }
 }
@@ -1037,6 +1050,7 @@ impl<T> HollowBatch<T> {
             parts,
             run_splits,
             run_meta,
+            cutoff_ts: None,
         }
     }
 
@@ -1053,6 +1067,7 @@ impl<T> HollowBatch<T> {
             parts,
             run_splits: vec![],
             run_meta,
+            cutoff_ts: None,
         }
     }
 
@@ -1076,6 +1091,7 @@ impl<T> HollowBatch<T> {
             parts,
             run_splits: vec![],
             run_meta,
+            cutoff_ts: None,
         }
     }
 
@@ -1087,6 +1103,7 @@ impl<T> HollowBatch<T> {
             parts: vec![],
             run_splits: vec![],
             run_meta: vec![],
+            cutoff_ts: None,
         }
     }
 
@@ -3181,7 +3198,7 @@ pub(crate) mod tests {
             keys.iter()
                 .map(|x| {
                     RunPart::Single(BatchPart::Hollow(HollowBatchPart {
-                        key: PartialBatchKey((*x).to_owned()),
+                        key: PartialBatchKey::Relative((*x).to_owned()),
                         meta: Default::default(),
                         encoded_size_bytes: 0,
                         key_lower: vec![],

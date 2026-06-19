@@ -670,6 +670,7 @@ where
                                 false,
                                 PartDecodeFormat::Arrow,
                                 None,
+                                None,
                             );
 
                             while let Some(((k, v), t, d)) =

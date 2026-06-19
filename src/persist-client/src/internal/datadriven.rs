@@ -103,7 +103,7 @@ impl<'a> DirectiveArgs<'a> {
             keys.iter()
                 .map(|x| {
                     RunPart::Single(BatchPart::Hollow(HollowBatchPart {
-                        key: PartialBatchKey((*x).to_owned()),
+                        key: PartialBatchKey::Relative((*x).to_owned()),
                         meta: Default::default(),
                         encoded_size_bytes: 0,
                         key_lower: vec![],

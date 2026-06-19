@@ -43,6 +43,34 @@ use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
 use crate::internal::state::{GC_USE_ACTIVE_GC, HollowBlobRef};
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter, UntypedStateVersionsIter};
 
+/// External reference check consulted before deleting a blob.
+///
+/// Persist's GC normally treats a blob as safe to delete once no live shard
+/// state references it. That assumption breaks when an outside system (for
+/// example, a manifest belonging to another shard) carries a reference to
+/// the blob. This trait gives persist a single place to ask "is anyone else
+/// still holding a reference?" without depending on the specific store that
+/// records those references.
+#[async_trait::async_trait]
+pub trait BlobRefCheck: std::fmt::Debug + Send + Sync {
+    /// Whether `blob_key` is referenced by some external manifest. If true,
+    /// GC must not delete this blob.
+    async fn is_referenced(&self, blob_key: &str) -> bool;
+}
+
+/// A [`BlobRefCheck`] that reports every key as unreferenced. This is the
+/// default; with no external manifest store wired up, GC behaves exactly as
+/// it did before this trait existed.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopBlobRefCheck;
+
+#[async_trait::async_trait]
+impl BlobRefCheck for NoopBlobRefCheck {
+    async fn is_referenced(&self, _blob_key: &str) -> bool {
+        false
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GcReq {
     pub shard_id: ShardId,
@@ -594,6 +622,7 @@ where
         let shard_id = machine.shard_id();
         let concurrency_limit = GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg);
         let delete_semaphore = Semaphore::new(concurrency_limit);
+        let blob_ref_check = Arc::clone(&machine.applier.cfg.blob_ref_check);
 
         let batch_parts = std::mem::take(batch_parts);
         batch_parts
@@ -603,6 +632,7 @@ where
                 concurrency_limit,
                 &*machine.applier.metrics,
                 &machine.applier.metrics.retries.external.batch_delete,
+                blob_ref_check.as_ref(),
             )
             .instrument(debug_span!("batch::delete"))
             .await;
@@ -614,6 +644,7 @@ where
             &machine.applier.metrics.retries.external.rollup_delete,
             debug_span!("rollup::delete"),
             &delete_semaphore,
+            blob_ref_check.as_ref(),
         )
         .await;
         rollups.clear();
@@ -631,12 +662,13 @@ where
     // becomes an issue. Maybe make Blob::delete take a list of keys?
     //
     // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
-    async fn delete_all(
+    pub(crate) async fn delete_all(
         blob: &dyn Blob,
         keys: impl Iterator<Item = BlobKey>,
         metrics: &RetryMetrics,
         span: Span,
         semaphore: &Semaphore,
+        blob_ref_check: &dyn BlobRefCheck,
     ) {
         let futures = FuturesUnordered::new();
         for key in keys {
@@ -648,6 +680,11 @@ where
                             .acquire()
                             .await
                             .expect("acquiring permit from open semaphore");
+                        // An external manifest references this blob: skip
+                        // the delete so the reference stays valid.
+                        if blob_ref_check.is_referenced(&key).await {
+                            return Ok(());
+                        }
                         blob.delete(&key).await.map(|_| ())
                     }
                 })
@@ -718,5 +755,140 @@ impl GcRollups {
             None => &[],
             Some((_rollup_to_keep, rollups_to_remove_from_state)) => rollups_to_remove_from_state,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist::location::Blob;
+    use mz_persist::mem::{MemBlob, MemBlobConfig};
+
+    use crate::cfg::PersistConfig;
+    use crate::internal::metrics::Metrics;
+    use crate::internal::paths::PartialBatchKey;
+
+    use super::*;
+
+    /// A test [`BlobRefCheck`] that reports a configurable set of keys as
+    /// referenced and everything else as unreferenced.
+    #[derive(Debug, Default)]
+    struct MockRefCheck {
+        referenced: BTreeSet<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl BlobRefCheck for MockRefCheck {
+        async fn is_referenced(&self, blob_key: &str) -> bool {
+            self.referenced.contains(blob_key)
+        }
+    }
+
+    /// Build a [`BlobKey`] that resolves to the full path `<shard>/<suffix>`.
+    /// Goes through [`PartialBatchKey::Relative::complete`] because the
+    /// [`BlobKey`] tuple constructor is module-private.
+    fn make_blob_key(shard: ShardId, suffix: &str) -> BlobKey {
+        PartialBatchKey::Relative(suffix.to_owned()).complete(&shard)
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow under miri
+    async fn delete_all_skips_referenced_blobs() {
+        let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let shard = ShardId::new();
+        let pinned = make_blob_key(shard, "n0000000/p00000000-0000-0000-0000-000000000001");
+        let free = make_blob_key(shard, "n0000000/p00000000-0000-0000-0000-000000000002");
+
+        blob.set(&pinned, Bytes::from_static(b"pinned"))
+            .await
+            .expect("set");
+        blob.set(&free, Bytes::from_static(b"free"))
+            .await
+            .expect("set");
+
+        let cfg = PersistConfig::new_for_tests();
+        let metrics = Metrics::new(&cfg, &MetricsRegistry::new());
+        let semaphore = Semaphore::new(2);
+
+        let checker = MockRefCheck {
+            referenced: [pinned.to_string()].into_iter().collect(),
+        };
+
+        GarbageCollector::<String, String, u64, i64>::delete_all(
+            &*blob,
+            [pinned.clone(), free.clone()].into_iter(),
+            &metrics.retries.external.rollup_delete,
+            tracing::Span::current(),
+            &semaphore,
+            &checker,
+        )
+        .await;
+
+        // Pinned key survives; unreferenced key is gone.
+        assert!(blob.get(&pinned).await.expect("get").is_some());
+        assert!(blob.get(&free).await.expect("get").is_none());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn delete_all_with_noop_check_deletes_everything() {
+        let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let shard = ShardId::new();
+        let key_a = make_blob_key(shard, "n0000000/p00000000-0000-0000-0000-000000000003");
+        let key_b = make_blob_key(shard, "n0000000/p00000000-0000-0000-0000-000000000004");
+
+        blob.set(&key_a, Bytes::from_static(b"a")).await.expect("set");
+        blob.set(&key_b, Bytes::from_static(b"b")).await.expect("set");
+
+        let cfg = PersistConfig::new_for_tests();
+        let metrics = Metrics::new(&cfg, &MetricsRegistry::new());
+        let semaphore = Semaphore::new(2);
+
+        GarbageCollector::<String, String, u64, i64>::delete_all(
+            &*blob,
+            [key_a.clone(), key_b.clone()].into_iter(),
+            &metrics.retries.external.rollup_delete,
+            tracing::Span::current(),
+            &semaphore,
+            &NoopBlobRefCheck,
+        )
+        .await;
+
+        assert!(blob.get(&key_a).await.expect("get").is_none());
+        assert!(blob.get(&key_b).await.expect("get").is_none());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn delete_all_with_empty_checker_short_circuits() {
+        // An empty checker (NoopBlobRefCheck) means no per-blob lookup work.
+        // The point of this test is not the count of calls but that GC still
+        // makes forward progress when there are no references.
+        let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let shard = ShardId::new();
+        let key = make_blob_key(shard, "n0000000/p00000000-0000-0000-0000-000000000005");
+        blob.set(&key, Bytes::from_static(b"data"))
+            .await
+            .expect("set");
+
+        let cfg = PersistConfig::new_for_tests();
+        let metrics = Metrics::new(&cfg, &MetricsRegistry::new());
+        let semaphore = Semaphore::new(1);
+
+        GarbageCollector::<String, String, u64, i64>::delete_all(
+            &*blob,
+            std::iter::once(key.clone()),
+            &metrics.retries.external.rollup_delete,
+            tracing::Span::current(),
+            &semaphore,
+            &NoopBlobRefCheck,
+        )
+        .await;
+
+        assert!(blob.get(&key).await.expect("get").is_none());
     }
 }

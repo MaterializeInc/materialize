@@ -178,6 +178,7 @@ where
             filter_pushdown_audit,
             part,
             reader_id: _,
+            cutoff_ts,
         } = part;
         let part: BatchPart<T> = part.decode_to().expect("valid part");
         if shard_id != self.shard_id {
@@ -252,6 +253,7 @@ where
             filter_pushdown_audit,
             structured_part_audit: self.cfg.part_decode_format(),
             fetch_permit,
+            cutoff_ts,
             _phantom: PhantomData,
             fetch_config: self.cfg.fetch_config.clone(),
         };
@@ -428,6 +430,7 @@ where
         part.filter_pushdown_audit,
         part_cfg.part_decode_format(),
         part.part.stats(),
+        part.cutoff_ts.clone(),
     )
 }
 
@@ -572,6 +575,9 @@ pub struct LeasedBatchPart<T> {
     pub(crate) filter: FetchBatchFilter<T>,
     pub(crate) desc: Description<T>,
     pub(crate) part: BatchPart<T>,
+    /// The `cutoff_ts` of the hollow batch this part was leased from. If set,
+    /// updates whose time is strictly greater than this are dropped on read.
+    pub(crate) cutoff_ts: Option<T>,
     /// The lease that prevents this part from being GCed. Code should ensure that this lease
     /// lives as long as the part is needed.
     pub(crate) lease: Lease,
@@ -606,6 +612,7 @@ where
             part: LazyProto::from(&self.part.into_proto()),
             reader_id: self.reader_id.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
+            cutoff_ts: self.cutoff_ts.clone(),
         };
         (part, lease)
     }
@@ -727,6 +734,7 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
     filter_pushdown_audit: bool,
     structured_part_audit: PartDecodeFormat,
     fetch_permit: Option<Arc<MetricsPermits>>,
+    cutoff_ts: Option<T>,
     fetch_config: FetchConfig,
     _phantom: PhantomData<fn() -> D>,
 }
@@ -756,6 +764,7 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             fetch_permit: self.fetch_permit.clone(),
             structured_part_audit: self.structured_part_audit.clone(),
+            cutoff_ts: self.cutoff_ts.clone(),
             fetch_config: self.fetch_config.clone(),
             _phantom: self._phantom.clone(),
         }
@@ -830,6 +839,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             self.filter_pushdown_audit,
             self.structured_part_audit,
             stats,
+            self.cutoff_ts.clone(),
         );
         ShardSourcePart {
             part,
@@ -854,6 +864,10 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
 pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     ts_filter: FetchBatchFilter<T>,
+    /// If set, drop any update whose time is strictly greater than this. The
+    /// filter is applied after [`FetchBatchFilter::filter_ts`] but before
+    /// diff/zero suppression, so any cutoff'd updates never reach the consumer.
+    cutoff_ts: Option<T>,
     // If migration is Either, then the columnar one will have already been
     // applied here on the structured data only.
     part: EitherOrBoth<
@@ -884,6 +898,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         filter_pushdown_audit: bool,
         part_decode_format: PartDecodeFormat,
         stats: Option<&LazyPartStats>,
+        cutoff_ts: Option<T>,
     ) -> Self {
         let part_len = u64::cast_from(part.part.updates.len());
         match &migration {
@@ -1009,6 +1024,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         FetchedPart {
             metrics,
             ts_filter,
+            cutoff_ts,
             part,
             peek_stash: None,
             timestamps,
@@ -1068,6 +1084,15 @@ where
                 // These `to_le_bytes` calls were previously encapsulated by `ColumnarRecords`.
                 // TODO(structured): re-encapsulate these once we've finished the structured migration.
                 let mut t = T::decode(self.timestamps.values()[next_idx].to_le_bytes());
+                // The cutoff is checked against the original (pre-as_of)
+                // timestamp. Applying it after `filter_ts` would compare against
+                // the advanced timestamp and over-filter; the cutoff describes
+                // the original write time, not the timestamp the reader sees.
+                if let Some(cutoff) = self.cutoff_ts.as_ref() {
+                    if cutoff.less_than(&t) {
+                        continue;
+                    }
+                }
                 if !self.ts_filter.filter_ts(&mut t) {
                     continue;
                 }
@@ -1290,7 +1315,7 @@ where
             cfg,
             metrics,
             registered_desc,
-            &part.key.0,
+            part.key.as_str(),
             part.ts_rewrite.as_ref(),
             parsed,
         )
@@ -1506,6 +1531,9 @@ pub struct ExchangeableBatchPart<T> {
     /// on [LeasedBatchPart].
     reader_id: LeasedReaderId,
     filter_pushdown_audit: bool,
+    /// See [`LeasedBatchPart::cutoff_ts`].
+    #[serde(default = "Option::default")]
+    cutoff_ts: Option<T>,
 }
 
 impl<T> ExchangeableBatchPart<T> {

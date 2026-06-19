@@ -109,13 +109,17 @@ impl Display for WriterKey {
     }
 }
 
-/// Partially encoded path used in [mz_persist::location::Blob] storage.
-/// Composed of a [WriterId] and [PartId]. Can be completed with a [ShardId] to
-/// form a full [BlobKey].
+/// A path used in [mz_persist::location::Blob] storage, either relative to a
+/// shard or absolute.
 ///
-/// Used to reduce the bytes needed to refer to a blob key in memory and in
-/// persistent state, all access to blobs are always within the context of an
-/// individual shard.
+/// `Relative(<writer>/<part>)` is the common form: a [WriterKey] plus a
+/// [PartId], completed against the calling shard's [ShardId] to form a full
+/// [BlobKey]. This is what ordinary writes produce, and storing it relative
+/// keeps in-memory and on-disk state compact.
+///
+/// `Absolute(<full path>)` carries the full blob path verbatim and ignores the
+/// calling shard's id when completed. It exists so a shard's manifest can
+/// reference blobs owned by a different shard.
 #[derive(
     Arbitrary,
     Clone,
@@ -128,7 +132,10 @@ impl Display for WriterKey {
     Serialize,
     Deserialize
 )]
-pub struct PartialBatchKey(pub(crate) String);
+pub enum PartialBatchKey {
+    Relative(String),
+    Absolute(String),
+}
 
 fn split_batch_key(key: &str) -> Result<(WriterKey, PartId), String> {
     let (writer_key, part_id) = key
@@ -142,21 +149,40 @@ fn split_batch_key(key: &str) -> Result<(WriterKey, PartId), String> {
 
 impl PartialBatchKey {
     pub fn new(version: &WriterKey, part_id: &PartId) -> Self {
-        PartialBatchKey(format!("{}/{}", version, part_id))
+        PartialBatchKey::Relative(format!("{}/{}", version, part_id))
     }
 
     pub fn split(&self) -> Option<(WriterKey, PartId)> {
-        split_batch_key(&self.0).ok()
+        match self {
+            PartialBatchKey::Relative(s) => split_batch_key(s).ok(),
+            PartialBatchKey::Absolute(_) => None,
+        }
     }
 
     pub fn complete(&self, shard_id: &ShardId) -> BlobKey {
-        BlobKey(format!("{}/{}", shard_id, self))
+        match self {
+            PartialBatchKey::Relative(s) => BlobKey(format!("{}/{}", shard_id, s)),
+            PartialBatchKey::Absolute(s) => BlobKey(s.clone()),
+        }
+    }
+
+    /// The path stored in this key. For `Relative`, this is the path that
+    /// gets resolved against a shard id; for `Absolute`, this is the full
+    /// blob path.
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            PartialBatchKey::Relative(s) | PartialBatchKey::Absolute(s) => s,
+        }
+    }
+
+    pub(crate) fn is_absolute(&self) -> bool {
+        matches!(self, PartialBatchKey::Absolute(_))
     }
 }
 
 impl std::fmt::Display for PartialBatchKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(self.as_str())
     }
 }
 
@@ -350,11 +376,35 @@ mod tests {
     #[mz_ore::test]
     fn partial_blob_key_completion() {
         let (shard_id, writer_id, part_id) = (ShardId::new(), WriterId::new(), PartId::new());
-        let partial_key = PartialBatchKey::new(&WriterKey::Id(writer_id.clone()), &part_id);
+        let relative_key = PartialBatchKey::new(&WriterKey::Id(writer_id.clone()), &part_id);
         assert_eq!(
-            partial_key.complete(&shard_id),
+            relative_key.complete(&shard_id),
             BlobKey(format!("{}/{}/{}", shard_id, writer_id, part_id))
         );
+
+        // An absolute key carries the full path and is returned verbatim by
+        // `complete`, regardless of which shard id is passed in.
+        let other_shard = ShardId::new();
+        let full_path = format!("{}/{}/{}", other_shard, writer_id, part_id);
+        let absolute_key = PartialBatchKey::Absolute(full_path.clone());
+        assert_eq!(absolute_key.complete(&shard_id), BlobKey(full_path.clone()));
+        assert_eq!(absolute_key.complete(&other_shard), BlobKey(full_path));
+    }
+
+    #[mz_ore::test]
+    fn partial_blob_key_split() {
+        let (writer_id, part_id) = (WriterId::new(), PartId::new());
+        let relative_key = PartialBatchKey::new(&WriterKey::Id(writer_id.clone()), &part_id);
+        assert_eq!(
+            relative_key.split(),
+            Some((WriterKey::Id(writer_id.clone()), part_id.clone()))
+        );
+
+        // `split` does not attempt to interpret absolute paths.
+        let other_shard = ShardId::new();
+        let absolute_key =
+            PartialBatchKey::Absolute(format!("{}/{}/{}", other_shard, writer_id, part_id));
+        assert_eq!(absolute_key.split(), None);
     }
 
     #[mz_ore::test]

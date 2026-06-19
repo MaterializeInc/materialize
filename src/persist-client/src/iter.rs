@@ -58,6 +58,9 @@ pub(crate) struct FetchData<T> {
     part_desc: Description<T>,
     part: RunPart<T>,
     structured_lower: Option<ArrayBound>,
+    /// If `Some`, the parent hollow batch carries this cutoff. Updates whose
+    /// time is strictly greater than the cutoff are dropped on read.
+    cutoff_ts: Option<T>,
 }
 
 pub(crate) trait RowSort<T, D> {
@@ -278,6 +281,9 @@ enum ConsolidationPart<T, D> {
     Encoded {
         part: StructuredUpdates,
         cursor: PartIndices,
+        /// Inherited from the parent hollow batch: drop updates with
+        /// `time > cutoff_ts` on read.
+        cutoff_ts: Option<T>,
     },
 }
 
@@ -285,6 +291,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
     pub(crate) fn from_encoded(
         part: EncodedPart<T>,
         force_reconsolidation: bool,
+        cutoff_ts: Option<T>,
         metrics: &ColumnarMetrics,
         sort: &impl RowSort<T, D>,
     ) -> Self {
@@ -308,13 +315,14 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
         ConsolidationPart::Encoded {
             part: updates,
             cursor,
+            cutoff_ts,
         }
     }
 
     fn kvt_lower(&self) -> Option<(SortKV<'_>, T)> {
         match self {
             ConsolidationPart::Queued { data, .. } => Some((kv_lower(data)?, T::minimum())),
-            ConsolidationPart::Encoded { part, cursor } => {
+            ConsolidationPart::Encoded { part, cursor, .. } => {
                 let (kv, t, _d) = part.get::<T, D>(cursor.index())?;
                 Some((kv, t))
             }
@@ -444,6 +452,7 @@ where
         &mut self,
         desc: &Description<T>,
         run_meta: &RunMeta,
+        cutoff_ts: Option<T>,
         parts: impl IntoIterator<Item = RunPart<T>>,
     ) {
         let run = parts
@@ -456,6 +465,7 @@ where
                         part_desc: desc.clone(),
                         structured_lower: part.structured_key_lower(),
                         part,
+                        cutoff_ts: cutoff_ts.clone(),
                     },
                     task: None,
                     _diff: Default::default(),
@@ -517,6 +527,10 @@ where
                 ConsolidationPart::Encoded {
                     part,
                     cursor: PartIndices::default(),
+                    // The stashed part has already been through `update_peek`,
+                    // so any cutoff that applied to its source rows has already
+                    // been applied. No need to re-filter.
+                    cutoff_ts: None,
                 },
                 0,
             )]));
@@ -534,8 +548,12 @@ where
             let last_in_run = run.len() < 2;
             if let Some((part, _)) = run.front_mut() {
                 match part {
-                    ConsolidationPart::Encoded { part, cursor } => {
-                        iter.push(part, cursor, last_in_run);
+                    ConsolidationPart::Encoded {
+                        part,
+                        cursor,
+                        cutoff_ts,
+                    } => {
+                        iter.push(part, cursor, last_in_run, cutoff_ts.clone());
                     }
                     other @ ConsolidationPart::Queued { .. } => {
                         // We don't want the iterator to return anything at or above this bound,
@@ -629,6 +647,7 @@ where
                                             part_desc: data.part_desc.clone(),
                                             part,
                                             structured_lower,
+                                            cutoff_ts: data.cutoff_ts.clone(),
                                         },
                                         task: None,
                                         _diff: Default::default(),
@@ -642,6 +661,7 @@ where
                                 ConsolidationPart::from_encoded(
                                     part,
                                     wrong_sort,
+                                    data.cutoff_ts.clone(),
                                     &self.metrics.columnar,
                                     &self.sort,
                                 ),
@@ -843,6 +863,10 @@ struct PartRef<'a, T: Timestamp, D> {
     /// Whether / not the iterator for the part is the last in its run, or whether there may be
     /// iterators for the same part in the future.
     last_in_run: bool,
+    /// If set, drop any update whose time is strictly greater than this. The
+    /// cutoff is checked before [`FetchBatchFilter::filter_ts`] mutates the
+    /// timestamp, because it describes the original write time.
+    cutoff_ts: Option<T>,
     _phantom: PhantomData<D>,
 }
 
@@ -850,6 +874,15 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Monoid> PartRef<'a, T, D
     fn update_peek(&mut self, part: &'a StructuredUpdates, filter: &FetchBatchFilter<T>) {
         let mut peek = part.get(self.row_index.index());
         while let Some((_kv, t, _d)) = &mut peek {
+            let above_cutoff = self
+                .cutoff_ts
+                .as_ref()
+                .map_or(false, |cutoff| cutoff.less_than(t));
+            if above_cutoff {
+                self.row_index.inc();
+                peek = part.get(self.row_index.index());
+                continue;
+            }
             let keep = filter.filter_ts(t);
             if keep {
                 break;
@@ -915,12 +948,19 @@ where
         }
     }
 
-    fn push(&mut self, iter: &'a StructuredUpdates, index: &'a mut PartIndices, last_in_run: bool) {
+    fn push(
+        &mut self,
+        iter: &'a StructuredUpdates,
+        index: &'a mut PartIndices,
+        last_in_run: bool,
+        cutoff_ts: Option<T>,
+    ) {
         let mut part_ref = PartRef {
             next_kvt: Reverse(None),
             part_index: self.parts.len(),
             row_index: index,
             last_in_run,
+            cutoff_ts,
             _phantom: Default::default(),
         };
         part_ref.update_peek(iter, self.filter);
@@ -1168,6 +1208,7 @@ mod tests {
                                         ConsolidationPart::from_encoded(
                                             part,
                                             true,
+                                            None,
                                             &metrics.columnar,
                                             &sort,
                                         ),
@@ -1268,7 +1309,7 @@ mod tests {
                     .into_iter()
                     .map(|encoded_size_bytes| {
                         RunPart::Single(BatchPart::Hollow(HollowBatchPart {
-                            key: PartialBatchKey(
+                            key: PartialBatchKey::Relative(
                                 "n0000000/p00000000-0000-0000-0000-000000000000".into(),
                             ),
                             meta: Default::default(),
@@ -1284,7 +1325,7 @@ mod tests {
                         }))
                     })
                     .collect();
-                consolidator.enqueue_run(&desc, &RunMeta::default(), parts)
+                consolidator.enqueue_run(&desc, &RunMeta::default(), None, parts)
             }
 
             // No matter what, the budget should be respected.
