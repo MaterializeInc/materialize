@@ -98,6 +98,10 @@ impl Coordinator {
         // need Altered support.
         let mut introspection_source_indexes: BTreeMap<ClusterId, BTreeMap<LogVariant, GlobalId>> =
             BTreeMap::new();
+        // Whether any replica-scoped system-parameter override changed in this
+        // batch. The push re-pushes the complete per-replica dyncfg layer, so we
+        // only track that a change happened, not the individual rows.
+        let mut replica_scoped_config_changed = false;
 
         for update in catalog_updates {
             tracing::trace!(?update, "got parsed state update");
@@ -159,6 +163,12 @@ impl Coordinator {
                     // Retractions don't need handling: introspection
                     // source indexes are dropped with their cluster.
                 }
+                ParsedStateUpdateKind::ReplicaSystemConfiguration { durable: _ } => {
+                    // Additions and retractions both re-derive the full
+                    // per-replica layer from the working copy, so the diff sign
+                    // does not matter here.
+                    replica_scoped_config_changed = true;
+                }
             }
         }
 
@@ -168,6 +178,7 @@ impl Coordinator {
             cluster_commands.into_iter().collect_vec(),
             cluster_replica_commands.into_iter().collect_vec(),
             introspection_source_indexes,
+            replica_scoped_config_changed,
         )
         .await?;
 
@@ -186,6 +197,7 @@ impl Coordinator {
         cluster_commands: Vec<(ClusterId, CatalogImplication)>,
         cluster_replica_commands: Vec<((ClusterId, ReplicaId), CatalogImplication)>,
         mut introspection_source_indexes: BTreeMap<ClusterId, BTreeMap<LogVariant, GlobalId>>,
+        replica_scoped_config_changed: bool,
     ) -> Result<(), AdapterError> {
         let mut tables_to_drop = BTreeSet::new();
         let mut sources_to_drop = vec![];
@@ -618,6 +630,16 @@ impl Coordinator {
                     );
                 }
             }
+        }
+
+        // Apply replica-scoped overrides after clusters are created (so their
+        // compute instances exist) but before replicas are created below. The
+        // override layer must be set before `create_replica`, so the new
+        // replica's first configuration replays with its override. The push
+        // reads the catalog working copy, which already reflects this
+        // transaction's scoped-config changes.
+        if replica_scoped_config_changed {
+            self.push_replica_dyncfg_overrides();
         }
 
         for ((cluster_id, replica_id), command) in cluster_replica_commands {
@@ -1825,6 +1847,11 @@ impl CatalogImplication {
                 // separately in apply_catalog_implications and not
                 // routed through absorb.
                 unreachable!("IntrospectionSourceIndex should not be passed to absorb");
+            }
+            ParsedStateUpdateKind::ReplicaSystemConfiguration { .. } => {
+                // ReplicaSystemConfiguration updates are collected separately in
+                // apply_catalog_implications and not routed through absorb.
+                unreachable!("ReplicaSystemConfiguration should not be passed to absorb");
             }
         }
     }
