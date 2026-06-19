@@ -26,6 +26,7 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
         -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
+        -not -wholename "./test/freshness/mzcompose.py" `# Manual investigation harness` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
     while read -r composition; do
         if ! grep -q "composition: $composition" ci/*/pipeline.template.yml; then
@@ -50,6 +51,7 @@ check_default_workflow_references_others() {
         -not -wholename "./test/cluster-spec-sheet/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/orchestratord/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/workload-replay/mzcompose.py" `# Handled differently` \
+        -not -wholename "./test/freshness/mzcompose.py" `# Other workflows are for manual usage` \
     )
 
     for file in "${MZCOMPOSE_TEST_FILES[@]}"; do
