@@ -1,0 +1,91 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Projects a managed cluster's durable catalog config into the
+//! [`ExpectedClusterState`] compare-and-append witness, and checks a witness
+//! against the current config.
+//!
+//! [`project_expected`] is the one projection from catalog config to the
+//! witness. Building the witness the same way wherever a write is conditioned
+//! and wherever it is checked keeps the compared fields from drifting apart.
+
+use mz_adapter_types::cluster_state::{
+    AvailabilityZones, BurstRecord, ExpectedClusterState, ReconfigurationRecord,
+    ReconfigurationTarget,
+};
+use mz_catalog::memory::objects::{
+    BurstState, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+};
+use mz_controller_types::ClusterId;
+
+use crate::catalog::CatalogState;
+
+/// Project a managed cluster's durable config into the compare-and-append
+/// witness: the fields a conditional write is conditioned on.
+pub(crate) fn project_expected(managed: &ClusterVariantManaged) -> ExpectedClusterState {
+    // Exhaustive destructure (no `..`): a field added to the managed config is a
+    // compile error here until we decide whether the witness must cover it.
+    let ClusterVariantManaged {
+        size,
+        availability_zones,
+        logging,
+        replication_factor,
+        optimizer_feature_overrides: _,
+        schedule: _,
+        auto_scaling_strategy: _,
+        reconfiguration,
+        burst,
+    } = managed;
+    ExpectedClusterState {
+        size: size.clone(),
+        replication_factor: *replication_factor,
+        availability_zones: AvailabilityZones(availability_zones.clone()),
+        logging: logging.clone(),
+        reconfiguration: reconfiguration.as_ref().map(reconfiguration_record),
+        burst: burst.as_ref().map(burst_record),
+    }
+}
+
+/// Whether `cluster_id`'s current managed state still equals `expected`. A
+/// missing or unmanaged cluster never matches. This is the compare half of the
+/// compare-and-append, evaluated inside the catalog transaction so the check and
+/// the commit cannot be separated.
+pub(crate) fn cluster_matches_expected(
+    state: &CatalogState,
+    cluster_id: ClusterId,
+    expected: &ExpectedClusterState,
+) -> bool {
+    let Some(cluster) = state.try_get_cluster(cluster_id) else {
+        return false;
+    };
+    let ClusterVariant::Managed(managed) = &cluster.config.variant else {
+        return false;
+    };
+    project_expected(managed) == *expected
+}
+
+fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecord {
+    ReconfigurationRecord {
+        target: ReconfigurationTarget {
+            size: record.target.size.clone(),
+            replication_factor: record.target.replication_factor,
+            availability_zones: AvailabilityZones(record.target.availability_zones.clone()),
+            logging: record.target.logging.clone(),
+        },
+        deadline: record.deadline,
+    }
+}
+
+fn burst_record(record: &BurstState) -> BurstRecord {
+    BurstRecord {
+        burst_size: record.burst_size.clone(),
+        linger_duration: record.linger_duration,
+        steady_hydrated_at: record.steady_hydrated_at,
+    }
+}

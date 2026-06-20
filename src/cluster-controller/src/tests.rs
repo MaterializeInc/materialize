@@ -24,8 +24,8 @@ use mz_repr::Timestamp;
 
 use crate::ClusterController;
 use crate::ctx::{
-    ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica, ReplicaShape,
-    StateWrite,
+    ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, Decision, ObservedReplica,
+    ReplicaShape, StateWrite,
 };
 use crate::strategy::{DesiredReplica, Strategy};
 
@@ -40,7 +40,7 @@ fn replica(n: u64) -> ReplicaId {
 fn shape(size: &str) -> ReplicaShape {
     ReplicaShape {
         size: size.to_string(),
-        availability_zones: Vec::new(),
+        availability_zones: AvailabilityZones(Vec::new()),
         logging: ComputeReplicaLogging::default(),
     }
 }
@@ -430,7 +430,9 @@ async fn distinct_shapes_union_and_attribute() {
 
 #[mz_ore::test(tokio::test)]
 async fn caa_conflict_is_rejected_and_recovered() {
-    use crate::ctx::{ExpectedClusterState, ReconfigurationRecord, ReconfigurationTarget};
+    use crate::ctx::{
+        AvailabilityZones, ExpectedClusterState, ReconfigurationRecord, ReconfigurationTarget,
+    };
 
     // A strategy that mirrors the cluster's current replication factor into a
     // reconfiguration record's target, so phase 1 produces an UpdateClusterState
@@ -453,7 +455,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
                     target: ReconfigurationTarget {
                         size: "200cc".to_string(),
                         replication_factor: state.replication_factor,
-                        availability_zones: Vec::new(),
+                        availability_zones: AvailabilityZones(Vec::new()),
                         logging: ComputeReplicaLogging::default(),
                     },
                     deadline: now,
@@ -509,7 +511,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
             &ExpectedClusterState {
                 size: "100cc".to_string(),
                 replication_factor: 1,
-                availability_zones: Vec::new(),
+                availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
                 reconfiguration: None,
                 burst: None,
@@ -564,7 +566,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
 
 #[mz_ore::test(tokio::test)]
 async fn create_drop_is_caa_guarded_and_recovers() {
-    use crate::ctx::ExpectedClusterState;
+    use crate::ctx::{AvailabilityZones, ExpectedClusterState};
 
     let c = cluster(1);
     // Over-provisioned: rf=1 with two replicas, so the baseline-only controller
@@ -598,7 +600,7 @@ async fn create_drop_is_caa_guarded_and_recovers() {
             &ExpectedClusterState {
                 size: "100cc".to_string(),
                 replication_factor: 1,
-                availability_zones: Vec::new(),
+                availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
                 reconfiguration: None,
                 burst: None,
