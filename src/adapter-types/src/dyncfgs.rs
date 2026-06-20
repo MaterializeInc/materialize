@@ -68,7 +68,7 @@ pub const ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK: Config<bool> = Config::new(
 pub const ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK: Config<bool> = Config::new(
     "enable_0dt_caught_up_stability_check",
     true,
-    "Require clusters to stay caught-up and healthy for a stability period before being considered ready during 0dt deployments. Emergency break-glass flag to disable this feature if needed.",
+    "Require clusters to stay caught-up and healthy for a stability period before being considered ready during 0dt deployments. Emergency break-glass flag: disabling reverts to treating a caught-up cluster as ready with no replica-health requirement, which differs from setting the stability period to zero (a zero period still requires all replicas to be healthy).",
 );
 
 pub const WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD: Config<Duration> = Config::new(

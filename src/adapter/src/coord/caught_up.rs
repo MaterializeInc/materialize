@@ -112,9 +112,42 @@ struct ReplicaHealthSnapshot {
     restart_total: u64,
 }
 
+/// Why the stability gate is (not) satisfied for a cluster on a given tick.
+///
+/// Recorded so we can log why a caught-up cluster is being held back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StabilityReason {
+    /// Not all replicas are currently `Online`.
+    NotHealthy,
+    /// A status change happened and resolved between two ticks.
+    StatusFlapped,
+    /// A replica process restarted between two ticks.
+    Restarted,
+    /// Currently caught-up and healthy, but the streak hasn't reached the
+    /// required period yet.
+    WithinPeriod,
+    /// Caught-up and healthy for at least the required period.
+    Stable,
+}
+
+/// Outcome of folding one health snapshot into a [`ClusterStabilityState`].
+#[derive(Debug, Clone, Copy)]
+struct StabilityObservation {
+    /// Whether the cluster has now been continuously caught-up and healthy for
+    /// at least the required period.
+    ready: bool,
+    /// How long the current uninterrupted streak has lasted, in milliseconds.
+    /// `None` when the cluster is not currently in a streak (this tick reset it).
+    stable_for_ms: Option<u64>,
+    /// Why the gate is (not) satisfied, for logging.
+    reason: StabilityReason,
+}
+
 impl ClusterStabilityState {
-    /// Folds in the latest health snapshot and returns whether the cluster has
-    /// now been continuously caught-up and healthy for at least `period_ms`.
+    /// Folds in the latest health snapshot and returns an observation: whether
+    /// the cluster has now been continuously caught-up and healthy for at least
+    /// `period_ms`, how long the current streak has lasted, and why the gate is
+    /// (not) satisfied.
     ///
     /// A cluster is "good" on a tick only if all its replicas are currently
     /// healthy and nothing changed since the previous tick (no status flap, no
@@ -125,7 +158,22 @@ impl ClusterStabilityState {
         snapshot: &ReplicaHealthSnapshot,
         now: EpochMillis,
         period_ms: u64,
-    ) -> bool {
+    ) -> StabilityObservation {
+        // NOTE: We don't assume orchestrator status events arrive in order or
+        // that every process of a cluster reports within the same tick. The
+        // snapshot reflects whatever the in-memory mirror holds right now, and
+        // the three checks below are deliberately redundant so no single one has
+        // to be reliable on its own:
+        //
+        //   - `all_healthy` is a point-in-time check, independent of ordering.
+        //   - a change in `restart_total` is the durable signal: k8s reports
+        //     restart counts monotonically and they survive gaps in the
+        //     orchestrator watch, so they catch restarts the status stream drops.
+        //   - `max_status_change` advancing is only a best-effort flap detector:
+        //     status `time` is overwritten without enforcing monotonicity, so an
+        //     out-of-order event could lower the max and hide a flap. The restart
+        //     counter is the belt-and-suspenders for exactly that gap.
+        //
         // We only compare the orchestrator-supplied times against each other, so
         // clock skew between the orchestrator and environmentd doesn't matter.
         let status_flapped = match (self.last_status_change, snapshot.max_status_change) {
@@ -146,8 +194,26 @@ impl ClusterStabilityState {
         self.last_status_change = snapshot.max_status_change;
         self.last_restart_total = Some(snapshot.restart_total);
 
-        self.stable_since
-            .is_some_and(|since| now.saturating_sub(since) >= period_ms)
+        let stable_for_ms = self.stable_since.map(|since| now.saturating_sub(since));
+        let ready = stable_for_ms.is_some_and(|elapsed| elapsed >= period_ms);
+
+        let reason = if ready {
+            StabilityReason::Stable
+        } else if !snapshot.all_healthy {
+            StabilityReason::NotHealthy
+        } else if status_flapped {
+            StabilityReason::StatusFlapped
+        } else if restarted {
+            StabilityReason::Restarted
+        } else {
+            StabilityReason::WithinPeriod
+        };
+
+        StabilityObservation {
+            ready,
+            stable_for_ms,
+            reason,
+        }
     }
 }
 
@@ -258,10 +324,11 @@ impl Coordinator {
             ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK.get(self.catalog().system_config().dyncfgs());
         let stability_period =
             WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD.get(self.catalog().system_config().dyncfgs());
-        let stability_period_ms: u64 = stability_period
-            .as_millis()
-            .try_into()
-            .expect("must fit into u64");
+        // Cap rather than panic on an absurdly large configured duration. A
+        // period of u64::MAX milliseconds means "effectively never auto-ready",
+        // which is the safe, conservative outcome: we won't cut over on our own,
+        // and an operator can still force it via skip-catchup.
+        let stability_period_ms = u64::try_from(stability_period.as_millis()).unwrap_or(u64::MAX);
 
         // We clone the exclude set so we don't hold a borrow of `caught_up_check`
         // across the classification, which lets us update the per-cluster
@@ -310,17 +377,31 @@ impl Coordinator {
                     all_ready = false;
                 }
                 ClusterCaughtUpStatus::CaughtUp => {
+                    // Break-glass: when disabled, a caught-up cluster is
+                    // immediately ready, with no replica-health requirement,
+                    // i.e. the behavior from before this gate existed. We keep it
+                    // as a config-level, fleet-wide revert. Operators can already
+                    // force a single cutover via skip-catchup/promote, but this
+                    // flag restores prior auto-cutover behavior across all
+                    // environments without per-deploy manual intervention or a
+                    // code release, mirroring
+                    // `enable_0dt_caught_up_replica_status_check`.
                     if !stability_check_enabled {
                         continue;
                     }
                     let snapshot = health.get(&cluster_id).expect("computed above");
                     let state = ctx.cluster_stability.entry(cluster_id).or_default();
-                    let ready = state.observe(snapshot, now, stability_period_ms);
-                    if !ready {
+                    let observation = state.observe(snapshot, now, stability_period_ms);
+                    if !observation.ready {
                         all_ready = false;
                         tracing::info!(
                             %cluster_id,
+                            reason = ?observation.reason,
                             all_healthy = snapshot.all_healthy,
+                            stable_for_ms = ?observation.stable_for_ms,
+                            required_period_ms = stability_period_ms,
+                            max_status_change = ?snapshot.max_status_change,
+                            restart_total = snapshot.restart_total,
                             "cluster is caught up but not yet stable for the required period"
                         );
                     }
@@ -776,11 +857,15 @@ mod tests {
         let mut state = ClusterStabilityState::default();
 
         // The first healthy observation starts the streak but isn't yet stable.
-        assert!(!state.observe(&snapshot(true, 100, 0), 0, period_ms));
+        assert!(!state.observe(&snapshot(true, 100, 0), 0, period_ms).ready);
         // Still within the period.
-        assert!(!state.observe(&snapshot(true, 100, 0), 500, period_ms));
+        assert!(!state.observe(&snapshot(true, 100, 0), 500, period_ms).ready);
         // Past the period: ready.
-        assert!(state.observe(&snapshot(true, 100, 0), 1000, period_ms));
+        assert!(
+            state
+                .observe(&snapshot(true, 100, 0), 1000, period_ms)
+                .ready
+        );
     }
 
     #[mz_ore::test]
@@ -788,13 +873,25 @@ mod tests {
         let period_ms = 1000;
         let mut state = ClusterStabilityState::default();
 
-        assert!(!state.observe(&snapshot(true, 100, 0), 0, period_ms));
+        assert!(!state.observe(&snapshot(true, 100, 0), 0, period_ms).ready);
         // A currently-unhealthy observation resets the streak.
-        assert!(!state.observe(&snapshot(false, 100, 0), 500, period_ms));
+        assert!(
+            !state
+                .observe(&snapshot(false, 100, 0), 500, period_ms)
+                .ready
+        );
         // Healthy again, but the clock restarts from here.
-        assert!(!state.observe(&snapshot(true, 100, 0), 600, period_ms));
-        assert!(!state.observe(&snapshot(true, 100, 0), 1599, period_ms));
-        assert!(state.observe(&snapshot(true, 100, 0), 1600, period_ms));
+        assert!(!state.observe(&snapshot(true, 100, 0), 600, period_ms).ready);
+        assert!(
+            !state
+                .observe(&snapshot(true, 100, 0), 1599, period_ms)
+                .ready
+        );
+        assert!(
+            state
+                .observe(&snapshot(true, 100, 0), 1600, period_ms)
+                .ready
+        );
     }
 
     #[mz_ore::test]
@@ -802,13 +899,25 @@ mod tests {
         let period_ms = 1000;
         let mut state = ClusterStabilityState::default();
 
-        assert!(!state.observe(&snapshot(true, 100, 0), 0, period_ms));
+        assert!(!state.observe(&snapshot(true, 100, 0), 0, period_ms).ready);
         // Currently healthy, but the status-change time advanced, so a flap
         // happened and resolved between ticks: reset.
-        assert!(!state.observe(&snapshot(true, 200, 0), 1000, period_ms));
+        assert!(
+            !state
+                .observe(&snapshot(true, 200, 0), 1000, period_ms)
+                .ready
+        );
         // A clean streak from here.
-        assert!(!state.observe(&snapshot(true, 200, 0), 1500, period_ms));
-        assert!(state.observe(&snapshot(true, 200, 0), 2500, period_ms));
+        assert!(
+            !state
+                .observe(&snapshot(true, 200, 0), 1500, period_ms)
+                .ready
+        );
+        assert!(
+            state
+                .observe(&snapshot(true, 200, 0), 2500, period_ms)
+                .ready
+        );
     }
 
     #[mz_ore::test]
@@ -816,19 +925,31 @@ mod tests {
         let period_ms = 1000;
         let mut state = ClusterStabilityState::default();
 
-        assert!(!state.observe(&snapshot(true, 100, 3), 0, period_ms));
+        assert!(!state.observe(&snapshot(true, 100, 3), 0, period_ms).ready);
         // Healthy with the same status-change time, but the restart count went
         // up: a restart happened and recovered between ticks, which the status
         // alone would miss. Reset.
-        assert!(!state.observe(&snapshot(true, 100, 4), 1000, period_ms));
-        assert!(!state.observe(&snapshot(true, 100, 4), 1500, period_ms));
-        assert!(state.observe(&snapshot(true, 100, 4), 2500, period_ms));
+        assert!(
+            !state
+                .observe(&snapshot(true, 100, 4), 1000, period_ms)
+                .ready
+        );
+        assert!(
+            !state
+                .observe(&snapshot(true, 100, 4), 1500, period_ms)
+                .ready
+        );
+        assert!(
+            state
+                .observe(&snapshot(true, 100, 4), 2500, period_ms)
+                .ready
+        );
     }
 
     #[mz_ore::test]
     fn zero_period_ready_on_first_healthy_tick() {
         let mut state = ClusterStabilityState::default();
         // With a zero period a single clean, healthy observation is enough.
-        assert!(state.observe(&snapshot(true, 100, 0), 0, 0));
+        assert!(state.observe(&snapshot(true, 100, 0), 0, 0).ready);
     }
 }
