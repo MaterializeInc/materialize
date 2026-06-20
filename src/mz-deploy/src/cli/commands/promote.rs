@@ -457,11 +457,18 @@ pub async fn run(
     let role = super::setup::validate_connection(&client, settings.emulator()).await?;
     super::setup::require_deployer(role)?;
 
-    // Validate deployment exists and is not promoted
-    client.deployments().validate_staging(deploy_id).await?;
-
     let apply_state = client.deployments().get_apply_state(deploy_id).await?;
     verbose!("Apply state: {:?}", apply_state);
+
+    // A fresh promote must target a staged, not-yet-promoted deployment. When
+    // apply-state markers already exist the promote was interrupted mid-flight
+    // (PreSwap/PostSwap), so resume it instead — even if `promoted_at` was
+    // already recorded. This makes a crash in the window between recording the
+    // promotion and dropping the markers recoverable by simply re-running
+    // `promote`, rather than leaving the markers orphaned.
+    if matches!(apply_state, ApplyState::NotStarted) {
+        client.deployments().validate_staging(deploy_id).await?;
+    }
 
     let staging_snapshot =
         deployment_snapshot::load_from_database(&client, Some(deploy_id)).await?;

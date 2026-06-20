@@ -1496,6 +1496,38 @@ def workflow_promote_resume(c: Composition, parser: WorkflowArgumentParser) -> N
         assert promoted_at("rp2") is not None
         assert orders_exists(), "no data loss across crash + resume"
 
+    with c.test_case("promote-resume-postcleanup"):
+        stage_and_wait("rp3")
+        # Crash after post-swap work (promotion recorded) but before the apply
+        # markers are cleaned up.
+        r = run_mz_deploy(
+            c,
+            "basic/v1",
+            "promote",
+            "rp3",
+            "--no-ready-check",
+            env_extra={"MZ_DEPLOY_FAIL_AT": "after-post-swap"},
+            check=False,
+        )
+        assert r.returncode != 0
+        assert (
+            marker("rp3") == "swapped=true"
+        ), f"expected PostSwap marker, got {marker('rp3')!r}"
+        assert (
+            promoted_at("rp3") is not None
+        ), "post-swap work should have recorded the promotion before the crash"
+        # Resume: re-running promote finishes the leftover cleanup even though the
+        # deployment is already promoted (it must not error "already promoted").
+        assert (
+            run_mz_deploy(
+                c, "basic/v1", "promote", "rp3", "--no-ready-check"
+            ).returncode
+            == 0
+        ), "promote must resume cleanup of an already-promoted-but-uncleaned deploy"
+        assert marker("rp3") is None, "markers should be cleaned up on resume"
+        assert promoted_at("rp3") is not None
+        assert orders_exists(), "no data loss across crash + resume"
+
 
 def workflow_redeploy_flags(c: Composition, parser: WorkflowArgumentParser) -> None:
     """`stage --redeploy-schema` / `--redeploy-all` force a redeploy.
