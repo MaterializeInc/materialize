@@ -347,7 +347,7 @@ Explained Query:
           Project (#6, #1..=#4) // { arity: 5 }
             TopK group_by=[#0, #1, #2, #3, #4] order_by=[#5 asc nulls_last] limit=1 // { arity: 7 }
               Project (#0..=#4, #6, #10) // { arity: 7 }
-                Filter case when (#8{cmp} = "<") then case when (#7{field} = "x") then (#1{x} < #9{val}) else case when (#7{field} = "m") then (#2{m} < #9{val}) else case when (#7{field} = "a") then (#3{a} < #9{val}) else case when (#7{field} = "s") then (#4{s} < #9{val}) else false end end end end else case when (#8{cmp} = ">") then case when (#7{field} = "x") then (#1{x} > #9{val}) else case when (#7{field} = "m") then (#2{m} > #9{val}) else case when (#7{field} = "a") then (#3{a} > #9{val}) else case when (#7{field} = "s") then (#4{s} > #9{val}) else false end end end end else false end end // { arity: 11 }
+                Filter case_lookup #8{cmp} when "<" then case_lookup #7{field} when "a" then (#3{a} < #9{val}) when "m" then (#2{m} < #9{val}) when "s" then (#4{s} < #9{val}) when "x" then (#1{x} < #9{val}) else false end when ">" then case_lookup #7{field} when "a" then (#3{a} > #9{val}) when "m" then (#2{m} > #9{val}) when "s" then (#4{s} > #9{val}) when "x" then (#1{x} > #9{val}) else false end else false end // { arity: 11 }
                   Join on=(#0{state} = #5{state}) type=differential // { arity: 11 }
                     implementation
                       %0:l1[#0{state}]K » %1:l0[#0{state}]K

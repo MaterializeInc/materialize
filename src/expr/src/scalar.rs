@@ -28,6 +28,7 @@ use mz_repr::adt::date::DateError;
 use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::RegexCompilationError;
 use mz_repr::adt::timestamp::TimestampError;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlColumnType};
 
@@ -686,8 +687,25 @@ impl MirScalarExpr {
     /// assert_eq!(test, expr_t);
     /// ```
     /// Reduce the expression to a simpler form.
+    ///
+    /// Uses default optimizer features, which leaves
+    /// `enable_case_literal_transform` cleared: callers that should honor that
+    /// flag (the optimizer's scalar-canonicalization pass and CREATE INDEX key
+    /// planning) must use [`MirScalarExpr::reduce_with_features`] instead.
     pub fn reduce(&mut self, column_types: &[ReprColumnType]) {
-        reduce::reduce(self, column_types);
+        reduce::reduce(self, column_types, &OptimizerFeatures::default());
+    }
+
+    /// Reduce the expression to a simpler form, honoring `features`.
+    ///
+    /// Identical to [`MirScalarExpr::reduce`] except that feature-flagged
+    /// rewrites (such as `CaseLiteral` construction) are gated on `features`.
+    pub fn reduce_with_features(
+        &mut self,
+        column_types: &[ReprColumnType],
+        features: &OptimizerFeatures,
+    ) {
+        reduce::reduce(self, column_types, features);
     }
 
     /// Decompose an IsNull expression into a disjunction of

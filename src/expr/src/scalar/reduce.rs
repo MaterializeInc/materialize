@@ -17,6 +17,7 @@
 //! Behavioral parity with the prior imperative implementation is a goal:
 //! rule order and the pre-/post-pass split are preserved.
 
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{ReprColumnType, RowArena};
 
 use crate::MirScalarExpr;
@@ -24,13 +25,22 @@ use crate::scalar::func::UnaryFunc;
 use crate::visit::Visit;
 
 mod binary;
+mod case_literal;
 mod if_then;
 mod unary;
 mod variadic;
 
 /// Reduce `expr` to a simpler equivalent form by repeatedly applying local
 /// rewrite rules until reaching a fixed point.
-pub fn reduce(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
+///
+/// `features` gates optimizer-feature-flagged rewrites; in particular
+/// `CaseLiteral` construction only runs when
+/// `features.enable_case_literal_transform` is set.
+pub fn reduce(
+    expr: &mut MirScalarExpr,
+    column_types: &[ReprColumnType],
+    features: &OptimizerFeatures,
+) {
     let temp_storage = &RowArena::new();
 
     // Simplifications run in a loop until `expr` no longer changes.
@@ -42,7 +52,7 @@ pub fn reduce(expr: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
                 reduce_pre(e, column_types);
                 None
             },
-            &mut |e| reduce_post(e, column_types, temp_storage),
+            &mut |e| reduce_post(e, column_types, temp_storage, features),
         );
     }
 }
@@ -98,7 +108,12 @@ fn reduce_pre(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
 }
 
 /// Post-order rewrites, applied after children have been reduced.
-fn reduce_post(e: &mut MirScalarExpr, column_types: &[ReprColumnType], temp_storage: &RowArena) {
+fn reduce_post(
+    e: &mut MirScalarExpr,
+    column_types: &[ReprColumnType],
+    temp_storage: &RowArena,
+    features: &OptimizerFeatures,
+) {
     match e {
         // Evaluate and pull up constants
         MirScalarExpr::Column(_, _)
@@ -111,6 +126,14 @@ fn reduce_post(e: &mut MirScalarExpr, column_types: &[ReprColumnType], temp_stor
         MirScalarExpr::CallVariadic { .. } => {
             variadic::reduce_call_variadic(e, column_types, temp_storage)
         }
-        MirScalarExpr::If { .. } => if_then::reduce_if(e, column_types),
+        MirScalarExpr::If { .. } => {
+            if_then::reduce_if(e, column_types);
+            // reduce_if may have rewritten the node away (e.g. bool branches
+            // become AND/OR); only attempt CaseLiteral construction if it is
+            // still an If.
+            if matches!(e, MirScalarExpr::If { .. }) {
+                case_literal::try_build(e, column_types, features);
+            }
+        }
     }
 }

@@ -288,7 +288,10 @@ impl EquivalencePropagation {
                         };
                         let changed = reducer.reduce_expr(expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce(&input_types[..(input_arity + index)]);
+                            expr.reduce_with_features(
+                                &input_types[..(input_arity + index)],
+                                ctx.features,
+                            );
                         }
                         if !ctx.features.enable_dequadratic_eqprop_map {
                             // Unfortunately, we had to stop doing the following, because it
@@ -345,7 +348,7 @@ impl EquivalencePropagation {
                     for expr in exprs.iter_mut() {
                         let changed = reducer.reduce_expr(expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce(input_types);
+                            expr.reduce_with_features(input_types, ctx.features);
                         }
                     }
                     let input_arity = *derived
@@ -381,7 +384,7 @@ impl EquivalencePropagation {
                     for expr in predicates.iter_mut() {
                         let changed = reducer.reduce_expr(expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce(input_types);
+                            expr.reduce_with_features(input_types, ctx.features);
                         }
                     }
                     // Incorporate `predicates` into `outer_equivalences`.
@@ -486,7 +489,10 @@ impl EquivalencePropagation {
                             let changed = reducer.reduce_expr(expr);
                             let acceptable_sub = literal_domination(&old, expr);
                             if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                                expr.reduce(input_types.as_ref().unwrap());
+                                expr.reduce_with_features(
+                                    input_types.as_ref().unwrap(),
+                                    ctx.features,
+                                );
                             }
                             if !acceptable_sub && !literal_domination(&old, expr)
                                 || expr.contains_err()
@@ -574,7 +580,7 @@ impl EquivalencePropagation {
                         let changed = reducer.reduce_expr(key);
                         let acceptable_sub = literal_domination(&old_key, key);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            key.reduce(input_type);
+                            key.reduce_with_features(input_type, ctx.features);
                         }
                         if !acceptable_sub && !literal_domination(&old_key, key) {
                             key.clone_from(&old_key);
@@ -583,7 +589,7 @@ impl EquivalencePropagation {
                     for aggr in aggregates.iter_mut() {
                         let changed = reducer.reduce_expr(&mut aggr.expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            aggr.expr.reduce(input_type);
+                            aggr.expr.reduce_with_features(input_type, ctx.features);
                         }
                         // A count expression over a non-null expression can discard the expression.
                         if aggr.func == mz_expr::AggregateFunc::Count && !aggr.distinct {
@@ -649,7 +655,7 @@ impl EquivalencePropagation {
                         let changed = reducer.reduce_expr(expr);
                         let acceptable_sub = literal_domination(&old_expr, expr);
                         if changed || !ctx.features.enable_less_reduce_in_eqprop {
-                            expr.reduce(input_types);
+                            expr.reduce_with_features(input_types, ctx.features);
                         }
                         if !acceptable_sub && !literal_domination(&old_expr, expr) {
                             expr.clone_from(&old_expr);

@@ -10,11 +10,6 @@
 # Tests for the CaseLiteral optimizer transform, which rewrites
 # CASE expr WHEN lit1 THEN res1 ... chains into BTreeMap lookups.
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_case_literal_transform TO true;
-----
-COMPLETE 0
-
 statement ok
 CREATE TABLE t (x int, y text, z int)
 
@@ -186,6 +181,31 @@ Target cluster: quickstart
 
 EOF
 
+# Nested chain: a CASE in a result arm folds independently of the outer chain.
+# The inner chain on z (in the x = 1 arm) and the outer chain on x both become
+# case_lookups.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT
+  CASE
+    WHEN x = 1 THEN CASE WHEN z = 10 THEN 100 WHEN z = 20 THEN 200 ELSE 0 END
+    WHEN x = 2 THEN 50
+    WHEN x = 3 THEN 60
+    ELSE 0
+  END
+FROM t
+----
+Explained Query:
+  Project (#3)
+    Map (case_lookup #0{x} when 1 then case_lookup #2{z} when 10 then 100 when 20 then 200 else 0 end when 2 then 50 when 3 then 60 else 0 end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
 statement ok
 INSERT INTO t VALUES (1, 'dup', 0), (2, 'two', 0), (99, 'miss', 0), (NULL, 'null', 0)
 
@@ -242,6 +262,9 @@ FROM t WHERE y = 'null'
 0
 
 # Verify JSON serialization of a CaseLiteral plan succeeds.
+# Normalize the table's GlobalId so the golden is stable regardless of how many
+# catalog objects exist when this file runs (it embeds "User": <n> in the raw plan).
+replace "User": \d+  "User": <id>
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT
@@ -264,7 +287,7 @@ FROM t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": <id>
                     }
                   },
                   "typ": {
@@ -388,10 +411,44 @@ FROM t
   "sources": [
     {
       "id": {
-        "User": 1
+        "User": <id>
       },
       "op": null
     }
   ]
 }
+EOF
+
+# Regression: float CASE-over-literals must NOT fold to case_lookup, because the
+# lookup's Row total-order disagrees with SQL `=` for -0.0 vs +0.0.
+# database-issues#11317 (Linear DB-59).
+statement ok
+CREATE TABLE f (a float8, b float8)
+
+statement ok
+INSERT INTO f VALUES (0.0, -1.0), (1.0, 1.0)
+
+# The -0.0 row (0.0 * -1.0) must match the WHEN 0.0 arm and return 'zero'.
+query TT
+SELECT a * b, CASE (a * b) WHEN 0.0 THEN 'zero' WHEN 1.0 THEN 'one' ELSE 'other' END FROM f ORDER BY 1
+----
+-0.000
+zero
+1.000
+one
+
+# The float CASE must stay `case when (...)` and NOT become `case_lookup`.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT CASE (a * b) WHEN 0.0 THEN 'zero' WHEN 1.0 THEN 'one' ELSE 'other' END FROM f
+----
+Explained Query:
+  Project (#2)
+    Map (case when (0 = (#0{a} * #1{b})) then "zero" else case when (1 = (#0{a} * #1{b})) then "one" else "other" end end)
+      ReadStorage materialize.public.f
+
+Source materialize.public.f
+
+Target cluster: quickstart
+
 EOF

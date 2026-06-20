@@ -72,7 +72,6 @@ def get_minimal_system_parameters(
         ),
         "enable_alter_swap": "true",
         "enable_arrangement_dictionary_compression_alpha": "false",
-        "enable_case_literal_transform": "true",
         "enable_cast_elimination": "true",
         "enable_coalesce_case_transform": "true",
         "enable_columnar_lgalloc": "false",
@@ -191,11 +190,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "compute_subscribe_snapshot_optimization",
             "true",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
-            "enable_case_literal_transform",
-            "false",
             ["true", "false"],
         ),
         VariableSystemParameter(

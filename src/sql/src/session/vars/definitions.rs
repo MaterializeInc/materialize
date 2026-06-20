@@ -2264,8 +2264,8 @@ feature_flags!(
     },
     {
         name: enable_case_literal_transform,
-        desc: "Allow the optimizer to rewrite If-chains matching a single expression against literals into a CaseLiteral lookup.",
-        default: false,
+        desc: "Allow the optimizer to rewrite If-chains matching a single expression against literals into a CaseLiteral lookup. Kill-switch: on by default, set to false to disable.",
+        default: true,
         enable_for_item_parsing: false,
     },
     {

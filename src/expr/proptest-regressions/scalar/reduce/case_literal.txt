@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 35d6f7ffa468be32fab57e806750506e1ecfb043296c37691ba3707aaf832629 # shrinks to arms = [(0, 0), (0, -45)], fallback = -45, probes = [0]
+cc 366b5eaa0f10eae754a56951e82abc59beecdb817993a9319a7d25f3e0c1df0f # shrinks to arms = [(-5, Some(0)), (-5, None)], fallback = Some(0), probes = [0]
+cc 53c36e2151c96858d20a8ffad8fdb2ce58a15ea66443922b44eeecb5e0f5e715 # shrinks to arms = [(0, None), (0, Some(0)), (0, None)], fallback = Some(0), probes = [0]
