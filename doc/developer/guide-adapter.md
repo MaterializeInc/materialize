@@ -66,6 +66,24 @@ logic to them. Extend the implications framework instead.
   Representing a new kind may require extending `ParsedStateUpdate` /
   `ParsedStateUpdateKind` first.
 
+### One writer per catalog-owned resource
+
+The coordinator is the sole writer of catalog state, and a given catalog-owned
+resource (for example a cluster's replica set) must have exactly one
+decision-maker at a time. When a change introduces a new owner behind a feature
+gate, the same change that lets the new owner act when the gate is on must also
+stop the legacy path from acting on that resource. A gate that activates the new
+writer without disabling the old one creates two writers. They race,
+double-apply, or one silently undoes the other. A controller create that the
+legacy reconcile path immediately drops is the typical shape.
+
+Reviewing corollary for stacked changes. Verify that the behavior a change's
+tests assert is implemented by that change, not by a later change in the stack. A
+test that flips the gate on and asserts the new owner's behavior is only valid if
+the same change also gates off the legacy path. Otherwise the test passes only
+against the full stack, and the change is not correct on its own, so it cannot be
+merged, reverted, or bisected independently.
+
 ## Correctness Invariants
 
 ### Timestamp selection must respect real-time bounds
@@ -254,3 +272,29 @@ real, but the solution must maintain strict serializability. Correct alternative
 might include: reducing oracle round-trip latency, colocating the oracle,
 using the batching oracle's existing mechanism to serve more callers per batch,
 or relaxing the isolation level for queries that opt in.
+
+## Reviewing adapter changes
+
+Read this guide when reviewing adapter changes, not only when writing them. The
+invariants above are what review most easily misses. Recurring heuristics:
+
+- Compare-and-append and TOCTOU. For a decision computed against a state
+  snapshot and applied later, confirm the precondition is enforced by the
+  transaction, not by an in-memory check before it. See the invariant above. Be
+  suspicious of "this is safe because the loop does not yield here" reasoning.
+- One writer. For a change that adds a new writer of a catalog-owned resource
+  behind a gate, confirm the same change disables the legacy writer when the gate
+  is on, and that a stacked change's tests exercise behavior it implements rather
+  than a later change's.
+- Message-boundary granularity. When a change adds a request or response over
+  the coordinator's internal channel, prefer the narrowest high-level question
+  over shipping bulk state across the boundary. Check how the existing or legacy
+  path obtains the same signal before adding a heavier one.
+- Assumptions that only hold today. Flag merge or combination logic whose
+  correctness rests on the current, small set of inputs (for example "the later
+  writer wins because the only other writer never sets this field"). Ask for the
+  invariant to be made explicit or enforced rather than left implicit.
+- Comments and rustdoc follow the repository comment guidelines. No chronology
+  ("a later PR will ..."), each comment stands on its own, a comment above a
+  struct field is about that field, and a term of art (a module's "kernel", say)
+  is defined where it is introduced.
