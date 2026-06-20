@@ -131,6 +131,7 @@ pub async fn run(
             &production_snapshot,
             &new_snapshot,
             &planned_project,
+            &BTreeSet::new(),
         ))
     };
 
