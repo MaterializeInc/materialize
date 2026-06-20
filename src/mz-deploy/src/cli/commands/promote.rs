@@ -482,12 +482,29 @@ pub async fn run(
     }
 
     execute_swap_phase(&client, &plan).await?;
+    maybe_crash("after-swap");
     run_post_swap_steps(&client, &plan).await?;
+    maybe_crash("after-post-swap");
     cleanup_apply_state(&client, &plan.deploy_id).await?;
 
     progress::success("Deployment completed successfully!");
 
     Ok(())
+}
+
+/// Test-only crash injection. When the `MZ_DEPLOY_FAIL_AT` environment variable
+/// matches `phase`, abort the process immediately — no unwinding, no cleanup —
+/// to faithfully simulate a crash at that boundary so promote's resume paths can
+/// be exercised end to end. Inert in normal use (the variable is never set).
+///
+/// Boundaries: `after-markers` (markers written, swap not committed → PreSwap),
+/// `after-swap` (swap committed → PostSwap), `after-post-swap` (post-swap work
+/// done, markers not yet cleaned up → PostSwap).
+fn maybe_crash(phase: &str) {
+    if std::env::var("MZ_DEPLOY_FAIL_AT").ok().as_deref() == Some(phase) {
+        crate::info!("MZ_DEPLOY_FAIL_AT={}: simulating crash", phase);
+        std::process::exit(1);
+    }
 }
 
 /// Runs the swap portion of apply according to persisted resume state.
@@ -499,6 +516,7 @@ async fn execute_swap_phase(client: &Client, plan: &DeploymentPlan) -> Result<()
                 .deployments()
                 .create_apply_state_schemas(&plan.deploy_id)
                 .await?;
+            maybe_crash("after-markers");
             verbose!("Executing atomic swap...");
             execute_atomic_swap(
                 client,
