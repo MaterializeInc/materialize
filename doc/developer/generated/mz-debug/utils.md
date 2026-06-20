@@ -1,6 +1,6 @@
 ---
 source: src/mz-debug/src/utils.rs
-revision: 19b7f2055a
+revision: 3b41d4605c
 ---
 
 # mz-debug::utils
