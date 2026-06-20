@@ -1363,6 +1363,140 @@ def workflow_index_on_storage(c: Composition, parser: WorkflowArgumentParser) ->
     ), f"expected hint to suggest indexing a view, got:\n{combined}"
 
 
+def workflow_redeploy_flags(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """`stage --redeploy-schema` / `--redeploy-all` force a redeploy.
+
+    `--redeploy-schema` marks a schema — and its downstream dependents — dirty
+    even when nothing changed; `--redeploy-all` redeploys every schema. The two
+    flags are mutually exclusive.
+    """
+    setup_base(c)
+
+    # Establish a promoted production deployment so later stages run
+    # incrementally (otherwise every stage is a full deploy and the flags are
+    # no-ops).
+    assert run_mz_deploy(c, "basic/v1", "apply").returncode == 0
+    assert (
+        run_mz_deploy(
+            c, "basic/v1", "stage", "--deploy-id", "rf", "--allow-dirty"
+        ).returncode
+        == 0
+    )
+    assert (
+        run_mz_deploy(
+            c, "basic/v1", "wait", "rf", "--timeout", "300", "--allowed-lag", "86400"
+        ).returncode
+        == 0
+    )
+    assert (
+        run_mz_deploy(c, "basic/v1", "promote", "rf", "--no-ready-check").returncode
+        == 0
+    )
+
+    def plan_object_schemas(*args: str) -> set[str]:
+        # Dry-run never creates the deployment, so the deploy-id is reusable.
+        result = run_mz_deploy(
+            c,
+            "basic/v1",
+            "stage",
+            "--deploy-id",
+            "rf-dry",
+            "--allow-dirty",
+            "--dry-run",
+            "--output",
+            "json",
+            *args,
+        )
+        assert result.returncode == 0, f"stage dry-run failed: {result.stderr}"
+        plan = json.loads(result.stdout)
+        # A schema is "in the plan" if any of its objects are staged in any
+        # bucket — regular objects, replacement MVs, or sinks.
+        return {
+            o["schema"]
+            for bucket in ("objects", "replacement_mvs", "sinks")
+            for o in plan[bucket]
+        }
+
+    with c.test_case("redeploy-no-changes-is-noop"):
+        # No changes and no force flag → nothing to stage.
+        result = run_mz_deploy(
+            c,
+            "basic/v1",
+            "stage",
+            "--deploy-id",
+            "rf-noop",
+            "--allow-dirty",
+            "--dry-run",
+            "--output",
+            "json",
+        )
+        assert result.returncode == 0, result.stderr
+        assert (
+            "No changes detected" in result.stderr
+        ), f"expected no-change message, got: {result.stderr}"
+
+    with c.test_case("redeploy-schema-forces-downstream-only"):
+        # `ops` depends on `core`. Forcing `ops` redeploys ops but must not pull
+        # in the upstream `core` schema.
+        schemas = plan_object_schemas("--redeploy-schema", "app.ops")
+        assert "ops" in schemas, f"ops should be forced dirty, got {schemas}"
+        assert (
+            "core" not in schemas
+        ), f"upstream core must not be pulled in by forcing ops, got {schemas}"
+
+    with c.test_case("redeploy-schema-comma-list"):
+        schemas = plan_object_schemas("--redeploy-schema", "app.core,app.ops")
+        assert {"core", "ops"} <= schemas, f"both schemas expected, got {schemas}"
+
+    with c.test_case("redeploy-all-forces-everything"):
+        schemas = plan_object_schemas("--redeploy-all")
+        assert {"core", "ops"} <= schemas, f"all schemas expected, got {schemas}"
+
+    with c.test_case("redeploy-flags-validation"):
+        # Mutually exclusive.
+        r = run_mz_deploy(
+            c,
+            "basic/v1",
+            "stage",
+            "--deploy-id",
+            "rf-x",
+            "--allow-dirty",
+            "--redeploy-schema",
+            "app.core",
+            "--redeploy-all",
+            check=False,
+        )
+        assert (
+            r.returncode != 0
+        ), "conflicting --redeploy-schema/--redeploy-all should fail"
+        # Unqualified schema.
+        r = run_mz_deploy(
+            c,
+            "basic/v1",
+            "stage",
+            "--deploy-id",
+            "rf-x",
+            "--allow-dirty",
+            "--redeploy-schema",
+            "core",
+            check=False,
+        )
+        assert r.returncode != 0, "unqualified schema should fail"
+        # Unknown schema.
+        r = run_mz_deploy(
+            c,
+            "basic/v1",
+            "stage",
+            "--deploy-id",
+            "rf-x",
+            "--allow-dirty",
+            "--redeploy-schema",
+            "app.bogus",
+            check=False,
+        )
+        assert r.returncode != 0, "unknown schema should fail"
+
+
 def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Exercise `apply` re-runs for CONNECTION objects.
 

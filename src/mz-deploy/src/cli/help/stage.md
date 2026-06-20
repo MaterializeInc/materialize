@@ -91,6 +91,13 @@ during a deployment.
 - `--dry-run` — Preview what would be deployed without executing any
   changes. Shows staging schemas, clusters, objects, deferred sinks,
   and replacement MVs. Add `--output json` for machine-readable output.
+- `--redeploy-schema <SCHEMA>` — Force a schema to redeploy even if nothing
+  in it changed, on top of the normally-detected changes. The value must be
+  fully qualified as `database.schema`. Repeatable, and accepts a
+  comma-separated list (`--redeploy-schema app.core,app.ops`). Mutually
+  exclusive with `--redeploy-all`.
+- `--redeploy-all` — Redeploy every schema, ignoring change detection.
+  Mutually exclusive with `--redeploy-schema`.
 
 ## Concurrent Deployments
 
