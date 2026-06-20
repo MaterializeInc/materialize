@@ -114,6 +114,7 @@ def run_mz_deploy(
     *args: str,
     check: bool = True,
     set_default_profile: bool = True,
+    env_extra: dict[str, str] = {},
 ) -> subprocess.CompletedProcess[str]:
     create_profiles()
     project_dir = PROJECTS_DIR / project_name
@@ -138,6 +139,7 @@ def run_mz_deploy(
         capture_stderr=True,
         check=False,
         rm=True,
+        env_extra=env_extra,
     )
     if result.returncode != 0 and check:
         print(f"mz-deploy stdout: {result.stdout}", file=sys.stderr)
@@ -1361,6 +1363,138 @@ def workflow_index_on_storage(c: Composition, parser: WorkflowArgumentParser) ->
     assert (
         "create a view" in combined
     ), f"expected hint to suggest indexing a view, got:\n{combined}"
+
+
+def workflow_promote_resume(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """`promote` is crash-safe and resumable.
+
+    A crash mid-promote leaves a marker state in `_mz_deploy`; re-running
+    `promote` resumes from it to a complete promotion, with no data loss. This
+    exercises the `ApplyState` PreSwap and PostSwap recovery paths end to end,
+    using deterministic crash injection (`MZ_DEPLOY_FAIL_AT`).
+    """
+    setup_base(c)
+
+    def marker(deploy_id: str) -> str | None:
+        # The persisted apply-state lives as a comment on the `apply_<id>_pre`
+        # marker schema in `_mz_deploy`.
+        rows = c.sql_query(
+            "SELECT c.comment FROM mz_catalog.mz_schemas s "
+            "JOIN mz_catalog.mz_databases d ON s.database_id = d.id "
+            "LEFT JOIN mz_internal.mz_comments c ON s.id = c.id "
+            f"WHERE s.name = 'apply_{deploy_id}_pre' AND d.name = '_mz_deploy'",
+            user="mz_system",
+            port=6877,
+        )
+        return rows[0][0] if rows else None
+
+    def promoted_at(deploy_id: str):
+        rows = c.sql_query(
+            "SELECT promoted_at FROM _mz_deploy.tables.deployments "
+            f"WHERE deploy_id = '{deploy_id}'",
+            user="mz_system",
+            port=6877,
+        )
+        return rows[0][0] if rows else None
+
+    def orders_exists() -> bool:
+        # The source-backed table is apply-only — it must survive every crash.
+        rows = c.sql_query(
+            "SELECT 1 FROM mz_tables t "
+            "JOIN mz_schemas s ON t.schema_id = s.id "
+            "JOIN mz_databases d ON s.database_id = d.id "
+            "WHERE t.name = 'orders' AND s.name = 'ingest' AND d.name = 'app'",
+            database="app",
+        )
+        return len(rows) == 1
+
+    assert run_mz_deploy(c, "basic/v1", "apply").returncode == 0
+    assert orders_exists()
+
+    def stage_and_wait(deploy_id: str) -> None:
+        # `--redeploy-all` forces a full stage even once a prior deploy is
+        # promoted, so each sub-case has something to promote.
+        assert (
+            run_mz_deploy(
+                c,
+                "basic/v1",
+                "stage",
+                "--deploy-id",
+                deploy_id,
+                "--allow-dirty",
+                "--redeploy-all",
+            ).returncode
+            == 0
+        )
+        assert (
+            run_mz_deploy(
+                c,
+                "basic/v1",
+                "wait",
+                deploy_id,
+                "--timeout",
+                "300",
+                "--allowed-lag",
+                "86400",
+            ).returncode
+            == 0
+        )
+
+    with c.test_case("promote-resume-preswap"):
+        stage_and_wait("rp1")
+        # Crash after markers are written but before the swap commits.
+        r = run_mz_deploy(
+            c,
+            "basic/v1",
+            "promote",
+            "rp1",
+            "--no-ready-check",
+            env_extra={"MZ_DEPLOY_FAIL_AT": "after-markers"},
+            check=False,
+        )
+        assert r.returncode != 0, "crash injection should make promote exit non-zero"
+        assert (
+            marker("rp1") == "swapped=false"
+        ), f"expected PreSwap marker, got {marker('rp1')!r}"
+        assert promoted_at("rp1") is None, "must not be promoted after a pre-swap crash"
+        # Resume: a plain re-run finishes the promotion.
+        assert (
+            run_mz_deploy(
+                c, "basic/v1", "promote", "rp1", "--no-ready-check"
+            ).returncode
+            == 0
+        )
+        assert marker("rp1") is None, "markers should be cleaned up after resume"
+        assert promoted_at("rp1") is not None, "should be promoted after resume"
+        assert orders_exists(), "no data loss across crash + resume"
+
+    with c.test_case("promote-resume-postswap"):
+        stage_and_wait("rp2")
+        # Crash after the swap commits but before cleanup.
+        r = run_mz_deploy(
+            c,
+            "basic/v1",
+            "promote",
+            "rp2",
+            "--no-ready-check",
+            env_extra={"MZ_DEPLOY_FAIL_AT": "after-swap"},
+            check=False,
+        )
+        assert r.returncode != 0
+        assert (
+            marker("rp2") == "swapped=true"
+        ), f"expected PostSwap marker, got {marker('rp2')!r}"
+        assert promoted_at("rp2") is None, "post-swap work must not have run yet"
+        # Resume: re-run finishes post-swap work + cleanup (and must not swap again).
+        assert (
+            run_mz_deploy(
+                c, "basic/v1", "promote", "rp2", "--no-ready-check"
+            ).returncode
+            == 0
+        )
+        assert marker("rp2") is None
+        assert promoted_at("rp2") is not None
+        assert orders_exists(), "no data loss across crash + resume"
 
 
 def workflow_redeploy_flags(c: Composition, parser: WorkflowArgumentParser) -> None:
