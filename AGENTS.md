@@ -62,7 +62,7 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
 
 ## Guidance
 
-- When designing specs or implementing features, preserve the full scope and
+* When designing specs or implementing features, preserve the full scope and
   capability of the solution. Do not substitute dynamic or generative
   approaches with hardcoded data, skip automation that a reference
   implementation provides, or simplify away the parts that make a feature
@@ -71,33 +71,33 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
   static snapshot. When you feel tempted to reduce scope or take a shortcut,
   flag it to the user and workshop an alternative together rather than silently
   downgrading the design.
-- When making code changes, run cheap checkers/linters and formatters before
-  reporting success and/or committing changes. For Rust, these would be `cargo
-  fmt` and `cargo check`.
-- When debugging CI or lint failures, start by reproducing the exact failing
+* When making code changes, run cheap checkers/linters and formatters before
+  reporting success and/or committing changes. For Rust, these would be
+  `bin/fmt` and `cargo check`.
+* When debugging CI or lint failures, start by reproducing the exact failing
   command locally and reading its output. Do not run generic checks (clippy,
   fmt, grep) in a shotgun approach.
-- We value simplicity and clear abstractions, we especially care about
-  designing the interfaces or boundaries between components well, this includes
-  components, traits, interfaces, modules, crates.
-- In code comments or inline documentation, we value clearly described
+* We value simplicity and clear abstractions. We especially care about
+  designing the interfaces or boundaries between components well. This includes
+  components, traits, interfaces, modules, and crates.
+* In code comments or inline documentation, we value clearly described
   contracts and assumptions.
-- In code comments, we don't like "fluff" comments, comments that describe what
+* In code comments, we don't like "fluff" comments, comments that describe what
   code does when it is obvious from the code. Good code should be readable. It
   _is_ okay to call out tricky parts of the code or "nota benes".
-- In code comments and code documentation we value conscise but complete
+* In code comments and code documentation we value concise but complete
   comments.
-- In code comments and documentation, don't refer to potential previous states
+* In code comments and documentation, don't refer to potential previous states
   of the code, or things like future PRs, try not to use chronology in there,
   except when it's needed to explain why a certain thing behaves as it does and
   we need to record that knowledge. In general comments need to stand on their
   own and make sense from just looking at them and the code around it, not
   previous changes.
-- Avoid em-dashes and semicolons for structuring sentences, everywhere: code
+* Avoid em-dashes and semicolons for structuring sentences, everywhere: code
   comments, specs, design docs, all of it. Restructure with full stops and
   commas instead. In most cases a sentence that wants an em-dash or semicolon
   can just be split into two.
-- Our guidance applies both when writing new code or designs, or when we notice
+* Our guidance applies both when writing new code or designs, or when we notice
   deviations in code or architecture that we are working on. At the same time,
   we want to keep our changes minimal so it's good to call out deviations and
   then we can decide together what to do about it.
@@ -110,14 +110,14 @@ languages), in addition to the comment guidance above.
 When to comment. Comment length scales with the cost of getting the code
 wrong, not with the size or sophistication of the code:
 
-- Write a comment when the code enters non-obvious territory: concurrency and
+* Write a comment when the code enters non-obvious territory: concurrency and
   async hazards (races, handle/lease expiry, things that must not be held
   across await points), ordering constraints ("X must happen before Y,
   otherwise Z"), invariants whose violation panics or corrupts data,
   restart/recovery semantics, the origin of magic values and tuning constants,
   why the obvious alternative was not used, subtle data-structure properties
   (iteration order, why this map type).
-- Don't comment plumbing, delegation, getters, conventional error handling,
+* Don't comment plumbing, delegation, getters, conventional error handling,
   idiomatic patterns (match arms, iterator chains), logging, or test bodies. A
   long function whose steps are well-named calls needs no inline comments.
   Calibration from our own code: a gnarly concurrent module runs ~30% comment
@@ -126,35 +126,33 @@ wrong, not with the size or sophistication of the code:
 
 Where the comment goes:
 
-- A doc comment states the contract for the caller: a one-sentence summary as
+* A doc comment states the contract for the caller: a one-sentence summary as
   the first line, further paragraphs only for invariants and semantics the
   caller must know. For self-evident public items (e.g. to satisfy
   missing_docs) a single line is enough, don't pad it.
-- Reasoning about how or why the implementation works goes in an inline `//`
+* Reasoning about how or why the implementation works goes in an inline `//`
   comment at the exact decision point in the body, not hoisted into the doc
   comment. Don't write doc comments that narrate the function body
   (state-machine transition lists, "Phase 1 ... Phase 2 ...", "When false ...
   when true ..." enumerations of a flag's behavior). Give a 1-2 line summary
   and put the detail next to the code it explains, or in module-level `//!`
   docs when it's about how the pieces fit together.
-- Struct fields get doc comments only when their semantics are subtle. Never
+* Struct fields get doc comments only when their semantics are subtle. Never
   restate the field name or type.
-- Bullet lists in rustdoc only for genuinely enumerable invariants or
+* Bullet lists in rustdoc only for genuinely enumerable invariants or
   scenarios, not as a general structuring device.
 
 How it reads:
 
-- Plain prose, one idea per sentence: "We do X because Y." "If we didn't do X
+* Plain prose, one idea per sentence: "We do X because Y." "If we didn't do X
   here, Z would happen." Write like explaining to a colleague, not like a
   specification. Avoid dense clause-stacking where every sentence carries
   three qualifications or parenthetical cross-references.
-- First person plural ("we") for design reasoning. Use the conventional third
+* First person plural ("we") for design reasoning. Use the conventional third
   person for rustdoc summaries ("Returns ...").
-- Honest hedging about tradeoffs is good: "This is expensive, but we only do
+* Honest hedging about tradeoffs is good: "This is expensive, but we only do
   it when ...", "Not ideal, but workable until we find something better."
-- Markers: `NOTE:` (or `NOTE(aljoscha):`) for counterintuitive gotchas,
+* Markers: `NOTE:` (or `NOTE(aljoscha):`) for counterintuitive gotchas,
   `TODO(aljoscha):` for future work. A TODO may explain reasoning and
   alternatives, but task-list scope detail belongs in an issue, not the
   comment.
-- Backticks around identifiers in rustdoc. Plain text is fine in inline
-  comments. Wrap at ~80 columns.
