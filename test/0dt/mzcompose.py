@@ -12,6 +12,7 @@ Explicit deterministic tests for read-only mode and zero downtime deploys (same
 version, no upgrade).
 """
 
+import json
 import time
 from datetime import datetime, timedelta
 from textwrap import dedent
@@ -2865,6 +2866,148 @@ def workflow_stuck_collection(c: Composition) -> None:
     )
 
     c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def workflow_caught_up_stability(c: Composition) -> None:
+    """Verify the 0dt caught-up stability gate end-to-end.
+
+    With a non-trivial stability period, a healthy deployment must still reach
+    ReadyToPromote (the gate does not deadlock healthy clusters) and can be
+    promoted to leader. The gate's reset-on-unhealthy behavior is hard to
+    reproduce deterministically here, so it is covered by adapter unit tests
+    that drive synthetic replica-health transitions directly.
+    """
+
+    c.down(destroy_volumes=True)
+
+    c.up("mz_old")
+
+    # Require clusters to stay caught-up and healthy for a while before we cut
+    # over. mz_new reads this from the shared catalog.
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '20s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        CREATE INDEX mv_idx ON mv (a);
+        INSERT INTO t VALUES (1), (2), (3);
+        """,
+        service="mz_old",
+    )
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def _leader_status(c: Composition, mz_service: str) -> str:
+    """Reads the current leader-promotion status of *mz_service*."""
+    return json.loads(
+        c.exec(
+            mz_service,
+            "curl",
+            "-s",
+            "localhost:6878/api/leader/status",
+            capture=True,
+            silent=True,
+        ).stdout
+    )["status"]
+
+
+def workflow_caught_up_stability_crash_loop(c: Composition) -> None:
+    """Verify the stability gate blocks cutover while a replica crash-loops.
+
+    A cluster with two replicas hosts a materialized view. One of mz_new's
+    replicas is repeatedly killed while the other stays healthy, so the cluster
+    keeps hydrating and counts as caught-up. Because it is caught-up, a
+    point-in-time check would see it ready and cut over into the crashing
+    replica. The stability gate must refuse while any replica is unhealthy, and
+    report ready only once the killed replica recovers and stays healthy for the
+    stability period.
+    """
+
+    c.down(destroy_volumes=True)
+
+    c.up("mz_old")
+
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '15s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+        CREATE CLUSTER crashy SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER crashy AS SELECT * FROM t;
+        CREATE INDEX mv_idx IN CLUSTER crashy ON mv (a);
+        INSERT INTO t VALUES (1), (2), (3);
+        """,
+        service="mz_old",
+    )
+
+    # Target a single replica of `crashy` so the cluster stays caught-up on the
+    # other one. Replica IDs come from the shared catalog, so they match across
+    # generations. We kill the matching child process inside mz_new's container.
+    replica_id = c.sql_query(
+        "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+        "WHERE c.name = 'crashy' ORDER BY r.name LIMIT 1",
+        service="mz_old",
+    )[0][0]
+
+    c.up("mz_new")
+
+    # SIGKILL the replica's clusterd repeatedly. The process orchestrator
+    # relaunches it ~5s later, producing Online/Offline flapping. SIGKILL is not
+    # classified as a crash, so it's safe with the default propagate_crashes.
+    crash_until = time.time() + 60
+
+    def crash_loop() -> None:
+        while time.time() < crash_until:
+            c.exec(
+                "mz_new",
+                "bash",
+                "-c",
+                f"ps aux | grep -v grep | grep -w 'replica_id={replica_id}' "
+                f"| awk '{{print $2}}' | xargs -r kill -9 || true",
+            )
+            time.sleep(3)
+
+    crasher = Thread(target=crash_loop)
+    crasher.start()
+    try:
+        # While a replica is crash-looping, mz_new must never report ready. The
+        # surviving replica hydrates the tiny view within seconds, so the cluster
+        # is caught-up almost immediately. Without the gate, mz_new would promote
+        # within a check interval. The status endpoint may not answer in the
+        # first moments after boot, so we only assert once we read a status.
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            try:
+                status = _leader_status(c, "mz_new")
+            except Exception:
+                time.sleep(2)
+                continue
+            assert (
+                status == DeploymentStatus.INITIALIZING.value
+            ), f"mz_new reached status {status} while a replica was crash-looping"
+            time.sleep(2)
+    finally:
+        crasher.join()
+
+    # The replica recovers. After the stability period mz_new becomes ready.
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     c.promote_mz("mz_new")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)

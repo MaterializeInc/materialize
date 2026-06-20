@@ -1712,6 +1712,7 @@ impl ClusterReplicaStatuses {
             .map(|process_id| {
                 let status = ClusterReplicaProcessStatus {
                     status: ClusterStatus::Offline(Some(OfflineReason::Initializing)),
+                    restart_count: 0,
                     time: time.clone(),
                 };
                 (u64::cast_from(process_id), status)
@@ -4895,6 +4896,7 @@ pub fn serve(
                 CaughtUpCheckContext {
                     trigger,
                     exclude_collections,
+                    cluster_stability: BTreeMap::new(),
                 }
             });
 

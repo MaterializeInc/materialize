@@ -379,6 +379,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         service_id: service_id.clone(),
                         process_id: u64::cast_from(process_id),
                         status: process_state.status.into(),
+                        // The process orchestrator does not track restart counts.
+                        restart_count: 0,
                         time: process_state.status_time,
                     });
                 }
@@ -1153,6 +1155,8 @@ impl ProcessStateUpdater {
             service_id: self.id.to_string(),
             process_id: u64::cast_from(self.i),
             status: status.into(),
+            // The process orchestrator does not track restart counts.
+            restart_count: 0,
             time: status_time,
         });
     }

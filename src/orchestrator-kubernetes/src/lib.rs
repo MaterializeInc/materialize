@@ -1342,6 +1342,22 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 })
                 .unwrap_or(false);
 
+            // Sum the per-container restart counts to get a per-process (per-pod)
+            // restart count. This is cumulative and survives gaps in the watch
+            // stream, so it lets consumers detect restarts they'd otherwise miss
+            // by only sampling the ready/not-ready status.
+            let restart_count = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_ref())
+                .map(|container_statuses| {
+                    container_statuses
+                        .iter()
+                        .map(|cs| u64::try_from(cs.restart_count).unwrap_or(0))
+                        .sum()
+                })
+                .unwrap_or(0);
+
             let (pod_ready, last_probe_time) = pod
                 .status
                 .and_then(|status| status.conditions)
@@ -1364,6 +1380,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 service_id,
                 process_id,
                 status,
+                restart_count,
                 time: DateTime::from_timestamp_nanos(
                     time.as_nanosecond().try_into().expect("must fit"),
                 ),

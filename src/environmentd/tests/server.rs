@@ -2990,7 +2990,13 @@ async fn test_leader_promotion_mixed_code_version() {
         .unsafe_mode()
         .data_directory(tmpdir.path())
         .with_deploy_generation(1)
-        .with_code_version(this_version);
+        .with_code_version(this_version)
+        // The caught-up stability gate would otherwise hold the new version in
+        // read-only for the production default period before it reports ready.
+        .with_system_parameter_default(
+            "with_0dt_caught_up_check_stability_period".to_string(),
+            "0s".to_string(),
+        );
 
     // Query a server at the current version before we start a second server.
     let server_this = harness.clone().start().await;

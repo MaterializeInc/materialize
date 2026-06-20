@@ -65,6 +65,18 @@ pub const ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK: Config<bool> = Config::new(
     "Enable checking for crash/OOM-looping replicas during 0dt caught-up checks. Emergency break-glass flag to disable this feature if needed.",
 );
 
+pub const ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK: Config<bool> = Config::new(
+    "enable_0dt_caught_up_stability_check",
+    true,
+    "Require clusters to stay caught-up and healthy for a stability period before being considered ready during 0dt deployments. Emergency break-glass flag to disable this feature if needed.",
+);
+
+pub const WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD: Config<Duration> = Config::new(
+    "with_0dt_caught_up_check_stability_period",
+    Duration::from_secs(10 * 60), // 10 minutes
+    "How long a cluster must continuously be caught-up and have all replicas healthy before it is considered ready to cut over during a 0dt deployment.",
+);
+
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
@@ -310,6 +322,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)
         .add(&ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK)
+        .add(&ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK)
+        .add(&WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&ENABLE_FRONTEND_SUBSCRIBES)
