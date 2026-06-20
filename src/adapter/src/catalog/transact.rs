@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use itertools::Itertools;
+use mz_adapter_types::cluster_state::ExpectedClusterState;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
@@ -268,6 +269,16 @@ pub enum Op {
     /// audit events.
     InjectAuditEvents {
         events: Vec<InjectedAuditEvent>,
+    },
+    /// Precondition, not a mutation. Aborts the whole transaction unless
+    /// `cluster_id`'s current managed config still equals `expected`. Running
+    /// the check inside the transaction makes it inseparable from the commit it
+    /// guards, giving a compare-and-append over the cluster's config. A purely
+    /// internal op for conditional cluster-config writes, never emitted by SQL
+    /// DDL.
+    CheckClusterState {
+        cluster_id: ClusterId,
+        expected: ExpectedClusterState,
     },
 }
 
@@ -823,6 +834,19 @@ impl Catalog {
         let mut temporary_item_updates = Vec::new();
 
         match op {
+            Op::CheckClusterState {
+                cluster_id,
+                expected,
+            } => {
+                // Precondition only. Returning `Err` here aborts `transact_inner`
+                // before `tx.commit`, so the compare-and-append holds atomically
+                // with the write it guards.
+                if !crate::catalog::cluster_state::cluster_matches_expected(
+                    state, cluster_id, &expected,
+                ) {
+                    return Err(AdapterError::ClusterStateChanged { cluster_id });
+                }
+            }
             Op::AlterRetainHistory { id, value, window } => {
                 let entry = state.get_entry(&id);
                 if id.is_system() {

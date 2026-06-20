@@ -24,15 +24,16 @@
 //! points no-op. (System/builtin clusters are never controller-owned. The
 //! catalog's bootstrap migration owns their replicas.)
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use mz_adapter_types::dyncfgs::{CLUSTER_CONTROLLER_TICK_INTERVAL, ENABLE_CLUSTER_CONTROLLER};
-use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
+use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
-    ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ExpectedClusterState,
-    ObservedReplica, ReconfigurationRecord, ReconfigurationTarget, ReplicaShape, StateWrite,
+    ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, Decision,
+    ExpectedClusterState, ObservedReplica, ReconfigurationRecord, ReplicaShape, StateWrite,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -266,17 +267,10 @@ impl Coordinator {
         let ClusterVariant::Managed(managed) = &cluster.config.variant else {
             return None;
         };
-        let ClusterVariantManaged {
-            size,
-            availability_zones,
-            logging,
-            replication_factor,
-            optimizer_feature_overrides: _,
-            schedule: _,
-            auto_scaling_strategy: _,
-            reconfiguration,
-            burst,
-        } = managed;
+        // The witness fields come from the same projection the compare-and-append
+        // check uses, so the state a decision is derived from and the state the
+        // apply path checks against cannot drift.
+        let expected = crate::catalog::cluster_state::project_expected(managed);
 
         let replicas = cluster
             .replicas()
@@ -311,12 +305,12 @@ impl Coordinator {
 
         Some(ClusterState {
             cluster_id,
-            size: size.clone(),
-            replication_factor: *replication_factor,
-            availability_zones: availability_zones.clone(),
-            logging: logging.clone(),
-            reconfiguration: reconfiguration.as_ref().map(reconfiguration_record),
-            burst: burst.as_ref().map(burst_record),
+            size: expected.size,
+            replication_factor: expected.replication_factor,
+            availability_zones: expected.availability_zones.0,
+            logging: expected.logging,
+            reconfiguration: expected.reconfiguration,
+            burst: expected.burst,
             replicas,
         })
     }
@@ -327,21 +321,28 @@ impl Coordinator {
     /// `UpdateClusterState`, a phase-2 batch is all create/drop. Either batch may
     /// in principle be mixed; this handles both.
     ///
-    /// Every decision (a create, drop, or state write) carries the durable state
-    /// it was derived from; the **compare-and-append guard** re-reads each target
-    /// cluster and rejects the *whole* batch if any state has since diverged
-    /// (e.g. a user `ALTER` landed mid-tick), so a stale create or drop can never
-    /// reshape the replica set against the config the `ALTER` has since
-    /// established (in particular, a stale drop cannot retire a replica the
-    /// `ALTER` has just made desired). On rejection nothing is applied and the
-    /// controller recomputes next tick. When the guards hold, the batch's ops are
-    /// transacted together, so they commit atomically.
+    /// Every decision carries the durable state it was derived from. We prepend
+    /// one `Op::CheckClusterState` per cluster, which the catalog transaction
+    /// evaluates before any mutation and which aborts the whole batch if that
+    /// cluster's state has since diverged (e.g. a user `ALTER` landed mid-tick).
+    /// Because the check runs inside the transaction it cannot be separated from
+    /// the commit it guards, so a stale create or drop can never reshape the
+    /// replica set against the config the `ALTER` has since established (in
+    /// particular, a stale drop cannot retire a replica the `ALTER` has just made
+    /// desired). On rejection nothing is applied and the controller recomputes
+    /// next tick.
     async fn apply_cluster_decisions(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
-        // Phase 0: compare-and-append guard. Every decision carries the durable
-        // state it was derived from; if any target cluster has since diverged the
-        // whole batch is stale.
-        for decision in &decisions {
-            let (cluster_id, expected) = match decision {
+        // Build the mutation ops, and collect one compare-and-append check per
+        // cluster to prepend. All decisions for a cluster in one tick are derived
+        // from a single snapshot, so they share one witness, and one check per
+        // cluster guards them all.
+        let mut checks: Vec<(ClusterId, ExpectedClusterState)> = Vec::new();
+        let mut seen_clusters = BTreeSet::new();
+        let mut mutations = Vec::new();
+        let mut drops = Vec::new();
+
+        for decision in decisions {
+            let (cluster_id, expected) = match &decision {
                 Decision::CreateReplica {
                     cluster_id,
                     expected,
@@ -358,22 +359,24 @@ impl Coordinator {
                     ..
                 } => (*cluster_id, expected),
             };
-            if !self.cluster_state_matches(cluster_id, expected) {
-                return ApplyOutcome::Rejected;
+            if seen_clusters.insert(cluster_id) {
+                checks.push((cluster_id, expected.clone()));
+            } else {
+                debug_assert!(
+                    checks
+                        .iter()
+                        .any(|(c, e)| *c == cluster_id && e == expected),
+                    "decisions for a cluster in one tick must share one expected witness",
+                );
             }
-        }
 
-        let mut ops = Vec::new();
-        let mut drops = Vec::new();
-        for decision in decisions {
             match decision {
                 Decision::UpdateClusterState {
                     cluster_id, write, ..
                 } => match self.build_update_cluster_config_op(cluster_id, &write) {
-                    Some(op) => ops.push(op),
+                    Some(op) => mutations.push(op),
                     None => {
-                        // The cluster vanished between the guard and here; the
-                        // batch is no longer coherent.
+                        // The cluster vanished. The batch is no longer coherent.
                         return ApplyOutcome::Rejected;
                     }
                 },
@@ -401,7 +404,7 @@ impl Coordinator {
                         }
                     };
                     match self.build_create_replica_op(cluster_id, replica_id, name, &shape) {
-                        Ok(Some(op)) => ops.push(op),
+                        Ok(Some(op)) => mutations.push(op),
                         Ok(None) => return ApplyOutcome::Rejected,
                         Err(err) => {
                             warn!(%cluster_id, "cluster controller could not build replica create: {err}");
@@ -423,15 +426,36 @@ impl Coordinator {
             }
         }
         if !drops.is_empty() {
-            ops.push(Op::DropObjects(drops));
+            mutations.push(Op::DropObjects(drops));
         }
 
-        if ops.is_empty() {
+        if mutations.is_empty() {
+            // Nothing to apply, so the checks guard nothing. Skip the transaction
+            // rather than commit a check-only batch, which would still cost a
+            // durable round-trip.
             return ApplyOutcome::Applied;
         }
 
+        // Prepend the checks so the transaction aborts before any mutation if a
+        // cluster's durable state has diverged from what the decisions were
+        // derived from.
+        let mut ops: Vec<Op> = checks
+            .into_iter()
+            .map(|(cluster_id, expected)| Op::CheckClusterState {
+                cluster_id,
+                expected,
+            })
+            .collect();
+        ops.extend(mutations);
+
         match self.catalog_transact(None, ops).await {
             Ok(()) => ApplyOutcome::Applied,
+            Err(AdapterError::ClusterStateChanged { .. }) => {
+                // A concurrent `ALTER` moved a cluster's durable state out from
+                // under the decisions. Expected, so the controller recomputes
+                // next tick.
+                ApplyOutcome::Rejected
+            }
             Err(AdapterError::ReadOnly) => {
                 // The controller is quiesced while read-only (see
                 // `handle_cluster_controller_request`), so this is normally
@@ -516,10 +540,10 @@ impl Coordinator {
             size: shape.size.clone(),
             pending: false,
         };
-        let azs: Option<&[String]> = if shape.availability_zones.is_empty() {
+        let azs: Option<&[String]> = if shape.availability_zones.0.is_empty() {
             None
         } else {
-            Some(&shape.availability_zones)
+            Some(&shape.availability_zones.0)
         };
         let location = self.catalog().concretize_replica_location(
             location,
@@ -549,27 +573,6 @@ impl Coordinator {
             reason: ReplicaCreateDropReason::Manual,
         }))
     }
-
-    /// Whether `cluster_id`'s current durable state still matches `expected`.
-    fn cluster_state_matches(
-        &self,
-        cluster_id: ClusterId,
-        expected: &ExpectedClusterState,
-    ) -> bool {
-        let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
-            return false;
-        };
-        let ClusterVariant::Managed(managed) = &cluster.config.variant else {
-            return false;
-        };
-        managed.size == expected.size
-            && managed.replication_factor == expected.replication_factor
-            && managed.availability_zones == expected.availability_zones
-            && managed.logging == expected.logging
-            && managed.reconfiguration.as_ref().map(reconfiguration_record)
-                == expected.reconfiguration
-            && managed.burst.as_ref().map(burst_record) == expected.burst
-    }
 }
 
 /// Map an in-memory replica config to a [`ReplicaShape`], or `None` for an
@@ -581,33 +584,9 @@ fn replica_shape(config: &mz_controller::clusters::ReplicaConfig) -> Option<Repl
     };
     Some(ReplicaShape {
         size: managed.size.clone(),
-        availability_zones: managed.availability_zones.clone(),
+        availability_zones: AvailabilityZones(managed.availability_zones.clone()),
         logging: config.compute.logging.clone(),
     })
-}
-
-fn reconfiguration_record(
-    record: &mz_catalog::memory::objects::ReconfigurationState,
-) -> ReconfigurationRecord {
-    ReconfigurationRecord {
-        target: ReconfigurationTarget {
-            size: record.target.size.clone(),
-            replication_factor: record.target.replication_factor,
-            availability_zones: record.target.availability_zones.clone(),
-            logging: record.target.logging.clone(),
-        },
-        deadline: record.deadline,
-    }
-}
-
-fn burst_record(
-    record: &mz_catalog::memory::objects::BurstState,
-) -> mz_cluster_controller::ctx::BurstRecord {
-    mz_cluster_controller::ctx::BurstRecord {
-        burst_size: record.burst_size.clone(),
-        linger_duration: record.linger_duration,
-        steady_hydrated_at: record.steady_hydrated_at,
-    }
 }
 
 fn memory_reconfiguration(
@@ -617,7 +596,7 @@ fn memory_reconfiguration(
         target: mz_catalog::memory::objects::ReconfigurationTarget {
             size: record.target.size.clone(),
             replication_factor: record.target.replication_factor,
-            availability_zones: record.target.availability_zones.clone(),
+            availability_zones: record.target.availability_zones.0.clone(),
             logging: record.target.logging.clone(),
         },
         deadline: record.deadline,

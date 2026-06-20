@@ -22,37 +22,19 @@
 //! controller drives what is fetched. Read methods are batched so a separate-task
 //! deployment can bound its round-trips to the Coordinator.
 
-use std::collections::BTreeSet;
-
 use async_trait::async_trait;
 use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::Timestamp;
 
-/// The config shape of a replica: the dimensions a reconfiguration changes and
-/// that the reconcile kernel matches desired slots against actual replicas by.
-///
-/// Two replicas with equal shape are interchangeable for the purpose of
-/// satisfying a desired slot. `availability_zones` is the provisioned AZ pool
-/// (order-insensitive, compared as a set), so an `AVAILABILITY ZONES`
-/// divergence is a shape difference.
-#[derive(Clone, Debug)]
-pub struct ReplicaShape {
-    pub size: String,
-    pub availability_zones: Vec<String>,
-    pub logging: ComputeReplicaLogging,
-}
-
-impl ReplicaShape {
-    /// Whether two shapes are interchangeable. `availability_zones` is compared
-    /// as a set so provisioning order does not matter.
-    pub fn matches(&self, other: &ReplicaShape) -> bool {
-        self.size == other.size
-            && self.logging == other.logging
-            && self.availability_zones.iter().collect::<BTreeSet<_>>()
-                == other.availability_zones.iter().collect::<BTreeSet<_>>()
-    }
-}
+// The compare-and-append witness types, and the replica shape they pair with,
+// live in `mz-adapter-types` so the catalog transaction that applies a
+// decision can share them without depending on this crate. They are part of the
+// ctx vocabulary, so re-export them here.
+pub use mz_adapter_types::cluster_state::{
+    AvailabilityZones, BurstRecord, ExpectedClusterState, ReconfigurationRecord,
+    ReconfigurationTarget, ReplicaShape,
+};
 
 /// A replica that actually exists on a cluster, as observed through the ctx.
 #[derive(Clone, Debug)]
@@ -60,37 +42,6 @@ pub struct ObservedReplica {
     pub replica_id: ReplicaId,
     pub name: String,
     pub shape: ReplicaShape,
-}
-
-/// An in-flight graceful reconfiguration record, mirrored from durable state.
-///
-/// Opaque to the kernel; the graceful strategy interprets it. Present here so a
-/// tick can read it as part of the cluster state and so the compare-and-append
-/// guard can carry it as the `expected` value.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReconfigurationRecord {
-    pub target: ReconfigurationTarget,
-    pub deadline: Timestamp,
-}
-
-/// The full config shape a reconfiguration is moving the cluster to. Distinct
-/// from [`ReplicaShape`] because it additionally carries `replication_factor`
-/// (a cluster-level, not replica-level, dimension).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReconfigurationTarget {
-    pub size: String,
-    pub replication_factor: u32,
-    pub availability_zones: Vec<String>,
-    pub logging: ComputeReplicaLogging,
-}
-
-/// An active hydration-burst record, mirrored from durable state. Opaque to the
-/// kernel; the burst strategy interprets it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BurstRecord {
-    pub burst_size: String,
-    pub linger_duration: std::time::Duration,
-    pub steady_hydrated_at: Option<Timestamp>,
 }
 
 /// The durable state of a single managed cluster plus its observed replicas, as
@@ -120,7 +71,7 @@ impl ClusterState {
     pub fn realized_shape(&self) -> ReplicaShape {
         ReplicaShape {
             size: self.size.clone(),
-            availability_zones: self.availability_zones.clone(),
+            availability_zones: AvailabilityZones(self.availability_zones.clone()),
             logging: self.logging.clone(),
         }
     }
@@ -131,26 +82,12 @@ impl ClusterState {
         ExpectedClusterState {
             size: self.size.clone(),
             replication_factor: self.replication_factor,
-            availability_zones: self.availability_zones.clone(),
+            availability_zones: AvailabilityZones(self.availability_zones.clone()),
             logging: self.logging.clone(),
             reconfiguration: self.reconfiguration.clone(),
             burst: self.burst.clone(),
         }
     }
-}
-
-/// The durable cluster state a [`Decision`] was derived from. The apply path
-/// re-reads it and rejects the batch if it no longer holds (compare-and-append),
-/// so a user `ALTER` that lands mid-tick cannot have a stale controller decision
-/// clobber it; the controller recomputes from the new state next tick.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExpectedClusterState {
-    pub size: String,
-    pub replication_factor: u32,
-    pub availability_zones: Vec<String>,
-    pub logging: ComputeReplicaLogging,
-    pub reconfiguration: Option<ReconfigurationRecord>,
-    pub burst: Option<BurstRecord>,
 }
 
 /// A durable state mutation a strategy's `update_state` asks for: cut over the

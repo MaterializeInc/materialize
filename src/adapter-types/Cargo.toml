@@ -10,6 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
+mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
