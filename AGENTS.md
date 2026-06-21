@@ -104,55 +104,21 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
 
 ## Code comments
 
-Follow this when writing or editing comments and rustdoc (or similar in other
-languages), in addition to the comment guidance above.
+Specifics for code comments and documentation:
 
-When to comment. Comment length scales with the cost of getting the code
-wrong, not with the size or sophistication of the code:
+Spend comments on the non-obvious: concurrency and async hazards (races,
+lease/handle expiry, values that must not be held across an await point),
+ordering constraints ("X must happen before Y, else Z"), invariants whose
+violation panics or corrupts data, restart/recovery semantics, the origin of
+magic constants, and why the obvious alternative was not taken. Idiomatic code
+(match arms, iterator chains, getters, logging) needs none.
 
-* Write a comment when the code enters non-obvious territory: concurrency and
-  async hazards (races, handle/lease expiry, things that must not be held
-  across await points), ordering constraints ("X must happen before Y,
-  otherwise Z"), invariants whose violation panics or corrupts data,
-  restart/recovery semantics, the origin of magic values and tuning constants,
-  why the obvious alternative was not used, subtle data-structure properties
-  (iteration order, why this map type).
-* Don't comment plumbing, delegation, getters, conventional error handling,
-  idiomatic patterns (match arms, iterator chains), logging, or test bodies. A
-  long function whose steps are well-named calls needs no inline comments.
-  Calibration from our own code: a gnarly concurrent module runs ~30% comment
-  lines, ordinary code 10-20%, simple delegation near 0%. If a new file is
-  pushing past that, it's over-commented.
+A doc comment is the caller's contract: a one-sentence summary, then only the
+invariants and semantics a caller must know. A self-evident public item needs
+only that one line. Don't narrate the body in rustdoc ("Phase 1 ... Phase
+2 ...", or enumerating a flag's branches). Reasoning about how or why the code
+works goes in an inline `//` at the decision point, or in a module-level `//!`
+when it is about how the pieces fit together. Document a struct field only when
+its meaning is subtle.
 
-Where the comment goes:
-
-* A doc comment states the contract for the caller: a one-sentence summary as
-  the first line, further paragraphs only for invariants and semantics the
-  caller must know. For self-evident public items (e.g. to satisfy
-  missing_docs) a single line is enough, don't pad it.
-* Reasoning about how or why the implementation works goes in an inline `//`
-  comment at the exact decision point in the body, not hoisted into the doc
-  comment. Don't write doc comments that narrate the function body
-  (state-machine transition lists, "Phase 1 ... Phase 2 ...", "When false ...
-  when true ..." enumerations of a flag's behavior). Give a 1-2 line summary
-  and put the detail next to the code it explains, or in module-level `//!`
-  docs when it's about how the pieces fit together.
-* Struct fields get doc comments only when their semantics are subtle. Never
-  restate the field name or type.
-* Bullet lists in rustdoc only for genuinely enumerable invariants or
-  scenarios, not as a general structuring device.
-
-How it reads:
-
-* Plain prose, one idea per sentence: "We do X because Y." "If we didn't do X
-  here, Z would happen." Write like explaining to a colleague, not like a
-  specification. Avoid dense clause-stacking where every sentence carries
-  three qualifications or parenthetical cross-references.
-* First person plural ("we") for design reasoning. Use the conventional third
-  person for rustdoc summaries ("Returns ...").
-* Honest hedging about tradeoffs is good: "This is expensive, but we only do
-  it when ...", "Not ideal, but workable until we find something better."
-* Markers: `NOTE:` (or `NOTE(aljoscha):`) for counterintuitive gotchas,
-  `TODO(aljoscha):` for future work. A TODO may explain reasoning and
-  alternatives, but task-list scope detail belongs in an issue, not the
-  comment.
+Mark counterintuitive gotchas with `NOTE:` and future work with `TODO:`.
