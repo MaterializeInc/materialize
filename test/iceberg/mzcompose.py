@@ -105,6 +105,16 @@ def workflow_mode_append(c: Composition) -> None:
     )
 
 
+def workflow_mz_audit_events(c: Composition) -> None:
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "mz-audit-events-append.td",
+    )
+
+
 def _polaris_get(table_url: str, access_token: str) -> dict:
     """GET table metadata from Polaris REST API (always returns latest)."""
     req = urllib.request.Request(
