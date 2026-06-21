@@ -2764,3 +2764,75 @@ class ReplicaExpiration(Scenario):
                   /* B */
                 1
                 """))
+
+
+class Jsonb(Scenario):
+    """Benchmarks around accessing fields of `jsonb` values."""
+
+
+class JsonbToColumns(Jsonb):
+    """Project many fields out of a `jsonb` column ("JSON to columns").
+
+    Each row holds a `jsonb` object with `NUM_KEYS` keys; the benchmark reads
+    every key back out as its own expression and aggregates the result, so the
+    cost is dominated by `NUM_KEYS` field accesses per row. This is the workload
+    that the in-map index on `DatumMap` (binary-search key lookup, replacing the
+    previous linear scan) is meant to speed up: it turns the per-row cost from
+    O(NUM_KEYS * NUM_KEYS) into O(NUM_KEYS * log NUM_KEYS).
+
+    `t1` is arranged behind a default index so the query reads already-decoded
+    `Row`s from memory. This matters because `jsonb` persists as JSON *text*:
+    reading from persist (a plain table or a materialized view) re-parses the
+    JSON on every scan, and that parse — not field access — dominates, hiding
+    the index's effect. Reading from an arrangement pays the parse once at index
+    build, so the per-query cost is the field access this scenario targets.
+    """
+
+    # Number of keys in each object. Independent of `--scale`; only the row
+    # count scales.
+    NUM_KEYS = 50
+
+    def _keys(self) -> list[str]:
+        return [f"k{i:02}" for i in range(self.NUM_KEYS)]
+
+    def _object_literal(self) -> str:
+        # A single object, reused for every row. Whether the object is the same
+        # across rows is irrelevant to the access cost, since `data` is a column
+        # and every `->>` must decode it.
+        pairs = ", ".join(f'"{k}": {i}' for i, k in enumerate(self._keys()))
+        return "{" + pairs + "}"
+
+    def init(self) -> list[Action]:
+        return [
+            TdAction(f"""
+> CREATE TABLE t1 (id bigint, data jsonb);
+
+> INSERT INTO t1
+  SELECT g, '{self._object_literal()}'::jsonb
+  FROM generate_series(1, {self.n()}) g;
+
+> CREATE DEFAULT INDEX ON t1;
+
+> SELECT COUNT(*) = {self.n()} FROM t1;
+true
+"""),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        # Touch every key in every row, but keep the per-access work down to the
+        # field lookup itself: `->` returns the value as `jsonb` (no text
+        # stringification, unlike `->>`) and `IS NOT NULL` is trivial, so the
+        # `DatumMap` lookup dominates. `(... IS NOT NULL)::int` forces all
+        # `NUM_KEYS` accesses (no short-circuit) and sums to `NUM_KEYS` per row.
+        projection = " + ".join(f"(data->'{k}' IS NOT NULL)::int" for k in self._keys())
+        # Every key is present, so each row contributes `NUM_KEYS`.
+        expected = self.NUM_KEYS * self.n()
+        return Td(f"""
+> SELECT 1;
+  /* A */
+1
+
+> SELECT SUM({projection}) FROM t1;
+  /* B */
+{expected}
+""")
