@@ -103,6 +103,10 @@ impl Coordinator {
         // only track that a change happened, not the individual rows.
         let mut replica_scoped_config_changed = false;
 
+        // Whether to wake the cluster controller once the implications below are
+        // applied. Decided from the committed diff, see the method.
+        let kick_cluster_controller = Self::should_kick_cluster_controller(&catalog_updates);
+
         for update in catalog_updates {
             tracing::trace!(?update, "got parsed state update");
             match &update.kind {
@@ -182,11 +186,40 @@ impl Coordinator {
         )
         .await?;
 
+        if kick_cluster_controller {
+            // Wake the controller to reconcile immediately rather than waiting
+            // out its tick interval. A missed or spurious wake is harmless: the
+            // periodic tick is the backstop, and an extra wake costs one no-op
+            // reconcile.
+            self.cluster_controller_kick.notify_one();
+        }
+
         self.metrics
             .apply_catalog_implications_seconds
             .observe(start.elapsed().as_secs_f64());
 
         Ok(())
+    }
+
+    /// Whether a batch of committed catalog updates should wake the cluster
+    /// controller. True when any cluster or cluster-replica durable state
+    /// changed, the only catalog changes the controller reconciles against.
+    ///
+    /// We key the wake off the committed diff rather than the input ops so it
+    /// fires the same way whether this node applied the change or is following
+    /// another writer's diff. NOTE: environment-wide system-config changes (the
+    /// controller's gate and tick interval) are not represented as catalog
+    /// implications (`parse_state_update` drops them), so they do not wake the
+    /// controller. The controller re-reads both each tick, so a config change is
+    /// picked up on the next tick without a wake.
+    fn should_kick_cluster_controller(updates: &[ParsedStateUpdate]) -> bool {
+        updates.iter().any(|update| {
+            matches!(
+                update.kind,
+                ParsedStateUpdateKind::Cluster { .. }
+                    | ParsedStateUpdateKind::ClusterReplica { .. }
+            )
+        })
     }
 
     #[instrument(level = "debug")]

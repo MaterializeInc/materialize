@@ -335,18 +335,9 @@ impl Coordinator {
         let mut update_cluster_scheduling_config = false;
         let mut update_http_config = false;
         let mut update_advance_timelines_interval = false;
-        // Whether to kick the cluster controller to reconcile immediately: set
-        // for ops that change durable cluster state or system configuration.
-        let mut kick_cluster_controller = false;
 
         for op in &ops {
             match op {
-                catalog::Op::UpdateClusterConfig { .. }
-                | catalog::Op::UpdateClusterReplicaConfig { .. }
-                | catalog::Op::RenameCluster { .. }
-                | catalog::Op::RenameClusterReplica { .. } => {
-                    kick_cluster_controller = true;
-                }
                 catalog::Op::DropObjects(drop_object_infos) => {
                     for drop_object_info in drop_object_infos {
                         match &drop_object_info {
@@ -356,7 +347,6 @@ impl Coordinator {
                             }
                             catalog::DropObjectInfo::Cluster(id) => {
                                 clusters_to_drop.push(*id);
-                                kick_cluster_controller = true;
                             }
                             catalog::DropObjectInfo::ClusterReplica((
                                 cluster_id,
@@ -365,7 +355,6 @@ impl Coordinator {
                             )) => {
                                 // Drop the cluster replica itself.
                                 cluster_replicas_to_drop.push((*cluster_id, *replica_id));
-                                kick_cluster_controller = true;
                             }
                             _ => (),
                         }
@@ -400,9 +389,6 @@ impl Coordinator {
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                     update_http_config |= vars::is_http_config_var(name);
                     update_advance_timelines_interval |= name == DEFAULT_TIMESTAMP_INTERVAL.name();
-                    // The controller's gates and knobs live in the system
-                    // configuration.
-                    kick_cluster_controller = true;
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -419,7 +405,6 @@ impl Coordinator {
                     update_metrics_config = true;
                     update_http_config = true;
                     update_advance_timelines_interval = true;
-                    kick_cluster_controller = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
@@ -451,7 +436,6 @@ impl Coordinator {
                 }
                 catalog::Op::CreateCluster { id, .. } => {
                     clusters_to_create.push(*id);
-                    kick_cluster_controller = true;
                 }
                 catalog::Op::CreateClusterReplica {
                     cluster_id,
@@ -464,7 +448,6 @@ impl Coordinator {
                         name.clone(),
                         config.location.num_processes(),
                     ));
-                    kick_cluster_controller = true;
                 }
                 _ => (),
             }
@@ -577,9 +560,6 @@ impl Coordinator {
                 if new_interval != self.advance_timelines_interval.period() {
                     self.advance_timelines_interval = tokio::time::interval(new_interval);
                 }
-            }
-            if kick_cluster_controller {
-                self.cluster_controller_kick.notify_one();
             }
         }
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
