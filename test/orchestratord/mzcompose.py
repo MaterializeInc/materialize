@@ -2032,10 +2032,10 @@ def operator_supports_v1(definition: dict[str, Any]):
     operator_version = MzVersion.parse(
         definition["operator"]["operator"]["image"]["tag"]
     )
-    # v1 first ships in v26.29; no released self-managed operator serves
+    # v1 first ships in v26.30; no released self-managed operator serves
     # the v1 CRD, so anything older must use v1alpha1. Keep this in sync
     # with the release that actually introduces the v1 CRD.
-    return operator_version >= MzVersion.parse("v26.29.0-dev.0")
+    return operator_version >= MzVersion.parse("v26.30.0-dev.0")
 
 
 def operator_serves_v1(definition: dict[str, Any]) -> bool:
