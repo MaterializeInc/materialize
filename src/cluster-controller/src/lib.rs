@@ -27,21 +27,27 @@
 //! Each tick reconciles every managed cluster in two phases separated by a
 //! barrier:
 //!
-//! 1. **`update_state`.** Run every strategy's [`Strategy::update_state`],
-//!    collect the durable writes (cut-overs, record writes/clears) as
-//!    [`Decision::UpdateClusterState`]s, and apply them under their
-//!    compare-and-append guards, awaiting confirmation.
+//! 1. **`update_state`.** Run every strategy's [`Strategy::update_state`], merge
+//!    their writes for a cluster into one [`Decision::UpdateClusterState`] (a
+//!    cut-over, a record write or clear), and apply it per cluster under a
+//!    compare-and-append guard, awaiting confirmation. The merge is a per-field
+//!    join (see `ClusterController::merge_state_writes`): strategies own
+//!    disjoint fields, so it is a disjoint union, and two strategies setting one
+//!    field to different values trips a soft-panic rather than being silently
+//!    resolved.
 //! 2. **`desired_replicas`.** With those writes applied, re-read state, run
 //!    every strategy's [`Strategy::desired_replicas`], union the contributions
 //!    (the implicit baseline included), match by [`ReplicaShape`] against the
 //!    actual replicas, and emit the creates and drops that close the gap.
 //!
 //! Every [`Decision`], the phase-1 writes and the phase-2 creates/drops alike,
-//! carries the durable state it was derived from, and the apply path transacts a
-//! batch only if that state still holds (compare-and-append). This is what keeps
-//! a create or drop derived from a pre-`ALTER` snapshot from reshaping the
-//! replica set against the config the `ALTER` has since established; on a
-//! rejection the controller recomputes from the new state next tick.
+//! carries the durable state it was derived from, and the apply path transacts
+//! it only if that state still holds (compare-and-append). This is what keeps a
+//! create or drop derived from a pre-`ALTER` snapshot from reshaping the replica
+//! set against the config the `ALTER` has since established. Applies are scoped
+//! to a single cluster, so one cluster's rejection isolates to that cluster and
+//! the rest still make progress. On a rejection the controller recomputes from
+//! the new state next tick.
 //!
 //! Commands name explicit replicas, so re-emission across a lagging view or a
 //! restart is harmless: a create of a name that already exists and a drop of one
@@ -55,8 +61,11 @@ pub mod strategy;
 
 use std::collections::BTreeSet;
 
+use mz_ore::soft_panic_or_log;
+
 use crate::ctx::{
     ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica, ReplicaShape,
+    StateWrite,
 };
 use crate::strategy::{BaselineStrategy, DesiredReplica, Strategy};
 
@@ -82,124 +91,164 @@ impl ClusterController {
         }
     }
 
-    /// Run one reconcile tick over every managed cluster the ctx reports; see
-    /// the module docs for the two-phase structure.
+    /// Run one reconcile tick over every managed cluster the ctx reports.
+    ///
+    /// See the module docs for the two-phase structure. Both phases apply per
+    /// cluster, so a compare-and-append rejection on one cluster never blocks
+    /// progress on the others.
     pub async fn reconcile(&self, ctx: &mut dyn ClusterControllerCtx) {
         let cluster_ids = ctx.managed_cluster_ids().await;
         if cluster_ids.is_empty() {
             return;
         }
 
-        // Phase 1: update_state. Collect every strategy's durable writes and
-        // apply them under their compare-and-append guards.
+        // Phase 1: update_state. We merge every strategy's write for a cluster
+        // into one compare-and-append, applied per cluster and independently of
+        // other clusters. Two separate decisions live here.
+        //
+        // Per cluster, not one batch per tick: a write rejected because a
+        // concurrent `ALTER` moved the cluster off its `expected` rejects only
+        // that cluster and leaves the rest free to progress. One batched apply
+        // would let a single mid-`ALTER` cluster sink the whole tick, the failure
+        // mode at large cluster counts where some cluster is almost always
+        // mid-`ALTER`.
+        //
+        // Merged across strategies, not one apply per strategy: every strategy
+        // for a cluster shares the same start-of-tick `expected`, so applying
+        // them one at a time would let the first write move the cluster off that
+        // `expected` and reject all the rest, serializing a cluster's disjoint
+        // writes one-per-tick. Merging lands them together under one guard. We
+        // still rely on the compare-and-append, not the merge, for `ALTER`
+        // safety, which is why the merged write carries the cluster's `expected`.
+        // See `merge_state_writes` for the join and its conflict handling.
         let states = ctx.cluster_states(&cluster_ids).await;
         let now = ctx.now();
-        let mut state_decisions = Vec::new();
+        // Set when we issue any phase-1 apply, applied or rejected. Either way
+        // the durable state may have moved (our write, or the concurrent `ALTER`
+        // that rejected it), so phase 2 re-reads.
+        let mut phase_1_wrote = false;
+        // Clusters whose phase-1 write was rejected. We skip their phase 2 this
+        // tick. Proceeding would be safe (we re-read below and every create/drop
+        // is guard-checked), but a cluster that just lost a race is likely still
+        // settling, so we let it recompute next tick instead of emitting work
+        // that is probably about to go stale.
+        let mut rejected = BTreeSet::new();
         for state in &states {
-            if let Some(decision) = self.collect_state_write(state, now) {
-                state_decisions.push(decision);
+            let write = self.merge_state_writes(state, now);
+            if write.is_empty() {
+                continue;
+            }
+            phase_1_wrote = true;
+            let decision = Decision::UpdateClusterState {
+                cluster_id: state.cluster_id,
+                expected: state.expected(),
+                write,
+            };
+            if ctx.apply(vec![decision]).await == ApplyOutcome::Rejected {
+                rejected.insert(state.cluster_id);
             }
         }
 
-        // Clusters whose phase-1 writes were rejected are skipped this tick: a
-        // rejection means a concurrent `ALTER` changed the durable state the
-        // write was derived from, so any create/drop derived from the same stale
-        // snapshot would be unsafe too. We recompute everything next tick.
-        let phase_1_wrote = !state_decisions.is_empty();
-        let rejected = if !phase_1_wrote {
-            Vec::new()
-        } else {
-            match ctx.apply(state_decisions.clone()).await {
-                ApplyOutcome::Applied => Vec::new(),
-                ApplyOutcome::Rejected => state_decisions
-                    .iter()
-                    .filter_map(|decision| match decision {
-                        Decision::UpdateClusterState { cluster_id, .. } => Some(*cluster_id),
-                        // collect_state_write only ever produces UpdateClusterState.
-                        Decision::CreateReplica { .. } | Decision::DropReplica { .. } => None,
-                    })
-                    .collect(),
-            }
-        };
-
         // Phase 2: desired_replicas. The barrier exists so that a cut-over a
         // phase-1 write performed is visible before we diff the replica set
-        // against the realized config. When phase 1 wrote nothing the first read
-        // is still the current view, so we reuse it; otherwise we re-read to pick
-        // up the applied writes. A stale diff is harmless either way: every
-        // create/drop carries its `expected` and is rejected by the apply guard
-        // if the durable state has since diverged.
+        // against the realized config. We re-read only if phase 1 wrote. The
+        // first read is otherwise still current. A stale diff is harmless: every
+        // create/drop carries its `expected` and is guard-rejected if the durable
+        // state has since diverged.
         let states = if phase_1_wrote {
             ctx.cluster_states(&cluster_ids).await
         } else {
             states
         };
         let now = ctx.now();
-        let mut replica_decisions = Vec::new();
         for state in &states {
             if rejected.contains(&state.cluster_id) {
                 continue;
             }
-            replica_decisions.extend(self.collect_replica_decisions(state, now));
-        }
-
-        if !replica_decisions.is_empty() {
-            // A rejection here is benign: every command names an explicit
-            // replica and is reconciled away next tick. We do not retry within
-            // the tick.
-            let _ = ctx.apply(replica_decisions).await;
+            let decisions = self.collect_replica_decisions(state, now);
+            if decisions.is_empty() {
+                continue;
+            }
+            // Per-cluster apply: a guard failure here is isolated to this cluster,
+            // and benign anyway since every command names an explicit replica and
+            // is reconciled away next tick. We do not retry within the tick.
+            let _ = ctx.apply(decisions).await;
         }
     }
 
-    /// Merge every strategy's `update_state` for one cluster into a single
-    /// [`Decision::UpdateClusterState`], or `None` if no strategy writes
-    /// anything. Strategies are additive and never contradict, so a field a
-    /// strategy leaves unset is taken from another strategy that sets it; if two
-    /// set the same field the later strategy wins (the baseline never sets any).
-    fn collect_state_write(
-        &self,
-        state: &ClusterState,
-        now: mz_repr::Timestamp,
-    ) -> Option<Decision> {
-        let mut merged = crate::ctx::StateWrite::default();
-        for strategy in &self.strategies {
-            // Exhaustive destructure (no `..`): a field added to `StateWrite` is a
-            // compile error here until its merge is spelled out.
-            let crate::ctx::StateWrite {
-                new_size,
-                new_replication_factor,
-                new_availability_zones,
-                new_logging,
-                reconfiguration,
-                burst,
-            } = strategy.update_state(state, now);
-            if new_size.is_some() {
-                merged.new_size = new_size;
-            }
-            if new_replication_factor.is_some() {
-                merged.new_replication_factor = new_replication_factor;
-            }
-            if new_availability_zones.is_some() {
-                merged.new_availability_zones = new_availability_zones;
-            }
-            if new_logging.is_some() {
-                merged.new_logging = new_logging;
-            }
-            if reconfiguration.is_some() {
-                merged.reconfiguration = reconfiguration;
-            }
-            if burst.is_some() {
-                merged.burst = burst;
-            }
+    /// Merge every strategy's [`Strategy::update_state`] for one cluster into the
+    /// single [`StateWrite`] the tick applies under one compare-and-append.
+    ///
+    /// The merge is a per-field join, independent of the order strategies run
+    /// in: a field set by exactly one strategy is taken as-is, a field no
+    /// strategy sets is left unchanged, and a field set to the same value by
+    /// several is that value.
+    ///
+    /// Two strategies setting one field to *different* values is a conflict.
+    /// Every field is owned by exactly one strategy, so by design it cannot
+    /// happen and the merge is really a disjoint union. We treat a conflict as
+    /// an invariant violation rather than a condition to resolve: there is no
+    /// safety-meaningful winner to pick for a contended `size` or record, so we
+    /// trip [`soft_panic_or_log!`] (a panic under test/CI soft assertions, a
+    /// logged error in production) and leave the field unchanged, the only
+    /// outcome that cannot make things worse. A persistent conflict then freezes
+    /// that field and keeps tripping the alarm, which is the point: surface the
+    /// design bug loudly instead of silently picking an arbitrary value.
+    fn merge_state_writes(&self, state: &ClusterState, now: mz_repr::Timestamp) -> StateWrite {
+        let writes: Vec<StateWrite> = self
+            .strategies
+            .iter()
+            .map(|strategy| strategy.update_state(state, now))
+            .filter(|write| !write.is_empty())
+            .collect();
+
+        let mut conflicts: Vec<&'static str> = Vec::new();
+        // Exhaustive construction (every field named, no `..`): a field added to
+        // `StateWrite` is a compile error here until its join is spelled out.
+        let merged = StateWrite {
+            new_size: join(
+                "size",
+                writes.iter().map(|w| w.new_size.clone()),
+                &mut conflicts,
+            ),
+            new_replication_factor: join(
+                "replication_factor",
+                writes.iter().map(|w| w.new_replication_factor),
+                &mut conflicts,
+            ),
+            new_availability_zones: join(
+                "availability_zones",
+                writes.iter().map(|w| w.new_availability_zones.clone()),
+                &mut conflicts,
+            ),
+            new_logging: join(
+                "logging",
+                writes.iter().map(|w| w.new_logging.clone()),
+                &mut conflicts,
+            ),
+            reconfiguration: join(
+                "reconfiguration",
+                writes.iter().map(|w| w.reconfiguration.clone()),
+                &mut conflicts,
+            ),
+            burst: join(
+                "burst",
+                writes.iter().map(|w| w.burst.clone()),
+                &mut conflicts,
+            ),
+        };
+
+        if !conflicts.is_empty() {
+            soft_panic_or_log!(
+                "cluster {:?}: strategies produced conflicting state writes for \
+                 field(s) {}; leaving those fields unchanged. Strategies must own \
+                 disjoint `StateWrite` fields.",
+                state.cluster_id,
+                conflicts.join(", "),
+            );
         }
-        if merged.is_empty() {
-            return None;
-        }
-        Some(Decision::UpdateClusterState {
-            cluster_id: state.cluster_id,
-            expected: state.expected(),
-            write: merged,
-        })
+
+        merged
     }
 
     /// Diff the unioned desired set against the actual replicas of one cluster
@@ -219,6 +268,32 @@ impl ClusterController {
 
         reconcile_replicas(state, &contributions)
     }
+}
+
+/// Join one `StateWrite` field across the strategies that set it: `None` if
+/// none did, the common value if one or more set it to the same value, and
+/// `None` with `field` pushed onto `conflicts` if two set it to different
+/// values. The result and the conflict signal depend only on the set of values,
+/// not the order they arrive in.
+fn join<T: PartialEq>(
+    field: &'static str,
+    values: impl IntoIterator<Item = Option<T>>,
+    conflicts: &mut Vec<&'static str>,
+) -> Option<T> {
+    let mut merged: Option<T> = None;
+    for value in values.into_iter().flatten() {
+        match &merged {
+            None => merged = Some(value),
+            Some(existing) if *existing == value => {}
+            // Two strategies disagree on this field. Record it and leave the
+            // field unchanged; merge_state_writes raises the alarm.
+            Some(_) => {
+                conflicts.push(field);
+                return None;
+            }
+        }
+    }
+    merged
 }
 
 /// The pure multiset union/diff kernel for one cluster: given each strategy's

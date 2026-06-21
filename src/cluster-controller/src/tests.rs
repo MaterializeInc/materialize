@@ -627,6 +627,152 @@ async fn create_drop_is_caa_guarded_and_recovers() {
     assert_eq!(ctx.applied.len(), before, "converged: no further decisions");
 }
 
+#[mz_ore::test(tokio::test)]
+async fn rejection_is_isolated_per_cluster() {
+    // Two clusters are each over-provisioned (rf=1 with two replicas), so the
+    // baseline-only controller wants a phase-2 drop on each. We reject exactly
+    // one apply. Under per-cluster apply that rejection is scoped to a single
+    // cluster, so the other still converges this tick. A single batched apply
+    // would have sunk both, leaving both over-provisioned. We assert on the
+    // multiset of outcomes rather than which specific cluster lost the race, so
+    // the test does not depend on the order the ctx reports clusters in.
+    let c1 = cluster(1);
+    let c2 = cluster(2);
+    let over_provisioned = |c| {
+        state(
+            c,
+            "100cc",
+            1,
+            vec![
+                observed(replica(1), "r0", "100cc"),
+                observed(replica(2), "r1", "100cc"),
+            ],
+        )
+    };
+    let mut ctx = FakeCtx::new(vec![over_provisioned(c1), over_provisioned(c2)]);
+    ctx.reject_next = 1;
+
+    ClusterController::new().reconcile(&mut ctx).await;
+
+    // One cluster's drop was rejected (still 2 replicas), the other converged to
+    // rf=1. A batched apply would leave both at 2.
+    let mut counts = [
+        ctx.states[&c1].replicas.len(),
+        ctx.states[&c2].replicas.len(),
+    ];
+    counts.sort_unstable();
+    assert_eq!(
+        counts,
+        [1, 2],
+        "exactly one cluster converges despite the other's rejection, got {counts:?}"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn disjoint_state_writes_merge_into_one_apply() {
+    // Two strategies write different `StateWrite` fields for the same cluster.
+    // They must land together in a single phase-1 apply, not serialize one per
+    // tick: the merge unions disjoint fields under one compare-and-append.
+    struct WritesSize;
+    impl Strategy for WritesSize {
+        fn name(&self) -> &'static str {
+            "writes-size"
+        }
+        fn update_state(&self, _state: &ClusterState, _now: Timestamp) -> StateWrite {
+            StateWrite {
+                new_size: Some("200cc".to_string()),
+                ..Default::default()
+            }
+        }
+        fn desired_replicas(&self, _state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+            // No replica contribution: this test is about the phase-1 merge, and
+            // an empty cluster keeps phase 2 a no-op so the only apply is phase 1.
+            Vec::new()
+        }
+    }
+    struct WritesReplicationFactor;
+    impl Strategy for WritesReplicationFactor {
+        fn name(&self) -> &'static str {
+            "writes-rf"
+        }
+        fn update_state(&self, _state: &ClusterState, _now: Timestamp) -> StateWrite {
+            StateWrite {
+                new_replication_factor: Some(2),
+                ..Default::default()
+            }
+        }
+        fn desired_replicas(&self, _state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+            Vec::new()
+        }
+    }
+
+    let c = cluster(1);
+    let mut ctx = FakeCtx::new(vec![state(c, "100cc", 1, Vec::new())]);
+    let controller = controller_with(vec![
+        Box::new(WritesSize),
+        Box::new(WritesReplicationFactor),
+    ]);
+    controller.reconcile(&mut ctx).await;
+
+    assert_eq!(
+        ctx.applied.len(),
+        1,
+        "the two disjoint writes merge into a single apply, got {:?}",
+        ctx.applied
+    );
+    match &ctx.applied[0][0] {
+        Decision::UpdateClusterState { write, .. } => {
+            assert_eq!(write.new_size.as_deref(), Some("200cc"));
+            assert_eq!(write.new_replication_factor, Some(2));
+        }
+        other => panic!("expected one merged UpdateClusterState, got {other:?}"),
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[should_panic(expected = "conflicting state writes")]
+async fn conflicting_state_writes_trip_the_tripwire() {
+    // Two strategies set the SAME field to different values. By design this
+    // cannot happen (every `StateWrite` field is owned by one strategy), so the
+    // merge treats it as an invariant violation and soft-panics, which is a hard
+    // panic under the test harness's soft assertions.
+    struct WantsLarge;
+    impl Strategy for WantsLarge {
+        fn name(&self) -> &'static str {
+            "wants-large"
+        }
+        fn update_state(&self, _state: &ClusterState, _now: Timestamp) -> StateWrite {
+            StateWrite {
+                new_size: Some("400cc".to_string()),
+                ..Default::default()
+            }
+        }
+        fn desired_replicas(&self, _state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+            Vec::new()
+        }
+    }
+    struct WantsSmall;
+    impl Strategy for WantsSmall {
+        fn name(&self) -> &'static str {
+            "wants-small"
+        }
+        fn update_state(&self, _state: &ClusterState, _now: Timestamp) -> StateWrite {
+            StateWrite {
+                new_size: Some("100cc".to_string()),
+                ..Default::default()
+            }
+        }
+        fn desired_replicas(&self, _state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+            Vec::new()
+        }
+    }
+
+    let c = cluster(1);
+    let mut ctx = FakeCtx::new(vec![state(c, "200cc", 1, Vec::new())]);
+    let controller = controller_with(vec![Box::new(WantsLarge), Box::new(WantsSmall)]);
+    controller.reconcile(&mut ctx).await;
+}
+
 #[mz_ore::test]
 fn replica_name_gen_is_one_based_and_avoids_used() {
     use crate::ReplicaNameGen;
