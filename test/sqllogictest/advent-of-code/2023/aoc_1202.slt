@@ -278,19 +278,19 @@ Explained Query:
                   %2 » %0[#0{game}]K » %1[#0{game}]K
                 ArrangeBy keys=[[#0{game}]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
-                    FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then (((integer_to_bigint(#1{max}) - 1) / 1) + 1) else 0 end) // { arity: 2 }
+                    FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then ((integer_to_bigint(#1{max}) - 1) + 1) else 0 end) // { arity: 2 }
                       Project (#0, #2{max}) // { arity: 2 }
                         Filter (#1{color} = "red") // { arity: 3 }
                           Get l4 // { arity: 3 }
                 ArrangeBy keys=[[#0{game}]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
-                    FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then (((integer_to_bigint(#1{max}) - 1) / 1) + 1) else 0 end) // { arity: 2 }
+                    FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then ((integer_to_bigint(#1{max}) - 1) + 1) else 0 end) // { arity: 2 }
                       Project (#0, #2{max}) // { arity: 2 }
                         Filter (#1{color} = "blue") // { arity: 3 }
                           Get l4 // { arity: 3 }
                 ArrangeBy keys=[[#0{game}]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
-                    FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then (((integer_to_bigint(#1{max}) - 1) / 1) + 1) else 0 end) // { arity: 2 }
+                    FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then ((integer_to_bigint(#1{max}) - 1) + 1) else 0 end) // { arity: 2 }
                       Project (#0, #2{max}) // { arity: 2 }
                         Filter (#1{color} = "green") // { arity: 3 }
                           Get l4 // { arity: 3 }

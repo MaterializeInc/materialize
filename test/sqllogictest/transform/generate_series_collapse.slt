@@ -68,7 +68,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)]
         Project ()
-          FlatMap repeat_row_non_negative(case when (#1{y} >= #0{x}) then (((integer_to_bigint(#1{y}) - integer_to_bigint(#0{x})) / 1) + 1) else 0 end)
+          FlatMap repeat_row_non_negative(case when (#1{y} >= #0{x}) then ((integer_to_bigint(#1{y}) - integer_to_bigint(#0{x})) + 1) else 0 end)
             Project (#1, #2)
               ReadStorage materialize.public.series_bounds
   Return
@@ -110,7 +110,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)]
         Project ()
-          FlatMap repeat_row_non_negative(case when (#1{y} >= #0{x}) then (((#1{y} - #0{x}) / 1) + 1) else 0 end)
+          FlatMap repeat_row_non_negative(case when (#1{y} >= #0{x}) then ((#1{y} - #0{x}) + 1) else 0 end)
             Project (#1, #2)
               ReadStorage materialize.public.series_bounds8
   Return
@@ -327,7 +327,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)]
         Project ()
-          FlatMap repeat_row_non_negative(case when (#1{y} >= #0{x}) then (((integer_to_bigint(#1{y}) - integer_to_bigint(#0{x})) / 1) + 1) else 0 end)
+          FlatMap repeat_row_non_negative(case when (#1{y} >= #0{x}) then ((integer_to_bigint(#1{y}) - integer_to_bigint(#0{x})) + 1) else 0 end)
             Project (#1, #2)
               ReadStorage materialize.public.series_bounds
   Return
