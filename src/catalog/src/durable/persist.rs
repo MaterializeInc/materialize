@@ -71,10 +71,7 @@ use crate::memory;
 pub(crate) type Timestamp = mz_repr::Timestamp;
 
 /// The minimum value of an epoch.
-///
-/// # Safety
-/// `new_unchecked` is safe to call with a non-zero value.
-const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
+const MIN_EPOCH: Epoch = Epoch::new(1).expect("1 is non-zero");
 
 /// Human readable catalog shard name.
 const CATALOG_SHARD_NAME: &str = "catalog";
