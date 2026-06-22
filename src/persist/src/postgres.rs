@@ -450,7 +450,7 @@ impl Consensus for PostgresConsensus {
                 WITH expected_row AS (
                     SELECT sequence_number FROM consensus
                     WHERE shard = $1 AND sequence_number = $4
-                    FOR UPDATE
+                    FOR KEY SHARE
                 )
                 INSERT INTO consensus (shard, sequence_number, data)
                 SELECT $1, $2, $3
@@ -537,7 +537,7 @@ impl Consensus for PostgresConsensus {
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         // `sequence_number >= 0` keeps the seqno -1 sentinel (see `compare_and_set`); it is a no-op
         // for shards that have no sentinel, since all of their seqnos are already >= 0.
-        static CRDB_TRUNCATE_QUERY: &str = "
+        static TRUNCATE_QUERY: &str = "
         DELETE FROM consensus
         WHERE shard = $1 AND sequence_number >= 0 AND sequence_number < $2 AND
         EXISTS (
@@ -547,7 +547,7 @@ impl Consensus for PostgresConsensus {
 
         let result = {
             let client = self.get_connection().await?;
-            let statement = client.prepare_cached(CRDB_TRUNCATE_QUERY).await?;
+            let statement = client.prepare_cached(TRUNCATE_QUERY).await?;
             pg_execute_prepared(&client, &statement, &[&key, &seqno]).await?
         };
         if result == 0 {
