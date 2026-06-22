@@ -120,7 +120,8 @@ impl JoinInputMapper {
         // for inputs `1..self.total_inputs()`, store a set of columns from that
         // input that exist in join constraints that have expressions belonging to
         // earlier inputs.
-        let mut column_with_prior_bound_by_input = vec![BTreeSet::new(); self.total_inputs() - 1];
+        let mut column_with_prior_bound_by_input =
+            vec![BTreeSet::new(); self.total_inputs().saturating_sub(1)];
         for equivalence in equivalences {
             // do a scan to find the first input represented in the constraint
             let min_bound_input = equivalence
@@ -572,5 +573,20 @@ mod tests {
             false,
             input_mapper.try_localize_to_input_with_bound_expr(&mut mutab, 1, &equivalences),
         )
+    }
+
+    #[mz_ore::test]
+    fn global_keys_zero_inputs_test() {
+        // Regression test: `global_keys` computed `total_inputs() - 1` to size a
+        // scratch vector before checking whether there were any inputs, which
+        // underflowed `usize` on a zero-input join. A zero-input join has no
+        // input from which to draw a uniqueness constraint, so the result must
+        // simply be empty.
+        let input_mapper = JoinInputMapper::new_from_input_arities(Vec::<usize>::new());
+        assert_eq!(input_mapper.total_inputs(), 0);
+
+        let local_keys: Vec<Vec<Vec<usize>>> = Vec::new();
+        let keys = input_mapper.global_keys(local_keys.iter(), &[]);
+        assert!(keys.is_empty());
     }
 }
