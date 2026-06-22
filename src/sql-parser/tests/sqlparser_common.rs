@@ -740,3 +740,397 @@ fn test_set_operation_leading_show_display_roundtrip() {
     // parse_pretty_roundtrip `(SHOW … EXCEPT SELECT …)` finding.
     assert_display_roundtrips("(SHOW foo EXCEPT SELECT 1)");
 }
+
+#[mz_ore::test]
+fn cast_operand_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    // Strips `Expr::Nested`, mimicking an AST transform (or the fuzz oracle's
+    // `normalize`) that drops the parser's protective parentheses.
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // `CAST(-0 AS int4)` parses to `Cast(Nested(- 0))`. The unary minus is not
+    // self-delimiting, so the printer must re-add parens once the `Nested` is
+    // gone. Otherwise it prints `- 0::int4`, which reparses as `- (0::int4)`
+    // (a structurally different, semantically different expression).
+    let mut ast = mz_sql_parser::parser::parse_statements("SELECT CAST(-0 AS int4) + a")
+        .unwrap()
+        .remove(0)
+        .ast;
+    StripNested.visit_statement_mut(&mut ast);
+    let displayed = ast.to_ast_string_simple();
+    let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+        .unwrap()
+        .remove(0)
+        .ast;
+    StripNested.visit_statement_mut(&mut reparsed);
+    assert_eq!(
+        ast, reparsed,
+        "Cast display did not round-trip after Nested was stripped; displayed = {displayed:?}"
+    );
+}
+
+#[mz_ore::test]
+fn between_bound_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // A `BETWEEN` bound parses with `parse_subexpr(Precedence::Like)`, so a bound
+    // whose left spine binds at or below `Like` is wrapped in `Expr::Nested` by
+    // the parser. Once the `Nested` is stripped, the printer must re-add the
+    // parens, or the bound's leading operator re-associates out of the `BETWEEN`
+    // (`... AND 0 = a` reparses as `(... BETWEEN ... AND 0) = a`, and
+    // `... 1 IS NULL AND ...` makes the parser expect `AND` but find `IS`). The
+    // right-closing forms (`IS NULL`, `= ANY (…)`, `IN (…)`) are the interesting
+    // cases: their looseness is on the *left* spine, so the decision must use the
+    // left edge, not the right edge (which closes at `ATOM`).
+    for sql in [
+        "SELECT false BETWEEN x AND (0 = a)",
+        "SELECT y BETWEEN (1 IS NULL) AND z",
+        "SELECT y BETWEEN x AND (1 IS NULL)",
+        "SELECT y BETWEEN (a = ANY (ARRAY[b])) AND z",
+        "SELECT y BETWEEN (a IN (SELECT c FROM t)) AND z",
+        "SELECT y BETWEEN (a OR b) AND z",
+        // The left-spine operator is buried under a tighter top (`IN`, `Like`).
+        "SELECT y BETWEEN (a = ANY (ARRAY[b]) IN (SELECT c FROM t)) AND z",
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "BETWEEN bound display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
+}
+
+#[mz_ore::test]
+fn binary_op_operand_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // A binary operator must parenthesize an operand that re-associates on
+    // reparse once the parser's protective `Expr::Nested` is stripped. The left
+    // operand is decided by its *right* edge (the operator reaches into its right
+    // spine), the right operand by its *left* edge. An operand's top operator
+    // is not enough, because a left-/right-nested chain can bury a looser operator
+    // down the spine. `(a + b) * c` -> `Op(*, Op(+), c)` must still print
+    // `(a + b) * c`, not `a + b * c`.
+    for sql in [
+        "SELECT (a + b) * c",
+        "SELECT (a OR b) AND c",
+        "SELECT (NOT a IS DISTINCT FROM b) + c",
+        "SELECT (a OR b) IN (SELECT c FROM bar)",
+        "SELECT x LIKE (b IN (SELECT c FROM bar))",
+        // Prefix `~` binds looser than `+`/`*`, so it needs parens as their operand.
+        "SELECT (~ a) + b",
+        "SELECT (~ a) * b",
+        // A prefix op is right-transparent: the quantified `= ANY` would bind into
+        // the `NOT` unless the whole left is parenthesized.
+        "SELECT (- NOT a IN (b)) = ANY (SELECT c FROM t)",
+        // The right operand's *top* operator (`IN`, binds tighter than `<>`) hides
+        // a looser `= ANY` (`Cmp`, equal to `<>`) on its left spine. Without
+        // parens the `<>` would re-associate into that `= ANY`'s left, so the
+        // right operand must be parenthesized by its left edge, not its top.
+        "SELECT a <> (b = ANY (ARRAY[c]) IN (SELECT d FROM t))",
+        // The quantified `<op>` is an ordinary binary infix and can bind *tighter*
+        // than its left's right spine: `*` (`MultiplyDivide`) over a `+`
+        // (`PlusMinus`) left must keep the parens, or `(a + b) * ANY (...)` prints
+        // `a + b * ANY (...)` and reparses as `a + (b * ANY (...))`. Decided by the
+        // left's right edge vs `<op>`'s own precedence, not a fixed `Like` cutoff.
+        "SELECT (a + b) * ANY (ARRAY[c])",
+        "SELECT (a + b) * ANY (SELECT c FROM t)",
+        "SELECT (a - b) / ALL (ARRAY[c])",
+        "SELECT (a - b) % ALL (SELECT c FROM t)",
+        // Prefix `~` binds at `Other`, looser than `*`, so it is right-transparent
+        // for a tighter quantified `*`: `~ a * ANY (...)` would bind the `* ANY`
+        // into the `~`'s operand without the parens.
+        "SELECT (~ a) * ANY (ARRAY[c])",
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "binary-op display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn quantified_left_minimal_parens_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // The quantified `<op>` binds at its own precedence, so a left whose right
+    // edge is *equal to or tighter than* `<op>` needs no parens. The old fixed
+    // `Like` threshold wrapped every `Cmp`/`Like`-edged left. Assert the minimal
+    // form now prints bare (and still round-trips). The `(left)` in each input is
+    // the parser's protective `Nested`, which we strip so `write_quantified_left`
+    // alone decides the parens.
+    for (sql, expected) in [
+        // Equal precedence on the left's right edge: the left's own `=` (`Cmp`)
+        // closes before the quantified `=` (`Cmp`), left-associatively.
+        (
+            "SELECT (a = b) = ANY (ARRAY[c])",
+            "SELECT a = b = ANY (ARRAY[c])",
+        ),
+        // Tighter left edge (`Like` > `Cmp`) under a looser quantified `=`.
+        (
+            "SELECT (a LIKE b) = ANY (ARRAY[c])",
+            "SELECT a LIKE b = ANY (ARRAY[c])",
+        ),
+        // Much tighter arithmetic left under a looser quantified `=`.
+        (
+            "SELECT (a + b) = ANY (ARRAY[c])",
+            "SELECT a + b = ANY (ARRAY[c])",
+        ),
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        assert_eq!(
+            displayed, expected,
+            "quantified-left over-parenthesized after Nested was stripped: {sql:?}"
+        );
+        // The bare form must still reparse to the same AST.
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "minimal quantified-left did not round-trip: {sql:?}"
+        );
+    }
+}
+
+#[mz_ore::test]
+fn is_distinct_from_rhs_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // `IS DISTINCT FROM` parses its right-hand side at the `IS` precedence (see
+    // `Parser::parse_is`), so a RHS whose left spine binds at or below `IS`
+    // (`OR`/`AND`/`IS`) is wrapped in `Expr::Nested`. Once stripped, the printer
+    // must re-add the parens. Otherwise `a IS DISTINCT FROM b OR c` reparses as
+    // `(a IS DISTINCT FROM b) OR c`. This drift is invisible to a stable-string
+    // round trip (both ASTs print to the same string), so it is checked
+    // structurally here.
+    for sql in [
+        "SELECT a IS DISTINCT FROM (b OR c)",
+        "SELECT a IS DISTINCT FROM (b AND c)",
+        "SELECT a IS DISTINCT FROM (b IS DISTINCT FROM c)",
+        "SELECT a IS DISTINCT FROM (b IS NULL)",
+        // A comparison RHS binds tighter than `IS`, so it stays bare.
+        "SELECT a IS DISTINCT FROM b = c",
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "IS DISTINCT FROM RHS display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
+}
+
+#[mz_ore::test]
+fn like_pattern_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // A `[I]LIKE` pattern parses at `Like` precedence. When an `ESCAPE` follows,
+    // the pattern is immediately left of the `ESCAPE` keyword, so a `[I]LIKE`
+    // exposed on the pattern's *right* spine steals the `ESCAPE` as its own:
+    // `x LIKE NOT (a LIKE b) ESCAPE c`, printed bare as
+    // `x LIKE NOT a LIKE b ESCAPE c`, binds the escape to the inner `a LIKE b`.
+    // The drift is structural and produces colliding stable strings, so it is
+    // checked structurally.
+    for sql in [
+        "SELECT x LIKE (NOT (a LIKE b)) ESCAPE c",
+        "SELECT x LIKE (a LIKE b) ESCAPE c",
+        "SELECT x ILIKE (a ILIKE b) ESCAPE c",
+        // Left-spine cases (covered with or without escape).
+        "SELECT x LIKE (a IN (SELECT b FROM t))",
+        // No escape: a right-spine LIKE is harmless, so this stays bare.
+        "SELECT x LIKE NOT (a LIKE b)",
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "LIKE pattern display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
+}
+
+#[mz_ore::test]
+fn postfix_access_receiver_reparenthesized_after_nested_stripped() {
+    use mz_sql_parser::ast::display::AstDisplay;
+    use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+    use mz_sql_parser::ast::{AstInfo, Expr};
+
+    struct StripNested;
+    impl<'a, T: AstInfo> VisitMut<'a, T> for StripNested {
+        fn visit_expr_mut(&mut self, e: &'a mut Expr<T>) {
+            visit_mut::visit_expr_mut(self, e);
+            if let Expr::Nested(inner) = e {
+                *e = (**inner).clone();
+            }
+        }
+    }
+
+    // The receivers of the postfix `.field`/`.*` and `[…]` operators must stay
+    // self-delimiting once `Expr::Nested` is stripped, or the trailing token
+    // re-binds. A bare-name `FieldAccess`/`WildcardAccess` receiver prints as a
+    // dotted name and collides with a qualified identifier (`(a).b` -> `a.b` is
+    // `Identifier([a, b])`). A `Cast` subscript receiver lets the type parser eat
+    // the `[…]` as an array suffix (`(a::int4)[1]` -> `a::int4[1]` is `a::int4[]`).
+    // A nested `Subscript` receiver flattens (`(a[1])[2]` -> `a[1][2]` is one
+    // two-position subscript).
+    for sql in [
+        // dot receiver
+        "SELECT (a).b",
+        "SELECT (a).*",
+        "SELECT ((a).b).c",
+        "SELECT ((a).*).*",
+        "SELECT (a).b[1]",
+        // subscript receiver
+        "SELECT (a::int4)[1]",
+        "SELECT (CAST(a AS int4))[1]",
+        "SELECT (a[1])[2]",
+        "SELECT (a + b)[1]",
+        // quantified-subquery dot receiver: the trailing `(query)` is a sub-part,
+        // so `.x`/`.*` would bind to it rather than the whole quantified expr.
+        "SELECT (a = ANY (SELECT b FROM t)).c",
+        "SELECT (a = ANY (SELECT b FROM t)).*",
+        "SELECT (a = ALL (SELECT b FROM t)).c",
+        "SELECT x BETWEEN (0 = ANY (SELECT b FROM t)).c AND y",
+        // these are parser-shaped and must remain stable (no spurious parens)
+        "SELECT (x).a.b",
+        "SELECT a.b[1]",
+        "SELECT a[1][2]",
+        "SELECT f(x)[1]",
+        "SELECT (a + b).c",
+    ] {
+        let mut ast = mz_sql_parser::parser::parse_statements(sql)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut ast);
+        let displayed = ast.to_ast_string_simple();
+        let mut reparsed = mz_sql_parser::parser::parse_statements(&displayed)
+            .unwrap()
+            .remove(0)
+            .ast;
+        StripNested.visit_statement_mut(&mut reparsed);
+        assert_eq!(
+            ast, reparsed,
+            "postfix-access receiver display did not round-trip after Nested was stripped: {sql:?} -> {displayed:?}"
+        );
+    }
+}
