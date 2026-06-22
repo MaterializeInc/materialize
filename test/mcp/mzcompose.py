@@ -965,6 +965,51 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
         )
         assert rows[0][0] == "restricted_agent", rows
 
+    with c.test_case("unrestricted_role_first_statement_succeeds"):
+        # Positive control on the resume path: an unrestricted role running
+        # the same deferred statement as its first statement must succeed,
+        # not error. If `DeferredPlan` now carries `resolved_ids` correctly
+        # the resumed `rbac::check_plan` returns Ok (no `restrict_to_user_objects`
+        # to enforce), and the EXPLAIN TIMESTAMP plan flows through. A
+        # regression here would mean we broke the non-restricted deferral path.
+        cur = c.sql_cursor(user="materialize", port=6875, reuse_connection=False)
+        outcome = run(cur, BYPASS)
+        assert outcome.startswith("ok:"), (
+            f"unrestricted EXPLAIN TIMESTAMP over mz_sessions should succeed "
+            f"as first statement, got: {outcome!r}"
+        )
+
+    with c.test_case("restricted_agent_user_table_first_statement_succeeds"):
+        # Positive control: a restricted role's first statement against a
+        # user-owned object that does NOT depend on mz_sessions must succeed.
+        # Confirms the fix only blocks the system-catalog refs and leaves
+        # legitimate first-statement reads alone.
+        c.sql(
+            """
+            DROP TABLE IF EXISTS restricted_smoke;
+            CREATE TABLE restricted_smoke (a int);
+            INSERT INTO restricted_smoke VALUES (1), (2), (3);
+            GRANT SELECT ON restricted_smoke TO restricted_agent;
+            GRANT USAGE ON SCHEMA public TO restricted_agent;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+        rows = c.sql_query(
+            "SELECT count(*) FROM restricted_smoke",
+            user="restricted_agent",
+            port=6875,
+            reuse_connection=False,
+        )
+        assert rows[0][0] == 3, rows
+        c.sql(
+            "DROP TABLE restricted_smoke;",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
     # test_case swallows assertion failures, so the cleanup always runs.
     c.sql(
         "DROP ROLE restricted_agent;",
