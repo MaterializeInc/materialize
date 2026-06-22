@@ -42,7 +42,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_repr::{Datum, Row};
 
-    use crate::avro::Decoder;
+    use crate::avro::{Decoder, WriterSchemaProvider};
 
     #[mz_ore::test(tokio::test)]
     async fn test_error_followed_by_success() {
@@ -51,7 +51,8 @@ mod tests {
 "name": "test",
 "fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
 }"#;
-        let mut decoder = Decoder::new(schema, &[], None, "Test".to_string(), false).unwrap();
+        let mut decoder =
+            Decoder::new(schema, &[], WriterSchemaProvider::None, "Test".to_string()).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
         assert_err!(decoder.decode(&mut bad_bytes).await.unwrap());
@@ -78,23 +79,9 @@ impl Decoder {
     pub fn new(
         reader_schema: &str,
         reader_reference_schemas: &[String],
-        ccsr_client: Option<mz_ccsr::Client>,
+        writer_schemas: crate::avro::WriterSchemaProvider,
         debug_name: String,
-        confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
-        // Map the legacy (ccsr_client, confluent_wire_format) pair to the
-        // unified `WriterSchemaProvider` enum. `(Some, false)` is rejected by the
-        // planner today; treat it as an internal error.
-        let writer_schemas = match (ccsr_client, confluent_wire_format) {
-            (None, false) => crate::avro::WriterSchemaProvider::None,
-            (client, true) => crate::avro::WriterSchemaProvider::confluent(client),
-            (Some(_), false) => {
-                anyhow::bail!(
-                    "internal error: Avro decoder received a CSR client but \
-                     confluent_wire_format = false"
-                )
-            }
-        };
         let csr_avro =
             AvroSchemaResolver::new(reader_schema, reader_reference_schemas, writer_schemas)?;
 

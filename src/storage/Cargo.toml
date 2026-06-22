@@ -40,6 +40,7 @@ maplit.workspace = true
 mysql_async.workspace = true
 mysql_common.workspace = true
 mz-arrow-util = { path = "../arrow-util" }
+mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
