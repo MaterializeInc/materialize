@@ -97,14 +97,13 @@ from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -145,7 +144,7 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    Cockroach(setup_materialize=True, in_memory=True),
+    PostgresMetadata(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     KgenService(),
@@ -259,7 +258,7 @@ def run_one_scenario(
                 additional_system_parameter_defaults,
             )
 
-        start_overridden_mz_clusterd_and_cockroach(
+        start_overridden_mz_clusterd_and_metadata_store(
             c, mz, clusterd, instance, balancerd, first_run
         )
         first_run = False
@@ -278,7 +277,7 @@ def run_one_scenario(
                 materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
                 default_timeout=default_timeout,
                 materialize_params={"statement_timeout": f"'{default_timeout}'"},
-                metadata_store="cockroach",
+                metadata_store="postgres-metadata",
                 external_blob_store=True,
                 blob_store_is_azure=args.azurite,
                 entrypoint_extra=testdrive_entrypoint_extra,
@@ -334,8 +333,8 @@ def run_one_scenario(
                         aggregation.name(),
                     )
 
-        c.kill("cockroach", "materialized", "clusterd", "testdrive")
-        c.rm("cockroach", "materialized", "clusterd", "testdrive")
+        c.kill("postgres-metadata", "materialized", "clusterd", "testdrive")
+        c.rm("postgres-metadata", "materialized", "clusterd", "testdrive")
         c.rm_volumes("mzdata")
 
         if early_abort:
@@ -377,7 +376,7 @@ def create_mz_service(
         soft_assertions=False,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
         external_metadata_store=True,
-        metadata_store="cockroach",
+        metadata_store="postgres-metadata",
         external_blob_store=True,
         blob_store_is_azure=azurite,
         sanity_restart=False,
@@ -393,7 +392,7 @@ def create_clusterd_service(
     return Clusterd(image=clusterd_image)
 
 
-def start_overridden_mz_clusterd_and_cockroach(
+def start_overridden_mz_clusterd_and_metadata_store(
     c: Composition,
     mz: Materialized,
     clusterd: Clusterd,
@@ -403,7 +402,7 @@ def start_overridden_mz_clusterd_and_cockroach(
 ) -> None:
     with c.override(mz, clusterd):
         c.up(
-            "cockroach",
+            "postgres-metadata",
             "materialized",
             "clusterd",
             *(["balancerd"] if balancerd else []),

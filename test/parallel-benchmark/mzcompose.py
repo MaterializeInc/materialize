@@ -32,14 +32,13 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -97,7 +96,7 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    Cockroach(setup_materialize=True, in_memory=True),
+    PostgresMetadata(),
     Minio(setup_materialize=True),
     Azurite(),
     KgenService(),
@@ -449,12 +448,12 @@ def run_once(
                 sanity_restart=False,
                 additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
                 | {"max_connections": "100000"},
-                metadata_store="cockroach",
+                metadata_store="postgres-metadata",
             ),
             Testdrive(
                 no_reset=True,
                 seed=1,
-                metadata_store="cockroach",
+                metadata_store="postgres-metadata",
                 external_blob_store=True,
                 # TODO: Better azurite support detection
                 blob_store_is_azure=args.azurite and bool(tag),
@@ -546,7 +545,7 @@ def run_once(
                 print(
                     "~~~ Resetting services to prevent interference between scenarios"
                 )
-                services = service_names + ["cockroach", "testdrive", "minio"]
+                services = service_names + ["postgres-metadata", "testdrive", "minio"]
                 c.kill(*services)
                 c.rm(*services, destroy_volumes=True)
                 c.rm_volumes("mzdata")
