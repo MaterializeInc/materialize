@@ -447,6 +447,22 @@ pub(super) async fn purify_source_exports(
             let exclude_columns = exclude_column_map.remove(&desc.oid);
 
             if let Some(exclude_cols) = &exclude_columns {
+                // Reject exclusion of key columns before mutating desc.columns.
+                // generate_source_export_statement_values resolves key col_nums
+                // back to columns; excluding a key column leaves a dangling
+                // attnum and triggers a panic there.
+                let key_col_nums: BTreeSet<u16> =
+                    desc.keys.iter().flat_map(|k| k.cols.iter().copied()).collect();
+                for col_name in exclude_cols.iter() {
+                    if let Some(col) = desc.columns.iter().find(|c| c.name == *col_name) {
+                        if key_col_nums.contains(&col.col_num) {
+                            return Err(PgSourcePurificationError::ExcludedKeyColumn {
+                                column: col_name.clone(),
+                                table: format!("{}.{}", desc.namespace, desc.name),
+                            });
+                        }
+                    }
+                }
                 desc.columns.retain(|c| !exclude_cols.contains(&c.name));
             }
 
