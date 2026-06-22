@@ -4168,7 +4168,8 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
     for i in range(900):
         time.sleep(1)
         try:
-            status = get_materialize_status_at_stored_version()
+            mz = get_materialize_at_stored_version()
+            status = mz.get("status")
             if not status:
                 continue
             if expect_fail:
@@ -4179,10 +4180,20 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                 or status["conditions"][0]["status"] != "True"
             ):
                 continue
-            if status.get("lastCompletedRolloutHash") or status.get(
-                "lastCompletedRolloutRequest"
+            # Wait for the rollout of the spec we just applied to complete,
+            # not a stale rollout left over from a previous upgrade step. On
+            # an upgrade the operator may still report the old rollout as
+            # UpToDate before it reacts to the new spec, and returning early
+            # there races the `ImmediatelyPromoteCausingDowntime` teardown of
+            # the old environmentd pod (leaving validate with zero pods).
+            # Both v1 and v1alpha1 resources are stored as v1alpha1, where the
+            # conversion webhook derives `spec.requestRollout` from the v1 spec
+            # hash, so comparing requestRollout UUIDs works for either
+            # apiVersion.
+            last_completed = status.get("lastCompletedRolloutRequest")
+            if last_completed is not None and last_completed == mz["spec"].get(
+                "requestRollout"
             ):
-                # TODO should I check somehow that this is the latest to handle upgrades?
                 break
         except subprocess.CalledProcessError:
             pass
