@@ -620,7 +620,7 @@ pub struct Settings {
     /// Resolved profile name (CLI --profile overrides project.toml default).
     /// `None` when no profile is configured and the command doesn't require one.
     pub profile_name: Option<String>,
-    /// Resolved Docker image for type checking and tests.
+    /// Resolved Docker image for the ephemeral container used by `test` and `explain`.
     pub docker_image: String,
     /// Per-profile config (security, profile_suffix) — used for SecretResolver.
     /// Default-constructed (empty variables, no suffix) when `profile_name` is `None`.

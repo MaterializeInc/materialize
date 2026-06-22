@@ -116,7 +116,7 @@ struct GlobalArgs {
     #[arg(short, long, global = true, env = "MZ_DEPLOY_PROFILE")]
     profile: Option<String>,
 
-    /// Materialize Docker image to use for tests
+    /// Materialize Docker image to use for `test` and `explain`
     #[arg(long, value_name = "IMAGE", global = true)]
     docker_image: Option<String>,
 
