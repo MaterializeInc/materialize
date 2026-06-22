@@ -1011,8 +1011,14 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
         )
 
     # test_case swallows assertion failures, so the cleanup always runs.
+    # DROP OWNED BY first revokes the schema/object grants the positive-control
+    # cases hand to the role, otherwise DROP ROLE fails with
+    # `DependentObjectsStillExist`.
     c.sql(
-        "DROP ROLE restricted_agent;",
+        """
+        DROP OWNED BY restricted_agent;
+        DROP ROLE restricted_agent;
+        """,
         user="mz_system",
         port=6877,
         print_statement=False,
