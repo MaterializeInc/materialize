@@ -17,7 +17,8 @@ other_ref="[new reference page](/sql/create-source/postgres-v2)"
 include_blurb=true >}}
 
 {{% create-source/intro %}}
-Materialize supports PostgreSQL (11+) as a data source. To connect to a
+Materialize supports PostgreSQL (11+) as a data source. PostgreSQL 16+ is
+required for connecting Materialize to a read-only standby. To connect to a
 PostgreSQL instance, you first need to [create a connection](#creating-a-connection)
 that specifies access and authentication parameters.
 Once created, a connection is **reusable** across multiple `CREATE SOURCE`
