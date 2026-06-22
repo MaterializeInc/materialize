@@ -28,6 +28,15 @@ DefSource name=y
 ----
 Source defined as t1
 
+# Define xi source (32-bit columns, for the int32 `generate_series` variant)
+define
+DefSource name=xi
+  - c0: integer
+  - c1: integer
+  - c3: integer
+----
+Source defined as t2
+
 
 # Absorb project in a constant
 apply pipeline=projection_pushdown
@@ -176,7 +185,8 @@ Project (#1)
     Project (#0)
       Get x
 
-# Query not using the columns newly created by FlatMap
+# An unused int64 `generate_series` with a unit step collapses to a
+# `repeat_row_non_negative` of the same cardinality, in cheap `i64` arithmetic.
 apply pipeline=projection_pushdown
 Project (#1)
   FlatMap generate_series(#0, #2, 1)
@@ -186,7 +196,7 @@ Project (#1)
   FlatMap repeat_row_non_negative(case when (#2 >= #0) then (((#2 - #0) / 1) + 1) else 0 end)
     Get x
 
-# Query using the columns newly created by FlatMap
+# Query using the column newly created by FlatMap: no collapse.
 apply pipeline=projection_pushdown
 Project (#3)
   FlatMap generate_series(#0, #2, 1)
@@ -195,6 +205,111 @@ Project (#3)
 Project (#2)
   FlatMap generate_series(#0, #1, 1)
     Project (#0, #2)
+      Get x
+
+# A non-unit positive step collapses too, but in `numeric`: a feasible series
+# can have a span too wide for `i64`, so the synthesized arithmetic must not.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(#0, #2, 3)
+    Get x
+----
+Project (#1)
+  FlatMap repeat_row_non_negative(case when (#2 >= #0) then numeric_to_bigint((floornumeric(((bigint_to_numeric(#2) - bigint_to_numeric(#0)) / bigint_to_numeric(3))) + bigint_to_numeric(1))) else 0 end)
+    Get x
+
+# A negative step flips the emptiness guard to `<=`; also `numeric`.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(#0, #2, -2)
+    Get x
+----
+Project (#1)
+  FlatMap repeat_row_non_negative(case when (#2 <= #0) then numeric_to_bigint((floornumeric(((bigint_to_numeric(#2) - bigint_to_numeric(#0)) / bigint_to_numeric(-2))) + bigint_to_numeric(1))) else 0 end)
+    Get x
+
+# A non-literal step is left alone (we can't specialize on its sign).
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(#0, #2, #1)
+    Get x
+----
+Project (#1)
+  FlatMap generate_series(#0, #2, #1)
+    Get x
+
+# The int32 variant widens its `i64`-step bounds with `integer_to_bigint`.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series_i32(#0, #2, 1)
+    Get xi
+----
+Project (#1)
+  FlatMap repeat_row_non_negative(case when (#2 >= #0) then (((integer_to_bigint(#2) - integer_to_bigint(#0)) / 1) + 1) else 0 end)
+    Get xi
+
+# The int32 variant widens its `numeric`-step bounds with `integer_to_numeric`.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series_i32(#0, #2, 2)
+    Get xi
+----
+Project (#1)
+  FlatMap repeat_row_non_negative(case when (#2 >= #0) then numeric_to_bigint((floornumeric(((integer_to_numeric(#2) - integer_to_numeric(#0)) / bigint_to_numeric(2))) + bigint_to_numeric(1))) else 0 end)
+    Get xi
+
+# All-literal arguments fold to an exact count at rewrite time:
+# (11 - 2) / 3 + 1 = 4.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(2, 11, 3)
+    Get x
+----
+FlatMap repeat_row_non_negative(4)
+  Project (#1)
+    Get x
+
+# An all-literal empty series folds to a count of zero.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(11, 2, 3)
+    Get x
+----
+FlatMap repeat_row_non_negative(0)
+  Project (#1)
+    Get x
+
+# An all-literal descending series folds exactly: (2 - 11) / -3 + 1 = 4.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(11, 2, -3)
+    Get x
+----
+FlatMap repeat_row_non_negative(4)
+  Project (#1)
+    Get x
+
+# A literal span too wide for `i64` still folds when the count fits:
+# 10^19 / 10^18 + 1 = 11.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(-5000000000000000000, 5000000000000000000, 1000000000000000000)
+    Get x
+----
+FlatMap repeat_row_non_negative(11)
+  Project (#1)
+    Get x
+
+# A literal count beyond `i64` declines to collapse: the original enumerates it
+# without error, so the rewrite must not introduce one.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(-5000000000000000000, 5000000000000000000, 1)
+    Get x
+----
+Project (#0)
+  FlatMap generate_series(-5000000000000000000, 5000000000000000000, 1)
+    Project (#1)
       Get x
 
 

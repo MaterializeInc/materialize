@@ -542,12 +542,23 @@ impl ProjectionPushdown {
 /// series without error (its iteration only ever visits in-range values), so
 /// its replacement must not error either.
 ///
-/// When the bounds are not literals, the synthesized `i64` arithmetic can error
-/// where the original would not: `stop - start` overflows when the span is at
-/// least `2^63`, which under the emptiness guard requires both bounds extreme
-/// with opposite signs — and for the original plan to have been *feasible*
-/// rather than effectively non-terminating, also a step of around `10^10` or
-/// more. We accept this corner.
+/// When the bounds are not literals we synthesize the arithmetic, and the width
+/// we synthesize it in depends on `step`:
+///
+/// * `|step| == 1`: `i64`. Here `stop - start` overflows `i64` only once the
+///   span reaches `2^63`, which means the series has more than `i64::MAX` rows —
+///   infeasible, exactly what the literal path declines. So `i64` arithmetic is
+///   exact for every feasible series, and an overflow only ever stands in for an
+///   effectively non-terminating enumeration.
+///
+/// * `|step| >= 2`: `numeric`. A coarse step over near-opposite `i64` extremes
+///   yields a *feasible* series (few rows) whose span nonetheless overflows
+///   `i64`, so `i64` arithmetic would error where the original does not.
+///   `numeric` holds the full `~2^64` span comfortably and represents the
+///   quotient exactly (it needs at most ~20 significant digits, well under
+///   `numeric`'s 39), so the only place this can error is the final cast back to
+///   `i64` — which happens exactly when the count itself exceeds `i64`, the same
+///   infeasible case the literal path declines.
 ///
 /// Null inputs are handled by `RepeatRowNonNegative` itself: like
 /// `generate_series`, it is `empty_on_null_input`, so a null count yields no
@@ -602,35 +613,57 @@ fn collapse_unused_generate_series(func: &mut TableFunc, exprs: &mut Vec<MirScal
         return;
     }
 
-    // Widen 32-bit `start`/`stop` to `i64` so the arithmetic below can't
-    // overflow the narrower type, and to produce the `i64` count that
-    // `RepeatRowNonNegative` expects.
-    let widen = matches!(func, TableFunc::GenerateSeriesInt32);
-    let to_i64 = |e: MirScalarExpr| {
-        if widen {
-            e.call_unary(func::CastInt32ToInt64)
-        } else {
-            e
-        }
-    };
-    let start = to_i64(exprs[0].clone());
-    let stop = to_i64(exprs[1].clone());
-
+    let int32 = matches!(func, TableFunc::GenerateSeriesInt32);
     let lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
 
     // The series is non-empty exactly when `stop` is on the far side of `start`
-    // in the direction of `step`.
+    // in the direction of `step`. Comparing the original (un-widened) bounds is
+    // overflow-free at any width.
     let non_empty = if step > 0 {
-        stop.clone().call_binary(start.clone(), func::Gte)
+        exprs[1].clone().call_binary(exprs[0].clone(), func::Gte)
     } else {
-        stop.clone().call_binary(start.clone(), func::Lte)
+        exprs[1].clone().call_binary(exprs[0].clone(), func::Lte)
     };
+
     // floor((stop - start) / step) + 1, valid (== truncating division) under the
-    // `non_empty` guard.
-    let cardinality = stop
-        .call_binary(start, func::SubInt64)
-        .call_binary(lit(step), func::DivInt64)
-        .call_binary(lit(1), func::AddInt64);
+    // `non_empty` guard. With `|step| == 1` an overflow of `stop - start` only
+    // occurs for infeasible series, so cheap `i64` arithmetic is safe; with
+    // `|step| >= 2` a feasible series can still overflow `i64`, so we compute in
+    // `numeric` (see the doc comment).
+    let cardinality = if step.abs() == 1 {
+        // Widen 32-bit `start`/`stop` to `i64` to produce the `i64` count that
+        // `RepeatRowNonNegative` expects.
+        let to_i64 = |e: MirScalarExpr| {
+            if int32 {
+                e.call_unary(func::CastInt32ToInt64)
+            } else {
+                e
+            }
+        };
+        let start = to_i64(exprs[0].clone());
+        let stop = to_i64(exprs[1].clone());
+        stop.call_binary(start, func::SubInt64)
+            .call_binary(lit(step), func::DivInt64)
+            .call_binary(lit(1), func::AddInt64)
+    } else {
+        // Cast the bounds to `numeric` so the span can't overflow, then floor the
+        // quotient (exact here) and cast back to the `i64` count.
+        let to_numeric = |e: MirScalarExpr| {
+            if int32 {
+                e.call_unary(func::CastInt32ToNumeric(None))
+            } else {
+                e.call_unary(func::CastInt64ToNumeric(None))
+            }
+        };
+        let numeric_lit = |v: i64| lit(v).call_unary(func::CastInt64ToNumeric(None));
+        let start = to_numeric(exprs[0].clone());
+        let stop = to_numeric(exprs[1].clone());
+        stop.call_binary(start, func::SubNumeric)
+            .call_binary(numeric_lit(step), func::DivNumeric)
+            .call_unary(func::FloorNumeric)
+            .call_binary(numeric_lit(1), func::AddNumeric)
+            .call_unary(func::CastNumericToInt64)
+    };
 
     *func = TableFunc::RepeatRowNonNegative;
     *exprs = vec![non_empty.if_then_else(cardinality, lit(0))];

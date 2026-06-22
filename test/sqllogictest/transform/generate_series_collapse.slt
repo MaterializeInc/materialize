@@ -68,7 +68,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)]
         Project ()
-          FlatMap repeat_row_non_negative(case when (integer_to_bigint(#1{y}) >= integer_to_bigint(#0{x})) then (((integer_to_bigint(#1{y}) - integer_to_bigint(#0{x})) / 1) + 1) else 0 end)
+          FlatMap repeat_row_non_negative(case when (#1{y} >= #0{x}) then (((integer_to_bigint(#1{y}) - integer_to_bigint(#0{x})) / 1) + 1) else 0 end)
             Project (#1, #2)
               ReadStorage materialize.public.series_bounds
   Return
@@ -162,7 +162,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)]
         Project ()
-          FlatMap repeat_row_non_negative(case when (integer_to_bigint(#1{y}) >= integer_to_bigint(#0{x})) then (((integer_to_bigint(#1{y}) - integer_to_bigint(#0{x})) / 2) + 1) else 0 end)
+          FlatMap repeat_row_non_negative(case when (#1{y} >= #0{x}) then numeric_to_bigint((floornumeric(((integer_to_numeric(#1{y}) - integer_to_numeric(#0{x})) / 2)) + 1)) else 0 end)
             Project (#1, #2)
               ReadStorage materialize.public.series_bounds
   Return
@@ -191,6 +191,52 @@ SELECT count(*) FROM series_bounds, generate_series(x, y, 2)
 
 query I
 SELECT count(*) FROM series_bounds, generate_series(y, x, -1)
+----
+6
+
+# C3: the column-bounds path handles a span too wide for i64 too. A coarse step
+# over near-opposite int8 extremes is a *feasible* series (here six rows) whose
+# span exceeds 2^63, so with a unit step the synthesized i64 arithmetic would be
+# fine only for infeasible series; with a larger step it must not overflow. We
+# do the arithmetic in numeric, so this counts correctly rather than erroring
+# (regression test: this query previously failed with "numeric field overflow").
+
+statement ok
+CREATE TABLE wide_bounds (lo bigint, hi bigint)
+
+statement ok
+INSERT INTO wide_bounds VALUES (-5000000000000000000, 5000000000000000000)
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT count(*) FROM wide_bounds, generate_series(lo, hi, 2000000000000000000)
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          FlatMap repeat_row_non_negative(case when (#1{hi} >= #0{lo}) then numeric_to_bigint((floornumeric(((bigint_to_numeric(#1{hi}) - bigint_to_numeric(#0{lo})) / 2000000000000000000)) + 1)) else 0 end)
+            ReadStorage materialize.public.wide_bounds
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Source materialize.public.wide_bounds
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT count(*) FROM wide_bounds, generate_series(lo, hi, 2000000000000000000)
 ----
 6
 
@@ -246,8 +292,8 @@ SELECT count(*) FROM series_bounds, generate_series(11, 2, 3)
 0
 
 # C4: a literal span too wide for i64 arithmetic still folds exactly when the
-# count fits: 10^19 / 10^18 + 1 = 11. (The column-bounds path would error on
-# this span; the literal path computes it in i128.)
+# count fits: 10^19 / 10^18 + 1 = 11. The literal path computes this in i128 at
+# rewrite time (the column-bounds path would reach for numeric; see C3 above).
 
 query I
 SELECT count(*) FROM generate_series(-5000000000000000000, 5000000000000000000, 1000000000000000000)
@@ -281,7 +327,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)]
         Project ()
-          FlatMap repeat_row_non_negative(case when (integer_to_bigint(#1{y}) >= integer_to_bigint(#0{x})) then (((integer_to_bigint(#1{y}) - integer_to_bigint(#0{x})) / 1) + 1) else 0 end)
+          FlatMap repeat_row_non_negative(case when (#1{y} >= #0{x}) then (((integer_to_bigint(#1{y}) - integer_to_bigint(#0{x})) / 1) + 1) else 0 end)
             Project (#1, #2)
               ReadStorage materialize.public.series_bounds
   Return
