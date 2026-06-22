@@ -2559,7 +2559,17 @@ impl RowPacker<'_> {
         // information.
         let cardinality = match dims {
             [] => 0,
-            dims => dims.iter().map(|d| d.length).product(),
+            // Saturate the product: a cardinality that overflows `usize` is
+            // impossibly large (no array can hold that many elements), so it can
+            // never equal the actual `nelements` and the check below rejects it as
+            // `WrongCardinality`. A plain `product()` would panic under overflow
+            // checks (debug/fuzz) and silently wrap in release — and a wrapped
+            // value could even spuriously match `nelements`, accepting a corrupt
+            // array (e.g. dims claiming `[2^32, 2^32]` wrap to 0 elements).
+            dims => dims
+                .iter()
+                .map(|d| d.length)
+                .fold(1usize, usize::saturating_mul),
         };
         if nelements != cardinality {
             self.row.data.truncate(start);
@@ -2602,7 +2612,10 @@ impl RowPacker<'_> {
         let mut cardinality: usize = 1;
         for dim in dims {
             num_dims += 1;
-            cardinality *= dim.length;
+            // Saturate: an overflowing cardinality is impossibly large and is
+            // rejected by the `nelements` check below. See the matching note in
+            // `push_array_with_unchecked`.
+            cardinality = cardinality.saturating_mul(dim.length);
 
             self.row
                 .data
@@ -3779,6 +3792,36 @@ mod tests {
             Err(InvalidArrayError::WrongCardinality {
                 actual: 2,
                 expected: 6,
+            })
+        );
+        assert!(row.data.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_array_cardinality_overflow() {
+        // Dimension lengths whose product overflows `usize` must be rejected as
+        // a `WrongCardinality` error, not panic (under overflow checks) or wrap
+        // (in release, which could spuriously accept a corrupt array). The
+        // product saturates to `usize::MAX`, which no real element count matches.
+        let mut row = Row::default();
+        let res = row.packer().try_push_array(
+            &[
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: usize::MAX,
+                },
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: 2,
+                },
+            ],
+            vec![Datum::Int32(1), Datum::Int32(2)],
+        );
+        assert_eq!(
+            res,
+            Err(InvalidArrayError::WrongCardinality {
+                actual: 2,
+                expected: usize::MAX,
             })
         );
         assert!(row.data.is_empty());
