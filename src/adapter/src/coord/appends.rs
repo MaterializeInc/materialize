@@ -118,7 +118,7 @@ pub struct DeferredPlan {
     /// bypassed `restrict_to_user_objects` for deferred reads (SQL-383).
     pub resolved_ids: ResolvedIds,
     /// Kept separate from `resolved_ids` to mirror the `sequence_plan`
-    /// signature; see [`rbac::check_plan`].
+    /// signature; see [`mz_sql::rbac::check_plan`].
     pub sql_impl_resolved_ids: ResolvedIds,
 }
 
