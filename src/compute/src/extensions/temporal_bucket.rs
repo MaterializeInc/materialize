@@ -9,13 +9,16 @@
 
 //! Utilities and stream extensions for temporal bucketing.
 
+use columnar::{Columnar, Index, Len};
 use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Batcher;
-use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
+use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::batcher::ColumnChunker;
+use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
+use timely::Accountable;
 use timely::container::PushInto;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
@@ -46,7 +49,7 @@ pub trait TemporalBucketing<'scope, T: Timestamp, O> {
 impl<'scope, T, D> TemporalBucketing<'scope, T, (D, T, mz_repr::Diff)>
     for StreamVec<'scope, T, (D, T, mz_repr::Diff)>
 where
-    T: Timestamp + ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice,
+    T: Timestamp + Default + ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice,
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
 {
     fn bucket<CB>(
@@ -133,15 +136,24 @@ where
                 let peeled = chain.peel(upper.borrow());
                 if let Some(cap) = cap.as_ref() {
                     let mut session = output.session_with_builder(cap);
-                    for stack in peeled.into_iter().flat_map(|x| x.done()) {
-                        // TODO: If we have a columnar merge batcher, cloning won't be necessary.
-                        session.give_iterator(stack.iter().cloned());
+                    for chunk in peeled.into_iter().flat_map(|x| x.done()) {
+                        // The columnar merge batcher hands back `Column` chunks; the output
+                        // builder consumes owned `(D, T, Diff)` tuples, so reconstitute each
+                        // record from its columnar reference.
+                        session.give_iterator(
+                            chunk
+                                .borrow()
+                                .into_index_iter()
+                                .map(<(D, T, mz_repr::Diff)>::into_owned),
+                        );
                     }
                 } else {
                     // If we don't have a cap, we should not have any data to reveal.
-                    assert_eq!(
-                        peeled.into_iter().flat_map(|x| x.done()).next(),
-                        None,
+                    assert!(
+                        peeled
+                            .into_iter()
+                            .flat_map(|x| x.done())
+                            .all(|chunk| chunk.record_count() == 0),
                         "Unexpected data revealed without a cap."
                     );
                 }
@@ -166,11 +178,13 @@ where
     }
 }
 
-/// A wrapper around `MergeBatcher` that implements the `Storage` trait for bucketing.
+/// A wrapper around [`ColumnMergeBatcher`] that implements the bucketing API.
 ///
-/// The merge batcher consumes pre-chunked input, so this wrapper carries a
-/// [`ColumnationChunker`] that consolidates the `Vec` input into the
-/// [`ColumnationStack`] chunks the batcher consumes.
+/// This is the same columnar-native merge batcher (`Col2ValPagedBatcher`) the
+/// default arrangement uses, so the bucket chain and arrangements share a single
+/// merge-batcher implementation. The batcher consumes pre-chunked, consolidated
+/// [`Column`] input, so this wrapper carries a [`ColumnChunker`] that sorts and
+/// consolidates the `Vec` input into the [`Column`] chunks the batcher consumes.
 struct MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Clone,
@@ -179,31 +193,45 @@ where
 {
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
-    chunker: ColumnationChunker<(D, T, R)>,
-    inner: MergeBatcher<ColInternalMerger<D, T, R>>,
+    chunker: ColumnChunker<(D, T, R)>,
+    inner: ColumnMergeBatcher<D, T, R>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Clone + 'static,
-    T: MzData + Ord + PartialOrder + Clone + Timestamp,
-    R: MzData + Semigroup + Default + 'static,
+    T: MzData + Ord + PartialOrder + Clone + Default + Timestamp,
+    R: MzData + Semigroup + Default + 'static + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    for<'a> columnar::Ref<'a, R>: Ord,
+    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
+    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
+    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
+    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
 {
     /// Construct a new `MergeBatcherWrapper` with the given logger and operator ID.
     fn new(logger: Option<differential_dataflow::logging::Logger>, operator_id: usize) -> Self {
         Self {
             logger: logger.clone(),
             operator_id,
-            chunker: ColumnationChunker::default(),
-            inner: MergeBatcher::new(logger, operator_id),
+            chunker: ColumnChunker::default(),
+            inner: ColumnMergeBatcher::new(logger, operator_id),
         }
     }
 
     /// Consolidate `buffer` through the chunker and feed any complete chunks to
-    /// the batcher.
+    /// the batcher. Empties `buffer`, retaining its capacity.
     fn push_container(&mut self, buffer: &mut Vec<(D, T, R)>) {
-        use timely::container::ContainerBuilder as _;
-        self.chunker.push_into(buffer);
+        use timely::container::{ContainerBuilder as _, PushInto as _};
+        if buffer.is_empty() {
+            return;
+        }
+        // The chunker consumes `Column` input, so stage the `Vec` updates into a
+        // raw `Column` first; the chunker then sorts and consolidates them.
+        let mut raw: Column<(D, T, R)> = Default::default();
+        for update in buffer.drain(..) {
+            raw.push_into(&update);
+        }
+        self.chunker.push_into(&mut raw);
         while let Some(chunk) = self.chunker.extract() {
             self.inner.push_into(std::mem::take(chunk));
         }
@@ -217,8 +245,8 @@ where
         }
     }
 
-    /// Reveal the contents of the `MergeBatcher`, returning a vector of `ColumnationStack`s.
-    fn done(mut self) -> Vec<ColumnationStack<(D, T, R)>> {
+    /// Reveal the contents of the merge batcher, returning a vector of `Column` chunks.
+    fn done(mut self) -> Vec<Column<(D, T, R)>> {
         self.flush();
         let (chain, _description) = self.inner.seal(Antichain::new());
         chain
@@ -228,25 +256,34 @@ where
 impl<D, T, R> Bucket for MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Clone + 'static,
-    T: MzData + Ord + PartialOrder + Clone + 'static + BucketTimestamp,
-    R: MzData + Semigroup + Default + 'static,
+    T: MzData + Ord + PartialOrder + Clone + Default + 'static + BucketTimestamp,
+    R: MzData + Semigroup + Default + 'static + for<'a> Semigroup<columnar::Ref<'a, R>>,
+    for<'a> columnar::Ref<'a, R>: Ord,
+    for<'a> <D as Columnar>::Container: columnar::Push<columnar::Ref<'a, D>>,
+    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
+    for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
+    for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<&'a (D, T, R)>,
 {
     type Timestamp = T;
 
     fn split(mut self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self) {
-        // The implementation isn't tuned for performance. We should not bounce in and out of
-        // different containers when not needed. The merge batcher we use can only accept
-        // vectors as inputs, but not any other container type.
-        // TODO: Allow the merge batcher to accept more generic containers.
+        // The implementation isn't tuned for performance: we round-trip the sealed
+        // chunks back through a `Vec` and re-chunk them into the lower batcher.
+        // TODO: Split the batcher's chains directly without re-chunking.
         self.flush();
         let upper = Antichain::from_elem(timestamp.clone());
         let mut lower = Self::new(self.logger.clone(), self.operator_id);
         let mut buffer = Vec::new();
         let (chain, _description) = self.inner.seal(upper);
         for chunk in chain {
-            *fuel = fuel.saturating_sub(chunk.len().try_into().expect("must fit"));
+            *fuel = fuel.saturating_sub(chunk.record_count());
             // TODO: Avoid this cloning.
-            buffer.extend(chunk.into_iter().cloned());
+            buffer.extend(
+                chunk
+                    .borrow()
+                    .into_index_iter()
+                    .map(<(D, T, R)>::into_owned),
+            );
             lower.push_container(&mut buffer);
             buffer.clear();
         }

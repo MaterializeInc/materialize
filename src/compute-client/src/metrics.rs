@@ -21,7 +21,7 @@ use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
     CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec,
-    IntCounterVec, MetricVecExt, MetricsRegistry, Rule,
+    IntCounterVec, MetricVecExt, MetricVisibility, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -74,157 +74,122 @@ pub struct ComputeControllerMetrics {
     shared: ControllerMetrics,
 }
 
-fn instance_name_rule() -> Rule {
-    Rule::ClusterNameLookup {
-        cluster_id_label: "instance_id".into(),
-        output_label: "instance_name".into(),
-    }
-}
-
-fn replica_name_rule() -> Rule {
-    Rule::ReplicaNameLookup {
-        cluster_id_label: "instance_id".into(),
-        replica_id_label: "replica_id".into(),
-        output_label: "replica_name".into(),
-    }
-}
-
 impl ComputeControllerMetrics {
     /// Create a metrics instance registered into the given registry.
     pub fn new(metrics_registry: &MetricsRegistry, shared: ControllerMetrics) -> Self {
-        let metrics = ComputeControllerMetrics {
+        ComputeControllerMetrics {
             commands_total: metrics_registry.register(metric!(
                 name: "mz_compute_commands_total",
                 help: "The total number of compute commands sent.",
                 var_labels: ["instance_id", "replica_id", "command_type"],
-                rules: [instance_name_rule(), replica_name_rule()],
+                visibility: MetricVisibility::Public,
             )),
             command_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_command_message_bytes_total",
                 help: "The total number of bytes sent in compute command messages.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             responses_total: metrics_registry.register(metric!(
                 name: "mz_compute_responses_total",
                 help: "The total number of compute responses sent.",
                 var_labels: ["instance_id", "replica_id", "response_type"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             response_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_response_message_bytes_total",
                 help: "The total number of bytes sent in compute response messages.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             replica_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_replica_count",
                 help: "The number of replicas.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             collection_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_collection_count",
                 help: "The number of installed compute collections.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             collection_unscheduled_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_collection_unscheduled_count",
                 help: "The number of installed but unscheduled compute collections.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             peek_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_peek_count",
                 help: "The number of pending peeks.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             subscribe_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_subscribe_count",
                 help: "The number of active subscribes.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             copy_to_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_copy_to_count",
                 help: "The number of active copy tos.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             command_queue_size: metrics_registry.register(metric!(
                 name: "mz_compute_controller_command_queue_size",
                 help: "The size of the compute command queue.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             response_send_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_response_send_count",
                 help: "The number of sends on the compute response queue.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             response_recv_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_response_recv_count",
                 help: "The number of receives on the compute response queue.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             hydration_queue_size: metrics_registry.register(metric!(
                 name: "mz_compute_controller_hydration_queue_size",
                 help: "The size of the compute hydration queue.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
+                visibility: MetricVisibility::Public,
             )),
             history_command_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_history_command_count",
                 help: "The number of commands in the controller's command history.",
                 var_labels: ["instance_id", "command_type"],
-                rules: [instance_name_rule()],
             )),
             history_dataflow_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_history_dataflow_count",
                 help: "The number of dataflows in the controller's command history.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             peeks_total: metrics_registry.register(metric!(
                 name: "mz_compute_peeks_total",
                 help: "The total number of peeks served.",
                 var_labels: ["instance_id", "result"],
-                rules: [instance_name_rule()],
             )),
             peek_duration_seconds: metrics_registry.register(metric!(
                 name: "mz_compute_peek_duration_seconds",
                 help: "A histogram of peek durations since restart.",
                 var_labels: ["instance_id", "result"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
-                rules: [instance_name_rule()],
+                visibility: MetricVisibility::Public,
             )),
             connected_replica_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_connected_replica_count",
                 help: "The number of replicas successfully connected to the compute controller.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             replica_connects_total: metrics_registry.register(metric!(
                 name: "mz_compute_controller_replica_connects_total",
                 help: "The total number of replica (re-)connections made by the compute controller.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             replica_connect_wait_time_seconds_total: metrics_registry.register(metric!(
                 name: "mz_compute_controller_replica_connect_wait_time_seconds_total",
                 help: "The total time the compute controller spent waiting for replica (re-)connection.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
 
             shared,
-        };
-
-        metrics
+        }
     }
 
     /// Return an object suitable for tracking metrics for the given compute instance.

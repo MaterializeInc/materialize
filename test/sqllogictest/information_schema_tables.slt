@@ -118,11 +118,11 @@ BASE TABLE
 materialize
 mz_catalog
 mz_cluster_replicas
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_clusters
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_columns
@@ -138,7 +138,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_default_privileges
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_egress_ips
@@ -214,11 +214,11 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_role_parameters
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_roles
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_schemas
@@ -246,7 +246,7 @@ VIEW
 materialize
 mz_catalog
 mz_system_privileges
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_tables
@@ -321,6 +321,10 @@ mz_cluster_replica_name_history
 VIEW
 materialize
 mz_internal
+mz_cluster_replica_size_internal
+BASE TABLE
+materialize
+mz_internal
 mz_cluster_replica_status_history
 SOURCE
 materialize
@@ -338,7 +342,11 @@ VIEW
 materialize
 mz_internal
 mz_cluster_schedules
-BASE TABLE
+MATERIALIZED VIEW
+materialize
+mz_internal
+mz_cluster_system_parameters
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_cluster_workload_classes
@@ -547,6 +555,10 @@ materialize
 mz_internal
 mz_replacements
 BASE TABLE
+materialize
+mz_internal
+mz_replica_system_parameters
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_session_history

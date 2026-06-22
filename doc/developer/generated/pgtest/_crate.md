@@ -1,6 +1,6 @@
 ---
 source: src/pgtest/src/lib.rs
-revision: e757b4d11b
+revision: 0c6fd21617
 ---
 
 # mz-pgtest

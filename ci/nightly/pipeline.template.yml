@@ -165,7 +165,7 @@ steps:
       - id: feature-benchmark
         label: "Feature benchmark against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 12
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
@@ -179,7 +179,7 @@ steps:
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         env:
           # Runs against Dockerhub directly
           MZ_GHCR: 0
@@ -204,7 +204,7 @@ steps:
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         env:
           # Runs against Dockerhub directly
@@ -233,7 +233,7 @@ steps:
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         env:
           # Runs against Dockerhub directly
@@ -260,7 +260,7 @@ steps:
       - id: parallel-benchmark
         label: "Parallel Benchmark"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 5
         agents:
           # Larger instance is more stable in performance
@@ -278,7 +278,7 @@ steps:
       - id: workload-replay
         label: "Workload Replay (1% initial data)"
         depends_on: build-x86_64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 5
         plugins:
           - ./ci/plugins/mzcompose:
@@ -658,7 +658,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=SqlServerCdc, --actions=10000, --max-execution-time=20m, --azurite]
-        skip: "database-issues#9855"
+        skip: "https://linear.app/materializeinc/issue/DB-113"
 
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
@@ -959,6 +959,21 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: secrets-local-file
 
+  - group: GCP
+    key: gcp
+    steps:
+      - id: gcp-real
+        label: GCP (Real)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        agents:
+          # because of GCP access
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: gcp
+        skip: "https://linear.app/materializeinc/issue/SS-279"
+
   - group: "Platform checks"
     key: platform-checks
     steps:
@@ -1217,7 +1232,7 @@ steps:
         label: "K8s recovery: envd on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1245,7 +1260,7 @@ steps:
         label: "K8s recovery: storage on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1273,7 +1288,7 @@ steps:
         label: "K8s recovery: compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1301,7 +1316,7 @@ steps:
         label: "K8s recovery: replicated compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1436,6 +1451,17 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: launchdarkly
 
+      - id: launchdarkly-flag-consistency
+        label: "LaunchDarkly flag consistency"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        agents:
+          # Requires LAUNCHDARKLY_API_TOKEN
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: launchdarkly-flag-consistency
+
   - group: E2E
     key: e2e
     steps:
@@ -1483,13 +1509,14 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize-terraform-self-managed#131"
 
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
       artifact_paths: [test/terraform/aws-upgrade/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 60
+      # ~26 min EKS setup + ~5 min per upgrade step + tests + ~18 min destroy
+      # (cleanup runs in the pre-exit hook, inside the job timeout)
+      timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-upgrade-aws'
       agents:
@@ -1508,7 +1535,6 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize-terraform-self-managed#131"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
@@ -1527,6 +1553,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      skip: "materialize-terraform-self-managed#157"
 
     - id: terraform-azure
       label: "Terraform + Helm Chart E2E on Azure"
@@ -1762,7 +1789,7 @@ steps:
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
         depends_on: build-aarch64
-        skip: "flaky until database-issues#7713 is fixed"
+        skip: "flaky until https://linear.app/materializeinc/issue/DB-141 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1785,7 +1812,7 @@ steps:
       - id: rqg-window-functions
         label: "RQG window functions workload"
         depends_on: build-aarch64
-        skip: "flaky until database-issues#8366 is fixed"
+        skip: "flaky until https://linear.app/materializeinc/issue/DB-137 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1852,7 +1879,7 @@ steps:
   - id: retain-history
     label: "Check retain history"
     depends_on: build-aarch64
-    skip: "database-issues#7310"
+    skip: "https://linear.app/materializeinc/issue/DB-144"
     timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-4cpu-8gb
@@ -2435,6 +2462,32 @@ steps:
               composition: orchestratord
               run: clusterd-generation-scheduling
               args: [--recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-v1-opt-in
+        label: "Orchestratord v1 opt-in tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: v1-opt-in
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-manually-promote
+        label: "Orchestratord ManuallyPromote tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: manually-promote
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

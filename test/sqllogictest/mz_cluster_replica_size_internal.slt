@@ -1,0 +1,70 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# mz_cluster_replica_size_internal is a system-only sidecar to
+# mz_cluster_replica_sizes. `swap_enabled` and `disk_bytes` are inputs to
+# the `disk` column of the mz_clusters / mz_cluster_replicas MVs; they
+# must stay locked down to the system user.
+
+statement error permission denied for TABLE
+SELECT * FROM mz_internal.mz_cluster_replica_size_internal
+
+# The mz_system user can query it.
+
+simple conn=mz_system,user=mz_system
+SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_size_internal;
+----
+t
+COMPLETE 1
+
+# Every public size has a corresponding internal row, AND the internal table
+# also includes disabled sizes (which are filtered out of the public table).
+# This is required so cluster_replica_size_has_disk's old semantics — that
+# managed clusters pinned to a disabled size still resolve `disk` from the
+# real allocation — are preserved by the MVs.
+
+simple conn=mz_system,user=mz_system
+SELECT count(*) FROM mz_catalog.mz_cluster_replica_sizes s
+WHERE NOT EXISTS (
+    SELECT 1 FROM mz_internal.mz_cluster_replica_size_internal i
+    WHERE i.size = s.size
+);
+----
+0
+COMPLETE 1
+
+# Internal table is a superset of the public table (>= rows).
+
+simple conn=mz_system,user=mz_system
+SELECT
+    (SELECT count(*) FROM mz_internal.mz_cluster_replica_size_internal)
+    >= (SELECT count(*) FROM mz_catalog.mz_cluster_replica_sizes);
+----
+t
+COMPLETE 1
+
+# Schema: size, swap_enabled, disk_bytes — no other columns leak in.
+
+simple conn=mz_system,user=mz_system
+SELECT name, type
+FROM mz_catalog.mz_columns
+WHERE id = (SELECT id FROM mz_catalog.mz_objects
+            WHERE name = 'mz_cluster_replica_size_internal'
+              AND schema_id = (SELECT id FROM mz_catalog.mz_schemas
+                               WHERE name = 'mz_internal'))
+ORDER BY position;
+----
+size,text
+swap_enabled,boolean
+disk_bytes,uint8
+COMPLETE 3

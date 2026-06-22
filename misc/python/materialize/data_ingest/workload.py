@@ -283,7 +283,18 @@ def execute_workload(
     for i in range(random.randint(1, 10)):
         fields.append(Field(f"key{i}", random.choice(DATA_TYPES_FOR_KEY), True))
     for i in range(random.randint(0, 20)):
-        fields.append(Field(f"value{i}", random.choice(DATA_TYPES_FOR_AVRO), False))
+        # Randomly make value columns nullable so the Avro-backed executor
+        # encodes them as `["null", T]` unions, exercising union schema
+        # resolution. Generated values are never None, so this is transparent
+        # to the value-equality check against the Postgres source of truth.
+        fields.append(
+            Field(
+                f"value{i}",
+                random.choice(DATA_TYPES_FOR_AVRO),
+                False,
+                nullable=random.choice([True, False]),
+            )
+        )
     print(f"With fields: {fields}")
 
     executors = [

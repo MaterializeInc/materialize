@@ -143,6 +143,13 @@ skip = [
     { name = "untrusted", version = "0.7.1" },
     # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
     { name = "spin", version = "0.5.2" },
+    # held back by tower-lsp 0.20 (mz-deploy LSP server)
+    { name = "dashmap", version = "5.5.3" },
+    { name = "tower", version = "0.4.13" },
+    # held back by rusqlite 0.32 (mz-deploy build cache)
+    { name = "hashlink", version = "0.9.1" },
+    # held back by owo-colors 4.3 (mz-deploy terminal styling)
+    { name = "supports-color", version = "2.1.0" },
 ]
 
 [[bans.deny]]
@@ -209,6 +216,8 @@ wrappers = [
     "rdkafka",
     "reqsign",
     "reqwest",
+    "rustls",
+    "sqlparser",
     "tokio-postgres",
     "tokio-tungstenite",
     "tracing-log",
@@ -217,13 +226,6 @@ wrappers = [
     "want",
     "zopfli",
 ]
-
-# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used. `gcp_auth` only ships with rustls-based TLS,
-# so allow it through.
-[[bans.deny]]
-name = "rustls"
-wrappers = ["hyper-rustls", "tokio-rustls"]
 
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.
@@ -279,6 +281,9 @@ ignore = [
     # rand unsoundness when a custom logger accesses ThreadRng during reseeding.
     # Affects transitive deps (rand 0.7.3 via http-types, rand 0.8.5 via fail/quickcheck/etc).
     "RUSTSEC-2026-0097",
+    # Allows private key leakage through timing information
+    # rsa is required through iceberg-storage-opendal
+    "RUSTSEC-2023-0071",
 ]
 
 # Must be manually kept in sync with about.toml.
@@ -289,7 +294,6 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "CC0-1.0",
-    "CDLA-Permissive-2.0",
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
@@ -297,10 +301,8 @@ allow = [
     "ISC",
     "MIT",
     "MPL-2.0",
-    "OpenSSL",
     "Zlib",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
 ]
 # copyleft is denied by default
 private = { ignore = true }

@@ -42,7 +42,9 @@ use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{instrument, soft_assert_eq_or_log, soft_assert_no_log, soft_assert_or_log};
+use mz_ore::{
+    instrument, soft_assert_eq_or_log, soft_assert_no_log, soft_assert_or_log, soft_panic_or_log,
+};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
@@ -315,6 +317,24 @@ impl CatalogState {
             StateUpdateKind::SystemConfiguration(system_configuration) => {
                 self.apply_system_configuration_update(system_configuration, diff, retractions);
             }
+            StateUpdateKind::ClusterSystemConfiguration(cfg) => {
+                Self::apply_scoped_system_configuration_update(
+                    &mut self.scoped_system_parameters.cluster,
+                    cfg.cluster_id,
+                    cfg.name,
+                    cfg.value,
+                    diff,
+                );
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(cfg) => {
+                Self::apply_scoped_system_configuration_update(
+                    &mut self.scoped_system_parameters.replica,
+                    cfg.replica_id,
+                    cfg.name,
+                    cfg.value,
+                    diff,
+                );
+            }
             StateUpdateKind::Cluster(cluster) => {
                 self.apply_cluster_update(cluster, diff, retractions);
             }
@@ -524,6 +544,43 @@ impl CatalogState {
         }
     }
 
+    /// Applies a durable update to one of the in-memory scoped-parameter working
+    /// copies (`scoped_system_parameters.{cluster,replica}`), keyed by object
+    /// id. Mirrors the durable `{cluster,replica}_system_configurations`
+    /// collections; the cluster copy is consumed at plan time via
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`], the replica copy at
+    /// the compute controller's per-replica dyncfg push.
+    ///
+    /// Retraction is conditional on the value matching, so a value change
+    /// (retraction of the old value + addition of the new) is correct regardless
+    /// of the order the two updates are applied in. See the scoped feature flags
+    /// design.
+    ///
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`]: crate::catalog::CatalogState::cluster_scoped_optimizer_overrides
+    fn apply_scoped_system_configuration_update<Id: Ord>(
+        map: &mut BTreeMap<Id, BTreeMap<String, String>>,
+        id: Id,
+        name: String,
+        value: String,
+        diff: StateDiff,
+    ) {
+        match diff {
+            StateDiff::Addition => {
+                map.entry(id).or_default().insert(name, value);
+            }
+            StateDiff::Retraction => {
+                if let Some(values) = map.get_mut(&id) {
+                    if values.get(&name) == Some(&value) {
+                        values.remove(&name);
+                        if values.is_empty() {
+                            map.remove(&id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[instrument(level = "debug")]
     fn apply_cluster_update(
         &mut self,
@@ -531,6 +588,25 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
+        // Soft signal for a managed cluster whose replica size isn't in
+        // the in-memory size map. The `mz_clusters` MV LEFT JOINs the size
+        // table and resolves `disk` to false when the size is missing, so
+        // this case no longer crashes a managed cluster with RF=0.
+        // A managed cluster with at least one running replica still panics
+        // via `concretize_replica_location` in `apply_cluster_replica_update`.
+        if matches!(diff, StateDiff::Addition) {
+            if let mz_catalog::durable::ClusterVariant::Managed(managed) = &cluster.config.variant {
+                if !self.cluster_replica_sizes.0.contains_key(&managed.size) {
+                    soft_panic_or_log!(
+                        "managed cluster {} ({}) references unknown replica size {:?}; \
+                         mz_clusters.disk will resolve to false",
+                        cluster.name,
+                        cluster.id,
+                        managed.size,
+                    );
+                }
+            }
+        }
         apply_inverted_lookup(&mut self.clusters_by_name, &cluster.name, cluster.id, diff);
         apply_with_update(
             &mut self.clusters_by_id,
@@ -632,9 +708,38 @@ impl CatalogState {
             .clusters_by_id
             .get(&cluster_replica.cluster_id)
             .expect("catalog out of sync");
-        let azs = cluster.availability_zones();
+
+        // Mirror the cluster-side soft signal: if a managed replica's size
+        // is no longer in the in-memory size map, skip in-memory
+        // registration rather than panicking. The mz_cluster_replicas MV
+        // resolves `disk` from mz_cluster_replica_size_internal (which
+        // retains rows for disabled sizes), so SQL still returns sensible
+        // results. We tolerate disabled sizes here (allow_disabled=true)
+        // because an existing replica must remain queryable even if the
+        // operator has since disabled its size.
+        if let mz_catalog::durable::ReplicaLocation::Managed { size, .. } =
+            &cluster_replica.config.location
+        {
+            if !self.cluster_replica_sizes.0.contains_key(size) {
+                soft_panic_or_log!(
+                    "cluster replica {}.{} ({}) references unknown replica size {:?}; \
+                     skipping in-memory registration",
+                    cluster.name,
+                    cluster_replica.name,
+                    cluster_replica.replica_id,
+                    size,
+                );
+                return;
+            }
+        }
+
+        // Pass no availability-zone override: a rebuild from the durable record
+        // keeps the AZ list the replica was provisioned under, which may differ
+        // from the cluster's current pool while a graceful reconfiguration is in
+        // flight — the cluster controller tells realized- from target-shape
+        // replicas by exactly this list.
         let location = self
-            .concretize_replica_location(cluster_replica.config.location, &vec![], azs)
+            .concretize_replica_location(cluster_replica.config.location, &vec![], None, true)
             .expect("catalog in unexpected state");
         let cluster = self
             .clusters_by_id
@@ -1385,31 +1490,36 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let diff = diff.into();
         match kind {
-            StateUpdateKind::Role(role) => self.pack_role_update(role.id, diff),
+            // mz_roles and mz_role_parameters are MaterializedViews backed by
+            // mz_internal.mz_catalog_raw, so role rows do not produce builtin
+            // table updates here.
+            StateUpdateKind::Role(_) => Vec::new(),
             StateUpdateKind::RoleAuth(role_auth) => {
                 vec![self.pack_role_auth_update(role_auth.role_id, diff)]
             }
-            StateUpdateKind::DefaultPrivilege(default_privilege) => {
-                vec![self.pack_default_privileges_update(
-                    &default_privilege.object,
-                    &default_privilege.acl_item.grantee,
-                    &default_privilege.acl_item.acl_mode,
-                    diff,
-                )]
-            }
-            StateUpdateKind::SystemPrivilege(system_privilege) => {
-                vec![self.pack_system_privileges_update(system_privilege, diff)]
-            }
+            // mz_default_privileges and mz_system_privileges are MaterializedViews
+            // backed by mz_internal.mz_catalog_raw, so privilege rows do not
+            // produce builtin table updates here.
+            StateUpdateKind::DefaultPrivilege(_) => Vec::new(),
+            StateUpdateKind::SystemPrivilege(_) => Vec::new(),
             StateUpdateKind::SystemConfiguration(_) => Vec::new(),
-            StateUpdateKind::Cluster(cluster) => self.pack_cluster_update(&cluster.name, diff),
+            // mz_internal.mz_{cluster,replica}_system_parameters are
+            // MaterializedViews backed by mz_internal.mz_catalog_raw, so the
+            // durable scoped-configuration rows do not produce builtin table
+            // updates here. (The in-memory working copy used for resolution is
+            // maintained separately in `apply_*_system_configuration_update`.)
+            StateUpdateKind::ClusterSystemConfiguration(_) => Vec::new(),
+            StateUpdateKind::ReplicaSystemConfiguration(_) => Vec::new(),
+            // mz_clusters and mz_cluster_schedules are MaterializedViews backed
+            // by mz_internal.mz_catalog_raw, so cluster rows do not produce
+            // builtin table updates here.
+            StateUpdateKind::Cluster(_) => Vec::new(),
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.pack_item_update(introspection_source_index.item_id, diff)
             }
-            StateUpdateKind::ClusterReplica(cluster_replica) => self.pack_cluster_replica_update(
-                cluster_replica.cluster_id,
-                &cluster_replica.name,
-                diff,
-            ),
+            // mz_cluster_replicas is a MaterializedView backed by
+            // mz_internal.mz_catalog_raw.
+            StateUpdateKind::ClusterReplica(_) => Vec::new(),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 // Runtime-alterable system objects have real entries in the
                 // items collection and so get handled through the normal
@@ -2198,8 +2308,10 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 &mut pre_cluster_additions,
             ),
             StateUpdateKind::Cluster(_)
+            | StateUpdateKind::ClusterSystemConfiguration(_)
             | StateUpdateKind::IntrospectionSourceIndex(_)
-            | StateUpdateKind::ClusterReplica(_) => push_update(
+            | StateUpdateKind::ClusterReplica(_)
+            | StateUpdateKind::ReplicaSystemConfiguration(_) => push_update(
                 update,
                 diff,
                 &mut cluster_retractions,
@@ -2545,6 +2657,8 @@ impl ApplyState {
             | DefaultPrivilege(_)
             | SystemPrivilege(_)
             | SystemConfiguration(_)
+            | ClusterSystemConfiguration(_)
+            | ReplicaSystemConfiguration(_)
             | Cluster(_)
             | NetworkPolicy(_)
             | ClusterReplica(_)

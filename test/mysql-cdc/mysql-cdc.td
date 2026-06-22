@@ -205,7 +205,7 @@ contains:Connection refused
 # TODO: database-issues#7490 (misleading error message)
 # contains:error connecting to server: Connection refused
 
-# TODO: database-issues#7587 (error not stable)
+# TODO: https://linear.app/materializeinc/issue/SS-315 (error not stable)
 # ! CREATE CONNECTION no_such_user TO MYSQL (
 #     HOST mysql,
 #     USER no_such_user,

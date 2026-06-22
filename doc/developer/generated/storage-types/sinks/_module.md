@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sinks.rs
-revision: 9c9b2926db
+revision: 4c35690026
 ---
 
 # storage-types::sinks
@@ -8,7 +8,7 @@ revision: 9c9b2926db
 Defines `StorageSinkDesc`, the full description of a storage sink dataflow, parameterised over metadata type `S` and timestamp `T`.
 `StorageSinkConnection` enumerates the supported sink backends: `Kafka` and `Iceberg`.
 `SinkEnvelope` covers three variants: `Debezium` (Kafka only), `Upsert`, and `Append` (Iceberg only).
-`KafkaSinkConnection` carries topic, format, compression, key/value descriptors, partition-by expression, and ID style fields; `IcebergSinkConnection` carries catalog and AWS connection references, namespace, table, and key descriptors.
+`KafkaSinkConnection` carries topic, format, compression, key/value descriptors, partition-by expression, and ID style fields; `IcebergSinkConnection` carries catalog connection references, an optional storage connection (currently unused — S3 Tables and BigLake/Lakehouse each reuse the same connection for both catalog and storage), namespace, table, and key descriptors.
 `KafkaSinkFormat` and `KafkaSinkFormatType` describe the key/value encoding (Avro, JSON, Text, or Bytes).
 `KafkaSinkCompressionType` maps to librdkafka compression options (none, gzip, snappy, lz4, zstd).
 `KafkaIdStyle` distinguishes prefixed (new-style) from legacy IDs for progress group and transactional IDs.

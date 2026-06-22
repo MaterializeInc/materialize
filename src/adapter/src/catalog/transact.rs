@@ -73,6 +73,7 @@ use crate::catalog::{
     is_reserved_role_name, object_type_to_audit_object_type,
     system_object_type_to_audit_object_type,
 };
+use crate::config::ScopedParameters;
 use crate::coord::ConnMeta;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::coord::cluster_scheduling::SchedulingDecision;
@@ -244,6 +245,16 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
+    /// Persists the durable cache of scoped (per-cluster and per-replica)
+    /// system parameters to match `scoped`, the complete desired state computed
+    /// by the system-parameter sync loop (the sole writer). The handler diffs
+    /// against the current durable contents: it upserts changed/added entries
+    /// and removes entries the sync loop no longer serves, and lazily prunes
+    /// entries whose owning object id is absent from the catalog. See the
+    /// scoped feature flags design.
+    UpdateScopedSystemParameters {
+        scoped: ScopedParameters,
+    },
     /// Injects audit events into the catalog.
     ///
     /// This is a nonstandard path used for manually appending audit events at the current time.
@@ -2691,6 +2702,67 @@ impl Catalog {
                     EventDetails::ResetAllV1,
                 )?;
             }
+            Op::UpdateScopedSystemParameters { scoped } => {
+                // The sync loop pushes the *complete* desired state each tick;
+                // diff it against the durable cache and persist only the delta.
+                // Entries whose owning object id is absent from the catalog are
+                // pruned (lazy GC); object ids are never reused, so such entries
+                // are inert and pruning is hygiene only.
+                let live_clusters: BTreeSet<ClusterId> =
+                    tx.get_clusters().map(|cluster| cluster.id).collect();
+                let live_replicas: BTreeSet<ReplicaId> = tx
+                    .get_cluster_replicas()
+                    .map(|replica| replica.replica_id)
+                    .collect();
+
+                // Cluster-coherent scope.
+                let existing_cluster: BTreeMap<(ClusterId, String), String> = tx
+                    .get_cluster_system_configurations()
+                    .map(|c| ((c.cluster_id, c.name), c.value))
+                    .collect();
+                let mut desired_cluster: BTreeSet<(ClusterId, String)> = BTreeSet::new();
+                for (cluster_id, values) in &scoped.cluster {
+                    if !live_clusters.contains(cluster_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_cluster.insert((*cluster_id, name.clone()));
+                        if existing_cluster.get(&(*cluster_id, name.clone())) != Some(value) {
+                            tx.upsert_cluster_system_config(*cluster_id, name, value.clone())?;
+                        }
+                    }
+                }
+                // Non-live clusters never enter `desired_cluster` (they `continue`
+                // above), so a missing entry already covers dropped clusters.
+                for (cluster_id, name) in existing_cluster.into_keys() {
+                    if !desired_cluster.contains(&(cluster_id, name.clone())) {
+                        tx.remove_cluster_system_config(cluster_id, &name);
+                    }
+                }
+
+                // Replica-local scope.
+                let existing_replica: BTreeMap<(ReplicaId, String), String> = tx
+                    .get_replica_system_configurations()
+                    .map(|r| ((r.replica_id, r.name), r.value))
+                    .collect();
+                let mut desired_replica: BTreeSet<(ReplicaId, String)> = BTreeSet::new();
+                for (replica_id, values) in &scoped.replica {
+                    if !live_replicas.contains(replica_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_replica.insert((*replica_id, name.clone()));
+                        if existing_replica.get(&(*replica_id, name.clone())) != Some(value) {
+                            tx.upsert_replica_system_config(*replica_id, name, value.clone())?;
+                        }
+                    }
+                }
+                for (replica_id, name) in existing_replica.into_keys() {
+                    if !desired_replica.contains(&(replica_id, name.clone())) {
+                        tx.remove_replica_system_config(replica_id, &name);
+                    }
+                }
+            }
             Op::InjectAuditEvents { events } => {
                 for event in events {
                     let id = tx.allocate_audit_log_id()?;
@@ -3010,31 +3082,33 @@ impl ObjectsToDrop {
 
                 // Implicitly drop materialized views that target this replica.
                 // When the target replica is gone, no replica advances the
-                // persist shard's upper frontier, causing reads to hang.
+                // persist shard's upper frontier, causing reads to hang. Cascade
+                // to anything depending on the implicitly-dropped MV so we don't
+                // leave dangling references in the catalog.
                 //
-                // Also cascade to anything depending on the implicitly-dropped
-                // MV so we don't leave dangling references in the catalog.
-                // Plan-driven drops already include these via
-                // `cluster_replica_dependents`; this branch handles internal
-                // callers that build `Op::DropObjects` directly without going
-                // through the plan stage.
+                // Plan-driven drops already include these dependents as their
+                // own `DropObjectInfo::Item` entries (the plan stage expands
+                // them via `cluster_replica_dependents`), so each one's comment
+                // is recorded by the top-of-function `self.comments` insert.
+                // This branch handles internal callers that build
+                // `Op::DropObjects` directly with only the replica, so we expand
+                // the dependents and record their comments ourselves.
+                //
+                // `seen` is seeded from the items already collected so that the
+                // plan-driven path (where the dependents are processed before
+                // the replica, in reverse-dependency order) does not re-add them
+                // here.
                 let mut seen: BTreeSet<ObjectId> =
                     self.items.iter().copied().map(ObjectId::Item).collect();
-                for item_id in &cluster.bound_objects {
-                    let entry = state.get_entry(item_id);
-                    if let CatalogItem::MaterializedView(mv) = entry.item()
-                        && mv.target_replica == Some(replica_id)
-                        && !seen.contains(&ObjectId::Item(*item_id))
-                    {
+                for dep in state.cluster_replica_dependents(cluster_id, replica_id, &mut seen) {
+                    if let ObjectId::Item(dep_id) = dep {
                         info!(
-                            "implicitly dropping materialized view {} because target replica was dropped",
-                            entry.name().item,
+                            "implicitly dropping {} because target replica was dropped",
+                            state.get_entry(&dep_id).name().item,
                         );
-                        for dep in state.item_dependents(*item_id, &mut seen) {
-                            if let ObjectId::Item(dep_id) = dep {
-                                self.items.push(dep_id);
-                            }
-                        }
+                        self.comments
+                            .insert(state.get_comment_id(ObjectId::Item(dep_id)));
+                        self.items.push(dep_id);
                     }
                 }
             }

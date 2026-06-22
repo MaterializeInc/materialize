@@ -21,12 +21,15 @@ use std::time::Duration;
 use differential_dataflow::capture::{Message, Progress};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
+use mz_interchange::avro::WriterSchemaProvider;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
-use mz_storage_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
+use mz_storage_types::sources::encoding::{
+    AvroEncoding, CsvDecoderState, DataEncoding, RegexEncoding,
+};
 use mz_storage_types::wire_format::WireFormat;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -42,14 +45,12 @@ use timely::scheduling::SyncActivator;
 use tracing::error;
 
 use crate::decode::avro::AvroDecoderState;
-use crate::decode::csv::CsvDecoderState;
 use crate::decode::protobuf::ProtobufDecoderState;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::decode::DecodeMetricDefs;
 use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
-mod csv;
 mod protobuf;
 
 /// Decode delimited CDCv2 messages.
@@ -357,29 +358,54 @@ async fn get_decoder(
         }) => {
             // Only the Confluent variant is reachable from SQL today; Glue
             // is not yet wired to the planner.
-            let (csr_client, confluent_wire_format) = match wire_format {
-                WireFormat::None => (None, false),
-                WireFormat::Confluent { registry: None } => (None, true),
-                WireFormat::Confluent {
-                    registry: Some(csr_connection),
-                } => {
-                    let client = csr_connection
-                        .connect(storage_configuration, InTask::Yes)
-                        .await?;
-                    (Some(client), true)
+
+            let writer_schemas = match wire_format {
+                WireFormat::None => WriterSchemaProvider::None,
+                WireFormat::Confluent { registry } => {
+                    let client = match registry {
+                        None => None,
+                        Some(csr_connection) => Some(
+                            csr_connection
+                                .connect(storage_configuration, InTask::Yes)
+                                .await?,
+                        ),
+                    };
+                    WriterSchemaProvider::confluent(client)
                 }
-                WireFormat::Glue { .. } => {
-                    unreachable!("AWS Glue Schema Registry not supported yet")
+                WireFormat::Glue { registry } => {
+                    let client_with_registry = match registry {
+                        None => None,
+                        Some(glue_connection) => {
+                            let enforce_external_addresses =
+                                mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                                    .get(storage_configuration.config_set());
+                            let sdk_config = glue_connection
+                                .aws_connection
+                                .connection
+                                .load_sdk_config(
+                                    &storage_configuration.connection_context,
+                                    glue_connection.aws_connection.connection_id,
+                                    InTask::Yes,
+                                    enforce_external_addresses,
+                                )
+                                .await?;
+                            let client =
+                                mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
+                            Some((client, glue_connection.registry_name.clone()))
+                        }
+                    };
+                    WriterSchemaProvider::glue(client_with_registry)
                 }
             };
             let state = avro::AvroDecoderState::new(
                 &schema,
                 &reference_schemas,
-                csr_client,
+                writer_schemas,
                 debug_name.to_string(),
-                confluent_wire_format,
             )
-            .expect("Failed to create avro decoder, even though we validated ccsr client creation in purification.");
+            .expect(
+                "avro decoder construction is infallible once writer-schema setup has succeeded",
+            );
             DataDecoder {
                 inner: DataDecoderInner::Avro(state),
                 metrics,

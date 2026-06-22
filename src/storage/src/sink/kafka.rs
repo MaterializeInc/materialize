@@ -596,16 +596,23 @@ async fn collect_statistics(
     mut receiver: watch::Receiver<Statistics>,
     metrics: Arc<KafkaSinkMetrics>,
 ) {
-    let mut outbuf_cnt: i64 = 0;
-    let mut outbuf_msg_cnt: i64 = 0;
-    let mut waitresp_cnt: i64 = 0;
-    let mut waitresp_msg_cnt: i64 = 0;
-    let mut txerrs: u64 = 0;
-    let mut txretries: u64 = 0;
-    let mut req_timeouts: u64 = 0;
-    let mut connects: i64 = 0;
-    let mut disconnects: i64 = 0;
     while receiver.changed().await.is_ok() {
+        // The librdkafka per-broker statistics are either running totals (counters)
+        // or point-in-time values (gauges). In both cases we aggregate across brokers
+        // by re-summing from scratch each interval, so these accumulators are reset
+        // every time statistics are fetched.
+        //
+        // see <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_STATISTICS.html#autotoc_md121>
+        let mut outbuf_cnt: i64 = 0;
+        let mut outbuf_msg_cnt: i64 = 0;
+        let mut waitresp_cnt: i64 = 0;
+        let mut waitresp_msg_cnt: i64 = 0;
+        let mut txerrs: u64 = 0;
+        let mut txretries: u64 = 0;
+        let mut req_timeouts: u64 = 0;
+        let mut connects: i64 = 0;
+        let mut disconnects: i64 = 0;
+
         let stats = receiver.borrow();
         for broker in stats.brokers.values() {
             outbuf_cnt += broker.outbuf_cnt;

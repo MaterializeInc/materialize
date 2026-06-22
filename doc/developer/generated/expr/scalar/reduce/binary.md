@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/reduce/binary.rs
-revision: 5d046b3ab6
+revision: ed05cf7584
 ---
 
 # mz-expr::scalar::reduce::binary
@@ -18,6 +18,7 @@ These fire before any per-function dispatch and short-circuit with a `return`:
 - **Constant folding** — if both operands are literals, evaluate the entire expression and replace it with a literal.
 - **Null propagation** — if either operand is `NULL` and the function propagates nulls, replace with a typed `NULL` literal.
 - **Error propagation** — if either operand is a literal error, propagate that error as a literal.
+- **Identity elimination** (`reduce_call_binary_identity`) — if a literal operand is the identity element for the function (e.g. adding zero, subtracting a zero interval, `substr(s, 1)`) and evaluation at that identity is infallible and null-propagating, replace the call with the other operand. Only patterns where the identity cannot change error or null behavior are included; floats and numerics are excluded.
 
 ### Per-function specializations
 

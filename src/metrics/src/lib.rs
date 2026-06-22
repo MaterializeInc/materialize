@@ -83,6 +83,53 @@ pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_se
     });
 }
 
+/// Returns the `(name, help, labels, source)` of every metric this crate
+/// registers through a `metric!`-wrapping macro (lgalloc and rusage).
+///
+/// The metrics catalog (`mz-metrics-catalog`) builds the user-facing metrics
+/// docs by scraping `metric!` invocations out of the source with `syn`. These
+/// metrics are invisible to that scraper because their names are assembled at
+/// macro-expansion time, so the catalog
+/// imports them from here instead: it registers them into a throwaway registry
+/// and reads their descriptors back out.
+pub fn describe_metrics() -> Vec<(String, String, Vec<String>, &'static str)> {
+    let registry = MetricsRegistry::new();
+
+    let tag = |descs: Vec<(String, String, Vec<String>)>, src: &'static str| {
+        descs
+            .into_iter()
+            .map(move |(name, help, labels)| (name, help, labels, src))
+    };
+
+    let mut out = Vec::new();
+    out.extend(tag(
+        lgalloc::register_metrics_into(&registry).descs(),
+        lgalloc::SOURCE,
+    ));
+    out.extend(tag(
+        lgalloc::register_map_metrics_into(&registry).descs(),
+        lgalloc::SOURCE,
+    ));
+    out.extend(tag(
+        rusage::register_metrics_into(&registry).descs(),
+        rusage::SOURCE,
+    ));
+    out
+}
+
+/// Extracts a metric's label keys from its Prometheus descriptor
+pub(crate) fn desc_labels(desc: &prometheus::core::Desc) -> Vec<String> {
+    let mut labels: Vec<String> = desc
+        .variable_labels
+        .iter()
+        .cloned()
+        .chain(desc.const_label_pairs.iter().map(|p| p.name().to_owned()))
+        .collect();
+    labels.sort();
+    labels.dedup();
+    labels
+}
+
 /// Update the configuration of the metrics.
 pub fn update_dyncfg(config_updates: &ConfigUpdates) {
     if let Some(metrics) = METRICS.lock().expect("lock poisoned").as_mut() {

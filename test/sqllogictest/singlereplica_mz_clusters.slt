@@ -1,0 +1,268 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural lockdown tests for mz_catalog.mz_clusters.
+
+mode cockroach
+
+reset-server
+
+# AVAILABILITY ZONES on managed clusters is gated behind a private-preview
+# feature flag; enable it so the AZ-related assertions below can run.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_managed_cluster_availability_zones TO true;
+----
+COMPLETE 0
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 11 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_clusters' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+name  text  false
+owner_id  text  false
+privileges  mz_aclitem[]  false
+managed  boolean  false
+size  text  true
+replication_factor  uint4  true
+disk  boolean  true
+availability_zones  list  true
+introspection_debugging  boolean  true
+introspection_interval  interval  true
+
+# --- System clusters ----------------------------------------------------------
+
+# Built-in system clusters must be present, in stable id order, with stable names.
+query TT
+SELECT id, name FROM mz_clusters WHERE id LIKE 's%' ORDER BY id
+----
+s1  mz_system
+s2  mz_catalog_server
+s3  mz_probe
+s4  mz_support
+s5  mz_analytics
+
+# --- Default user cluster (quickstart) ----------------------------------------
+
+# Default quickstart cluster is managed, owned by mz_system (s1), size and
+# replication_factor are not null, and disk is true on the default local size.
+query TBTITB
+SELECT name, managed, owner_id, replication_factor, size IS NULL, disk
+FROM mz_clusters
+WHERE id = 'u1'
+----
+quickstart  true  s1  1  false  true
+
+# availability_zones is null when not set by the user.
+query B
+SELECT availability_zones IS NULL FROM mz_clusters WHERE id = 'u1'
+----
+true
+
+# introspection_debugging defaults to false; introspection_interval defaults to
+# a non-null interval.
+query BB
+SELECT introspection_debugging, introspection_interval IS NOT NULL
+FROM mz_clusters WHERE id = 'u1'
+----
+false  true
+
+# --- CREATE CLUSTER (managed) -------------------------------------------------
+
+statement ok
+CREATE CLUSTER c_managed SIZE = 'scale=1,workers=1'
+
+# id is a u-prefixed user id; managed=true; replication_factor default=1; size set;
+# disk true on the default local size.
+query TBTIB
+SELECT id LIKE 'u%', managed, size, replication_factor, disk
+FROM mz_clusters WHERE name = 'c_managed'
+----
+true  true  scale=1,workers=1  1  true
+
+# No availability zones were specified, so availability_zones is NULL (not an
+# empty list).
+query B
+SELECT availability_zones IS NULL FROM mz_clusters WHERE name = 'c_managed'
+----
+true
+
+# --- ALTER CLUSTER changes propagate -----------------------------------------
+
+statement ok
+ALTER CLUSTER c_managed SET (REPLICATION FACTOR = 2)
+
+query I
+SELECT replication_factor FROM mz_clusters WHERE name = 'c_managed'
+----
+2
+
+statement ok
+ALTER CLUSTER c_managed SET (SIZE = 'scale=2,workers=2')
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'c_managed'
+----
+scale=2,workers=2
+
+# Replication factor 0 is allowed and must round-trip.
+statement ok
+ALTER CLUSTER c_managed SET (REPLICATION FACTOR = 0)
+
+query I
+SELECT replication_factor FROM mz_clusters WHERE name = 'c_managed'
+----
+0
+
+statement ok
+DROP CLUSTER c_managed
+
+# --- CREATE CLUSTER (unmanaged) ----------------------------------------------
+
+statement ok
+CREATE CLUSTER c_unmanaged REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+# For unmanaged clusters: managed=false, and every managed-only column is NULL.
+query BTTTTBB
+SELECT
+    managed,
+    size,
+    replication_factor::text,
+    disk::text,
+    availability_zones::text,
+    introspection_debugging IS NULL,
+    introspection_interval IS NULL
+FROM mz_clusters WHERE name = 'c_unmanaged'
+----
+false  NULL  NULL  NULL  NULL  true  true
+
+statement ok
+DROP CLUSTER c_unmanaged
+
+# --- AVAILABILITY ZONES list shape -------------------------------------------
+
+# The sqllogictest environment has no availability zones configured, so we
+# cannot create a cluster with a non-empty AZ list (validation rejects any
+# user-supplied zone). The empty-list case is observable, however, and it
+# round-trips to NULL — matches pack_cluster_update yielding None for an
+# empty Vec.
+statement ok
+CREATE CLUSTER c_az_empty SIZE = 'scale=1,workers=1', AVAILABILITY ZONES = ()
+
+query B
+SELECT availability_zones IS NULL FROM mz_clusters WHERE name = 'c_az_empty'
+----
+true
+
+statement ok
+DROP CLUSTER c_az_empty
+
+# Non-empty AZ list is rejected when no zones are configured. This is not a
+# property of mz_clusters per se, but it guards the assumption that the only
+# way an AZ list shows up in the table in this environment is via a
+# config-supplied zone set.
+statement error unknown cluster replica availability zone a
+CREATE CLUSTER c_az_bad SIZE = 'scale=1,workers=1', AVAILABILITY ZONES = ('a')
+
+# --- INTROSPECTION INTERVAL options ------------------------------------------
+
+statement ok
+CREATE CLUSTER c_introspection SIZE = 'scale=1,workers=1', INTROSPECTION DEBUGGING = TRUE, INTROSPECTION INTERVAL = '5s'
+
+query BT
+SELECT introspection_debugging, introspection_interval::text
+FROM mz_clusters WHERE name = 'c_introspection'
+----
+true  00:00:05
+
+# INTROSPECTION INTERVAL = 0 must round-trip to NULL (matches Option::None for
+# the duration in the ReplicaLogging.interval field).
+statement ok
+ALTER CLUSTER c_introspection SET (INTROSPECTION INTERVAL = 0)
+
+query B
+SELECT introspection_interval IS NULL
+FROM mz_clusters WHERE name = 'c_introspection'
+----
+true
+
+statement ok
+DROP CLUSTER c_introspection
+
+# --- Uniqueness invariants ---------------------------------------------------
+
+# id is unique.
+query I
+SELECT count(*) - count(DISTINCT id) FROM mz_clusters
+----
+0
+
+# name is unique.
+query I
+SELECT count(*) - count(DISTINCT name) FROM mz_clusters
+----
+0
+
+# No row has a NULL id, name, or owner_id (NOT NULL columns).
+query I
+SELECT count(*) FROM mz_clusters WHERE id IS NULL OR name IS NULL OR owner_id IS NULL
+----
+0
+
+# --- privileges column shape -------------------------------------------------
+
+# Default user cluster has at least one privilege entry (ownership);
+# system clusters also have privilege entries.
+query I
+SELECT count(*) FROM mz_clusters WHERE array_length(privileges, 1) >= 1
+----
+6
+
+# --- mz_clusters_ind is on mz_clusters ---------------------------------------
+
+# The mz_clusters_ind index must continue to target mz_clusters after
+# conversion from Table to MaterializedView.
+query TT
+SELECT idx.name, on_obj.name
+FROM mz_indexes idx
+JOIN mz_objects on_obj ON idx.on_id = on_obj.id
+WHERE idx.name = 'mz_clusters_ind'
+----
+mz_clusters_ind  mz_clusters
+
+# --- CREATE CLUSTER / DROP CLUSTER round-trip --------------------------------
+
+statement ok
+CREATE CLUSTER c_rt_a SIZE = 'scale=1,workers=1'
+
+statement ok
+CREATE CLUSTER c_rt_b SIZE = 'scale=1,workers=1'
+
+query I
+SELECT count(*) FROM mz_clusters WHERE name IN ('c_rt_a', 'c_rt_b')
+----
+2
+
+statement ok
+DROP CLUSTER c_rt_a
+
+statement ok
+DROP CLUSTER c_rt_b
+
+query I
+SELECT count(*) FROM mz_clusters WHERE name IN ('c_rt_a', 'c_rt_b')
+----
+0

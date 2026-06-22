@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/client.rs
-revision: 47b3fad674
+revision: 704f7f8fcc
 ---
 
 # adapter::client

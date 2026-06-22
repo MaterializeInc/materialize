@@ -53,6 +53,7 @@ use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::{ColumnName, RelationDesc, SqlColumnType, SqlScalarType, UNKNOWN_COLUMN_NAME};
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::avro::is_null;
 
@@ -358,77 +359,262 @@ mod tests {
             .expect("diamond reuse of a named type should be allowed");
         assert_eq!(desc.arity(), 2);
     }
+
+    #[mz_ore::test]
+    fn registry_name_from_schema_arn_commercial() {
+        assert_eq!(
+            registry_name_from_schema_arn(
+                "arn:aws:glue:us-east-1:123456789012:schema/myreg/myschema"
+            ),
+            Some("myreg")
+        );
+    }
+
+    #[mz_ore::test]
+    fn registry_name_from_schema_arn_china_partition() {
+        assert_eq!(
+            registry_name_from_schema_arn(
+                "arn:aws-cn:glue:cn-north-1:123456789012:schema/myreg/myschema"
+            ),
+            Some("myreg")
+        );
+    }
+
+    #[mz_ore::test]
+    fn registry_name_from_schema_arn_govcloud_partition() {
+        assert_eq!(
+            registry_name_from_schema_arn(
+                "arn:aws-us-gov:glue:us-gov-west-1:123456789012:schema/myreg/myschema"
+            ),
+            Some("myreg")
+        );
+    }
+
+    #[mz_ore::test]
+    fn registry_name_from_schema_arn_rejects_non_aws_partition() {
+        assert_eq!(
+            registry_name_from_schema_arn(
+                "arn:gcp:glue:us-east-1:123456789012:schema/myreg/myschema"
+            ),
+            None
+        );
+    }
+
+    #[mz_ore::test]
+    fn registry_name_from_schema_arn_rejects_missing_arn_prefix() {
+        // Bare `schema/...` fragments must not parse — see the anchor on
+        // `arn:` in [`registry_name_from_schema_arn`].
+        assert_eq!(registry_name_from_schema_arn("schema/myreg/myschema"), None);
+    }
+
+    #[mz_ore::test]
+    fn registry_name_from_schema_arn_rejects_non_glue_service() {
+        assert_eq!(
+            registry_name_from_schema_arn(
+                "arn:aws:s3:us-east-1:123456789012:schema/myreg/myschema"
+            ),
+            None
+        );
+    }
+
+    #[mz_ore::test]
+    fn registry_name_from_schema_arn_rejects_missing_schema_segment() {
+        assert_eq!(
+            registry_name_from_schema_arn("arn:aws:glue:us-east-1:123456789012:table/myreg/foo"),
+            None
+        );
+    }
+
+    #[mz_ore::test]
+    fn registry_name_from_schema_arn_rejects_empty_registry() {
+        assert_eq!(
+            registry_name_from_schema_arn("arn:aws:glue:us-east-1:123456789012:schema//myschema"),
+            None
+        );
+    }
+
+    #[mz_ore::test]
+    fn registry_name_from_schema_arn_allows_schema_name_with_slashes() {
+        // Glue schema *names* aren't restricted the way registry names are.
+        // Only the segment before the first `/` matters for the registry.
+        assert_eq!(
+            registry_name_from_schema_arn(
+                "arn:aws:glue:us-east-1:123456789012:schema/myreg/path/like/name"
+            ),
+            Some("myreg")
+        );
+    }
+}
+
+/// Identifier carried in a wire-format header that points at the writer's
+/// schema. Different schema registries key their writer schemas differently:
+/// Confluent uses a sequential `i32`, AWS Glue uses a UUID. Callers do not
+/// have to care which kind of key they're holding — the resolver routes it
+/// back to the matching cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriterSchemaKey {
+    Confluent(i32),
+    Glue(Uuid),
+}
+
+impl fmt::Display for WriterSchemaKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WriterSchemaKey::Confluent(id) => write!(f, "Confluent schema id {}", id),
+            WriterSchemaKey::Glue(uuid) => write!(f, "Glue schema-version {}", uuid),
+        }
+    }
+}
+
+/// Provides writer schemas to an [`AvroSchemaResolver`].
+///
+/// Mirrors the `WireFormat<C>` enum on the catalog side: a decoder can run
+/// without any wire-format framing, with Confluent framing, or with AWS
+/// Glue framing (each of the framed variants optionally without a
+/// registry to fetch from). Each variant owns its cache type by
+/// construction, so the resolver cannot mis-route a key to the wrong
+/// cache.
+pub enum WriterSchemaProvider {
+    /// No wire-format framing. The resolver always returns the reader
+    /// schema and never consumes header bytes.
+    None,
+    /// Confluent framing. `cache: None` means strip-and-discard the
+    /// schema id (no registry attached); `cache: Some` means fetch from
+    /// the cache.
+    Confluent { cache: Option<SchemaCache> },
+    /// AWS Glue framing. `cache: None` means strip-and-discard the UUID
+    /// (no registry attached); `cache: Some` means fetch from the cache.
+    Glue { cache: Option<GlueSchemaCache> },
+}
+
+impl fmt::Debug for WriterSchemaProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tag = match self {
+            WriterSchemaProvider::None => "none",
+            WriterSchemaProvider::Confluent { cache: None } => "confluent (no cache)",
+            WriterSchemaProvider::Confluent { cache: Some(_) } => "confluent",
+            WriterSchemaProvider::Glue { cache: None } => "glue (no cache)",
+            WriterSchemaProvider::Glue { cache: Some(_) } => "glue",
+        };
+        f.debug_tuple("WriterSchemaProvider").field(&tag).finish()
+    }
+}
+
+impl WriterSchemaProvider {
+    /// Build the Confluent variant from an optional CCSR client. `None`
+    /// means "Confluent framing but no registry to fetch from" — the
+    /// resolver will strip the header and fall back to the reader schema.
+    pub fn confluent(ccsr_client: Option<mz_ccsr::Client>) -> Self {
+        let cache = ccsr_client.map(SchemaCache::new);
+        WriterSchemaProvider::Confluent { cache }
+    }
+
+    /// Build the Glue variant from an optional (client, registry-name)
+    /// pair. `None` means "Glue framing but no registry to fetch from" —
+    /// the resolver strips the UUID header and falls back to the reader
+    /// schema. When the pair is supplied, the registry name is the one
+    /// the catalog connection points at; the cache rejects any UUID
+    /// whose `SchemaArn` doesn't sit under that registry. (Schema
+    /// *names* aren't unique across Glue registries, so the registry
+    /// name is the only meaningful scope here.) Pairing the two in a
+    /// tuple makes the "no client → no registry name" case unrepresentable.
+    pub fn glue(
+        client_with_registry: Option<(mz_aws_glue_schema_registry::Client, String)>,
+    ) -> Self {
+        let cache = client_with_registry.map(|(c, registry)| GlueSchemaCache::new(c, registry));
+        WriterSchemaProvider::Glue { cache }
+    }
 }
 
 pub struct AvroSchemaResolver {
     reader_schema: Schema,
-    writer_schemas: Option<SchemaCache>,
-    confluent_wire_format: bool,
+    writer_schemas: WriterSchemaProvider,
 }
 
 impl AvroSchemaResolver {
     pub fn new(
         reader_schema: &str,
         reader_reference_schemas: &[String],
-        ccsr_client: Option<mz_ccsr::Client>,
-        confluent_wire_format: bool,
+        writer_schemas: WriterSchemaProvider,
     ) -> anyhow::Result<Self> {
         // parse_schema handles incremental parsing of references (dependencies first)
         let reader_schema = parse_schema(reader_schema, reader_reference_schemas)?;
-        let writer_schemas = ccsr_client.map(SchemaCache::new).transpose()?;
         Ok(Self {
             reader_schema,
             writer_schemas,
-            confluent_wire_format,
         })
     }
 
     pub async fn resolve<'a, 'b>(
         &'a mut self,
         mut bytes: &'b [u8],
-    ) -> anyhow::Result<anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)>> {
-        let (resolved_schema, schema_id) = match &mut self.writer_schemas {
-            Some(cache) => {
-                debug_assert!(
-                    self.confluent_wire_format,
-                    "We should have set 'confluent_wire_format' everywhere \
-                     that can lead to this branch"
-                );
-                // XXX(guswynn): use destructuring assignments when they are stable
-                let (schema_id, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes)
-                {
+    ) -> anyhow::Result<anyhow::Result<(&'b [u8], &'a Schema, Option<WriterSchemaKey>)>> {
+        let (resolved_schema, key) = match &mut self.writer_schemas {
+            WriterSchemaProvider::None => (&self.reader_schema, None),
+
+            WriterSchemaProvider::Confluent { cache: None } => {
+                // Validate the header (so we surface producer/consumer
+                // framing mismatches early) and discard the schema id —
+                // there is no registry to look it up in.
+                match crate::confluent::extract_avro_header(bytes) {
+                    Ok((_id, adjusted_bytes)) => {
+                        bytes = adjusted_bytes;
+                        (&self.reader_schema, None)
+                    }
+                    Err(err) => return Ok(Err(err)),
+                }
+            }
+
+            WriterSchemaProvider::Confluent { cache: Some(cache) } => {
+                let (id, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes) {
                     Ok(ok) => ok,
                     Err(err) => return Ok(Err(err)),
                 };
                 bytes = adjusted_bytes;
                 let result = cache
-                    .get(schema_id, &self.reader_schema)
-                    // The outer Result describes transient errors so use ? here to propagate
+                    .get(id, &self.reader_schema)
+                    // The outer Result describes transient errors so use ?
+                    // here to propagate; the inner Result is the cached
+                    // permanent outcome (parsed schema or parse error) and
+                    // is handled below.
                     .await?
-                    .with_context(|| format!("failed to resolve Avro schema (id = {})", schema_id));
+                    .with_context(|| format!("failed to resolve Avro schema (id = {id})"));
                 let schema = match result {
                     Ok(schema) => schema,
                     Err(err) => return Ok(Err(err)),
                 };
-                (schema, Some(schema_id))
+                (schema, Some(WriterSchemaKey::Confluent(id)))
             }
 
-            // If we haven't been asked to use a schema registry, we have no way
-            // to discover the writer's schema. That's ok; we'll just use the
-            // reader's schema and hope it lines up.
-            None => {
-                if self.confluent_wire_format {
-                    // validate and just move the bytes buffer ahead
-                    let (_, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes) {
-                        Ok(ok) => ok,
-                        Err(err) => return Ok(Err(err)),
-                    };
-                    bytes = adjusted_bytes;
+            WriterSchemaProvider::Glue { cache: None } => {
+                // Strip + discard the header; no registry to look up.
+                match crate::glue::extract_avro_header(bytes) {
+                    Ok((_uuid, adjusted_bytes)) => {
+                        bytes = adjusted_bytes;
+                        (&self.reader_schema, None)
+                    }
+                    Err(err) => return Ok(Err(err)),
                 }
-                (&self.reader_schema, None)
+            }
+
+            WriterSchemaProvider::Glue { cache: Some(cache) } => {
+                let (uuid, adjusted_bytes) = match crate::glue::extract_avro_header(bytes) {
+                    Ok(ok) => ok,
+                    Err(err) => return Ok(Err(err)),
+                };
+                bytes = adjusted_bytes;
+                let result = cache
+                    .get(uuid, &self.reader_schema)
+                    .await?
+                    .with_context(|| format!("failed to resolve Avro schema (uuid = {uuid})"));
+                let schema = match result {
+                    Ok(schema) => schema,
+                    Err(err) => return Ok(Err(err)),
+                };
+                (schema, Some(WriterSchemaKey::Glue(uuid)))
             }
         };
-        Ok(Ok((bytes, resolved_schema, schema_id)))
+        Ok(Ok((bytes, resolved_schema, key)))
     }
 }
 
@@ -436,30 +622,188 @@ impl fmt::Debug for AvroSchemaResolver {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("AvroSchemaResolver")
             .field("reader_schema", &self.reader_schema)
-            .field(
-                "write_schema",
-                if self.writer_schemas.is_some() {
-                    &"some"
-                } else {
-                    &"none"
-                },
-            )
+            .field("writer_schemas", &self.writer_schemas)
             .finish()
     }
 }
 
+/// Glue-side analogue of [`SchemaCache`].
+///
+/// Differences from the CSR cache:
+/// * Keys are UUIDs (Glue schema-version IDs), not `i32`s.
+/// * Glue schemas are single definitions — no `references` field on
+///   `GetSchemaVersion`, so the cache does not chase a dependency graph.
+/// * No outer retry layer. `aws-sdk-glue` ships a "standard" retry policy
+///   by default that handles transient errors; layering our own
+///   `Retry::default()` on top would only amplify backoff.
 #[derive(Debug)]
-struct SchemaCache {
+pub struct GlueSchemaCache {
+    cache: BTreeMap<Uuid, Result<Schema, AvroError>>,
+    glue_client: mz_aws_glue_schema_registry::Client,
+    /// The registry name the catalog connection points at. Per-UUID
+    /// fetches are cross-checked against this; mismatches become decode
+    /// errors. See type-level docs.
+    expected_registry: String,
+}
+
+impl GlueSchemaCache {
+    fn new(glue_client: mz_aws_glue_schema_registry::Client, expected_registry: String) -> Self {
+        GlueSchemaCache {
+            cache: BTreeMap::new(),
+            glue_client,
+            expected_registry,
+        }
+    }
+
+    /// Look up the writer schema for `uuid`, fetching from Glue on a
+    /// cache miss. Mirrors [`SchemaCache::get`]: the outer `Result`
+    /// surfaces transient errors (network, auth, throttling — already
+    /// retried by the SDK) that the caller may retry on; the inner
+    /// `Result` carries permanent failures (schema not found,
+    /// non-`Available` lifecycle, registry mismatch, parse failure) that
+    /// get cached so the same bad UUID does not re-hit Glue on every
+    /// record.
+    async fn get(
+        &mut self,
+        uuid: Uuid,
+        reader_schema: &Schema,
+    ) -> anyhow::Result<anyhow::Result<&Schema>> {
+        let entry = match self.cache.entry(uuid) {
+            Entry::Occupied(o) => o.into_mut(),
+            Entry::Vacant(v) => {
+                let parsed: Result<Schema, AvroError> = match self
+                    .glue_client
+                    .get_schema_version_by_id(uuid)
+                    .await
+                {
+                    Ok(version) => {
+                        Self::parse_version(version, uuid, &self.expected_registry, reader_schema)
+                    }
+                    // Permanent: UUID does not exist in any visible
+                    // registry. Cache so we don't re-fetch on every
+                    // record carrying this UUID.
+                    Err(mz_aws_glue_schema_registry::GetSchemaVersionError::NotFound) => Err(
+                        ParseSchemaError::new(format!("Glue schema version {uuid} not found"))
+                            .into(),
+                    ),
+                    // Transient: SDK has already retried; surface to the
+                    // outer Result so the source can decide. The explicit
+                    // `Other` arm (rather than a wildcard) makes any
+                    // future variant a compile error rather than a
+                    // silent reclassification.
+                    Err(e @ mz_aws_glue_schema_registry::GetSchemaVersionError::Other(_)) => {
+                        return Err(e.into());
+                    }
+                };
+                v.insert(parsed)
+            }
+        };
+        Ok(entry.as_ref().map_err(|e| anyhow::Error::new(e.clone())))
+    }
+
+    /// Validate and parse a fetched [`mz_aws_glue_schema_registry::SchemaVersion`] into an Avro schema.
+    ///
+    /// All failures here are permanent (a retry would return the same
+    /// `SchemaVersion`) and get cached by the caller.
+    fn parse_version(
+        version: mz_aws_glue_schema_registry::SchemaVersion,
+        uuid: Uuid,
+        expected_registry: &str,
+        reader_schema: &Schema,
+    ) -> Result<Schema, AvroError> {
+        use mz_aws_glue_schema_registry::SchemaVersionLifecycleStatus;
+
+        // Reject anything not Available. Pending/Failure versions may
+        // still carry a `definition` from the SDK, but decoding records
+        // against them would yield garbage.
+        if !matches!(
+            version.lifecycle_status,
+            Some(SchemaVersionLifecycleStatus::Available)
+        ) {
+            return Err(ParseSchemaError::new(format!(
+                "Glue schema version {uuid} is not Available (status: {:?}); \
+                 refusing to decode",
+                version.lifecycle_status
+            ))
+            .into());
+        }
+        let definition = version.definition.ok_or_else(|| {
+            ParseSchemaError::new(format!(
+                "Glue schema version {uuid} returned without a definition"
+            ))
+        })?;
+        // Enforce that the fetched version actually lives in the
+        // registry our catalog connection points at. Without this, any
+        // UUID the credentials can resolve would decode silently,
+        // defeating the per-connection scope.
+        let arn = version.schema_arn.as_deref().ok_or_else(|| {
+            ParseSchemaError::new(format!(
+                "Glue schema version {uuid} returned without a SchemaArn; \
+                 cannot verify registry membership"
+            ))
+        })?;
+        let actual_registry = registry_name_from_schema_arn(arn).ok_or_else(|| {
+            ParseSchemaError::new(format!(
+                "Glue SchemaArn {arn:?} did not match the expected \
+                 arn:aws[-...]:glue:<region>:<account>:schema/<registry>/<schema> form"
+            ))
+        })?;
+        if actual_registry != expected_registry {
+            return Err(ParseSchemaError::new(format!(
+                "Glue schema version {uuid} lives in registry {actual_registry:?} \
+                 but this source is configured for registry {expected:?}; \
+                 refusing to decode",
+                expected = expected_registry,
+            ))
+            .into());
+        }
+        let value: serde_json::Value = serde_json::from_str(&definition)
+            .map_err(|e| ParseSchemaError::new(format!("Error parsing JSON: {e}")))?;
+        let schema = Schema::parse_with_references(&value, &[])?;
+        resolve_schemas(&schema, reader_schema)
+    }
+}
+
+/// Parse the registry name out of a Glue `SchemaArn`.
+///
+/// Glue schema ARNs have the shape
+/// `arn:<partition>:glue:<region>:<account>:schema/<registry>/<schema>`,
+/// where `<partition>` is `aws`, `aws-cn`, `aws-us-gov`, etc. We anchor
+/// on `arn:` and the `:glue:` segment so a fragment like
+/// `:schema/foo/bar` alone won't parse. Returns `None` if the input
+/// doesn't match — we surface that as a decode error rather than
+/// panicking, so schemas in unexpected partitions or future ARN shapes
+/// don't crash the source.
+fn registry_name_from_schema_arn(arn: &str) -> Option<&str> {
+    let rest = arn.strip_prefix("arn:")?;
+    let (partition, after_partition) = rest.split_once(":glue:")?;
+    if !partition.starts_with("aws") {
+        return None;
+    }
+    let (_, after_schema) = after_partition.split_once(":schema/")?;
+    let (registry, _) = after_schema.split_once('/')?;
+    if registry.is_empty() {
+        return None;
+    }
+    Some(registry)
+}
+
+/// Cache of writer schemas fetched from a Confluent Schema Registry. Held
+/// inside [`WriterSchemaProvider::Confluent`]; the type is named pub because that
+/// variant's field is reachable through the pub enum, but it has no pub
+/// constructor or methods — only [`WriterSchemaProvider::confluent`] can build one.
+#[derive(Debug)]
+pub struct SchemaCache {
     cache: BTreeMap<i32, Result<Schema, AvroError>>,
     ccsr_client: Arc<mz_ccsr::Client>,
 }
 
 impl SchemaCache {
-    fn new(ccsr_client: mz_ccsr::Client) -> Result<SchemaCache, anyhow::Error> {
-        Ok(SchemaCache {
+    fn new(ccsr_client: mz_ccsr::Client) -> SchemaCache {
+        SchemaCache {
             cache: BTreeMap::new(),
             ccsr_client: Arc::new(ccsr_client),
-        })
+        }
     }
 
     /// Looks up the writer schema for ID. If the schema is literally identical

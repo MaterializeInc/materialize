@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/metrics/source.rs
-revision: 802229d6eb
+revision: 82dac06732
 ---
 
 # mz-storage::metrics::source

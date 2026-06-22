@@ -11,9 +11,9 @@ You can use [Debezium](https://debezium.io/) to propagate Change Data Capture
 (CDC) data to Materialize from a PostgreSQL database, but we **strongly
 recommend** using the native [PostgreSQL](/sql/create-source/postgres/) source
 instead.
-{{</ warning >}}
+{{< /warning >}}
 
-{{< guided-tour-blurb-for-ingest-data >}}
+{{% guided-tour-blurb-for-ingest-data %}}
 
 Change Data Capture (CDC) allows you to track and propagate changes in a
 PostgreSQL database to downstream consumers based on its Write-Ahead Log
@@ -160,22 +160,27 @@ Once logical replication is enabled:
    specific privileges will depend on how much control you want to give to the
    replication user, so we recommend following the [Debezium documentation](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-replication-user-privileges).
 
-1. If a table that you want to replicate has a **primary key** defined, you can
-   use your default replica identity value. If a table you want to replicate
-   has **no primary key** defined, you must set the replica identity value to
-   `FULL`:
+1. Specify the `REPLICA IDENTITY` value:
 
-    ```postgres
-    ALTER TABLE repl_table REPLICA IDENTITY FULL;
-    ```
+   - If a table that you want to replicate has a **primary key** defined, you
+    can use your default replica identity value.  However, without `REPLICA
+    IDENTITY FULL`, you cannot ingest unchanged
+    [TOASTed](https://www.postgresql.org/docs/current/storage-toast.html)
+    values.
 
-    This setting determines the amount of information that is written to the WAL
-    in `UPDATE` and `DELETE` operations. Setting it to `FULL` will include the
-    previous values of all the table’s columns in the change events.
+   - If a table you want to replicate has **no primary key** defined, you must
+     set the replica identity value to `FULL`:
 
-    As a heads up, you should expect a performance hit in the database from
-    increased CPU usage. For more information, see the
-    [PostgreSQL documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html).
+     ```postgres
+     ALTER TABLE repl_table REPLICA IDENTITY FULL;
+     ```
+
+   This setting determines the amount of information that is written to the WAL
+   in `UPDATE` and `DELETE` operations. Setting it to `FULL` will include the
+   previous values of all the table’s columns in the change events.
+   As a heads up, you should expect a performance hit in the database from
+   increased CPU usage. For more information, see the
+   [PostgreSQL documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html).
 
 ### B. Deploy Debezium
 

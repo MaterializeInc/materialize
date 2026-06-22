@@ -774,6 +774,9 @@ pub trait CatalogCluster<'a> {
     /// Returns the schedule of the cluster, if the cluster is a managed cluster.
     fn schedule(&self) -> Option<&ClusterSchedule>;
 
+    /// Returns the replication factor of the cluster, if the cluster is a managed cluster.
+    fn replication_factor(&self) -> Option<u32>;
+
     /// Try to convert this cluster into a [`CreateClusterPlan`].
     // TODO(jkosh44) Make this infallible and convert to `to_plan`.
     fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError>;

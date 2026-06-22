@@ -1046,7 +1046,7 @@ class Scenario:
     # When one of these is encountered the catalog is likely in an
     # inconsistent state, so the scenario signals for a full reset.
     ignorable_errors: list[str] = [
-        # TODO: https://github.com/MaterializeInc/database-issues/issues/9690
+        # TODO: https://linear.app/materializeinc/issue/DB-117
         "another session modified the catalog while this DDL transaction was open",
         # Downstream effect: a prior catalog-conflict rolled back a
         # BEGIN/COMMIT transaction, so the object never existed by the time

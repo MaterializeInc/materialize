@@ -28,8 +28,8 @@ use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -166,7 +166,7 @@ use crate::plan::{
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
     ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
-    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
+    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -177,6 +177,9 @@ mod connection;
 // The real max is probably higher than this, but it's easier to relax a constraint than make it
 // more strict.
 const MAX_NUM_COLUMNS: usize = 256;
+
+const MAX_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 static MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
@@ -1221,6 +1224,11 @@ fn plan_kafka_source_connection(
         // This is a librdkafka-enforced restriction that, if violated,
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    }
+    if topic_metadata_refresh_interval < Duration::from_secs(1) {
+        // This is a librdkafka-enforced restriction that, if violated,
+        // would result in a runtime error for the source.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
     let metadata_columns = include_metadata
         .into_iter()
@@ -2893,7 +2901,13 @@ pub fn plan_create_materialized_view(
                         sql_bail!("REFRESH interval must not involve units larger than days");
                     }
                     let interval = interval.duration()?;
-                    if u64::try_from(interval.as_millis()).is_err() {
+                    // `Interval::from_duration` (needed to unparse the interval, e.g. for
+                    // `mz_materialized_view_refresh_strategies`) requires the micros to fit
+                    // in an i64, which is a tighter bound than `Duration::duration` enforces.
+                    // Reject too-large intervals here to avoid panicking later.
+                    if u64::try_from(interval.as_millis()).is_err()
+                        || Interval::from_duration(&interval).is_err()
+                    {
                         sql_bail!("REFRESH interval too large");
                     }
                     if interval.as_micros() < 1000 {
@@ -3789,10 +3803,14 @@ fn kafka_sink_builder(
 
     let topic_name = topic.ok_or_else(|| sql_err!("KAFKA CONNECTION must specify TOPIC"))?;
 
-    if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
+    if topic_metadata_refresh_interval > MAX_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
         // This is a librdkafka-enforced restriction that, if violated,
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    } else if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
+        // We enforce a minimum of 1 second here to prevent excessive refreshes, and ensure that
+        // tokio::time::interval receives a valid (positive) duration.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
 
     let assert_positive = |val: Option<i32>, name: &str| {
@@ -4446,12 +4464,25 @@ impl PlannedRoleVariable {
     }
 }
 
-fn plan_role_variable(variable: SetRoleVar) -> Result<PlannedRoleVariable, PlanError> {
+fn plan_role_variable(
+    scx: &StatementContext,
+    variable: SetRoleVar,
+) -> Result<PlannedRoleVariable, PlanError> {
     let plan = match variable {
-        SetRoleVar::Set { name, value } => PlannedRoleVariable::Set {
-            name: name.to_string(),
-            value: scl::plan_set_variable_to(value)?,
-        },
+        SetRoleVar::Set { name, value } => {
+            let name = name.to_string();
+            let value = scl::plan_set_variable_to(value)?;
+            // Gate feature-flagged isolation levels, matching the `SET` and
+            // connection-option paths in `SessionVars::set`.
+            if let VariableValue::Values(values) = &value {
+                vars::check_transaction_isolation_feature_flag(
+                    &name,
+                    VarInput::SqlSet(values),
+                    scx.catalog.system_vars(),
+                )?;
+            }
+            PlannedRoleVariable::Set { name, value }
+        }
         SetRoleVar::Reset { name } => PlannedRoleVariable::Reset {
             name: name.to_string(),
         },
@@ -4921,9 +4952,15 @@ pub fn unplan_create_cluster(
             let replication_factor = match &schedule {
                 ClusterScheduleOptionValue::Manual => Some(replication_factor),
                 ClusterScheduleOptionValue::Refresh { .. } => {
-                    assert!(
+                    // A cluster with a refresh schedule is turned On/Off by the cluster scheduling
+                    // policy, so its replication factor should always be 0 or 1, and CREATE/ALTER
+                    // reject setting both a non-MANUAL schedule and a higher replication factor. If
+                    // we nevertheless find one (e.g., a cluster left in an invalid state by an
+                    // older version), log loudly rather than crashing the coordinator: the
+                    // replication factor is omitted from the rendered statement regardless.
+                    soft_assert_or_log!(
                         replication_factor <= 1,
-                        "replication factor, {replication_factor:?}, must be <= 1"
+                        "replication factor, {replication_factor:?}, must be <= 1 with a refresh schedule"
                     );
                     None
                 }
@@ -6163,6 +6200,24 @@ pub fn plan_alter_cluster(
                         && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                     {
                         scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
+
+                        // A cluster with a non-MANUAL schedule is automatically turned On/Off by
+                        // the cluster scheduling policy, which means its replication factor is
+                        // always 0 or 1. If the cluster currently has a higher replication factor
+                        // and the user is not lowering it in the same statement (which would be
+                        // rejected just below), then reject the schedule change: otherwise we'd
+                        // leave the cluster in an invalid state with both a non-MANUAL schedule and
+                        // a replication factor > 1 (which would, e.g., make SHOW CREATE CLUSTER
+                        // panic).
+                        if replication_factor.is_none()
+                            && cluster.replication_factor().is_some_and(|rf| rf > 1)
+                        {
+                            sql_bail!(
+                                "SCHEDULE cannot be set to anything other than MANUAL while the \
+                                cluster's REPLICATION FACTOR is greater than 1; \
+                                set the REPLICATION FACTOR to 1 first"
+                            );
+                        }
                     }
 
                     if replication_factor.is_some() {
@@ -7438,7 +7493,7 @@ pub fn plan_alter_role(
             PlannedAlterRoleOption::Attributes(attrs)
         }
         AlterRoleOption::Variable(variable) => {
-            let var = plan_role_variable(variable)?;
+            let var = plan_role_variable(scx, variable)?;
             PlannedAlterRoleOption::Variable(var)
         }
     };

@@ -28,11 +28,13 @@ Structuring your transformations as views gives you:
 - **Readability:** save complex logic under a clear, meaningful name.
 - **Composability:** break complex logic into stacked view definitions, building
   richer business objects on top of simpler ones.
+- **Efficiency:** project only the columns you need, filter out unnecessary
+  rows, and convert values to more [compact data types](/sql/types/) where
+  possible.
 
 ## SQL in Materialize
 
 {{% include-from-yaml data="materialize_details" name="postgres-compatibility" %}}
-
 
 ## Explore this section
 

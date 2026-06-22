@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/catalog.rs
-revision: 234d77f6b5
+revision: 75d653ae9e
 ---
 
 # mz-sql::catalog

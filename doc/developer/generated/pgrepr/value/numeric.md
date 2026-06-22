@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr/src/value/numeric.rs
-revision: e757b4d11b
+revision: 0c6fd21617
 ---
 
 # mz-pgrepr::value::numeric

@@ -37,9 +37,22 @@ ALTER USER "materialize@foocorp.io" SET search_path = 'abc,def';
 statement ok
 ALTER USER "materialize@foocorp.io" SET cluster = "cluster=cluster=cluster=";
 
+# Behavior note: mz_role_parameters is now a BuiltinMaterializedView over
+# mz_internal.mz_catalog_raw. The stored parameter_value is the raw user
+# input verbatim. Previously, the BuiltinTable populator called
+# `var.check()` on the input, which for list-typed vars (e.g. search_path)
+# reformatted a single quoted-string input like 'abc,def' by parsing and
+# re-joining it with ", ". Now the catalog stores 'abc,def' as written.
+# Multi-arg list inputs (ALTER ROLE ... SET search_path TO a, b, c) still
+# round-trip through Vec<Ident>::format() which joins with ", ".
+#
+# This is closer to Postgres, where pg_db_role_setting.setconfig /
+# pg_user.useconfig store the raw input string; canonicalization happens at
+# SHOW time, not at storage. The old Materialize behavior (canonicalizing
+# inside the catalog table) was the un-Postgres-like one.
 query TT rowsort
 SELECT usename, useconfig::text FROM pg_user;
 ----
-materialize@foocorp.io  {cluster=cluster=cluster=cluster=,"search_path=abc,␠def"}
+materialize@foocorp.io  {cluster=cluster=cluster=cluster=,"search_path=abc,def"}
 mz_support  NULL
 mz_system  NULL

@@ -1,15 +1,18 @@
 ---
 source: src/storage-types/src/connections.rs
-revision: b1959edbc1
+revision: a8a4d88813
 ---
 
 # storage-types::connections
 
 Defines all connection types used to connect storage sources and sinks to external systems, along with the runtime infrastructure needed to instantiate them.
-Key types include `Connection` (an enum over Kafka, CSR, Postgres, SSH, AWS, AWS PrivateLink, MySQL, SQL Server, Glue Schema Registry, and Iceberg Catalog connections), `ConnectionContext` (holds global runtime state such as SSH tunnel managers and secret readers), and `KafkaConnection`/`PostgresConnection`/`IcebergCatalogConnection` etc.
+Key types include `Connection` (an enum over Kafka, CSR, Postgres, SSH, AWS, AWS PrivateLink, GCP, MySQL, SQL Server, Glue Schema Registry, and Iceberg Catalog connections), `ConnectionContext` (holds global runtime state such as SSH tunnel managers and secret readers), and `KafkaConnection`/`PostgresConnection`/`IcebergCatalogConnection` etc.
 `IcebergCatalogConnection` holds an `IcebergCatalogImpl` (either `Rest` or `S3TablesRest`) and a URI; it implements `connect()` to return a live `Arc<dyn Catalog>`.
+`GlueSchemaRegistryConnection` carries a reference to an `AwsConnection` (for credentials, region, and endpoint) and a `registry_name`. Its `validate` method calls `mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build()` and issues a `get_registry` ping to confirm the named registry exists; `validate_by_default()` returns `true` so a bad registry name surfaces at `CREATE CONNECTION` time rather than on first use.
 `AwsSdkCredentialLoader` is a private type that wraps an AWS SDK credentials provider and implements the iceberg `AwsCredentialLoad` trait, enabling refreshable assume-role credential chains for Iceberg FileIO/OpenDAL; its `load_credential` method accepts a `reqwest::Client`.
-The submodules `aws`, `inline`, and `string_or_secret` provide supporting abstractions for AWS credential loading, reference/inlined connection polymorphism, and secret-backed string values respectively.
+`Sigv4Authenticator` is a private type that implements `RequestAuthenticator` for the `iceberg-catalog-rest` crate, signing each outgoing REST catalog request with AWS SigV4 using a `SharedCredentialsProvider` (so credentials are refreshed per-request). It carries `provider`, `region`, and `signing_name` fields (e.g. `"s3tables"` for S3 Tables).
+`IcebergCatalogAuth` is an enum with variants `OAuth { credential, scope }` (standard Iceberg REST OAuth2 flow) and `Gcp(GcpConnectionReference)` (GCP service-account-based auth for BigLake/Lakehouse catalogs). `RestIcebergCatalog` holds an `auth: IcebergCatalogAuth` field and an optional `warehouse`.
+The submodules `aws`, `gcp`, `inline`, and `string_or_secret` provide supporting abstractions for AWS credential loading, GCP credential loading, reference/inlined connection polymorphism, and secret-backed string values respectively.
 Connection types implement `AlterCompatible` to constrain which fields may change across an `ALTER CONNECTION`.
 
 `Tunnel<C>` is an enum with variants `Direct`, `Ssh(SshTunnel<C>)`, `AwsPrivatelink(AwsPrivatelink)`, and `AwsPrivatelinks(AwsPrivatelinks)`. The `AwsPrivatelinks` variant routes broker connections through an ordered list of pattern-based PrivateLink rules.

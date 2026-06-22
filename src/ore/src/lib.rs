@@ -81,6 +81,7 @@ pub mod result;
 pub mod retry;
 pub mod secure;
 pub mod serde;
+pub mod sql;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]
 pub mod stack;

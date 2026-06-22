@@ -18,6 +18,7 @@ import glob
 from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
+from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import (
@@ -60,6 +61,7 @@ SERVICES = [
     Mz(app_password=""),
     Materialized(external_blob_store=True, sanity_restart=False),
     CockroachOrPostgresMetadata(),
+    FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),
 ]
 
@@ -122,6 +124,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args, passthrough_args = parser.parse_known_args()
 
     dependencies = [
+        "fivetran-destination",
         "materialized",
         "postgres",
         "mysql",
@@ -162,6 +165,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         volumes_extra=["mzdata:/mzdata"],
         external_blob_store=True,
         blob_store_is_azure=args.azurite,
+        fivetran_destination=True,
+        fivetran_destination_files_path="/share/tmp",
         entrypoint_extra=[
             f"--var=uses-redpanda={args.redpanda}",
         ],
@@ -320,7 +325,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             "session.td",
             "status-history.td",
             "kafka-progress.td",
-            # TODO: Reenable these 4 files when database-issues#9686 is fixed
+            # TODO: Reenable these 4 files when https://linear.app/materializeinc/issue/SS-286 is fixed
             "load-generator-key-value.td",
             "materialization-lag.td",
             "primary-key-optimizations.td",
@@ -332,6 +337,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     dependencies = [
+        "fivetran-destination",
         "minio",
         "materialized",
         "postgres",
@@ -374,6 +380,8 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         volumes_extra=["mzdata:/mzdata"],
         external_blob_store=True,
         blob_store_is_azure=args.azurite,
+        fivetran_destination=True,
+        fivetran_destination_files_path="/share/tmp",
         entrypoint_extra=[
             f"--var=uses-redpanda={args.redpanda}",
         ],

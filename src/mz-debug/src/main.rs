@@ -107,7 +107,7 @@ pub struct Args {
     /// The username to use to connect to Materialize,
     #[clap(long, env = "MZ_USERNAME", global = true)]
     mz_username: Option<String>,
-    /// The password to use to connect to Materialize if the authenticator kind is Password.
+    /// The password to use to connect to Materialize if the authenticator kind is Password, Sasl, or Oidc.
     #[clap(long, env = "MZ_PASSWORD", global = true)]
     mz_password: Option<String>,
     /// The URL of the Materialize SQL connection used to dump the system catalog.

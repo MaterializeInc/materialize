@@ -1,0 +1,18 @@
+[package]
+name = "mz-aws-glue-schema-registry"
+description = "AWS Glue Schema Registry API client."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+aws-sdk-glue.workspace = true
+aws-smithy-runtime-api.workspace = true
+aws-types.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true

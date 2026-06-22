@@ -12,8 +12,8 @@
 use mz_ore::cast::CastLossy;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, IntCounterVec, MetricsRegistry,
-    Rule,
+    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, IntCounterVec, MetricVisibility,
+    MetricsRegistry,
 };
 use mz_ore::stats::SlidingMinMax;
 use prometheus::core::{AtomicF64, AtomicU64};
@@ -38,52 +38,17 @@ impl ControllerMetrics {
                 help: "A summary of the second-by-second lag of the dataflow frontier relative \
                        to wallclock time, aggregated over the last minute.",
                 var_labels: ["instance_id", "replica_id", "collection_id", "quantile"],
-                rules: [
-                    Rule::ClusterNameLookup {
-                        cluster_id_label: "instance_id".into(),
-                        output_label: "cluster_name".into(),
-                    },
-                    Rule::ReplicaNameLookup {
-                        cluster_id_label: "instance_id".into(),
-                        replica_id_label: "replica_id".into(),
-                        output_label: "replica_name".into(),
-                    },
-                    Rule::object_name_lookup_with_default_labels("collection_id", "collection_name"),
-                ],
+                visibility: MetricVisibility::Public,
             )),
             dataflow_wallclock_lag_seconds_sum: metrics_registry.register(metric!(
                 name: "mz_dataflow_wallclock_lag_seconds_sum",
                 help: "The total sum of dataflow wallclock lag measurements.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
-                rules: [
-                    Rule::ClusterNameLookup {
-                        cluster_id_label: "instance_id".into(),
-                        output_label: "cluster_name".into(),
-                    },
-                    Rule::ReplicaNameLookup {
-                        cluster_id_label: "instance_id".into(),
-                        replica_id_label: "replica_id".into(),
-                        output_label: "replica_name".into(),
-                    },
-                    Rule::object_name_lookup_with_default_labels("collection_id", "collection_name"),
-                ],
             )),
             dataflow_wallclock_lag_seconds_count: metrics_registry.register(metric!(
                 name: "mz_dataflow_wallclock_lag_seconds_count",
                 help: "The total count of dataflow wallclock lag measurements.",
                 var_labels: ["instance_id", "replica_id", "collection_id"],
-                rules: [
-                    Rule::ClusterNameLookup {
-                        cluster_id_label: "instance_id".into(),
-                        output_label: "cluster_name".into(),
-                    },
-                    Rule::ReplicaNameLookup {
-                        cluster_id_label: "instance_id".into(),
-                        replica_id_label: "replica_id".into(),
-                        output_label: "replica_name".into(),
-                    },
-                    Rule::object_name_lookup_with_default_labels("collection_id", "collection_name"),
-                ],
             )),
         }
     }

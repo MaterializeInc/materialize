@@ -1387,6 +1387,29 @@ error: Expected right parenthesis, found WITH
 SELECT * FROM ROWS FROM (generate_series(1, 2) WITH ORDINALITY)
                                                ^
 
+# FILTER, OVER, and DISTINCT are not part of the grammar in ROWS FROM
+# (PostgreSQL's func_expr_windowless).
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(1, 2) FILTER (WHERE true), generate_series(3, 4))
+----
+error: Expected right parenthesis, found FILTER
+SELECT * FROM ROWS FROM (generate_series(1, 2) FILTER (WHERE true), generate_series(3, 4))
+                                               ^
+
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(1, 2) OVER (), generate_series(3, 4))
+----
+error: Expected right parenthesis, found OVER
+SELECT * FROM ROWS FROM (generate_series(1, 2) OVER (), generate_series(3, 4))
+                                               ^
+
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(DISTINCT 1, 2), generate_series(3, 4))
+----
+error: Expected right parenthesis, found number "1"
+SELECT * FROM ROWS FROM (generate_series(DISTINCT 1, 2), generate_series(3, 4))
+                                                  ^
+
 parse-statement
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY
 ----
@@ -2079,6 +2102,6 @@ parse-statement
 SELECT "true", "false", "null", "array", "list", "map", "case", "cast", "coalesce", "greatest", "least", "nullif", "exists", "extract", "not", "row", "trim", "position", "substring"
 FROM iffy_colnames
 ----
-SELECT "true", "false", "null", "array", list, map, "case", "cast", coalesce, greatest, least, nullif, exists, extract, "not", row, trim, position, substring FROM iffy_colnames
+SELECT "true", "false", "null", "array", "list", map, "case", "cast", coalesce, greatest, least, nullif, exists, extract, "not", row, trim, position, substring FROM iffy_colnames
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("true")]), alias: None }, Expr { expr: Identifier([Ident("false")]), alias: None }, Expr { expr: Identifier([Ident("null")]), alias: None }, Expr { expr: Identifier([Ident("array")]), alias: None }, Expr { expr: Identifier([Ident("list")]), alias: None }, Expr { expr: Identifier([Ident("map")]), alias: None }, Expr { expr: Identifier([Ident("case")]), alias: None }, Expr { expr: Identifier([Ident("cast")]), alias: None }, Expr { expr: Identifier([Ident("coalesce")]), alias: None }, Expr { expr: Identifier([Ident("greatest")]), alias: None }, Expr { expr: Identifier([Ident("least")]), alias: None }, Expr { expr: Identifier([Ident("nullif")]), alias: None }, Expr { expr: Identifier([Ident("exists")]), alias: None }, Expr { expr: Identifier([Ident("extract")]), alias: None }, Expr { expr: Identifier([Ident("not")]), alias: None }, Expr { expr: Identifier([Ident("row")]), alias: None }, Expr { expr: Identifier([Ident("trim")]), alias: None }, Expr { expr: Identifier([Ident("position")]), alias: None }, Expr { expr: Identifier([Ident("substring")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("iffy_colnames")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })

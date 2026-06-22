@@ -117,6 +117,7 @@ use mz_controller::clusters::{
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
+use mz_dyncfg::ConfigUpdates;
 use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
@@ -229,6 +230,7 @@ mod command_handler;
 mod ddl;
 pub(crate) mod group_sync;
 mod indexes;
+mod info_metrics;
 mod introspection;
 mod message_handler;
 mod privatelink_status;
@@ -1978,6 +1980,10 @@ pub struct Coordinator {
     /// Only used during 0dt deployment, while in read-only mode.
     caught_up_check: Option<CaughtUpCheckContext>,
 
+    /// The metrics registry, handed to the catalog info-metrics background task
+    /// so it can register and own its `*_info` series.
+    catalog_info_metrics_registry: MetricsRegistry,
+
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
 
@@ -2008,6 +2014,76 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
+    /// Resolves the replica-local scoped overrides from the catalog working copy
+    /// into the compute controller's per-replica dyncfg layer, then re-pushes
+    /// the environment-wide compute configuration so replicas observe the new
+    /// values. Driven by the catalog implication for replica-scoped
+    /// configuration changes, and called once on bootstrap.
+    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
+        // Clone the (sparse) replica overrides so we don't hold a catalog borrow
+        // across the mutable controller calls below.
+        let replica_overrides = self
+            .catalog()
+            .state()
+            .scoped_system_parameters()
+            .replica
+            .clone();
+
+        let dyncfgs = self.catalog().system_config().dyncfgs();
+        let mut instance_overrides: BTreeMap<
+            ComputeInstanceId,
+            BTreeMap<ReplicaId, ConfigUpdates>,
+        > = BTreeMap::new();
+        for cluster in self.catalog().clusters() {
+            for replica in cluster.replicas() {
+                let Some(values) = replica_overrides.get(&replica.replica_id) else {
+                    continue;
+                };
+                let mut updates = ConfigUpdates::default();
+                for (name, value) in values {
+                    let Some(entry) = dyncfgs.entry(name) else {
+                        // A replica-local parameter that is not a dyncfg has no
+                        // per-replica realization, so skip it.
+                        continue;
+                    };
+                    match entry.parse_val(value) {
+                        Ok(val) => updates.add_dynamic(name, val),
+                        Err(e) => {
+                            tracing::warn!(%name, %value, "cannot parse scoped override: {e}")
+                        }
+                    }
+                }
+                if !updates.updates.is_empty() {
+                    instance_overrides
+                        .entry(cluster.id)
+                        .or_default()
+                        .insert(replica.replica_id, updates);
+                }
+            }
+        }
+
+        // Only the compute controller's per-replica dyncfg layer is pushed, but on
+        // `clusterd` that also reaches storage. Compute and storage share one
+        // process, and the compute worker's `handle_update_configuration` applies
+        // the pushed dyncfg updates both to compute's own worker `ConfigSet` and to
+        // the shared persist client `ConfigSet` (`persist_clients.cfg()`) that the
+        // co-located storage server reads from the same `Arc`. So persist-backed and
+        // process-global replica-local configs such as the persist pager, LZ4,
+        // persist client tuning, and `lgalloc` take effect on storage too. The only
+        // gap would be a future `Replica`-scoped config realized solely in the
+        // storage worker's own `ConfigSet`, of which none exists today.
+        self.controller
+            .compute
+            .update_replica_dyncfg_overrides(instance_overrides);
+        // Re-push the env-wide compute config so existing replicas pick up their
+        // (possibly changed) overrides. This also reverts a removed override: the
+        // per-replica layer no longer carries the key, so the replica falls back
+        // to the env-wide value, which `compute_config` always includes because it
+        // renders the full dyncfg set.
+        let compute_config = crate::flags::compute_config(self.catalog().system_config());
+        self.controller.compute.update_configuration(compute_config);
+    }
+
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
@@ -2126,6 +2202,19 @@ impl Coordinator {
                 )?;
             }
         }
+
+        // Now that the compute instances and their replicas exist, push the
+        // replica-local scoped overrides into the compute controller so existing
+        // replicas observe them at startup. The scoped (per-cluster and
+        // per-replica) working copy was restored from the durable cache into
+        // `CatalogState` while opening the catalog, so the last-known values are
+        // in effect before the first parameter sync and through a sync outage.
+        // This must run after the creation loop above: the push iterates the
+        // controller's instances, so before they exist it is a no-op. It also
+        // runs before dataflows are rendered later in bootstrap, so render-frozen
+        // replica flags take effect. The cluster-coherent layer is read at plan
+        // time.
+        self.push_replica_dyncfg_overrides();
 
         info!(
             "startup: coordinator init: bootstrap: preamble complete in {:?}",
@@ -3553,6 +3642,7 @@ impl Coordinator {
             self.schedule_arrangement_sizes_collection().await;
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
+            self.spawn_catalog_info_metrics_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -4726,6 +4816,7 @@ pub fn serve(
                     storage_usage_collection_interval,
                     segment_client,
                     metrics,
+                    catalog_info_metrics_registry: metrics_registry.clone(),
                     optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),

@@ -145,6 +145,7 @@ impl Catalog {
             role_auth_by_id: imbl::OrdMap::new(),
             network_policies_by_name: imbl::OrdMap::new(),
             system_configuration: Arc::new(system_configuration),
+            scoped_system_parameters: Default::default(),
             default_privileges: Arc::new(DefaultPrivileges::default()),
             system_privileges: Arc::new(PrivilegeMap::default()),
             comments: Arc::new(CommentsMap::default()),
@@ -266,6 +267,8 @@ impl Catalog {
                 | BootstrapStateUpdateKind::DefaultPrivilege(_)
                 | BootstrapStateUpdateKind::SystemPrivilege(_)
                 | BootstrapStateUpdateKind::SystemConfiguration(_)
+                | BootstrapStateUpdateKind::ClusterSystemConfiguration(_)
+                | BootstrapStateUpdateKind::ReplicaSystemConfiguration(_)
                 | BootstrapStateUpdateKind::Cluster(_)
                 | BootstrapStateUpdateKind::NetworkPolicy(_)
                 | BootstrapStateUpdateKind::ClusterReplica(_) => {
@@ -985,6 +988,9 @@ fn add_new_remove_old_builtin_clusters_migration(
                         logging: default_logging_config(),
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
+                        auto_scaling_strategy: None,
+                        reconfiguration: None,
+                        burst: None,
                     }),
                     workload_class: None,
                 },
@@ -1320,7 +1326,7 @@ pub(crate) fn builtin_cluster_replica_config(
 ) -> mz_catalog::durable::ReplicaConfig {
     mz_catalog::durable::ReplicaConfig {
         location: mz_catalog::durable::ReplicaLocation::Managed {
-            availability_zone: None,
+            availability_zones: Vec::new(),
             billed_as: None,
             pending: false,
             internal: false,

@@ -133,6 +133,7 @@ class Composition:
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.has_testdrive_junit: bool = False
+        self.has_sqllogictest_junit: bool = False
         # Per-thread cached YAML file is held in self._tls.file_and_gen.
         # When self.compose is mutated, _invalidate_compose_files() bumps
         # self._compose_gen so each thread regenerates on its next invoke.
@@ -558,8 +559,9 @@ class Composition:
                         # freshly-built mzbuild image can briefly fail to
                         # resolve in the registry ("failed to resolve reference
                         # ... not found") before it has propagated. With a flat
-                        # 3s sleep, `up`'s 5 tries exhausted in ~12s, which was
-                        # too short to ride out the propagation delay.
+                        # 3s sleep, `up`'s tries exhausted in seconds, which was
+                        # too short to ride out the propagation delay; the cap
+                        # plus `up`'s try count govern the total wait (see there).
                         time.sleep(min(3 * 2 ** (retry - 1), 30))
                     continue
                 else:
@@ -911,6 +913,7 @@ class Composition:
         entrypoint: str | None = None,
         check: bool = True,
         silent: bool = False,
+        use_aliases: bool = False,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -927,6 +930,9 @@ class Composition:
             stdin: read STDIN from a string.
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
+            use_aliases: Connect the container to the network(s) using the
+                service's network aliases, so other services can reach it by
+                its service name (`docker compose run` omits aliases by default).
             capture: Capture the stdout of the `docker compose` invocation.
             capture_stderr: Capture the stderr of the `docker compose` invocation.
             capture_and_print: Print during execution and capture the
@@ -938,6 +944,7 @@ class Composition:
             *(f"-e{k}" for k in env_extra.keys()),
             *(["--detach"] if detach else []),
             *(["--rm"] if rm else []),
+            *(["--use-aliases"] if use_aliases else []),
             service,
             *args,
             capture=capture,
@@ -1206,7 +1213,7 @@ class Composition:
         *services: str | Service,
         detach: bool = True,
         wait: bool = True,
-        max_tries: int = 5,  # increased since quay.io returns 502 sometimes
+        max_tries: int = 8,
     ) -> None:
         """Build, (re)create, and start the named services.
 

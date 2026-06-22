@@ -21,6 +21,7 @@ from materialize.scratch import (
     launch_cluster,
     mssh,
     print_instances,
+    render_table,
     whoami,
 )
 
@@ -36,8 +37,6 @@ def _natsort_key(s: str) -> list:
 
 def pick_machine() -> str:
     """Show available machine configs and let the user pick one."""
-    from prettytable import PrettyTable
-
     scratch_dir = MZ_ROOT / "misc" / "scratch"
     configs: list[tuple[str, str, str]] = []
     for f in sorted(scratch_dir.glob("*.json"), key=lambda f: _natsort_key(f.stem)):
@@ -46,12 +45,13 @@ def pick_machine() -> str:
         for d in descs:
             configs.append((f.stem, d.instance_type, d.name))
 
-    pt = PrettyTable()
-    pt.field_names = ["#", "Config", "Instance Type", "Name"]
-    pt.align = "l"
-    for i, (stem, instance_type, name) in enumerate(configs, 1):
-        pt.add_row([i, stem, instance_type, name])
-    print(pt)
+    render_table(
+        ["#", "CONFIG", "INSTANCE TYPE", "NAME"],
+        [
+            [str(i), stem, instance_type, name]
+            for i, (stem, instance_type, name) in enumerate(configs, 1)
+        ],
+    )
 
     while True:
         choice = input("Select a machine config [#]: ").strip()
@@ -90,6 +90,44 @@ def multi_json(s: str) -> list[dict[Any, Any]]:
             result.append(obj)
 
     return result
+
+
+def load_machine_descs(
+    machine: str | None,
+    *,
+    instance_type: str | None = None,
+    size_gb: int | None = None,
+) -> list[MachineDesc]:
+    """Load machine configs, applying optional overrides.
+
+    With no `machine` but an explicit `instance_type`, synthesize a single
+    default config so callers can launch an arbitrary instance type without a
+    preset file. With no `machine` and no `instance_type`, prompt for one."""
+    if machine is None and instance_type is not None:
+        desc = MachineDesc(name=instance_type, instance_type=instance_type)
+        if size_gb is not None:
+            desc.size_gb = size_gb
+        return [desc]
+
+    if machine is None:
+        machine = pick_machine()
+
+    with open(MZ_ROOT / "misc" / "scratch" / f"{machine}.json") as f:
+        print(f"Reading machine configs from {f.name}")
+        descs = [MachineDesc.model_validate(obj) for obj in multi_json(f.read())]
+
+    if instance_type is not None:
+        if len(descs) != 1:
+            raise RuntimeError(
+                f"--instance-type requires a single-machine config, got {len(descs)}"
+            )
+        descs[0].instance_type = instance_type
+        # An explicit type override invalidates any pinned AMI; re-derive it.
+        descs[0].ami = None
+    if size_gb is not None:
+        for d in descs:
+            d.size_gb = size_gb
+    return descs
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
@@ -140,6 +178,19 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--instance-type",
+        type=str,
+        help=(
+            "Override the EC2 instance type. The AMI is derived from its "
+            "architecture. May be used without a machine config."
+        ),
+    )
+    parser.add_argument(
+        "--size-gb",
+        type=int,
+        help="Override the root volume size in GiB.",
+    )
+    parser.add_argument(
         "--max-age-days",
         type=float,
         default=MAX_AGE_DAYS,
@@ -158,15 +209,11 @@ def run(args: argparse.Namespace) -> None:
                 "extra-tags must be a JSON dictionary of strings to strings"
             )
 
-    if args.machine:
-        with open(MZ_ROOT / "misc" / "scratch" / f"{args.machine}.json") as f:
-            print(f"Reading machine configs from {f.name}")
-            descs = [MachineDesc.model_validate(obj) for obj in multi_json(f.read())]
-    else:
-        args.machine = pick_machine()
-        with open(MZ_ROOT / "misc" / "scratch" / f"{args.machine}.json") as f:
-            print(f"Reading machine configs from {f.name}")
-            descs = [MachineDesc.model_validate(obj) for obj in multi_json(f.read())]
+    descs = load_machine_descs(
+        args.machine,
+        instance_type=args.instance_type,
+        size_gb=args.size_gb,
+    )
 
     check_required_vars()
     extra_tags["LaunchedBy"] = whoami()
@@ -184,7 +231,7 @@ def run(args: argparse.Namespace) -> None:
         security_group_name=args.security_group_name,
         instance_profile=args.instance_profile,
         extra_tags=extra_tags,
-        delete_after=datetime.datetime.utcnow() + max_age,
+        delete_after=datetime.datetime.now(datetime.timezone.utc) + max_age,
         git_rev=args.git_rev,
         extra_env={},
     )

@@ -1,0 +1,38 @@
+- name: "syntax"
+  code: |
+    EXECUTE UNIT TEST <test_name>
+    FOR <target_view>
+    [AT TIME <timestamp_expr>]
+    [MOCK <dependency>(<col_name> <col_type>, ...) AS (<query>)[, ...]]
+    EXPECTED(<col_name> <col_type>, ...) AS (<query>);
+  syntax_elements:
+    - name: "`<test_name>`"
+      description: |
+        A name for the test. It identifies the test in `mz-deploy test`
+        output and in test filters.
+    - name: "`FOR <target_view>`"
+      description: |
+        The view or materialized view under test, given as a
+        fully-qualified name (`<database>.<schema>.<view>`).
+    - name: "`AT TIME <timestamp_expr>`"
+      description: |
+        Optional. Sets the value [`mz_now()`](/sql/functions/now_and_mz_now/)
+        returns while the test runs, so views with temporal filters produce
+        deterministic results. If omitted, `mz_now()` is not pinned.
+    - name: "`MOCK <dependency>(...) AS (<query>)`"
+      description: |
+        Replaces a dependency of the target view with literal rows. Specify
+        zero or more `MOCK` clauses, separated by commas; there is no comma
+        before the trailing `EXPECTED` clause. Every object the target view
+        depends on must have a corresponding `MOCK`. The dependency name may
+        be unqualified (`orders`), schema-qualified (`public.orders`), or
+        fully-qualified (`materialize.public.orders`), and is resolved
+        relative to the target view. The column list declares the names and
+        types of the mock; `<query>` supplies its rows, typically with
+        [`VALUES`](/sql/values/).
+    - name: "`EXPECTED(...) AS (<query>)`"
+      description: |
+        Required. The rows the target view should produce. The column list
+        must match the names and types of the target view's output columns,
+        and `<query>` supplies the expected rows. The test passes when the
+        view's output and the expected rows are equal as sets.

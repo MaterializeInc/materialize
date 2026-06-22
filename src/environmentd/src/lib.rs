@@ -107,6 +107,8 @@ pub struct Config {
     pub external_login_password_mz_system: Option<Password>,
     /// Frontegg JWT authenticator.
     pub frontegg: Option<FronteggAuthenticator>,
+    /// Frontegg workspace URL advertised in MCP OAuth discovery.
+    pub frontegg_oauth_issuer_url: Option<String>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
@@ -401,6 +403,7 @@ impl Listeners {
                 active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
                 http_host_name: config.http_host_name.clone(),
+                frontegg_oauth_issuer_url: config.frontegg_oauth_issuer_url.clone(),
                 source,
                 tls,
                 authenticator_kind,

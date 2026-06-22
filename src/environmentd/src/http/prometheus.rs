@@ -8,7 +8,8 @@
 // by the Apach
 
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
-use mz_sql::ast::display::escaped_string_literal;
+use mz_ore::sql;
+use mz_ore::sql::Sql;
 
 use super::sql::SqlRequest;
 
@@ -16,7 +17,7 @@ use super::sql::SqlRequest;
 pub(crate) struct PrometheusSqlQuery<'a> {
     pub(crate) metric_name: &'a str,
     pub(crate) help: &'a str,
-    pub(crate) query: &'a str,
+    pub(crate) query: &'static str,
     pub(crate) value_column_name: &'a str,
     pub(crate) per_replica: bool,
 }
@@ -26,21 +27,21 @@ impl<'a> PrometheusSqlQuery<'a> {
         &self,
         cluster: Option<(&Cluster, &ClusterReplica)>,
     ) -> SqlRequest {
-        SqlRequest::Simple {
-            query: if let Some((cluster, replica)) = cluster {
-                format!(
-                    "SET auto_route_catalog_queries = false; SET CLUSTER = {}; SET CLUSTER_REPLICA = {}; {}",
-                    escaped_string_literal(&cluster.name),
-                    escaped_string_literal(&replica.name),
-                    self.query
-                )
-            } else {
-                format!(
-                    "SET auto_route_catalog_queries = true; RESET CLUSTER; RESET CLUSTER_REPLICA; {}",
-                    self.query
-                )
-            },
-        }
+        let query = Sql::new(self.query);
+        let query = if let Some((cluster, replica)) = cluster {
+            sql!(
+                "SET auto_route_catalog_queries = false; SET CLUSTER = {}; SET CLUSTER_REPLICA = {}; {}",
+                Sql::literal(&cluster.name),
+                Sql::literal(&replica.name),
+                query
+            )
+        } else {
+            sql!(
+                "SET auto_route_catalog_queries = true; RESET CLUSTER; RESET CLUSTER_REPLICA; {}",
+                query
+            )
+        };
+        SqlRequest::Simple { query }
     }
 }
 

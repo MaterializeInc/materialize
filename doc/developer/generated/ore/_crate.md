@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/lib.rs
-revision: 6d8705a7be
+revision: 12fbe31d24
 ---
 
 # mz-ore
@@ -32,6 +32,7 @@ Modules are included here when they are broadly useful but too small to warrant 
 | `permutations` | Permutation iterators |
 | `result` | `ResultExt` trait |
 | `serde` | Serde helpers for alternate serialization formats |
+| `sql` | Composable, escape-aware SQL fragment building: `Sql` type and `sql!` macro for constructing PostgreSQL-safe SQL strings from trusted text and escaped identifiers/literals |
 | `stats` | Simple stats (min/max/histogram) |
 | `str` | String utilities: `StrExt`, indentation, separators |
 | `thread` | Thread-spawning wrappers that capture tracing context |

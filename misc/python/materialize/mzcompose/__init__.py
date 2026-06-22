@@ -509,6 +509,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "memory_limiter_interval",
     "memory_limiter_usage_bias",
     "memory_limiter_burst_factor",
+    "catalog_info_metrics_reconcile_interval",
     "compute_server_maintenance_interval",
     "compute_dataflow_max_inflight_bytes_cc",
     "compute_flat_map_fuel",
@@ -669,6 +670,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mcp_agent",
     "enable_mcp_agent_query_tool",
     "enable_mcp_developer",
+    "enable_mcp_developer_query_tool",
     "mcp_max_response_size",
     "user_id_pool_batch_size",
 ]

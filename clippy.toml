@@ -53,6 +53,29 @@ disallowed-methods = [
     { path = "aws_config::from_env", reason = "use the `mz_aws_config::defaults` function instead" },
     { path = "aws_config::load_from_env", reason = "use the `mz_aws_config::defaults` function instead" },
     { path = "aws_sdk_s3::Client::new", reason = "use the `mz_aws_util::s3::new_client` function instead" },
+    { path = "tokio_postgres::Client::simple_query", reason = "use `mz_postgres_util::simple_query` with `Sql` instead" },
+    { path = "tokio_postgres::Client::batch_execute", reason = "use `mz_postgres_util::batch_execute` with `Sql` instead" },
+    { path = "tokio_postgres::Client::query", reason = "use `mz_postgres_util::query`/`query_prepared` wrappers instead" },
+    { path = "tokio_postgres::Client::query_one", reason = "use `mz_postgres_util::query_one`/`query_one_prepared` wrappers instead" },
+    { path = "tokio_postgres::Client::query_opt", reason = "use `mz_postgres_util::query_opt`/`query_opt_prepared` wrappers instead" },
+    { path = "tokio_postgres::Client::execute", reason = "use `mz_postgres_util::execute`/`execute_prepared` wrappers instead" },
+    { path = "tokio_postgres::Transaction::simple_query", reason = "use `Sql` wrappers from `mz_postgres_util` instead" },
+    { path = "tokio_postgres::Transaction::batch_execute", reason = "use `Sql` wrappers from `mz_postgres_util` instead" },
+    { path = "tokio_postgres::Transaction::query", reason = "use `mz_postgres_util::query`/`query_prepared` wrappers instead" },
+    { path = "tokio_postgres::Transaction::query_one", reason = "use `mz_postgres_util::query_one`/`query_one_prepared` wrappers instead" },
+    { path = "tokio_postgres::Transaction::query_opt", reason = "use `mz_postgres_util::query_opt`/`query_opt_prepared` wrappers instead" },
+    { path = "tokio_postgres::Transaction::execute", reason = "use `mz_postgres_util::execute`/`execute_prepared` wrappers instead" },
+    { path = "postgres::Client::simple_query", reason = "avoid direct string SQL; use `Sql` composition and wrappers where possible" },
+    { path = "postgres::Client::batch_execute", reason = "avoid direct string SQL; use `Sql` composition and wrappers where possible" },
+
+    # Unlike PostgreSQL above, MySQL gets `query` → `exec` lints instead of an `Sql`-style typed
+    # builder, because `mysql_async`'s prepared-statement API already provides the trust boundary.
+    { path = "mysql_async::queryable::Queryable::query", reason = "use `Queryable::exec` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_first", reason = "use `Queryable::exec_first` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_drop", reason = "use `Queryable::exec_drop` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_iter", reason = "use `Queryable::exec_iter` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_map", reason = "use `Queryable::exec_map` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
+    { path = "mysql_async::queryable::Queryable::query_fold", reason = "use `Queryable::exec_fold` (prepared statements) instead, or validate inputs and `#[allow]` locally" },
 
     # Prevent access to Differential APIs that want to use the default trace or use a default name, or where we offer
     # our own wrapper

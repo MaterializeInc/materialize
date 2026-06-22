@@ -509,6 +509,15 @@ p+p {
         }
     }
 
+    .private-preview-inline {
+        color: #d33902;
+        white-space: nowrap;
+        background: rgba(238, 134, 96, 0.05);
+        border: 1px solid rgba(238, 134, 96, 0.2);
+        border-radius: rem(0.6);
+        padding: rem(0.1);
+    }
+
     .note,
     .important {
         background: var(--note);
@@ -790,6 +799,7 @@ p+p {
 
         display: flex;
         overflow-x: auto;
+        overflow-y: hidden;
         // white-space: nowrap;
 
         li {

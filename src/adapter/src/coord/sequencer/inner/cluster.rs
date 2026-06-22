@@ -18,8 +18,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
-    ReplicaLogging,
+    ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_ore::cast::CastFrom;
@@ -184,6 +183,9 @@ impl Coordinator {
                     replication_factor: 1,
                     optimizer_feature_overrides: Default::default(),
                     schedule: Default::default(),
+                    auto_scaling_strategy: None,
+                    reconfiguration: None,
+                    burst: None,
                 });
             }
         }
@@ -196,6 +198,9 @@ impl Coordinator {
                 replication_factor,
                 optimizer_feature_overrides: _,
                 schedule,
+                auto_scaling_strategy: _,
+                reconfiguration: _,
+                burst: _,
             }) => {
                 match &options.size {
                     Set(s) => size.clone_from(s),
@@ -627,6 +632,9 @@ impl Coordinator {
                     replication_factor: plan.replication_factor,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
+                    auto_scaling_strategy: None,
+                    reconfiguration: None,
+                    burst: None,
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -680,6 +688,7 @@ impl Coordinator {
                 .catalog()
                 .get_role_allowed_cluster_sizes(&Some(role_id)),
             &size,
+            false,
         )?;
 
         // Eagerly validate the `max_replicas_per_cluster` limit.
@@ -732,7 +741,9 @@ impl Coordinator {
         reason: ReplicaCreateDropReason,
     ) -> Result<(), AdapterError> {
         let location = mz_catalog::durable::ReplicaLocation::Managed {
-            availability_zone: None,
+            // Concretized below from the cluster config; this intermediate value
+            // is discarded, so the list is left empty here.
+            availability_zones: Vec::new(),
             billed_as: None,
             internal: false,
             size: size.clone(),
@@ -755,6 +766,7 @@ impl Coordinator {
                     .catalog()
                     .get_role_allowed_cluster_sizes(&Some(owner_id)),
                 azs,
+                false,
             )?,
             compute: ComputeReplicaConfig { logging },
         };
@@ -853,7 +865,9 @@ impl Coordinator {
                     }
 
                     let location = mz_catalog::durable::ReplicaLocation::Managed {
-                        availability_zone,
+                        // The user-pinned `AVAILABILITY ZONE`, if any, as a zero-
+                        // or one-element list.
+                        availability_zones: availability_zone.into_iter().collect(),
                         billed_as,
                         internal,
                         size: size.clone(),
@@ -880,6 +894,7 @@ impl Coordinator {
                         .catalog()
                         .get_role_allowed_cluster_sizes(&Some(role_id)),
                     None,
+                    false,
                 )?,
                 compute: ComputeReplicaConfig { logging },
             };
@@ -936,7 +951,9 @@ impl Coordinator {
                     None => None,
                 };
                 let location = mz_catalog::durable::ReplicaLocation::Managed {
-                    availability_zone,
+                    // The user-pinned `AVAILABILITY ZONE`, if any, as a zero- or
+                    // one-element list.
+                    availability_zones: availability_zone.into_iter().collect(),
                     billed_as,
                     internal,
                     size,
@@ -965,6 +982,7 @@ impl Coordinator {
                 // Planning ensures all replicas in this codepath
                 // are unmanaged.
                 None,
+                false,
             )?,
             compute: ComputeReplicaConfig { logging },
         };
@@ -1036,6 +1054,9 @@ impl Coordinator {
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
         }) = &cluster.config.variant
         else {
             panic!("expected existing managed cluster config");
@@ -1047,6 +1068,9 @@ impl Coordinator {
             logging: new_logging,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
         }) = &new_config.variant
         else {
             panic!("expected new managed cluster config");
@@ -1056,6 +1080,7 @@ impl Coordinator {
         self.catalog.ensure_valid_replica_size(
             &self.catalog().get_role_allowed_cluster_sizes(&role_id),
             new_size,
+            false,
         )?;
 
         // check for active updates
@@ -1213,6 +1238,9 @@ impl Coordinator {
             logging: _,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
         }) = &mut new_config.variant
         else {
             panic!("expected new managed cluster config");
@@ -1253,9 +1281,10 @@ impl Coordinator {
                 ReplicaLocation::Managed(location) => {
                     sizes.insert(location.size.clone());
 
-                    if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
-                        &location.availability_zones
-                    {
+                    // An unmanaged cluster's replica carries its single
+                    // user-pinned AZ (if any) as the sole entry; every pin must
+                    // fall within the managed cluster's `AVAILABILITY ZONES`.
+                    for az in &location.availability_zones {
                         if !new_availability_zones.contains(az) {
                             coord_bail!(
                                 "unmanaged replica has availability zone {az} which is not \

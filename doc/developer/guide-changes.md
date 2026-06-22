@@ -150,16 +150,25 @@ A classic example of a bad commit message is
 
 ### Release notes
 
-If your PR contains one or more user-visible changes, be sure to add a
-preliminary release note to the PR description in the marked location in the
-template.
+Release notes are no longer written by PR authors. They are generated per
+release by the LLM-driven [`/mz-release-notes` skill](https://github.com/MaterializeInc/mz-skills/blob/main/.agents/skills/mz-release-notes/SKILL.md),
+which reads every PR in a version — including its **full description** —
+classifies each change as user-facing or internal, drafts a note describing the
+user-observable effect, and opens a docs PR against materialize for human
+review.
 
-Your release note may sound very similar to your commit message. That's okay!
+What this means for you as a PR author: instead of writing a release note, make
+sure your **PR description** states the user-visible effect in **user-facing
+terms**. The classifier omits any PR whose description contains only implementation
+detail (internal struct, function, flag, or config names) with no discernible
+user-facing impact. If your change is user-visible, say so in the description —
+otherwise it may be silently left out of the release notes.
 
-#### What changes require a release note?
+#### What counts as a user-facing change?
 
-Any behavior change to a stable, user-visible API requires a release note.
-Roughly speaking, Materialize's stable APIs are:
+Any behavior change to a stable, user-visible API is user-facing, so make sure
+your PR description spells it out. Roughly speaking, Materialize's stable APIs
+are:
 
   * The syntax and semantics of all documented SQL statements.
   * The observable behavior of any source or sink.
@@ -167,13 +176,13 @@ Roughly speaking, Materialize's stable APIs are:
 
 For details, see the [backwards compatibility policy](https://materialize.com/docs/releases/#backwards-compatibility).
 
-Notably, changes to experimental or unstable APIs should *not* have release
-notes. The point of having experimental and unstable APIs is to decrease the
-engineering burden when those features are changed. Instead, write a release
-note introducing the feature for the release in which the feature is
-de-experimentalized.
+Notably, changes to experimental or unstable APIs are not user-facing yet: the
+classifier omits anything still behind an off-by-default feature flag, since a
+feature you must manually enable isn't available to users. The user-facing note
+appears naturally in the release where the feature is turned on by default
+(de-experimentalized) — describe the feature in that PR's description.
 
-Examples of changes that require release notes:
+Examples of user-facing changes:
 
   * The addition of a new, documented SQL function.
   * The stabilization of a new source type.
@@ -181,7 +190,7 @@ Examples of changes that require release notes:
   * A bug fix that changes the output format of a particular data type in a
     sink.
 
-Examples of changes that do not require release notes:
+Examples of changes that are not user-facing:
 
   * **An improvement to the build system.** The build system is not user
     visible.
@@ -193,53 +202,25 @@ Examples of changes that do not require release notes:
     the visible behavior of Materialize, not its implementation!)
 
 Performance improvements are a borderline case. A small performance improvement
-does not need a release note, but a large performance improvement may warrant
-one if it results in a noticeable improvement for a large class of users or
-unlocks new use cases for Materialize. Examples of performance improvements
-that warrant a release note include:
+is generally not user-facing, but a large one is if it results in a noticeable
+improvement for a large class of users or unlocks new use cases for Materialize.
+The classifier only includes a performance PR when its description carries
+concrete evidence of user-observable impact — ideally a measured number ("2.5x
+faster", "87% reduction in p99 latency"), not just an implementation description.
+Examples of performance improvements worth surfacing include:
 
   * Improving the speed of Avro decoding by 2x
   * Converting an O(n<sup>2</sup>) algorithm in the optimizer to an O(n)
     algorithm so that queries with several dozen `UNION` operations can be
     planned in a reasonable amount of time
 
-#### How to write a good release note
+#### How the note gets written and phrased
 
-Every release note should be phrased in the imperative mood, like a Git
-commit message. They should complete the sentence, "This release will...".
-
-Good release notes:
-
-  - [This release will...] Require the `-w` / `--workers` command-line option.
-  - [This release will...] In the event of a crash, print the stack trace.
-
-Misbehaved release notes:
-
-  - Users must now specify the `-w` / `-threads` command line option.
-  - Materialize will print a stack trace if it crashes.
-  - Instead of limiting SQL statements to 8KiB, limit them to 1024KiB instead.
-
-Link to at least one page where users can learn more about either the change or
-the area in which the change was made. Notes about new features can be concise if
-the new feature has comprehensive documentation. Notes about changes to features
-must be more detailed, as the note is likely the only documentation of the
-change in behavior. Consider linking to a GitHub issue or pull request via the
-`gh` shortcode if there is no good section of the documentation to link to.
-
-Strive for some variety of verbs. "Support new feature" gets boring as a release
-note.
-
-Use relative links (/path/to/doc), not absolute links
-(https://materialize.com/docs/path/to/doc).
-
-Wrap your release notes at the 80 character mark.
-
-#### Internal note order
-
-Put breaking changes before other release notes, and mark them with
-`**Breaking change.**` at the start.
-
-List new features before bug fixes.
+You don't phrase the note yourself — the `mz-release-notes` skill drafts it from
+your PR description in the house style (imperative mood, user-facing wording,
+links to docs or the tracking issue). Your job is to give it accurate
+raw material: a description that names the user-visible effect. See the skill's
+rubric in `MaterializeInc/mz-skills` for the conventions it follows.
 
 ### PR size limits
 

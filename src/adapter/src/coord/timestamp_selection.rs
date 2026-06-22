@@ -228,14 +228,18 @@ pub trait TimestampProvider {
     fn needs_linearized_read_ts(isolation_level: &IsolationLevel, when: &QueryWhen) -> bool {
         // When we're in the context of a timeline (assumption) and one of these
         // scenarios hold, we need to use a linearized read timestamp:
-        // - The isolation level is Strict Serializable and the `when` allows us to use the
-        //   the timestamp oracle (ex: queries with no AS OF).
-        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
+        // - The isolation level anchors against the oracle (Strict Serializable,
+        //   Strong Session Serializable, Bounded Staleness) and the `when` allows
+        //   us to use the timestamp oracle (ex: queries with no AS OF).
+        // - The `when` requires us to use the timestamp oracle (ex: read-then-write
+        //   queries).
         when.must_advance_to_timeline_ts()
             || (when.can_advance_to_timeline_ts()
                 && matches!(
                     isolation_level,
-                    IsolationLevel::StrictSerializable | IsolationLevel::StrongSessionSerializable
+                    IsolationLevel::StrictSerializable
+                        | IsolationLevel::StrongSessionSerializable
+                        | IsolationLevel::BoundedStaleness(_)
                 ))
     }
 
@@ -304,15 +308,27 @@ pub trait TimestampProvider {
             }
 
             // The specification of an `oracle_read_ts` may indicates that we must advance to it,
-            // except in one isolation mode, or if `when` does not indicate that we should.
+            // except in some isolation modes, or if `when` does not indicate that we should.
             // At the moment, only `QueryWhen::FreshestTableWrite` indicates that we should.
             // TODO: Should this just depend on the isolation level?
             if let Some(timestamp) = &oracle_read_ts {
-                if isolation_level != &IsolationLevel::StrongSessionSerializable
-                    || when.must_advance_to_timeline_ts()
-                {
-                    // When specification of an `oracle_read_ts` is required, we must advance to it.
-                    // If it's not present, lets bail out.
+                // Whether this isolation level treats `oracle_read_ts` as a hard
+                // lower bound. Strong session serializable (session-local oracle)
+                // and bounded staleness (`oracle - D` anchor) instead consult it
+                // below; pushing it here would shadow those semantics.
+                let hard_lower_bound = match isolation_level {
+                    IsolationLevel::StrongSessionSerializable
+                    | IsolationLevel::BoundedStaleness(_) => false,
+                    IsolationLevel::ReadUncommitted
+                    | IsolationLevel::ReadCommitted
+                    | IsolationLevel::RepeatableRead
+                    | IsolationLevel::Serializable
+                    | IsolationLevel::StrictSerializable => true,
+                };
+                // `must_advance_to_timeline_ts()` (only `FreshestTableWrite`)
+                // forces the bound regardless; bounded staleness rejects writes
+                // upstream, so that path is unreachable for it in practice.
+                if hard_lower_bound || when.must_advance_to_timeline_ts() {
                     constraints.lower.push((
                         Antichain::from_elem(*timestamp),
                         Reason::IsolationLevel(*isolation_level),
@@ -332,6 +348,27 @@ pub trait TimestampProvider {
                     Antichain::from_elem(real_time_recency_ts),
                     Reason::RealTimeRecency,
                 ));
+            }
+
+            // Bounded staleness anchors the freshness floor at `oracle.read_ts - D`
+            // and clamps the upper at `largest_not_in_advance_of_upper`. The upper
+            // clamp is what makes an infeasible bound fail fast in the coordinator
+            // instead of blocking on compute for the upper to advance — which would
+            // make the failure mode cluster-shape-dependent. `oracle_read_ts` is
+            // `None` under `AS OF`, where the user-chosen `T` is the only constraint.
+            if let IsolationLevel::BoundedStaleness(d) = isolation_level {
+                if let Some(anchor) = oracle_read_ts {
+                    let bound_ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+                    let lower = anchor.saturating_sub(bound_ms);
+                    constraints.lower.push((
+                        Antichain::from_elem(lower),
+                        Reason::IsolationLevel(*isolation_level),
+                    ));
+                    constraints.upper.push((
+                        Antichain::from_elem(largest_not_in_advance_of_upper),
+                        Reason::IsolationLevel(*isolation_level),
+                    ));
+                }
             }
 
             // If we are operating in Strong Session Serializable, we use an alternate timestamp lower bound.
@@ -382,7 +419,9 @@ pub trait TimestampProvider {
             // bound through the `oracle_read_ts`, and then requires the stalest valid timestamp.
 
             if when.can_advance_to_upper()
-                && (isolation_level == &IsolationLevel::Serializable || timeline.is_none())
+                && (isolation_level == &IsolationLevel::Serializable
+                    || matches!(isolation_level, IsolationLevel::BoundedStaleness(_))
+                    || timeline.is_none())
             {
                 Preference::FreshestAvailable
             } else {
@@ -412,6 +451,30 @@ pub trait TimestampProvider {
             if !constraints.lower_bound().less_equal(&candidate)
                 || constraints.upper_bound().less_than(&candidate)
             {
+                // Bounded staleness wants a specific error describing the staleness
+                // gap. Derive it directly from `anchor - D` and the inputs' upper,
+                // not from `constraints.{lower,upper}_bound()` — those join *all*
+                // reasons (`since`, `AS OF`, …), so a non-bs constraint could
+                // dominate and the reported gap would not describe the bs failure.
+                // A zero gap means the bs floor was satisfiable and something else
+                // caused the infeasibility; fall through to the generic error.
+                // `oracle_read_ts` is unset under `AS OF`, where bs added no
+                // constraint, so we cannot reach here for a bs-specific failure.
+                if let IsolationLevel::BoundedStaleness(d) = isolation_level {
+                    if let Some(anchor) = oracle_read_ts {
+                        let bound_ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+                        let bs_lower: u64 = anchor.saturating_sub(bound_ms).into();
+                        let upper: u64 = largest_not_in_advance_of_upper.into();
+                        let gap = bs_lower.saturating_sub(upper);
+                        if gap > 0 {
+                            return Err(AdapterError::BoundedStalenessExceeded {
+                                bound: *d,
+                                gap_ms: gap,
+                                slowest_input: None,
+                            });
+                        }
+                    }
+                }
                 return Err(AdapterError::ImpossibleTimestampConstraints {
                     constraints: constraints.display(timeline.as_ref()).to_string(),
                 });
@@ -498,6 +561,16 @@ pub trait TimestampProvider {
             return Err(AdapterError::CollectionUnreadable {
                 id: unreadable_collections.into_iter().join(", "),
             });
+        }
+
+        // Bounded staleness freshness math assumes the EpochMilliseconds timeline,
+        // where timestamps are wall-clock milliseconds. Timeline-less queries
+        // (`TimestampIndependent`, e.g. constant queries) are fine — the freshness
+        // contract is vacuous for them.
+        if isolation_level.is_bounded_staleness()
+            && matches!(&timeline, Some(t) if *t != Timeline::EpochMilliseconds)
+        {
+            return Err(AdapterError::BoundedStalenessTimelineUnsupported);
         }
 
         let raw_determination = Self::determine_timestamp_via_constraints(
@@ -651,6 +724,31 @@ impl Coordinator {
                         .with_label_values(&[compute_instance.to_string().as_str()])
                         .observe(f64::cast_lossy(u64::from(
                             strict.saturating_sub(*serializable),
+                        )));
+                }
+            }
+        }
+        if !det.respond_immediately()
+            && isolation_level.is_bounded_staleness()
+            && real_time_recency_ts.is_none()
+        {
+            // Note down the difference between BoundedStaleness and Serializable into a metric.
+            if let Some(bs_ts) = det.timestamp_context.timestamp() {
+                let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
+                    session,
+                    id_bundle,
+                    when,
+                    timeline_context,
+                    oracle_read_ts,
+                    real_time_recency_ts,
+                    &IsolationLevel::Serializable,
+                )?;
+                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
+                    self.metrics
+                        .timestamp_difference_for_bounded_staleness_ms
+                        .with_label_values(&[compute_instance.to_string().as_str()])
+                        .observe(f64::cast_lossy(u64::from(
+                            serializable.saturating_sub(*bs_ts),
                         )));
                 }
             }

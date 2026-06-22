@@ -522,6 +522,159 @@ mod tests {
         assert_none!(reader.next());
     }
 
+    // Avro numeric promotion across every promotable pair, with the field
+    // rendered both bare (`"int"`) and nullable (`["null", "int"]`) on each
+    // side. Promoting a nullable column means promoting inside the `["null",
+    // T]` union; that previously failed at decode time with "Failed to match
+    // writer union variant ... against any variant in the reader" because union
+    // variant matching ignored promotion. The four bare/nullable combinations
+    // cover concrete -> union, union -> concrete, union -> union, and the plain
+    // concrete -> concrete path.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
+    fn test_numeric_promotion_matrix() {
+        // `123` is exactly representable in int/long/float/double, so a value
+        // promoted to `kind` equals that kind's representative value.
+        fn value_of(kind: &str) -> Value {
+            match kind {
+                "int" => Value::Int(123),
+                "long" => Value::Long(123),
+                "float" => Value::Float(123.0),
+                "double" => Value::Double(123.0),
+                other => panic!("unhandled kind {other}"),
+            }
+        }
+        fn record_schema_json(kind: &str, nullable: bool) -> String {
+            let ty = if nullable {
+                format!(r#"["null", "{kind}"]"#)
+            } else {
+                format!(r#""{kind}""#)
+            };
+            format!(r#"{{"type":"record","name":"test","fields":[{{"name":"f1","type":{ty}}}]}}"#)
+        }
+        // A nullable field is a `["null", T]` union, so the value lives in
+        // variant 1 with the null variant at 0.
+        fn maybe_union(v: Value, nullable: bool) -> Value {
+            if nullable {
+                Value::Union {
+                    index: 1,
+                    inner: Box::new(v),
+                    n_variants: 2,
+                    null_variant: Some(0),
+                }
+            } else {
+                v
+            }
+        }
+
+        // Every promotable numeric pair (int/long/float/double widening).
+        let pairs = [
+            ("int", "long"),
+            ("int", "float"),
+            ("int", "double"),
+            ("long", "float"),
+            ("long", "double"),
+            ("float", "double"),
+        ];
+        for (writer_kind, reader_kind) in pairs {
+            for writer_nullable in [false, true] {
+                for reader_nullable in [false, true] {
+                    let writer_schema =
+                        Schema::from_str(&record_schema_json(writer_kind, writer_nullable))
+                            .unwrap();
+                    let reader_schema =
+                        Schema::from_str(&record_schema_json(reader_kind, reader_nullable))
+                            .unwrap();
+                    let mut writer =
+                        Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+                    let mut record = Record::new(writer_schema.top_node()).unwrap();
+                    record.put("f1", maybe_union(value_of(writer_kind), writer_nullable));
+                    writer.append(record).unwrap();
+                    writer.flush().unwrap();
+                    let input = writer.into_inner();
+
+                    let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
+                    let expected = maybe_union(value_of(reader_kind), reader_nullable);
+                    assert_eq!(
+                        reader.next().unwrap().unwrap(),
+                        Value::Record(vec![("f1".to_string(), expected)]),
+                        "promotion {writer_kind}{} -> {reader_kind}{} decoded incorrectly",
+                        if writer_nullable { " (nullable)" } else { "" },
+                        if reader_nullable { " (nullable)" } else { "" },
+                    );
+                    assert_none!(reader.next());
+                }
+            }
+        }
+    }
+
+    // Promotion-aware union matching must still *reject* changes that are not
+    // valid promotions; a too-permissive matcher would match a variant and then
+    // mis-decode or silently corrupt the value. Each case is a numeric
+    // narrowing (`double` -> `int`) or an incompatible change (`string` ->
+    // `int`), across the same bare/nullable combinations as the positive
+    // matrix, and must fail rather than produce a value.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
+    fn test_non_promotable_changes_are_rejected() {
+        fn record_with_field(ty: &str) -> Schema {
+            Schema::from_str(&format!(
+                r#"{{"type":"record","name":"test","fields":[{{"name":"f1","type":{ty}}}]}}"#
+            ))
+            .unwrap()
+        }
+        // (writer field type, writer value, reader field type).
+        let cases = [
+            // Numeric narrowing, exercising each union matcher's reject path.
+            (
+                r#"["null", "double"]"#,
+                Value::Double(1.0),
+                r#"["null", "int"]"#,
+            ), // union -> union
+            (r#""double""#, Value::Double(1.0), r#"["null", "int"]"#), // bare  -> union
+            (r#"["null", "double"]"#, Value::Double(1.0), r#""int""#), // union -> bare
+            (r#""double""#, Value::Double(1.0), r#""int""#),           // bare  -> bare
+            // Incompatible (non-numeric) change.
+            (
+                r#"["null", "string"]"#,
+                Value::String("x".to_string()),
+                r#"["null", "int"]"#,
+            ),
+            (r#""string""#, Value::String("x".to_string()), r#""int""#),
+        ];
+        for (writer_ty, writer_value, reader_ty) in cases {
+            let writer_schema = record_with_field(writer_ty);
+            let reader_schema = record_with_field(reader_ty);
+            let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+            let mut record = Record::new(writer_schema.top_node()).unwrap();
+            let field_value = if writer_ty.starts_with('[') {
+                Value::Union {
+                    index: 1,
+                    inner: Box::new(writer_value),
+                    n_variants: 2,
+                    null_variant: Some(0),
+                }
+            } else {
+                writer_value
+            };
+            record.put("f1", field_value);
+            writer.append(record).unwrap();
+            writer.flush().unwrap();
+            let input = writer.into_inner();
+
+            // Resolution may reject the pair up front, or decoding may error;
+            // either is acceptable, but it must never silently yield a value.
+            let produced_value = match Reader::with_schema(&reader_schema, &input[..]) {
+                Err(_) => false,
+                Ok(mut reader) => matches!(reader.next(), Some(Ok(_))),
+            };
+            assert!(
+                !produced_value,
+                "non-promotable change {writer_ty} -> {reader_ty} was not rejected",
+            );
+        }
+    }
+
     //TODO: move where it fits better
     #[mz_ore::test]
     fn test_enum_no_reader_schema() {

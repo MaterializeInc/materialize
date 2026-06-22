@@ -27,7 +27,15 @@ pub struct PrettyConfig {
 }
 
 /// Pretty prints a statement at a width.
-pub fn to_pretty<T: AstInfo>(stmt: &Statement<T>, config: PrettyConfig) -> String {
+///
+/// Bounded on `NestedStatement = Statement<Raw>` (true for every `AstInfo` —
+/// both `Raw` and `Aug` nest a raw statement) so that `DECLARE`/`PREPARE` can
+/// recurse into their inner statement's pretty doc, which is what keeps a secret
+/// in the inner statement (e.g. a role password) lossless rather than redacted.
+pub fn to_pretty<T: AstInfo<NestedStatement = Statement<Raw>>>(
+    stmt: &Statement<T>,
+    config: PrettyConfig,
+) -> String {
     format!("{};", Pretty { config }.to_doc(stmt).pretty(config.width))
 }
 
@@ -82,7 +90,10 @@ pub struct Pretty {
 }
 
 impl Pretty {
-    fn to_doc<'a, T: AstInfo>(&'a self, v: &'a Statement<T>) -> RcDoc<'a> {
+    fn to_doc<'a, T: AstInfo<NestedStatement = Statement<Raw>>>(
+        &'a self,
+        v: &'a Statement<T>,
+    ) -> RcDoc<'a> {
         match v {
             Statement::Select(v) => self.doc_select_statement(v),
             Statement::Insert(v) => self.doc_insert(v),
@@ -103,6 +114,11 @@ impl Pretty {
             Statement::CreateIndex(v) => self.doc_create_index(v),
             Statement::CreateRole(v) => self.doc_create_role(v),
             Statement::AlterRole(v) => self.doc_alter_role(v),
+            // Recurse into the inner statement so a secret it carries (e.g. a
+            // role password) is printed losslessly by the inner doc rather than
+            // redacted by the fallback AstDisplay path.
+            Statement::Declare(v) => self.doc_declare(v),
+            Statement::Prepare(v) => self.doc_prepare(v),
             _ => self.doc_display(v, "statement"),
         }
     }

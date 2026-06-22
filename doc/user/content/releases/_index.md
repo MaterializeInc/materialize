@@ -15,6 +15,168 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.29.0
+*Released to Materialize Cloud: 2026-06-18* <br>
+*Released to Materialize Self-Managed: 2026-06-19* <br>
+
+### Bounded Staleness Isolation Level {#v26.29-bounded-staleness-isolation-level}
+
+{{< public-preview />}}
+
+Bounded staleness is a new SQL isolation level that lets you set a freshness target for your queries. For example, you can configure a session to only serve data that is at most 10 seconds stale. If sufficiently fresh data is unavailable, the query immediately returns an error (`SQLSTATE 40001`) rather than blocking. This positions bounded staleness between [Serializable](/reference/isolation-level/#serializable) and [Strict Serializable](/reference/isolation-level/#strict-serializable): it never blocks on input frontiers, but errors immediately when the staleness bound cannot be met. Bounded staleness is read-only and can be set at the session or connection level.
+
+```mzsql
+-- Serve data no more than 10 seconds stale; error immediately if unavailable.
+SET TRANSACTION_ISOLATION TO 'bounded staleness 10s';
+```
+
+For more information, see [Bounded Staleness](/reference/isolation-level/#bounded-staleness).
+
+### mz-deploy (v0.1) {#v26.29-mz-deploy}
+
+[mz-deploy](/manage/mz-deploy/) is a new CLI for declarative Materialize deployments. You can use mz-deploy to define sources, views, indexes, clusters, and other Materialize objects as code—and so can your coding agents. Projects compile locally with no running Materialize instance required: run unit tests, inspect query plans, and validate changes entirely inside a sandbox before touching a shared environment. Built in Rust, mz-deploy cold-compiles a project with 40,000+ models in under 500ms, with most incremental changes compiling in under 10ms. Deployments only redeploy changed objects, support blue-green deployments, and allow concurrent deployments with conflict detection at promote time.
+
+For instance, to create a new Materialize project called `order-monitoring`:
+
+```bash
+mz-deploy new order-monitoring
+```
+
+This scaffolds the following directory structure:
+
+```nofmt
+order-monitoring/
+├── models/
+│   └── materialize/
+│       └── public/        # SQL files → materialize.public.<filename>
+├── clusters/              # Cluster definitions
+├── roles/                 # Role definitions
+├── network-policies/      # Network policy definitions
+├── project.toml           # Project configuration
+├── README.md
+└── .gitignore
+```
+
+For more information, see [mz-deploy](/manage/mz-deploy/).
+
+### Iceberg Sinks for Google Cloud Platform {#v26.29-google-cloud-support-for-iceberg-sinks}
+
+{{< private-preview />}}
+
+Iceberg sinks can now deliver data into [GCP Lakehouse](https://docs.cloud.google.com/lakehouse/docs/introduction) managed Iceberg tables. A new `GCP` connection type handles Google service account credentials, enabling Materialize to authenticate with BigLake's Iceberg REST catalog.
+
+```mzsql
+-- Create a GCP service account connection
+CREATE CONNECTION gcp_connection TO GCP (
+  SERVICE ACCOUNT KEY = SECRET gcp_sa_key
+);
+
+-- Create an Iceberg catalog connection using BigLake
+CREATE CONNECTION biglake_catalog TO ICEBERG CATALOG (
+  CATALOG TYPE = 'rest',
+  URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
+  GCP CONNECTION = gcp_connection,
+  WAREHOUSE = 'gs://my-gcs-bucket'
+);
+
+-- Create an Iceberg sink writing into a GCP Lakehouse managed Iceberg table
+CREATE SINK my_gcp_iceberg_sink
+  IN CLUSTER sink_cluster
+  FROM my_materialized_view
+  INTO ICEBERG CATALOG CONNECTION biglake_catalog (
+    NAMESPACE = 'my_namespace',
+    TABLE = 'my_table'
+  )
+  KEY (id)
+  MODE UPSERT
+  WITH (COMMIT INTERVAL = '60s');
+```
+
+For more information, see [Syntax: CREATE SINK... INTO ICEBERG](/sql/create-sink/iceberg).
+
+### Advisory {#v26.29-advisory}
+
+- **MySQL zero-value YEAR columns**: This release changes how the MySQL source decodes zero-value `YEAR` columns (`0000`). Previously, zero values were decoded inconsistently: as `0` during the initial snapshot and as `1900` (an invalid year) from the binlog. Both are now decoded as the 4-digit string `0000`, matching MySQL's own representation. Non-zero years (1901–2155) are unaffected.
+
+  **Upgrade impact**: If you replicate a `YEAR` column that can hold zero values, rows ingested before the upgrade retain their old representation (`0` or `1900`) until the upstream row is modified and re-decoded. To make all rows consistent and avoid potential source errors, drop and recreate the affected source (or subsource/table) after upgrading. Sources without zero-value `YEAR` data require no action.
+
+### Improvements {#v26.29-improvements}
+- **Correct SQLSTATEs for evaluation errors**: Evaluation errors such as division by zero, out-of-range casts, and invalid input now return their correct PostgreSQL-standard SQLSTATE codes instead of the generic `XX000` (internal error).
+- **PostgreSQL-compatible binary encoding diagnostics**: When a type has no binary output function (e.g., `list`, `map`, `aclitem`), Materialize now returns PostgreSQL's `SQLSTATE 42883` with the message `no binary output function available for type <t>`.
+
+### Bug Fixes {#v26.29-bug-fixes}
+
+- Fixed a panic when a cluster is dropped concurrently with statement execution on that cluster.
+- Fixed stack overflows on deeply nested query expressions by converting expression visitors to iterative traversals.
+- Fixed a panic when using `COPY ... TO STDOUT WITH (FORMAT binary)` on types without binary encoding support, including `list`, `map`, `aclitem`, and records or arrays containing these types.
+- Fixed a panic when specifying `TEXT COLUMNS` with an empty list.
+- Fixed a panic when specifying `EXCLUDE COLUMNS` with an empty list.
+- Fixed `oidc_group_claim` and `oidc_group_role_sync_strict` being incorrectly modifiable by environment superusers via `ALTER SYSTEM SET`; these parameters now correctly require `mz_system` access.
+- Fixed a stack overflow when using Avro schemas with recursive references in maps.
+- Fixed data corruption in MySQL sources when a table is dropped and immediately recreated with the same name and a compatible schema.
+- Fixed HTTP health probes (`/api/livez`, `/api/readyz`) and the metrics endpoint failing when the coordinator is unhealthy in deployments with OIDC authentication.
+- Fixed a crash caused by duplicate statement execution logging that could bring down the entire environment.
+- Fixed array values failing to write to Iceberg sinks due to the array dimension being stored as a narrower integer type than Iceberg requires.
+
+## v26.28.0
+*Released to Materialize Cloud: 2026-06-11* <br>
+*Released to Materialize Self-Managed: 2026-06-12* <br>
+
+### Improvements {#v26.28-improvements}
+
+- **Improved performance using temporal filters**: We've made a second round of improvements to temporal filter performance. Steady state CPU usage while using temporal filters is significantly reduced; we saw a drop from 75% CPU to 4% CPU in internal tests.
+- **Multi-item `DROP` with dependencies**: `DROP` statements now succeed
+  when multiple co-dependent items are named in the same command,
+  matching PostgreSQL behavior.
+- **Self-Managed OIDC configuration**: Environment superusers can now
+  configure `oidc_group_claim` and `oidc_group_role_sync_strict` via
+  `ALTER SYSTEM SET` without requiring `mz_system` access.
+- **OIDC group claim nested paths**: OIDC group claims now support
+  dot-separated paths (e.g., `groups.materialize`) for navigating
+  nested JWT structures.
+- **Self-Managed Console connection info**: The Console in self-managed
+  deployments now displays the actual balancerd hostname in the OIDC
+  and MCP connection dialogs.
+- **Password redaction in system catalog**: `pg_catalog.pg_user.passwd`
+  now returns `'********'` instead of the actual password hash,
+  matching PostgreSQL behavior.
+
+
+### Bug Fixes {#v26.28-bug-fixes}
+
+- Fixed Kafka sources appearing healthy after a low-watermark data-loss
+  error by preventing automatic restarts that masked the stalled state.
+- Fixed Kafka sources becoming unhealthy and producing stale data due to
+  transient connection failures when fetching low watermarks.
+- Fixed Kafka sinks using upsert envelope becoming permanently stale
+  when a concurrent writer advanced the output shard.
+- Fixed `generate_subscripts` returning incorrect results for arrays
+  with custom lower bounds.
+- Fixed `array_lower` and `array_upper` returning incorrect results for
+  arrays with custom lower bounds.
+- Fixed `SUM(float8)` returning incorrect results when summing large
+  finite values.
+- Fixed `date_bin` returning incorrect results for timestamps exactly on
+  a bin boundary before the origin.
+- Fixed `INSERT INTO ... SELECT` queries being incorrectly classified as
+  constant, potentially producing wrong results.
+- Fixed `SHOW CREATE SINK` including an internal version number that
+  prevented the output from being used to recreate the sink.
+- Fixed MCP `read_data_product` failing when the role lacks `USAGE`
+  privilege on the data product's cluster; the tool now falls back to
+  the default cluster instead.
+- Fixed a panic when setting `statement_timeout` or similar duration
+  parameters with Unicode numeric characters.
+- Fixed a panic when calling `pg_cancel_backend(NULL)`; now returns
+  `NULL` to match PostgreSQL behavior.
+- Fixed a crash when using `SUBSCRIBE` with duplicate columns in the
+  key; now returns a clear error.
+- Fixed a crash when using `CREATE TABLE ... FROM SOURCE` with only
+  constraints and no explicit columns.
+- Fixed a panic when setting `default_timestamp_interval` to `0`; now
+  returns an error.
+- Fixed cluster size options appearing in incorrect order in the Console.
+
 ## v26.27.0
 *Released to Materialize Cloud: 2026-06-04* <br>
 *Released to Materialize Self-Managed: 2026-06-05* <br>

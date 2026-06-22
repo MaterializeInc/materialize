@@ -13,6 +13,7 @@ import asyncio
 import csv
 import datetime
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -29,7 +30,6 @@ from mypy_boto3_ec2.type_defs import (
     InstanceTypeDef,
     RunInstancesRequestServiceResourceCreateInstancesTypeDef,
 )
-from prettytable import PrettyTable
 from pydantic import BaseModel
 
 from materialize import MZ_ROOT, git, spawn, ui, util
@@ -38,10 +38,49 @@ from materialize import MZ_ROOT, git, spawn, ui, util
 DEFAULT_SECURITY_GROUP_NAME = "scratch-security-group"
 DEFAULT_INSTANCE_PROFILE_NAME = "admin-instance"
 
+# Ubuntu 26.04 LTS (Resolute Raccoon) base images, keyed by the CPU
+# architecture that EC2 reports for an instance type.
+#
+# To update: open https://cloud-images.ubuntu.com/locator/ec2/, filter to the
+# desired release, zone `us-east-1`, and instance type `hvm:ebs-ssd-gp3`. Copy
+# the AMI id for each architecture (amd64 -> x86_64, arm64) below. Bumping the
+# release also means updating the comment above and the `ami_user` default if
+# Canonical changes it.
+AMIS_BY_ARCH: dict[str, str] = {
+    "x86_64": "ami-0b6d9d3d33ba97d99",
+    "arm64": "ami-0bc7f2dbdcc6b5303",
+}
+
 SSH_COMMAND = ["mssh", "-o", "StrictHostKeyChecking=off"]
 SFTP_COMMAND = ["msftp", "-o", "StrictHostKeyChecking=off"]
 
 say = ui.speaker("scratch> ")
+
+
+def instance_type_arch(instance_type: str) -> str:
+    """Return the CPU architecture for an EC2 instance type as a key into
+    `AMIS_BY_ARCH`. Queries EC2, which also validates that the type exists."""
+    infos = boto3.client("ec2").describe_instance_types(
+        InstanceTypes=[cast(InstanceTypeType, instance_type)]
+    )["InstanceTypes"]
+    if not infos:
+        raise RuntimeError(f"unknown EC2 instance type: {instance_type}")
+    archs = infos[0]["ProcessorInfo"]["SupportedArchitectures"]
+    for arch in archs:
+        if arch in AMIS_BY_ARCH:
+            return arch
+    raise RuntimeError(
+        f"no scratch AMI for instance type {instance_type} "
+        f"(architectures: {', '.join(archs)})"
+    )
+
+
+def resolve_ami(desc: "MachineDesc") -> str:
+    """Resolve the AMI for a machine, deriving it from the instance type's
+    architecture unless the config pins one explicitly."""
+    if desc.ami:
+        return desc.ami
+    return AMIS_BY_ARCH[instance_type_arch(desc.instance_type)]
 
 
 def tags(i: Instance) -> dict[str, str]:
@@ -80,58 +119,123 @@ def instance_host(instance: Instance, user: str | None = None) -> str:
     return f"{user}@{instance.id}"
 
 
+# Launch tags the instance Name as "{nonce}-{config name}"; the nonce is
+# redundant with the instance id in a flat listing, so strip it for display.
+_NONCE_PREFIX = re.compile(r"^[0-9a-f]{8}-")
+
+
+def _short_name(n: str | None) -> str:
+    if not n:
+        return "-"
+    return _NONCE_PREFIX.sub("", n, count=1)
+
+
+def render_table(headers: list[str], rows: list[list[str]]) -> None:
+    """Print a borderless, left-aligned table, like `docker ps` / `kubectl get`:
+    columns separated by two spaces, an uppercase header, no rules."""
+    widths = [max(len(r[c]) for r in [headers, *rows]) for c in range(len(headers))]
+    for r in [headers, *rows]:
+        print("  ".join(cell.ljust(w) for cell, w in zip(r, widths)).rstrip())
+
+
+def _format_expires(dt: datetime.datetime | None) -> str:
+    """Render a delete-after time as a compact relative duration."""
+    if dt is None:
+        return "-"
+    secs = (dt - datetime.datetime.now()).total_seconds()
+    if secs <= 0:
+        return "expired"
+    if secs >= 86400:
+        return f"{secs / 86400:.1f}d"
+    if secs >= 3600:
+        return f"{secs / 3600:.0f}h"
+    return f"{secs / 60:.0f}m"
+
+
 def print_instances(
-    ists: list[Instance], format: str = "table", numbered: bool = False
+    ists: list[Instance],
+    format: str = "table",
+    numbered: bool = False,
+    show_launched_by: bool = False,
 ) -> None:
-    field_names = [
-        "Name",
-        "Instance ID",
-        "Public IP Address",
-        "Private IP Address",
-        "Launched By",
-        "Delete After",
-        "State",
-    ]
+    if format == "csv":
+        # CSV is machine-readable: emit the full set of columns, unabridged.
+        field_names = [
+            "Name",
+            "Instance ID",
+            "Public IP Address",
+            "Private IP Address",
+            "Launched By",
+            "Delete After",
+            "State",
+        ]
+        if numbered:
+            field_names = ["#"] + field_names
+        w = csv.writer(sys.stdout)
+        w.writerow(field_names)
+        for idx, i in enumerate(ists, 1):
+            t = tags(i)
+            row = [
+                name(t),
+                i.instance_id,
+                i.public_ip_address,
+                i.private_ip_address,
+                launched_by(t),
+                delete_after(t),
+                i.state["Name"],
+            ]
+            if numbered:
+                row = [idx] + row
+            w.writerow(row)
+        return
+
+    if format != "table":
+        raise RuntimeError("Unknown format passed to print_instances")
+
+    # Table is for humans: a compact subset that fits a default terminal.
+    # Private IP is omitted (mssh connects by instance id, not IP) and the
+    # owner only shown when listing instances beyond your own.
+    headers = ["INSTANCE ID", "NAME", "STATE", "EXPIRES", "PUBLIC IP"]
+    if show_launched_by:
+        headers.append("LAUNCHED BY")
     if numbered:
-        field_names = ["#"] + field_names
+        headers = ["#"] + headers
     rows = []
     for idx, i in enumerate(ists, 1):
         t = tags(i)
+        state = i.state["Name"]
+        # A dead instance has no meaningful expiry; don't show a future time.
+        expires = (
+            "-"
+            if state in ("terminated", "shutting-down")
+            else _format_expires(delete_after(t))
+        )
         row = [
-            name(t),
             i.instance_id,
-            i.public_ip_address,
-            i.private_ip_address,
-            launched_by(t),
-            delete_after(t),
-            i.state["Name"],
+            _short_name(name(t)),
+            state,
+            expires,
+            i.public_ip_address or "-",
         ]
+        if show_launched_by:
+            row.append(launched_by(t) or "-")
         if numbered:
-            row = [idx] + row
+            row = [str(idx)] + row
         rows.append(row)
-    if format == "table":
-        pt = PrettyTable()
-        pt.field_names = field_names
-        pt.align = "l"
-        pt.add_rows(rows)
-        print(pt)
-    elif format == "csv":
-        w = csv.writer(sys.stdout)
-        w.writerow(field_names)
-        w.writerows(rows)
-    else:
-        raise RuntimeError("Unknown format passed to print_instances")
+
+    render_table(headers, rows)
 
 
 def mssh(
     instance: Instance,
     command: str,
     *,
-    extra_ssh_args: list[str] = [],
+    extra_ssh_args: list[str] | None = None,
     input: bytes | None = None,
     quiet: bool = False,
 ) -> None:
     """Runs a command over SSH via EC2 Instance Connect."""
+    extra_ssh_args = extra_ssh_args or []
     host = instance_host(instance)
     if command:
         if not quiet:
@@ -275,7 +379,9 @@ class MachineDesc(BaseModel):
     name: str
     launch_script: str | None = None
     instance_type: str
-    ami: str
+    # Optional: when unset, the AMI is derived from the instance type's
+    # architecture via `resolve_ami`.
+    ami: str | None = None
     tags: dict[str, str] = {}
     size_gb: int = 50
     checkout: bool = True
@@ -317,7 +423,7 @@ def launch(
         vpcs = ec2.describe_vpcs()
         vpc_id = None
         for vpc in vpcs["Vpcs"]:
-            if vpc["IsDefault"] == True:
+            if vpc["IsDefault"]:
                 vpc_id = vpc["VpcId"]
                 break
         if vpc_id is None:
@@ -472,12 +578,15 @@ def launch_cluster(
     key_name: str | None = None,
     security_group_name: str = DEFAULT_SECURITY_GROUP_NAME,
     instance_profile: str | None = DEFAULT_INSTANCE_PROFILE_NAME,
-    extra_tags: dict[str, str] = {},
+    extra_tags: dict[str, str] | None = None,
     delete_after: datetime.datetime,
     git_rev: str = "HEAD",
-    extra_env: dict[str, str] = {},
+    extra_env: dict[str, str] | None = None,
 ) -> list[Instance]:
     """Launch a cluster of instances with a given nonce"""
+
+    extra_tags = extra_tags or {}
+    extra_env = extra_env or {}
 
     if not nonce:
         nonce = util.nonce(8)
@@ -486,7 +595,7 @@ def launch_cluster(
         launch(
             key_name=key_name,
             instance_type=d.instance_type,
-            ami=d.ami,
+            ami=resolve_ami(d),
             ami_user=d.ami_user,
             tags={**d.tags, **extra_tags},
             display_name=f"{nonce}-{d.name}",
@@ -499,15 +608,15 @@ def launch_cluster(
         for d in descs
     ]
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
-        asyncio.gather(
+    async def setup_all() -> None:
+        await asyncio.gather(
             *(
                 setup(i, git_rev if d.checkout else "HEAD")
                 for (i, d) in zip(instances, descs)
             )
         )
-    )
+
+    asyncio.run(setup_all())
 
     for i in instances:
         i.reload()
@@ -581,7 +690,7 @@ def get_old_instances() -> list[InstanceTypeDef]:
         if delete_after is None:
             return False
         delete_after = float(delete_after)
-        return datetime.datetime.utcnow().timestamp() > delete_after
+        return datetime.datetime.now(datetime.timezone.utc).timestamp() > delete_after
 
     return [
         i

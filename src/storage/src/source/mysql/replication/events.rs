@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
+use sqlparser::ast::{ObjectName, ObjectNamePart, ObjectType, Statement};
+use sqlparser::dialect::MySqlDialect;
+use sqlparser::parser::Parser;
+use std::collections::BTreeMap;
+
 use maplit::btreemap;
 use mysql_async::binlog::events::OptionalMetaExtractor;
 use mysql_common::binlog::events::{QueryEvent, RowsEventData};
@@ -18,18 +24,30 @@ use mz_storage_types::sources::mysql::GtidPartition;
 use timely::progress::Timestamp;
 use tracing::trace;
 
+use crate::source::mysql::SourceOutputInfo;
 use crate::source::types::{FuelSize, SourceMessage};
 
 use super::super::schemas::verify_schemas;
 use super::super::{DefiniteError, MySqlTableName, TransientError};
 use super::context::ReplContext;
 
+const DIALECT: MySqlDialect = MySqlDialect {};
+
 /// Returns the MySqlTableName for the given table name referenced in a
 /// SQL statement, using the current schema if the table name is unqualified.
 fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, TransientError> {
     let stripped = name.replace('`', "");
     let mut name_iter = stripped.split('.');
-    match (name_iter.next(), name_iter.next()) {
+    mysql_table_name(name_iter.next(), name_iter.next(), current_schema, name)
+}
+
+fn mysql_table_name(
+    first_component: Option<&str>,
+    second_component: Option<&str>,
+    current_schema: &str,
+    name: &str,
+) -> Result<MySqlTableName, TransientError> {
+    match (first_component, second_component) {
         (Some(t_name), None) => Ok(MySqlTableName::new(current_schema, t_name)),
         (Some(schema_name), Some(t_name)) => Ok(MySqlTableName::new(schema_name, t_name)),
         _ => Err(TransientError::Generic(anyhow::anyhow!(
@@ -37,6 +55,36 @@ fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, Trans
             name
         ))),
     }
+}
+
+/// This function has the same intent as table_ident except handles the object name type parsed out of the sql by sqlparser rather than a raw string.
+/// The ObjectName type is more flexible than the constraints for an identifier in mysql. i.e. it has a function type, which appears to only be supported
+/// in snowflake. It also has a vector for identifier components, however a table identifier from the binlog should only have 1 or 2 components - never 0 or more than 2
+fn table_ident_from_object_name(
+    name: &ObjectName,
+    current_schema: &str,
+) -> Result<MySqlTableName, TransientError> {
+    let processed_name_parts: Vec<String> = name.0.iter().map(|part| match part {
+        ObjectNamePart::Identifier(ident) => Ok(ident.value.clone()),
+        // Functions for table name identifiers are a snowflake-specific concept, unexpected for mysql so we should fail hard.
+        ObjectNamePart::Function(_) => Err(TransientError::Generic(anyhow::anyhow!(
+            "Invalid table name from QueryEvent, function identifiers not supported in mysql: {}", name
+        ))),
+    }).collect::<Result<_, _>>()?;
+    if processed_name_parts.len() != 1 && processed_name_parts.len() != 2 {
+        return Err(TransientError::Generic(anyhow::anyhow!(
+            "Invalid table name from QueryEvent: {}",
+            name
+        )));
+    }
+
+    let mut name_parts_iter = processed_name_parts.iter().map(|x| x.as_str());
+    mysql_table_name(
+        name_parts_iter.next(),
+        name_parts_iter.next(),
+        current_schema,
+        &name.to_string(),
+    )
 }
 
 /// Handles QueryEvents from the MySQL replication stream. Since we only use
@@ -109,41 +157,45 @@ pub(super) async fn handle_query_event(
                 }
             }
         }
-        // Detect `DROP TABLE [IF EXISTS] <tbl>, <tbl>` statements. Since
-        // this can drop multiple tables we just check all tables we care about
+        // Detect `DROP TABLE [IF EXISTS] <tbl>, <tbl>` statements.
         (Some("drop"), Some("table")) => {
-            let mut conn = ctx
-                .connection_config
-                .connect(
-                    &format!("timely-{worker_id} MySQL "),
-                    &ctx.config.config.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-            let expected = ctx
-                .table_info
+            let dropped_tables = drop_table_identifiers(&current_schema, &query)?;
+
+            // Sources referencing the dropped table name that were created before the table was dropped. Before is determined
+            // by looking at the initial gtid set for the source and ensuring that's before the new gtid.
+            let sources_to_drop: BTreeMap<&MySqlTableName, Vec<&SourceOutputInfo>> = dropped_tables
                 .iter()
-                .map(|(t, info)| {
-                    (
-                        t,
-                        info.iter()
-                            .filter(|output| !ctx.errored_outputs.contains(&output.output_index)),
-                    )
+                .filter_map(|table_name| {
+                    ctx.table_info
+                        .get_key_value(table_name)
+                        .map(|(name, info)| {
+                            let kept = info
+                                .iter()
+                                .filter(|output| {
+                                    !ctx.errored_outputs.contains(&output.output_index)
+                                    // Only drop sources that were created before the table was dropped.
+                                    && output.initial_gtid_set.less_equal(new_gtid)
+                                })
+                                .collect();
+                            (name, kept)
+                        })
                 })
                 .collect();
-            let schema_errors = verify_schemas(&mut *conn, expected).await?;
             is_complete_event = true;
-            for (dropped_output, err) in schema_errors {
-                tracing::info!(%id, "timely-{worker_id} DDL change \
-                           dropped output: {dropped_output:?}: {err:?}");
-                let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                let update = (
-                    (dropped_output.output_index, Err(err.into())),
-                    new_gtid.clone(),
-                    Diff::ONE,
-                );
-                let size = std::mem::size_of_val(&update);
-                ctx.data_output.give_fueled(&gtid_cap, update, size).await;
-                ctx.errored_outputs.insert(dropped_output.output_index);
+            for (table_name, outputs) in sources_to_drop {
+                tracing::info!(%id, "timely-{worker_id} DDL change dropped outputs: {outputs:?}");
+                for output in outputs {
+                    let err = DefiniteError::TableDropped(table_name.to_string());
+                    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
+                    let update = (
+                        (output.output_index, Err(err.into())),
+                        new_gtid.clone(),
+                        Diff::ONE,
+                    );
+                    let size = std::mem::size_of_val(&update);
+                    ctx.data_output.give_fueled(&gtid_cap, update, size).await;
+                    ctx.errored_outputs.insert(output.output_index);
+                }
             }
         }
         // Detect `TRUNCATE [TABLE] <tbl>` statements
@@ -213,6 +265,41 @@ pub(super) async fn handle_query_event(
     }
 
     Ok(is_complete_event)
+}
+
+/// Handles parsing table names from "DROP TABLE [IF EXISTS] table1, table2, table3".
+fn drop_table_identifiers(
+    current_schema: &str,
+    query: &str,
+) -> Result<Vec<MySqlTableName>, TransientError> {
+    let invalid =
+        |msg| TransientError::Generic(anyhow::anyhow!("Invalid DDL query, {msg}, got: {query}"));
+
+    let parse_result = Parser::parse_sql(&DIALECT, query)
+        .map_err(|e| TransientError::Generic(anyhow::anyhow!(e)))?;
+    let stmt = parse_result
+        .iter()
+        .exactly_one()
+        .map_err(|_| invalid("expected only a single statement from the binlog"))?;
+
+    let Statement::Drop {
+        object_type,
+        temporary,
+        names,
+        ..
+    } = stmt
+    else {
+        return Err(invalid("expected DROP statement"));
+    };
+
+    if *object_type != ObjectType::Table || *temporary {
+        return Err(invalid("expected DROP TABLE statement"));
+    }
+    let table_identifiers: Vec<MySqlTableName> = names
+        .iter()
+        .map(|name| table_ident_from_object_name(name, current_schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(table_identifiers)
 }
 
 /// Handles RowsEvents from the MySQL replication stream. These events contain
@@ -376,4 +463,187 @@ pub(super) async fn handle_rows_event(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn table(schema: &str, name: &str) -> MySqlTableName {
+        MySqlTableName::new(schema, name)
+    }
+
+    fn parse_drop(
+        query: &str,
+        current_schema: &str,
+    ) -> Result<Vec<MySqlTableName>, TransientError> {
+        let mut tokens = query.split_ascii_whitespace();
+        let first = tokens.next();
+        let second = tokens.next();
+        match (
+            first.map(str::to_ascii_lowercase).as_deref(),
+            second.map(str::to_ascii_lowercase).as_deref(),
+        ) {
+            (Some("drop"), Some("table")) => drop_table_identifiers(current_schema, query),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    #[mz_ore::test]
+    fn table_ident_unqualified_uses_current_schema() {
+        assert_eq!(
+            table_ident("orders", "shop").unwrap(),
+            table("shop", "orders")
+        );
+    }
+
+    #[mz_ore::test]
+    fn table_ident_qualified_overrides_current_schema() {
+        assert_eq!(
+            table_ident("inventory.orders", "shop").unwrap(),
+            table("inventory", "orders"),
+        );
+    }
+
+    #[mz_ore::test]
+    fn table_ident_strips_backtick_quoting() {
+        assert_eq!(
+            table_ident("`inventory`.`orders`", "shop").unwrap(),
+            table("inventory", "orders"),
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_single_unqualified_table() {
+        assert_eq!(
+            parse_drop("DROP TABLE orders", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_qualified_table() {
+        assert_eq!(
+            parse_drop("DROP TABLE inventory.orders", "shop").unwrap(),
+            vec![table("inventory", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_backtick_quoted_table() {
+        assert_eq!(
+            parse_drop("DROP TABLE `inventory`.`orders`", "shop").unwrap(),
+            vec![table("inventory", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_if_exists_clause() {
+        assert_eq!(
+            parse_drop("DROP TABLE IF EXISTS orders", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+        assert_eq!(
+            parse_drop("DROP TABLE if exists orders", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_rejects_if_without_exists() {
+        assert!(parse_drop("DROP TABLE IF orders", "shop").is_err());
+    }
+
+    #[mz_ore::test]
+    fn drop_rejects_missing_table_name() {
+        assert!(parse_drop("DROP TABLE", "shop").is_err());
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_multiple_space_separated_tables() {
+        assert_eq!(
+            parse_drop("DROP TABLE orders, customers, items", "shop").unwrap(),
+            vec![
+                table("shop", "orders"),
+                table("shop", "customers"),
+                table("shop", "items"),
+            ],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_comma_joined_tables_without_spaces() {
+        assert_eq!(
+            parse_drop("DROP TABLE `shop`.`orders`,`shop`.`customers`", "shop").unwrap(),
+            vec![table("shop", "orders"), table("shop", "customers")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_does_not_treat_comment_shaped_text_in_identifier_as_comment() {
+        assert_eq!(
+            parse_drop("DROP TABLE `tbl /* not a comment */`", "shop").unwrap(),
+            vec![table("shop", "tbl /* not a comment */")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_table_with_restrict() {
+        assert_eq!(
+            parse_drop("DROP TABLE orders RESTRICT", "shop").unwrap(),
+            vec![table("shop", "orders")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_parses_multiple_tables_with_cascade() {
+        assert_eq!(
+            parse_drop("DROP TABLE orders, customers CASCADE", "shop").unwrap(),
+            vec![table("shop", "orders"), table("shop", "customers")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_of_multiple_statements_errors() {
+        // Defensive only: a real `Query_event` never packs two top-level
+        // statements together.
+        assert!(parse_drop("DROP TABLE orders; DROP TABLE customers", "shop").is_err());
+    }
+
+    #[mz_ore::test]
+    fn drop_temporary_table_is_not_detected() {
+        assert_eq!(
+            parse_drop("DROP TEMPORARY TABLE orders", "shop").unwrap(),
+            Vec::<MySqlTableName>::new(),
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_quoted_identifier_with_dot_is_a_single_table() {
+        assert_eq!(
+            parse_drop("DROP TABLE `weird.name`", "shop").unwrap(),
+            vec![table("shop", "weird.name")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn drop_escaped_backtick_identifier_is_preserved() {
+        assert_eq!(
+            parse_drop("DROP TABLE `a``b`", "shop").unwrap(),
+            vec![table("shop", "a`b")],
+        );
+    }
+
+    #[mz_ore::test]
+    fn identifier_with_multiple_dots_errors() {
+        assert!(parse_drop("DROP TABLE def.shop.customer", "shop").is_err());
+    }
+
+    #[mz_ore::test]
+    fn ansi_quotes_parsed_properly() {
+        assert_eq!(
+            parse_drop("DROP TABLE \"customer\"", "shop").unwrap(),
+            vec![table("shop", "customer")],
+        );
+    }
 }

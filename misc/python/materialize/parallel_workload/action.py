@@ -150,6 +150,27 @@ class Action:
     def run(self, exe: Executor) -> bool:
         raise NotImplementedError
 
+    def create_system_connection(
+        self, exe: Executor, num_attempts: int = 10
+    ) -> Connection:
+        try:
+            conn = psycopg.connect(
+                host=exe.db.host,
+                port=exe.db.ports[
+                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
+                ],
+                user="mz_system",
+                dbname="materialize",
+            )
+            conn.autocommit = True
+            return conn
+        except:
+            if num_attempts == 0:
+                raise
+            else:
+                time.sleep(1)
+                return self.create_system_connection(exe, num_attempts - 1)
+
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = [
             "permission denied for",
@@ -919,7 +940,7 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         if (
             not temp
@@ -1649,6 +1670,7 @@ class FlipFlagsAction(Action):
             "memory_limiter_burst_factor",
             "enable_columnation_lgalloc",
             "enable_columnar_lgalloc",
+            "catalog_info_metrics_reconcile_interval",
             "compute_server_maintenance_interval",
             "compute_dataflow_max_inflight_bytes",
             "compute_dataflow_max_inflight_bytes_cc",
@@ -1812,6 +1834,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_agent",
             "enable_mcp_agent_query_tool",
             "enable_mcp_developer",
+            "enable_mcp_developer_query_tool",
             "mcp_max_response_size",
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
@@ -1846,7 +1869,7 @@ class FlipFlagsAction(Action):
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
 
-        # TODO: Remove when database-issues#8352 is fixed
+        # TODO: Remove when https://linear.app/materializeinc/issue/DB-138 is fixed
         if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
             "persist_use_critical_since_"
         ):
@@ -1870,27 +1893,6 @@ class FlipFlagsAction(Action):
         except Exception as e:
             raise QueryError(str(e), "FlipFlags")
 
-    def create_system_connection(
-        self, exe: Executor, num_attempts: int = 10
-    ) -> Connection:
-        try:
-            conn = psycopg.connect(
-                host=exe.db.host,
-                port=exe.db.ports[
-                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
-                ],
-                user="mz_system",
-                dbname="materialize",
-            )
-            conn.autocommit = True
-            return conn
-        except:
-            if num_attempts == 0:
-                raise
-            else:
-                time.sleep(1)
-                return self.create_system_connection(exe, num_attempts - 1)
-
     def flip_flag(self, conn: Connection, flag_name: str, flag_value: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
@@ -1912,7 +1914,7 @@ class CreateViewAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
@@ -3002,6 +3004,35 @@ class CreateIcebergSinkAction(Action):
         return True
 
 
+class CheckSinkAction(Action):
+    def run(self, exe: Executor) -> bool:
+        try:
+            conn = self.create_system_connection(exe)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT name, type, last_status_change_at, status, error, details FROM mz_internal.mz_sink_statuses WHERE status not in ('running', 'starting', NULL)"
+                    )
+                    results = cur.fetchall()
+                if results:
+                    results_str = "\n".join(
+                        [
+                            f"{name} ({sink_type}) changed status at {last_status_change_at} to {status}: {error} (details: {details})"
+                            for name, sink_type, last_status_change_at, status, error, details in results
+                        ]
+                    )
+                    raise ValueError(f"Sinks are in a bad state:\n{results_str}")
+            finally:
+                conn.close()
+        except:
+            if exe.db.scenario not in (
+                Scenario.Kill,
+                Scenario.ZeroDowntimeDeploy,
+            ):
+                raise
+        return True
+
+
 class DropIcebergSinkAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -3167,6 +3198,34 @@ class HttpPostAction(Action):
         return True
 
 
+class SourceSinkStallCheckAction(Action):
+    def run(self, exe: Executor) -> bool:
+        if exe.db.scenario in (
+            Scenario.Kill,
+            Scenario.ZeroDowntimeDeploy,
+            Scenario.BackupRestore,
+        ):
+            return False
+
+        exe.execute(
+            "SELECT name, error FROM mz_internal.mz_sink_statuses WHERE status = 'stalled'"
+        )
+        stalled_sinks = exe.cur.fetchall()
+        if stalled_sinks:
+            details = "; ".join(f"{name}: {error}" for name, error in stalled_sinks)
+            raise ValueError(f"Sinks in stalled state: {details}")
+
+        exe.execute(
+            "SELECT name, error FROM mz_internal.mz_source_statuses WHERE status = 'stalled'"
+        )
+        stalled_sources = exe.cur.fetchall()
+        if stalled_sources:
+            details = "; ".join(f"{name}: {error}" for name, error in stalled_sources)
+            raise ValueError(f"Sources in stalled state: {details}")
+
+        return True
+
+
 class StatisticsAction(Action):
     def run(self, exe: Executor) -> bool:
         for typ, objs in [
@@ -3252,6 +3311,7 @@ dml_nontrans_action_list = ActionList(
         (SetClusterAction, 1),
         (ReconnectAction, 1),
         (FlipFlagsAction, 2),
+        (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,  # deletes can't be inside of transactions
@@ -3281,12 +3341,13 @@ ddl_action_list = ActionList(
         (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
-        # TODO: Reenable when database-issues#8237 is fixed
+        (CheckSinkAction, 1),
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-307 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 4),
-        # TODO: Reenable when database-issues#9620 is fixed
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-290 is fixed
         # (CreateSqlServerSourceAction, 4),
         # (DropSqlServerSourceAction, 4),
         (GrantPrivilegesAction, 4),
@@ -3304,7 +3365,7 @@ ddl_action_list = ActionList(
         (SwapSchemaAction, 10),
         (ReplaceMaterializedViewAction, 20),
         (FlipFlagsAction, 2),
-        # TODO: Reenable when database-issues#8813 is fixed.
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-405 is fixed.
         # (AlterTableAddColumnAction, 10),
         (AlterIcebergSinkFromAction, 8),
         (AlterKafkaSinkFromAction, 8),

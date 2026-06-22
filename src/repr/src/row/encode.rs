@@ -2238,7 +2238,6 @@ mod tests {
     use crate::adt::interval::Interval;
     use crate::adt::numeric::Numeric;
     use crate::adt::timestamp::CheckedTimestamp;
-    use crate::fixed_length::ToDatumIter;
     use crate::relation::arb_relation_desc;
     use crate::{ColumnName, RowArena, SqlColumnType, arb_datum_for_column, arb_row_for_relation};
     use crate::{Datum, RelationDesc, Row, SqlScalarType};
@@ -2393,8 +2392,8 @@ mod tests {
                 a_prefix.cmp(b_prefix).is_le(),
                 "ordering should be consistent on preserves_order columns: {:#?}\n{:?}\n{:?}",
                 desc.iter().take(ordered_prefix_len).collect_vec(),
-                a.to_datum_iter().take(ordered_prefix_len).collect_vec(),
-                b.to_datum_iter().take(ordered_prefix_len).collect_vec()
+                a.iter().take(ordered_prefix_len).collect_vec(),
+                b.iter().take(ordered_prefix_len).collect_vec()
             );
         }
 

@@ -429,7 +429,7 @@ impl AstDisplay for CsrSeedProtobufSchema {
         f.write_str("SCHEMA '");
         f.write_str(&display::escape_single_quote_string(&self.schema));
         f.write_str("' MESSAGE '");
-        f.write_str(&self.message_name);
+        f.write_str(&display::escape_single_quote_string(&self.message_name));
         f.write_str("'");
     }
 }
@@ -777,6 +777,7 @@ pub enum ConnectionOptionName {
     Credential,
     Database,
     Endpoint,
+    GcpConnection,
     Host,
     Password,
     Port,
@@ -818,6 +819,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::Credential => "CREDENTIAL",
             ConnectionOptionName::Database => "DATABASE",
             ConnectionOptionName::Endpoint => "ENDPOINT",
+            ConnectionOptionName::GcpConnection => "GCP CONNECTION",
             ConnectionOptionName::Host => "HOST",
             ConnectionOptionName::Password => "PASSWORD",
             ConnectionOptionName::Port => "PORT",
@@ -871,6 +873,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::Credential
             | ConnectionOptionName::Database
             | ConnectionOptionName::Endpoint
+            | ConnectionOptionName::GcpConnection
             | ConnectionOptionName::Host
             | ConnectionOptionName::Password
             | ConnectionOptionName::Port

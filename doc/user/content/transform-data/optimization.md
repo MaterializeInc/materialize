@@ -11,6 +11,79 @@ aliases:
   - /ops/optimization/
 ---
 
+## Reduce the size of the data
+
+With view definitions, you can project only the columns you need, filter out
+unnecessary rows, and convert values to more [compact data
+types](/sql/types/) where possible.
+
+For stacked view definitions, apply these strategies as early as possible to
+reduce the size of data.
+
+### Project only the columns you need
+
+Instead of using `SELECT *` in your view definition, select only the columns
+your downstream queries actually reference. For example:
+
+```mzsql
+-- Project only the columns downstream queries reference.
+CREATE VIEW order_totals AS
+  SELECT id, customer_id, total
+  FROM orders;
+```
+
+### Filter out unnecessary rows
+
+Specify conditions to filter out unnecessary rows. Filter as close to the source
+as possible such that downstream joins and aggregations process fewer rows.
+
+```mzsql
+CREATE VIEW active_orders AS
+  SELECT id, customer_id, total
+  FROM orders
+  WHERE status = 'active';
+```
+
+### Use compact data types
+
+When applicable, choose a more compact representation of a view's column to
+reduce the size of each row, especially for views over large collections of
+data:
+
+- If a column is of type `text` but its values can accurately be represented as
+  a more compact type, cast to that type. For example, a column containing only
+  the strings `'true'` or `'false'` can be represented as `boolean`.
+
+- If a column holds one of a small, fixed set of string values (e.g., days of
+  the week, or status values), represent each value as a small integer code
+  instead.
+
+For example, assume the `events` table includes:
+
+- an `id` field of type `text` whose values are `UUID`s as text; and
+
+- an `event_ts` field of type `timestamp`, from which you only need the day of
+  the week.
+
+You can create a view that uses more compact representations of these
+columns:
+
+```mzsql
+CREATE VIEW events_compact AS
+  SELECT
+    id::uuid AS id,                                       -- cast to type UUID
+    EXTRACT(dow FROM event_ts)::smallint AS day_of_week   -- encode day-of-week
+  FROM events;
+```
+
+{{< note >}}
+
+For integers, the actual number of bytes written depends on the actual
+value. For example, a `bigint` value of `3` takes 2 bytes total (1 payload
+byte plus 1 tag byte). As such, casting to a smaller integer type does not necessarily reduce storage.
+
+{{< /note >}}
+
 ## Indexes
 
 Indexes in Materialize maintain the complete up-to-date query results in memory

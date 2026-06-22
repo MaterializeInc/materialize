@@ -92,8 +92,19 @@ for (const region of REGIONS) {
     // Create api key
     await context.goto(`${CONSOLE_ADDR}/access`);
     console.log("Creating app password", apiKeyName);
-    await page.getByRole("button", { name: "Create new" }).click();
-    await page.getByRole("link", { name: "App Password", exact: true }).click();
+    const appPasswordLink = page.getByRole("link", {
+      name: "App Password",
+      exact: true,
+    });
+    // Clicking "Create new" opens a Chakra popover. Under WebKit in CI the
+    // click occasionally lands before the popover is wired up, so the menu
+    // never opens and the "App Password" entry never appears. Retry clicking
+    // until the popover is actually open.
+    await expect(async () => {
+      await page.getByRole("button", { name: "Create new" }).click();
+      await expect(appPasswordLink).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 30_000 });
+    await appPasswordLink.click();
     await page.getByRole("dialog", { name: "New app password" }).waitFor();
     await page.getByRole("textbox", { name: "Name" }).fill(apiKeyName);
     await page.getByRole("button", { name: "Create password" }).click();
@@ -221,11 +232,20 @@ for (const region of REGIONS) {
       `[aria-label='${apiKeyName}'] [aria-label='Delete app password']`,
     );
     await page.fill("[aria-modal] input", apiKeyName);
+    // Deleting an app password round-trips to Frontegg before the modal closes,
+    // which can take longer than the default 5s timeout (observed under WebKit
+    // in CI), so give the network call room to complete.
     await Promise.all([
-      page.waitForSelector("[aria-modal]", { state: "detached" }),
+      page.waitForSelector("[aria-modal]", {
+        state: "detached",
+        timeout: 30_000,
+      }),
       page.click("[aria-modal] button:text('Delete')"),
     ]);
-    await page.waitForSelector(`text=${apiKeyName}`, { state: "detached" });
+    await page.waitForSelector(`text=${apiKeyName}`, {
+      state: "detached",
+      timeout: 30_000,
+    });
   });
 }
 

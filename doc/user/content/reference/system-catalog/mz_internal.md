@@ -820,6 +820,34 @@ The `mz_sessions` table contains a row for each active session in the system.
 | `connected_at`   | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
 
 
+## `mz_cluster_system_parameters`
+
+The `mz_cluster_system_parameters` view contains a row for each cluster-coherent
+system parameter whose scoped value differs from the environment-wide value for a
+given cluster.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_system_parameters -->
+| Field        | Type     | Meaning                                                                                  |
+| ------------ | -------- | --------                                                                                 |
+| `cluster_id` | [`text`] | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters).     |
+| `name`       | [`text`] | The name of the cluster-coherent system parameter.                                       |
+| `value`      | [`text`] | The cluster-scoped value of the system parameter.                                        |
+
+
+## `mz_replica_system_parameters`
+
+The `mz_replica_system_parameters` view contains a row for each replica-local
+system parameter whose scoped value differs from the environment-wide value for a
+given cluster replica.
+
+<!-- RELATION_SPEC mz_internal.mz_replica_system_parameters -->
+| Field        | Type     | Meaning                                                                                          |
+| ------------ | -------- | --------                                                                                         |
+| `replica_id` | [`text`] | The ID of the cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas).  |
+| `name`       | [`text`] | The name of the replica-local system parameter.                                                  |
+| `value`      | [`text`] | The replica-scoped value of the system parameter.                                                |
+
+
 ## `mz_network_policies`
 
 The `mz_network_policies` table contains a row for each network policy in the
@@ -1400,6 +1428,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_sources -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_size_internal -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw_unified -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->

@@ -26,7 +26,7 @@ use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
     ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::channel::instrumented_unbounded_channel;
@@ -140,6 +140,13 @@ pub(super) struct Instance {
     workload_class: Option<String>,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState>,
+    /// Per-replica dyncfg overrides, merged into the `UpdateConfiguration`
+    /// command sent to each replica (and into the command-history replay used
+    /// to hydrate new replicas). Populated from the scoped feature flags
+    /// (replica-local) layer; empty by default, in which case every replica
+    /// receives the unmodified environment-wide configuration. Stores only the
+    /// values that differ from the environment-wide value, so the map is sparse.
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
     /// Currently installed compute collections.
     ///
     /// New entries are added for all collections exported from dataflows created through
@@ -345,7 +352,7 @@ impl Instance {
         client: ReplicaClient,
         config: ReplicaConfig,
         epoch: u64,
-    ) {
+    ) -> Result<(), read_holds::ReadHoldIssuerHungUp> {
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
         let metrics = self.metrics.for_replica(id);
@@ -359,6 +366,7 @@ impl Instance {
         );
 
         // Add per-replica collection state.
+        let mut shutdown_input = None;
         for (collection_id, collection) in &self.collections {
             // Skip log collections not maintained by this replica,
             // and collections targeted at a different replica.
@@ -378,11 +386,42 @@ impl Instance {
                 collection.read_frontier().to_owned()
             };
 
-            let input_read_holds = collection.storage_dependencies.values().cloned().collect();
+            // Cloning a `ReadHold` fails when its issuer has hung up. For these holds the issuer
+            // is the `StorageCollections`, which doesn't hang up as long as the `Instance` exists,
+            // except during process shutdown, when the tokio runtime drops tasks in arbitrary
+            // order. In that case there is no way of correctly initializing the per-replica
+            // collection state, so we give up. We still add the replica itself, to keep the
+            // bookkeeping consistent with the controller's, and then signal the unrecoverable
+            // error to the caller, which shuts the instance down.
+            let mut input_read_holds = Vec::with_capacity(collection.storage_dependencies.len());
+            let mut hung_up = Vec::new();
+            for hold in collection.storage_dependencies.values() {
+                match hold.try_clone() {
+                    Ok(hold) => input_read_holds.push(hold),
+                    Err(read_holds::ReadHoldIssuerHungUp(input_id)) => hung_up.push(input_id),
+                }
+            }
+            if !hung_up.is_empty() {
+                tracing::error!(
+                    replica_id = %id,
+                    %collection_id,
+                    ?hung_up,
+                    "giving up on adding replica collections: storage read hold issuers hung \
+                     up, the process is shutting down",
+                );
+                shutdown_input = hung_up.into_iter().next();
+                break;
+            }
+
             replica.add_collection(*collection_id, as_of, input_read_holds);
         }
 
         self.replicas.insert(id, replica);
+
+        match shutdown_input {
+            Some(input_id) => Err(read_holds::ReadHoldIssuerHungUp(input_id)),
+            None => Ok(()),
+        }
     }
 
     /// Enqueue the given response for delivery to the controller clients.
@@ -813,6 +852,7 @@ impl Instance {
             read_only,
             workload_class,
             replicas,
+            replica_dyncfg_overrides: _,
             collections,
             log_sources: _,
             peeks,
@@ -918,6 +958,7 @@ impl Instance {
             read_only,
             workload_class: None,
             replicas: Default::default(),
+            replica_dyncfg_overrides: Default::default(),
             collections,
             log_sources,
             peeks: Default::default(),
@@ -1043,23 +1084,71 @@ impl Instance {
         );
     }
 
+    /// Terminate the [`Instance::run`] loop, causing the instance task to shut down.
+    ///
+    /// Unlike [`Instance::shutdown`], this does not assert that the instance has no replicas
+    /// left. We use it to react to unrecoverable errors that can only occur during process
+    /// shutdown, such as a storage read hold issuer hanging up while we rehydrate a replica.
+    fn initiate_shutdown(&mut self) {
+        // Replacing `command_rx` with a fresh, sender-less channel makes the next `recv` in
+        // [`Instance::run`] return `None`, terminating the loop.
+        let (_tx, rx) = mpsc::unbounded_channel();
+        self.command_rx = rx;
+    }
+
     /// Sends a command to replicas of this instance.
     #[mz_ore::instrument(level = "debug")]
     fn send(&mut self, cmd: ComputeCommand) {
         // Record the command so that new replicas can be brought up to speed.
+        // We record the *base* (un-specialized) command, so that the per-replica
+        // dyncfg overrides are re-applied at replay time in `add_replica` rather
+        // than baked into the shared history.
         self.history.push(cmd.clone());
 
         let target_replica = self.target_replica(&cmd);
 
+        // Borrow the overrides separately from `self.replicas` so the per-replica
+        // specialization below does not conflict with the mutable replica borrow.
+        let overrides = &self.replica_dyncfg_overrides;
+
         if let Some(rid) = target_replica {
             if let Some(replica) = self.replicas.get_mut(&rid) {
+                let cmd = Self::specialize_command_for_replica(cmd, rid, overrides);
                 let _ = replica.client.send(cmd);
             }
         } else {
-            for replica in self.replicas.values_mut() {
-                let _ = replica.client.send(cmd.clone());
+            for (rid, replica) in self.replicas.iter_mut() {
+                let cmd = Self::specialize_command_for_replica(cmd.clone(), *rid, overrides);
+                let _ = replica.client.send(cmd);
             }
         }
+    }
+
+    /// Specializes a command for a specific replica by merging that replica's
+    /// dyncfg override (if any) into an `UpdateConfiguration` command. All other
+    /// commands, and replicas without an override, are returned unchanged.
+    fn specialize_command_for_replica(
+        mut cmd: ComputeCommand,
+        replica_id: ReplicaId,
+        overrides: &BTreeMap<ReplicaId, ConfigUpdates>,
+    ) -> ComputeCommand {
+        if let ComputeCommand::UpdateConfiguration(params) = &mut cmd
+            && let Some(over) = overrides.get(&replica_id)
+            && !over.updates.is_empty()
+        {
+            params.dyncfg_updates.extend(over.clone());
+        }
+        cmd
+    }
+
+    /// Replaces the per-replica dyncfg overrides. Callers should follow this
+    /// with a configuration push (e.g. `update_configuration`) so that existing
+    /// replicas observe the new overrides.
+    pub(super) fn update_replica_dyncfg_overrides(
+        &mut self,
+        overrides: BTreeMap<ReplicaId, ConfigUpdates>,
+    ) {
+        self.replica_dyncfg_overrides = overrides;
     }
 
     /// Determine the target replica for a compute command. Retrieves the
@@ -1139,7 +1228,13 @@ impl Instance {
                 continue;
             }
 
-            if client.send(command.clone()).is_err() {
+            // Re-apply this replica's dyncfg override to replayed config commands.
+            let command = Self::specialize_command_for_replica(
+                command.clone(),
+                id,
+                &self.replica_dyncfg_overrides,
+            );
+            if client.send(command).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
                 // restart the connection as well as this rehydration.
                 tracing::warn!("Replica {:?} connection terminated during hydration", id);
@@ -1148,7 +1243,14 @@ impl Instance {
         }
 
         // Add replica to tracked state.
-        self.add_replica_state(id, client, config, epoch);
+        if self.add_replica_state(id, client, config, epoch).is_err() {
+            // A storage read hold issuer hung up, which only happens during process shutdown.
+            // There is no way to correctly bring up the replica anymore, so we shut the instance
+            // down instead of running on with half-initialized replica state. `add_replica_state`
+            // has already logged the details and inserted the replica to keep our bookkeeping
+            // consistent with the controller's.
+            self.initiate_shutdown();
+        }
 
         Ok(())
     }
