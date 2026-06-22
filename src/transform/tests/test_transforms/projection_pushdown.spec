@@ -193,8 +193,43 @@ Project (#1)
     Get x
 ----
 Project (#1)
-  FlatMap repeat_row_non_negative(case when (#2 >= #0) then (((#2 - #0) / 1) + 1) else 0 end)
+  FlatMap repeat_row_non_negative(case when (#2 >= #0) then ((#2 - #0) + 1) else 0 end)
     Get x
+
+# A literal lower bound folds the `+ 1` into it; `generate_series(1, n)` with a
+# unit step collapses to just the upper bound.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(1, #2, 1)
+    Get x
+----
+Project (#0)
+  FlatMap repeat_row_non_negative(case when (#1 >= 1) then #1 else 0 end)
+    Project (#1, #2)
+      Get x
+
+# A non-unit literal lower bound folds to `stop + (1 - lo)`.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(5, #2, 1)
+    Get x
+----
+Project (#0)
+  FlatMap repeat_row_non_negative(case when (#1 >= 5) then (#1 + -4) else 0 end)
+    Project (#1, #2)
+      Get x
+
+# With a negative unit step the upper bound is the subtracted one, so a literal
+# there folds the same way.
+apply pipeline=projection_pushdown
+Project (#1)
+  FlatMap generate_series(#0, 1, -1)
+    Get x
+----
+Project (#1)
+  FlatMap repeat_row_non_negative(case when (1 <= #0) then #0 else 0 end)
+    Project (#0, #1)
+      Get x
 
 # Query using the column newly created by FlatMap: no collapse.
 apply pipeline=projection_pushdown
@@ -245,7 +280,7 @@ Project (#1)
     Get xi
 ----
 Project (#1)
-  FlatMap repeat_row_non_negative(case when (#2 >= #0) then (((integer_to_bigint(#2) - integer_to_bigint(#0)) / 1) + 1) else 0 end)
+  FlatMap repeat_row_non_negative(case when (#2 >= #0) then ((integer_to_bigint(#2) - integer_to_bigint(#0)) + 1) else 0 end)
     Get xi
 
 # The int32 variant widens its `numeric`-step bounds with `integer_to_numeric`.

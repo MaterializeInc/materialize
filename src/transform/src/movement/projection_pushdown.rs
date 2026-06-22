@@ -545,11 +545,14 @@ impl ProjectionPushdown {
 /// When the bounds are not literals we synthesize the arithmetic, and the width
 /// we synthesize it in depends on `step`:
 ///
-/// * `|step| == 1`: `i64`. Here `stop - start` overflows `i64` only once the
-///   span reaches `2^63`, which means the series has more than `i64::MAX` rows —
-///   infeasible, exactly what the literal path declines. So `i64` arithmetic is
-///   exact for every feasible series, and an overflow only ever stands in for an
-///   effectively non-terminating enumeration.
+/// * `|step| == 1`: `i64`, and the division (the identity or a negation) is
+///   elided, so the count is just `(a - b) + 1`. A literal subtracted bound is
+///   folded into `a + (1 - b)` — `a` itself for `generate_series(1, n)`. Here
+///   `a - b` overflows `i64` only once the span reaches `2^63`, which means the
+///   series has more than `i64::MAX` rows — infeasible, exactly what the literal
+///   path declines. So `i64` arithmetic is exact for every feasible series, and
+///   an overflow only ever stands in for an effectively non-terminating
+///   enumeration.
 ///
 /// * `|step| >= 2`: `numeric`. A coarse step over near-opposite `i64` extremes
 ///   yields a *feasible* series (few rows) whose span nonetheless overflows
@@ -631,8 +634,12 @@ fn collapse_unused_generate_series(func: &mut TableFunc, exprs: &mut Vec<MirScal
     // `|step| >= 2` a feasible series can still overflow `i64`, so we compute in
     // `numeric` (see the doc comment).
     let cardinality = if step.abs() == 1 {
-        // Widen 32-bit `start`/`stop` to `i64` to produce the `i64` count that
-        // `RepeatRowNonNegative` expects.
+        // `|step| == 1` makes the division in `floor((stop - start) / step) + 1`
+        // either the identity (`step == 1`) or a negation (`step == -1`), so we
+        // write the count as `(a - b) + 1` directly, with no `DivInt64`:
+        //   step ==  1: `(a, b) = (stop, start)`
+        //   step == -1: `(a, b) = (start, stop)`
+        // Widen 32-bit bounds to the `i64` count `RepeatRowNonNegative` expects.
         let to_i64 = |e: MirScalarExpr| {
             if int32 {
                 e.call_unary(func::CastInt32ToInt64)
@@ -640,11 +647,22 @@ fn collapse_unused_generate_series(func: &mut TableFunc, exprs: &mut Vec<MirScal
                 e
             }
         };
-        let start = to_i64(exprs[0].clone());
-        let stop = to_i64(exprs[1].clone());
-        stop.call_binary(start, func::SubInt64)
-            .call_binary(lit(step), func::DivInt64)
-            .call_binary(lit(1), func::AddInt64)
+        let (a_idx, b_idx) = if step > 0 { (1, 0) } else { (0, 1) };
+        let a = to_i64(exprs[a_idx].clone());
+        // When the subtracted bound `b` is a literal, fold `(a - b) + 1` into the
+        // single constant `a + (1 - b)`, which is just `a` when `b == 1` (the
+        // common `generate_series(1, n)` shape). Decline the fold when `1 - b`
+        // overflows `i64`; the `(a - b) + 1` fallback then carries the same
+        // infeasible-only overflow as any other `|step| == 1` count.
+        match literal_i64(&exprs[b_idx]).and_then(|b| i64::try_from(1i128 - i128::from(b)).ok()) {
+            Some(0) => a,
+            Some(c) => a.call_binary(lit(c), func::AddInt64),
+            None => {
+                let b = to_i64(exprs[b_idx].clone());
+                a.call_binary(b, func::SubInt64)
+                    .call_binary(lit(1), func::AddInt64)
+            }
+        }
     } else {
         // Cast the bounds to `numeric` so the span can't overflow, then floor the
         // quotient (exact here) and cast back to the `i64` count.
