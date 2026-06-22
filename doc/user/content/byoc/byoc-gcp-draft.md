@@ -30,8 +30,7 @@ BYOC is set up together with the Materialize team. This guide describes the step
 
 ## How it works
 
-Your environment runs entirely in a dedicated GCP project that you create for Materialize. Materialize provisions and operates it using an identity you grant admin on that project through Workload Identity Federation; the project itself is the isolation boundary. Only operational telemetry (logs and metrics, with sensitive values redacted) leaves your project so Materialize can monitor and support the deployment.
-
+Your environment runs entirely in a dedicated GCP project that you create for Materialize. The project is the isolation boundary. Materialize provisions and operates the environment using an identity you grant admin on that project, accessed through Workload Identity Federation. Only operational telemetry (logs and metrics, with sensitive values redacted) leaves your project, so Materialize can monitor and support the deployment.
 ![BYOC on GCP architecture](/images/byoc-gcp-architecture.svg)
 
 ## Prerequisites
@@ -58,8 +57,7 @@ Using the access you granted, Materialize provisions your environment in your pr
 
 ## Step 4: Connect
 
-Once provisioning completes, Materialize shares your connection details. Establish a Private Service Connect connection from your VPC to reach the environment privately.
-
+Once provisioning completes, Materialize shares your connection details. You then establish a private connection from your VPC to reach the environment. (Draft: the exact GCP connectivity mechanism, likely Private Service Connect, is still being confirmed.)
 ## Security model
 
 - **No standing keys.** Materialize authenticates through Workload Identity Federation: your project trusts Materialize's OIDC issuer and issues short-lived credentials on demand. No service-account keys are created or stored.
