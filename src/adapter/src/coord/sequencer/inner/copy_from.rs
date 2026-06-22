@@ -177,7 +177,9 @@ impl Coordinator {
                             .retire(Err(AdapterError::Unstructured(anyhow::anyhow!("{err}"))));
                     }
                 }
-                mz_storage_types::oneshot_sources::ContentSource::Http { url }
+                mz_storage_types::oneshot_sources::ContentSource::Http {
+                    url: mz_ore::url::SensitiveUrl(url),
+                }
             }
             CopyFromSource::AwsS3 {
                 uri,
