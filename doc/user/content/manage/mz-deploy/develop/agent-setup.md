@@ -1,9 +1,11 @@
 ---
 title: "AI agent setup"
+aliases:
+  - /manage/mz-deploy/agent-setup/
 description: "Configure AI coding agents like Claude Code and Codex to work with mz-deploy projects."
 menu:
   main:
-    parent: manage-mz-deploy
+    parent: mz-deploy-develop
     weight: 44
     identifier: "mz-deploy-agent-setup"
     name: "AI agent setup"
@@ -101,3 +103,23 @@ Add to your project's `.claude/settings.json`:
   }
 }
 ```
+
+## MCP server
+
+`mz-deploy mcp` exposes Materialize's [developer MCP
+server](/integrations/mcp-server/mcp-developer/) to any MCP client (Claude
+Code, Claude Desktop, Cursor) using your active profile. The client can then
+query the Materialize system catalog without you managing separate credentials
+in its config.
+
+This requires the profile to set `http_host` — the Materialize HTTP API
+hostname, which is separate from `host` (the SQL endpoint):
+
+```toml
+[default]
+http_host = "<your-materialize-http-host>"
+username = "<your-username>"
+password = "<your-password>"
+```
+
+For the MCP client configuration block, run `mz-deploy help mcp`.

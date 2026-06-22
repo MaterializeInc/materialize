@@ -1,9 +1,11 @@
 ---
 title: "Editor setup"
+aliases:
+  - /manage/mz-deploy/editor-setup/
 description: "Configure VS Code, Neovim, or Helix with the mz-deploy language server."
 menu:
   main:
-    parent: manage-mz-deploy
+    parent: mz-deploy-develop
     weight: 42
     identifier: "mz-deploy-editor-setup"
     name: "Editor setup"
@@ -15,21 +17,16 @@ dependencies, column schemas, and Materialize-specific features.
 
 ## What the language server provides
 
-- **Parse error diagnostics** — SQL syntax errors appear inline as you type.
-- **Go-to-definition** — Click a table or view name to jump to the file that
-  defines it, across your entire project.
-- **Find references** — See every object that depends on the one under your
-  cursor.
-- **Completions** — Context-aware suggestions for column names, object names,
-  functions, and keywords. Column completions are scoped to your file's actual
-  dependencies.
-- **Hover** — Hover over an object to see its column schema (names, types,
-  nullability) pulled from `types.lock` or the internal type cache.
-- **Document symbols** — Outline view showing the primary object, indexes,
-  constraints, grants, and unit tests in each file.
-- **Workspace symbols** — Fuzzy-find any object across your project by name.
-- **Code lens** — Clickable "Run Test" above unit tests and "Explain" above
-  materialized views.
+| Feature | Description |
+|---------|-------------|
+| **Parse error diagnostics** | SQL syntax errors appear inline as you type. |
+| **Go-to-definition** | Click a table or view name to jump to the file that defines it, across your entire project. |
+| **Find references** | See every object that depends on the one under your cursor. |
+| **Completions** | Context-aware suggestions for column names, object names, functions, and keywords. Column completions are scoped to your file's actual dependencies. |
+| **Hover** | Hover over an object to see its column schema (names, types, nullability) pulled from `types.lock` or the internal type cache. |
+| **Document symbols** | Outline view showing the primary object, indexes, constraints, grants, and unit tests in each file. |
+| **Workspace symbols** | Fuzzy-find any object across your project by name. |
+| **Code lens** | Clickable "Run Test" above unit tests and "Explain" above materialized views. |
 
 ## VS Code
 

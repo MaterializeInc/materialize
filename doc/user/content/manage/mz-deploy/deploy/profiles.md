@@ -1,9 +1,11 @@
 ---
 title: "Profiles"
+aliases:
+  - /manage/mz-deploy/profiles/
 description: "Configure multiple environments with profiles, variables, and file overrides."
 menu:
   main:
-    parent: manage-mz-deploy
+    parent: mz-deploy-deploy
     weight: 60
     identifier: "mz-deploy-profiles"
     name: "Profiles"

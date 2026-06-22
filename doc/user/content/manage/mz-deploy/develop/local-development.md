@@ -1,9 +1,11 @@
 ---
 title: "Local development"
+aliases:
+  - /manage/mz-deploy/local-development/
 description: "Type-check, test, and inspect query plans locally before deploying."
 menu:
   main:
-    parent: manage-mz-deploy
+    parent: mz-deploy-develop
     weight: 40
     identifier: "mz-deploy-local-development"
     name: "Local development"
@@ -74,6 +76,19 @@ Verbose mode shows the dependency graph, deployment order, and full SQL plan.
 
 Use `compile` as your inner development loop: edit, compile, fix, repeat.
 Feedback is instant.
+
+## Clean build artifacts
+
+`mz-deploy` caches build artifacts — parsed SQL, compile caches, and type-check
+databases — in a `target/` directory at the project root. To clear it and force
+the next `compile`, `test`, or `apply` to rebuild from scratch:
+
+```bash
+mz-deploy clean
+```
+
+This only removes local files; it never touches your Materialize region and
+requires no profile or database connection.
 
 ## Write and run unit tests
 
@@ -164,7 +179,7 @@ cluster configuration.
 ## Next step: iterate against production data
 
 Once your changes compile and pass tests locally, use
-[`dev`](/manage/mz-deploy/deployments/#iterate-against-production-data)
+[`dev`](/manage/mz-deploy/deploy/deployments/#iterate-against-production-data)
 to validate behavior against real production data. `dev` creates a
 per-developer overlay database containing only your dirty views and
 requires the `materialize_developer` role — no deployer permissions
