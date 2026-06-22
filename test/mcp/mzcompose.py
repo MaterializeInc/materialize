@@ -911,9 +911,7 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
 
     def fresh_cursor() -> Cursor:
         # Every check needs a fresh session whose startup append is still pending.
-        return c.sql_cursor(
-            user="restricted_agent", port=6875, reuse_connection=False
-        )
+        return c.sql_cursor(user="restricted_agent", port=6875, reuse_connection=False)
 
     with c.test_case("explain_timestamp_first_statement_blocked"):
         cur = fresh_cursor()
