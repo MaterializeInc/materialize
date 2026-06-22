@@ -36,12 +36,15 @@ Use a bash timeout of at least 600000ms (10 min) for test commands.
 Run sqllogictest files with:
 
 ```
-bin/sqllogictest --optimized -- PATH
+bin/sqllogictest -- PATH [PATH ...]
 ```
 
 `PATH` is relative to the repo root, usually a file in `test/sqllogictest/`.
+sqllogictest accepts a list of files, not just one, and runs them in order.
 Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
-For large test files, `--optimized` significantly improves execution speed at the cost of longer compile time.
+
+Add `--optimized` when running many or large files: it significantly improves execution speed at the cost of a longer one-time compile.
+For a single small file, skip `--optimized`, since the extra compile time outweighs the runtime savings.
 You can use `-v` for printing each query before it is run, e.g. to figure out where we are crashing.
 
 ## Testdrive
