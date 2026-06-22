@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/stack.rs
-revision: 301697f040
+revision: 67c62b92f4
 ---
 
 # mz-ore::stack

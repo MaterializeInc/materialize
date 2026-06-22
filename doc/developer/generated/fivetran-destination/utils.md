@@ -1,6 +1,6 @@
 ---
 source: src/fivetran-destination/src/utils.rs
-revision: 849327076c
+revision: cbc5c36774
 ---
 
 # mz-fivetran-destination::utils
