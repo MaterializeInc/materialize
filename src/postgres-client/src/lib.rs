@@ -62,16 +62,54 @@ pub trait PostgresClientKnobs: std::fmt::Debug + Send + Sync {
     fn keepalives_retries(&self) -> u32;
 }
 
+/// The transaction isolation level applied to new connections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IsolationLevel {
+    /// `SERIALIZABLE` — the strongest level; the historical default for consensus.
+    Serializable,
+    /// `READ COMMITTED` — for callers (e.g. consensus) whose queries are correct without
+    /// serializable isolation (relying instead on the `PRIMARY KEY` / `FOR UPDATE` / `ON CONFLICT`).
+    ReadCommitted,
+}
+
+impl IsolationLevel {
+    /// The `SET SESSION CHARACTERISTICS` statement that selects this isolation level.
+    fn set_characteristics_sql(self) -> &'static str {
+        match self {
+            IsolationLevel::Serializable => {
+                "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE"
+            }
+            IsolationLevel::ReadCommitted => {
+                "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED"
+            }
+        }
+    }
+}
+
+/// Resolves the isolation level to apply to a connection. It is invoked once per connection
+/// creation, so a dyncfg-backed resolver lets a change take effect as the pool cycles connections.
+pub type IsolationLevelFn = Arc<dyn Fn() -> IsolationLevel + Send + Sync>;
+
 /// Configuration for creating a [PostgresClient].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PostgresClientConfig {
     url: SensitiveUrl,
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
+    isolation: IsolationLevelFn,
+}
+
+impl std::fmt::Debug for PostgresClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresClientConfig")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PostgresClientConfig {
-    /// Returns a new [PostgresClientConfig] for use in production.
+    /// Returns a new [PostgresClientConfig] for use in production. Connections default to
+    /// `SERIALIZABLE`; use [PostgresClientConfig::with_isolation] to override.
     pub fn new(
         url: SensitiveUrl,
         knobs: Arc<dyn PostgresClientKnobs>,
@@ -81,7 +119,14 @@ impl PostgresClientConfig {
             url,
             knobs,
             metrics,
+            isolation: Arc::new(|| IsolationLevel::Serializable),
         }
+    }
+
+    /// Sets the resolver that picks the isolation level applied to each new connection.
+    pub fn with_isolation(mut self, isolation: IsolationLevelFn) -> Self {
+        self.isolation = isolation;
+        self
     }
 }
 
@@ -128,6 +173,7 @@ impl PostgresClient {
         let last_ttl_connection = AtomicU64::new(0);
         let connections_created = config.metrics.connpool_connections_created.clone();
         let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
+        let isolation = Arc::clone(&config.isolation);
         let builder = Pool::builder(manager);
         let builder = match config.knobs.connection_pool_max_wait() {
             None => builder,
@@ -137,15 +183,16 @@ impl PostgresClient {
             .max_size(config.knobs.connection_pool_max_size())
             .post_create(Hook::async_fn(move |client, _| {
                 connections_created.inc();
+                // Resolved per connection so a dyncfg-backed isolation level takes effect as the
+                // pool cycles connections. Defaults to SERIALIZABLE (see `new`).
+                let isolation = Arc::clone(&isolation);
                 Box::pin(async move {
                     debug!("opened new consensus postgres connection");
                     // This hook must return `tokio_postgres::Error`; using
                     // `mz_postgres_util` wrappers would change the error type.
                     #[allow(clippy::disallowed_methods)]
                     client
-                        .batch_execute(
-                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
-                    )
+                        .batch_execute(isolation().set_characteristics_sql())
                         .await
                         .map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
                 })

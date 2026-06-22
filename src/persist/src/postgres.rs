@@ -27,7 +27,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
 use mz_postgres_client::metrics::PostgresClientMetrics;
-use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
+use mz_postgres_client::{
+    IsolationLevel, PostgresClient, PostgresClientConfig, PostgresClientKnobs,
+};
 use postgres_protocol::escape::escape_identifier;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Row, Statement};
@@ -36,12 +38,13 @@ use tracing::{info, warn};
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
 
-/// Flag to use concensus queries that are tuned for vanilla Postgres.
-pub const USE_POSTGRES_TUNED_QUERIES: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
-    "persist_use_postgres_tuned_queries",
-    false,
-    "Use a set of queries for consensus that have specifically been tuned against
-    Postgres to ensure we acquire a minimal number of locks.",
+/// Flag to run consensus connections at READ COMMITTED isolation instead of SERIALIZABLE, for
+/// BOTH CockroachDB and vanilla Postgres.
+pub const CONSENSUS_USE_READ_COMMITTED: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
+    "persist_consensus_use_read_committed",
+    true,
+    "Run consensus connections (CockroachDB and Postgres) at READ COMMITTED isolation instead of \
+     SERIALIZABLE.",
 );
 
 const SCHEMA: &str = "
@@ -150,7 +153,18 @@ pub struct PostgresConsensusConfig {
 
 impl From<PostgresConsensusConfig> for PostgresClientConfig {
     fn from(config: PostgresConsensusConfig) -> Self {
-        PostgresClientConfig::new(config.url, config.knobs, config.metrics)
+        // Resolve the isolation level per connection from the dyncfg, so flipping the flag takes
+        // effect as the pool cycles connections. Applies uniformly to CockroachDB and Postgres.
+        let dyncfg = Arc::clone(&config.dyncfg);
+        PostgresClientConfig::new(config.url, config.knobs, config.metrics).with_isolation(
+            Arc::new(move || {
+                if CONSENSUS_USE_READ_COMMITTED.get(&dyncfg) {
+                    IsolationLevel::ReadCommitted
+                } else {
+                    IsolationLevel::Serializable
+                }
+            }),
+        )
     }
 }
 
@@ -234,7 +248,7 @@ impl PostgresConsensusConfig {
             }
         }
 
-        let dyncfg = ConfigSet::default().add(&USE_POSTGRES_TUNED_QUERIES);
+        let dyncfg = ConfigSet::default().add(&CONSENSUS_USE_READ_COMMITTED);
         let config = PostgresConsensusConfig::new(
             &url,
             Box::new(TestConsensusKnobs),
@@ -258,7 +272,6 @@ enum PostgresMode {
 pub struct PostgresConsensus {
     postgres_client: PostgresClient,
     dyncfg: Arc<ConfigSet>,
-    mode: PostgresMode,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -322,7 +335,6 @@ impl PostgresConsensus {
         Ok(PostgresConsensus {
             postgres_client,
             dyncfg,
-            mode,
         })
     }
 
@@ -418,71 +430,74 @@ impl Consensus for PostgresConsensus {
     ) -> Result<CaSResult, ExternalError> {
         let expected = new.seqno.previous();
 
-        let result = if let Some(expected) = expected {
-            /// This query has been written to execute within a single
-            /// network round-trip. The insert performance has been tuned
-            /// against CockroachDB, ensuring it goes through the fast-path
-            /// 1-phase commit of CRDB. Any changes to this query should
-            /// confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
-            /// `auto commit`
-            static CRDB_CAS_QUERY: &str = "
+        let result = match expected {
+            Some(expected) => {
+                /// This query has been written to execute within a single
+                /// network round-trip. The insert performance has been tuned
+                /// against CockroachDB, ensuring it goes through the fast-path
+                /// 1-phase commit of CRDB. Any changes to this query should
+                /// confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
+                /// `auto commit`
+                static CRDB_CAS_QUERY: &str = "
+                    INSERT INTO consensus (shard, sequence_number, data)
+                    SELECT $1, $2, $3
+                    WHERE (SELECT sequence_number FROM consensus
+                        WHERE shard = $1
+                        ORDER BY sequence_number DESC LIMIT 1) = $4;
+                ";
+
+                static READ_COMMITTED_CAS_QUERY: &str = "
+                WITH expected_row AS (
+                    SELECT sequence_number FROM consensus
+                    WHERE shard = $1 AND sequence_number = $4
+                    FOR UPDATE
+                )
                 INSERT INTO consensus (shard, sequence_number, data)
                 SELECT $1, $2, $3
-                WHERE (SELECT sequence_number FROM consensus
-                       WHERE shard = $1
-                       ORDER BY sequence_number DESC LIMIT 1) = $4;
-            ";
+                FROM expected_row;
+                ";
 
-            /// This query has been written to ensure we only get row level
-            /// locks on the `(shard, seq_no)` we're trying to update. The insert
-            /// performance has been tuned against Postgres 15 to ensure it
-            /// minimizes possible serialization conflicts.
-            static POSTGRES_CAS_QUERY: &str = "
-            WITH last_seq AS (
-                SELECT sequence_number FROM consensus
-                WHERE shard = $1
-                ORDER BY sequence_number DESC
-                LIMIT 1
-                FOR UPDATE
-            )
-            INSERT INTO consensus (shard, sequence_number, data)
-            SELECT $1, $2, $3
-            FROM last_seq
-            WHERE last_seq.sequence_number = $4;
-            ";
-
-            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
-                && self.mode == PostgresMode::Postgres
-            {
-                POSTGRES_CAS_QUERY
-            } else {
-                CRDB_CAS_QUERY
-            };
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            pg_execute_prepared(
-                &client,
-                &statement,
-                &[&key, &new.seqno, &new.data.as_ref(), &expected],
-            )
-            .await?
-        } else {
-            // Insert the new row as long as no other row exists for the same shard.
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1
-                     )
-                     ON CONFLICT DO NOTHING";
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            pg_execute_prepared(&client, &statement, &[&key, &new.seqno, &new.data.as_ref()])
-                .await?
+                let q = if CONSENSUS_USE_READ_COMMITTED.get(&self.dyncfg) {
+                    READ_COMMITTED_CAS_QUERY
+                } else {
+                    CRDB_CAS_QUERY
+                };
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                pg_execute_prepared(
+                    &client,
+                    &statement,
+                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                )
+                .await
+            }
+            None => {
+                static CRDB_INIT_QUERY: &str = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
+                    NOT EXISTS (
+                        SELECT * FROM consensus WHERE shard = $1
+                    )";
+                static READ_COMMITTED_INIT_QUERY: &str =
+                    "INSERT INTO consensus (shard, sequence_number, data)
+                    VALUES ($1, -1, ''), ($1, $2, $3)";
+                let q = if CONSENSUS_USE_READ_COMMITTED.get(&self.dyncfg) {
+                    READ_COMMITTED_INIT_QUERY
+                } else {
+                    CRDB_INIT_QUERY
+                };
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                pg_execute_prepared(&client, &statement, &[&key, &new.seqno, &new.data.as_ref()])
+                    .await
+            }
         };
 
-        if result == 1 {
-            Ok(CaSResult::Committed)
-        } else {
-            Ok(CaSResult::ExpectationMismatch)
+        match result {
+            Ok(n) if n >= 1 => Ok(CaSResult::Committed),
+            Ok(_) => Ok(CaSResult::ExpectationMismatch),
+            Err(e) if e.code() == Some(&SqlState::UNIQUE_VIOLATION) => {
+                Ok(CaSResult::ExpectationMismatch)
+            }
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -520,57 +535,19 @@ impl Consensus for PostgresConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
+        // `sequence_number >= 0` keeps the seqno -1 sentinel (see `compare_and_set`); it is a no-op
+        // for shards that have no sentinel, since all of their seqnos are already >= 0.
         static CRDB_TRUNCATE_QUERY: &str = "
         DELETE FROM consensus
-        WHERE shard = $1 AND sequence_number < $2 AND
+        WHERE shard = $1 AND sequence_number >= 0 AND sequence_number < $2 AND
         EXISTS (
             SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
         )
         ";
 
-        /// This query has been specifically tuned to ensure we get the minimal
-        /// number of __row__ locks possible, and that it doesn't conflict with
-        /// concurrently running compare and swap operations that are trying to
-        /// evolve the shard.
-        ///
-        /// It's performance has been benchmarked against Postgres 15.
-        ///
-        /// Note: The `ORDER BY` in the newer_exists CTE exists so we obtain a
-        /// row lock on the lowest possible sequence number. This ensures
-        /// minimal conflict between concurrently running truncate and append
-        /// operations.
-        static POSTGRES_TRUNCATE_QUERY: &str = "
-        WITH newer_exists AS (
-            SELECT * FROM consensus
-            WHERE shard = $1
-                AND sequence_number >= $2
-            ORDER BY sequence_number ASC
-            LIMIT 1
-            FOR UPDATE
-        ),
-        to_lock AS (
-            SELECT ctid FROM consensus
-            WHERE shard = $1
-            AND sequence_number < $2
-            AND EXISTS (SELECT * FROM newer_exists)
-            ORDER BY sequence_number DESC
-            FOR UPDATE
-        )
-        DELETE FROM consensus
-        USING to_lock
-        WHERE consensus.ctid = to_lock.ctid;
-        ";
-
-        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
-            && self.mode == PostgresMode::Postgres
-        {
-            POSTGRES_TRUNCATE_QUERY
-        } else {
-            CRDB_TRUNCATE_QUERY
-        };
         let result = {
             let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
+            let statement = client.prepare_cached(CRDB_TRUNCATE_QUERY).await?;
             pg_execute_prepared(&client, &statement, &[&key, &seqno]).await?
         };
         if result == 0 {
@@ -666,6 +643,52 @@ mod tests {
         let conn3 = consensus.get_connection().await;
 
         assert_err!(conn3);
+
+        Ok(())
+    }
+
+    /// Verifies the `persist_consensus_use_read_committed` flag switches the connection isolation
+    /// level (for both CockroachDB and vanilla Postgres). Only touches the session-level
+    /// `transaction_isolation` setting, not the `consensus` table, so it does not interfere with the
+    /// table-mutating tests above.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method`
+    async fn postgres_consensus_read_committed() -> Result<(), ExternalError> {
+        let config = match PostgresConsensusConfig::new_for_test()? {
+            Some(config) => config,
+            None => {
+                info!(
+                    "{} env not set: skipping test that uses external service",
+                    PostgresConsensusConfig::EXTERNAL_TESTS_POSTGRES_URL
+                );
+                return Ok(());
+            }
+        };
+
+        async fn session_isolation(consensus: &PostgresConsensus) -> String {
+            let client = consensus
+                .get_connection()
+                .await
+                .expect("failed to get connection");
+            let row = client
+                .query_one("SHOW transaction_isolation", &[])
+                .await
+                .expect("failed to query transaction_isolation");
+            row.get(0)
+        }
+
+        // Default (flag off): consensus connections run at SERIALIZABLE.
+        let consensus = PostgresConsensus::open(config.clone()).await?;
+        assert_eq!(session_isolation(&consensus).await, "serializable");
+        drop(consensus);
+
+        // Flag on: consensus connections run at READ COMMITTED.
+        let mut updates = mz_dyncfg::ConfigUpdates::default();
+        updates.add(&CONSENSUS_USE_READ_COMMITTED, true);
+        updates.apply(&config.dyncfg);
+
+        let consensus = PostgresConsensus::open(config.clone()).await?;
+        assert_eq!(session_isolation(&consensus).await, "read committed");
 
         Ok(())
     }
