@@ -14,6 +14,7 @@ import re
 import time
 
 import requests
+from psycopg import Cursor
 
 from materialize import MZ_ROOT
 from materialize.mzcompose.composition import Composition
@@ -863,6 +864,116 @@ def workflow_endpoints(c: Composition) -> None:
             "replica_count",
             "hydrated_replica_count",
         }, f"unexpected keys in hydration object: {hydration}"
+
+
+def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> None:
+    """Regression test for SQL-383: a `restrict_to_user_objects` read deferred
+    on the session's startup `mz_sessions` builtin-table append resumed with
+    empty `resolved_ids`, silently skipping the system-catalog guard. Same
+    bug class as the SHOW fix in #36543.
+
+    `EXPLAIN TIMESTAMP` is the reliable vector — it reaches `sequence_plan`
+    and its raw plan depends on `mz_sessions`. The deferral fires only on the
+    *first* `mz_sessions` reference in a session, so the same statement is
+    correctly blocked once the wait future is cleared; we use that for a
+    differential check.
+    """
+    c.up("materialized")
+
+    # `restrict_to_user_objects` is enforced independently of
+    # `enable_rbac_checks`, and the no-auth external SQL listener (port 6875)
+    # lets a LOGIN role connect without a password, so each new connection is
+    # a fresh restricted session.
+    c.sql(
+        """
+        DROP ROLE IF EXISTS restricted_agent;
+        CREATE ROLE restricted_agent LOGIN;
+        ALTER ROLE restricted_agent SET restrict_to_user_objects = true;
+        """,
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
+
+    RESTRICTED = "is restricted"
+    # mz_sessions is the only REQUIRED_BUILTIN_TABLE.
+    BYPASS = "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_internal.mz_sessions"
+
+    def run(cur: Cursor, sql: str) -> str:
+        """Run `sql`; return ``"ok:<nrows>"`` or the error message string."""
+        try:
+            cur.execute(sql.encode())
+        except Exception as e:  # noqa: BLE001 — the message is the assertion
+            return str(e)
+        if cur.description is None:
+            return "ok:0"
+        return f"ok:{len(cur.fetchall())}"
+
+    def fresh_cursor() -> Cursor:
+        # Every check needs a fresh session whose startup append is still pending.
+        return c.sql_cursor(
+            user="restricted_agent", port=6875, reuse_connection=False
+        )
+
+    with c.test_case("explain_timestamp_first_statement_blocked"):
+        cur = fresh_cursor()
+        # First reference: deferred for the startup append, then resumed.
+        first = run(cur, BYPASS)
+        # Second reference: wait future already cleared, no deferral.
+        second = run(cur, BYPASS)
+
+        # Control: holds on both builds; proves the restriction works and that
+        # the statement's resolved_ids carry mz_sessions.
+        assert RESTRICTED in second, (
+            "non-deferred EXPLAIN TIMESTAMP over mz_sessions should be blocked, "
+            f"got: {second!r}"
+        )
+
+        # Regression: fails on the buggy build, passes once `DeferredPlan`
+        # carries `resolved_ids` into the resumed `check_plan`.
+        assert RESTRICTED in first, (
+            f"deferred EXPLAIN TIMESTAMP bypassed restrict_to_user_objects, "
+            f"got: {first!r}"
+        )
+
+    with c.test_case("non_required_builtin_blocked_as_first_statement"):
+        # mz_roles is not a REQUIRED_BUILTIN_TABLE, so no deferral fires —
+        # blocked even as the first statement.
+        outcome = run(
+            fresh_cursor(),
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_roles",
+        )
+        assert RESTRICTED in outcome, (
+            f"first-statement EXPLAIN TIMESTAMP over mz_roles should be blocked, "
+            f"got: {outcome!r}"
+        )
+
+    with c.test_case("frontend_peek_path_not_vulnerable"):
+        # SELECT uses the frontend peek path, which runs the RBAC check before
+        # awaiting the startup appends. Pins that SELECT is not a bypass vector.
+        outcome = run(fresh_cursor(), "SELECT * FROM mz_internal.mz_sessions")
+        assert RESTRICTED in outcome, (
+            f"first-statement SELECT over mz_sessions should be blocked, "
+            f"got: {outcome!r}"
+        )
+
+    with c.test_case("restricted_agent_can_still_run_safe_queries"):
+        # Sanity: the restriction is targeted, not a blanket failure.
+        rows = c.sql_query(
+            "SELECT current_user",
+            user="restricted_agent",
+            port=6875,
+            reuse_connection=False,
+        )
+        assert rows[0][0] == "restricted_agent", rows
+
+    # test_case swallows assertion failures, so the cleanup always runs.
+    c.sql(
+        "DROP ROLE restricted_agent;",
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
 
 
 def workflow_oauth_metadata_host_injection(c: Composition) -> None:

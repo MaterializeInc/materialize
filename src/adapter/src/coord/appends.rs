@@ -113,6 +113,13 @@ pub struct DeferredPlan {
     pub plan: Plan,
     pub validity: PlanValidity,
     pub requires_locks: BTreeSet<CatalogItemId>,
+    /// Forwarded to the resumed `sequence_plan` so `rbac::check_plan` sees the
+    /// same dependencies as on the non-deferred path. Dropping these silently
+    /// bypassed `restrict_to_user_objects` for deferred reads (SQL-383).
+    pub resolved_ids: ResolvedIds,
+    /// Kept separate from `resolved_ids` to mirror the `sequence_plan`
+    /// signature; see [`rbac::check_plan`].
+    pub sql_impl_resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug)]
@@ -237,10 +244,6 @@ impl Coordinator {
                 if let Err(e) = deferred.validity.check(self.catalog()) {
                     deferred.ctx.retire(Err(e))
                 } else {
-                    // Write statements never need to track resolved IDs (NOTE: This is not the
-                    // same thing as plan dependencies, which we do need to re-validate).
-                    let resolved_ids = ResolvedIds::empty();
-
                     // If we pre-acquired our locks, grant them to the session.
                     if let Some(locks) = write_locks {
                         let conn_id = deferred.ctx.session().conn_id().clone();
@@ -257,11 +260,13 @@ impl Coordinator {
                     };
 
                     // Note: This plan is not guaranteed to run, it may get deferred again.
+                    // Resolved IDs are forwarded so the resumed `rbac::check_plan` sees the
+                    // same dependencies as the non-deferred path (SQL-383).
                     self.sequence_plan(
                         deferred.ctx,
                         deferred.plan,
-                        resolved_ids,
-                        ResolvedIds::empty(),
+                        deferred.resolved_ids,
+                        deferred.sql_impl_resolved_ids,
                     )
                     .await;
                 }
