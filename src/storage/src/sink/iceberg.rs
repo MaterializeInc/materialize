@@ -1281,35 +1281,39 @@ where
                         }
                     }
 
-                    // We only start minting after we've reached as_of and resume_upper to avoid
-                    // minting batches that would be immediately skipped.
+                    // If we aren't hydrating from a source snapshot (i.e. resume_upper = minimum),
+                    // don't mint batches until the frontier advances to where there's data.
+                    // N.B. When resume_upper = minimum, this condition cannot be satisfied.
                     if PartialOrder::less_than(&observed_frontier, &resume_upper)
-                        || PartialOrder::less_than(&observed_frontier, &as_of)
                     {
                         continue;
                     }
 
-                    let mut batch_descriptions = vec![];
-                    let mut current_upper = observed_frontier.clone();
-                    let current_upper_ts = current_upper.as_option().expect("frontier not empty").clone();
+                    let (batch_lower, current_upper_ts) =
+                    if *resume_upper == [Timestamp::minimum()] {
+                        // We're hydrating from the source snapshot.
+                        // Start from a batch that just contains 'as_of'.
+                        let batch_lower = as_of.clone();
+                        let batch_upper_ts = as_of.as_option().expect("as_of not empty").clone().step_forward();
 
-                    // Create a catch-up batch from the later of resume_upper or as_of to current frontier.
-                    // We use the later of the two because:
-                    // - For fresh sinks: resume_upper = minimum, as_of = actual timestamp, data starts at as_of
-                    // - For resuming: as_of <= resume_upper (enforced by overcompaction check), data starts at resume_upper
-                    let batch_lower = if PartialOrder::less_than(&resume_upper, &as_of) {
-                        as_of.clone()
+                        (batch_lower, batch_upper_ts)
                     } else {
-                        resume_upper.clone()
+                        // We are a resuming sink. Data (ergo, batches) starts at 'resume_upper'.
+                        // N.B. When resuming, as_of <= resume_upper (enforced by overcompaction check).
+                        let batch_lower = resume_upper.clone();
+                        let mut batch_upper_ts = observed_frontier.as_option().expect("frontier not empty").clone();
+                        if batch_lower == Antichain::from_elem(batch_upper_ts) {
+                            // We enforce that 'batch_upper = observed_frontier' is not less than 'resume_upper'.
+                            // But they could be equal. Make sure the first batch includes at least one timestamp.
+                            batch_upper_ts = batch_upper_ts.step_forward();
+                        }
+
+                        (batch_lower, batch_upper_ts)
                     };
 
-                    if batch_lower == current_upper {
-                        // Snapshot! as_of is exactly at the frontier. We still need to mint
-                        // a batch to create the snapshot, so we step the upper forward by one.
-                        current_upper = Antichain::from_elem(current_upper_ts.step_forward());
-                    }
+                    let mut batch_descriptions = vec![];
 
-                    let batch_description = (batch_lower.clone(), current_upper.clone());
+                    let mut current_upper = Antichain::from_elem(current_upper_ts);
                     debug!(
                         ?sink_id,
                         %name_for_logging,
@@ -1323,7 +1327,8 @@ where
                         batch_lower.pretty(),
                         current_upper.pretty()
                     );
-                    batch_descriptions.push(batch_description);
+                    batch_descriptions.push((batch_lower.clone(), current_upper.clone()));
+
                     // Mint initial future batch descriptions at configurable intervals
                     for i in 1..INITIAL_DESCRIPTIONS_TO_MINT {
                         let duration_millis = commit_interval.as_millis()
