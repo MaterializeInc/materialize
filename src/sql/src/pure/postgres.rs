@@ -451,8 +451,11 @@ pub(super) async fn purify_source_exports(
                 // generate_source_export_statement_values resolves key col_nums
                 // back to columns; excluding a key column leaves a dangling
                 // attnum and triggers a panic there.
-                let key_col_nums: BTreeSet<u16> =
-                    desc.keys.iter().flat_map(|k| k.cols.iter().copied()).collect();
+                let key_col_nums: BTreeSet<u16> = desc
+                    .keys
+                    .iter()
+                    .flat_map(|k| k.cols.iter().copied())
+                    .collect();
                 for col_name in exclude_cols.iter() {
                     if let Some(col) = desc.columns.iter().find(|c| c.name == *col_name) {
                         if key_col_nums.contains(&col.col_num) {

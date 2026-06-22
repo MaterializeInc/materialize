@@ -48,7 +48,9 @@ pub enum PgSourcePurificationError {
     DanglingTextColumns { items: Vec<PartialItemName> },
     #[error("EXCLUDE COLUMNS refers to table not currently being added")]
     DanglingExcludeColumns { items: Vec<PartialItemName> },
-    #[error("cannot exclude column \"{column}\" from table \"{table}\" because it is part of a key constraint")]
+    #[error(
+        "cannot exclude column \"{column}\" from table \"{table}\" because it is part of a key constraint"
+    )]
     ExcludedKeyColumn { column: String, table: String },
     #[error("duplicated column name references: {0:?}")]
     DuplicatedColumnNames(Vec<String>),
