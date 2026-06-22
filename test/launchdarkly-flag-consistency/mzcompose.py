@@ -441,9 +441,6 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_explain_broken
     enable_iceberg_sink
     enable_kafka_sink_partition_by
-    enable_mcp_agents
-    enable_mcp_agents_query_tool
-    enable_mcp_observatory
     enable_multi_replica_sources
     enable_reduce_reduction
     enable_repr_typecheck
