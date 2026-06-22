@@ -92,8 +92,19 @@ for (const region of REGIONS) {
     // Create api key
     await context.goto(`${CONSOLE_ADDR}/access`);
     console.log("Creating app password", apiKeyName);
-    await page.getByRole("button", { name: "Create new" }).click();
-    await page.getByRole("link", { name: "App Password", exact: true }).click();
+    const appPasswordLink = page.getByRole("link", {
+      name: "App Password",
+      exact: true,
+    });
+    // Clicking "Create new" opens a Chakra popover. Under WebKit in CI the
+    // click occasionally lands before the popover is wired up, so the menu
+    // never opens and the "App Password" entry never appears. Retry clicking
+    // until the popover is actually open.
+    await expect(async () => {
+      await page.getByRole("button", { name: "Create new" }).click();
+      await expect(appPasswordLink).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 30_000 });
+    await appPasswordLink.click();
     await page.getByRole("dialog", { name: "New app password" }).waitFor();
     await page.getByRole("textbox", { name: "Name" }).fill(apiKeyName);
     await page.getByRole("button", { name: "Create password" }).click();
