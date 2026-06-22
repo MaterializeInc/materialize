@@ -123,8 +123,9 @@ $ mysql-execute name=mysql
 ALTER TABLE reorder_column MODIFY f1 INT AFTER f2;
 INSERT INTO reorder_column VALUES (20, 10);
 
-! SELECT * from reorder_column;
-contains:incompatible schema change
+> SELECT * from reorder_column;
+1 2
+10 20
 
 > DROP SOURCE mz_source CASCADE;
 
