@@ -249,12 +249,36 @@ impl FrequencyCounter {
         }
     }
 
+    /// Add another counter's per-byte counts into this one. Merging two batches'
+    /// counters this way yields a counter for their union, from which a fresh
+    /// Huffman code valid for the merged data can be built.
+    pub fn add(&mut self, other: &FrequencyCounter) {
+        for b in 0..256 {
+            self.freq[b] += other.freq[b];
+        }
+    }
+
     pub fn frequencies(&self) -> &[u64; 256] {
         &self.freq
     }
 
     pub fn build(&self) -> Option<HuffmanCode> {
         HuffmanCode::from_frequencies(&self.freq)
+    }
+
+    /// Build a code that can encode *any* byte value, by treating every unseen
+    /// byte as if it occurred once. Used for mid-formation install, where the
+    /// codec is fixed before all rows are seen: a code built only over observed
+    /// bytes could not encode a byte that arrives later. Flooring lengthens the
+    /// observed bytes' codes slightly (256 symbols instead of the seen subset),
+    /// the price of soundness against unseen bytes. `None` only if the floored
+    /// distribution still needs codes longer than [`MAX_BITS`] (degenerate).
+    pub fn build_floored(&self) -> Option<HuffmanCode> {
+        let mut freq = self.freq;
+        for slot in freq.iter_mut() {
+            *slot = (*slot).max(1);
+        }
+        HuffmanCode::from_frequencies(&freq)
     }
 }
 
