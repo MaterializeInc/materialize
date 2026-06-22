@@ -16,7 +16,7 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec, IntGaugeVec,
+    DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec, IntGaugeVec, MetricTag,
     MetricVisibility, MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::GlobalId;
@@ -78,6 +78,7 @@ impl GeneralSourceMetricDefs {
                 help: "A counter representing how many times we have failed to commit offsets for a source",
                 var_labels: ["source_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Source],
             )),
             progress: registry.register(metric!(
                 name: "mz_source_progress",

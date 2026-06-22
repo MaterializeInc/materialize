@@ -74,6 +74,7 @@ macro_rules! metric {
         $(, var_labels: [ $($vl_name:expr),* ])?
         $(, buckets: $bk_name:expr)?
         $(, visibility: $visibility:expr)?
+        $(, tags: [ $($tag:expr),* $(,)? ])?
         $(,)?
     ) => {{
         let const_labels = (&[
@@ -100,6 +101,9 @@ macro_rules! metric {
         // It has no runtime effect; we only type-check it here so a bad value is
         // a compile error rather than silently ignored.
         $(let _: $crate::metrics::MetricVisibility = $visibility;)?
+        // `tags` is documentation metadata for the metrics catalog.
+        // It has no runtime effect.
+        $($(let _: $crate::metrics::MetricTag = $tag;)*)?
         mk_opts
     }}
 }
@@ -129,6 +133,27 @@ pub enum MetricVisibility {
     /// alerts on. We do not guarantee stability for this group
     /// of metrics.
     Public,
+}
+
+/// A tag categorizing a metric in the user-facing metrics catalog.
+///
+/// It is set via the optional `tags:` field of [`metric!`] and
+/// consumed by the metrics catalog (`bin/gen-metrics-catalog`).
+/// It has no effect on the metric at runtime.
+///
+/// A metric may carry many tags, or none (the default). A tag names the
+/// grouping the metric is presented under in user-facing documentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MetricTag {
+    /// Control plane metrics (client connections, availability, catalog).
+    Environment,
+    /// Metrics for compute objects (indexes, materialized views).
+    Compute,
+    /// Metrics for sources.
+    Source,
+    /// Metrics for sinks.
+    Sink,
 }
 
 /// The materialize metrics registry.
