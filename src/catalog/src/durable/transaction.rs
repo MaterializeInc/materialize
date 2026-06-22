@@ -3564,13 +3564,16 @@ where
 mod tests {
     use super::*;
 
+    use mz_controller::clusters::ReplicaLogging;
     use mz_ore::now::SYSTEM_TIME;
     use mz_ore::{assert_none, assert_ok};
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_types::PersistLocation;
     use semver::Version;
 
-    use crate::durable::{TestCatalogStateBuilder, test_bootstrap_args};
+    use crate::durable::{
+        ReplicaConfig, ReplicaLocation, TestCatalogStateBuilder, test_bootstrap_args,
+    };
     use crate::memory;
 
     #[mz_ore::test]
@@ -4156,6 +4159,84 @@ mod tests {
         assert_eq!(db_name, db.name);
         assert_eq!(db_owner, db.owner_id);
         assert_eq!(db_privileges, db.privileges);
+    }
+
+    /// Regression test for DB-147: inserting a replica with an explicit id must not consume the
+    /// `IdAlloc` counter, and the durable allocator must advance independently so a later
+    /// allocation never collides with an explicitly inserted id.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_insert_replica_with_id_does_not_consume_allocator() {
+        const VERSION: Version = Version::new(26, 0, 0);
+        let mut persist_cache = PersistClientCache::new_no_metrics();
+        persist_cache.cfg.build_version = VERSION;
+        let persist_client = persist_cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .unwrap();
+        let state_builder = TestCatalogStateBuilder::new(persist_client)
+            .with_default_deploy_generation()
+            .with_version(VERSION);
+        let mut state = state_builder
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+            .0;
+
+        // The cluster does not need to exist: `insert_cluster_replica_with_id` only writes a
+        // `cluster_replicas` row and does not validate the referenced cluster.
+        let cluster_id = ClusterId::User(1);
+        let owner_id = RoleId::User(1);
+        let config = ReplicaConfig {
+            location: ReplicaLocation::Managed {
+                size: "1".to_string(),
+                availability_zones: Vec::new(),
+                internal: false,
+                billed_as: None,
+                pending: false,
+            },
+            logging: ReplicaLogging {
+                log_logging: false,
+                interval: Some(Duration::from_secs(1)),
+            },
+        };
+
+        // Step 1: allocate one user replica id out-of-band via the durable allocator.
+        let commit_ts = state.current_upper().await;
+        let a = state
+            .allocate_user_replica_ids(1, commit_ts)
+            .await
+            .unwrap()
+            .into_element();
+        assert!(a.is_user());
+
+        // Step 2: insert a replica with that explicit id and commit.
+        let mut txn = state.transaction().await.unwrap();
+        txn.insert_cluster_replica_with_id(cluster_id, a, "explicit", config, owner_id)
+            .unwrap();
+        let commit_ts = txn.upper();
+        txn.commit_internal(commit_ts).await.unwrap();
+
+        // Step 3: allocate one more user replica id.
+        let commit_ts = state.current_upper().await;
+        let b = state
+            .allocate_user_replica_ids(1, commit_ts)
+            .await
+            .unwrap()
+            .into_element();
+
+        // Step 4: the explicit insert consumed zero ids, so the allocator's next value is the
+        // direct successor of the first allocation.
+        assert_eq!(b.inner_id(), a.inner_id() + 1);
+
+        // Step 5: the explicitly inserted replica is present in the committed state.
+        let txn = state.transaction().await.unwrap();
+        let found = txn
+            .get_cluster_replicas()
+            .any(|replica| replica.replica_id == a);
+        assert!(found, "explicitly inserted replica {a} not found");
     }
 
     #[mz_ore::test]
