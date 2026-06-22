@@ -37,7 +37,7 @@
 
   <!-- notes -->
   <text x="48" y="444" font-size="11.5" font-style="italic" fill="#2D6CDF">Your data never leaves your project.</text>
-  <text x="48" y="464" font-size="11.5" fill="#5B6472">Apps connect privately over Private Service Connect.</text>
+  <text x="48" y="464" font-size="11.5" fill="#5B6472">Apps connect over a private connection.</text>
 
   <!-- Materialize control plane -->
   <rect x="672" y="170" width="200" height="180" rx="12" fill="#F4EEFF" stroke="#7F4EFF" stroke-width="1.5"/>
