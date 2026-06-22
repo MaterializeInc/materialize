@@ -2205,6 +2205,20 @@ impl<'a> Parser<'a> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
             let csr_connection = self.parse_csr_connection_avro()?;
             AvroSchema::Csr { csr_connection }
+        } else if self.parse_keywords(&[AWS, GLUE, SCHEMA, REGISTRY]) {
+            self.expect_keyword(CONNECTION)?;
+            let connection = self.parse_raw_name()?;
+            let with_options = if self.consume_token(&Token::LParen) {
+                let opts = self.parse_comma_separated(Parser::parse_glue_avro_option)?;
+                self.expect_token(&Token::RParen)?;
+                opts
+            } else {
+                vec![]
+            };
+            AvroSchema::Glue {
+                connection,
+                with_options,
+            }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
             self.expect_keyword(SCHEMA)?;
@@ -2225,7 +2239,7 @@ impl<'a> Parser<'a> {
         } else {
             return self.expected(
                 self.peek_pos(),
-                "CONFLUENT SCHEMA REGISTRY or SCHEMA",
+                "CONFLUENT SCHEMA REGISTRY, AWS GLUE SCHEMA REGISTRY, or SCHEMA",
                 self.peek_token(),
             );
         };
@@ -2236,6 +2250,23 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[CONFLUENT, WIRE, FORMAT])?;
         Ok(AvroSchemaOption {
             name: AvroSchemaOptionName::ConfluentWireFormat,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
+    fn parse_glue_avro_option(&mut self) -> Result<GlueAvroOption<Raw>, ParserError> {
+        self.expect_keywords(&[SCHEMA, NAME])?;
+        // The value is parsed as optional even though SCHEMA NAME requires one currently.
+        // Enforcing it here wouldn't let us drop the purification-layer check:
+        // the whole option list is optional, so `CONNECTION glue_conn` and
+        // `(...)` with no SCHEMA NAME bypass this function entirely. This also allows
+        // us to provide more detailed errors.
+        //
+        // Future work may add mutually exclusive options (or interpret a lack of schema name).
+        // For example, a lack of schema name may fall back to the default AWS Glue naming strategy:
+        // See <https://github.com/awslabs/aws-glue-schema-registry/blob/4b9cac477d6876a883e2a8893738a30c072694dc/common/src/main/java/com/amazonaws/services/schemaregistry/common/AWSSchemaNamingStrategyDefaultImpl.java#L18>
+        Ok(GlueAvroOption {
+            name: GlueAvroOptionName::SchemaName,
             value: self.parse_optional_option_value()?,
         })
     }
