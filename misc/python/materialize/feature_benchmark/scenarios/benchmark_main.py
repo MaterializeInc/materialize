@@ -1121,7 +1121,7 @@ class ArrangementColumnCompression(Dataflow):
         # `GROUP BY a1.s1` keeps the low-cardinality `s1` in `v1`'s join arrangement
         # (rather than letting it be projected away), so the arrangement actually
         # carries a compressible column.
-        return Td(f"""
+        return Td("""
 > DROP MATERIALIZED VIEW IF EXISTS v2
 
 > SELECT 1
