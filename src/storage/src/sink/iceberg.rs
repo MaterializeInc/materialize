@@ -1223,6 +1223,25 @@ where
             // It's "sortedness" is derived from the monotonicity of batch descriptions,
             // and the fact that we only ever push new descriptions to the back and pop from the front.
             let mut minted_batches = VecDeque::new();
+
+            // Once we start seeing new data, we'll roll everything into a single catch-up commit
+            // before beginning the steady state commit interval.
+            let catchup_start = if *resume_upper == [Timestamp::minimum()] {
+                // If we're hydrating from a source snapshot, we immediately emit the snapshot's batch description.
+                let batch_upper = Antichain::from_elem(
+                    as_of.as_option().expect("as_of not empty").step_forward());
+                let batch = (as_of.clone(), batch_upper.clone());
+                minted_batches.push_back(batch.clone());
+                batch_desc_output.give(&capset[0], batch);
+                capset.downgrade(batch_upper.clone());
+
+                // The "catch-up" batch starts at the end of the snapshot batch.
+                batch_upper
+            } else {
+                // If we're resuming, the "catch-up" batch starts at the start of data, i.e. resume_upper.
+                resume_upper.clone()
+            };
+
             loop {
                 if let Some(event) = input.next().await {
                     match event {
@@ -1258,7 +1277,7 @@ where
                         // initialization. For example, a loadgen source configured for a finite
                         // dataset may emit all rows at time t and then immediately close. If we
                         // saw any data, synthesize an upper one tick past the maximum timestamp
-                        // so we can mint a snapshot batch and commit it.
+                        // so we can mint a catch-up batch and commit it.
                         if let Some(max_ts) = max_seen_ts.as_ref() {
                             let synthesized_upper =
                                 Antichain::from_elem(max_ts.step_forward());
@@ -1281,49 +1300,31 @@ where
                         }
                     }
 
-                    // We only start minting after we've reached as_of and resume_upper to avoid
-                    // minting batches that would be immediately skipped.
-                    if PartialOrder::less_than(&observed_frontier, &resume_upper)
-                        || PartialOrder::less_than(&observed_frontier, &as_of)
+                    // Don't make empty commits while we wait ^for the first data to be ready.
+                    // (^for the frontier to indicate there _could_ be data ready)
+                    if !PartialOrder::less_than(&catchup_start, &observed_frontier)
                     {
                         continue;
                     }
 
                     let mut batch_descriptions = vec![];
                     let mut current_upper = observed_frontier.clone();
-                    let current_upper_ts = current_upper.as_option().expect("frontier not empty").clone();
-
-                    // Create a catch-up batch from the later of resume_upper or as_of to current frontier.
-                    // We use the later of the two because:
-                    // - For fresh sinks: resume_upper = minimum, as_of = actual timestamp, data starts at as_of
-                    // - For resuming: as_of <= resume_upper (enforced by overcompaction check), data starts at resume_upper
-                    let batch_lower = if PartialOrder::less_than(&resume_upper, &as_of) {
-                        as_of.clone()
-                    } else {
-                        resume_upper.clone()
-                    };
-
-                    if batch_lower == current_upper {
-                        // Snapshot! as_of is exactly at the frontier. We still need to mint
-                        // a batch to create the snapshot, so we step the upper forward by one.
-                        current_upper = Antichain::from_elem(current_upper_ts.step_forward());
-                    }
-
-                    let batch_description = (batch_lower.clone(), current_upper.clone());
+                    let current_upper_ts = observed_frontier.as_option().expect("frontier not empty").clone();
                     debug!(
                         ?sink_id,
                         %name_for_logging,
-                        batch_lower = %batch_lower.pretty(),
+                        batch_lower = %catchup_start.pretty(),
                         current_upper = %current_upper.pretty(),
                         "iceberg mint initializing (catch-up batch)"
                     );
                     debug!(
                         "{}: creating catch-up batch [{}, {})",
                         name_for_logging,
-                        batch_lower.pretty(),
+                        catchup_start.pretty(),
                         current_upper.pretty()
                     );
-                    batch_descriptions.push(batch_description);
+                    batch_descriptions.push((catchup_start.clone(), current_upper.clone()));
+
                     // Mint initial future batch descriptions at configurable intervals
                     for i in 1..INITIAL_DESCRIPTIONS_TO_MINT {
                         let duration_millis = commit_interval.as_millis()
