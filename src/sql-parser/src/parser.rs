@@ -2258,7 +2258,7 @@ impl<'a> Parser<'a> {
         // `(...)` with no SCHEMA NAME bypass this function entirely. This also allows
         // us to provide more detailed errors.
         //
-        // Future work may add mutually exclusive options (or interpert a lack of schema name).
+        // Future work may add mutually exclusive options (or interpret a lack of schema name).
         // For example, a lack of schema name may fall back to the default AWS Glue naming strategy:
         // See <https://github.com/awslabs/aws-glue-schema-registry/blob/4b9cac477d6876a883e2a8893738a30c072694dc/common/src/main/java/com/amazonaws/services/schemaregistry/common/AWSSchemaNamingStrategyDefaultImpl.java#L18>
         Ok(GlueAvroOption {
