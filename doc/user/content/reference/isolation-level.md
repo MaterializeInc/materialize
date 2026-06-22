@@ -284,8 +284,9 @@ You can set the isolation level using the session-level [configuration parameter
 SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 ```
 
-You can also set the isolation level for an explicit transaction block as part
-of the [`BEGIN` statement](/sql/begin); for example:
+For `STRICT SERIALIZABLE` and `SERIALIZABLE`, you can also set the isolation
+level for an explicit transaction block as part of the [`BEGIN`
+statement](/sql/begin); for example:
 
 ```mzsql
 BEGIN ISOLATION LEVEL STRICT SERIALIZABLE;
