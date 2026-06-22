@@ -61,8 +61,10 @@ logic to them. Extend the implications framework instead.
   belong, even though existing system-config pushes happen there today.
 - Several `StateUpdateKind`s are not yet represented as implications.
   `parse_state_update` returns `None` for them via its catch-all arm (this
-  covers the system-config kinds, among others). Representing a new kind may
-  require extending `ParsedStateUpdate` / `ParsedStateUpdateKind` first.
+  covers the environment-wide and cluster-scoped system-config kinds, among
+  others; the replica-scoped kind is represented as a `ParsedStateUpdateKind`).
+  Representing a new kind may require extending `ParsedStateUpdate` /
+  `ParsedStateUpdateKind` first.
 
 ## Correctness Invariants
 

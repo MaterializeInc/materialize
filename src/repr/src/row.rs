@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Borrow;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, RefMut};
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
@@ -824,6 +824,11 @@ pub struct RowArena {
     // for reuse; reusing one region across `clear` cycles makes a steady-state
     // workload (e.g. decoding rows one at a time) allocation-free.
     inner: RefCell<Vec<Vec<u8>>>,
+    // A single reusable scratch buffer backing `RowArena::writer`. A writer builds into it and
+    // `finish` copies the result into a region (via `push_bytes`); the buffer is then retained
+    // (cleared, capacity kept) for the next writer, so building values incrementally does not
+    // allocate per use once it reaches its high-water mark.
+    scratch: RefCell<Vec<u8>>,
 }
 
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
@@ -3042,6 +3047,7 @@ impl RowArena {
     pub fn new() -> Self {
         RowArena {
             inner: RefCell::new(vec![]),
+            scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -3054,6 +3060,7 @@ impl RowArena {
         }
         RowArena {
             inner: RefCell::new(inner),
+            scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -3132,6 +3139,22 @@ impl RowArena {
         unsafe {
             // This is safe because we just copied the bytes of a valid `String`.
             std::str::from_utf8_unchecked(copied)
+        }
+    }
+
+    /// Returns a growable, writeable byte buffer for assembling a value incrementally.
+    ///
+    /// Write into it with [`RowArenaBuf::push`], [`RowArenaBuf::extend_from_slice`], or
+    /// [`std::io::Write`], then call [`RowArenaBuf::finish`] to copy the result into the arena and
+    /// obtain a reference valid for the arena's lifetime. The backing buffer is a single scratch
+    /// allocation reused across writers, so this lets a producer that builds bytes piecewise (e.g.
+    /// decoding a row) avoid managing its own scratch. Only one writer may be live at a time.
+    pub fn writer(&self) -> RowArenaBuf<'_> {
+        let mut scratch = self.scratch.borrow_mut();
+        scratch.clear();
+        RowArenaBuf {
+            arena: self,
+            scratch,
         }
     }
 
@@ -3243,6 +3266,84 @@ impl RowArena {
 impl Default for RowArena {
     fn default() -> RowArena {
         RowArena::new()
+    }
+}
+
+/// A growable, writeable byte buffer that builds a value into a [`RowArena`]'s scratch space.
+///
+/// Obtained from [`RowArena::writer`]. Behaves like a writeable byte slice (push/extend bytes,
+/// read back as `&[u8]`); [`RowArenaBuf::finish`] copies the assembled bytes into the arena and
+/// returns a reference valid for the arena's lifetime. The scratch allocation is held for the
+/// writer's lifetime and reused by later writers.
+#[derive(Debug)]
+pub struct RowArenaBuf<'a> {
+    arena: &'a RowArena,
+    scratch: RefMut<'a, Vec<u8>>,
+}
+
+impl<'a> RowArenaBuf<'a> {
+    /// Appends a single byte.
+    pub fn push(&mut self, byte: u8) {
+        self.scratch.push(byte);
+    }
+
+    /// Appends a slice of bytes.
+    pub fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.scratch.extend_from_slice(bytes);
+    }
+
+    /// The bytes written so far.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.scratch
+    }
+
+    /// The number of bytes written so far.
+    pub fn len(&self) -> usize {
+        self.scratch.len()
+    }
+
+    /// Whether no bytes have been written.
+    pub fn is_empty(&self) -> bool {
+        self.scratch.is_empty()
+    }
+
+    /// Copies the written bytes into the arena, returning a reference valid for its lifetime.
+    pub fn finish(self) -> &'a [u8] {
+        self.arena.push_bytes(self.scratch.as_slice())
+    }
+
+    /// Like [`RowArenaBuf::finish`], but returns the bytes as a `&str`.
+    ///
+    /// Intended for buffers written via [`std::fmt::Write`] (e.g. `write!`), whose contents are
+    /// valid UTF-8. Panics if the bytes are not valid UTF-8.
+    pub fn finish_str(self) -> &'a str {
+        let bytes = self.arena.push_bytes(self.scratch.as_slice());
+        std::str::from_utf8(bytes).expect("RowArenaBuf::finish_str on non-UTF-8 contents")
+    }
+}
+
+impl<'a> std::ops::Deref for RowArenaBuf<'a> {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.scratch
+    }
+}
+
+impl<'a> std::io::Write for RowArenaBuf<'a> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.scratch.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> std::fmt::Write for RowArenaBuf<'a> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.scratch.extend_from_slice(s.as_bytes());
+        Ok(())
     }
 }
 
@@ -3424,6 +3525,60 @@ mod tests {
         arena.clear();
         let empty: &[u8] = &[];
         assert_eq!(arena.push_bytes(Vec::<u8>::new()), empty);
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_writer() {
+        use std::io::Write;
+
+        let arena = RowArena::new();
+
+        // Build a value incrementally and commit it.
+        let mut w = arena.writer();
+        let mut expected = Vec::new();
+        for i in 0..1000u16 {
+            let byte = u8::try_from(i % 256).unwrap();
+            w.push(byte);
+            expected.push(byte);
+            w.extend_from_slice(&[byte, byte]);
+            expected.extend_from_slice(&[byte, byte]);
+        }
+        assert_eq!(w.as_slice(), expected.as_slice());
+        assert_eq!(w.len(), expected.len());
+        let first = w.finish();
+        assert_eq!(first, expected.as_slice());
+
+        // A second writer reuses the scratch; its result is independent of the first, which stays
+        // valid because `finish` copied it into the arena.
+        let mut w2 = arena.writer();
+        write!(w2, "hello").unwrap();
+        let second = w2.finish();
+        assert_eq!(second, b"hello");
+        assert_eq!(first, expected.as_slice());
+
+        // An empty writer commits to an empty slice.
+        let empty: &[u8] = &[];
+        assert_eq!(arena.writer().finish(), empty);
+
+        // Abandoning a writer without finishing is fine; the next writer starts empty.
+        {
+            let mut w3 = arena.writer();
+            w3.extend_from_slice(b"discarded");
+        }
+        assert_eq!(arena.writer().as_slice(), empty);
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_writer_fmt() {
+        use std::fmt::Write;
+
+        // Format text into the writer (e.g. building a cast-to-string result) and commit as `&str`.
+        let arena = RowArena::new();
+        let mut w = arena.writer();
+        for i in 0..5 {
+            write!(w, "{i},").unwrap();
+        }
+        assert_eq!(w.finish_str(), "0,1,2,3,4,");
     }
 
     #[mz_ore::test]
