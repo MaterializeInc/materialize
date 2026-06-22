@@ -139,13 +139,12 @@ def run_mz_deploy(
         check=False,
         rm=True,
     )
-    if result.returncode != 0:
+    if result.returncode != 0 and check:
         print(f"mz-deploy stdout: {result.stdout}", file=sys.stderr)
         print(f"mz-deploy stderr: {result.stderr}", file=sys.stderr)
-        if check:
-            raise subprocess.CalledProcessError(
-                result.returncode, ["mz-deploy", *cmd], result.stdout, result.stderr
-            )
+        raise subprocess.CalledProcessError(
+            result.returncode, ["mz-deploy", *cmd], result.stdout, result.stderr
+        )
     return result
 
 
@@ -254,6 +253,23 @@ def setup_base(c: Composition) -> None:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Run every other workflow as a sub-case so the default workflow
+    exercises the full suite."""
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_basic(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Core apply / stage / promote / abort lifecycle over the ``basic/*``
+    projects.
+
+    A single sequential, stateful chain sharing one ``setup_base``: each test
+    case builds on the catalog state left by the previous one, so the cases
+    are not independently runnable."""
     setup_base(c)
 
     with c.test_case("apply-initial"):
@@ -677,6 +693,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         assert len(rows) >= 1, f"Expected ops views after v3, got {rows}"
 
+
+def workflow_multi_profile(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Per-profile name suffixing, variable overrides, and the apply / stage /
+    promote lifecycle across the ``default`` and ``staging`` profiles."""
+    setup_base(c)
+
     with c.test_case("mz-deploy-multi-profile"):
         # ── 1. Apply default profile ──────────────────────
         result = run_mz_deploy(c, "multi-profile/v1", "apply")
@@ -910,6 +932,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         dry_run = parse_dry_run_json(result)
         assert count_actions(dry_run["phases"], "created") == 0
 
+
+def workflow_profiles(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Profile- and variable-resolution edge cases: which commands require an
+    active profile, and how unresolved variables surface at compile time."""
+    setup_base(c)
+
     with c.test_case("mz-deploy-undefined-var"):
         result = run_mz_deploy(c, "undefined-var/v1", "compile", check=False)
         assert (
@@ -989,15 +1017,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert (
             "no profile selected" in combined
         ), f"Expected 'no profile selected' error, got: {combined}"
-
-    # Run every other workflow as a sub-case so the default workflow exercises
-    # the full suite.
-    for name in c.workflows:
-        if name == "default":
-            continue
-
-        with c.test_case(name):
-            c.workflow(name)
 
 
 def workflow_dev(c: Composition, parser: WorkflowArgumentParser) -> None:
