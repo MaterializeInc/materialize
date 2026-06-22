@@ -151,18 +151,18 @@ macro_rules! metrics_size_class {
                     }
                     Ok(())
                 }
-                /// Returns the `(name, help)` of every metric defined here.
+                /// Returns the `(name, help, labels)` of every metric defined here.
                 ///
                 /// Used by `mz-metrics-catalog` to document metrics whose names
                 /// are assembled at macro-expansion time
-                pub(crate) fn descs(&self) -> Vec<(String, String)> {
+                pub(crate) fn descs(&self) -> Vec<(String, String, Vec<String>)> {
                     use prometheus::core::Collector;
                     let mut descs = Vec::new();
                     $(for d in self.$metric.desc() {
-                        descs.push((d.fq_name.clone(), d.help.clone()));
+                        descs.push((d.fq_name.clone(), d.help.clone(), crate::desc_labels(d)));
                     })*
                     $(for d in self.$f_metric.desc() {
-                        descs.push((d.fq_name.clone(), d.help.clone()));
+                        descs.push((d.fq_name.clone(), d.help.clone(), crate::desc_labels(d)));
                     })*
                     descs
                 }
@@ -229,16 +229,16 @@ macro_rules! map_metrics {
                     }
                     Ok(())
                 }
-                /// Returns the `(name, help)` of every metric defined here.
+                /// Returns the `(name, help, labels)` of every metric defined here.
                 ///
                 /// Used by `mz-metrics-catalog` to document metrics whose names
                 /// are assembled at macro-expansion time and so are invisible to
                 /// its source scraper.
-                pub(crate) fn descs(&self) -> Vec<(String, String)> {
+                pub(crate) fn descs(&self) -> Vec<(String, String, Vec<String>)> {
                     use prometheus::core::Collector;
                     let mut descs = Vec::new();
                     $(for d in self.$m_metric.desc() {
-                        descs.push((d.fq_name.clone(), d.help.clone()));
+                        descs.push((d.fq_name.clone(), d.help.clone(), crate::desc_labels(d)));
                     })*
                     descs
                 }
