@@ -1152,8 +1152,13 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
             };
 
             let config = builtin_cluster_replica_config(replica_size.clone());
-            let replica_id = txn.insert_cluster_replica(
+            // Builtin replicas live on system clusters. This runs inside the
+            // catalog-open transaction with no coordinator, so allocating from
+            // the same transaction is single-source and safe.
+            let replica_id = txn.allocate_system_replica_id()?;
+            txn.insert_cluster_replica_with_id(
                 cluster.id,
+                replica_id,
                 builtin_replica.name,
                 config,
                 MZ_SYSTEM_ROLE_ID,

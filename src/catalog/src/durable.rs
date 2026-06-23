@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
-use mz_controller_types::ClusterId;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
@@ -395,6 +395,36 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
             .await?
             .into_element();
         Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
+    }
+
+    /// Allocates and returns `amount` many user [`ReplicaId`]s.
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
+    async fn allocate_user_replica_ids(
+        &mut self,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<ReplicaId>, CatalogError> {
+        let ids = self
+            .allocate_id(USER_REPLICA_ID_ALLOC_KEY, amount, commit_ts)
+            .await?;
+        let ids = ids.into_iter().map(ReplicaId::User).collect();
+        Ok(ids)
+    }
+
+    /// Allocates and returns `amount` many system [`ReplicaId`]s.
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
+    async fn allocate_system_replica_ids(
+        &mut self,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<ReplicaId>, CatalogError> {
+        let ids = self
+            .allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, amount, commit_ts)
+            .await?;
+        let ids = ids.into_iter().map(ReplicaId::System).collect();
+        Ok(ids)
     }
 
     fn shard_id(&self) -> ShardId;

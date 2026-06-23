@@ -149,6 +149,7 @@ pub enum Op {
     },
     CreateClusterReplica {
         cluster_id: ClusterId,
+        replica_id: ReplicaId,
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
@@ -1324,6 +1325,7 @@ impl Catalog {
             }
             Op::CreateClusterReplica {
                 cluster_id,
+                replica_id,
                 name,
                 config,
                 owner_id,
@@ -1335,8 +1337,16 @@ impl Catalog {
                     )));
                 }
                 let cluster = state.get_cluster(cluster_id);
-                let id =
-                    tx.insert_cluster_replica(cluster_id, &name, config.clone().into(), owner_id)?;
+                // The replica id is allocated out-of-band by the durable
+                // allocator before the transaction, mirroring cluster and item
+                // ids. Nothing allocates a replica id in-apply.
+                tx.insert_cluster_replica_with_id(
+                    cluster_id,
+                    replica_id,
+                    &name,
+                    config.clone().into(),
+                    owner_id,
+                )?;
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
                     billed_as,
@@ -1349,7 +1359,7 @@ impl Catalog {
                         mz_audit_log::CreateClusterReplicaV4 {
                             cluster_id: cluster_id.to_string(),
                             cluster_name: cluster.name.clone(),
-                            replica_id: Some(id.to_string()),
+                            replica_id: Some(replica_id.to_string()),
                             replica_name: name.clone(),
                             logical_size: size.clone(),
                             billed_as: billed_as.clone(),

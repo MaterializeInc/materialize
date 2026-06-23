@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use itertools::Itertools;
@@ -20,8 +20,9 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
 };
-use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
@@ -705,9 +706,23 @@ impl Coordinator {
             )?;
         }
 
-        for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
+        // Pre-allocate replica ids out-of-band via the durable allocator,
+        // picking the id type from the owning cluster. This mirrors how cluster
+        // and item ids are allocated, so nothing allocates a replica id
+        // in-apply.
+        let id_ts = self.get_catalog_write_ts().await;
+        let replica_ids = self
+            .catalog()
+            .allocate_replica_ids(cluster_id, u64::from(replication_factor), id_ts)
+            .await?;
+
+        for (replica_id, replica_name) in replica_ids
+            .into_iter()
+            .zip_eq((0..replication_factor).map(managed_cluster_replica_name))
+        {
             self.create_managed_cluster_replica_op(
                 cluster_id,
+                replica_id,
                 replica_name,
                 &compute,
                 &size,
@@ -731,6 +746,7 @@ impl Coordinator {
     fn create_managed_cluster_replica_op(
         &self,
         cluster_id: ClusterId,
+        replica_id: ReplicaId,
         name: String,
         compute: &mz_sql::plan::ComputeReplicaConfig,
         size: &String,
@@ -771,8 +787,12 @@ impl Coordinator {
             compute: ComputeReplicaConfig { logging },
         };
 
+        // The caller pre-allocates `replica_id` out-of-band via the durable
+        // allocator, mirroring how cluster and item ids are allocated, so
+        // nothing allocates a replica id in-apply.
         ops.push(catalog::Op::CreateClusterReplica {
             cluster_id,
+            replica_id,
             name,
             config,
             owner_id,
@@ -833,7 +853,18 @@ impl Coordinator {
             )?;
         }
 
-        for (replica_name, replica_config) in replicas {
+        // Pre-allocate replica ids out-of-band via the durable allocator,
+        // picking the id type from the owning cluster. This mirrors how cluster
+        // and item ids are allocated, so nothing allocates a replica id
+        // in-apply.
+        let id_ts = self.get_catalog_write_ts().await;
+        let replica_ids = self
+            .catalog()
+            .allocate_replica_ids(id, u64::cast_from(replicas.len()), id_ts)
+            .await?;
+
+        for (replica_id, (replica_name, replica_config)) in replica_ids.into_iter().zip_eq(replicas)
+        {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let (compute, location) = match replica_config {
@@ -901,6 +932,7 @@ impl Coordinator {
 
             ops.push(catalog::Op::CreateClusterReplica {
                 cluster_id: id,
+                replica_id,
                 name: replica_name.clone(),
                 config,
                 owner_id: *session.current_role_id(),
@@ -1011,8 +1043,22 @@ impl Coordinator {
 
         // Replicas have the same owner as their cluster.
         let owner_id = cluster.owner_id();
+
+        // Pre-allocate the replica id out-of-band via the durable allocator,
+        // picking the id type from the target cluster. The target cluster may
+        // be a system cluster, so dispatch on its id type. This mirrors how
+        // cluster and item ids are allocated, so nothing allocates a replica id
+        // in-apply.
+        let id_ts = self.get_catalog_write_ts().await;
+        let replica_id = self
+            .catalog()
+            .allocate_replica_ids(cluster_id, 1, id_ts)
+            .await?
+            .into_element();
+
         let op = catalog::Op::CreateClusterReplica {
             cluster_id,
+            replica_id,
             name: name.clone(),
             config,
             owner_id,
@@ -1061,6 +1107,13 @@ impl Coordinator {
         else {
             panic!("expected existing managed cluster config");
         };
+        // Clone the existing managed config out of the cluster so the immutable
+        // catalog borrow can be released before the out-of-band replica id
+        // allocation below, which needs mutable access to self.
+        let size = size.clone();
+        let availability_zones = availability_zones.clone();
+        let logging = logging.clone();
+        let replication_factor = *replication_factor;
         let ClusterVariant::Managed(ClusterVariantManaged {
             size: new_size,
             replication_factor: new_replication_factor,
@@ -1088,6 +1141,13 @@ impl Coordinator {
             return Err(AlterClusterWhilePendingReplicas);
         }
 
+        // Resolve existing replica ids by name before releasing the catalog
+        // borrow, so the drop branches below can build their ops without it.
+        let replica_id_by_name: BTreeMap<String, ReplicaId> = cluster
+            .replicas()
+            .map(|r| (r.name.clone(), r.replica_id))
+            .collect();
+
         let compute = mz_sql::plan::ComputeReplicaConfig {
             introspection: new_logging
                 .interval
@@ -1101,11 +1161,11 @@ impl Coordinator {
         // `catalog_transact` will do this validation too, but allocating
         // replica IDs is expensive enough that we need to do this validation
         // before allocating replica IDs. See database-issues#6046.
-        if new_replication_factor > replication_factor {
+        if *new_replication_factor > replication_factor {
             if cluster_id.is_user() {
                 self.validate_resource_limit(
-                    usize::cast_from(*replication_factor),
-                    i64::from(*new_replication_factor) - i64::from(*replication_factor),
+                    usize::cast_from(replication_factor),
+                    i64::from(*new_replication_factor) - i64::from(replication_factor),
                     SystemVars::max_replicas_per_cluster,
                     "cluster replica",
                     MAX_REPLICAS_PER_CLUSTER.name(),
@@ -1113,22 +1173,51 @@ impl Coordinator {
             }
         }
 
-        if new_size != size
-            || new_availability_zones != availability_zones
-            || new_logging != logging
-        {
+        // Count exactly as many replica ids as the branches below consume. The
+        // config-changed branches recreate all replicas; a pure scale-up
+        // creates only the delta; scale-down and no-op create none.
+        let config_changed = new_size != &size
+            || new_availability_zones != &availability_zones
+            || new_logging != &logging;
+        let needed_replica_ids = if config_changed {
+            *new_replication_factor
+        } else if *new_replication_factor > replication_factor {
+            *new_replication_factor - replication_factor
+        } else {
+            0
+        };
+        // Allocate the replica ids out-of-band via the durable allocator, only
+        // after the eager limit validation above so a rejected alter allocates
+        // nothing. Pick the id type from the target cluster, which may be a
+        // system cluster. This mirrors how cluster and item ids are allocated,
+        // so nothing allocates a replica id in-apply. Fetch the catalog write
+        // timestamp lazily here, since it needs mutable access to self (the
+        // cluster borrow above is already released) and scale-down, no-op, and
+        // automated scheduling turn-off alters must not pay an oracle
+        // round-trip just to allocate nothing.
+        let mut new_replica_ids = if needed_replica_ids > 0 {
+            let id_ts = self.get_catalog_write_ts().await;
+            self.catalog()
+                .allocate_replica_ids(cluster_id, u64::from(needed_replica_ids), id_ts)
+                .await?
+                .into_iter()
+        } else {
+            Vec::<ReplicaId>::new().into_iter()
+        };
+
+        if config_changed {
             self.ensure_valid_azs(new_availability_zones.iter())?;
             // If we're not doing a zero-downtime reconfig tear down all
             // replicas, create new ones else create the pending replicas and
             // return early asking for finalization
             match strategy {
                 AlterClusterPlanStrategy::None => {
-                    let replica_ids_and_reasons = (0..*replication_factor)
+                    let replica_ids_and_reasons = (0..replication_factor)
                         .map(managed_cluster_replica_name)
-                        .filter_map(|name| cluster.replica_id(&name))
+                        .filter_map(|name| replica_id_by_name.get(&name).copied())
                         .map(|replica_id| {
                             catalog::DropObjectInfo::ClusterReplica((
-                                cluster.id(),
+                                cluster_id,
                                 replica_id,
                                 reason.clone(),
                             ))
@@ -1136,8 +1225,12 @@ impl Coordinator {
                         .collect();
                     ops.push(catalog::Op::DropObjects(replica_ids_and_reasons));
                     for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
+                        let replica_id = new_replica_ids
+                            .next()
+                            .expect("pre-allocated enough replica ids");
                         self.create_managed_cluster_replica_op(
                             cluster_id,
+                            replica_id,
                             name.clone(),
                             &compute,
                             new_size,
@@ -1152,8 +1245,12 @@ impl Coordinator {
                 AlterClusterPlanStrategy::For(_) | AlterClusterPlanStrategy::UntilReady { .. } => {
                     for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
                         let name = format!("{name}{PENDING_REPLICA_SUFFIX}");
+                        let replica_id = new_replica_ids
+                            .next()
+                            .expect("pre-allocated enough replica ids");
                         self.create_managed_cluster_replica_op(
                             cluster_id,
+                            replica_id,
                             name.clone(),
                             &compute,
                             new_size,
@@ -1167,27 +1264,31 @@ impl Coordinator {
                     finalization_needed = NeedsFinalization::Yes;
                 }
             }
-        } else if new_replication_factor < replication_factor {
+        } else if *new_replication_factor < replication_factor {
             // Adjust replica count down
-            let replica_ids = (*new_replication_factor..*replication_factor)
+            let replica_ids = (*new_replication_factor..replication_factor)
                 .map(managed_cluster_replica_name)
-                .filter_map(|name| cluster.replica_id(&name))
+                .filter_map(|name| replica_id_by_name.get(&name).copied())
                 .map(|replica_id| {
                     catalog::DropObjectInfo::ClusterReplica((
-                        cluster.id(),
+                        cluster_id,
                         replica_id,
                         reason.clone(),
                     ))
                 })
                 .collect();
             ops.push(catalog::Op::DropObjects(replica_ids));
-        } else if new_replication_factor > replication_factor {
+        } else if *new_replication_factor > replication_factor {
             // Adjust replica count up
             for name in
-                (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
+                (replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
+                let replica_id = new_replica_ids
+                    .next()
+                    .expect("pre-allocated enough replica ids");
                 self.create_managed_cluster_replica_op(
                     cluster_id,
+                    replica_id,
                     name.clone(),
                     &compute,
                     new_size,
