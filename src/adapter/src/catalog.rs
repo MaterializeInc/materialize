@@ -360,8 +360,7 @@ impl Catalog {
         let mut storage = openable_storage
             .open(now().into(), &bootstrap_args)
             .await
-            .expect("can open durable catalog")
-            .0;
+            .expect("can open durable catalog");
         // Drain updates.
         let _ = storage
             .sync_to_current_updates()
@@ -387,7 +386,7 @@ impl Catalog {
             .with_default_deploy_generation()
             .build()
             .await?;
-        let storage = openable_storage.open(now().into(), bootstrap_args).await?.0;
+        let storage = openable_storage.open(now().into(), bootstrap_args).await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(
             persist_client,
