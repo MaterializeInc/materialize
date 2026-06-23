@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/metrics.rs
-revision: 82dac06732
+revision: 83e4f88e27
 ---
 
 # mz-ore::metrics
@@ -18,5 +18,5 @@ Key types and traits:
 * `MetricsFutureExt` — extension trait adding `wall_time()` and `exec_time()` combinators to any `Future`; the resulting `WallTimeFuture` / `ExecTimeFuture` record elapsed or CPU time to a Histogram or Counter.
 * `delete_on_drop` submodule — underlying RAII machinery for `DeleteOnDropMetric` and related types.
 
-The `describe_runtime_metrics()` function (feature-gated on `async`) returns a `Vec<(String, String, &'static str)>` of `(name, help, source_file)` triples for every Tokio runtime metric registered by `register_runtime_metrics`; it builds a throwaway current-thread runtime and registry to enumerate metric descriptors without recording values.
+The `describe_runtime_metrics()` function (feature-gated on `async`) returns a `Vec<(String, String, Vec<String>, &'static str)>` of `(name, help, label_keys, source_file)` 4-tuples for every Tokio runtime metric registered by `register_runtime_metrics`; it builds a throwaway current-thread runtime and registry to enumerate metric descriptors without recording values. Label keys are extracted from the first metric in each family's label set, sorted and deduplicated.
 The module is the single integration point between Materialize subsystems and Prometheus: every subsystem defines a struct that calls `registry.register(metric!(...))` for each metric, and uses delete-on-drop wrappers for any per-label-set child metric.
