@@ -509,7 +509,38 @@ impl<'a, B: Copy + Ord> Range<B> {
 }
 
 impl<'a> Range<Datum<'a>> {
-    /// Canonicalize the range by PG's heuristics, which are:
+    /// Canonicalize the range, recovering the element type from a finite bound's
+    /// [`Datum`] tag.
+    ///
+    /// This is the legacy entry point. It exists only to keep callers that lack a
+    /// declared element type working; it isolates the historical tag-sniffing,
+    /// which is the residual coupling that communicating the element type
+    /// explicitly is meant to remove (see `RANGE_CANON_ANALYSIS.md`). Callers that
+    /// know the range's element [`SqlScalarType`] — range construction and range
+    /// casts — should call [`Range::canonicalize_with_type`] instead, so that
+    /// canonicalization does not depend on the runtime tag of the bound value.
+    ///
+    /// # Panics
+    /// - If the upper and lower bounds are finite and of different types.
+    pub fn canonicalize(&mut self) -> Result<(), InvalidRangeError> {
+        let elem_type = match &self.inner {
+            // Both bounds share a type (asserted in `canonicalize_with_type`), so a
+            // single finite bound's tag determines the element type.
+            Some(inner) => inner
+                .lower
+                .bound
+                .or(inner.upper.bound)
+                .map(range_elem_sql_type),
+            None => None,
+        };
+        // With no finite bound, canonicalization is element-type-independent (only
+        // the infinite-bound rule applies), so the element type is irrelevant.
+        let elem_type = elem_type.unwrap_or(SqlScalarType::Int64);
+        self.canonicalize_with_type(&elem_type)
+    }
+
+    /// Canonicalize the range by PG's heuristics, using the supplied element type
+    /// rather than inferring it from a bound's [`Datum`]. The heuristics are:
     /// - Infinite bounds are always exclusive
     /// - If type has step:
     ///  - Exclusive lower bounds are rewritten as inclusive += step
@@ -517,9 +548,16 @@ impl<'a> Range<Datum<'a>> {
     /// - Ranges are empty if lower >= upper after prev. step unless range type
     ///   does not have step and both bounds are inclusive
     ///
+    /// `elem_type` is the range's declared element type; it determines the
+    /// discrete step's width (e.g. `int4` vs `int8`), which is load-bearing at the
+    /// element type's boundary.
+    ///
     /// # Panics
     /// - If the upper and lower bounds are finite and of different types.
-    pub fn canonicalize(&mut self) -> Result<(), InvalidRangeError> {
+    pub fn canonicalize_with_type(
+        &mut self,
+        elem_type: &SqlScalarType,
+    ) -> Result<(), InvalidRangeError> {
         let (lower, upper) = match &mut self.inner {
             Some(inner) => (&mut inner.lower, &mut inner.upper),
             None => return Ok(()),
@@ -539,8 +577,8 @@ impl<'a> Range<Datum<'a>> {
             _ => {}
         };
 
-        lower.canonicalize()?;
-        upper.canonicalize()?;
+        lower.canonicalize(elem_type)?;
+        upper.canonicalize(elem_type)?;
 
         // The only way that you have two inclusive bounds with equal value are
         // if type does not have step.
@@ -554,6 +592,25 @@ impl<'a> Range<Datum<'a>> {
         }
 
         Ok(())
+    }
+}
+
+/// Recovers a range's element [`SqlScalarType`] from a bound's [`Datum`],
+/// reproducing the historical tag-based dispatch used by canonicalization.
+///
+/// This is the residual "type sniffing" that the type-communicated path removes;
+/// only the legacy [`Range::canonicalize`] shim relies on it. The continuous
+/// variants' parameters are irrelevant — those types have no discrete step and
+/// are never rewritten — so placeholder values are used.
+fn range_elem_sql_type(d: Datum) -> SqlScalarType {
+    match d {
+        Datum::Int32(_) => SqlScalarType::Int32,
+        Datum::Int64(_) => SqlScalarType::Int64,
+        Datum::Date(_) => SqlScalarType::Date,
+        Datum::Numeric(_) => SqlScalarType::Numeric { max_scale: None },
+        Datum::Timestamp(_) => SqlScalarType::Timestamp { precision: None },
+        Datum::TimestampTz(_) => SqlScalarType::TimestampTz { precision: None },
+        other => unreachable!("{other:?} is not a valid range element type"),
     }
 }
 
@@ -734,18 +791,22 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
     /// Rewrite the bounds to the consistent format. This is absolutely
     /// necessary to perform the correct equality/comparison operations on
     /// types.
-    fn canonicalize(&mut self) -> Result<(), InvalidRangeError> {
+    fn canonicalize(&mut self, elem_type: &SqlScalarType) -> Result<(), InvalidRangeError> {
         Ok(match self.bound {
             None => {
                 self.inclusive = false;
             }
-            // Valid range types are defined in typeconv.rs:validate_range_element_type
-            Some(value) => match value {
-                d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d)?,
-                d @ Datum::Int64(_) => self.canonicalize_inner::<i64>(d)?,
-                d @ Datum::Date(_) => self.canonicalize_inner::<Date>(d)?,
-                Datum::Numeric(..) | Datum::Timestamp(..) | Datum::TimestampTz(..) => {}
-                d => unreachable!("{d:?} not yet supported in ranges"),
+            // Valid range element types are defined in
+            // typeconv.rs:validate_range_element_type. The discrete-step width is
+            // taken from the declared `elem_type`, not the bound's `Datum` tag.
+            Some(d) => match elem_type {
+                SqlScalarType::Int32 => self.canonicalize_inner::<i32>(d)?,
+                SqlScalarType::Int64 => self.canonicalize_inner::<i64>(d)?,
+                SqlScalarType::Date => self.canonicalize_inner::<Date>(d)?,
+                SqlScalarType::Numeric { .. }
+                | SqlScalarType::Timestamp { .. }
+                | SqlScalarType::TimestampTz { .. } => {}
+                other => unreachable!("{other:?} is not a valid range element type"),
             },
         })
     }

@@ -591,7 +591,10 @@ impl EagerVariadicFunc for RangeCreate {
             RangeBound::new(upper, upper_inclusive),
         )));
 
-        range.canonicalize()?;
+        // Canonicalize using the range's declared element type rather than the
+        // bound's Datum tag, so the discrete-step width is correct at the
+        // element type's boundary (e.g. int4 vs int8).
+        range.canonicalize_with_type(&self.elem_type)?;
 
         Ok(temp_storage.make_datum(|row| {
             row.push_range(range).expect("errors already handled");
