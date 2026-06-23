@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: a86b11d757
+revision: b72bd8ad32
 ---
 
 # mz-sql-parser::parser
@@ -20,4 +20,6 @@ The private method `parse_list_value<T, F>` optionally consumes `=`, then parses
 `CREATE CONNECTION ... TO AWS` dispatches on the next keyword: `PRIVATELINK` yields `CreateConnectionType::AwsPrivatelink`, `GLUE` (followed by `SCHEMA REGISTRY`) yields `CreateConnectionType::GlueSchemaRegistry`, and no keyword yields `CreateConnectionType::Aws`. `CREATE CONNECTION ... TO GCP` yields `CreateConnectionType::Gcp`.
 In connection option parsing, `GCP CONNECTION` is parsed as `ConnectionOptionName::GcpConnection` (with `parse_object_option_value`), and `SERVICE ACCOUNT KEY` is parsed as `ConnectionOptionName::ServiceAccountKey`.
 Iceberg sink parsing reads the catalog connection name, then optionally parses `USING AWS CONNECTION <name>` — if the keywords are absent, `aws_connection` is `None`.
+When parsing `FORMAT AVRO USING`, if the next tokens are `AWS GLUE SCHEMA REGISTRY`, the parser expects `CONNECTION <name>` followed by an optional parenthesized list of `GlueAvroOption`s parsed by `parse_glue_avro_option`. `parse_glue_avro_option` expects the `SCHEMA NAME` keyword sequence and then an optional value.
+The `Precedence` enum is `pub(crate)` and serves as the single source of truth for both parser precedence and output parenthesization; the `prec` module in `ast::defs::expr` derives its constants from it via `as u8`.
 `parse_rows_from` uses `parse_windowless_function` (a private method) for each function inside `ROWS FROM (...)`. `parse_windowless_function` parses a function name and argument list without consuming `DISTINCT`, `FILTER`, or `OVER`, ensuring that table functions in `ROWS FROM` never carry those clauses.

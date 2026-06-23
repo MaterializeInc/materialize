@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: ccf3f8951a
+revision: b72bd8ad32
 ---
 
 # mz-sql::plan::statement::ddl
@@ -17,3 +17,4 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `TOPIC METADATA REFRESH INTERVAL` for Kafka sources and sinks is validated to be between 1 second and 1 hour (inclusive); intervals outside this range produce a planning error (enforcing librdkafka runtime constraints at plan time for the upper bound, and preventing excessive refreshes or zero/negative durations for the lower bound).
 `plan_role_variable` (used by `plan_alter_role`) accepts a `StatementContext` and calls `vars::check_transaction_isolation_feature_flag` on any `SET` assignment, enforcing the same feature-flag gate as the `SET` and connection-option paths.
 `DROP … name1, name2, …` resolves all named items before running the non-cascade dependency check, so that two co-dependent items listed in the same statement do not block each other: dependents whose ids appear in the same drop set are excluded from `ensure_no_blocking_dependents`.
+`AvroSchema::Glue { .. }` in a source format raises a "not yet implemented" error at planning time.
