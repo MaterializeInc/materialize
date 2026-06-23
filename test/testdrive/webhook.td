@@ -600,3 +600,31 @@ SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-
 > DROP TABLE webhook_as_table;
 
 $ check-shard-tombstone shard-id=${webhook-table-shard-id}
+
+# The maximum webhook request body size is configurable at runtime via the
+# `webhook_max_request_size` dyncfg, and read live on every request.
+
+> CREATE SOURCE webhook_request_size FROM WEBHOOK BODY FORMAT TEXT;
+
+# Shrink the limit; a body larger than the limit is rejected with 413.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET webhook_max_request_size = 5
+
+$ webhook-append name=webhook_request_size status=413
+this body is larger than five bytes
+
+# Raise the limit; the same body is now accepted, proving the dyncfg is read
+# live without a restart.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET webhook_max_request_size = 1048576
+
+$ webhook-append name=webhook_request_size
+this body is larger than five bytes
+
+> SELECT * FROM webhook_request_size;
+"this body is larger than five bytes"
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET webhook_max_request_size
+
+> DROP SOURCE webhook_request_size;

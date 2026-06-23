@@ -80,6 +80,7 @@ use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
 use mz_controller::ReplicaHttpLocator;
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Error as FronteggError;
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
@@ -183,6 +184,10 @@ pub struct HttpConfig {
     pub routes_enabled: HttpRoutesEnabled,
     /// Locator for cluster replica HTTP addresses, used for proxying requests.
     pub replica_http_locator: Arc<ReplicaHttpLocator>,
+    /// Live dyncfg set, cheaply readable on the webhook hot path. A clone of the
+    /// process-wide [`ConfigSet`] that shares its inner atomics, so reads reflect
+    /// runtime updates without a coordinator round-trip.
+    pub dyncfg: ConfigSet,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +211,7 @@ pub struct WsState {
 pub struct WebhookState {
     adapter_client_rx: Delayed<mz_adapter::Client>,
     webhook_cache: WebhookAppenderCache,
+    dyncfg: ConfigSet,
 }
 
 #[derive(Clone, Debug)]
@@ -241,6 +247,7 @@ impl HttpServer {
             internal_route_config,
             routes_enabled,
             replica_http_locator,
+            dyncfg,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_enabled = tls.is_some();
@@ -346,6 +353,7 @@ impl HttpServer {
                 .with_state(WebhookState {
                     adapter_client_rx: adapter_client_rx.clone(),
                     webhook_cache,
+                    dyncfg: dyncfg.clone(),
                 })
                 .layer(
                     tower_http::decompression::RequestDecompressionLayer::new()

@@ -420,6 +420,10 @@ impl Listeners {
                 internal_route_config: Arc::clone(&internal_route_config),
                 routes_enabled: listener.config.routes.clone(),
                 replica_http_locator: Arc::clone(&config.controller.replica_http_locator),
+                // Clone the live dyncfg set (shares inner atomics) so the webhook
+                // handler can read its request-size limit without a coordinator
+                // round-trip.
+                dyncfg: mz_dyncfg::ConfigSet::clone(config.catalog_config.persist_clients.cfg()),
             };
             http_listener_handles.insert(name.clone(), listener.serve_http(http_config).await);
         }

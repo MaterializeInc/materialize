@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mz_adapter::{AppendWebhookError, AppendWebhookResponse, WebhookAppenderCache};
+use mz_adapter_types::dyncfgs::WEBHOOK_MAX_REQUEST_SIZE;
 use mz_ore::cast::CastFrom;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
@@ -21,6 +22,7 @@ use mz_repr::{Datum, Diff, Row, RowPacker, SqlScalarType};
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
 use mz_storage_types::controller::StorageError;
 
+use axum::body::{Body, to_bytes};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use bytes::Bytes;
@@ -33,11 +35,22 @@ pub async fn handle_webhook(
     State(WebhookState {
         adapter_client_rx,
         webhook_cache,
+        dyncfg,
     }): State<WebhookState>,
     Path((database, schema, name)): Path<(String, String, String)>,
     headers: http::HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> impl IntoResponse {
+    // Bound the (decompressed) request body to the configured limit. We read the
+    // limit from the live dyncfg set on every request, which is just an atomic
+    // load. Using the `Body` extractor instead of `Bytes` means the global
+    // `DefaultBodyLimit` does not apply here, so this is the sole limit for
+    // webhook requests.
+    let limit = WEBHOOK_MAX_REQUEST_SIZE.get(&dyncfg);
+    let body = to_bytes(body, limit)
+        .await
+        .map_err(|_| WebhookError::RequestTooLarge { limit })?;
+
     let adapter_client = adapter_client_rx.clone().await.expect("sender not dropped");
     // Collect headers into a map, while converting them into strings.
     let mut headers_s = BTreeMap::new();
@@ -322,6 +335,8 @@ pub enum WebhookError {
     SecretMissing,
     #[error("headers of request were invalid: {0}")]
     InvalidHeaders(String),
+    #[error("request body exceeds the maximum allowed size of {limit} bytes")]
+    RequestTooLarge { limit: usize },
     #[error("failed to deserialize body as {ty:?}: {msg}")]
     InvalidBody { ty: SqlScalarType, msg: String },
     #[error("failed to validate the request")]
@@ -386,6 +401,9 @@ impl IntoResponse for WebhookError {
             }
             e @ WebhookError::InvalidHeaders(_) => {
                 (StatusCode::UNAUTHORIZED, e.to_string()).into_response()
+            }
+            e @ WebhookError::RequestTooLarge { .. } => {
+                (StatusCode::PAYLOAD_TOO_LARGE, e.to_string()).into_response()
             }
             e @ WebhookError::Unavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
