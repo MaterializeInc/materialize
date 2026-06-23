@@ -113,18 +113,18 @@ Explained Query:
               ReadStorage materialize.public.t // { types: "(r_int32?, r_string?, r_date?)" }
   Return // { types: "(r_int32?, r_string?, r_date?)" }
     Union // { types: "(r_int32?, r_string?, r_date?)" }
-      Map (null, null, null) // { types: "(r_int32?, r_string?, r_date?)" }
-        Union // { types: "()" }
-          Negate // { types: "()" }
-            Project () // { types: "()" }
-              Join on=(#0{d} = #1{d}) type=differential // { types: "(r_int32, r_int32)" }
-                Get l0 // { types: "(r_int32)" }
-                ArrangeBy keys=[[#0{d}]] // { types: "(r_int32)" }
-                  Distinct project=[#0{d}] // { types: "(r_int32)" }
-                    Project (#0{d}) // { types: "(r_int32)" }
-                      Get l1 // { types: "(r_int32, r_string?, r_date?)" }
-          Project () // { types: "()" }
-            ReadStorage materialize.public.u // { types: "(r_int32?)" }
+      Negate // { types: "(r_int32?, r_string?, r_date?)" }
+        Project (#2..=#4) // { types: "(r_int32?, r_string?, r_date?)" }
+          Map (null, null, null) // { types: "(r_int32, r_int32, r_int32?, r_string?, r_date?)" }
+            Join on=(#0{d} = #1{d}) type=differential // { types: "(r_int32, r_int32)" }
+              Get l0 // { types: "(r_int32)" }
+              ArrangeBy keys=[[#0{d}]] // { types: "(r_int32)" }
+                Distinct project=[#0{d}] // { types: "(r_int32)" }
+                  Project (#0{d}) // { types: "(r_int32)" }
+                    Get l1 // { types: "(r_int32, r_string?, r_date?)" }
+      Project (#1..=#3) // { types: "(r_int32?, r_string?, r_date?)" }
+        Map (null, null, null) // { types: "(r_int32?, r_int32?, r_string?, r_date?)" }
+          ReadStorage materialize.public.u // { types: "(r_int32?)" }
       Get l1 // { types: "(r_int32, r_string?, r_date?)" }
 
 Source materialize.public.t

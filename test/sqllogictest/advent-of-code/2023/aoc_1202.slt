@@ -81,13 +81,12 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
 
 Source materialize.public.aoc_1202
 
@@ -131,13 +130,12 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
 
 Source materialize.public.aoc_1202
 
@@ -297,29 +295,27 @@ Explained Query:
   Return // { arity: 2 }
     CrossJoin type=differential // { arity: 2 }
       implementation
-        %0[×]U » %1[×]U
+        %0[×] » %1[×]
       ArrangeBy keys=[[]] // { arity: 1 }
         Union // { arity: 1 }
           Get l3 // { arity: 1 }
-          Map (null) // { arity: 1 }
-            Union // { arity: 0 }
-              Negate // { arity: 0 }
-                Project () // { arity: 0 }
-                  Get l3 // { arity: 1 }
-              Constant // { arity: 0 }
-                - ()
+          Negate // { arity: 1 }
+            Project (#1) // { arity: 1 }
+              Map (null) // { arity: 2 }
+                Get l3 // { arity: 1 }
+          Constant // { arity: 1 }
+            - (null)
       ArrangeBy keys=[[]] // { arity: 1 }
-        Project (#1) // { arity: 1 }
-          Map (numeric_to_bigint(#0{sum_count})) // { arity: 2 }
-            Union // { arity: 1 }
+        Union // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Map (numeric_to_bigint(#0{sum_count})) // { arity: 2 }
               Get l5 // { arity: 1 }
-              Map (null) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l5 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+          Negate // { arity: 1 }
+            Project (#1) // { arity: 1 }
+              Map (null) // { arity: 2 }
+                Get l5 // { arity: 1 }
+          Constant // { arity: 1 }
+            - (null)
 
 Source materialize.public.input
 

@@ -69,14 +69,13 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 1 }
           Union // { arity: 1 }
             Get l0 // { arity: 1 }
-            Map (null) // { arity: 1 }
-              Union // { arity: 0 }
-                Negate // { arity: 0 }
-                  Distinct project=[] // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l0 // { arity: 1 }
-                Constant // { arity: 0 }
-                  - ()
+            Negate // { arity: 1 }
+              Map (null) // { arity: 1 }
+                Distinct project=[] // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l0 // { arity: 1 }
+            Constant // { arity: 1 }
+              - (null)
 
 Source materialize.public.t1
 Source materialize.public.t2
@@ -125,13 +124,13 @@ Explained Query:
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
             Get l2 // { arity: 2 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0{f1}] // { arity: 1 }
+                  Project (#0{f1}) // { arity: 1 }
+                    Get l2 // { arity: 2 }
             Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0{f1}] // { arity: 1 }
-                    Project (#0{f1}) // { arity: 1 }
-                      Get l2 // { arity: 2 }
-                Get l0 // { arity: 1 }
+              Get l0 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)
@@ -200,13 +199,13 @@ Explained Query:
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
             Get l4 // { arity: 2 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0{f1}] // { arity: 1 }
+                  Project (#0{f1}) // { arity: 1 }
+                    Get l4 // { arity: 2 }
             Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0{f1}] // { arity: 1 }
-                    Project (#0{f1}) // { arity: 1 }
-                      Get l4 // { arity: 2 }
-                Get l0 // { arity: 1 }
+              Get l0 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)
@@ -265,6 +264,9 @@ Explained Query:
             Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
               Project (#0{f1}) // { arity: 1 }
                 Get l5 // { arity: 2 }
+    cte l7 =
+      Map (null) // { arity: 2 }
+        Get l0 // { arity: 1 }
   Return // { arity: 2 }
     Project (#2{f1}, #4{f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1} = #3{f1}) type=delta // { arity: 5 }
@@ -277,23 +279,21 @@ Explained Query:
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
             Get l4 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0{f1}] // { arity: 1 }
-                    Project (#0{f1}) // { arity: 1 }
-                      Get l4 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0{f1}] // { arity: 1 }
+                  Project (#0{f1}) // { arity: 1 }
+                    Get l4 // { arity: 2 }
+            Get l7 // { arity: 2 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
             Get l6 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0{f1}] // { arity: 1 }
-                    Project (#0{f1}) // { arity: 1 }
-                      Get l6 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0{f1}] // { arity: 1 }
+                  Project (#0{f1}) // { arity: 1 }
+                    Get l6 // { arity: 2 }
+            Get l7 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)
@@ -347,6 +347,9 @@ Explained Query:
         Map ((#0{f1} + 2)) // { arity: 2 }
           Get l1 // { arity: 1 }
         Get l2 // { arity: 2 }
+    cte l5 =
+      Map (null) // { arity: 2 }
+        Get l0 // { arity: 1 }
   Return // { arity: 2 }
     Project (#2, #4) // { arity: 2 }
       Join on=(#0{f1} = #1{f1} = #3{f1}) type=delta // { arity: 5 }
@@ -359,23 +362,21 @@ Explained Query:
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
             Get l3 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0{f1}] // { arity: 1 }
-                    Project (#0{f1}) // { arity: 1 }
-                      Get l3 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0{f1}] // { arity: 1 }
+                  Project (#0{f1}) // { arity: 1 }
+                    Get l3 // { arity: 2 }
+            Get l5 // { arity: 2 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
             Get l4 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0{f1}] // { arity: 1 }
-                    Project (#0{f1}) // { arity: 1 }
-                      Get l4 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0{f1}] // { arity: 1 }
+                  Project (#0{f1}) // { arity: 1 }
+                    Get l4 // { arity: 2 }
+            Get l5 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)
@@ -414,53 +415,52 @@ Explained Query:
       Reduce group_by=[#0{f1}] aggregates=[min(#0{f1})] // { arity: 2 }
         Get l1 // { arity: 1 }
     cte l3 =
+      Map (null) // { arity: 2 }
+        Get l0 // { arity: 1 }
+    cte l4 =
       Union // { arity: 2 }
         Get l2 // { arity: 2 }
-        Map (null) // { arity: 2 }
-          Union // { arity: 1 }
-            Negate // { arity: 1 }
-              Project (#0{f1}) // { arity: 1 }
-                Get l2 // { arity: 2 }
-            Get l0 // { arity: 1 }
-    cte l4 =
+        Negate // { arity: 2 }
+          Project (#0{f1}, #2) // { arity: 2 }
+            Map (null) // { arity: 3 }
+              Get l2 // { arity: 2 }
+        Get l3 // { arity: 2 }
+    cte l5 =
       Reduce group_by=[#0{f1}] aggregates=[max(#0{f1})] // { arity: 2 }
         Get l1 // { arity: 1 }
-    cte l5 =
+    cte l6 =
       Union // { arity: 2 }
-        Get l4 // { arity: 2 }
-        Map (null) // { arity: 2 }
-          Union // { arity: 1 }
-            Negate // { arity: 1 }
-              Project (#0{f1}) // { arity: 1 }
-                Get l4 // { arity: 2 }
-            Get l0 // { arity: 1 }
+        Get l5 // { arity: 2 }
+        Negate // { arity: 2 }
+          Project (#0{f1}, #2) // { arity: 2 }
+            Map (null) // { arity: 3 }
+              Get l5 // { arity: 2 }
+        Get l3 // { arity: 2 }
   Return // { arity: 2 }
     Project (#2{min_f1}, #4{max_f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1} = #3{f1}) type=delta // { arity: 5 }
         implementation
-          %0:t2 » %1[#0]UK » %2[#0]UK
-          %1 » %2[#0]UK » %0:t2[#0]K
-          %2 » %1[#0]UK » %0:t2[#0]K
+          %0:t2 » %1[#0]K » %2[#0]K
+          %1 » %0:t2[#0]K » %2[#0]K
+          %2 » %0:t2[#0]K » %1[#0]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
+            Get l4 // { arity: 2 }
+            Negate // { arity: 2 }
+              Project (#0{f1}, #2) // { arity: 2 }
+                Map (null) // { arity: 3 }
+                  Get l4 // { arity: 2 }
             Get l3 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Project (#0{f1}) // { arity: 1 }
-                    Get l3 // { arity: 2 }
-                Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
-            Get l5 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Project (#0{f1}) // { arity: 1 }
-                    Get l5 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Get l6 // { arity: 2 }
+            Negate // { arity: 2 }
+              Project (#0{f1}, #2) // { arity: 2 }
+                Map (null) // { arity: 3 }
+                  Get l6 // { arity: 2 }
+            Get l3 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)
@@ -530,13 +530,13 @@ Explained Query:
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Union // { arity: 2 }
               Get l4 // { arity: 2 }
+              Negate // { arity: 2 }
+                Map (null) // { arity: 2 }
+                  Distinct project=[#0{f1}] // { arity: 1 }
+                    Project (#0{f1}) // { arity: 1 }
+                      Get l4 // { arity: 2 }
               Map (null) // { arity: 2 }
-                Union // { arity: 1 }
-                  Negate // { arity: 1 }
-                    Distinct project=[#0{f1}] // { arity: 1 }
-                      Project (#0{f1}) // { arity: 1 }
-                        Get l4 // { arity: 2 }
-                  Get l2 // { arity: 1 }
+                Get l2 // { arity: 1 }
     cte l6 =
       Union // { arity: 2 }
         Get l5 // { arity: 2 }
@@ -555,13 +555,13 @@ Explained Query:
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
             Get l6 // { arity: 2 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0{f1}] // { arity: 1 }
+                  Project (#0{f1}) // { arity: 1 }
+                    Get l6 // { arity: 2 }
             Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0{f1}] // { arity: 1 }
-                    Project (#0{f1}) // { arity: 1 }
-                      Get l6 // { arity: 2 }
-                Get l0 // { arity: 1 }
+              Get l0 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)
@@ -622,13 +622,13 @@ Explained Query:
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Union // { arity: 2 }
               Get l3 // { arity: 2 }
+              Negate // { arity: 2 }
+                Map (null) // { arity: 2 }
+                  Distinct project=[#0{f1}] // { arity: 1 }
+                    Project (#0{f1}) // { arity: 1 }
+                      Get l3 // { arity: 2 }
               Map (null) // { arity: 2 }
-                Union // { arity: 1 }
-                  Negate // { arity: 1 }
-                    Distinct project=[#0{f1}] // { arity: 1 }
-                      Project (#0{f1}) // { arity: 1 }
-                        Get l3 // { arity: 2 }
-                  Get l0 // { arity: 1 }
+                Get l0 // { arity: 1 }
     cte l5 =
       Distinct project=[#0{f1}] // { arity: 1 }
         Project (#0{f1}) // { arity: 1 }
@@ -660,23 +660,22 @@ Explained Query:
             ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
               Union // { arity: 2 }
                 Get l7 // { arity: 2 }
+                Negate // { arity: 2 }
+                  Map (null) // { arity: 2 }
+                    Distinct project=[#0{f1}] // { arity: 1 }
+                      Project (#0{f1}) // { arity: 1 }
+                        Get l7 // { arity: 2 }
                 Map (null) // { arity: 2 }
-                  Union // { arity: 1 }
-                    Negate // { arity: 1 }
-                      Distinct project=[#0{f1}] // { arity: 1 }
-                        Project (#0{f1}) // { arity: 1 }
-                          Get l7 // { arity: 2 }
-                    Get l5 // { arity: 1 }
+                  Get l5 // { arity: 1 }
   Return // { arity: 2 }
     Union // { arity: 2 }
       Get l8 // { arity: 2 }
-      Map (null, null) // { arity: 2 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l8 // { arity: 2 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 2 }
+        Project (#2, #3) // { arity: 2 }
+          Map (null, null) // { arity: 4 }
+            Get l8 // { arity: 2 }
+      Constant // { arity: 2 }
+        - (null, null)
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)
@@ -740,13 +739,13 @@ Explained Query:
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Union // { arity: 2 }
             Get l2 // { arity: 2 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0{f1}] // { arity: 1 }
+                  Project (#0{f1}) // { arity: 1 }
+                    Get l2 // { arity: 2 }
             Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0{f1}] // { arity: 1 }
-                    Project (#0{f1}) // { arity: 1 }
-                      Get l2 // { arity: 2 }
-                Get l0 // { arity: 1 }
+              Get l0 // { arity: 1 }
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)
@@ -821,13 +820,13 @@ Explained Query:
         ArrangeBy keys=[[#0{f1}, #1{f1}]] // { arity: 3 }
           Union // { arity: 3 }
             Get l3 // { arity: 3 }
+            Negate // { arity: 3 }
+              Map (null) // { arity: 3 }
+                Distinct project=[#0{f1}, #1{f1}] // { arity: 2 }
+                  Project (#0{f1}, #1{f1}) // { arity: 2 }
+                    Get l3 // { arity: 3 }
             Map (null) // { arity: 3 }
-              Union // { arity: 2 }
-                Negate // { arity: 2 }
-                  Distinct project=[#0{f1}, #1{f1}] // { arity: 2 }
-                    Project (#0{f1}, #1{f1}) // { arity: 2 }
-                      Get l3 // { arity: 3 }
-                Get l1 // { arity: 2 }
+              Get l1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)

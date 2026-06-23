@@ -2015,7 +2015,7 @@ FROM t
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 11,
+        "lir_id": 9,
         "node": {
           "Let": {
             "id": 0,
@@ -2170,12 +2170,12 @@ FROM t
               }
             },
             "body": {
-              "lir_id": 10,
+              "lir_id": 8,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 9,
+                      "lir_id": 7,
                       "node": {
                         "ArrangeBy": {
                           "input_key": [],
@@ -2224,133 +2224,109 @@ FROM t
                       }
                     },
                     {
-                      "lir_id": 8,
+                      "lir_id": 5,
                       "node": {
-                        "Mfp": {
+                        "Negate": {
                           "input": {
-                            "lir_id": 7,
+                            "lir_id": 4,
                             "node": {
-                              "Union": {
-                                "inputs": [
-                                  {
-                                    "lir_id": 5,
-                                    "node": {
-                                      "Negate": {
-                                        "input": {
-                                          "lir_id": 4,
-                                          "node": {
-                                            "Get": {
-                                              "id": {
-                                                "Local": 0
-                                              },
-                                              "keys": {
-                                                "raw": false,
-                                                "arranged": [
-                                                  [
-                                                    [],
-                                                    [
-                                                      0,
-                                                      1
-                                                    ],
-                                                    [
-                                                      0,
-                                                      1
-                                                    ]
-                                                  ]
-                                                ]
-                                              },
-                                              "plan": {
-                                                "Arrangement": [
-                                                  [],
-                                                  null,
-                                                  {
-                                                    "expressions": [],
-                                                    "predicates": [],
-                                                    "projection": [],
-                                                    "input_arity": 2
-                                                  }
+                              "Get": {
+                                "id": {
+                                  "Local": 0
+                                },
+                                "keys": {
+                                  "raw": false,
+                                  "arranged": [
+                                    [
+                                      [],
+                                      [
+                                        0,
+                                        1
+                                      ],
+                                      [
+                                        0,
+                                        1
+                                      ]
+                                    ]
+                                  ]
+                                },
+                                "plan": {
+                                  "Arrangement": [
+                                    [],
+                                    null,
+                                    {
+                                      "expressions": [
+                                        {
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
                                                 ]
                                               }
+                                            },
+                                            {
+                                              "scalar_type": "Int64",
+                                              "nullable": true
                                             }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "lir_id": 6,
-                                    "node": {
-                                      "Constant": {
-                                        "rows": {
-                                          "Ok": [
-                                            [
-                                              {
-                                                "data": []
-                                              },
-                                              0,
-                                              1
-                                            ]
+                                          ]
+                                        },
+                                        {
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  49
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int64",
+                                              "nullable": false
+                                            }
                                           ]
                                         }
-                                      }
+                                      ],
+                                      "predicates": [],
+                                      "projection": [
+                                        2,
+                                        3
+                                      ],
+                                      "input_arity": 2
                                     }
-                                  }
-                                ],
-                                "consolidate_output": true,
-                                "temporal_bucketing_strategies": [
-                                  "Direct",
-                                  "Direct"
-                                ]
+                                  ]
+                                }
                               }
                             }
-                          },
-                          "mfp": {
-                            "expressions": [
-                              {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
-                                  },
-                                  {
-                                    "scalar_type": "Int64",
-                                    "nullable": true
-                                  }
-                                ]
-                              },
-                              {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        49
-                                      ]
-                                    }
-                                  },
-                                  {
-                                    "scalar_type": "Int64",
-                                    "nullable": false
-                                  }
-                                ]
-                              }
-                            ],
-                            "predicates": [],
-                            "projection": [
-                              0,
-                              1
-                            ],
-                            "input_arity": 0
-                          },
-                          "input_key_val": null
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "lir_id": 6,
+                      "node": {
+                        "Constant": {
+                          "rows": {
+                            "Ok": [
+                              [
+                                {
+                                  "data": [
+                                    0,
+                                    49
+                                  ]
+                                },
+                                0,
+                                1
+                              ]
+                            ]
+                          }
                         }
                       }
                     }
                   ],
-                  "consolidate_output": false,
+                  "consolidate_output": true,
                   "temporal_bucketing_strategies": [
+                    "Direct",
                     "Direct",
                     "Direct"
                   ]
@@ -2486,7 +2462,7 @@ MATERIALIZED VIEW hierarchical_global_mv
     {
       "id": "materialize.public.hierarchical_global_mv",
       "plan": {
-        "lir_id": 11,
+        "lir_id": 9,
         "node": {
           "Let": {
             "id": 0,
@@ -2604,12 +2580,12 @@ MATERIALIZED VIEW hierarchical_global_mv
               }
             },
             "body": {
-              "lir_id": 10,
+              "lir_id": 8,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 9,
+                      "lir_id": 7,
                       "node": {
                         "ArrangeBy": {
                           "input_key": [],
@@ -2658,133 +2634,109 @@ MATERIALIZED VIEW hierarchical_global_mv
                       }
                     },
                     {
-                      "lir_id": 8,
+                      "lir_id": 5,
                       "node": {
-                        "Mfp": {
+                        "Negate": {
                           "input": {
-                            "lir_id": 7,
+                            "lir_id": 4,
                             "node": {
-                              "Union": {
-                                "inputs": [
-                                  {
-                                    "lir_id": 5,
-                                    "node": {
-                                      "Negate": {
-                                        "input": {
-                                          "lir_id": 4,
-                                          "node": {
-                                            "Get": {
-                                              "id": {
-                                                "Local": 0
-                                              },
-                                              "keys": {
-                                                "raw": false,
-                                                "arranged": [
-                                                  [
-                                                    [],
-                                                    [
-                                                      0,
-                                                      1
-                                                    ],
-                                                    [
-                                                      0,
-                                                      1
-                                                    ]
-                                                  ]
-                                                ]
-                                              },
-                                              "plan": {
-                                                "Arrangement": [
-                                                  [],
-                                                  null,
-                                                  {
-                                                    "expressions": [],
-                                                    "predicates": [],
-                                                    "projection": [],
-                                                    "input_arity": 2
-                                                  }
+                              "Get": {
+                                "id": {
+                                  "Local": 0
+                                },
+                                "keys": {
+                                  "raw": false,
+                                  "arranged": [
+                                    [
+                                      [],
+                                      [
+                                        0,
+                                        1
+                                      ],
+                                      [
+                                        0,
+                                        1
+                                      ]
+                                    ]
+                                  ]
+                                },
+                                "plan": {
+                                  "Arrangement": [
+                                    [],
+                                    null,
+                                    {
+                                      "expressions": [
+                                        {
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
                                                 ]
                                               }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
                                             }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "lir_id": 6,
-                                    "node": {
-                                      "Constant": {
-                                        "rows": {
-                                          "Ok": [
-                                            [
-                                              {
-                                                "data": []
-                                              },
-                                              0,
-                                              1
-                                            ]
+                                          ]
+                                        },
+                                        {
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            }
                                           ]
                                         }
-                                      }
+                                      ],
+                                      "predicates": [],
+                                      "projection": [
+                                        2,
+                                        3
+                                      ],
+                                      "input_arity": 2
                                     }
-                                  }
-                                ],
-                                "consolidate_output": true,
-                                "temporal_bucketing_strategies": [
-                                  "Direct",
-                                  "Direct"
-                                ]
+                                  ]
+                                }
                               }
                             }
-                          },
-                          "mfp": {
-                            "expressions": [
-                              {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
-                                  },
-                                  {
-                                    "scalar_type": "Int32",
-                                    "nullable": true
-                                  }
-                                ]
-                              },
-                              {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
-                                  },
-                                  {
-                                    "scalar_type": "Int32",
-                                    "nullable": true
-                                  }
-                                ]
-                              }
-                            ],
-                            "predicates": [],
-                            "projection": [
-                              0,
-                              1
-                            ],
-                            "input_arity": 0
-                          },
-                          "input_key_val": null
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "lir_id": 6,
+                      "node": {
+                        "Constant": {
+                          "rows": {
+                            "Ok": [
+                              [
+                                {
+                                  "data": [
+                                    0,
+                                    0
+                                  ]
+                                },
+                                0,
+                                1
+                              ]
+                            ]
+                          }
                         }
                       }
                     }
                   ],
-                  "consolidate_output": false,
+                  "consolidate_output": true,
                   "temporal_bucketing_strategies": [
+                    "Direct",
                     "Direct",
                     "Direct"
                   ]
@@ -2810,7 +2762,7 @@ SELECT * FROM hierarchical_global
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 11,
+        "lir_id": 9,
         "node": {
           "Let": {
             "id": 0,
@@ -2920,12 +2872,12 @@ SELECT * FROM hierarchical_global
               }
             },
             "body": {
-              "lir_id": 10,
+              "lir_id": 8,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 9,
+                      "lir_id": 7,
                       "node": {
                         "ArrangeBy": {
                           "input_key": [],
@@ -2974,133 +2926,109 @@ SELECT * FROM hierarchical_global
                       }
                     },
                     {
-                      "lir_id": 8,
+                      "lir_id": 5,
                       "node": {
-                        "Mfp": {
+                        "Negate": {
                           "input": {
-                            "lir_id": 7,
+                            "lir_id": 4,
                             "node": {
-                              "Union": {
-                                "inputs": [
-                                  {
-                                    "lir_id": 5,
-                                    "node": {
-                                      "Negate": {
-                                        "input": {
-                                          "lir_id": 4,
-                                          "node": {
-                                            "Get": {
-                                              "id": {
-                                                "Local": 0
-                                              },
-                                              "keys": {
-                                                "raw": false,
-                                                "arranged": [
-                                                  [
-                                                    [],
-                                                    [
-                                                      0,
-                                                      1
-                                                    ],
-                                                    [
-                                                      0,
-                                                      1
-                                                    ]
-                                                  ]
-                                                ]
-                                              },
-                                              "plan": {
-                                                "Arrangement": [
-                                                  [],
-                                                  null,
-                                                  {
-                                                    "expressions": [],
-                                                    "predicates": [],
-                                                    "projection": [],
-                                                    "input_arity": 2
-                                                  }
+                              "Get": {
+                                "id": {
+                                  "Local": 0
+                                },
+                                "keys": {
+                                  "raw": false,
+                                  "arranged": [
+                                    [
+                                      [],
+                                      [
+                                        0,
+                                        1
+                                      ],
+                                      [
+                                        0,
+                                        1
+                                      ]
+                                    ]
+                                  ]
+                                },
+                                "plan": {
+                                  "Arrangement": [
+                                    [],
+                                    null,
+                                    {
+                                      "expressions": [
+                                        {
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
                                                 ]
                                               }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
                                             }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "lir_id": 6,
-                                    "node": {
-                                      "Constant": {
-                                        "rows": {
-                                          "Ok": [
-                                            [
-                                              {
-                                                "data": []
-                                              },
-                                              0,
-                                              1
-                                            ]
+                                          ]
+                                        },
+                                        {
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  0
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": true
+                                            }
                                           ]
                                         }
-                                      }
+                                      ],
+                                      "predicates": [],
+                                      "projection": [
+                                        2,
+                                        3
+                                      ],
+                                      "input_arity": 2
                                     }
-                                  }
-                                ],
-                                "consolidate_output": true,
-                                "temporal_bucketing_strategies": [
-                                  "Direct",
-                                  "Direct"
-                                ]
+                                  ]
+                                }
                               }
                             }
-                          },
-                          "mfp": {
-                            "expressions": [
-                              {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
-                                  },
-                                  {
-                                    "scalar_type": "Int32",
-                                    "nullable": true
-                                  }
-                                ]
-                              },
-                              {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
-                                  },
-                                  {
-                                    "scalar_type": "Int32",
-                                    "nullable": true
-                                  }
-                                ]
-                              }
-                            ],
-                            "predicates": [],
-                            "projection": [
-                              0,
-                              1
-                            ],
-                            "input_arity": 0
-                          },
-                          "input_key_val": null
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "lir_id": 6,
+                      "node": {
+                        "Constant": {
+                          "rows": {
+                            "Ok": [
+                              [
+                                {
+                                  "data": [
+                                    0,
+                                    0
+                                  ]
+                                },
+                                0,
+                                1
+                              ]
+                            ]
+                          }
                         }
                       }
                     }
                   ],
-                  "consolidate_output": false,
+                  "consolidate_output": true,
                   "temporal_bucketing_strategies": [
+                    "Direct",
                     "Direct",
                     "Direct"
                   ]
@@ -3732,7 +3660,7 @@ FROM t
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 15,
+        "lir_id": 13,
         "node": {
           "Let": {
             "id": 0,
@@ -3792,7 +3720,7 @@ FROM t
               }
             },
             "body": {
-              "lir_id": 14,
+              "lir_id": 12,
               "node": {
                 "Let": {
                   "id": 1,
@@ -4298,7 +4226,7 @@ FROM t
                     }
                   },
                   "body": {
-                    "lir_id": 13,
+                    "lir_id": 11,
                     "node": {
                       "Union": {
                         "inputs": [
@@ -4318,117 +4246,93 @@ FROM t
                             }
                           },
                           {
-                            "lir_id": 12,
+                            "lir_id": 9,
                             "node": {
-                              "Mfp": {
+                              "Negate": {
                                 "input": {
-                                  "lir_id": 11,
+                                  "lir_id": 8,
                                   "node": {
-                                    "Union": {
-                                      "inputs": [
-                                        {
-                                          "lir_id": 9,
-                                          "node": {
-                                            "Negate": {
-                                              "input": {
-                                                "lir_id": 8,
-                                                "node": {
-                                                  "Get": {
-                                                    "id": {
-                                                      "Local": 1
-                                                    },
-                                                    "keys": {
-                                                      "raw": true,
-                                                      "arranged": []
-                                                    },
-                                                    "plan": {
-                                                      "Collection": {
-                                                        "expressions": [],
-                                                        "predicates": [],
-                                                        "projection": [],
-                                                        "input_arity": 2
-                                                      }
-                                                    }
+                                    "Get": {
+                                      "id": {
+                                        "Local": 1
+                                      },
+                                      "keys": {
+                                        "raw": true,
+                                        "arranged": []
+                                      },
+                                      "plan": {
+                                        "Collection": {
+                                          "expressions": [
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
                                                   }
+                                                },
+                                                {
+                                                  "scalar_type": "String",
+                                                  "nullable": true
                                                 }
-                                              }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "String",
+                                                  "nullable": true
+                                                }
+                                              ]
                                             }
-                                          }
-                                        },
-                                        {
-                                          "lir_id": 10,
-                                          "node": {
-                                            "Constant": {
-                                              "rows": {
-                                                "Ok": [
-                                                  [
-                                                    {
-                                                      "data": []
-                                                    },
-                                                    0,
-                                                    1
-                                                  ]
-                                                ]
-                                              }
-                                            }
-                                          }
+                                          ],
+                                          "predicates": [],
+                                          "projection": [
+                                            2,
+                                            3
+                                          ],
+                                          "input_arity": 2
                                         }
-                                      ],
-                                      "consolidate_output": true,
-                                      "temporal_bucketing_strategies": [
-                                        "Direct",
-                                        "Direct"
-                                      ]
+                                      }
                                     }
                                   }
-                                },
-                                "mfp": {
-                                  "expressions": [
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    }
-                                  ],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1
-                                  ],
-                                  "input_arity": 0
-                                },
-                                "input_key_val": null
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "lir_id": 10,
+                            "node": {
+                              "Constant": {
+                                "rows": {
+                                  "Ok": [
+                                    [
+                                      {
+                                        "data": [
+                                          0,
+                                          0
+                                        ]
+                                      },
+                                      0,
+                                      1
+                                    ]
+                                  ]
+                                }
                               }
                             }
                           }
                         ],
-                        "consolidate_output": false,
+                        "consolidate_output": true,
                         "temporal_bucketing_strategies": [
+                          "Direct",
                           "Direct",
                           "Direct"
                         ]
@@ -7299,7 +7203,7 @@ MATERIALIZED VIEW collated_global_mv
     {
       "id": "materialize.public.collated_global_mv",
       "plan": {
-        "lir_id": 19,
+        "lir_id": 17,
         "node": {
           "Let": {
             "id": 0,
@@ -7359,7 +7263,7 @@ MATERIALIZED VIEW collated_global_mv
               }
             },
             "body": {
-              "lir_id": 18,
+              "lir_id": 16,
               "node": {
                 "Let": {
                   "id": 1,
@@ -8430,7 +8334,7 @@ MATERIALIZED VIEW collated_global_mv
                     }
                   },
                   "body": {
-                    "lir_id": 17,
+                    "lir_id": 15,
                     "node": {
                       "Union": {
                         "inputs": [
@@ -8464,181 +8368,161 @@ MATERIALIZED VIEW collated_global_mv
                             }
                           },
                           {
-                            "lir_id": 16,
+                            "lir_id": 13,
                             "node": {
-                              "Mfp": {
+                              "Negate": {
                                 "input": {
-                                  "lir_id": 15,
+                                  "lir_id": 12,
                                   "node": {
-                                    "Union": {
-                                      "inputs": [
-                                        {
-                                          "lir_id": 13,
-                                          "node": {
-                                            "Negate": {
-                                              "input": {
-                                                "lir_id": 12,
-                                                "node": {
-                                                  "Get": {
-                                                    "id": {
-                                                      "Local": 1
-                                                    },
-                                                    "keys": {
-                                                      "raw": true,
-                                                      "arranged": []
-                                                    },
-                                                    "plan": {
-                                                      "Collection": {
-                                                        "expressions": [],
-                                                        "predicates": [],
-                                                        "projection": [],
-                                                        "input_arity": 6
-                                                      }
-                                                    }
+                                    "Get": {
+                                      "id": {
+                                        "Local": 1
+                                      },
+                                      "keys": {
+                                        "raw": true,
+                                        "arranged": []
+                                      },
+                                      "plan": {
+                                        "Collection": {
+                                          "expressions": [
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      49
+                                                    ]
                                                   }
+                                                },
+                                                {
+                                                  "scalar_type": "Int64",
+                                                  "nullable": false
                                                 }
-                                              }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "String",
+                                                  "nullable": true
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "Int32",
+                                                  "nullable": true
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "Int32",
+                                                  "nullable": true
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "Int64",
+                                                  "nullable": true
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "String",
+                                                  "nullable": true
+                                                }
+                                              ]
                                             }
-                                          }
-                                        },
-                                        {
-                                          "lir_id": 14,
-                                          "node": {
-                                            "Constant": {
-                                              "rows": {
-                                                "Ok": [
-                                                  [
-                                                    {
-                                                      "data": []
-                                                    },
-                                                    0,
-                                                    1
-                                                  ]
-                                                ]
-                                              }
-                                            }
-                                          }
+                                          ],
+                                          "predicates": [],
+                                          "projection": [
+                                            6,
+                                            7,
+                                            8,
+                                            9,
+                                            10,
+                                            11
+                                          ],
+                                          "input_arity": 6
                                         }
-                                      ],
-                                      "consolidate_output": true,
-                                      "temporal_bucketing_strategies": [
-                                        "Direct",
-                                        "Direct"
-                                      ]
+                                      }
                                     }
                                   }
-                                },
-                                "mfp": {
-                                  "expressions": [
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              49
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "Int64",
-                                          "nullable": false
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "Int64",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    }
-                                  ],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1,
-                                    2,
-                                    3,
-                                    4,
-                                    5
-                                  ],
-                                  "input_arity": 0
-                                },
-                                "input_key_val": null
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "lir_id": 14,
+                            "node": {
+                              "Constant": {
+                                "rows": {
+                                  "Ok": [
+                                    [
+                                      {
+                                        "data": [
+                                          49,
+                                          0,
+                                          0,
+                                          0,
+                                          0,
+                                          0
+                                        ]
+                                      },
+                                      0,
+                                      1
+                                    ]
+                                  ]
+                                }
                               }
                             }
                           }
                         ],
-                        "consolidate_output": false,
+                        "consolidate_output": true,
                         "temporal_bucketing_strategies": [
+                          "Direct",
                           "Direct",
                           "Direct"
                         ]
@@ -8667,7 +8551,7 @@ SELECT * FROM collated_global
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 19,
+        "lir_id": 17,
         "node": {
           "Let": {
             "id": 0,
@@ -8727,7 +8611,7 @@ SELECT * FROM collated_global
               }
             },
             "body": {
-              "lir_id": 18,
+              "lir_id": 16,
               "node": {
                 "Let": {
                   "id": 1,
@@ -9790,7 +9674,7 @@ SELECT * FROM collated_global
                     }
                   },
                   "body": {
-                    "lir_id": 17,
+                    "lir_id": 15,
                     "node": {
                       "Union": {
                         "inputs": [
@@ -9824,181 +9708,161 @@ SELECT * FROM collated_global
                             }
                           },
                           {
-                            "lir_id": 16,
+                            "lir_id": 13,
                             "node": {
-                              "Mfp": {
+                              "Negate": {
                                 "input": {
-                                  "lir_id": 15,
+                                  "lir_id": 12,
                                   "node": {
-                                    "Union": {
-                                      "inputs": [
-                                        {
-                                          "lir_id": 13,
-                                          "node": {
-                                            "Negate": {
-                                              "input": {
-                                                "lir_id": 12,
-                                                "node": {
-                                                  "Get": {
-                                                    "id": {
-                                                      "Local": 1
-                                                    },
-                                                    "keys": {
-                                                      "raw": true,
-                                                      "arranged": []
-                                                    },
-                                                    "plan": {
-                                                      "Collection": {
-                                                        "expressions": [],
-                                                        "predicates": [],
-                                                        "projection": [],
-                                                        "input_arity": 6
-                                                      }
-                                                    }
+                                    "Get": {
+                                      "id": {
+                                        "Local": 1
+                                      },
+                                      "keys": {
+                                        "raw": true,
+                                        "arranged": []
+                                      },
+                                      "plan": {
+                                        "Collection": {
+                                          "expressions": [
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      49
+                                                    ]
                                                   }
+                                                },
+                                                {
+                                                  "scalar_type": "Int64",
+                                                  "nullable": false
                                                 }
-                                              }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "String",
+                                                  "nullable": true
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "Int32",
+                                                  "nullable": true
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "Int32",
+                                                  "nullable": true
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "Int64",
+                                                  "nullable": true
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "Literal": [
+                                                {
+                                                  "Ok": {
+                                                    "data": [
+                                                      0
+                                                    ]
+                                                  }
+                                                },
+                                                {
+                                                  "scalar_type": "String",
+                                                  "nullable": true
+                                                }
+                                              ]
                                             }
-                                          }
-                                        },
-                                        {
-                                          "lir_id": 14,
-                                          "node": {
-                                            "Constant": {
-                                              "rows": {
-                                                "Ok": [
-                                                  [
-                                                    {
-                                                      "data": []
-                                                    },
-                                                    0,
-                                                    1
-                                                  ]
-                                                ]
-                                              }
-                                            }
-                                          }
+                                          ],
+                                          "predicates": [],
+                                          "projection": [
+                                            6,
+                                            7,
+                                            8,
+                                            9,
+                                            10,
+                                            11
+                                          ],
+                                          "input_arity": 6
                                         }
-                                      ],
-                                      "consolidate_output": true,
-                                      "temporal_bucketing_strategies": [
-                                        "Direct",
-                                        "Direct"
-                                      ]
+                                      }
                                     }
                                   }
-                                },
-                                "mfp": {
-                                  "expressions": [
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              49
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "Int64",
-                                          "nullable": false
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "Int32",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "Int64",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    },
-                                    {
-                                      "Literal": [
-                                        {
-                                          "Ok": {
-                                            "data": [
-                                              0
-                                            ]
-                                          }
-                                        },
-                                        {
-                                          "scalar_type": "String",
-                                          "nullable": true
-                                        }
-                                      ]
-                                    }
-                                  ],
-                                  "predicates": [],
-                                  "projection": [
-                                    0,
-                                    1,
-                                    2,
-                                    3,
-                                    4,
-                                    5
-                                  ],
-                                  "input_arity": 0
-                                },
-                                "input_key_val": null
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "lir_id": 14,
+                            "node": {
+                              "Constant": {
+                                "rows": {
+                                  "Ok": [
+                                    [
+                                      {
+                                        "data": [
+                                          49,
+                                          0,
+                                          0,
+                                          0,
+                                          0,
+                                          0
+                                        ]
+                                      },
+                                      0,
+                                      1
+                                    ]
+                                  ]
+                                }
                               }
                             }
                           }
                         ],
-                        "consolidate_output": false,
+                        "consolidate_output": true,
                         "temporal_bucketing_strategies": [
+                          "Direct",
                           "Direct",
                           "Direct"
                         ]

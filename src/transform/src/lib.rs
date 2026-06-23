@@ -789,6 +789,7 @@ impl Optimizer {
                     Box::new(ReductionPushdown),
                     // Replaces reduces with maps when the group keys are
                     // unique with maps
+                    Box::new(CanonicalizeMfp),
                     Box::new(ReduceElision),
                     // Rips complex reduces apart.
                     Box::new(ReduceReduction),

@@ -445,28 +445,26 @@ Explained Query:
           ArrangeBy keys=[[#1{o_orderdate}]] // { arity: 2 }
             Project (#0{o_orderkey}, #4{o_orderdate}) // { arity: 2 }
               ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
-    cte l1 =
-      Project (#4{l_quantity}, #11{l_commitdate}) // { arity: 2 }
-        Filter (null OR ((#0{l_orderkey} <= 100) AND (#0{l_orderkey} >= 59) AND (#11{l_commitdate} >= 1998-03-22))) // { arity: 16 }
-          ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
   Return // { arity: 2 }
     Union // { arity: 2 }
-      Project (#1, #0{l_quantity}) // { arity: 2 }
-        Map (null) // { arity: 2 }
-          Union // { arity: 1 }
-            Negate // { arity: 1 }
-              Project (#0{l_quantity}) // { arity: 1 }
-                Join on=(#1{l_commitdate} = #2{l_commitdate}) type=differential // { arity: 3 }
-                  implementation
-                    %1[#0]UKA » %0:l1[#1{l_commitdate}]Kif
-                  ArrangeBy keys=[[#1{l_commitdate}]] // { arity: 2 }
-                    Get l1 // { arity: 2 }
-                  ArrangeBy keys=[[#0{l_commitdate}]] // { arity: 1 }
-                    Distinct project=[#0{l_commitdate}] // { arity: 1 }
-                      Project (#2{l_commitdate}) // { arity: 1 }
-                        Get l0 // { arity: 5 }
-            Project (#0{l_quantity}) // { arity: 1 }
-              Get l1 // { arity: 2 }
+      Negate // { arity: 2 }
+        Project (#3, #0{l_quantity}) // { arity: 2 }
+          Map (null) // { arity: 4 }
+            Join on=(#1{l_commitdate} = #2{l_commitdate}) type=differential // { arity: 3 }
+              implementation
+                %1[#0]UKA » %0:lineitem[#1{l_commitdate}]Kif
+              ArrangeBy keys=[[#1{l_commitdate}]] // { arity: 2 }
+                Project (#4{l_quantity}, #11{l_commitdate}) // { arity: 2 }
+                  Filter (null OR ((#0{l_orderkey} <= 100) AND (#0{l_orderkey} >= 59) AND (#11{l_commitdate} >= 1998-03-22))) // { arity: 16 }
+                    ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
+              ArrangeBy keys=[[#0{l_commitdate}]] // { arity: 1 }
+                Distinct project=[#0{l_commitdate}] // { arity: 1 }
+                  Project (#2{l_commitdate}) // { arity: 1 }
+                    Get l0 // { arity: 5 }
+      Project (#16, #4{l_quantity}) // { arity: 2 }
+        Filter (null OR ((#0{l_orderkey} <= 100) AND (#0{l_orderkey} >= 59) AND (#11{l_commitdate} >= 1998-03-22))) // { arity: 17 }
+          Map (null) // { arity: 17 }
+            ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
       Project (#4{o_orderkey}, #1{l_quantity}) // { arity: 2 }
         Filter ((#2{l_commitdate} = #3{l_receiptdate}) OR ((#0{l_orderkey} <= 100) AND (#0{l_orderkey} >= 59) AND (#2{l_commitdate} >= 1998-03-22))) // { arity: 5 }
           Get l0 // { arity: 5 }

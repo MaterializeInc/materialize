@@ -871,8 +871,8 @@ ArrangeBy[[CallUnary(CastInt32ToInt64(CastInt32ToInt64), Column(0, "id"))]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0, "data")]]
 ArrangeBy[[Column(0, "data")]]-errors
-ArrangeBy[[Column(0, "id")]]
-ArrangeBy[[Column(0, "id")]]-errors
+ArrangeBy[[Column(0, "id"), Column(1, "top_2_count"), Column(2, "total_count")]]
+ArrangeBy[[Column(0, "id"), Column(1, "top_2_count"), Column(2, "total_count")]]-errors
 ArrangeBy[[Column(0, "max")]]
 ArrangeBy[[Column(0, "max")]]-errors
 Arranged Accumulable Distinct [val: empty]

@@ -499,11 +499,11 @@ Explained Query:
           Union // { arity: 2 }
             Map (true) // { arity: 2 }
               Get l1 // { arity: 1 }
+            Negate // { arity: 2 }
+              Map (false) // { arity: 2 }
+                Get l1 // { arity: 1 }
             Map (false) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Get l1 // { arity: 1 }
-                Get l0 // { arity: 1 }
+              Get l0 // { arity: 1 }
 
 Source materialize.public.x
 Source materialize.public.y
@@ -542,11 +542,11 @@ Explained Query:
             Union // { arity: 2 }
               Map (true) // { arity: 2 }
                 Get l1 // { arity: 1 }
+              Negate // { arity: 2 }
+                Map (false) // { arity: 2 }
+                  Get l1 // { arity: 1 }
               Map (false) // { arity: 2 }
-                Union // { arity: 1 }
-                  Negate // { arity: 1 }
-                    Get l1 // { arity: 1 }
-                  Get l0 // { arity: 1 }
+                Get l0 // { arity: 1 }
 
 Source materialize.public.x
 Source materialize.public.y
@@ -587,11 +587,11 @@ Explained Query:
             Union // { arity: 2 }
               Map (true) // { arity: 2 }
                 Get l1 // { arity: 1 }
+              Negate // { arity: 2 }
+                Map (false) // { arity: 2 }
+                  Get l1 // { arity: 1 }
               Map (false) // { arity: 2 }
-                Union // { arity: 1 }
-                  Negate // { arity: 1 }
-                    Get l1 // { arity: 1 }
-                  Get l0 // { arity: 1 }
+                Get l0 // { arity: 1 }
 
 Source materialize.public.x
 Source materialize.public.y

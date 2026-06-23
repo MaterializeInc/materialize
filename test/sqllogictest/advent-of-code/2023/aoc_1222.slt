@@ -451,27 +451,25 @@ Explained Query:
       Return // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
-            %0[×]U » %1[×]U
+            %0[×] » %1[×]
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l15 // { arity: 1 }
-              Map (0) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l15 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (0) // { arity: 2 }
+                    Get l15 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (0)
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l23 // { arity: 1 }
-              Map (0) // { arity: 1 }
-                Union // { arity: 0 }
-                  Negate // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l23 // { arity: 1 }
-                  Constant // { arity: 0 }
-                    - ()
+              Negate // { arity: 1 }
+                Project (#1) // { arity: 1 }
+                  Map (0) // { arity: 2 }
+                    Get l23 // { arity: 1 }
+              Constant // { arity: 1 }
+                - (0)
 
 Source materialize.public.input
 

@@ -45,13 +45,12 @@ materialize.public.mv1:
   Return
     Union
       Get l0
-      Map (0)
-        Union
-          Negate
-            Project ()
-              Get l0
-          Constant
-            - ()
+      Negate
+        Project (#1)
+          Map (0)
+            Get l0
+      Constant
+        - (0)
 
 Source materialize.public.events
   filter=((mz_now() >= numeric_to_mz_timestamp(#1{insert_ms})) AND (mz_now() < numeric_to_mz_timestamp(#2{delete_ms})))
