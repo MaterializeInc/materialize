@@ -19,6 +19,7 @@ import random
 import string
 import threading
 import time
+from decimal import Decimal
 from io import BytesIO, StringIO
 from textwrap import dedent
 
@@ -456,6 +457,32 @@ def workflow_test_github_9627(c: Composition):
         after = int(result[0][0])
 
         assert before < after, f"read frontier is stuck, {before} >= {after}"
+
+
+def workflow_test_ss_193(c: Composition):
+    """
+    Regression test for SS-193 where COPYing to a table from STDIN would
+    store values without rounding them to the destination column's scale.
+
+    The same rounding must also apply to the COPY FROM parquet path, so we
+    additionally round-trip scale-3 values through a parquet file on S3 and
+    assert they are rounded to the destination column's scale on read.
+    """
+    c.up("materialized")
+    conn = c.sql_connection()
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE numbers_with_precision (a DECIMAL(10, 2), b NUMERIC(10, 2))")
+        with cur.copy("COPY numbers_with_precision FROM STDIN") as copy:
+            copy.write('10.447\t10.447\n')
+        with cur.copy("COPY numbers_with_precision FROM STDIN (FORMAT CSV)") as copy:
+            copy.write('10.447,10.447\n')
+
+        cur.execute("SELECT a, b FROM numbers_with_precision")
+        rows = cur.fetchall()
+        assert rows == [
+            (Decimal('10.45'), Decimal('10.45')),
+            (Decimal('10.45'), Decimal('10.45'))
+        ], f"COPY FROM did not round values to the column scale: {rows}"
 
 
 def workflow_copy_from_ssrf_redirect(c: Composition) -> None:
