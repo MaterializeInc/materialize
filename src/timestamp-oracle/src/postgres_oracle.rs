@@ -1069,4 +1069,52 @@ mod tests {
 
         Ok(())
     }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_postgres_statement_timeout() -> Result<(), anyhow::Error> {
+        let config = match PostgresTimestampOracleConfig::new_for_test() {
+            Some(config) => config,
+            None => {
+                info!(
+                    "{} env not set: skipping test that uses external service",
+                    PostgresTimestampOracleConfig::EXTERNAL_TESTS_POSTGRES_URL
+                );
+                return Ok(());
+            }
+        };
+
+        // With the default config, the statement timeout is unset (the zero
+        // sentinel), so a query that outlives a short sleep still completes.
+        let no_timeout_client = PostgresClient::open(config.clone().into())?;
+        let conn = no_timeout_client.get_connection().await?;
+        pg_batch_execute(&conn, "SELECT pg_sleep(0.1)")
+            .await
+            .expect("query should not be aborted when no statement timeout is set");
+        drop(conn);
+
+        // Apply a short statement timeout through the dynamic-config path. New
+        // connections set it via the per-session setup hook.
+        TimestampOracleParameters {
+            pg_statement_timeout: Some(Duration::from_millis(100)),
+            ..Default::default()
+        }
+        .apply(&config);
+
+        let timeout_client = PostgresClient::open(config.clone().into())?;
+        let conn = timeout_client.get_connection().await?;
+
+        // A query that sleeps for much longer than the statement timeout must
+        // be aborted by the server.
+        let err = pg_batch_execute(&conn, "SELECT pg_sleep(5)")
+            .await
+            .expect_err("query should have been aborted by the statement timeout");
+        assert_eq!(
+            err.code(),
+            Some(&SqlState::QUERY_CANCELED),
+            "unexpected error, expected a statement timeout: {err:?}"
+        );
+
+        Ok(())
+    }
 }
