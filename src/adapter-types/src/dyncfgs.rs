@@ -65,6 +65,9 @@ pub const ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK: Config<bool> = Config::new(
     "Enable checking for crash/OOM-looping replicas during 0dt caught-up checks. Emergency break-glass flag to disable this feature if needed.",
 );
 
+// TODO(aljoscha): Remove this break-glass flag after a couple of releases, once
+// the sustained-health gate has proven itself in production. It only exists as a
+// fleet-wide automatic revert to the prior "caught-up implies ready" behavior.
 pub const ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK: Config<bool> = Config::new(
     "enable_0dt_caught_up_stability_check",
     true,
