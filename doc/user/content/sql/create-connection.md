@@ -30,8 +30,9 @@ certificates) can be specified as plain `text`, or also stored as secrets.
 An Amazon Web Services (AWS) connection provides Materialize with access to an
 Identity and Access Management (IAM) user or role in your AWS account. You can
 use AWS connections to perform [bulk exports to Amazon S3](/serve-results/s3/),
-perform [authentication with an Amazon MSK cluster](#kafka-aws-connection), or
-perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection).
+perform [authentication with an Amazon MSK cluster](#kafka-aws-connection),
+perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection),
+or [authenticate to an AWS Glue Schema Registry](#aws-glue-schema-registry).
 
 {{% include-syntax file="examples/create_connection" example="syntax-aws" %}}
 
@@ -438,7 +439,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 ##### Default connections {#kafka-privatelink-default}
 
-[Redpanda Cloud](/ingest-data/redpanda/redpanda-cloud/)) does not require
+[Redpanda Cloud](/ingest-data/redpanda/redpanda-cloud/) does not require
 listing every broker individually. In this case, you should specify a
 PrivateLink connection and the port of the bootstrap server instead.
 
@@ -617,6 +618,71 @@ CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
 
 {{< /tab >}}
 {{< /tabs >}}
+
+### AWS Glue Schema Registry
+
+{{< private-preview />}}
+
+An AWS Glue Schema Registry connection establishes a link to an [AWS Glue Schema
+Registry]. You can use AWS Glue Schema Registry connections in the `FORMAT`
+clause of [`CREATE SOURCE`] statements to decode Avro-encoded messages whose
+schemas are managed in AWS Glue.
+
+The connection authenticates to AWS through a separate [AWS connection](#aws),
+which supplies the credentials and region. See [AWS](#aws) for how to grant
+Materialize access to your AWS account.
+
+#### Syntax {#glue-syntax}
+
+{{% include-syntax file="examples/create_connection" example="syntax-glue" %}}
+
+#### Examples {#glue-example}
+
+```mzsql
+CREATE CONNECTION aws_conn TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
+);
+
+CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = 'default-registry'
+);
+```
+
+#### Permissions {#glue-permissions}
+
+The IAM role assumed by the [AWS connection](#aws) must be allowed to read
+schemas from the registry. Materialize uses the following AWS Glue actions:
+
+| Action | When it is used |
+|--------|-----------------|
+| `glue:GetRegistry` | At connection creation, to validate the connection. Only required when `VALIDATE` is `true` (the default). |
+| `glue:GetSchemaVersion` | When a source is created, to pin the schema, and at runtime, to fetch the writer schema for each new schema version encountered. Always required. |
+
+A least-privilege policy scoped to a single registry looks like:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "glue:GetRegistry",
+                "glue:GetSchemaVersion"
+            ],
+            "Resource": [
+                "arn:aws:glue:<region>:<account>:registry/<registry-name>",
+                "arn:aws:glue:<region>:<account>:schema/<registry-name>/*"
+            ]
+        }
+    ]
+}
+```
+
+If you create the connection with `WITH (VALIDATE = false)`, you can omit
+`glue:GetRegistry` and grant only `glue:GetSchemaVersion`. For details on
+creating and authorizing the AWS connection, see [AWS](#aws).
 
 ### MySQL
 
@@ -1016,6 +1082,7 @@ Connection type             | Validated by default |
 AWS                         |                      |
 Kafka                       | ✓                    |
 Confluent Schema Registry   | ✓                    |
+AWS Glue Schema Registry    | ✓                    |
 MySQL                       | ✓                    |
 PostgreSQL                  | ✓                    |
 SSH Tunnel                  |                      |
@@ -1046,6 +1113,7 @@ The privileges required to execute this statement are:
 
 [AWS PrivateLink]: https://aws.amazon.com/privatelink/
 [Confluent Schema Registry]: https://docs.confluent.io/platform/current/schema-registry/index.html#sr-overview
+[AWS Glue Schema Registry]: https://docs.aws.amazon.com/glue/latest/dg/schema-registry.html
 [Kafka]: https://kafka.apache.org
 [MySQL]: https://www.mysql.com/
 [PostgreSQL]: https://www.postgresql.org
