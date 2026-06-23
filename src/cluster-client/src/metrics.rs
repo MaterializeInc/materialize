@@ -12,8 +12,8 @@
 use mz_ore::cast::CastLossy;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, IntCounterVec, MetricVisibility,
-    MetricsRegistry,
+    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, IntCounterVec, MetricTag,
+    MetricVisibility, MetricsRegistry,
 };
 use mz_ore::stats::SlidingMinMax;
 use prometheus::core::{AtomicF64, AtomicU64};
@@ -39,6 +39,7 @@ impl ControllerMetrics {
                        to wallclock time, aggregated over the last minute.",
                 var_labels: ["instance_id", "replica_id", "collection_id", "quantile"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute, MetricTag::Source, MetricTag::Sink],
             )),
             dataflow_wallclock_lag_seconds_sum: metrics_registry.register(metric!(
                 name: "mz_dataflow_wallclock_lag_seconds_sum",

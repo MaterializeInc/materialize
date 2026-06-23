@@ -11,7 +11,7 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropGauge, IntGaugeVec, MetricVisibility, MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropGauge, IntGaugeVec, MetricTag, MetricVisibility, MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -102,6 +102,7 @@ impl KafkaSinkMetricDefs {
                 help: "The number of messages awaiting transmission across all brokers.",
                 var_labels: ["sink_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Sink],
             )),
             rdkafka_waitresp_cnt: registry.register(metric!(
                 name: "mz_sink_rdkafka_waitresp_cnt",
@@ -120,6 +121,7 @@ impl KafkaSinkMetricDefs {
                 help: "The total number of transmission errors across all brokers.",
                 var_labels: ["sink_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Sink],
             )),
             rdkafka_txretries: registry.register(metric!(
                 name: "mz_sink_rdkafka_txretries",
@@ -137,6 +139,7 @@ impl KafkaSinkMetricDefs {
                        attempts, and name resolution failures across all brokers.",
                 var_labels: ["sink_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Sink],
             )),
             rdkafka_disconnects: registry.register(metric!(
                 name: "mz_sink_rdkafka_disconnects",
@@ -144,6 +147,7 @@ impl KafkaSinkMetricDefs {
                       network, the load balancer, or something else across all brokers.",
                 var_labels: ["sink_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Sink],
             )),
             outstanding_progress_records: registry.register(metric!(
                 name: "mz_sink_oustanding_progress_records",
