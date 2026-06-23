@@ -45,10 +45,6 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
-# TODO: Reenable when https://linear.app/materializeinc/issue/SS-308 is fixed
-$ skip-if
-SELECT true
-
 ! SELECT * FROM table_a;
 contains:table was dropped
 
