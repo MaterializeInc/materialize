@@ -98,6 +98,7 @@ def workflow_default(c: Composition) -> None:
                 "permission denied"
                 in r.json()["results"][0]["error"]["message"].lower()
             )
+        check_internal_endpoints_require_authorization(c, internal)
 
     check_livez_coordinator_coupling(c)
 
@@ -128,3 +129,63 @@ def check_livez_coordinator_coupling(c: Composition) -> None:
             assert requests.get(f"{base}/api/livez").status_code == 200
         delta = get_system_vars_count() - before
         assert delta < 50, f"100 liveness probes caused {delta} coordinator round-trips"
+
+
+def check_internal_endpoints_require_authorization(
+    c: Composition, internal: str
+) -> None:
+    """The internal catalog/coordinator HTTP endpoints in
+    `src/environmentd/src/http/catalog.rs` only authenticate the caller, never
+    authorize them: they take an `AuthedClient` and call adapter APIs doc'd "No
+    authorization is performed... limit to internal servers or superusers." So
+    any normal user on a listener with `routes.internal=true` +
+    `allowed_roles=NormalAndInternal` (the orchestrator's internal HTTP
+    listener, and the *external* one under password/SASL/OIDC auth) reaches
+    them. Here that caller is the non-superuser `anonymous_http_user` (the
+    `anonymous_cannot_alter_system` case above proves it lacks superuser).
+
+    These cases assert the secure behavior (401/403), so they fail RED until
+    the handlers gain an internal-or-superuser check.
+    """
+    # `internal` is the .../api/sql URL on the 6878 listener; derive its root.
+    # No auth header => the session is the normal `anonymous_http_user`.
+    base = internal[: -len("/api/sql")]
+
+    for path in (
+        "catalog/dump",
+        "catalog/check",
+        "coordinator/check",
+        "coordinator/dump",
+    ):
+        with c.test_case(f"internal_{path.replace('/', '_')}_requires_authorization"):
+            r = requests.get(f"{base}/api/{path}")
+            assert r.status_code in (401, 403), (
+                f"normal user (anonymous_http_user) reached /api/{path}: "
+                f"status={r.status_code}, {len(r.text)} bytes returned"
+            )
+    with c.test_case("internal_inject_audit_events_requires_authorization"):
+        # A normal user must not be able to forge audit-log entries.
+        forged = [
+            {
+                "event_type": "create",
+                "object_type": "table",
+                "details": {"IdNameV1": {"id": "u1", "name": "forged_by_normal_user"}},
+                "user": "mz_system",  # caller picks the attributed user
+            }
+        ]
+        r = requests.post(f"{base}/api/catalog/inject-audit-events", json=forged)
+        # Proof the forgery took effect: count its rows in the audit log.
+        audit = requests.post(
+            internal,
+            headers={"x-materialize-user": "mz_system"},
+            json={
+                "query": "SELECT count(*) FROM mz_audit_events "
+                "WHERE details->>'name' = 'forged_by_normal_user'"
+            },
+        )
+        forged_rows = audit.json()["results"][0]["rows"][0][0]
+        assert r.status_code in (401, 403), (
+            "normal user (anonymous_http_user) forged an audit event via "
+            f"/api/catalog/inject-audit-events: status={r.status_code}, "
+            f"audit rows={forged_rows}"
+        )
