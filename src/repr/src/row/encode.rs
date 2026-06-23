@@ -2126,7 +2126,9 @@ impl RowPacker<'_> {
                     // Map keys must be unique and strictly ascending; iterating a
                     // map that violates this trips a debug_assert. A crafted
                     // proto can, so reject it as a decode error here instead.
-                    if let Some(prev) = prev_key && e.key.as_str() <= prev {
+                    if let Some(prev) = prev_key
+                        && e.key.as_str() <= prev
+                    {
                         return Err(format!(
                             "dict keys must be unique and in ascending order, \
                              but {:?} came after {:?}",
@@ -2148,9 +2150,9 @@ impl RowPacker<'_> {
                 // represented as variants of ProtoDatumOther.
                 //
                 // `decPackedToNumber` (called via `Decimal::from_packed_bcd`)
-                // doesn't bounds-check its input and segfaults on empty bcd —
-                // reachable from untrusted proto bytes, so we reject before
-                // descending into the FFI.
+                // doesn't bounds-check its input and segfaults on empty bcd.
+                // That is reachable from untrusted proto bytes, so we reject
+                // before descending into the FFI.
                 if x.bcd.is_empty() {
                     return Err("ProtoNumeric.bcd is empty".to_string());
                 }
@@ -2170,9 +2172,10 @@ impl RowPacker<'_> {
                             upper,
                         } = &**inner;
 
-                        // Range bounds must not be `Datum::Null` — `push_range_with`
-                        // panics on that invariant. Reject untrusted proto bytes
-                        // that would push a `Null` bound before calling it.
+                        // Range bounds must not be `Datum::Null`, because
+                        // `push_range_with` panics on that invariant. Reject
+                        // untrusted proto bytes that would push a `Null` bound
+                        // before calling it.
                         let is_null_proto = |d: &ProtoDatum| {
                             matches!(
                                 d.datum_type,
@@ -2282,7 +2285,7 @@ mod tests {
     #[mz_ore::test]
     fn proto_row_invalid_range_is_error() {
         // A ProtoRow with a range whose bounds have inconsistent datum kinds
-        // (or a null/extra bound) must decode to an error, not panic — the range
+        // (or a null/extra bound) must decode to an error, not panic. The range
         // packer used to `assert!` these invariants. Regression for the
         // row_proto_roundtrip cargo-fuzz finding.
         use prost::Message;
@@ -2301,7 +2304,7 @@ mod tests {
     #[mz_ore::test]
     fn proto_row_unordered_dict_keys_is_error() {
         // A ProtoRow with a dict whose keys are duplicated or not in ascending
-        // order must decode to an error, not panic — iterating such a map trips
+        // order must decode to an error, not panic. Iterating such a map trips
         // a debug_assert. Regression for the row_proto_roundtrip cargo-fuzz
         // finding.
         use prost::Message;

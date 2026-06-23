@@ -899,7 +899,7 @@ impl RustType<ProtoNaiveDateTime> for CheckedTimestamp<NaiveDateTime> {
 
     fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
         // Go through `from_timestamplike` so out-of-range values are
-        // rejected here — pushing them into a `Row` succeeds but
+        // rejected here. Pushing them into a `Row` succeeds, but
         // `read_datum` would panic when reconstructing the timestamp.
         CheckedTimestamp::from_timestamplike(NaiveDateTime::from_proto(proto)?)
             .map_err(|err| TryFromProtoError::InvalidFieldError(err.to_string()))
@@ -1119,8 +1119,8 @@ mod test {
     fn test_round_to_precision_leap_second_off_minute() {
         // Regression: parsing a `:60` literal can leave chrono's leap-second
         // representation (sub-second >= 1s) on a second other than `:59` (after
-        // time-zone math). Rounding such a value — as the string->timestamp cast
-        // does — must not panic. `truncate_microseconds`/`truncate_milliseconds`
+        // time-zone math). Rounding such a value, as the string->timestamp cast
+        // does, must not panic. `truncate_microseconds`/`truncate_milliseconds`
         // previously rebuilt the time with `from_hms_{micro,milli}_opt`, whose
         // leap sub-second range is only valid at `:59`, and unwrapped the `None`.
         let leap = NaiveDate::from_ymd_opt(3, 3, 17)

@@ -402,9 +402,9 @@ pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     if input.is_empty() {
         // An empty byte string is not a valid two's-complement integer. Our own
         // encoder never emits one (zero is the single byte `0x00`), so this only
-        // arises from untrusted input — e.g. an Avro `decimal` field whose
-        // unscaled value was encoded as zero-length `bytes`. Reject it rather
-        // than indexing `input[0]` below and panicking.
+        // arises from untrusted input. One example is an Avro `decimal` field
+        // whose unscaled value was encoded as zero-length `bytes`. Reject it
+        // rather than indexing `input[0]` below and panicking.
         bail!("cannot parse a numeric value from an empty byte string");
     }
     let is_neg = if (input[0] & 0x80) != 0 {

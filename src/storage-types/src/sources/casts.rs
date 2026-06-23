@@ -820,8 +820,8 @@ mod tests {
         fn error_uuid() {
             // `parse_uuid` rejects anything too short to be a UUID before the
             // `uuid` crate runs (the crate panics building an error for some
-            // short inputs), so the error carries no crate-specific detail —
-            // matching Postgres, whose message for `'bad'::uuid` has none.
+            // short inputs), so the error carries no crate-specific detail.
+            // This matches Postgres, whose message for `'bad'::uuid` has none.
             assert_eq!(
                 eval_cast_err(CastFunc::CastStringToUuid, "bad"),
                 parse_err("uuid", "bad"),

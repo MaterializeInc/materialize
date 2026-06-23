@@ -733,9 +733,9 @@ where
 pub fn parse_uuid(s: &str) -> Result<Uuid, ParseError> {
     let trimmed = s.trim();
     // The `uuid` crate panics while constructing a parse error for some short,
-    // brace-wrapped inputs (e.g. `{}`, `{\0}`) — it mis-slices the input. Reject
-    // anything that can't be a UUID before handing it to the crate: the shortest
-    // valid form is 32 hex digits and every form is ASCII.
+    // brace-wrapped inputs (e.g. `{}`, `{\0}`) because it mis-slices the input.
+    // Reject anything that can't be a UUID before handing it to the crate. The
+    // shortest valid form is 32 hex digits and every form is ASCII.
     if trimmed.len() < 32 || !trimmed.is_ascii() {
         return Err(ParseError::invalid_input_syntax("uuid", s));
     }
