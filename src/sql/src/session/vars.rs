@@ -2395,6 +2395,7 @@ pub fn is_timestamp_oracle_config_var(name: &str) -> bool {
         || name == CRDB_KEEPALIVES_IDLE.name()
         || name == CRDB_KEEPALIVES_INTERVAL.name()
         || name == CRDB_KEEPALIVES_RETRIES.name()
+        || name == mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.name()
 }
 
 /// Returns whether the named variable is a cluster scheduling config
