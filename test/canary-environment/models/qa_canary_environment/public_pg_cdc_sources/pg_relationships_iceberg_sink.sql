@@ -7,12 +7,11 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- TODO: Reenable when SS-282 is fixed
-CREATE SINK customer_iceberg_sink
+CREATE SINK pg_relationships_iceberg_sink
     IN CLUSTER qa_canary_environment_sinks
-    FROM qa_canary_environment.public_loadgen_sources.customer_tbl
-    INTO ICEBERG CATALOG CONNECTION qa_canary_environment.public.qa_canary_iceberg_catalog (NAMESPACE = 'qa_canary_environment', TABLE = 'customer')
+    FROM qa_canary_environment.public_pg_cdc_sources.pg_relationships
+    INTO ICEBERG CATALOG CONNECTION qa_canary_environment.public.qa_canary_iceberg_catalog (NAMESPACE = 'qa_canary_environment', TABLE = 'pg_relationships')
     USING AWS CONNECTION qa_canary_environment.public.qa_canary_aws_connection
-    KEY (key)
+    KEY (a, b) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL = '60s');

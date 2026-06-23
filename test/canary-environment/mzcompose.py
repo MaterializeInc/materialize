@@ -439,11 +439,17 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION public.csr_connection
               ENVELOPE DEBEZIUM
 
-            # TODO: Reenable when SS-282 is fixed
-            # The public_table.table_mv Iceberg sinks (table_mv_iceberg_sink,
-            # table_mv_gcs_iceberg_sink) are disabled — the Iceberg sinks OOM the
-            # sinks cluster during hydration. See the disabled .sql.disabled
-            # sink models under models/ for the rest.
+            > CREATE SINK IF NOT EXISTS public_table.table_mv_iceberg_sink
+              IN CLUSTER qa_canary_environment_sinks
+              FROM public_table.table_mv
+              INTO ICEBERG CATALOG CONNECTION public.qa_canary_iceberg_catalog (NAMESPACE = 'qa_canary_environment', TABLE = 'table_mv')
+              USING AWS CONNECTION public.qa_canary_aws_connection
+              MODE APPEND
+              WITH (COMMIT INTERVAL = '60s')
+
+            # The GCS Iceberg sink (table_mv_gcs_iceberg_sink) stays disabled, as
+            # do the *_gcs_iceberg_sink.sql.disabled model sinks. Only the
+            # AWS/S3-Tables Iceberg sinks are enabled.
 
             # Seed data for the loadgen product/category tables (created by `apply`).
             > DELETE FROM public_loadgen_sources.product_category

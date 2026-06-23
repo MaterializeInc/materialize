@@ -7,7 +7,6 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- TODO: Reenable when SS-282 is fixed
 CREATE SINK sales_iceberg_sink
     IN CLUSTER qa_canary_environment_sinks
     FROM qa_canary_environment.public_loadgen_sources.sales_tbl
