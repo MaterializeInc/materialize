@@ -2215,9 +2215,21 @@ impl<'a> Parser<'a> {
             } else {
                 vec![]
             };
+            // SEED VALUE SCHEMA '<json>' is normally emitted by purification
+            // and re-parsed when persisted create_sql is reloaded. A user may
+            // also write it directly; that is accepted here (purification trusts
+            // a pre-populated seed), though it is not the intended path.
+            let seed = if self.parse_keyword(SEED) {
+                self.expect_keywords(&[VALUE, SCHEMA])?;
+                let value_schema = self.parse_literal_string()?;
+                Some(GlueAvroSeed { value_schema })
+            } else {
+                None
+            };
             AvroSchema::Glue {
                 connection,
                 with_options,
+                seed,
             }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();

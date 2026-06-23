@@ -356,9 +356,6 @@ async fn get_decoder(
             reference_schemas,
             wire_format,
         }) => {
-            // Only the Confluent variant is reachable from SQL today; Glue
-            // is not yet wired to the planner.
-
             let writer_schemas = match wire_format {
                 WireFormat::None => WriterSchemaProvider::None,
                 WireFormat::Confluent { registry } => {

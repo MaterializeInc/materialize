@@ -176,6 +176,11 @@ pub enum AvroSchema<T: AstInfo> {
     Glue {
         connection: T::ItemName,
         with_options: Vec<GlueAvroOption<T>>,
+        /// Normally populated during purification by fetching the named
+        /// schema's latest version from AWS Glue. The grammar also accepts a
+        /// user-written `SEED VALUE SCHEMA`, so this may be set on input; it is
+        /// not the intended authoring path, but it is not rejected.
+        seed: Option<GlueAvroSeed>,
     },
 }
 
@@ -200,6 +205,7 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
             Self::Glue {
                 connection,
                 with_options,
+                seed,
             } => {
                 f.write_str("USING AWS GLUE SCHEMA REGISTRY CONNECTION ");
                 f.write_node(connection);
@@ -207,6 +213,10 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                     f.write_str(" (");
                     f.write_node(&display::comma_separated(with_options));
                     f.write_str(")");
+                }
+                if let Some(seed) = seed {
+                    f.write_str(" ");
+                    f.write_node(seed);
                 }
             }
         }
@@ -458,6 +468,35 @@ impl AstDisplay for CsrSeedAvro {
     }
 }
 impl_display!(CsrSeedAvro);
+
+/// Resolved reader schema for a single `AvroSchema::Glue` FORMAT clause.
+///
+/// Glue resolves exactly one named schema per FORMAT clause, so this holds a
+/// single schema rather than a key/value pair. This differs from
+/// [`CsrSeedAvro`], where one `FORMAT AVRO USING CONFLUENT ...` clause can seed
+/// both key and value. Under Glue, the key and value are expressed as separate
+/// `KEY FORMAT ... VALUE FORMAT ...` clauses, each carrying its own
+/// `GlueAvroSeed`; the field is named `value_schema` because, for a single
+/// clause, it is decoded as that clause's value (a bare `FORMAT` clause, or the
+/// value side of a `KEY FORMAT/VALUE FORMAT` pair) — and a `KEY FORMAT` clause
+/// reuses the same schema as its key.
+///
+/// Glue schemas also have no references (each schema-version is a single
+/// self-contained definition), so unlike [`CsrSeedAvro`] there is no references
+/// vector.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GlueAvroSeed {
+    pub value_schema: String,
+}
+
+impl AstDisplay for GlueAvroSeed {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SEED VALUE SCHEMA '");
+        f.write_node(&display::escape_single_quote_string(&self.value_schema));
+        f.write_str("'");
+    }
+}
+impl_display!(GlueAvroSeed);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeedProtobuf {

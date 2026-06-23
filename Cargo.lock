@@ -8214,6 +8214,7 @@ dependencies = [
  "mz-arrow-util",
  "mz-audit-log",
  "mz-auth",
+ "mz-aws-glue-schema-registry",
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-provider",

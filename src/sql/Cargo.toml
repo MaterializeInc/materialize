@@ -34,6 +34,7 @@ mz-arrow-util = { path = "../arrow-util" }
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
 mz-auth = { path = "../auth" }
+mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-provider = { path = "../cloud-provider", default-features = false }
