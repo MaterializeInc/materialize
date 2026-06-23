@@ -379,8 +379,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         service_id: service_id.clone(),
                         process_id: u64::cast_from(process_id),
                         status: process_state.status.into(),
-                        // The process orchestrator does not track restart counts.
-                        restart_count: 0,
+                        restart_count: process_state.restart_count,
                         time: process_state.status_time,
                     });
                 }
@@ -698,6 +697,7 @@ impl OrchestratorWorker {
                     _handle: handle.abort_on_drop(),
                     status: ProcessStatus::NotReady,
                     status_time: Utc::now(),
+                    restart_count: 0,
                     labels: labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
                     tcp_proxy_addrs,
                 });
@@ -1149,14 +1149,21 @@ impl ProcessStateUpdater {
             return;
         };
         let status_time = Utc::now();
+        // Count each transition to NotReady as a restart. The process
+        // orchestrator always relaunches a process that exits, so a death is a
+        // restart. This is monotonic for a given `ProcessState` and changes on
+        // every restart, which is what the 0dt caught-up check needs. It only
+        // resets to zero if the whole service is dropped and recreated.
+        if matches!(status, ProcessStatus::NotReady) {
+            process_state.restart_count += 1;
+        }
         process_state.status = status;
         process_state.status_time = status_time;
         let _ = self.service_event_tx.send(ServiceEvent {
             service_id: self.id.to_string(),
             process_id: u64::cast_from(self.i),
             status: status.into(),
-            // The process orchestrator does not track restart counts.
-            restart_count: 0,
+            restart_count: process_state.restart_count,
             time: status_time,
         });
     }
@@ -1167,6 +1174,9 @@ struct ProcessState {
     _handle: AbortOnDropHandle<()>,
     status: ProcessStatus,
     status_time: DateTime<Utc>,
+    /// Number of times this process has died and been relaunched. Monotonic for
+    /// the lifetime of this `ProcessState`. See [`ProcessStateUpdater::update_state`].
+    restart_count: u64,
     labels: BTreeMap<String, String>,
     tcp_proxy_addrs: BTreeMap<String, SocketAddr>,
 }
