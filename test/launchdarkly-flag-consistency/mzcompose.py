@@ -362,6 +362,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     pg_timestamp_oracle_connection_pool_max_wait
     pg_timestamp_oracle_connection_pool_ttl
     pg_timestamp_oracle_connection_pool_ttl_stagger
+    pg_timestamp_oracle_statement_timeout
     plan_insights_notice_fast_path_clusters_optimize_duration
     postgres_fetch_slot_resume_lsn_interval
     privatelink_status_update_quota_per_minute

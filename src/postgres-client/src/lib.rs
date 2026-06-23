@@ -21,6 +21,7 @@
 pub mod error;
 pub mod metrics;
 
+use std::fmt::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -60,6 +61,9 @@ pub trait PostgresClientKnobs: std::fmt::Debug + Send + Sync {
     fn keepalives_interval(&self) -> Duration;
     /// Maximum number of TCP keepalive probes that will be sent before dropping a connection.
     fn keepalives_retries(&self) -> u32;
+    /// Server-side `statement_timeout` to set on each connection. A value of
+    /// zero is a sentinel that means "do not set a statement timeout".
+    fn statement_timeout(&self) -> Duration;
 }
 
 /// Configuration for creating a [PostgresClient].
@@ -128,6 +132,7 @@ impl PostgresClient {
         let last_ttl_connection = AtomicU64::new(0);
         let connections_created = config.metrics.connpool_connections_created.clone();
         let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
+        let knobs = Arc::clone(&config.knobs);
         let builder = Pool::builder(manager);
         let builder = match config.knobs.connection_pool_max_wait() {
             None => builder,
@@ -137,15 +142,31 @@ impl PostgresClient {
             .max_size(config.knobs.connection_pool_max_size())
             .post_create(Hook::async_fn(move |client, _| {
                 connections_created.inc();
+                let knobs = Arc::clone(&knobs);
                 Box::pin(async move {
                     debug!("opened new consensus postgres connection");
+                    let mut setup = String::from(
+                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+                    );
+                    // A zero `statement_timeout` is our sentinel for "leave it
+                    // unset". We only emit the `SET` when non-zero so we don't
+                    // override a timeout configured out of band.
+                    let statement_timeout = knobs.statement_timeout();
+                    if !statement_timeout.is_zero() {
+                        // A bare integer value for `statement_timeout` is
+                        // interpreted as milliseconds.
+                        write!(
+                            setup,
+                            "; SET statement_timeout = {}",
+                            statement_timeout.as_millis()
+                        )
+                        .expect("writing to a String never fails");
+                    }
                     // This hook must return `tokio_postgres::Error`; using
                     // `mz_postgres_util` wrappers would change the error type.
                     #[allow(clippy::disallowed_methods)]
                     client
-                        .batch_execute(
-                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
-                    )
+                        .batch_execute(&setup)
                         .await
                         .map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
                 })

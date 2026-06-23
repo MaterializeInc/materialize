@@ -607,6 +607,11 @@ impl PostgresClientKnobs for PersistConfig {
     fn keepalives_retries(&self) -> u32 {
         CRDB_KEEPALIVES_RETRIES.get(self)
     }
+
+    fn statement_timeout(&self) -> Duration {
+        // Persist consensus does not use a server-side statement timeout.
+        Duration::ZERO
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Arbitrary, Serialize, Deserialize)]

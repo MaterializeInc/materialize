@@ -1577,6 +1577,13 @@ class FlipFlagsAction(Action):
             "'1h'",
             "'7d'",
         ]
+        # Keep these generous: a tight timeout would abort the oracle's own
+        # queries (they are retried, but it adds noise). "0s" leaves it unset.
+        self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
+            "'0s'",
+            "'30s'",
+            "'60s'",
+        ]
         # Note: it's not safe to re-enable this flag after writing with `persist_validate_part_bounds_on_write`,
         # since those new-style parts may fail our old-style validation.
         self.flags_with_values["persist_validate_part_bounds_on_read"] = ["FALSE"]

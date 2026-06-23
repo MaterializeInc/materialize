@@ -35,3 +35,8 @@ pub const DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_INTERVAL: Duration = Duration::
 
 /// Default value for `DynamicConfig::pg_connection_pool_keepalives_retries`.
 pub const DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_RETRIES: u32 = 5;
+
+/// Default value for `DynamicConfig::pg_statement_timeout`.
+///
+/// A value of zero is a sentinel that means "do not set a statement timeout".
+pub const DEFAULT_PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT: Duration = Duration::from_secs(0);
