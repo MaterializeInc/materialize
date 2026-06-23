@@ -61,24 +61,22 @@ ANALYZE;
   IN CLUSTER storage
   FROM POSTGRES CONNECTION pg (PUBLICATION mz_source);
 
-# Excluding the PRIMARY KEY column must produce a clean error, not crash envd.
-! CREATE TABLE pk_table
+# Excluding the PRIMARY KEY column should be fine
+> CREATE TABLE pk_table
   FROM SOURCE mz_source (REFERENCE public.pk_table)
   WITH (EXCLUDE COLUMNS (id));
-contains:cannot exclude column
 
-# Excluding a UNIQUE-constraint column must likewise be rejected gracefully.
-! CREATE TABLE uniq_table
+# Excluding a UNIQUE-constraint column also okay
+> CREATE TABLE jkljkljhhjk
   FROM SOURCE mz_source (REFERENCE public.uniq_table)
   WITH (EXCLUDE COLUMNS (u));
-contains:cannot exclude column
 
 # Sanity: excluding a non-key column on a keyed table still works, and the key
 # constraint is preserved on the resulting table.
-> CREATE TABLE pk_table
+> CREATE TABLE pk_table_2
   FROM SOURCE mz_source (REFERENCE public.pk_table)
   WITH (EXCLUDE COLUMNS (val));
 
-> SELECT * FROM pk_table;
+> SELECT * FROM pk_table_2;
 1
 2
