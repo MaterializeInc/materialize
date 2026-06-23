@@ -37,6 +37,16 @@ pub fn compute_addr() -> String {
     std::env::var("CLUSTERD_COMPUTE_ADDR").unwrap_or_else(|_| "127.0.0.1:2101".to_string())
 }
 
+/// The clusterd Prometheus metrics endpoint, from `CLUSTERD_METRICS_URL`. Defaults
+/// to clusterd's internal HTTP server on localhost (`127.0.0.1:6878`, the clap
+/// default of `--internal-http-listen-addr`), which the local `run-local.py` runner
+/// uses unchanged. An mzcompose run, where clusterd is a separate container, must
+/// set this to that container's address (e.g. `http://clusterd:6878/metrics`).
+pub fn metrics_url() -> String {
+    std::env::var("CLUSTERD_METRICS_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:6878/metrics".to_string())
+}
+
 /// Whether an end-to-end test should run: true only when a target address was
 /// explicitly provided. Integration tests skip when unset to keep `cargo test`
 /// green without a running clusterd.

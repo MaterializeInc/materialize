@@ -6448,6 +6448,7 @@ dependencies = [
  "mz-service",
  "mz-storage-types",
  "mz-transform",
+ "reqwest 0.12.28",
  "serde",
  "tempfile",
  "timely",
