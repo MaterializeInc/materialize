@@ -2126,14 +2126,12 @@ impl RowPacker<'_> {
                     // Map keys must be unique and strictly ascending; iterating a
                     // map that violates this trips a debug_assert. A crafted
                     // proto can, so reject it as a decode error here instead.
-                    if let Some(prev) = prev_key {
-                        if e.key.as_str() <= prev {
-                            return Err(format!(
-                                "dict keys must be unique and in ascending order, \
-                                 but {:?} came after {:?}",
-                                e.key, prev,
-                            ));
-                        }
+                    if let Some(prev) = prev_key && e.key.as_str() <= prev {
+                        return Err(format!(
+                            "dict keys must be unique and in ascending order, \
+                             but {:?} came after {:?}",
+                            e.key, prev,
+                        ));
                     }
                     prev_key = Some(e.key.as_str());
                     row.push(Datum::from(e.key.as_str()));
