@@ -464,11 +464,12 @@ def workflow_test_ss_193(c: Composition):
     Regression test for SS-193 where COPYing to a table from STDIN would
     store values without rounding them to the destination column's scale.
 
-    The same rounding must also apply to the COPY FROM parquet path, so we
-    additionally round-trip scale-3 values through a parquet file on S3 and
-    assert they are rounded to the destination column's scale on read.
+    The same rounding must also apply to the COPY FROM S3 paths, so we
+    additionally round-trip scale-3 values through both a CSV and a parquet
+    file on S3 and assert they are rounded to the destination column's scale
+    on read.
     """
-    c.up("materialized")
+    c.up("materialized", "minio")
     conn = c.sql_connection()
     with conn.cursor() as cur:
         cur.execute("CREATE TABLE numbers_with_precision (a DECIMAL(10, 2), b NUMERIC(10, 2))")
@@ -482,7 +483,45 @@ def workflow_test_ss_193(c: Composition):
         assert rows == [
             (Decimal('10.45'), Decimal('10.45')),
             (Decimal('10.45'), Decimal('10.45'))
-        ], f"COPY FROM did not round values to the column scale: {rows}"
+        ], f"COPY FROM STDIN did not round values to the column scale: {rows}"
+
+        # Round-trip scale-3 values through CSV and parquet files on S3 and
+        # assert COPY FROM rounds them to the destination column's scale on read.
+        cur.execute("CREATE SECRET minio_secret AS 'minioadmin'")
+        cur.execute(
+            """
+            CREATE CONNECTION aws_conn TO AWS (
+                ACCESS KEY ID = 'minioadmin',
+                SECRET ACCESS KEY = SECRET minio_secret,
+                ENDPOINT = 'http://minio:9000/',
+                REGION = 'us-east-1'
+            )
+            """
+        )
+
+        # Source carries scale-3 values that don't round evenly to scale 2.
+        cur.execute("CREATE TABLE numbers_scale3 (a DECIMAL(10, 3), b NUMERIC(10, 3))")
+        cur.execute("INSERT INTO numbers_scale3 VALUES (10.447, 10.447)")
+
+        for format in ["csv", "parquet"]:
+            cur.execute(
+                f"COPY (SELECT a, b FROM numbers_scale3) "
+                f"TO 's3://copytos3/test/ss_193/{format}' "
+                f"WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
+            )
+            cur.execute(
+                f"CREATE TABLE numbers_from_{format} (a DECIMAL(10, 2), b NUMERIC(10, 2))"
+            )
+            cur.execute(
+                f"COPY INTO numbers_from_{format} "
+                f"FROM 's3://copytos3/test/ss_193/{format}' "
+                f"(FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
+            )
+            cur.execute(f"SELECT a, b FROM numbers_from_{format}")
+            rows = cur.fetchall()
+            assert rows == [
+                (Decimal('10.45'), Decimal('10.45'))
+            ], f"COPY FROM {format} did not round values to the column scale: {rows}"
 
 
 def workflow_copy_from_ssrf_redirect(c: Composition) -> None:
