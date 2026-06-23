@@ -19,6 +19,7 @@ use derivative::Derivative;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
+    DEFAULT_PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT,
 };
 use mz_dyncfg::ParameterScope;
 use mz_ore::cast::{self, CastFrom};
@@ -683,6 +684,15 @@ pub static PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER: VarDefinition = VarD
     "pg_timestamp_oracle_connection_pool_ttl_stagger",
     value!(Duration; DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER),
     "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
+    false,
+);
+
+/// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_statement_timeout`.
+pub static PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "pg_timestamp_oracle_statement_timeout",
+    value!(Duration; DEFAULT_PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT),
+    "The server-side statement timeout to set on Postgres/CRDB connections used by the \
+    Postgres/CRDB timestamp oracle. A value of zero leaves the statement timeout unset.",
     false,
 );
 

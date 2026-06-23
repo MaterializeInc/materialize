@@ -180,6 +180,7 @@ pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters
         pg_connection_pool_keepalives_idle: Some(config.crdb_keepalives_idle()),
         pg_connection_pool_keepalives_interval: Some(config.crdb_keepalives_interval()),
         pg_connection_pool_keepalives_retries: Some(config.crdb_keepalives_retries()),
+        pg_statement_timeout: Some(config.pg_timestamp_oracle_statement_timeout()),
     }
 }
 
