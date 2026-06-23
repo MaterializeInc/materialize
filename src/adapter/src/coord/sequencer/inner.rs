@@ -2687,6 +2687,12 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
+        // Explicitly checking here produces the standard "transaction in
+        // read-only mode" error for UPDATE/DELETE and non-constant INSERT.
+        if !ctx.session_mut().transaction().allows_writes() {
+            ctx.retire(Err(AdapterError::ReadOnlyTransaction));
+            return;
+        }
         if ctx
             .session()
             .vars()

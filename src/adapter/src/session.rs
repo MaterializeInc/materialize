@@ -1270,8 +1270,12 @@ impl TransactionStatus {
             TransactionStatus::Started(Transaction { ops, access, .. })
             | TransactionStatus::InTransaction(Transaction { ops, access, .. })
             | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
+                // READ ONLY vetoes writes regardless of accumulated ops.
+                if access == &Some(TransactionAccessMode::ReadOnly) {
+                    return false;
+                }
                 match ops {
-                    TransactionOps::None => access != &Some(TransactionAccessMode::ReadOnly),
+                    TransactionOps::None => true,
                     TransactionOps::Peeks { determination, .. } => {
                         // If-and-only-if peeks thus far do not have a timestamp
                         // (i.e. they are constant), we can switch to a write
@@ -1303,6 +1307,17 @@ impl TransactionStatus {
     /// different timestamps, reads on different timelines, reads on different clusters, etc. It's
     /// up to the caller to make sure these are aligned.
     pub fn add_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
+        // READ ONLY vetoes writes regardless of accumulated ops.
+        if matches!(add_ops, TransactionOps::Writes(_)) {
+            if let TransactionStatus::Started(Transaction { access, .. })
+            | TransactionStatus::InTransaction(Transaction { access, .. })
+            | TransactionStatus::InTransactionImplicit(Transaction { access, .. }) = self
+            {
+                if matches!(access, Some(TransactionAccessMode::ReadOnly)) {
+                    return Err(AdapterError::ReadOnlyTransaction);
+                }
+            }
+        }
         match self {
             TransactionStatus::Started(Transaction { ops, access, .. })
             | TransactionStatus::InTransaction(Transaction { ops, access, .. })
@@ -1846,5 +1861,130 @@ impl Drop for GroupCommitWriteLocks {
                 "dropping group commit write locks",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_controller_types::ClusterId;
+    use mz_repr::{CatalogItemId, Timestamp};
+    use mz_sql::ast::TransactionAccessMode;
+    use mz_sql::plan::PlanContext;
+    use mz_storage_client::client::TableData;
+    use mz_storage_types::sources::Timeline;
+    use timely::progress::{Antichain, Timestamp as _};
+
+    use crate::AdapterError;
+    use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+    use crate::session::{
+        RequireLinearization, Transaction, TransactionOps, TransactionStatus, WriteOp,
+    };
+
+    fn empty_determination(timestamp_context: TimestampContext) -> TimestampDetermination {
+        TimestampDetermination {
+            timestamp_context,
+            since: Antichain::new(),
+            upper: Antichain::new(),
+            largest_not_in_advance_of_upper: Timestamp::minimum(),
+            oracle_read_ts: None,
+            session_oracle_read_ts: None,
+            real_time_recency_ts: None,
+            constraints: Default::default(),
+        }
+    }
+
+    fn no_ts_peeks() -> TransactionOps {
+        TransactionOps::Peeks {
+            determination: empty_determination(TimestampContext::NoTimestamp),
+            cluster_id: ClusterId::User(1),
+            requires_linearization: RequireLinearization::NotRequired,
+        }
+    }
+
+    fn ts_peeks() -> TransactionOps {
+        TransactionOps::Peeks {
+            determination: empty_determination(TimestampContext::TimelineTimestamp {
+                timeline: Timeline::EpochMilliseconds,
+                chosen_ts: Timestamp::from(42u64),
+                oracle_ts: None,
+            }),
+            cluster_id: ClusterId::User(1),
+            requires_linearization: RequireLinearization::NotRequired,
+        }
+    }
+
+    fn writes() -> TransactionOps {
+        TransactionOps::Writes(vec![WriteOp {
+            id: CatalogItemId::User(1),
+            rows: TableData::Rows(vec![]),
+        }])
+    }
+
+    fn make_txn(ops: TransactionOps, access: Option<TransactionAccessMode>) -> TransactionStatus {
+        TransactionStatus::InTransaction(Transaction {
+            pcx: PlanContext::zero(),
+            ops,
+            id: 0,
+            write_lock_guards: None,
+            access,
+        })
+    }
+
+    // SQL-374: READ ONLY must be an absolute veto on writes regardless of
+    // accumulated ops.
+    #[mz_ore::test]
+    fn allows_writes_read_only_blocks_all_ops() {
+        let ro = || Some(TransactionAccessMode::ReadOnly);
+        assert!(!make_txn(TransactionOps::None, ro()).allows_writes());
+        assert!(!make_txn(no_ts_peeks(), ro()).allows_writes());
+        assert!(!make_txn(ts_peeks(), ro()).allows_writes());
+    }
+
+    // Regression guard: a constant peek must still allow a subsequent write
+    // outside of READ ONLY.
+    #[mz_ore::test]
+    fn allows_writes_after_constant_peek_when_not_read_only() {
+        assert!(make_txn(no_ts_peeks(), None).allows_writes());
+        assert!(make_txn(no_ts_peeks(), Some(TransactionAccessMode::ReadWrite)).allows_writes());
+    }
+
+    // SQL-374: this used to succeed because the Peeks→Writes upgrade arm
+    // ignored access mode.
+    #[mz_ore::test]
+    fn add_ops_read_only_rejects_writes_after_constant_peek() {
+        let mut txn = make_txn(no_ts_peeks(), Some(TransactionAccessMode::ReadOnly));
+        assert!(matches!(
+            txn.add_ops(writes()),
+            Err(AdapterError::ReadOnlyTransaction)
+        ));
+    }
+
+    #[mz_ore::test]
+    fn add_ops_read_only_rejects_writes_with_no_ops() {
+        let mut txn = make_txn(TransactionOps::None, Some(TransactionAccessMode::ReadOnly));
+        assert!(matches!(
+            txn.add_ops(writes()),
+            Err(AdapterError::ReadOnlyTransaction)
+        ));
+    }
+
+    #[mz_ore::test]
+    fn add_ops_read_only_rejects_writes_after_timestamped_peek() {
+        let mut txn = make_txn(ts_peeks(), Some(TransactionAccessMode::ReadOnly));
+        assert!(matches!(
+            txn.add_ops(writes()),
+            Err(AdapterError::ReadOnlyTransaction)
+        ));
+    }
+
+    // Regression guard: the Peeks→Writes upgrade still works for
+    // non-READ-ONLY transactions.
+    #[mz_ore::test]
+    fn add_ops_writes_allowed_after_constant_peek_when_not_read_only() {
+        let mut txn = make_txn(no_ts_peeks(), None);
+        assert!(txn.add_ops(writes()).is_ok());
+
+        let mut txn = make_txn(no_ts_peeks(), Some(TransactionAccessMode::ReadWrite));
+        assert!(txn.add_ops(writes()).is_ok());
     }
 }

@@ -482,6 +482,44 @@ INSERT INTO t (a) VALUES (1)
 statement ok
 ROLLBACK
 
+# Regression for SQL-374: a constant SELECT must not silently flip
+# a READ ONLY transaction into a write transaction.
+
+statement ok
+BEGIN READ ONLY
+
+query I
+SELECT 1
+----
+1
+
+statement error transaction in read-only mode
+INSERT INTO t (a) VALUES (1)
+
+statement ok
+ROLLBACK
+
+# Multiple constant peeks should not change the outcome.
+
+statement ok
+BEGIN READ ONLY
+
+query I
+SELECT 1 + 1
+----
+2
+
+query I
+SELECT 1
+----
+1
+
+statement error transaction in read-only mode
+INSERT INTO t (a) VALUES (2)
+
+statement ok
+ROLLBACK
+
 ## BEGIN does not lose READ ONLY bit
 
 statement ok
