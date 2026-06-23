@@ -1179,7 +1179,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::MaterializedView(&MZ_INTERNAL_CLUSTER_REPLICAS),
         Builtin::MaterializedView(&MZ_PENDING_CLUSTER_REPLICAS),
-        Builtin::Table(&MZ_AUDIT_EVENTS),
+        Builtin::MaterializedView(&MZ_AUDIT_EVENTS),
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::Table(&MZ_EGRESS_IPS),
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),

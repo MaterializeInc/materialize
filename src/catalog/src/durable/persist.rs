@@ -61,9 +61,9 @@ use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
-    AuditLogIterator, BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError,
-    DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
-    ReadOnlyDurableCatalogState, Transaction, initialize, persist_desc,
+    BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError, DurableCatalogError,
+    DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
+    Transaction, initialize, persist_desc,
 };
 use crate::memory;
 
@@ -1144,7 +1144,7 @@ impl UnopenedPersistCatalogState {
         mode: Mode,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         // It would be nice to use `initial_ts` here, but it comes from the system clock, not the
         // timestamp oracle.
         let mut commit_ts = self.upper;
@@ -1259,14 +1259,17 @@ impl UnopenedPersistCatalogState {
         }
         soft_assert_ne_or_log!(self.upper, Timestamp::minimum());
 
-        // Remove all audit log entries.
+        // Audit log entries are served from `mz_internal.mz_catalog_raw` via
+        // the `mz_audit_events` materialized view, so they do not need to live
+        // in the in-memory catalog snapshot. Drop them here and only keep the
+        // count for metrics.
         let (audit_logs, snapshot): (Vec<_>, Vec<_>) = self
             .snapshot
             .into_iter()
             .partition(|(update, _, _)| update.is_audit_log());
         self.snapshot = snapshot;
         let audit_log_count = audit_logs.iter().map(|(_, _, diff)| diff).sum::<Diff>();
-        let audit_log_handle = AuditLogIterator::new(audit_logs);
+        drop(audit_logs);
 
         // Perform data migrations.
         if is_initialized && !read_only {
@@ -1387,7 +1390,7 @@ impl UnopenedPersistCatalogState {
             });
         }
 
-        Ok((Box::new(catalog), audit_log_handle))
+        Ok(Box::new(catalog))
     }
 
     /// Reports if the catalog state has been initialized.
@@ -1451,7 +1454,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Savepoint, initial_ts, bootstrap_args)
             .boxed()
             .await
@@ -1465,7 +1468,6 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         self.open_inner(Mode::Readonly, EpochMillis::MIN.into(), bootstrap_args)
             .boxed()
             .await
-            .map(|(catalog, _)| catalog)
     }
 
     #[mz_ore::instrument]
@@ -1473,7 +1475,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Writable, initial_ts, bootstrap_args)
             .boxed()
             .await

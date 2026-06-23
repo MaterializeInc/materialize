@@ -1,0 +1,319 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural lockdown tests for mz_catalog.mz_audit_events.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 6 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_audit_events' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  uint8  false
+event_type  text  false
+object_type  text  false
+details  jsonb  false
+user  text  true
+occurred_at  timestamp␠with␠time␠zone  false
+
+# --- OID stability ------------------------------------------------------------
+
+# mz_audit_events must continue to be addressable by its persistent OID.
+query I
+SELECT oid FROM mz_objects
+WHERE name = 'mz_audit_events'
+  AND schema_id IN (SELECT id FROM mz_schemas WHERE name = 'mz_catalog')
+----
+16733
+
+# --- Catalog item type --------------------------------------------------------
+
+# Locks down the BuiltinTable → BuiltinMaterializedView conversion: information_schema
+# must report mz_audit_events as a MATERIALIZED VIEW.
+query T
+SELECT table_type FROM information_schema.tables
+WHERE table_schema = 'mz_catalog' AND table_name = 'mz_audit_events'
+----
+MATERIALIZED VIEW
+
+# --- NOT NULL invariants ------------------------------------------------------
+
+# Bootstrap accumulates a handful of events. All required columns must be
+# populated for every row.
+query I
+SELECT count(*)
+FROM mz_audit_events
+WHERE id IS NULL
+   OR event_type IS NULL
+   OR object_type IS NULL
+   OR details IS NULL
+   OR occurred_at IS NULL
+----
+0
+
+# --- id monotonicity ----------------------------------------------------------
+
+# Audit event IDs are assigned monotonically. The MV must preserve that order.
+query I
+SELECT count(*)
+FROM (
+    SELECT id, lag(id) OVER (ORDER BY id) AS prev_id
+    FROM mz_audit_events
+) t
+WHERE prev_id IS NOT NULL AND id <= prev_id
+----
+0
+
+# --- event_type / object_type coverage ---------------------------------------
+
+# Use a deterministic timestamp so occurred_at assertions below are stable.
+# 1000 ms = 1970-01-01 00:00:01 UTC; cross-referenced by the occurred_at test
+# further down.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_mock_audit_event_timestamp = 1000
+----
+COMPLETE 0
+
+# create / table
+statement ok
+CREATE TABLE t_le (a int, b text)
+
+# alter / table
+statement ok
+ALTER TABLE t_le RENAME TO t_le_renamed
+
+# comment / table
+statement ok
+COMMENT ON TABLE t_le_renamed IS 'a comment'
+
+# create / view
+statement ok
+CREATE VIEW v_le AS SELECT 1 AS x
+
+# create / materialized-view
+statement ok
+CREATE MATERIALIZED VIEW mv_le AS SELECT 1 AS y
+
+# create / index
+statement ok
+CREATE DEFAULT INDEX ON t_le_renamed
+
+# create / source
+statement ok
+CREATE SOURCE src_le FROM LOAD GENERATOR COUNTER
+
+# create / type
+statement ok
+CREATE TYPE int4_list_le AS LIST (ELEMENT TYPE = int4)
+
+# create / secret
+statement ok
+CREATE SECRET sec_le AS 'foo'
+
+# create / role
+statement ok
+CREATE ROLE r_le
+
+# create / database
+statement ok
+CREATE DATABASE db_le
+
+# create / schema
+statement ok
+CREATE SCHEMA db_le.sch_le
+
+# create / cluster + cluster-replica
+statement ok
+CREATE CLUSTER cl_le REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+# create / connection
+statement ok
+CREATE CONNECTION conn_le TO SSH TUNNEL (HOST 'host', PORT 22, USER 'materialize')
+
+# create / network-policy
+statement ok
+CREATE NETWORK POLICY np_le (RULES ())
+
+# Note: the object_type value `continual-task` is not exercised here because
+# CREATE CONTINUAL TASK requires an unstable feature flag, and the standalone
+# `system` object_type (used only for cluster-type events) is emitted only
+# during catalog bootstrap.
+#
+# `GRANT ... ON SYSTEM` and `REVOKE ... ON SYSTEM` below DO emit
+# (event_type, object_type) = (grant|revoke, system) rows — the `system`
+# object_type covers both cluster-type and system-grant cases.
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO r_le
+----
+COMPLETE 0
+
+# revoke
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM r_le
+----
+COMPLETE 0
+
+# The id field in IdFullNameV1 events must match the corresponding catalog id.
+# This runs before the drop below while the table still exists.
+query T
+SELECT details->>'id' = (SELECT id FROM mz_tables WHERE name = 't_le_renamed')
+FROM mz_audit_events
+WHERE event_type = 'create' AND object_type = 'table'
+  AND details->>'item' = 't_le'
+----
+true
+
+# drop / table (and friends)
+statement ok
+DROP TABLE t_le_renamed CASCADE
+
+# Lock down: every (event_type, object_type) pair reachable from the DDL above.
+# Sorted output isolates the kebab-case mapping (audit_log::ObjectType::Display
+# and audit_log::EventType::Display).
+query TT rowsort
+SELECT DISTINCT event_type, object_type
+FROM mz_audit_events
+WHERE id >= (
+    SELECT min(id) FROM mz_audit_events WHERE details->>'item' = 't_le'
+)
+----
+alter  table
+comment  table
+create  cluster
+create  cluster-replica
+create  connection
+create  database
+create  index
+create  materialized-view
+create  network-policy
+create  role
+create  schema
+create  secret
+create  source
+create  table
+create  type
+create  view
+drop  index
+drop  table
+grant  system
+revoke  system
+
+# --- details shape for representative variants --------------------------------
+
+# IdFullNameV1 (e.g. CREATE TABLE): id and FullNameV1 fields are flattened
+# at the top level by `EventDetails::as_json`. The MV must preserve the
+# flattened shape.
+query TTT
+SELECT
+    details->>'database',
+    details->>'schema',
+    details->>'item'
+FROM mz_audit_events
+WHERE event_type = 'create' AND object_type = 'table'
+  AND details->>'item' = 't_le'
+----
+materialize  public  t_le
+
+# RenameItemV1 (e.g. ALTER TABLE ... RENAME): old_name and new_name are
+# nested FullNameV1 structs.
+query TT
+SELECT
+    details->'old_name'->>'item',
+    details->'new_name'->>'item'
+FROM mz_audit_events
+WHERE event_type = 'alter' AND object_type = 'table'
+  AND details->'old_name'->>'item' = 't_le'
+----
+t_le  t_le_renamed
+
+# UpdatePrivilegeV1 (e.g. GRANT ... ON SYSTEM): details carries grantee/grantor/privileges.
+query TTT
+SELECT
+    details->>'grantee_id' IS NOT NULL,
+    details->>'grantor_id' IS NOT NULL,
+    details->>'privileges' IS NOT NULL
+FROM mz_audit_events
+WHERE event_type = 'grant' AND object_type = 'system'
+  AND details->>'grantee_id' = (SELECT id FROM mz_roles WHERE name = 'r_le')
+----
+true  true  true
+
+# CreateClusterReplicaV* (e.g. CREATE CLUSTER ... REPLICAS): replica_id/replica_name
+# survive the catalog-raw round-trip.
+query TT
+SELECT
+    details->>'cluster_name',
+    details->>'replica_name'
+FROM mz_audit_events
+WHERE event_type = 'create' AND object_type = 'cluster-replica'
+  AND details->>'cluster_name' = 'cl_le'
+----
+cl_le  r1
+
+# --- user column -------------------------------------------------------------
+
+# System-emitted events (e.g. those issued during bootstrap) populate user IS NULL.
+query B
+SELECT count(*) > 0
+FROM mz_audit_events
+WHERE "user" IS NULL
+----
+true
+
+# User-emitted DDL records the session user.
+query T
+SELECT DISTINCT "user"
+FROM mz_audit_events
+WHERE event_type = 'create' AND object_type = 'cluster'
+  AND details->>'name' = 'cl_le'
+----
+materialize
+
+# --- occurred_at -------------------------------------------------------------
+
+# The mock timestamp dyncfg forces occurred_at = 1970-01-01 00:00:01.000+00 (1000 ms).
+query T
+SELECT DISTINCT occurred_at::text
+FROM mz_audit_events
+WHERE event_type = 'create' AND object_type = 'cluster'
+  AND details->>'name' = 'cl_le'
+----
+1970-01-01 00:00:01+00
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET unsafe_mock_audit_event_timestamp
+----
+COMPLETE 0
+
+# --- PUBLIC SELECT permission preserved ---------------------------------------
+
+# A non-superuser role can SELECT from mz_audit_events. (PUBLIC_SELECT access
+# must survive the conversion to MV.)
+statement ok
+CREATE ROLE r_audit_reader LOGIN
+
+simple conn=mz_system,user=mz_system
+GRANT r_audit_reader TO materialize
+----
+COMPLETE 0
+
+simple conn=reader,user=r_audit_reader
+SELECT count(*) >= 0 FROM mz_audit_events
+----
+t
+COMPLETE 1

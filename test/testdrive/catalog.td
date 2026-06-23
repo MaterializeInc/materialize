@@ -511,7 +511,6 @@ mz_cluster_replica_frontiers                 source  <null>   ""
 name                           comment
 --------------------------------------
 mz_array_types                 ""
-mz_audit_events                ""
 mz_aws_privatelink_connections ""
 mz_base_types                  ""
 mz_cluster_replica_sizes       ""
@@ -547,6 +546,7 @@ mz_timezone_names          ""
 > SHOW MATERIALIZED VIEWS FROM mz_catalog
 name                  cluster             comment
 --------------------------------------------------
+mz_audit_events       mz_catalog_server   ""
 mz_clusters           mz_catalog_server   ""
 mz_cluster_replicas   mz_catalog_server   ""
 mz_connections        mz_catalog_server   ""
@@ -828,7 +828,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-45
+44
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

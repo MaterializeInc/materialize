@@ -1204,3 +1204,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17097  mz_console_cluster_utilization_overview_3h_ind
 17098  mz_console_cluster_utilization_overview_24h
 17099  mz_console_cluster_utilization_overview_24h_ind
+17100  parse_catalog_audit_log_details
