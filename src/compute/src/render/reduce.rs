@@ -1786,27 +1786,11 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
             // value from its NULL-ness, which is not quite as easily
             // accumulated.
             match datum {
-                Datum::Int16(i) => Accum::SimpleNumber {
+                Datum::Int(i) => Accum::SimpleNumber {
                     accum: i.into(),
                     non_nulls: Diff::ONE,
                 },
-                Datum::Int32(i) => Accum::SimpleNumber {
-                    accum: i.into(),
-                    non_nulls: Diff::ONE,
-                },
-                Datum::Int64(i) => Accum::SimpleNumber {
-                    accum: i.into(),
-                    non_nulls: Diff::ONE,
-                },
-                Datum::UInt16(u) => Accum::SimpleNumber {
-                    accum: u.into(),
-                    non_nulls: Diff::ONE,
-                },
-                Datum::UInt32(u) => Accum::SimpleNumber {
-                    accum: u.into(),
-                    non_nulls: Diff::ONE,
-                },
-                Datum::UInt64(u) => Accum::SimpleNumber {
+                Datum::UInt(u) => Accum::SimpleNumber {
                     accum: u.into(),
                     non_nulls: Diff::ONE,
                 },
@@ -1833,7 +1817,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
     } else {
         match (&aggr_func, &accum) {
             (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => {
-                Datum::Int64(non_nulls.into_inner())
+                Datum::Int(non_nulls.into_inner())
             }
             (AggregateFunc::All, Accum::Bool { falses, trues }) => {
                 // If any false, else if all true, else must be no false and some nulls.
@@ -1864,7 +1848,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                 // TODO(benesch): are we guaranteed to have less than 2^32 summands?
                 // If so, rewrite to avoid `as`.
                 #[allow(clippy::as_conversions)]
-                Datum::Int64(accum.into_inner() as i64)
+                Datum::Int(accum.into_inner() as i64)
             }
             (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => Datum::from(*accum),
             (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
@@ -1876,7 +1860,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     // signed types.
                     // TODO(vmarcos): remove potentially dangerous usage of `as`.
                     #[allow(clippy::as_conversions)]
-                    Datum::UInt64(accum.into_inner() as u64)
+                    Datum::UInt(accum.into_inner() as u64)
                 } else {
                     // Note that we return a value here, but an error in the other
                     // operator of the reduce_pair. Therefore, we expect that this

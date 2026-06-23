@@ -208,7 +208,7 @@ impl ActiveSubscribe {
                 SubscribeOutput::EnvelopeUpsert { .. }
                 | SubscribeOutput::EnvelopeDebezium { .. } => {}
                 SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
-                    packer.push(Datum::Int64(diff.into_inner()));
+                    packer.push(Datum::Int(diff.into_inner()));
                 }
             }
 
@@ -226,10 +226,10 @@ impl ActiveSubscribe {
                     |(left_row, left_time, left_diff), (right_row, right_time, right_diff)| {
                         left_time.cmp(right_time).then_with(|| {
                             let mut left_datums = left_datum_vec.borrow();
-                            left_datums.extend(&[Datum::Int64(left_diff.into_inner())]);
+                            left_datums.extend(&[Datum::Int(left_diff.into_inner())]);
                             left_datums.extend(left_row.iter());
                             let mut right_datums = right_datum_vec.borrow();
-                            right_datums.extend(&[Datum::Int64(right_diff.into_inner())]);
+                            right_datums.extend(&[Datum::Int(right_diff.into_inner())]);
                             right_datums.extend(right_row.iter());
                             compare_columns(order_by, &left_datums, &right_datums, || {
                                 left_row.cmp(right_row).then(left_diff.cmp(right_diff))

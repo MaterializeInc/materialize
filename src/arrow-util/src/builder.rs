@@ -908,13 +908,22 @@ impl ArrowColumn {
             (s, Datum::Null) => s.append_null(),
             (ColBuilder::BooleanBuilder(builder), Datum::False) => builder.append_value(false),
             (ColBuilder::BooleanBuilder(builder), Datum::True) => builder.append_value(true),
-            (ColBuilder::Int16Builder(builder), Datum::Int16(i)) => builder.append_value(i),
-            (ColBuilder::Int32Builder(builder), Datum::Int32(i)) => builder.append_value(i),
-            (ColBuilder::Int64Builder(builder), Datum::Int64(i)) => builder.append_value(i),
-            (ColBuilder::UInt8Builder(builder), Datum::UInt8(i)) => builder.append_value(i),
-            (ColBuilder::UInt16Builder(builder), Datum::UInt16(i)) => builder.append_value(i),
-            (ColBuilder::UInt32Builder(builder), Datum::UInt32(i)) => builder.append_value(i),
-            (ColBuilder::UInt64Builder(builder), Datum::UInt64(i)) => builder.append_value(i),
+            // Egress guardrail: the builder variant was chosen upstream from the
+            // source column's `SqlScalarType`, so the unified `Datum::Int`/`UInt`
+            // is narrowed to it here.
+            (ColBuilder::Int16Builder(builder), Datum::Int(i)) => {
+                builder.append_value(i16::try_from(i).expect("int16 out of range"))
+            }
+            (ColBuilder::UInt8Builder(builder), Datum::UInt(i)) => {
+                builder.append_value(u8::try_from(i).expect("uint8 out of range"))
+            }
+            (ColBuilder::UInt16Builder(builder), Datum::UInt(i)) => {
+                builder.append_value(u16::try_from(i).expect("uint16 out of range"))
+            }
+            (ColBuilder::UInt32Builder(builder), Datum::UInt(i)) => {
+                builder.append_value(u32::try_from(i).expect("uint32 out of range"))
+            }
+            (ColBuilder::UInt64Builder(builder), Datum::UInt(i)) => builder.append_value(i),
             (ColBuilder::Float32Builder(builder), Datum::Float32(f)) => builder.append_value(*f),
             (ColBuilder::Float64Builder(builder), Datum::Float64(f)) => builder.append_value(*f),
             (ColBuilder::Date32Builder(builder), Datum::Date(d)) => {
@@ -947,20 +956,23 @@ impl ArrowColumn {
             (ColBuilder::UInt64Builder(builder), Datum::MzTimestamp(ts)) => {
                 builder.append_value(ts.into())
             }
-            // Lossless unsigned-to-signed promotions for destinations that don't
-            // support unsigned types (e.g., Iceberg).
-            (ColBuilder::Int32Builder(builder), Datum::UInt16(i)) => {
-                builder.append_value(i32::from(i))
+            // Int32/Int64 destinations accept signed values directly and also
+            // serve as lossless promotion targets for unsigned source columns
+            // (e.g. Iceberg, which has no unsigned or narrow integer types). The
+            // routing decision (which source width lands in which builder) was
+            // made upstream when the `ColBuilder` was constructed, so the lost
+            // source-width distinction is immaterial here.
+            (ColBuilder::Int32Builder(builder), Datum::Int(i)) => {
+                builder.append_value(i32::try_from(i).expect("int32 out of range"))
             }
-            // Lossless signed-to-signed widening for destinations that don't
-            // support narrow integers (e.g., Iceberg has no smallint).
-            (ColBuilder::Int32Builder(builder), Datum::Int16(i)) => {
-                builder.append_value(i32::from(i))
+            (ColBuilder::Int32Builder(builder), Datum::UInt(i)) => {
+                builder.append_value(i32::try_from(i).expect("int32 out of range"))
             }
-            (ColBuilder::Int64Builder(builder), Datum::UInt32(i)) => {
-                builder.append_value(i64::from(i))
+            (ColBuilder::Int64Builder(builder), Datum::Int(i)) => builder.append_value(i),
+            (ColBuilder::Int64Builder(builder), Datum::UInt(i)) => {
+                builder.append_value(i64::try_from(i).expect("int64 out of range"))
             }
-            (ColBuilder::Decimal128Builder(builder), Datum::UInt64(i)) => {
+            (ColBuilder::Decimal128Builder(builder), Datum::UInt(i)) => {
                 builder.append_value(i128::from(i))
             }
             (ColBuilder::Decimal128Builder(builder), Datum::MzTimestamp(ts)) => {

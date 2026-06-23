@@ -781,7 +781,7 @@ mod tests {
         LocalExpressions {
             local_mir: OptimizedMirRelationExpr(MirRelationExpr::constant(
                 vec![vec![datum]],
-                ReprRelationType::new(vec![ReprScalarType::UInt64.nullable(false)]),
+                ReprRelationType::new(vec![ReprScalarType::UInt.nullable(false)]),
             )),
             optimizer_features: Default::default(),
         }

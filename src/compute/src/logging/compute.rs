@@ -556,24 +556,24 @@ impl DemuxState {
         operator_id: usize,
     ) -> (&RowRef, &RowRef) {
         self.arrangement_heap_allocations_packer.pack_slice(&[
-            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt(u64::cast_from(self.worker_id)),
         ])
     }
 
     /// Pack an arrangement heap capacity update key-value for the given operator.
     fn pack_arrangement_heap_capacity_update(&mut self, operator_id: usize) -> (&RowRef, &RowRef) {
         self.arrangement_heap_capacity_packer.pack_slice(&[
-            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt(u64::cast_from(self.worker_id)),
         ])
     }
 
     /// Pack an arrangement heap size update key-value for the given operator.
     fn pack_arrangement_heap_size_update(&mut self, operator_id: usize) -> (&RowRef, &RowRef) {
         self.arrangement_heap_size_packer.pack_slice(&[
-            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt(u64::cast_from(self.worker_id)),
         ])
     }
 
@@ -584,8 +584,8 @@ impl DemuxState {
         global_id: GlobalId,
     ) -> (&RowRef, &RowRef) {
         self.dataflow_global_packer.pack_slice(&[
-            Datum::UInt64(u64::cast_from(dataflow_index)),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(u64::cast_from(dataflow_index)),
+            Datum::UInt(u64::cast_from(self.worker_id)),
             make_string_datum(global_id, &mut self.scratch_string_a),
         ])
     }
@@ -597,8 +597,8 @@ impl DemuxState {
         // is treated as an error.
         self.error_count_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
-            Datum::Int64(count.into_inner()),
+            Datum::UInt(u64::cast_from(self.worker_id)),
+            Datum::Int(count.into_inner()),
         ])
     }
 
@@ -610,8 +610,8 @@ impl DemuxState {
     ) -> (&RowRef, &RowRef) {
         self.export_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
-            Datum::UInt64(u64::cast_from(dataflow_index)),
+            Datum::UInt(u64::cast_from(self.worker_id)),
+            Datum::UInt(u64::cast_from(dataflow_index)),
         ])
     }
 
@@ -623,7 +623,7 @@ impl DemuxState {
     ) -> (&RowRef, &RowRef) {
         self.hydration_time_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(u64::cast_from(self.worker_id)),
             Datum::from(time_ns),
         ])
     }
@@ -638,7 +638,7 @@ impl DemuxState {
         self.import_frontier_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
             make_string_datum(import_id, &mut self.scratch_string_b),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(u64::cast_from(self.worker_id)),
             Datum::MzTimestamp(time),
         ])
     }
@@ -655,13 +655,13 @@ impl DemuxState {
     ) -> (&RowRef, &RowRef) {
         self.lir_mapping_packer.pack_slice(&[
             make_string_datum(global_id, &mut self.scratch_string_a),
-            Datum::UInt64(lir_id.into()),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(lir_id.into()),
+            Datum::UInt(u64::cast_from(self.worker_id)),
             make_string_datum(operator, &mut self.scratch_string_b),
-            parent_lir_id.map_or(Datum::Null, |lir_id| Datum::UInt64(lir_id.into())),
-            Datum::UInt16(u16::cast_from(nesting)),
-            Datum::UInt64(u64::cast_from(operator_span.0)),
-            Datum::UInt64(u64::cast_from(operator_span.1)),
+            parent_lir_id.map_or(Datum::Null, |lir_id| Datum::UInt(lir_id.into())),
+            Datum::UInt(u64::cast_from(nesting)),
+            Datum::UInt(u64::cast_from(operator_span.0)),
+            Datum::UInt(u64::cast_from(operator_span.1)),
         ])
     }
 
@@ -675,8 +675,8 @@ impl DemuxState {
     ) -> (&RowRef, &RowRef) {
         self.operator_hydration_status_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
-            Datum::UInt64(lir_id.into()),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(lir_id.into()),
+            Datum::UInt(u64::cast_from(self.worker_id)),
             Datum::from(hydrated),
         ])
     }
@@ -688,9 +688,9 @@ impl DemuxState {
         bucket: u128,
     ) -> (&RowRef, &RowRef) {
         self.peek_duration_packer.pack_slice(&[
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(u64::cast_from(self.worker_id)),
             Datum::String(peek_type.name()),
-            Datum::UInt64(bucket.try_into().expect("bucket too big")),
+            Datum::UInt(bucket.try_into().expect("bucket too big")),
         ])
     }
 
@@ -704,7 +704,7 @@ impl DemuxState {
     ) -> (&RowRef, &RowRef) {
         self.peek_packer.pack_slice(&[
             Datum::Uuid(uuid),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(u64::cast_from(self.worker_id)),
             make_string_datum(id, &mut self.scratch_string_a),
             Datum::String(peek_type.name()),
             Datum::MzTimestamp(time),
@@ -715,7 +715,7 @@ impl DemuxState {
     fn pack_frontier_update(&mut self, export_id: GlobalId, time: Timestamp) -> (&RowRef, &RowRef) {
         self.frontier_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt(u64::cast_from(self.worker_id)),
             Datum::MzTimestamp(time),
         ])
     }

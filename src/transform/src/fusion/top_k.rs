@@ -107,8 +107,8 @@ impl TopK {
                             inner_limit_minus_outer_offset
                         };
                         *limit = Some(mz_expr::MirScalarExpr::literal_ok(
-                            mz_repr::Datum::Int64(new_limit),
-                            ReprScalarType::Int64,
+                            mz_repr::Datum::Int(new_limit),
+                            ReprScalarType::Int,
                         ));
                     }
 

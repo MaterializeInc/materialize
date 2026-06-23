@@ -311,13 +311,26 @@ impl DatumColumnEncoder {
             (DatumColumnEncoder::Bool(bool_builder), Datum::False) => {
                 bool_builder.append_value(false)
             }
-            (DatumColumnEncoder::U8(builder), Datum::UInt8(val)) => builder.append_value(val),
-            (DatumColumnEncoder::U16(builder), Datum::UInt16(val)) => builder.append_value(val),
-            (DatumColumnEncoder::U32(builder), Datum::UInt32(val)) => builder.append_value(val),
-            (DatumColumnEncoder::U64(builder), Datum::UInt64(val)) => builder.append_value(val),
-            (DatumColumnEncoder::I16(builder), Datum::Int16(val)) => builder.append_value(val),
-            (DatumColumnEncoder::I32(builder), Datum::Int32(val)) => builder.append_value(val),
-            (DatumColumnEncoder::I64(builder), Datum::Int64(val)) => builder.append_value(val),
+            // Arrow egress guardrail: the builder variant is chosen by the
+            // column's declared `SqlScalarType`, so the unified `Datum::Int`/
+            // `UInt` is narrowed back to that width here. An out-of-range value
+            // means a value wider than the column type leaked through; that is a
+            // bug in a width-respecting cast/arithmetic function.
+            (DatumColumnEncoder::U8(builder), Datum::UInt(val)) => {
+                builder.append_value(u8::try_from(val).expect("UInt out of range for uint8 column"))
+            }
+            (DatumColumnEncoder::U16(builder), Datum::UInt(val)) => builder
+                .append_value(u16::try_from(val).expect("UInt out of range for uint16 column")),
+            (DatumColumnEncoder::U32(builder), Datum::UInt(val)) => builder
+                .append_value(u32::try_from(val).expect("UInt out of range for uint32 column")),
+            (DatumColumnEncoder::U64(builder), Datum::UInt(val)) => builder.append_value(val),
+            (DatumColumnEncoder::I16(builder), Datum::Int(val)) => {
+                builder.append_value(i16::try_from(val).expect("Int out of range for int16 column"))
+            }
+            (DatumColumnEncoder::I32(builder), Datum::Int(val)) => {
+                builder.append_value(i32::try_from(val).expect("Int out of range for int32 column"))
+            }
+            (DatumColumnEncoder::I64(builder), Datum::Int(val)) => builder.append_value(val),
             (DatumColumnEncoder::F32(builder), Datum::Float32(val)) => builder.append_value(*val),
             (DatumColumnEncoder::F64(builder), Datum::Float64(val)) => builder.append_value(*val),
             (
@@ -915,31 +928,31 @@ impl DatumColumnDecoder {
             DatumColumnDecoder::U8(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::UInt8),
+                .map(|v| Datum::UInt(v.into())),
             DatumColumnDecoder::U16(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::UInt16),
+                .map(|v| Datum::UInt(v.into())),
             DatumColumnDecoder::U32(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::UInt32),
+                .map(|v| Datum::UInt(v.into())),
             DatumColumnDecoder::U64(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::UInt64),
+                .map(Datum::UInt),
             DatumColumnDecoder::I16(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::Int16),
+                .map(|v| Datum::Int(v.into())),
             DatumColumnDecoder::I32(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::Int32),
+                .map(|v| Datum::Int(v.into())),
             DatumColumnDecoder::I64(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::Int64),
+                .map(Datum::Int),
             DatumColumnDecoder::F32(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
@@ -1940,13 +1953,11 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
         let datum_type = match x {
             Datum::False => DatumType::Other(ProtoDatumOther::False.into()),
             Datum::True => DatumType::Other(ProtoDatumOther::True.into()),
-            Datum::Int16(x) => DatumType::Int16(x.into()),
-            Datum::Int32(x) => DatumType::Int32(x),
-            Datum::UInt8(x) => DatumType::Uint8(x.into()),
-            Datum::UInt16(x) => DatumType::Uint16(x.into()),
-            Datum::UInt32(x) => DatumType::Uint32(x),
-            Datum::UInt64(x) => DatumType::Uint64(x),
-            Datum::Int64(x) => DatumType::Int64(x),
+            // Schemaless proto codec: width is carried by the accompanying
+            // RelationDesc, not the value, so unified integers serialize through
+            // the widest proto variant and re-widen on decode.
+            Datum::Int(x) => DatumType::Int64(x),
+            Datum::UInt(x) => DatumType::Uint64(x),
             Datum::Float32(x) => DatumType::Float32(x.into_inner()),
             Datum::Float64(x) => DatumType::Float64(x.into_inner()),
             Datum::Date(x) => DatumType::Date(x.into_proto()),
@@ -2052,25 +2063,13 @@ impl RowPacker<'_> {
                 Ok(ProtoDatumOther::NumericNaN) => self.push(Datum::from(Numeric::nan())),
                 Err(_) => return Err(format!("unknown datum type: {}", o)),
             },
-            Some(DatumType::Int16(x)) => {
-                let x = i16::try_from(*x)
-                    .map_err(|_| format!("int16 field stored with out of range value: {}", *x))?;
-                self.push(Datum::Int16(x))
-            }
-            Some(DatumType::Int32(x)) => self.push(Datum::Int32(*x)),
-            Some(DatumType::Int64(x)) => self.push(Datum::Int64(*x)),
-            Some(DatumType::Uint8(x)) => {
-                let x = u8::try_from(*x)
-                    .map_err(|_| format!("uint8 field stored with out of range value: {}", *x))?;
-                self.push(Datum::UInt8(x))
-            }
-            Some(DatumType::Uint16(x)) => {
-                let x = u16::try_from(*x)
-                    .map_err(|_| format!("uint16 field stored with out of range value: {}", *x))?;
-                self.push(Datum::UInt16(x))
-            }
-            Some(DatumType::Uint32(x)) => self.push(Datum::UInt32(*x)),
-            Some(DatumType::Uint64(x)) => self.push(Datum::UInt64(*x)),
+            Some(DatumType::Int16(x)) => self.push(Datum::Int(i64::from(*x))),
+            Some(DatumType::Int32(x)) => self.push(Datum::Int(i64::from(*x))),
+            Some(DatumType::Int64(x)) => self.push(Datum::Int(*x)),
+            Some(DatumType::Uint8(x)) => self.push(Datum::UInt(u64::from(*x))),
+            Some(DatumType::Uint16(x)) => self.push(Datum::UInt(u64::from(*x))),
+            Some(DatumType::Uint32(x)) => self.push(Datum::UInt(u64::from(*x))),
+            Some(DatumType::Uint64(x)) => self.push(Datum::UInt(*x)),
             Some(DatumType::Float32(x)) => self.push(Datum::Float32((*x).into())),
             Some(DatumType::Float64(x)) => self.push(Datum::Float64((*x).into())),
             Some(DatumType::Bytes(x)) => self.push(Datum::Bytes(x)),

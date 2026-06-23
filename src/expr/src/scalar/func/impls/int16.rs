@@ -68,7 +68,9 @@ fn cast_int16_to_float64(a: i16) -> f64 {
     sqlname = "smallint_to_integer",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt32ToInt16),
-    is_monotone = true
+    is_monotone = true,
+    // Same-sign widening is the identity on the unified `Datum::Int`.
+    is_eliminable_cast = true
 )]
 fn cast_int16_to_int32(a: i16) -> i32 {
     i32::from(a)
@@ -78,7 +80,9 @@ fn cast_int16_to_int32(a: i16) -> i32 {
     sqlname = "smallint_to_bigint",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt64ToInt16),
-    is_monotone = true
+    is_monotone = true,
+    // Same-sign widening is the identity on the unified `Datum::Int`.
+    is_eliminable_cast = true
 )]
 fn cast_int16_to_int64(a: i16) -> i64 {
     i64::from(a)

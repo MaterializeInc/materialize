@@ -278,11 +278,11 @@ fn upsert_value_to_row(value: &UpsertValue) -> Row {
     let mut packer = row.packer();
     match value {
         Ok(ok) => {
-            packer.push(Datum::UInt8(0));
+            packer.push(Datum::UInt(0));
             packer.extend(ok.iter());
         }
         Err(err) => {
-            packer.push(Datum::UInt8(1));
+            packer.push(Datum::UInt(1));
             let bytes =
                 bincode::serialize(err.as_ref()).expect("UpsertError is serializable via bincode");
             packer.push(Datum::Bytes(&bytes));
@@ -304,8 +304,8 @@ fn upsert_value_byte_len(value: &UpsertValue) -> usize {
 /// iterator — a `ValRowSpine` cursor's `DatumSeq` or a stashed `Row`'s `iter`.
 fn decode_upsert_value<'a>(mut iter: impl Iterator<Item = Datum<'a>>) -> UpsertValue {
     let tag = match iter.next() {
-        Some(Datum::UInt8(tag)) => tag,
-        other => panic!("upsert value missing UInt8 tag, got {:?}", other),
+        Some(Datum::UInt(tag)) => tag,
+        other => panic!("upsert value missing UInt tag, got {:?}", other),
     };
     match tag {
         0 => {

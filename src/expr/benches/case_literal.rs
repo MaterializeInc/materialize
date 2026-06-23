@@ -32,7 +32,7 @@ fn if_then_else(cond: MirScalarExpr, then: MirScalarExpr, els: MirScalarExpr) ->
 
 /// Build an i64 literal.
 fn lit_i64(v: i64) -> MirScalarExpr {
-    MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64)
+    MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int)
 }
 
 /// Column reference.
@@ -58,7 +58,7 @@ fn build_case_literal(n: usize) -> MirScalarExpr {
         input: Box::new(mz_expr::MirRelationExpr::constant(
             vec![vec![Datum::Int64(0)]],
             ReprRelationType::new(vec![ReprColumnType {
-                scalar_type: ReprScalarType::Int64,
+                scalar_type: ReprScalarType::Int,
                 nullable: false,
             }]),
         )),

@@ -65,7 +65,9 @@ fn cast_uint32_to_uint16(a: u32) -> Result<u16, EvalError> {
     sqlname = "uint4_to_uint8",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastUint64ToUint32),
-    is_monotone = true
+    is_monotone = true,
+    // Same-sign widening is the identity on the unified `Datum::UInt`.
+    is_eliminable_cast = true
 )]
 fn cast_uint32_to_uint64(a: u32) -> u64 {
     u64::from(a)

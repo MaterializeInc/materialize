@@ -154,8 +154,8 @@ pub(super) fn construct(
             >(input, log, move |data, packer, session| {
                 for ((op, ()), time, diff) in data.iter() {
                     let data = packer.pack_slice(&[
-                        Datum::UInt64(u64::cast_from(*op)),
-                        Datum::UInt64(u64::cast_from(worker_id)),
+                        Datum::UInt(u64::cast_from(*op)),
+                        Datum::UInt(u64::cast_from(worker_id)),
                     ]);
                     session.give((data, *time, *diff))
                 }

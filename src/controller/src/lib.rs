@@ -592,7 +592,7 @@ impl Controller {
             .map(|(process_id, m)| {
                 row.packer().extend(&[
                     Datum::String(&replica_id),
-                    Datum::UInt64(u64::cast_from(process_id)),
+                    Datum::UInt(u64::cast_from(process_id)),
                     m.cpu_nano_cores.into(),
                     m.memory_bytes.into(),
                     m.disk_bytes.into(),

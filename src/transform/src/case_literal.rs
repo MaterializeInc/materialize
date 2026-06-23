@@ -368,7 +368,7 @@ mod tests {
 
     /// Helper: build an i64 literal.
     fn lit_i64(v: i64) -> MirScalarExpr {
-        MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64)
+        MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int)
     }
 
     /// Wrap a scalar expression in a `Map` over a constant to allow applying the transform.
@@ -377,7 +377,7 @@ mod tests {
             input: Box::new(MirRelationExpr::constant(
                 vec![vec![Datum::Int64(0)]],
                 ReprRelationType::new(vec![ReprColumnType {
-                    scalar_type: ReprScalarType::Int64,
+                    scalar_type: ReprScalarType::Int,
                     nullable: false,
                 }]),
             )),
@@ -438,7 +438,7 @@ mod tests {
         // If(Eq(#0, NULL::int64), 10, If(Eq(#0, 2), 20, If(Eq(#0, 3), 30, 0)))
         // The NULL arm breaks the chain at the top level because
         // peek_eq_literal skips NULL literals, so arm1 doesn't match.
-        let null_lit = MirScalarExpr::literal(Ok(Datum::Null), ReprScalarType::Int64);
+        let null_lit = MirScalarExpr::literal(Ok(Datum::Null), ReprScalarType::Int);
         let expr = MirScalarExpr::column(0)
             .call_binary(null_lit, Eq)
             .if_then_else(

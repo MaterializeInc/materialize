@@ -140,7 +140,7 @@ impl CatalogState {
             &*MZ_ROLE_AUTH,
             Row::pack_slice(&[
                 Datum::String(&role_auth.role_id.to_string()),
-                Datum::UInt32(role.oid),
+                Datum::from(role.oid),
                 match &role_auth.password_hash {
                     Some(hash) => Datum::String(hash),
                     None => Datum::Null,
@@ -444,12 +444,12 @@ impl CatalogState {
                     Row::pack_slice(&[
                         Datum::String(&id.to_string()),
                         Datum::String(column_name),
-                        Datum::UInt64(u64::cast_from(i + 1)),
+                        Datum::UInt(u64::cast_from(i + 1)),
                         Datum::from(column_type.nullable),
                         Datum::String(type_name),
                         default,
-                        Datum::UInt32(type_oid),
-                        Datum::Int32(pgtype.typmod()),
+                        Datum::from(type_oid),
+                        Datum::from(pgtype.typmod()),
                     ]),
                     diff,
                 ));
@@ -534,7 +534,7 @@ impl CatalogState {
             &*MZ_TABLES,
             Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
+                Datum::from(oid),
                 Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
@@ -889,7 +889,7 @@ impl CatalogState {
             &*MZ_VIEWS,
             Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
+                Datum::from(oid),
                 Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&query_string),
@@ -1039,7 +1039,7 @@ impl CatalogState {
             &*MZ_SINKS,
             Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
+                Datum::from(oid),
                 Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(sink.connection.name()),
@@ -1107,7 +1107,7 @@ impl CatalogState {
                 .to_ast_string_simple();
             let (field_number, expression) = match key {
                 MirScalarExpr::Column(col, _) => {
-                    (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
+                    (Datum::UInt(u64::cast_from(*col + 1)), Datum::Null)
                 }
                 _ => (Datum::Null, Datum::String(&key_sql)),
             };
@@ -1115,7 +1115,7 @@ impl CatalogState {
                 &*MZ_INDEX_COLUMNS,
                 Row::pack_slice(&[
                     Datum::String(&id.to_string()),
-                    Datum::UInt64(seq_in_index),
+                    Datum::UInt(seq_in_index),
                     field_number,
                     expression,
                     Datum::from(nullable),
@@ -1152,7 +1152,7 @@ impl CatalogState {
             &*MZ_TYPES,
             Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
+                Datum::from(oid),
                 Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
@@ -1179,7 +1179,7 @@ impl CatalogState {
             if mods.is_empty() {
                 packer.push(Datum::Null);
             } else {
-                packer.push_list(mods.iter().map(|m| Datum::Int64(*m)));
+                packer.push_list(mods.iter().map(|m| Datum::Int(*m)));
             }
         }
 
@@ -1229,8 +1229,8 @@ impl CatalogState {
                 &*MZ_TYPE_PG_METADATA,
                 Row::pack_slice(&[
                     Datum::String(&id.to_string()),
-                    Datum::UInt32(pg_metadata.typinput_oid),
-                    Datum::UInt32(pg_metadata.typreceive_oid),
+                    Datum::from(pg_metadata.typinput_oid),
+                    Datum::from(pg_metadata.typreceive_oid),
                 ]),
                 diff,
             ));
@@ -1274,7 +1274,7 @@ impl CatalogState {
                 &*MZ_FUNCTIONS,
                 Row::pack_slice(&[
                     Datum::String(&id.to_string()),
-                    Datum::UInt32(func_impl_details.oid),
+                    Datum::from(func_impl_details.oid),
                     Datum::String(&schema_id.to_string()),
                     Datum::String(name),
                     arg_type_ids,
@@ -1300,10 +1300,10 @@ impl CatalogState {
                 updates.push(BuiltinTableUpdate::row(
                     &*MZ_AGGREGATES,
                     Row::pack_slice(&[
-                        Datum::UInt32(func_impl_details.oid),
+                        Datum::from(func_impl_details.oid),
                         // TODO(database-issues#1064): Support ordered-set aggregate functions.
                         Datum::String("n"),
-                        Datum::Int16(0),
+                        Datum::Int(0),
                     ]),
                     diff,
                 ));
@@ -1339,7 +1339,7 @@ impl CatalogState {
         BuiltinTableUpdate::row(
             &*MZ_OPERATORS,
             Row::pack_slice(&[
-                Datum::UInt32(func_impl_details.oid),
+                Datum::from(func_impl_details.oid),
                 Datum::String(operator),
                 arg_type_ids,
                 Datum::from(
@@ -1390,7 +1390,7 @@ impl CatalogState {
         Ok(BuiltinTableUpdate::row(
             &*MZ_AUDIT_EVENTS,
             Row::pack_slice(&[
-                Datum::UInt64(id),
+                Datum::UInt(id),
                 Datum::String(&format!("{}", event_type)),
                 Datum::String(&format!("{}", object_type)),
                 details,
@@ -1411,9 +1411,9 @@ impl CatalogState {
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let id = &MZ_STORAGE_USAGE_BY_SHARD;
         let row = Row::pack_slice(&[
-            Datum::UInt64(event.id),
+            Datum::UInt(event.id),
             Datum::from(event.shard_id.as_deref()),
-            Datum::UInt64(event.size_bytes),
+            Datum::UInt(event.size_bytes),
             Datum::TimestampTz(
                 mz_ore::now::to_datetime(event.collection_timestamp)
                     .try_into()
@@ -1431,7 +1431,7 @@ impl CatalogState {
         let addr = ip.network();
         let row = Row::pack_slice(&[
             Datum::String(&addr.to_string()),
-            Datum::Int32(ip.prefix_len().into()),
+            Datum::Int(ip.prefix_len().into()),
             Datum::String(&format!("{}/{}", addr, ip.prefix_len())),
         ]);
         Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
@@ -1550,7 +1550,7 @@ impl CatalogState {
             &*MZ_SESSIONS,
             Row::pack_slice(&[
                 Datum::Uuid(conn.uuid()),
-                Datum::UInt32(conn.conn_id().unhandled()),
+                Datum::from(conn.conn_id().unhandled()),
                 Datum::String(&conn.authenticated_role_id().to_string()),
                 Datum::from(conn.client_ip().map(|ip| ip.to_string()).as_deref()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
@@ -1611,7 +1611,7 @@ impl CatalogState {
                 // TODO(parkmycar): https://github.com/MaterializeInc/database-issues/issues/6711.
                 let pos =
                     i32::try_from(pos).expect("we constrain this value in the planning layer");
-                Datum::Int32(pos)
+                Datum::from(pos)
             }
             None => Datum::Null,
         };

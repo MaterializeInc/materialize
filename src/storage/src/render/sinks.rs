@@ -130,7 +130,7 @@ fn arrange_sink_input<'scope>(
         .map(|k| k.to_vec());
 
     let keyed = match key_indices {
-        None => collection.map(|row| (Some(Row::pack(Some(Datum::UInt64(row.hashed())))), row)),
+        None => collection.map(|row| (Some(Row::pack(Some(Datum::UInt(row.hashed())))), row)),
         Some(key_indices) => {
             let mut datum_vec = mz_repr::DatumVec::new();
             collection.map(move |row| {

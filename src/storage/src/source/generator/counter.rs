@@ -44,7 +44,7 @@ impl Generator for Counter {
                         // (4, 3, +1)
                         Some(max) if offset >= max => {
                             let retracted_value = i64::try_from(offset - max + 1).unwrap();
-                            let row = Row::pack_slice(&[Datum::Int64(retracted_value)]);
+                            let row = Row::pack_slice(&[Datum::Int(retracted_value)]);
                             Some((
                                 LoadGeneratorOutput::Default,
                                 Event::Message(MzOffset::from(offset), (row, Diff::MINUS_ONE)),
@@ -54,7 +54,7 @@ impl Generator for Counter {
                     };
 
                     let inserted_value = i64::try_from(offset + 1).unwrap();
-                    let row = Row::pack_slice(&[Datum::Int64(inserted_value)]);
+                    let row = Row::pack_slice(&[Datum::Int(inserted_value)]);
                     let insertion = [
                         (
                             LoadGeneratorOutput::Default,

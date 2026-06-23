@@ -61,7 +61,7 @@ mod tests {
         // The decode should succeed with the correct value.
         assert_eq!(
             decoder.decode(&mut good_bytes).await.unwrap().unwrap(),
-            Row::pack([Datum::Int32(0), Datum::Int32(0)])
+            Row::pack([Datum::from(0), Datum::from(0)])
         );
     }
 }
@@ -246,8 +246,8 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
                     self.packer.push(Datum::False)
                 }
             }
-            mz_avro::types::Scalar::Int(val) => self.packer.push(Datum::Int32(val)),
-            mz_avro::types::Scalar::Long(val) => self.packer.push(Datum::Int64(val)),
+            mz_avro::types::Scalar::Int(val) => self.packer.push(Datum::Int(i64::from(val))),
+            mz_avro::types::Scalar::Long(val) => self.packer.push(Datum::Int(val)),
             mz_avro::types::Scalar::Float(val) => {
                 self.packer.push(Datum::Float32(OrderedFloat(val)))
             }

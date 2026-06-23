@@ -111,10 +111,10 @@ pub(super) fn construct(
                     let (update_type, operator_id, source, port, ts) = datum;
                     let update_type = if *update_type { "source" } else { "target" };
                     let data = packer.pack_slice(&[
-                        Datum::UInt64(u64::cast_from(*operator_id)),
-                        Datum::UInt64(u64::cast_from(worker_id)),
-                        Datum::UInt64(u64::cast_from(*source)),
-                        Datum::UInt64(u64::cast_from(*port)),
+                        Datum::UInt(u64::cast_from(*operator_id)),
+                        Datum::UInt(u64::cast_from(worker_id)),
+                        Datum::UInt(u64::cast_from(*source)),
+                        Datum::UInt(u64::cast_from(*port)),
                         Datum::String(update_type),
                         Datum::from(*ts),
                     ]);

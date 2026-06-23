@@ -193,8 +193,8 @@ pub(super) fn construct(
             move |data, packer, session| {
                 for ((id, name), time, diff) in data.iter() {
                     let data = packer.pack_slice(&[
-                        Datum::UInt64(u64::cast_from(*id)),
-                        Datum::UInt64(u64::cast_from(worker_id)),
+                        Datum::UInt(u64::cast_from(*id)),
+                        Datum::UInt(u64::cast_from(worker_id)),
                         Datum::String(name),
                     ]);
                     session.give((data, time, diff));
@@ -217,12 +217,12 @@ pub(super) fn construct(
                             let (source_node, source_port) = datum.source;
                             let (target_node, target_port) = datum.target;
                             let data = packer.pack_slice(&[
-                                Datum::UInt64(u64::cast_from(datum.id)),
-                                Datum::UInt64(u64::cast_from(worker_id)),
-                                Datum::UInt64(u64::cast_from(source_node)),
-                                Datum::UInt64(u64::cast_from(source_port)),
-                                Datum::UInt64(u64::cast_from(target_node)),
-                                Datum::UInt64(u64::cast_from(target_port)),
+                                Datum::UInt(u64::cast_from(datum.id)),
+                                Datum::UInt(u64::cast_from(worker_id)),
+                                Datum::UInt(u64::cast_from(source_node)),
+                                Datum::UInt(u64::cast_from(source_port)),
+                                Datum::UInt(u64::cast_from(target_node)),
+                                Datum::UInt(u64::cast_from(target_port)),
                                 Datum::String(
                                     std::str::from_utf8(datum.typ).expect("valid string"),
                                 ),
@@ -251,10 +251,10 @@ pub(super) fn construct(
             move |data, packer, session| {
                 for ((id, address), time, diff) in data.iter() {
                     let data = packer.pack_by_index(|packer, index| match index {
-                        0 => packer.push(Datum::UInt64(u64::cast_from(*id))),
-                        1 => packer.push(Datum::UInt64(u64::cast_from(worker_id))),
+                        0 => packer.push(Datum::UInt(u64::cast_from(*id))),
+                        1 => packer.push(Datum::UInt(u64::cast_from(worker_id))),
                         2 => {
-                            let list = address.iter().map(|i| Datum::UInt64(u64::cast_from(*i)));
+                            let list = address.iter().map(|i| Datum::UInt(u64::cast_from(*i)));
                             packer.push_list(list)
                         }
                         _ => unreachable!("Addresses relation has three columns"),
@@ -271,12 +271,9 @@ pub(super) fn construct(
                 move |data, packer, session| {
                     for ((datum, ()), time, diff) in data.iter() {
                         let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(worker_id)),
-                            Datum::UInt64(datum.duration_pow),
-                            datum
-                                .requested_pow
-                                .map(Datum::UInt64)
-                                .unwrap_or(Datum::Null),
+                            Datum::UInt(u64::cast_from(worker_id)),
+                            Datum::UInt(datum.duration_pow),
+                            datum.requested_pow.map(Datum::UInt).unwrap_or(Datum::Null),
                         ]);
                         session.give((data, time, diff));
                     }
@@ -290,9 +287,9 @@ pub(super) fn construct(
                 move |data, packer, session| {
                     for ((datum, ()), time, diff) in data.iter() {
                         let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(datum.channel)),
-                            Datum::UInt64(u64::cast_from(worker_id)),
-                            Datum::UInt64(u64::cast_from(datum.worker)),
+                            Datum::UInt(u64::cast_from(datum.channel)),
+                            Datum::UInt(u64::cast_from(worker_id)),
+                            Datum::UInt(u64::cast_from(datum.worker)),
                         ]);
                         session.give((data, time, diff));
                     }
@@ -306,9 +303,9 @@ pub(super) fn construct(
                 move |data, packer, session| {
                     for ((datum, ()), time, diff) in data.iter() {
                         let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(datum.channel)),
-                            Datum::UInt64(u64::cast_from(datum.worker)),
-                            Datum::UInt64(u64::cast_from(worker_id)),
+                            Datum::UInt(u64::cast_from(datum.channel)),
+                            Datum::UInt(u64::cast_from(datum.worker)),
+                            Datum::UInt(u64::cast_from(worker_id)),
                         ]);
                         session.give((data, time, diff));
                     }
@@ -322,9 +319,9 @@ pub(super) fn construct(
                 move |data, packer, session| {
                     for ((datum, ()), time, diff) in data.iter() {
                         let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(datum.channel)),
-                            Datum::UInt64(u64::cast_from(worker_id)),
-                            Datum::UInt64(u64::cast_from(datum.worker)),
+                            Datum::UInt(u64::cast_from(datum.channel)),
+                            Datum::UInt(u64::cast_from(worker_id)),
+                            Datum::UInt(u64::cast_from(datum.worker)),
                         ]);
                         session.give((data, time, diff));
                     }
@@ -338,9 +335,9 @@ pub(super) fn construct(
                 move |data, packer, session| {
                     for ((datum, ()), time, diff) in data.iter() {
                         let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(datum.channel)),
-                            Datum::UInt64(u64::cast_from(datum.worker)),
-                            Datum::UInt64(u64::cast_from(worker_id)),
+                            Datum::UInt(u64::cast_from(datum.channel)),
+                            Datum::UInt(u64::cast_from(datum.worker)),
+                            Datum::UInt(u64::cast_from(worker_id)),
                         ]);
                         session.give((data, time, diff));
                     }
@@ -354,8 +351,8 @@ pub(super) fn construct(
                 move |data, packer, session| {
                     for ((operator, ()), time, diff) in data.iter() {
                         let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(*operator)),
-                            Datum::UInt64(u64::cast_from(worker_id)),
+                            Datum::UInt(u64::cast_from(*operator)),
+                            Datum::UInt(u64::cast_from(worker_id)),
                         ]);
                         session.give((data, time, diff));
                     }
@@ -369,9 +366,9 @@ pub(super) fn construct(
                 move |data, packer, session| {
                     for ((datum, ()), time, diff) in data.iter() {
                         let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(datum.operator)),
-                            Datum::UInt64(u64::cast_from(worker_id)),
-                            Datum::UInt64(datum.duration_pow),
+                            Datum::UInt(u64::cast_from(datum.operator)),
+                            Datum::UInt(u64::cast_from(worker_id)),
+                            Datum::UInt(datum.duration_pow),
                         ]);
                         session.give((data, time, diff));
                     }

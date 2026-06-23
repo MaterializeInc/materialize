@@ -597,7 +597,7 @@ impl Coordinator {
             let new_row = Row::pack_slice(&[
                 Datum::String(replica_id),
                 Datum::String(object_id),
-                Datum::Int64(size),
+                Datum::Int(size),
                 collection_datum,
                 Datum::from(hydration_complete),
             ]);
@@ -986,7 +986,7 @@ impl Coordinator {
                 };
                 let row = Row::pack_slice(&[
                     Datum::String(&event.replica_id.to_string()),
-                    Datum::UInt64(event.process_id),
+                    Datum::UInt(event.process_id),
                     Datum::String(event.status.as_kebab_case_str()),
                     Datum::from(offline_reason.as_deref()),
                     Datum::TimestampTz(event.time.try_into().expect("must fit")),

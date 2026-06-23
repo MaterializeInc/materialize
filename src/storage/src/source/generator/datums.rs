@@ -43,7 +43,7 @@ impl Generator for Datums {
         datums.insert(
             0,
             (1..=len + 1)
-                .map(|i| Datum::Int64(i64::try_from(i).expect("must fit")))
+                .map(|i| Datum::Int(i64::try_from(i).expect("must fit")))
                 .collect(),
         );
         let mut idx = 0;

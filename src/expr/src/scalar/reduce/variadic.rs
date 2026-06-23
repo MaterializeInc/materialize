@@ -71,7 +71,7 @@ pub(super) fn reduce_call_variadic(
             reduce_greatest_least(e, column_types);
         }
         VariadicFunc::Substr(_)
-            if exprs.len() == 2 && matches!(exprs[1].as_literal(), Some(Ok(Datum::Int32(1)))) =>
+            if exprs.len() == 2 && matches!(exprs[1].as_literal(), Some(Ok(Datum::Int(1)))) =>
         {
             // `substr(s, 1)` — the two-argument form — keeps the entire
             // string, and its evaluation at a start of one is infallible.
@@ -324,7 +324,7 @@ fn reduce_list_create_list_index_literal(
             // We can remove this index.
             let removed_index = index_exprs.remove(i);
             let index_i64 = match removed_index.as_literal().unwrap().unwrap() {
-                Datum::Int64(sql_index_i64) => sql_index_i64 - 1,
+                Datum::Int(sql_index_i64) => sql_index_i64 - 1,
                 _ => unreachable!(), // always an Int64, see plan_index_list
             };
             // For each list_create referenced by list_create_mut_refs, substitute it by its
@@ -415,10 +415,10 @@ mod tests {
     #[mz_ore::test]
     fn greatest_least_null_operand_drop() {
         let types = [
-            ReprScalarType::Int32.nullable(true),
-            ReprScalarType::Int32.nullable(true),
+            ReprScalarType::Int.nullable(true),
+            ReprScalarType::Int.nullable(true),
         ];
-        let null = || MirScalarExpr::literal_null(ReprScalarType::Int32);
+        let null = || MirScalarExpr::literal_null(ReprScalarType::Int);
         let col = MirScalarExpr::column;
 
         // Null operands drop; a single survivor is the result.
@@ -456,7 +456,7 @@ mod tests {
     fn substr_from_one() {
         let types = [ReprScalarType::String.nullable(true)];
         let col = || MirScalarExpr::column(0);
-        let lit = |v| MirScalarExpr::literal_ok(Datum::Int32(v), ReprScalarType::Int32);
+        let lit = |v| MirScalarExpr::literal_ok(Datum::Int(v), ReprScalarType::Int);
 
         // The two-argument form starting at one is the identity.
         let mut e = MirScalarExpr::call_variadic(Substr, vec![col(), lit(1)]);

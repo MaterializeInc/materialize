@@ -80,7 +80,7 @@ impl Generator for Auction {
             let mut packer = company.packer();
             // Start ids at 1, not 0
             let id = i64::try_from(offset + 1).expect("demo entries less than i64::MAX");
-            packer.push(Datum::Int64(id));
+            packer.push(Datum::Int(id));
             packer.push(Datum::String(*name));
             (AuctionView::Organizations, company)
         });
@@ -90,10 +90,10 @@ impl Generator for Auction {
             let mut packer = user.packer();
             // Start ids at 1, not 0.
             let id = i64::try_from(offset + 1).expect("demo entries less than i64::MAX");
-            packer.push(Datum::Int64(id));
+            packer.push(Datum::Int(id));
             let org_id = i64::try_from((offset % COMPANIES.len()) + 1)
                 .expect("demo entries less than i64::MAX");
-            packer.push(Datum::Int64(org_id));
+            packer.push(Datum::Int(org_id));
             packer.push(Datum::String(name));
             (AuctionView::Users, user)
         });
@@ -103,9 +103,9 @@ impl Generator for Auction {
             let mut packer = org.packer();
             let org_id = i64::try_from(org_id).expect("demo entries less than i64::MAX");
             let id = org_id + 42;
-            packer.push(Datum::Int64(id));
-            packer.push(Datum::Int64(org_id));
-            packer.push(Datum::Int64(10000)); // balance
+            packer.push(Datum::Int(id));
+            packer.push(Datum::Int(org_id));
+            packer.push(Datum::Int(10000)); // balance
             (AuctionView::Accounts, org)
         });
 
@@ -122,10 +122,10 @@ impl Generator for Auction {
                         let now = to_datetime(now());
                         let mut auction = Row::with_capacity(4);
                         let mut packer = auction.packer();
-                        packer.push(Datum::Int64(counter)); // auction id
+                        packer.push(Datum::Int(counter)); // auction id
                         let max_seller_id = i64::try_from(CELEBRETIES.len())
                             .expect("demo entries less than i64::MAX");
-                        packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // seller
+                        packer.push(Datum::Int(rng.gen_range(1..=max_seller_id))); // seller
                         packer.push(Datum::String(AUCTIONS.choose(&mut rng).unwrap())); // item
                         packer.push(Datum::TimestampTz(
                             (now + chrono::Duration::try_seconds(10).unwrap())
@@ -135,14 +135,14 @@ impl Generator for Auction {
                         pending.push_back((AuctionView::Auctions, auction));
                         const MAX_BIDS: i64 = 10;
                         for i in 0..rng.gen_range(2..MAX_BIDS) {
-                            let bid_id = Datum::Int64(counter * MAX_BIDS + i);
+                            let bid_id = Datum::Int(counter * MAX_BIDS + i);
                             let bid = {
                                 let mut bid = Row::with_capacity(5);
                                 let mut packer = bid.packer();
                                 packer.push(bid_id);
-                                packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // buyer
-                                packer.push(Datum::Int64(counter)); // auction id
-                                packer.push(Datum::Int32(rng.gen_range(1..100))); // amount
+                                packer.push(Datum::Int(rng.gen_range(1..=max_seller_id))); // buyer
+                                packer.push(Datum::Int(counter)); // auction id
+                                packer.push(Datum::Int(rng.gen_range(1..100))); // amount
                                 packer.push(Datum::TimestampTz(
                                     (now + chrono::Duration::try_seconds(i)
                                         .expect("time must fit"))

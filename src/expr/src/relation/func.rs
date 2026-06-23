@@ -482,7 +482,7 @@ where
         .map(|(d, i)| {
             callers_temp_storage.make_datum(|packer| {
                 packer.push_list_with(|packer| {
-                    packer.push(Datum::Int64(i));
+                    packer.push(Datum::Int(i));
                     packer.push(d);
                 });
             })
@@ -549,7 +549,7 @@ where
         }.3).into_iter().map(|(d, i)| {
         callers_temp_storage.make_datum(|packer| {
             packer.push_list_with(|packer| {
-                packer.push(Datum::Int64(i));
+                packer.push(Datum::Int(i));
                 packer.push(d);
             });
         })
@@ -619,7 +619,7 @@ where
         }.2).into_iter().map(|(d, i)| {
         callers_temp_storage.make_datum(|packer| {
             packer.push_list_with(|packer| {
-                packer.push(Datum::Int64(i));
+                packer.push(Datum::Int(i));
                 packer.push(d);
             });
         })
@@ -2336,7 +2336,7 @@ impl AggregateFunc {
     /// input relation.
     pub fn default(&self) -> Datum<'static> {
         match self {
-            AggregateFunc::Count => Datum::Int64(0),
+            AggregateFunc::Count => Datum::Int(0),
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
             AggregateFunc::Dummy => Datum::Dummy,
@@ -3494,8 +3494,8 @@ fn acl_explode<'a>(
         let acl_item = acl_item.unwrap_acl_item();
         for privilege in acl_item.acl_mode.explode() {
             let row = [
-                Datum::UInt32(acl_item.grantor.0),
-                Datum::UInt32(acl_item.grantee.0),
+                Datum::UInt(acl_item.grantor.0.into()),
+                Datum::UInt(acl_item.grantee.0.into()),
                 Datum::String(temp_storage.push_string(privilege.to_string())),
                 // GRANT OPTION is not implemented, so we hardcode false.
                 Datum::False,
@@ -4125,7 +4125,7 @@ impl WithOrdinality {
                 let mut ordinals = next_ordinal..(next_ordinal + diff);
                 next_ordinal += diff;
                 // The maximum byte capacity we need for the original row and its ordinal.
-                let cap = row.data_len() + datum_size(&Datum::Int64(next_ordinal));
+                let cap = row.data_len() + datum_size(&Datum::Int(next_ordinal));
                 iter::from_fn(move || {
                     let ordinal = ordinals.next()?;
                     let mut row = if ordinals.is_empty() {
@@ -4137,7 +4137,7 @@ impl WithOrdinality {
                         new_row.clone_from(&row);
                         new_row
                     };
-                    RowPacker::for_existing_row(&mut row).push(Datum::Int64(ordinal));
+                    RowPacker::for_existing_row(&mut row).push(Datum::Int(ordinal));
                     Some((row, Diff::ONE))
                 })
             });
