@@ -41,7 +41,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
 use mz_catalog::memory::objects::Cluster;
-use mz_controller::clusters::ClusterStatus;
+use mz_controller::clusters::{ClusterStatus, ProcessId};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::OfflineReason;
 use mz_ore::channel::trigger::Trigger;
@@ -109,17 +109,20 @@ pub struct ClusterStabilityState {
     /// `Instant`. We only ever compare these orchestrator times against each
     /// other, so orchestrator/environmentd clock skew doesn't matter.
     last_status_change: Option<DateTime<Utc>>,
-    /// Sum of replica-process restart counts observed on the previous tick.
+    /// Restart count per replica process observed on the previous tick.
     ///
-    /// Any change resets the streak: an increase means a restart, a decrease
-    /// means a process was recreated. The restart count survives gaps in the
-    /// orchestrator watch, so it catches restarts the status stream can drop.
-    last_restart_total: Option<u64>,
+    /// Any difference from this tick resets the streak: an increased count means
+    /// a restart, a decreased one means the process was recreated, and an added
+    /// or removed key means replica/process churn. Restart counts survive gaps
+    /// in the orchestrator watch, so they catch restarts the status stream can
+    /// drop. We track them per process rather than as a cluster-wide sum so that
+    /// offsetting changes across processes can't cancel out and hide a restart.
+    last_restart_counts: Option<BTreeMap<(ReplicaId, ProcessId), u64>>,
 }
 
 /// A point-in-time view of a cluster's replica health, derived from the
 /// in-memory mirror of orchestrator-reported replica statuses.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ClusterHealthSnapshot {
     /// True iff the cluster has replicas and every process of every replica is
     /// `Online`. We deliberately require all replicas to be healthy, so we only
@@ -127,8 +130,13 @@ struct ClusterHealthSnapshot {
     all_healthy: bool,
     /// Max status-change time across all of the cluster's replica processes.
     max_status_change: Option<DateTime<Utc>>,
-    /// Sum of restart counts across all of the cluster's replica processes.
-    restart_total: u64,
+    /// Restart count per replica process.
+    ///
+    /// Kept per process rather than summed: restart counts are not monotonic (a
+    /// recreated process resets to zero), so a cluster-wide sum could cancel
+    /// offsetting changes across processes and hide a restart. Comparing the
+    /// whole map between ticks also catches replica/process churn.
+    restart_counts: BTreeMap<(ReplicaId, ProcessId), u64>,
 }
 
 /// Why a caught-up cluster is being held back by the stability gate on a given
@@ -185,13 +193,18 @@ impl ClusterStabilityState {
         // to be reliable on its own:
         //
         //   - `all_healthy` is a point-in-time check, independent of ordering.
-        //   - a change in `restart_total` is the durable signal: k8s reports
-        //     restart counts monotonically and they survive gaps in the
-        //     orchestrator watch, so they catch restarts the status stream drops.
-        //   - `max_status_change` advancing is only a best-effort flap detector:
-        //     status `time` is overwritten without enforcing monotonicity, so an
-        //     out-of-order event could lower the max and hide a flap. The restart
-        //     counter is the belt-and-suspenders for exactly that gap.
+        //   - a change in the per-process `restart_counts` is the durable signal:
+        //     k8s reports restart counts and they survive gaps in the orchestrator
+        //     watch, so they catch restarts the status stream drops. We compare
+        //     the whole map, never a cluster-wide sum: restart counts are not
+        //     monotonic (a recreated process resets to zero), so a sum could
+        //     cancel offsetting changes across processes and hide a restart.
+        //   - `max_status_change` advancing is a best-effort flap detector. A
+        //     cluster-wide max is enough here, unlike the restart counts, because
+        //     any status change stamps `process.time` at ~now, so a flap pushes
+        //     the max past the previous tick's value. It can still miss a flap if
+        //     an out-of-order event reports an older time, which is why the
+        //     restart counts are the belt-and-suspenders.
         //
         // We only compare the orchestrator-supplied times against each other, so
         // clock skew between the orchestrator and environmentd doesn't matter.
@@ -200,8 +213,9 @@ impl ClusterStabilityState {
             _ => false,
         };
         let restarted = self
-            .last_restart_total
-            .is_some_and(|prev| prev != snapshot.restart_total);
+            .last_restart_counts
+            .as_ref()
+            .is_some_and(|prev| prev != &snapshot.restart_counts);
 
         let good = snapshot.all_healthy && !status_flapped && !restarted;
 
@@ -211,7 +225,7 @@ impl ClusterStabilityState {
             None
         };
         self.last_status_change = snapshot.max_status_change;
-        self.last_restart_total = Some(snapshot.restart_total);
+        self.last_restart_counts = Some(snapshot.restart_counts.clone());
 
         let stable_for_ms = self.stable_since.map(|since| now.saturating_sub(since));
         let ready = stable_for_ms.is_some_and(|elapsed| elapsed >= period_ms);
@@ -420,7 +434,9 @@ impl Coordinator {
                             stable_for_ms = ?observation.stable_for_ms,
                             required_period_ms = stability_period_ms,
                             max_status_change = ?snapshot.max_status_change,
-                            restart_total = snapshot.restart_total,
+                            // Summed only for a readable log line. The gate
+                            // compares the per-process map, not this total.
+                            restart_total = snapshot.restart_counts.values().sum::<u64>(),
                             "cluster is caught up but not yet stable for the required period"
                         );
                     }
@@ -447,33 +463,31 @@ impl Coordinator {
             .try_get_cluster_statuses(cluster_id)
             .filter(|replicas| !replicas.is_empty())
         else {
-            // A cluster with no replica statuses is treated as not healthy. We
-            // spell the snapshot out rather than deriving `Default` so the
-            // "no replicas means unhealthy" choice is explicit at the use site.
+            // A cluster with no replica statuses is treated as not healthy.
             return ClusterHealthSnapshot {
                 all_healthy: false,
                 max_status_change: None,
-                restart_total: 0,
+                restart_counts: BTreeMap::new(),
             };
         };
 
         let mut all_healthy = true;
         let mut max_status_change = None;
-        let mut restart_total: u64 = 0;
-        for processes in replicas.values() {
+        let mut restart_counts = BTreeMap::new();
+        for (replica_id, processes) in replicas {
             if ClusterReplicaStatuses::cluster_replica_status(processes) != ClusterStatus::Online {
                 all_healthy = false;
             }
-            for process in processes.values() {
+            for (process_id, process) in processes {
                 max_status_change = max_status_change.max(Some(process.time));
-                restart_total = restart_total.saturating_add(process.restart_count);
+                restart_counts.insert((*replica_id, *process_id), process.restart_count);
             }
         }
 
         ClusterHealthSnapshot {
             all_healthy,
             max_status_change,
-            restart_total,
+            restart_counts,
         }
     }
 
@@ -863,13 +877,14 @@ impl Coordinator {
 mod tests {
     use super::*;
 
-    /// Builds a health snapshot. `change_secs` is the max status-change time as
-    /// a unix-second offset, `restarts` the summed restart count.
+    /// Builds a health snapshot with all restarts attributed to a single
+    /// replica process. `change_secs` is the max status-change time as a
+    /// unix-second offset, `restarts` that process's restart count.
     fn snapshot(all_healthy: bool, change_secs: i64, restarts: u64) -> ClusterHealthSnapshot {
         ClusterHealthSnapshot {
             all_healthy,
             max_status_change: DateTime::from_timestamp(change_secs, 0),
-            restart_total: restarts,
+            restart_counts: BTreeMap::from([((ReplicaId::User(1), 0), restarts)]),
         }
     }
 
@@ -966,6 +981,31 @@ mod tests {
                 .observe(&snapshot(true, 100, 4), 2500, period_ms)
                 .ready
         );
+    }
+
+    #[mz_ore::test]
+    fn offsetting_restart_changes_reset_streak() {
+        // Two processes whose restart counts move in opposite directions by the
+        // same amount. A cluster-wide sum would be unchanged and miss the
+        // restart, but the per-process map differs, so the streak resets.
+        let period_ms = 1000;
+        let mut state = ClusterStabilityState::default();
+
+        let r = ReplicaId::User(1);
+        let snapshot = |a: u64, b: u64| ClusterHealthSnapshot {
+            all_healthy: true,
+            max_status_change: DateTime::from_timestamp(100, 0),
+            restart_counts: BTreeMap::from([((r, 0u64), a), ((r, 1u64), b)]),
+        };
+
+        // Start a streak with per-process counts summing to 2.
+        assert!(!state.observe(&snapshot(1, 1), 0, period_ms).ready);
+        // One process restarts (+1) while the other is recreated (-1). The sum
+        // is still 2, but the per-process map changed: reset.
+        assert!(!state.observe(&snapshot(2, 0), 1000, period_ms).ready);
+        // A clean streak from here.
+        assert!(!state.observe(&snapshot(2, 0), 1500, period_ms).ready);
+        assert!(state.observe(&snapshot(2, 0), 2500, period_ms).ready);
     }
 
     #[mz_ore::test]
