@@ -4022,10 +4022,28 @@ async fn test_serialized_ddl_cancel() {
             .unwrap_err();
         err
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    // Cancel the pending statement (this uses different cancellation logic and is the actual thing
-    // we are trying to test here).
-    cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
+    // Cancel the pending statement (this uses different cancellation logic, scanning the
+    // `serialized_ddl` queue, and is the actual thing we are trying to test here). There's a race
+    // for when client2's statement is actually enqueued behind client1's DDL lock, and another for
+    // when client1's optimization finishes and releases the lock (after which client2 would be
+    // dequeued and run to completion). Because both views depend on the unstable `mz_unsafe.mz_sleep`,
+    // a statement that escapes the queue fails with "cannot create view with unstable dependencies"
+    // rather than being canceled, which previously made this test flaky. Retry the cancel (as the
+    // `test_cancel_linearize_*` tests above do) until it lands while the statement is still pending.
+    let ((_, handle2), res) = Retry::default()
+        .clamp_backoff(Duration::from_millis(250))
+        .max_duration(Duration::from_secs(30))
+        .retry_async_with_state((cancel2, handle2), |_, (cancel2, handle2)| async move {
+            cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
+            let res = if handle2.is_finished() {
+                Ok(())
+            } else {
+                Err("pending statement not yet canceled".to_string())
+            };
+            ((cancel2, handle2), res)
+        })
+        .await;
+    res.unwrap();
     let err = handle2.await;
     assert_contains!(
         err.to_string_with_causes(),
