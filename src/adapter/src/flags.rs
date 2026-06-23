@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT;
 use mz_compute_client::protocol::command::ComputeParameters;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
@@ -180,7 +181,7 @@ pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters
         pg_connection_pool_keepalives_idle: Some(config.crdb_keepalives_idle()),
         pg_connection_pool_keepalives_interval: Some(config.crdb_keepalives_interval()),
         pg_connection_pool_keepalives_retries: Some(config.crdb_keepalives_retries()),
-        pg_statement_timeout: Some(config.pg_timestamp_oracle_statement_timeout()),
+        pg_statement_timeout: Some(PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.get(config.dyncfgs())),
     }
 }
 

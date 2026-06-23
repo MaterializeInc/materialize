@@ -1297,7 +1297,6 @@ impl SystemVars {
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER,
-            &PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT,
             &USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION,
             &FORCE_SOURCE_TABLE_SYNTAX,
             &OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD,
@@ -2282,11 +2281,6 @@ impl SystemVars {
         *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER)
     }
 
-    /// Returns the `pg_timestamp_oracle_statement_timeout` configuration parameter.
-    pub fn pg_timestamp_oracle_statement_timeout(&self) -> Duration {
-        *self.expect_value(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
-    }
-
     /// Returns the `user_storage_managed_collections_batch_duration` configuration parameter.
     pub fn user_storage_managed_collections_batch_duration(&self) -> Duration {
         *self.expect_value(&USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION)
@@ -2396,7 +2390,6 @@ pub fn is_timestamp_oracle_config_var(name: &str) -> bool {
         || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT.name()
         || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL.name()
         || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER.name()
-        || name == PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == CRDB_KEEPALIVES_IDLE.name()
