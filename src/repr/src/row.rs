@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Borrow;
-use std::cell::{Cell, RefCell, RefMut};
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
@@ -824,11 +824,14 @@ pub struct RowArena {
     // for reuse; reusing one region across `clear` cycles makes a steady-state
     // workload (e.g. decoding rows one at a time) allocation-free.
     inner: RefCell<Vec<Vec<u8>>>,
-    // A single reusable scratch buffer backing `RowArena::writer`. A writer builds into it and
-    // `finish` copies the result into a region (via `push_bytes`); the buffer is then retained
-    // (cleared, capacity kept) for the next writer, so building values incrementally does not
-    // allocate per use once it reaches its high-water mark.
-    scratch: RefCell<Vec<u8>>,
+    // A single recycled scratch buffer backing `RowArena::writer`. A writer takes ownership of this
+    // buffer (or allocates a fresh one if absent), builds into it, and on drop returns it here for
+    // the next writer to reuse — so building values incrementally does not allocate per use once the
+    // buffer reaches its high-water mark. Holding `Option` (rather than the buffer directly) means
+    // `writer` borrows this cell only transiently, to take and return the buffer, never across the
+    // writer's lifetime. That keeps nested writers sound: a writer obtained while another is live
+    // finds the slot empty and allocates its own buffer instead of double-borrowing.
+    scratch: RefCell<Option<Vec<u8>>>,
 }
 
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
@@ -3066,7 +3069,7 @@ impl RowArena {
     pub fn new() -> Self {
         RowArena {
             inner: RefCell::new(vec![]),
-            scratch: RefCell::new(Vec::new()),
+            scratch: RefCell::new(None),
         }
     }
 
@@ -3079,7 +3082,7 @@ impl RowArena {
         }
         RowArena {
             inner: RefCell::new(inner),
-            scratch: RefCell::new(Vec::new()),
+            scratch: RefCell::new(None),
         }
     }
 
@@ -3167,14 +3170,18 @@ impl RowArena {
     /// [`std::io::Write`], then call [`RowArenaBuf::finish`] to copy the result into the arena and
     /// obtain a reference valid for the arena's lifetime. The backing buffer is a single scratch
     /// allocation reused across writers, so this lets a producer that builds bytes piecewise (e.g.
-    /// decoding a row) avoid managing its own scratch. Only one writer may be live at a time.
+    /// decoding a row) avoid managing its own scratch.
+    ///
+    /// Nested writers are sound but not free: a writer obtained while another is still live can't
+    /// reuse the (in-use) scratch, so it allocates its own buffer. Steady-state, non-nested use
+    /// stays allocation-free.
     pub fn writer(&self) -> RowArenaBuf<'_> {
-        let mut scratch = self.scratch.borrow_mut();
-        scratch.clear();
-        RowArenaBuf {
-            arena: self,
-            scratch,
-        }
+        // Take the recycled buffer if one is available, else allocate a fresh one. The cell is
+        // borrowed only for this `take`, never for the writer's lifetime, so a nested `writer` call
+        // doesn't double-borrow: it simply finds the slot empty and allocates its own buffer.
+        let mut buf = self.scratch.borrow_mut().take().unwrap_or_default();
+        buf.clear();
+        RowArenaBuf { arena: self, buf }
     }
 
     /// Take ownership of `row` for the lifetime of the arena, returning a
@@ -3288,47 +3295,49 @@ impl Default for RowArena {
     }
 }
 
-/// A growable, writeable byte buffer that builds a value into a [`RowArena`]'s scratch space.
+/// A growable, writeable byte buffer that builds a value into a [`RowArena`].
 ///
 /// Obtained from [`RowArena::writer`]. Behaves like a writeable byte slice (push/extend bytes,
 /// read back as `&[u8]`); [`RowArenaBuf::finish`] copies the assembled bytes into the arena and
-/// returns a reference valid for the arena's lifetime. The scratch allocation is held for the
-/// writer's lifetime and reused by later writers.
+/// returns a reference valid for the arena's lifetime. The buffer is owned for the writer's
+/// lifetime and, on drop, returned to the arena to be reused by the next writer.
 #[derive(Debug)]
 pub struct RowArenaBuf<'a> {
     arena: &'a RowArena,
-    scratch: RefMut<'a, Vec<u8>>,
+    buf: Vec<u8>,
 }
 
 impl<'a> RowArenaBuf<'a> {
     /// Appends a single byte.
     pub fn push(&mut self, byte: u8) {
-        self.scratch.push(byte);
+        self.buf.push(byte);
     }
 
     /// Appends a slice of bytes.
     pub fn extend_from_slice(&mut self, bytes: &[u8]) {
-        self.scratch.extend_from_slice(bytes);
+        self.buf.extend_from_slice(bytes);
     }
 
     /// The bytes written so far.
     pub fn as_slice(&self) -> &[u8] {
-        &self.scratch
+        &self.buf
     }
 
     /// The number of bytes written so far.
     pub fn len(&self) -> usize {
-        self.scratch.len()
+        self.buf.len()
     }
 
     /// Whether no bytes have been written.
     pub fn is_empty(&self) -> bool {
-        self.scratch.is_empty()
+        self.buf.is_empty()
     }
 
     /// Copies the written bytes into the arena, returning a reference valid for its lifetime.
     pub fn finish(self) -> &'a [u8] {
-        self.arena.push_bytes(self.scratch.as_slice())
+        // `self` is dropped at the end of this call, returning `buf` to the arena for reuse; the
+        // returned reference points into a committed region, not `buf`, so it stays valid.
+        self.arena.push_bytes(self.buf.as_slice())
     }
 
     /// Like [`RowArenaBuf::finish`], but returns the bytes as a `&str`.
@@ -3336,21 +3345,34 @@ impl<'a> RowArenaBuf<'a> {
     /// Intended for buffers written via [`std::fmt::Write`] (e.g. `write!`), whose contents are
     /// valid UTF-8. Panics if the bytes are not valid UTF-8.
     pub fn finish_str(self) -> &'a str {
-        let bytes = self.arena.push_bytes(self.scratch.as_slice());
+        let bytes = self.arena.push_bytes(self.buf.as_slice());
         std::str::from_utf8(bytes).expect("RowArenaBuf::finish_str on non-UTF-8 contents")
+    }
+}
+
+impl<'a> Drop for RowArenaBuf<'a> {
+    fn drop(&mut self) {
+        // Return the buffer to the arena so the next writer can reuse its allocation. We keep only
+        // one buffer: if the slot is already occupied — an outer writer is still live, or a nested
+        // writer beat us to it — we drop ours rather than growing an unbounded pool. The borrow is
+        // transient and never overlaps a live writer's, so this can't double-borrow.
+        let mut slot = self.arena.scratch.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(std::mem::take(&mut self.buf));
+        }
     }
 }
 
 impl<'a> std::ops::Deref for RowArenaBuf<'a> {
     type Target = [u8];
     fn deref(&self) -> &[u8] {
-        &self.scratch
+        &self.buf
     }
 }
 
 impl<'a> std::io::Write for RowArenaBuf<'a> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.scratch.extend_from_slice(bytes);
+        self.buf.extend_from_slice(bytes);
         Ok(bytes.len())
     }
 
@@ -3361,7 +3383,7 @@ impl<'a> std::io::Write for RowArenaBuf<'a> {
 
 impl<'a> std::fmt::Write for RowArenaBuf<'a> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        self.scratch.extend_from_slice(s.as_bytes());
+        self.buf.extend_from_slice(s.as_bytes());
         Ok(())
     }
 }
@@ -3585,6 +3607,39 @@ mod tests {
             w3.extend_from_slice(b"discarded");
         }
         assert_eq!(arena.writer().as_slice(), empty);
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_writer_nested() {
+        // Reentrancy: a writer obtained while another is still live must not panic (no `RefCell`
+        // double-borrow) and must not disturb the outer writer. The nested writer just gets its own
+        // buffer; the outer one keeps building independently.
+        let arena = RowArena::new();
+
+        let mut outer = arena.writer();
+        outer.extend_from_slice(b"outer-before-");
+
+        // Take a second writer while `outer` is still live -- the case that double-borrowed before.
+        let inner_bytes = {
+            let mut inner = arena.writer();
+            inner.extend_from_slice(b"inner");
+            // The outer writer is unaffected by the nested one.
+            assert_eq!(outer.as_slice(), b"outer-before-");
+            inner.finish()
+        };
+        assert_eq!(inner_bytes, b"inner");
+
+        // `outer` is intact and still writable after the nested writer committed.
+        outer.extend_from_slice(b"after");
+        let outer_bytes = outer.finish();
+        assert_eq!(outer_bytes, b"outer-before-after");
+        // Both committed slices stay valid and independent.
+        assert_eq!(inner_bytes, b"inner");
+
+        // Once all writers have dropped, the recycled buffer is reusable (and cleared on acquire).
+        let mut again = arena.writer();
+        again.extend_from_slice(b"reused");
+        assert_eq!(again.finish(), b"reused");
     }
 
     #[mz_ore::test]
