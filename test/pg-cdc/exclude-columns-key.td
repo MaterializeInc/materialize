@@ -8,23 +8,8 @@
 # by the Apache License, Version 2.0.
 
 #
-# Regression test: EXCLUDE COLUMNS naming a key column must be rejected with a
-# graceful planning error, NOT a process-aborting panic.
-#
-# `purify_source_exports` prunes excluded columns from the table descriptor's
-# column list (src/sql/src/pure/postgres.rs) but leaves `desc.keys` referencing
-# the removed column's attnum. `generate_source_export_statement_values` then
-# walks every key and resolves each `col_num` back to a column via
-# `.find(...).expect("key exists as column")`. Excluding a PRIMARY KEY or UNIQUE
-# column leaves a dangling attnum in `key.cols`, so the lookup returns `None` and
-# the `.expect()` panics. Purification runs in a `task::spawn` future that is not
-# wrapped in `catch_unwind`, so the enhanced panic handler calls `process::abort()`
-# and takes down all of environmentd. Keys are loaded from `pg_constraint`
-# (contype IN ('p','u')) independent of replica identity, so this is reachable on
-# any REPLICA IDENTITY FULL table that also has a key.
-#
-# The existing test/pg-cdc/exclude-columns.td only excludes a non-key column on a
-# keyless table, so this path had no coverage.
+# We can support the exclusion of constraint columns, and any constraint for which one or more
+# columns is excluded will simply be ignored.
 #
 
 > CREATE CLUSTER storage SIZE '${arg.default-replica-size}'
@@ -50,8 +35,8 @@ CREATE TABLE pk_table (id int PRIMARY KEY, val text);
 INSERT INTO pk_table VALUES (1, 'a'), (2, 'b');
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
-# A table with a UNIQUE constraint: `u` (attnum 2) participates in the key.
-CREATE TABLE uniq_table (id int, u int UNIQUE, val text);
+# A table with a UNIQUE constraint: `(id, u)` 
+CREATE TABLE uniq_table (id int, u int, val text, UNIQUE (id, u));
 INSERT INTO uniq_table VALUES (1, 10, 'a'), (2, 20, 'b');
 ALTER TABLE uniq_table REPLICA IDENTITY FULL;
 
@@ -67,9 +52,26 @@ ANALYZE;
   WITH (EXCLUDE COLUMNS (id));
 
 # Excluding a UNIQUE-constraint column also okay
-> CREATE TABLE jkljkljhhjk
+> CREATE TABLE uniq_table
   FROM SOURCE mz_source (REFERENCE public.uniq_table)
   WITH (EXCLUDE COLUMNS (u));
+
+# Verify that the constraint is ignored on uniq_table
+> CREATE DEFAULT INDEX ON uniq_table;
+
+> SELECT key FROM (SHOW INDEXES ON uniq_table);
+{id,val}
+
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT id FROM uniq_table
+Explained Query:
+  Distinct project=[#0]
+    Project (#0)
+      ReadIndex on=uniq_table uniq_table_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.uniq_table_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
 
 # Sanity: excluding a non-key column on a keyed table still works, and the key
 # constraint is preserved on the resulting table.
