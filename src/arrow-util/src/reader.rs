@@ -30,7 +30,7 @@ use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbPacker;
-use mz_repr::adt::numeric::Numeric;
+use mz_repr::adt::numeric::{Numeric, rescale};
 use mz_repr::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, RelationDesc, Row, RowPacker, SharedRow, SqlScalarType};
@@ -188,8 +188,7 @@ fn scalar_type_and_array_to_reader(
         (SqlScalarType::Float64, DataType::Float64) => {
             Ok(ColReader::Float64(downcast_array::<Float64Array>(array)))
         }
-        // TODO(cf3): Consider the max_scale for numeric.
-        (SqlScalarType::Numeric { .. }, DataType::Decimal128(precision, scale)) => {
+        (SqlScalarType::Numeric { max_scale }, DataType::Decimal128(precision, scale)) => {
             use num_traits::Pow;
 
             let base = Numeric::from(10);
@@ -209,10 +208,10 @@ fn scalar_type_and_array_to_reader(
                 array,
                 scale_factor,
                 precision,
+                max_scale: (*max_scale).map(|s| s.into_u8()),
             })
         }
-        // TODO(cf3): Consider the max_scale for numeric.
-        (SqlScalarType::Numeric { .. }, DataType::Decimal256(precision, scale)) => {
+        (SqlScalarType::Numeric { max_scale }, DataType::Decimal256(precision, scale)) => {
             use num_traits::Pow;
 
             let base = Numeric::from(10);
@@ -232,6 +231,7 @@ fn scalar_type_and_array_to_reader(
                 array,
                 scale_factor,
                 precision,
+                max_scale: (*max_scale).map(|s| s.into_u8()),
             })
         }
         (SqlScalarType::Bytes, DataType::Binary) => {
@@ -489,11 +489,15 @@ enum ColReader {
         array: Decimal128Array,
         scale_factor: Numeric,
         precision: usize,
+        /// The destination column's declared scale, if constrained.
+        max_scale: Option<u8>,
     },
     Decimal256 {
         array: Decimal256Array,
         scale_factor: Numeric,
         precision: usize,
+        /// The destination column's declared scale, if constrained.
+        max_scale: Option<u8>,
     },
 
     Binary(arrow::array::BinaryArray),
@@ -609,21 +613,34 @@ impl ColReader {
                 array,
                 scale_factor,
                 precision,
-            } => array.is_valid(idx).then(|| array.value(idx)).map(|x| {
-                // Create a Numeric from our i128 with precision.
-                let mut ctx = dec::Context::<Numeric>::default();
-                ctx.set_precision(*precision).expect("checked before");
-                let mut num = ctx.from_i128(x);
+                max_scale,
+            } => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|x| {
+                    // Create a Numeric from our i128 with precision.
+                    let mut ctx = dec::Context::<Numeric>::default();
+                    ctx.set_precision(*precision).expect("checked before");
+                    let mut num = ctx.from_i128(x);
 
-                // Scale the number.
-                ctx.div(&mut num, scale_factor);
+                    // Scale the number.
+                    ctx.div(&mut num, scale_factor);
 
-                Datum::Numeric(OrderedDecimal(num))
-            }),
+                    // Round to the destination column's declared scale, matching
+                    // the assignment-cast path so COPY FROM agrees with INSERT
+                    // (SS-193).
+                    if let Some(max_scale) = max_scale {
+                        rescale(&mut num, *max_scale)?;
+                    }
+
+                    Ok::<_, anyhow::Error>(Datum::Numeric(OrderedDecimal(num)))
+                })
+                .transpose()?,
             ColReader::Decimal256 {
                 array,
                 scale_factor,
                 precision,
+                max_scale,
             } => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
@@ -641,6 +658,13 @@ impl ColReader {
 
                     // Scale the number.
                     ctx.div(&mut num, scale_factor);
+
+                    // Round to the destination column's declared scale, matching
+                    // the assignment-cast path so COPY FROM agrees with INSERT
+                    // (SS-193).
+                    if let Some(max_scale) = max_scale {
+                        rescale(&mut num, *max_scale)?;
+                    }
 
                     Ok::<_, anyhow::Error>(Datum::Numeric(OrderedDecimal(num)))
                 })
@@ -1181,6 +1205,134 @@ mod tests {
         reader.read(2, &mut rnd_row).unwrap();
         let num = rnd_row.into_element().unwrap_numeric();
         assert_eq!(num.0, Numeric::from(100000000.009f64));
+    }
+
+    /// Regression test for SS-193: when the destination column declares a
+    /// `max_scale`, the reader must round the decoded value to that scale
+    /// rather than preserving the source file's scale. This mirrors the
+    /// assignment-cast path so `COPY FROM PARQUET` agrees with `INSERT`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn decimal_applies_destination_max_scale() {
+        use mz_repr::adt::numeric::NumericMaxScale;
+
+        // Destination column is numeric(10, 2): scale 2.
+        let desc = RelationDesc::builder()
+            .with_column(
+                "a",
+                SqlScalarType::Numeric {
+                    max_scale: Some(NumericMaxScale::try_from(2_i64).unwrap()),
+                }
+                .nullable(true),
+            )
+            .finish();
+
+        let expected = Numeric::from(10.45f64);
+
+        // The source files carry scale-3 values (10.447) that don't round
+        // evenly to the destination's scale 2.
+        let mut dec128 = arrow::array::Decimal128Builder::new();
+        dec128 = dec128.with_precision_and_scale(12, 3).unwrap();
+        dec128.append_value(10447);
+        let dec128 = dec128.finish();
+        #[allow(clippy::as_conversions)]
+        let batch128 = StructArray::from(vec![(
+            Arc::new(Field::new("a", dec128.data_type().clone(), true)),
+            Arc::new(dec128) as arrow::array::ArrayRef,
+        )]);
+
+        let reader = ArrowReader::new(&desc, batch128).unwrap();
+        let mut rnd_row = Row::default();
+        reader.read(0, &mut rnd_row).unwrap();
+        let num = rnd_row.into_element().unwrap_numeric();
+        assert_eq!(num.0, expected, "Decimal128 did not round to max_scale");
+
+        let mut dec256 = arrow::array::Decimal256Builder::new();
+        dec256 = dec256.with_precision_and_scale(12, 3).unwrap();
+        dec256.append_value(arrow::datatypes::i256::from(10447));
+        let dec256 = dec256.finish();
+        #[allow(clippy::as_conversions)]
+        let batch256 = StructArray::from(vec![(
+            Arc::new(Field::new("a", dec256.data_type().clone(), true)),
+            Arc::new(dec256) as arrow::array::ArrayRef,
+        )]);
+
+        let reader = ArrowReader::new(&desc, batch256).unwrap();
+        let mut rnd_row = Row::default();
+        reader.read(0, &mut rnd_row).unwrap();
+        let num = rnd_row.into_element().unwrap_numeric();
+        assert_eq!(num.0, expected, "Decimal256 did not round to max_scale");
+    }
+
+    /// Rescaling the decoded value to the destination's `max_scale` (SS-193)
+    /// can push it past numeric's maximum precision: a higher scale appends
+    /// fractional digits, so a value with many integer digits that decodes
+    /// cleanly at a low scale overflows `NUMERIC_DATUM_MAX_PRECISION` (39) at a
+    /// high scale. The reader must surface that as an error rather than
+    /// silently truncating or panicking. Demonstrates that the *same* source
+    /// value can decode at one destination scale and fail at a larger one.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn decimal_rescale_to_higher_scale_overflows() {
+        use mz_repr::adt::numeric::NumericMaxScale;
+
+        // A 33-digit integer (10^33 - 1). The source column has scale 0, so the
+        // parquet file stores this integer verbatim.
+        let value: i128 = 10_i128.pow(33) - 1;
+
+        // Build the source array fresh per reader: `ArrowReader::new` consumes
+        // the `StructArray`.
+        let build_batch = || {
+            let mut dec128 = arrow::array::Decimal128Builder::new();
+            dec128 = dec128.with_precision_and_scale(38, 0).unwrap();
+            dec128.append_value(value);
+            let dec128 = dec128.finish();
+            #[allow(clippy::as_conversions)]
+            StructArray::from(vec![(
+                Arc::new(Field::new("a", dec128.data_type().clone(), true)),
+                Arc::new(dec128) as arrow::array::ArrayRef,
+            )])
+        };
+
+        let desc_with_scale = |scale: i64| {
+            RelationDesc::builder()
+                .with_column(
+                    "a",
+                    SqlScalarType::Numeric {
+                        max_scale: Some(NumericMaxScale::try_from(scale).unwrap()),
+                    }
+                    .nullable(true),
+                )
+                .finish()
+        };
+
+        // Lower scale (2): 33 integer digits + 2 fractional digits = 35
+        // significant digits, within the 39-digit limit, so the value decodes
+        // successfully and is rescaled to scale 2.
+        let reader = ArrowReader::new(&desc_with_scale(2), build_batch()).unwrap();
+        let mut row = Row::default();
+        reader
+            .read(0, &mut row)
+            .expect("value must decode at destination scale 2");
+        let num = row.into_element().unwrap_numeric();
+        let mut expected = Numeric::try_from(value).unwrap();
+        rescale(&mut expected, 2).unwrap();
+        assert_eq!(num.0, expected, "value did not rescale to scale 2");
+
+        // Higher scale (8): 33 + 8 = 41 significant digits exceeds the 39-digit
+        // maximum precision, so the same value now errors out instead of
+        // decoding.
+        let reader = ArrowReader::new(&desc_with_scale(8), build_batch()).unwrap();
+        let mut row = Row::default();
+        let err = reader
+            .read(0, &mut row)
+            .expect_err("value must overflow at destination scale 8");
+        // `ArrowReader::read` wraps the column error with the row index, so
+        // check the full chain rather than just the top-level message.
+        assert!(
+            format!("{err:#}").contains("exceed maximum precision"),
+            "unexpected error: {err:#}",
+        );
     }
 
     /// Regression test for database-issues#11330: when a Parquet file authored
