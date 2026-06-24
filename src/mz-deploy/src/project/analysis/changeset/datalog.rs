@@ -23,16 +23,18 @@
 //! ## Algorithm
 //!
 //! 1. **Seed:** Initialize `dirty_stmts` from `changed_stmts` (objects whose
-//!    hashes differ between the old and new snapshots).
+//!    hashes differ between the old and new snapshots) and `dirty_schemas` from
+//!    `forced_dirty_schemas` (schemas the caller redeploys unconditionally).
 //! 2. **Build indexes:** Pre-compute reverse lookup maps and the current
 //!    `ClusterBoundary` relation from base facts for O(1) rule evaluation.
 //! 3. **Fixed-point loop:** In each iteration, apply all five rule groups in
 //!    a fixed order:
 //!    1. Cluster dirtiness (from changed statements only, within `ClusterBoundary`)
 //!    2. Statement dirtiness from dirty clusters
-//!    3. Dependency propagation (downstream of dirty statements)
-//!    4. Schema dirtiness (from dirty statements, excluding sinks/replacements)
-//!    5. Statement dirtiness from dirty schemas (excluding replacements)
+//!    3. Dependency propagation (downstream of dirty statements, excluding
+//!       replacement MVs, whose dirtiness does not fan out to dependents)
+//!    4. Schema dirtiness (from dirty statements, excluding sinks)
+//!    5. Statement dirtiness from dirty schemas
 //! 4. **Termination:** The loop converges when no set (`dirty_stmts`,
 //!    `dirty_clusters`, `dirty_schemas`) grows in an iteration. Convergence
 //!    is guaranteed because all sets are monotonically non-decreasing and
@@ -147,12 +149,18 @@ pub(super) struct DirtyState {
 }
 
 impl DirtyState {
-    /// Seeds dirty state from objects whose hashes changed between snapshots.
-    pub(super) fn new(changed_stmts: &BTreeSet<ObjectId>) -> Self {
+    /// Seeds dirty state from objects whose hashes changed between snapshots,
+    /// plus any schemas forced dirty by the caller. Forced schemas let the
+    /// fixed-point treat an unchanged schema as if it had changed: Rule 6 turns
+    /// each into its objects, which then propagate to downstream dependents.
+    pub(super) fn new(
+        changed_stmts: &BTreeSet<ObjectId>,
+        forced_dirty_schemas: &BTreeSet<SchemaQualifier>,
+    ) -> Self {
         Self {
             dirty_stmts: changed_stmts.clone(),
             dirty_clusters: BTreeSet::new(),
-            dirty_schemas: BTreeSet::new(),
+            dirty_schemas: forced_dirty_schemas.clone(),
         }
     }
 
@@ -185,7 +193,7 @@ impl PendingFacts {
 struct Evaluator<'a> {
     changed_stmts: &'a BTreeSet<ObjectId>,
     base_facts: &'a BaseFacts,
-    changed_replacements: &'a BTreeSet<ObjectId>,
+    forced_dirty_schemas: &'a BTreeSet<SchemaQualifier>,
     indexes: FactIndexes,
 }
 
@@ -193,18 +201,18 @@ impl<'a> Evaluator<'a> {
     fn new(
         changed_stmts: &'a BTreeSet<ObjectId>,
         base_facts: &'a BaseFacts,
-        changed_replacements: &'a BTreeSet<ObjectId>,
+        forced_dirty_schemas: &'a BTreeSet<SchemaQualifier>,
     ) -> Self {
         Self {
             changed_stmts,
             base_facts,
-            changed_replacements,
+            forced_dirty_schemas,
             indexes: FactIndexes::from_base_facts(base_facts),
         }
     }
 
     fn run(&self) -> DirtyState {
-        let mut state = DirtyState::new(self.changed_stmts);
+        let mut state = DirtyState::new(self.changed_stmts, self.forced_dirty_schemas);
 
         let mut iteration = 0;
         loop {
@@ -331,18 +339,19 @@ impl<'a> Evaluator<'a> {
 
     /// Applies downstream dependency propagation for dirty statements.
     ///
-    /// Changed replacement MVs are excluded so in-place replacement does not fan out
-    /// to dependents that do not require redeployment.
+    /// Replacement MVs are excluded as parents: a dirty replacement MV is
+    /// redeployed in place, so its dirtiness does not fan out to dependents in
+    /// other schemas. This is the only special property of replacement MVs.
     ///
     /// ```datalog
-    /// DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P), NOT IsChangedReplacement(P)
+    /// DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P), NOT IsReplacement(P)
     /// ```
     fn derive_stmt_dependency_dirtiness(&self, state: &DirtyState, pending: &mut PendingFacts) {
         for dirty_obj in &state.dirty_stmts {
-            if self.changed_replacements.contains(dirty_obj) {
+            if self.base_facts.is_replacement.contains(dirty_obj) {
                 let skip_style = Style::new().yellow().bold();
                 verbose!(
-                    "  ├─ {}: {} is a changed replacement MV, not propagating to dependents",
+                    "  ├─ {}: {} is a replacement MV, not propagating to dependents",
                     "SKIP".if_supports_color(Stream::Stderr, |t| skip_style.style(t)),
                     dirty_obj
                         .to_string()
@@ -373,11 +382,14 @@ impl<'a> Evaluator<'a> {
 
     /// Marks schemas dirty from dirty statements eligible for schema-level redeploy.
     ///
-    /// Sinks and replacement MVs are excluded to preserve stage/apply semantics.
+    /// Sinks are excluded: they write to external systems and are created after
+    /// the swap during apply, so they must not pull their schema into a
+    /// redeploy. Replacement MVs are ordinary here — a dirty replacement MV
+    /// dirties its schema like any other compute object.
     ///
     /// ```datalog
     /// DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch),
-    ///                          NOT IsSink(O), NOT IsReplacement(O)
+    ///                          NOT IsSink(O)
     /// ```
     fn derive_schema_dirtiness(&self, state: &DirtyState, pending: &mut PendingFacts) {
         for obj in &state.dirty_stmts {
@@ -385,16 +397,6 @@ impl<'a> Evaluator<'a> {
                 let skip_style = Style::new().yellow().bold();
                 verbose!(
                     "  ├─ {}: {} is a sink, not marking schema dirty",
-                    "SKIP".if_supports_color(Stream::Stderr, |t| skip_style.style(t)),
-                    obj.to_string()
-                        .if_supports_color(Stream::Stderr, |t| t.cyan())
-                );
-                continue;
-            }
-            if self.base_facts.is_replacement.contains(obj) {
-                let skip_style = Style::new().yellow().bold();
-                verbose!(
-                    "  ├─ {}: {} is a replacement MV, not marking schema dirty",
                     "SKIP".if_supports_color(Stream::Stderr, |t| skip_style.style(t)),
                     obj.to_string()
                         .if_supports_color(Stream::Stderr, |t| t.cyan())
@@ -419,18 +421,19 @@ impl<'a> Evaluator<'a> {
 
     /// Pulls statements into the dirty set when their schema is marked dirty.
     ///
+    /// Every object in a dirty schema is dirty, replacement MVs included: a
+    /// stable schema redeploys atomically. The downstream-propagation exclusion
+    /// (Rule 4) is what keeps a dirty replacement MV from pulling in dependents
+    /// in *other* schemas.
+    ///
     /// ```datalog
-    /// DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch),
-    ///                  NOT IsReplacement(O)
+    /// DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch)
     /// ```
     fn derive_stmt_dirtiness_from_schemas(&self, state: &DirtyState, pending: &mut PendingFacts) {
         for dirty_schema in &state.dirty_schemas {
             if let Some(objects) = self.indexes.schema_to_objects.get(dirty_schema) {
                 for obj in objects {
-                    if self.base_facts.is_replacement.contains(obj)
-                        || state.dirty_stmts.contains(obj)
-                        || !pending.dirty_stmts.insert(obj.clone())
-                    {
+                    if state.dirty_stmts.contains(obj) || !pending.dirty_stmts.insert(obj.clone()) {
                         continue;
                     }
                     verbose!(
@@ -451,20 +454,25 @@ impl<'a> Evaluator<'a> {
 ///
 /// Implements the Datalog rules defined at the top of this module.
 ///
+/// `forced_dirty_schemas` seeds the fixed-point with schemas the caller forces
+/// dirty (e.g. `stage --redeploy-schema`); pass an empty set for pure
+/// change-driven dirtiness. Every object in a forced schema, and its downstream
+/// dependents, ends up in the dirty set.
+///
 /// **Important:** Sinks are special - they do NOT propagate dirtiness to clusters or schemas.
 /// Sinks write to external systems and are created after the swap during apply, so they
 /// shouldn't cause other objects to be redeployed.
 pub(super) fn compute_dirty_datalog(
     changed_stmts: &BTreeSet<ObjectId>,
     base_facts: &BaseFacts,
-    changed_replacements: &BTreeSet<ObjectId>,
+    forced_dirty_schemas: &BTreeSet<SchemaQualifier>,
 ) -> (
     BTreeSet<ObjectId>,
     BTreeSet<Cluster>,
     BTreeSet<SchemaQualifier>,
 ) {
     log_datalog_start(changed_stmts, base_facts);
-    let evaluator = Evaluator::new(changed_stmts, base_facts, changed_replacements);
+    let evaluator = Evaluator::new(changed_stmts, base_facts, forced_dirty_schemas);
     let state = evaluator.run();
 
     log_final_results(&state);

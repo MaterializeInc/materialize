@@ -189,6 +189,8 @@ pub async fn run(
     allow_dirty: bool,
     no_rollback: bool,
     dry_run: bool,
+    redeploy_schemas: &[String],
+    redeploy_all: bool,
 ) -> Result<(), CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
@@ -215,7 +217,16 @@ pub async fn run(
         crate::cli::commands::setup::validate_connection(&client, settings.emulator()).await?;
     crate::cli::commands::setup::require_deployer(role)?;
 
-    let Some(analysis) = analyze_project_changes(&client, &planned_project, &stage_name).await?
+    let forced_dirty_schemas = resolve_redeploy_schemas(&planned_project, redeploy_schemas)?;
+
+    let Some(analysis) = analyze_project_changes(
+        &client,
+        &planned_project,
+        &stage_name,
+        forced_dirty_schemas,
+        redeploy_all,
+    )
+    .await?
     else {
         return Ok(());
     };
@@ -319,6 +330,58 @@ pub async fn run(
     Ok(())
 }
 
+/// Parse one `--redeploy-schema` value, which must be fully qualified as
+/// `database.schema`. Reuses the SQL parser so reserved-word components quote
+/// correctly.
+fn parse_qualified_schema(raw: &str) -> Result<SchemaQualifier, CliError> {
+    let unqualified = || {
+        CliError::Message(format!(
+            "invalid --redeploy-schema '{}': expected a qualified 'database.schema' name",
+            raw
+        ))
+    };
+    let name = mz_sql_parser::parser::parse_item_name(raw).map_err(|_| unqualified())?;
+    let [database, schema] = name.0.as_slice() else {
+        return Err(unqualified());
+    };
+    Ok(SchemaQualifier::new(
+        database.as_str().to_string(),
+        schema.as_str().to_string(),
+    ))
+}
+
+/// Resolve `--redeploy-schema` values into `SchemaQualifier`s, validating each
+/// against the project's schemas.
+fn resolve_redeploy_schemas(
+    planned_project: &Project,
+    redeploy_schemas: &[String],
+) -> Result<BTreeSet<SchemaQualifier>, CliError> {
+    if redeploy_schemas.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    let objects: Vec<_> = planned_project.iter_objects().collect();
+    let project_schemas = SchemaQualifier::collect_from(&objects);
+
+    let mut resolved = BTreeSet::new();
+    for raw in redeploy_schemas {
+        let sq = parse_qualified_schema(raw)?;
+        if !project_schemas.contains(&sq) {
+            let available = project_schemas
+                .iter()
+                .map(|s| format!("{}.{}", s.database, s.schema))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(CliError::Message(format!(
+                "--redeploy-schema '{}.{}' is not a schema in this project; available: {}",
+                sq.database, sq.schema, available
+            )));
+        }
+        resolved.insert(sq);
+    }
+    Ok(resolved)
+}
+
 /// Produces the stage deployment plan by diffing against current production snapshot.
 ///
 /// Handles incremental-vs-full mode, applies stage-specific object filtering,
@@ -327,6 +390,8 @@ async fn analyze_project_changes<'a>(
     client: &Client,
     planned_project: &'a Project,
     stage_name: &str,
+    forced_dirty_schemas: BTreeSet<SchemaQualifier>,
+    redeploy_all: bool,
 ) -> Result<Option<StageAnalysis<'a>>, CliError> {
     progress::stage_start("Analyzing project changes");
     let analyze_start = Instant::now();
@@ -345,6 +410,12 @@ async fn analyze_project_changes<'a>(
     let new_snapshot = deployment_snapshot::build_snapshot_from_planned(planned_project)?;
     let production_snapshot = deployment_snapshot::load_from_database(client, None).await?;
 
+    let dirty_schemas = if redeploy_all {
+        new_snapshot.schemas.keys().cloned().collect()
+    } else {
+        forced_dirty_schemas
+    };
+
     let change_set = if production_snapshot.objects.is_empty() {
         None
     } else {
@@ -352,6 +423,7 @@ async fn analyze_project_changes<'a>(
             &production_snapshot,
             &new_snapshot,
             planned_project,
+            &dirty_schemas,
         ))
     };
 
@@ -1272,6 +1344,27 @@ mod tests {
     use crate::project::ir::object_id::ObjectId;
     use std::collections::{BTreeMap, BTreeSet};
 
+    #[mz_ore::test]
+    fn parse_qualified_schema_requires_two_parts() {
+        // Fully qualified parses to (database, schema).
+        let sq = parse_qualified_schema("app.core").expect("qualified name parses");
+        assert_eq!(
+            sq,
+            SchemaQualifier::new("app".to_string(), "core".to_string())
+        );
+
+        // A reserved-word component is handled via the SQL parser.
+        let sq = parse_qualified_schema("app.\"select\"").expect("quoted keyword parses");
+        assert_eq!(
+            sq,
+            SchemaQualifier::new("app".to_string(), "select".to_string())
+        );
+
+        // Unqualified (1-part) and over-qualified (3-part) are rejected.
+        assert!(parse_qualified_schema("core").is_err());
+        assert!(parse_qualified_schema("app.core.orders").is_err());
+    }
+
     /// Parse SQL strings into a compiled::DatabaseObject.
     ///
     /// The first CREATE statement becomes the main statement.
@@ -1542,6 +1635,7 @@ mod tests {
             &old_snapshot,
             &new_snapshot,
             &planned_project,
+            &BTreeSet::new(),
         );
 
         // The view should be in objects_to_deploy
@@ -1629,6 +1723,7 @@ mod tests {
             &old_snapshot,
             &new_snapshot,
             &planned_project,
+            &BTreeSet::new(),
         );
 
         assert!(

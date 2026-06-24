@@ -7,6 +7,6 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-CREATE TABLE products FROM SOURCE app.ingest.pg_source (REFERENCE public.products);
+CREATE TABLE foo (a int);
 
-GRANT SELECT ON TABLE app.ingest.products TO materialize
+CREATE INDEX foo_idx IN CLUSTER compute ON foo (a);

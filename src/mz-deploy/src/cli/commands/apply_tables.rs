@@ -81,7 +81,7 @@ pub async fn plan(
     for (obj_id, typed_obj) in target_objects {
         executor.take_statements();
 
-        let action = if existing.contains(&obj_id) {
+        if existing.contains(&obj_id) {
             apply_objects::reconcile_grants_and_comments(
                 client,
                 executor,
@@ -90,39 +90,45 @@ pub async fn plan(
                 &GRANT_KIND,
             )
             .await?;
-            ObjectAction::UpToDate
-        } else {
-            executor.execute_sql(&typed_obj.stmt).await?;
-            for index in &typed_obj.indexes {
-                executor.execute_sql(index).await?;
-            }
-            apply_objects::reconcile_grants_and_comments(
-                client,
-                executor,
-                &obj_id,
-                typed_obj,
-                &GRANT_KIND,
-            )
-            .await?;
-            ObjectAction::Created
-        };
+            results.push(ObjectResult {
+                object: obj_id.to_string(),
+                action: ObjectAction::UpToDate,
+                statements: executor.take_statements(),
+                redacted_statements: vec![],
+                transaction_group: None,
+                post_statements: vec![],
+            });
+            continue;
+        }
 
-        let txn_group = if action == ObjectAction::Created {
-            if let Statement::CreateTableFromSource(s) = &typed_obj.stmt {
-                Some(s.source.to_string())
-            } else {
-                None
-            }
-        } else {
-            None
+        executor.execute_sql(&typed_obj.stmt).await?;
+        let statements = executor.take_statements();
+
+        for index in &typed_obj.indexes {
+            executor.execute_sql(index).await?;
+        }
+        apply_objects::reconcile_grants_and_comments(
+            client,
+            executor,
+            &obj_id,
+            typed_obj,
+            &GRANT_KIND,
+        )
+        .await?;
+        let post_statements = executor.take_statements();
+
+        let transaction_group = match &typed_obj.stmt {
+            Statement::CreateTableFromSource(s) => Some(s.source.to_string()),
+            _ => None,
         };
 
         results.push(ObjectResult {
             object: obj_id.to_string(),
-            action,
-            statements: executor.take_statements(),
+            action: ObjectAction::Created,
+            statements,
             redacted_statements: vec![],
-            transaction_group: txn_group,
+            transaction_group,
+            post_statements,
         });
     }
 

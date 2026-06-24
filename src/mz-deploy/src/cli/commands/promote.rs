@@ -457,11 +457,18 @@ pub async fn run(
     let role = super::setup::validate_connection(&client, settings.emulator()).await?;
     super::setup::require_deployer(role)?;
 
-    // Validate deployment exists and is not promoted
-    client.deployments().validate_staging(deploy_id).await?;
-
     let apply_state = client.deployments().get_apply_state(deploy_id).await?;
     verbose!("Apply state: {:?}", apply_state);
+
+    // A fresh promote must target a staged, not-yet-promoted deployment. When
+    // apply-state markers already exist the promote was interrupted mid-flight
+    // (PreSwap/PostSwap), so resume it instead — even if `promoted_at` was
+    // already recorded. This makes a crash in the window between recording the
+    // promotion and dropping the markers recoverable by simply re-running
+    // `promote`, rather than leaving the markers orphaned.
+    if matches!(apply_state, ApplyState::NotStarted) {
+        client.deployments().validate_staging(deploy_id).await?;
+    }
 
     let staging_snapshot =
         deployment_snapshot::load_from_database(&client, Some(deploy_id)).await?;
@@ -482,12 +489,29 @@ pub async fn run(
     }
 
     execute_swap_phase(&client, &plan).await?;
+    maybe_crash("after-swap");
     run_post_swap_steps(&client, &plan).await?;
+    maybe_crash("after-post-swap");
     cleanup_apply_state(&client, &plan.deploy_id).await?;
 
     progress::success("Deployment completed successfully!");
 
     Ok(())
+}
+
+/// Test-only crash injection. When the `MZ_DEPLOY_FAIL_AT` environment variable
+/// matches `phase`, abort the process immediately — no unwinding, no cleanup —
+/// to faithfully simulate a crash at that boundary so promote's resume paths can
+/// be exercised end to end. Inert in normal use (the variable is never set).
+///
+/// Boundaries: `after-markers` (markers written, swap not committed → PreSwap),
+/// `after-swap` (swap committed → PostSwap), `after-post-swap` (post-swap work
+/// done, markers not yet cleaned up → PostSwap).
+fn maybe_crash(phase: &str) {
+    if std::env::var("MZ_DEPLOY_FAIL_AT").ok().as_deref() == Some(phase) {
+        crate::info!("MZ_DEPLOY_FAIL_AT={}: simulating crash", phase);
+        std::process::exit(1);
+    }
 }
 
 /// Runs the swap portion of apply according to persisted resume state.
@@ -499,6 +523,7 @@ async fn execute_swap_phase(client: &Client, plan: &DeploymentPlan) -> Result<()
                 .deployments()
                 .create_apply_state_schemas(&plan.deploy_id)
                 .await?;
+            maybe_crash("after-markers");
             verbose!("Executing atomic swap...");
             execute_atomic_swap(
                 client,
@@ -919,6 +944,13 @@ async fn execute_pending_sinks(client: &Client, plan: &DeploymentPlan) -> Result
 /// Apply replacement materialized views using data from the plan.
 ///
 /// Uses `plan.replacement_mvs` instead of re-querying.
+///
+/// Idempotent across a post-swap resume: `APPLY REPLACEMENT` consumes the
+/// staging MV, and the replacement-MV records are not deleted until
+/// `cleanup_apply_state`. A crash between recording the promotion and that
+/// cleanup leaves the records in place while their staging MVs are already
+/// gone, so re-running skips any replacement whose staging source MV no longer
+/// exists rather than erroring on the dropped staging schema.
 async fn apply_replacement_mvs(client: &Client, plan: &DeploymentPlan) -> Result<(), CliError> {
     if plan.replacement_mvs.is_empty() {
         verbose!("No replacement MVs to apply");
@@ -926,6 +958,25 @@ async fn apply_replacement_mvs(client: &Client, plan: &DeploymentPlan) -> Result
     }
 
     for record in &plan.replacement_mvs {
+        let already_applied = !client
+            .introspection()
+            .object_exists(
+                &record.target_database,
+                &record.replacement_schema,
+                &record.target_name,
+            )
+            .await
+            .map_err(CliError::Connection)?;
+        if already_applied {
+            verbose!(
+                "Skipping already-applied replacement {}.{}.{}",
+                record.target_database,
+                record.target_schema,
+                record.target_name
+            );
+            continue;
+        }
+
         let alter_sql = format!(
             "ALTER MATERIALIZED VIEW \"{}\".\"{}\".\"{}\"\
              APPLY REPLACEMENT \"{}\".\"{}\".\"{}\";",
