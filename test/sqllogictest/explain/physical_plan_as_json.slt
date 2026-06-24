@@ -142,9 +142,9 @@ EXPLAIN PHYSICAL PLAN WITH(no fast path) AS JSON FOR
                 [
                   {
                     "data": [
-                      45,
+                      50,
                       1,
-                      45,
+                      50,
                       2
                     ]
                   },
@@ -154,9 +154,9 @@ EXPLAIN PHYSICAL PLAN WITH(no fast path) AS JSON FOR
                 [
                   {
                     "data": [
-                      45,
+                      50,
                       3,
-                      45,
+                      50,
                       4
                     ]
                   },
@@ -343,13 +343,13 @@ SELECT a + b, 1 FROM t
                         {
                           "Ok": {
                             "data": [
-                              45,
+                              50,
                               1
                             ]
                           }
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": false
                         }
                       ]
@@ -442,13 +442,13 @@ SELECT c + d, 1 FROM u
               {
                 "Ok": {
                   "data": [
-                    45,
+                    50,
                     1
                   ]
                 }
               },
               {
-                "scalar_type": "Int32",
+                "scalar_type": "Int",
                 "nullable": false
               }
             ]
@@ -569,7 +569,7 @@ SELECT * FROM ov
                       }
                     },
                     {
-                      "scalar_type": "Int64",
+                      "scalar_type": "Int",
                       "nullable": false
                     }
                   ]
@@ -882,7 +882,7 @@ SELECT * FROM ov
                       }
                     },
                     {
-                      "scalar_type": "Int64",
+                      "scalar_type": "Int",
                       "nullable": false
                     }
                   ]
@@ -1139,13 +1139,13 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                           {
                                             "Ok": {
                                               "data": [
-                                                45,
+                                                50,
                                                 1
                                               ]
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           }
                                         ]
@@ -1219,13 +1219,13 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                           {
                                             "Ok": {
                                               "data": [
-                                                45,
+                                                50,
                                                 1
                                               ]
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           }
                                         ]
@@ -1358,7 +1358,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                         [
                                                           {
                                                             "data": [
-                                                              45,
+                                                              50,
                                                               5
                                                             ]
                                                           },
@@ -1556,13 +1556,13 @@ SELECT x * 5 FROM cte WHERE x = 5
                     {
                       "Ok": {
                         "data": [
-                          45,
+                          50,
                           25
                         ]
                       }
                     },
                     {
-                      "scalar_type": "Int32",
+                      "scalar_type": "Int",
                       "nullable": false
                     }
                   ]
@@ -1616,13 +1616,13 @@ SELECT x * 5 FROM cte WHERE x = 5
                     {
                       "Ok": {
                         "data": [
-                          45,
+                          50,
                           5
                         ]
                       }
                     },
                     {
-                      "scalar_type": "Int32",
+                      "scalar_type": "Int",
                       "nullable": false
                     }
                   ]
@@ -1715,13 +1715,13 @@ SELECT generate_series(a, b) from t
                   {
                     "Ok": {
                       "data": [
-                        45,
+                        50,
                         1
                       ]
                     }
                   },
                   {
-                    "scalar_type": "Int32",
+                    "scalar_type": "Int",
                     "nullable": false
                   }
                 ]
@@ -2316,7 +2316,7 @@ FROM t
                                     }
                                   },
                                   {
-                                    "scalar_type": "Int64",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ]
@@ -2331,7 +2331,7 @@ FROM t
                                     }
                                   },
                                   {
-                                    "scalar_type": "Int64",
+                                    "scalar_type": "Int",
                                     "nullable": false
                                   }
                                 ]
@@ -2750,7 +2750,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                                     }
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ]
@@ -2765,7 +2765,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                                     }
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ]
@@ -3066,7 +3066,7 @@ SELECT * FROM hierarchical_global
                                     }
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ]
@@ -3081,7 +3081,7 @@ SELECT * FROM hierarchical_global
                                     }
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ]
@@ -8540,7 +8540,7 @@ MATERIALIZED VIEW collated_global_mv
                                           }
                                         },
                                         {
-                                          "scalar_type": "Int64",
+                                          "scalar_type": "Int",
                                           "nullable": false
                                         }
                                       ]
@@ -8570,7 +8570,7 @@ MATERIALIZED VIEW collated_global_mv
                                           }
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         }
                                       ]
@@ -8585,7 +8585,7 @@ MATERIALIZED VIEW collated_global_mv
                                           }
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         }
                                       ]
@@ -8600,7 +8600,7 @@ MATERIALIZED VIEW collated_global_mv
                                           }
                                         },
                                         {
-                                          "scalar_type": "Int64",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         }
                                       ]
@@ -9900,7 +9900,7 @@ SELECT * FROM collated_global
                                           }
                                         },
                                         {
-                                          "scalar_type": "Int64",
+                                          "scalar_type": "Int",
                                           "nullable": false
                                         }
                                       ]
@@ -9930,7 +9930,7 @@ SELECT * FROM collated_global
                                           }
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         }
                                       ]
@@ -9945,7 +9945,7 @@ SELECT * FROM collated_global
                                           }
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         }
                                       ]
@@ -9960,7 +9960,7 @@ SELECT * FROM collated_global
                                           }
                                         },
                                         {
-                                          "scalar_type": "Int64",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         }
                                       ]
@@ -10327,13 +10327,13 @@ WHERE a = c AND d = e AND b + d > 42
                                           {
                                             "Ok": {
                                               "data": [
-                                                45,
+                                                50,
                                                 42
                                               ]
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           }
                                         ]
@@ -10515,13 +10515,13 @@ WHERE a = c AND d = e AND b + d > 42
                                           {
                                             "Ok": {
                                               "data": [
-                                                45,
+                                                50,
                                                 42
                                               ]
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           }
                                         ]
@@ -10736,13 +10736,13 @@ WHERE a = c AND d = e AND b + d > 42
                                           {
                                             "Ok": {
                                               "data": [
-                                                45,
+                                                50,
                                                 42
                                               ]
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           }
                                         ]

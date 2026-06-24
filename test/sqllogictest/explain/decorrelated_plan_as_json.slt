@@ -87,13 +87,13 @@ SELECT 1 / 0
                       {
                         "Ok": {
                           "data": [
-                            45,
+                            50,
                             1
                           ]
                         }
                       },
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": false
                       }
                     ]
@@ -103,12 +103,12 @@ SELECT 1 / 0
                       {
                         "Ok": {
                           "data": [
-                            44
+                            49
                           ]
                         }
                       },
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": false
                       }
                     ]
@@ -179,13 +179,13 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                       {
                         "Ok": {
                           "data": [
-                            45,
+                            50,
                             1
                           ]
                         }
                       },
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": false
                       }
                     ]
@@ -195,13 +195,13 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                       {
                         "Ok": {
                           "data": [
-                            45,
+                            50,
                             2
                           ]
                         }
                       },
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": false
                       }
                     ]
@@ -240,13 +240,13 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              45,
+                              50,
                               1
                             ]
                           }
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": false
                         }
                       ]
@@ -256,13 +256,13 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              45,
+                              50,
                               2
                             ]
                           }
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": false
                         }
                       ]
@@ -300,13 +300,13 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              45,
+                              50,
                               3
                             ]
                           }
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": false
                         }
                       ]
@@ -316,13 +316,13 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              45,
+                              50,
                               4
                             ]
                           }
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": false
                         }
                       ]
@@ -405,11 +405,11 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                               "typ": {
                                 "column_types": [
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": false
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ],
@@ -452,12 +452,12 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                           {
                                             "Ok": {
                                               "data": [
-                                                44
+                                                49
                                               ]
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           }
                                         ]
@@ -480,12 +480,12 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                           {
                                             "Ok": {
                                               "data": [
-                                                44
+                                                49
                                               ]
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           }
                                         ]
@@ -524,12 +524,12 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                     {
                                       "Ok": {
                                         "data": [
-                                          44
+                                          49
                                         ]
                                       }
                                     },
                                     {
-                                      "scalar_type": "Int32",
+                                      "scalar_type": "Int",
                                       "nullable": false
                                     }
                                   ]
@@ -550,11 +550,11 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     "typ": {
                       "column_types": [
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": false
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         }
                       ],
@@ -571,13 +571,13 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                   {
                     "Ok": {
                       "data": [
-                        45,
+                        50,
                         1
                       ]
                     }
                   },
                   {
-                    "scalar_type": "Int32",
+                    "scalar_type": "Int",
                     "nullable": false
                   }
                 ]
@@ -672,11 +672,11 @@ SELECT generate_series(a, b) from t
                       "typ": {
                         "column_types": [
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": true
                           },
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": true
                           }
                         ],
@@ -700,11 +700,11 @@ SELECT generate_series(a, b) from t
                     "typ": {
                       "column_types": [
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         }
                       ],
@@ -732,13 +732,13 @@ SELECT generate_series(a, b) from t
                       {
                         "Ok": {
                           "data": [
-                            45,
+                            50,
                             1
                           ]
                         }
                       },
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": false
                       }
                     ]
@@ -818,11 +818,11 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                               "typ": {
                                 "column_types": [
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ],
@@ -888,11 +888,11 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                                     "typ": {
                                       "column_types": [
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": false
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         }
                                       ],
@@ -994,11 +994,11 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -1049,11 +1049,11 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                 "typ": {
                                   "column_types": [
                                     {
-                                      "scalar_type": "Int32",
+                                      "scalar_type": "Int",
                                       "nullable": false
                                     },
                                     {
-                                      "scalar_type": "Int32",
+                                      "scalar_type": "Int",
                                       "nullable": true
                                     }
                                   ],
@@ -1136,11 +1136,11 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
               "typ": {
                 "column_types": [
                   {
-                    "scalar_type": "Int32",
+                    "scalar_type": "Int",
                     "nullable": true
                   },
                   {
-                    "scalar_type": "Int32",
+                    "scalar_type": "Int",
                     "nullable": true
                   }
                 ],
@@ -1223,11 +1223,11 @@ SELECT abs(min(a) - max(a)) FROM t
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -1278,11 +1278,11 @@ SELECT abs(min(a) - max(a)) FROM t
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 }
                               ],
@@ -1316,11 +1316,11 @@ SELECT abs(min(a) - max(a)) FROM t
                                                           "typ": {
                                                             "column_types": [
                                                               {
-                                                                "scalar_type": "Int32",
+                                                                "scalar_type": "Int",
                                                                 "nullable": true
                                                               },
                                                               {
-                                                                "scalar_type": "Int32",
+                                                                "scalar_type": "Int",
                                                                 "nullable": true
                                                               }
                                                             ],
@@ -1405,11 +1405,11 @@ SELECT abs(min(a) - max(a)) FROM t
                                     "typ": {
                                       "column_types": [
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         }
                                       ],
@@ -1435,11 +1435,11 @@ SELECT abs(min(a) - max(a)) FROM t
                     "typ": {
                       "column_types": [
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         }
                       ],
@@ -1558,11 +1558,11 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -1584,11 +1584,11 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                                     "typ": {
                                       "column_types": [
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         }
                                       ],
@@ -1658,15 +1658,15 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                     "typ": {
                       "column_types": [
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         }
                       ],
@@ -1789,11 +1789,11 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -1863,11 +1863,11 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                         "typ": {
                                           "column_types": [
                                             {
-                                              "scalar_type": "Int32",
+                                              "scalar_type": "Int",
                                               "nullable": true
                                             },
                                             {
-                                              "scalar_type": "Int32",
+                                              "scalar_type": "Int",
                                               "nullable": true
                                             }
                                           ],
@@ -1902,11 +1902,11 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               "typ": {
                                                 "column_types": [
                                                   {
-                                                    "scalar_type": "Int32",
+                                                    "scalar_type": "Int",
                                                     "nullable": true
                                                   },
                                                   {
-                                                    "scalar_type": "Int32",
+                                                    "scalar_type": "Int",
                                                     "nullable": true
                                                   }
                                                 ],
@@ -1935,7 +1935,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                     "typ": {
                                                                       "column_types": [
                                                                         {
-                                                                          "scalar_type": "Int32",
+                                                                          "scalar_type": "Int",
                                                                           "nullable": true
                                                                         }
                                                                       ],
@@ -1958,11 +1958,11 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                     "typ": {
                                                                       "column_types": [
                                                                         {
-                                                                          "scalar_type": "Int32",
+                                                                          "scalar_type": "Int",
                                                                           "nullable": false
                                                                         },
                                                                         {
-                                                                          "scalar_type": "Int32",
+                                                                          "scalar_type": "Int",
                                                                           "nullable": true
                                                                         }
                                                                       ],
@@ -2041,7 +2041,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                       "typ": {
                                                         "column_types": [
                                                           {
-                                                            "scalar_type": "Int32",
+                                                            "scalar_type": "Int",
                                                             "nullable": false
                                                           },
                                                           {
@@ -2081,7 +2081,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                                     "typ": {
                                                                                       "column_types": [
                                                                                         {
-                                                                                          "scalar_type": "Int32",
+                                                                                          "scalar_type": "Int",
                                                                                           "nullable": false
                                                                                         },
                                                                                         {
@@ -2124,7 +2124,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                                   "typ": {
                                                                                     "column_types": [
                                                                                       {
-                                                                                        "scalar_type": "Int32",
+                                                                                        "scalar_type": "Int",
                                                                                         "nullable": true
                                                                                       }
                                                                                     ],
@@ -2161,7 +2161,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                         "typ": {
                                                                           "column_types": [
                                                                             {
-                                                                              "scalar_type": "Int32",
+                                                                              "scalar_type": "Int",
                                                                               "nullable": true
                                                                             }
                                                                           ],
@@ -2294,11 +2294,11 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 }
                               ],
@@ -2333,11 +2333,11 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -2366,7 +2366,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                         "typ": {
                                                           "column_types": [
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": true
                                                             }
                                                           ],
@@ -2389,11 +2389,11 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                         "typ": {
                                                           "column_types": [
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": false
                                                             },
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": true
                                                             }
                                                           ],
@@ -2472,7 +2472,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": false
                                               },
                                               {
@@ -2512,7 +2512,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                         "typ": {
                                                                           "column_types": [
                                                                             {
-                                                                              "scalar_type": "Int32",
+                                                                              "scalar_type": "Int",
                                                                               "nullable": false
                                                                             },
                                                                             {
@@ -2555,7 +2555,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": true
                                                                           }
                                                                         ],
@@ -2592,7 +2592,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                             "typ": {
                                                               "column_types": [
                                                                 {
-                                                                  "scalar_type": "Int32",
+                                                                  "scalar_type": "Int",
                                                                   "nullable": true
                                                                 }
                                                               ],
@@ -2776,11 +2776,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -2805,11 +2805,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -2831,11 +2831,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -2876,11 +2876,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -2920,11 +2920,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                             "typ": {
                                               "column_types": [
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": true
                                                 },
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": true
                                                 }
                                               ],
@@ -2961,7 +2961,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": true
                                                                           }
                                                                         ],
@@ -2984,11 +2984,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": false
                                                                           },
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": true
                                                                           }
                                                                         ],
@@ -3040,7 +3040,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                               }
                                                             },
                                                             {
-                                                              "scalar_type": "Int64",
+                                                              "scalar_type": "Int",
                                                               "nullable": false
                                                             }
                                                           ]
@@ -3066,11 +3066,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                         "typ": {
                                                           "column_types": [
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": false
                                                             },
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": false
                                                             }
                                                           ],
@@ -3098,11 +3098,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": false
                                                                           },
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": false
                                                                           }
                                                                         ],
@@ -3150,7 +3150,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                               },
                                                               "func": {
                                                                 "GuardSubquerySize": {
-                                                                  "column_type": "Int32"
+                                                                  "column_type": "Int64"
                                                                 }
                                                               },
                                                               "exprs": [
@@ -3184,11 +3184,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                     "typ": {
                                                       "column_types": [
                                                         {
-                                                          "scalar_type": "Int32",
+                                                          "scalar_type": "Int",
                                                           "nullable": false
                                                         },
                                                         {
-                                                          "scalar_type": "Int32",
+                                                          "scalar_type": "Int",
                                                           "nullable": false
                                                         }
                                                       ],
@@ -3220,11 +3220,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                                   "typ": {
                                                                                     "column_types": [
                                                                                       {
-                                                                                        "scalar_type": "Int32",
+                                                                                        "scalar_type": "Int",
                                                                                         "nullable": false
                                                                                       },
                                                                                       {
-                                                                                        "scalar_type": "Int32",
+                                                                                        "scalar_type": "Int",
                                                                                         "nullable": false
                                                                                       }
                                                                                     ],
@@ -3259,7 +3259,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                                 "typ": {
                                                                                   "column_types": [
                                                                                     {
-                                                                                      "scalar_type": "Int32",
+                                                                                      "scalar_type": "Int",
                                                                                       "nullable": true
                                                                                     }
                                                                                   ],
@@ -3296,7 +3296,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": true
                                                                           }
                                                                         ],
@@ -3351,7 +3351,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             "typ": {
                                                               "column_types": [
                                                                 {
-                                                                  "scalar_type": "Int32",
+                                                                  "scalar_type": "Int",
                                                                   "nullable": true
                                                                 }
                                                               ],
@@ -3413,11 +3413,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -3458,11 +3458,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -3502,11 +3502,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                             "typ": {
                                               "column_types": [
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": true
                                                 },
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": true
                                                 }
                                               ],
@@ -3543,7 +3543,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": true
                                                                           }
                                                                         ],
@@ -3566,11 +3566,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": false
                                                                           },
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": true
                                                                           }
                                                                         ],
@@ -3622,7 +3622,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                               }
                                                             },
                                                             {
-                                                              "scalar_type": "Int64",
+                                                              "scalar_type": "Int",
                                                               "nullable": false
                                                             }
                                                           ]
@@ -3648,11 +3648,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                         "typ": {
                                                           "column_types": [
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": false
                                                             },
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": false
                                                             }
                                                           ],
@@ -3680,11 +3680,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": false
                                                                           },
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": false
                                                                           }
                                                                         ],
@@ -3732,7 +3732,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                               },
                                                               "func": {
                                                                 "GuardSubquerySize": {
-                                                                  "column_type": "Int32"
+                                                                  "column_type": "Int64"
                                                                 }
                                                               },
                                                               "exprs": [
@@ -3766,11 +3766,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                     "typ": {
                                                       "column_types": [
                                                         {
-                                                          "scalar_type": "Int32",
+                                                          "scalar_type": "Int",
                                                           "nullable": false
                                                         },
                                                         {
-                                                          "scalar_type": "Int32",
+                                                          "scalar_type": "Int",
                                                           "nullable": false
                                                         }
                                                       ],
@@ -3802,11 +3802,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                                   "typ": {
                                                                                     "column_types": [
                                                                                       {
-                                                                                        "scalar_type": "Int32",
+                                                                                        "scalar_type": "Int",
                                                                                         "nullable": false
                                                                                       },
                                                                                       {
-                                                                                        "scalar_type": "Int32",
+                                                                                        "scalar_type": "Int",
                                                                                         "nullable": false
                                                                                       }
                                                                                     ],
@@ -3841,7 +3841,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                                 "typ": {
                                                                                   "column_types": [
                                                                                     {
-                                                                                      "scalar_type": "Int32",
+                                                                                      "scalar_type": "Int",
                                                                                       "nullable": true
                                                                                     }
                                                                                   ],
@@ -3878,7 +3878,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": true
                                                                           }
                                                                         ],
@@ -3933,7 +3933,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             "typ": {
                                                               "column_types": [
                                                                 {
-                                                                  "scalar_type": "Int32",
+                                                                  "scalar_type": "Int",
                                                                   "nullable": true
                                                                 }
                                                               ],
@@ -4114,11 +4114,11 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                       "typ": {
                         "column_types": [
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": true
                           },
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": true
                           }
                         ],
@@ -4162,11 +4162,11 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -4196,11 +4196,11 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -4217,11 +4217,11 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -4251,19 +4251,19 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                         "typ": {
                           "column_types": [
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             }
                           ],
@@ -4346,11 +4346,11 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                       "typ": {
                         "column_types": [
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": true
                           },
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": true
                           }
                         ],
@@ -4394,11 +4394,11 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -4428,11 +4428,11 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -4449,11 +4449,11 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -4483,19 +4483,19 @@ SELECT t1.a, t2.a FROM t as t1 INNER JOIN t as t2 ON true
                         "typ": {
                           "column_types": [
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             }
                           ],
@@ -4588,11 +4588,11 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               "typ": {
                                 "column_types": [
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ],
@@ -4636,11 +4636,11 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -4670,11 +4670,11 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -4691,11 +4691,11 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -4725,19 +4725,19 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 "typ": {
                                   "column_types": [
                                     {
-                                      "scalar_type": "Int32",
+                                      "scalar_type": "Int",
                                       "nullable": true
                                     },
                                     {
-                                      "scalar_type": "Int32",
+                                      "scalar_type": "Int",
                                       "nullable": true
                                     },
                                     {
-                                      "scalar_type": "Int32",
+                                      "scalar_type": "Int",
                                       "nullable": true
                                     },
                                     {
-                                      "scalar_type": "Int32",
+                                      "scalar_type": "Int",
                                       "nullable": true
                                     }
                                   ],
@@ -4782,11 +4782,11 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               "typ": {
                                 "column_types": [
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ],
@@ -4816,19 +4816,19 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -4845,11 +4845,11 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -4881,27 +4881,27 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 }
                               ],
@@ -5041,11 +5041,11 @@ INNER JOIN t as t3 ON t2.b = t3.b
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -5089,11 +5089,11 @@ INNER JOIN t as t3 ON t2.b = t3.b
                               "typ": {
                                 "column_types": [
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ],
@@ -5125,11 +5125,11 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -5146,11 +5146,11 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -5203,19 +5203,19 @@ INNER JOIN t as t3 ON t2.b = t3.b
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": false
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": false
                                 }
                               ],
@@ -5260,11 +5260,11 @@ INNER JOIN t as t3 ON t2.b = t3.b
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -5296,19 +5296,19 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           }
                                         ],
@@ -5325,11 +5325,11 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -5384,27 +5384,27 @@ INNER JOIN t as t3 ON t2.b = t3.b
                         "typ": {
                           "column_types": [
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": false
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": false
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": false
                             }
                           ],
@@ -5493,11 +5493,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -5541,11 +5541,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                               "typ": {
                                 "column_types": [
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ],
@@ -5577,11 +5577,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -5598,11 +5598,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -5662,19 +5662,19 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         "typ": {
                                           "column_types": [
                                             {
-                                              "scalar_type": "Int32",
+                                              "scalar_type": "Int",
                                               "nullable": true
                                             },
                                             {
-                                              "scalar_type": "Int32",
+                                              "scalar_type": "Int",
                                               "nullable": false
                                             },
                                             {
-                                              "scalar_type": "Int32",
+                                              "scalar_type": "Int",
                                               "nullable": true
                                             },
                                             {
-                                              "scalar_type": "Int32",
+                                              "scalar_type": "Int",
                                               "nullable": false
                                             }
                                           ],
@@ -5724,11 +5724,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                               "typ": {
                                                                 "column_types": [
                                                                   {
-                                                                    "scalar_type": "Int32",
+                                                                    "scalar_type": "Int",
                                                                     "nullable": true
                                                                   },
                                                                   {
-                                                                    "scalar_type": "Int32",
+                                                                    "scalar_type": "Int",
                                                                     "nullable": true
                                                                   }
                                                                 ],
@@ -5769,7 +5769,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                           "typ": {
                                                             "column_types": [
                                                               {
-                                                                "scalar_type": "Int32",
+                                                                "scalar_type": "Int",
                                                                 "nullable": false
                                                               }
                                                             ],
@@ -5819,11 +5819,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                               "typ": {
                                                 "column_types": [
                                                   {
-                                                    "scalar_type": "Int32",
+                                                    "scalar_type": "Int",
                                                     "nullable": true
                                                   },
                                                   {
-                                                    "scalar_type": "Int32",
+                                                    "scalar_type": "Int",
                                                     "nullable": true
                                                   }
                                                 ],
@@ -5846,7 +5846,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ]
@@ -5861,7 +5861,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ]
@@ -5878,19 +5878,19 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           }
                                         ],
@@ -5940,11 +5940,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -5976,19 +5976,19 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -6005,11 +6005,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -6071,27 +6071,27 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     "typ": {
                                       "column_types": [
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": false
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": true
                                         },
                                         {
-                                          "scalar_type": "Int32",
+                                          "scalar_type": "Int",
                                           "nullable": false
                                         }
                                       ],
@@ -6143,11 +6143,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                               "typ": {
                                                                 "column_types": [
                                                                   {
-                                                                    "scalar_type": "Int32",
+                                                                    "scalar_type": "Int",
                                                                     "nullable": true
                                                                   },
                                                                   {
-                                                                    "scalar_type": "Int32",
+                                                                    "scalar_type": "Int",
                                                                     "nullable": true
                                                                   }
                                                                 ],
@@ -6188,7 +6188,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                           "typ": {
                                                             "column_types": [
                                                               {
-                                                                "scalar_type": "Int32",
+                                                                "scalar_type": "Int",
                                                                 "nullable": false
                                                               }
                                                             ],
@@ -6238,11 +6238,11 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                               "typ": {
                                                 "column_types": [
                                                   {
-                                                    "scalar_type": "Int32",
+                                                    "scalar_type": "Int",
                                                     "nullable": true
                                                   },
                                                   {
-                                                    "scalar_type": "Int32",
+                                                    "scalar_type": "Int",
                                                     "nullable": true
                                                   }
                                                 ],
@@ -6265,7 +6265,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ]
@@ -6280,7 +6280,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ]
@@ -6295,7 +6295,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ]
@@ -6310,7 +6310,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ]
@@ -6337,27 +6337,27 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": false
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": false
                                       }
                                     ],
@@ -6452,11 +6452,11 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -6478,11 +6478,11 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 }
                               ],
@@ -6544,7 +6544,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -6561,7 +6561,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -6589,11 +6589,11 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                                 "typ": {
                                   "column_types": [
                                     {
-                                      "scalar_type": "Int32",
+                                      "scalar_type": "Int",
                                       "nullable": true
                                     },
                                     {
-                                      "scalar_type": "Int32",
+                                      "scalar_type": "Int",
                                       "nullable": true
                                     }
                                   ],
@@ -6612,11 +6612,11 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 },
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 }
                               ],
@@ -6745,11 +6745,11 @@ FROM
                       "typ": {
                         "column_types": [
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": true
                           },
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": true
                           }
                         ],
@@ -6776,11 +6776,11 @@ FROM
                         "typ": {
                           "column_types": [
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             },
                             {
-                              "scalar_type": "Int32",
+                              "scalar_type": "Int",
                               "nullable": true
                             }
                           ],
@@ -6815,11 +6815,11 @@ FROM
                               "typ": {
                                 "column_types": [
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   },
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ],
@@ -6847,7 +6847,7 @@ FROM
                                                 "typ": {
                                                   "column_types": [
                                                     {
-                                                      "scalar_type": "Int32",
+                                                      "scalar_type": "Int",
                                                       "nullable": true
                                                     }
                                                   ],
@@ -6870,11 +6870,11 @@ FROM
                                                 "typ": {
                                                   "column_types": [
                                                     {
-                                                      "scalar_type": "Int32",
+                                                      "scalar_type": "Int",
                                                       "nullable": true
                                                     },
                                                     {
-                                                      "scalar_type": "Int32",
+                                                      "scalar_type": "Int",
                                                       "nullable": true
                                                     }
                                                   ],
@@ -6935,11 +6935,11 @@ FROM
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -6975,11 +6975,11 @@ FROM
                                                                         "typ": {
                                                                           "column_types": [
                                                                             {
-                                                                              "scalar_type": "Int32",
+                                                                              "scalar_type": "Int",
                                                                               "nullable": true
                                                                             },
                                                                             {
-                                                                              "scalar_type": "Int32",
+                                                                              "scalar_type": "Int",
                                                                               "nullable": true
                                                                             }
                                                                           ],
@@ -7018,7 +7018,7 @@ FROM
                                                                       "typ": {
                                                                         "column_types": [
                                                                           {
-                                                                            "scalar_type": "Int32",
+                                                                            "scalar_type": "Int",
                                                                             "nullable": true
                                                                           }
                                                                         ],
@@ -7055,7 +7055,7 @@ FROM
                                                             "typ": {
                                                               "column_types": [
                                                                 {
-                                                                  "scalar_type": "Int32",
+                                                                  "scalar_type": "Int",
                                                                   "nullable": true
                                                                 }
                                                               ],
@@ -7110,7 +7110,7 @@ FROM
                                                   "typ": {
                                                     "column_types": [
                                                       {
-                                                        "scalar_type": "Int32",
+                                                        "scalar_type": "Int",
                                                         "nullable": true
                                                       }
                                                     ],
@@ -7138,11 +7138,11 @@ FROM
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -7220,15 +7220,15 @@ FROM
                     "typ": {
                       "column_types": [
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": false
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": false
                         }
                       ],
@@ -7263,15 +7263,15 @@ FROM
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": false
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": false
                               }
                             ],
@@ -7299,7 +7299,7 @@ FROM
                                             "typ": {
                                               "column_types": [
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": false
                                                 }
                                               ],
@@ -7322,11 +7322,11 @@ FROM
                                             "typ": {
                                               "column_types": [
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": true
                                                 },
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": true
                                                 }
                                               ],
@@ -7387,11 +7387,11 @@ FROM
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": false
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -7427,11 +7427,11 @@ FROM
                                                                     "typ": {
                                                                       "column_types": [
                                                                         {
-                                                                          "scalar_type": "Int32",
+                                                                          "scalar_type": "Int",
                                                                           "nullable": false
                                                                         },
                                                                         {
-                                                                          "scalar_type": "Int32",
+                                                                          "scalar_type": "Int",
                                                                           "nullable": true
                                                                         }
                                                                       ],
@@ -7470,7 +7470,7 @@ FROM
                                                                   "typ": {
                                                                     "column_types": [
                                                                       {
-                                                                        "scalar_type": "Int32",
+                                                                        "scalar_type": "Int",
                                                                         "nullable": false
                                                                       }
                                                                     ],
@@ -7507,7 +7507,7 @@ FROM
                                                         "typ": {
                                                           "column_types": [
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": false
                                                             }
                                                           ],
@@ -7562,7 +7562,7 @@ FROM
                                               "typ": {
                                                 "column_types": [
                                                   {
-                                                    "scalar_type": "Int32",
+                                                    "scalar_type": "Int",
                                                     "nullable": true
                                                   }
                                                 ],
@@ -7590,11 +7590,11 @@ FROM
                                   "typ": {
                                     "column_types": [
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": false
                                       },
                                       {
-                                        "scalar_type": "Int32",
+                                        "scalar_type": "Int",
                                         "nullable": true
                                       }
                                     ],
@@ -7793,11 +7793,11 @@ FROM
                   "typ": {
                     "column_types": [
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": true
                       },
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": true
                       }
                     ],
@@ -7824,11 +7824,11 @@ FROM
                     "typ": {
                       "column_types": [
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         },
                         {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int",
                           "nullable": true
                         }
                       ],
@@ -7863,11 +7863,11 @@ FROM
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               },
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -7895,7 +7895,7 @@ FROM
                                             "typ": {
                                               "column_types": [
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": true
                                                 }
                                               ],
@@ -7918,11 +7918,11 @@ FROM
                                             "typ": {
                                               "column_types": [
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": true
                                                 },
                                                 {
-                                                  "scalar_type": "Int32",
+                                                  "scalar_type": "Int",
                                                   "nullable": true
                                                 }
                                               ],
@@ -7983,11 +7983,11 @@ FROM
                                       "typ": {
                                         "column_types": [
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           },
                                           {
-                                            "scalar_type": "Int32",
+                                            "scalar_type": "Int",
                                             "nullable": true
                                           }
                                         ],
@@ -8023,11 +8023,11 @@ FROM
                                                                     "typ": {
                                                                       "column_types": [
                                                                         {
-                                                                          "scalar_type": "Int32",
+                                                                          "scalar_type": "Int",
                                                                           "nullable": true
                                                                         },
                                                                         {
-                                                                          "scalar_type": "Int32",
+                                                                          "scalar_type": "Int",
                                                                           "nullable": true
                                                                         }
                                                                       ],
@@ -8066,7 +8066,7 @@ FROM
                                                                   "typ": {
                                                                     "column_types": [
                                                                       {
-                                                                        "scalar_type": "Int32",
+                                                                        "scalar_type": "Int",
                                                                         "nullable": true
                                                                       }
                                                                     ],
@@ -8103,7 +8103,7 @@ FROM
                                                         "typ": {
                                                           "column_types": [
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": true
                                                             }
                                                           ],
@@ -8158,7 +8158,7 @@ FROM
                                               "typ": {
                                                 "column_types": [
                                                   {
-                                                    "scalar_type": "Int32",
+                                                    "scalar_type": "Int",
                                                     "nullable": true
                                                   }
                                                 ],
@@ -8191,11 +8191,11 @@ FROM
                                           "typ": {
                                             "column_types": [
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               },
                                               {
-                                                "scalar_type": "Int32",
+                                                "scalar_type": "Int",
                                                 "nullable": true
                                               }
                                             ],
@@ -8236,11 +8236,11 @@ FROM
                                                 "typ": {
                                                   "column_types": [
                                                     {
-                                                      "scalar_type": "Int32",
+                                                      "scalar_type": "Int",
                                                       "nullable": true
                                                     },
                                                     {
-                                                      "scalar_type": "Int32",
+                                                      "scalar_type": "Int",
                                                       "nullable": true
                                                     }
                                                   ],
@@ -8268,11 +8268,11 @@ FROM
                                                                   "typ": {
                                                                     "column_types": [
                                                                       {
-                                                                        "scalar_type": "Int32",
+                                                                        "scalar_type": "Int",
                                                                         "nullable": true
                                                                       },
                                                                       {
-                                                                        "scalar_type": "Int32",
+                                                                        "scalar_type": "Int",
                                                                         "nullable": true
                                                                       }
                                                                     ],
@@ -8296,11 +8296,11 @@ FROM
                                                                   "typ": {
                                                                     "column_types": [
                                                                       {
-                                                                        "scalar_type": "Int32",
+                                                                        "scalar_type": "Int",
                                                                         "nullable": true
                                                                       },
                                                                       {
-                                                                        "scalar_type": "Int32",
+                                                                        "scalar_type": "Int",
                                                                         "nullable": true
                                                                       }
                                                                     ],
@@ -8367,15 +8367,15 @@ FROM
                                                             "typ": {
                                                               "column_types": [
                                                                 {
-                                                                  "scalar_type": "Int32",
+                                                                  "scalar_type": "Int",
                                                                   "nullable": true
                                                                 },
                                                                 {
-                                                                  "scalar_type": "Int32",
+                                                                  "scalar_type": "Int",
                                                                   "nullable": true
                                                                 },
                                                                 {
-                                                                  "scalar_type": "Int32",
+                                                                  "scalar_type": "Int",
                                                                   "nullable": true
                                                                 }
                                                               ],
@@ -8412,15 +8412,15 @@ FROM
                                                                                           "typ": {
                                                                                             "column_types": [
                                                                                               {
-                                                                                                "scalar_type": "Int32",
+                                                                                                "scalar_type": "Int",
                                                                                                 "nullable": true
                                                                                               },
                                                                                               {
-                                                                                                "scalar_type": "Int32",
+                                                                                                "scalar_type": "Int",
                                                                                                 "nullable": true
                                                                                               },
                                                                                               {
-                                                                                                "scalar_type": "Int32",
+                                                                                                "scalar_type": "Int",
                                                                                                 "nullable": true
                                                                                               }
                                                                                             ],
@@ -8466,11 +8466,11 @@ FROM
                                                                                         "typ": {
                                                                                           "column_types": [
                                                                                             {
-                                                                                              "scalar_type": "Int32",
+                                                                                              "scalar_type": "Int",
                                                                                               "nullable": true
                                                                                             },
                                                                                             {
-                                                                                              "scalar_type": "Int32",
+                                                                                              "scalar_type": "Int",
                                                                                               "nullable": true
                                                                                             }
                                                                                           ],
@@ -8514,11 +8514,11 @@ FROM
                                                                               "typ": {
                                                                                 "column_types": [
                                                                                   {
-                                                                                    "scalar_type": "Int32",
+                                                                                    "scalar_type": "Int",
                                                                                     "nullable": true
                                                                                   },
                                                                                   {
-                                                                                    "scalar_type": "Int32",
+                                                                                    "scalar_type": "Int",
                                                                                     "nullable": true
                                                                                   }
                                                                                 ],
@@ -8589,7 +8589,7 @@ FROM
                                                                     "typ": {
                                                                       "column_types": [
                                                                         {
-                                                                          "scalar_type": "Int32",
+                                                                          "scalar_type": "Int",
                                                                           "nullable": true
                                                                         }
                                                                       ],
@@ -8617,15 +8617,15 @@ FROM
                                                         "typ": {
                                                           "column_types": [
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": true
                                                             },
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": true
                                                             },
                                                             {
-                                                              "scalar_type": "Int32",
+                                                              "scalar_type": "Int",
                                                               "nullable": true
                                                             }
                                                           ],
@@ -8676,13 +8676,13 @@ FROM
                                                                     {
                                                                       "Ok": {
                                                                         "data": [
-                                                                          45,
+                                                                          50,
                                                                           5
                                                                         ]
                                                                       }
                                                                     },
                                                                     {
-                                                                      "scalar_type": "Int32",
+                                                                      "scalar_type": "Int",
                                                                       "nullable": false
                                                                     }
                                                                   ]
