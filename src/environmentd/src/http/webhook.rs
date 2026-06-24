@@ -33,6 +33,7 @@ pub async fn handle_webhook(
     State(WebhookState {
         adapter_client_rx,
         webhook_cache,
+        ..
     }): State<WebhookState>,
     Path((database, schema, name)): Path<(String, String, String)>,
     headers: http::HeaderMap,
