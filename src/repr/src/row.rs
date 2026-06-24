@@ -4029,14 +4029,8 @@ mod tests {
         // all reachable from a crafted/corrupted `ProtoRow`, so they return an
         // error instead of panicking.
         for error_case in [
-            vec![
-                vec![Datum::Int(1), Datum::Int(2)],
-                vec![Datum::Int(3)],
-            ],
-            vec![
-                vec![Datum::Int(1)],
-                vec![Datum::Int(2), Datum::Int(3)],
-            ],
+            vec![vec![Datum::Int(1), Datum::Int(2)], vec![Datum::Int(3)]],
+            vec![vec![Datum::Int(1)], vec![Datum::Int(2), Datum::Int(3)]],
             vec![vec![Datum::Int(1)], vec![Datum::UInt(2)]],
             vec![vec![Datum::Null], vec![Datum::Int(2)]],
             vec![vec![Datum::Int(1)], vec![Datum::Null]],

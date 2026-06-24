@@ -4579,7 +4579,10 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 ecx.require_feature_flag(&vars::ENABLE_LIST_N_LAYERS)?;
                 let d = ecx.scalar_type(&e).unwrap_list_n_layers();
                 match i32::try_from(d) {
-                    Ok(d) => Ok(HirScalarExpr::literal(Datum::Int(i64::from(d)), SqlScalarType::Int32)),
+                    Ok(d) => Ok(HirScalarExpr::literal(
+                        Datum::Int(i64::from(d)),
+                        SqlScalarType::Int32,
+                    )),
                     Err(_) => sql_bail!("list has more than {} layers", i32::MAX),
                 }
 
