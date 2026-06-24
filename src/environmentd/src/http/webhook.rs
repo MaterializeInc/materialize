@@ -44,8 +44,22 @@ pub async fn handle_webhook(
     let max_request_size = WEBHOOK_MAX_REQUEST_SIZE_BYTES.get(&dyncfgs);
     let body = axum::body::to_bytes(body, max_request_size)
         .await
-        .map_err(|_| WebhookError::BodyTooLarge {
-            max_bytes: max_request_size,
+        .map_err(|err| {
+            use std::error::Error;
+            // axum::Error wraps the underlying cause as its source. If that source is a
+            // LengthLimitError the body exceeded the configured limit (HTTP 413). Any other
+            // cause (TCP reset, decompression failure, etc.) is an internal read error (HTTP 500)
+            // and must not be reported as a size-limit violation.
+            if err
+                .source()
+                .is_some_and(|s| s.is::<http_body_util::LengthLimitError>())
+            {
+                WebhookError::BodyTooLarge {
+                    max_bytes: max_request_size,
+                }
+            } else {
+                WebhookError::Internal(anyhow::anyhow!(err))
+            }
         })?;
     let adapter_client = adapter_client_rx.clone().await.expect("sender not dropped");
     // Collect headers into a map, while converting them into strings.
