@@ -1225,10 +1225,9 @@ fn plan_kafka_source_connection(
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
     }
-    if topic_metadata_refresh_interval < Duration::from_secs(1) {
-        // This is a librdkafka-enforced restriction that, if violated,
-        // would result in a runtime error for the source.
-        topic_metadata_refresh_interval = Duration::from_secs(1);
+    if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
+        // We enforce a minimum of 1 second refresh interval to prevent overloading the topic
+        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
     }
     let metadata_columns = include_metadata
         .into_iter()
@@ -3816,7 +3815,7 @@ fn kafka_sink_builder(
     } else if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
         // We enforce a minimum of 1 second here to prevent excessive refreshes, and ensure that
         // tokio::time::interval receives a valid (positive) duration.
-        topic_metadata_refresh_interval = Duration::from_secs(1);
+        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
     }
 
     let assert_positive = |val: Option<i32>, name: &str| {
