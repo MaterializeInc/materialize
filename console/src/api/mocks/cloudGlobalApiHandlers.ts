@@ -11,6 +11,7 @@ import { addDays, differenceInDays, formatISO, parseISO } from "date-fns";
 import { http, HttpResponse } from "msw";
 
 import {
+  CostBreakdown,
   CreditBlock,
   DailyCosts,
   Invoice,
@@ -124,6 +125,14 @@ export const buildDailyCostResponse = (
       const endDate = parseISO(endParam);
       payload = generateDailyCostResponsePayload(startDate, endDate);
     }
+    return HttpResponse.json(payload, { status: options.status ?? 200 });
+  });
+
+export const buildCostBreakdownResponse = (
+  options: { payload?: CostBreakdown; status?: number } = {},
+) =>
+  http.get("*/api/costs/breakdown", () => {
+    const payload: CostBreakdown = options.payload ?? { accounts: [] };
     return HttpResponse.json(payload, { status: options.status ?? 200 });
   });
 

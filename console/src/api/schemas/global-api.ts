@@ -46,6 +46,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/costs/breakdown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get per-child per-cluster cost breakdown for an organization */
+        get: operations["get_cost_breakdown"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/costs/daily": {
         parameters: {
             query?: never;
@@ -275,6 +292,35 @@ export interface components {
             unitAmount: string;
             /** @description The total cost for the resource type in the region, excluding any minimums and discounts. */
             subtotal: string;
+        };
+        /** @description Cost breakdown for one Orb account (parent or child) within a billing period. */
+        CostBreakdownAccount: {
+            external_customer_id: string;
+            clusters: components["schemas"]["CostBreakdownCluster"][];
+        };
+        /** @description Per-cluster cost breakdown for a single Orb account within a billing period. */
+        CostBreakdownCluster: {
+            /** @description The environment that owns this cluster (event property `environment_id`). */
+            environment_id: string;
+            /**
+             * @description Human-readable cluster key in `cluster_name.replica_name` form
+             *     (event property `cluster_grouping_key`). Empty for storage/egress rows
+             *     that have no per-cluster breakdown.
+             */
+            cluster_grouping_key: string;
+            /** @description Map from price_id to the computed dollar amount (e.g. "1.23"). */
+            amounts: {
+                [key: string]: string;
+            };
+        };
+        /**
+         * @description Response for `GET /api/costs/breakdown`.
+         *
+         *     Contains one entry per Orb account (the parent plus any sub-accounts).
+         *     Each account lists per-cluster costs computed via Orb's evaluate-prices API.
+         */
+        CostBreakdownResponse: {
+            accounts: components["schemas"]["CostBreakdownAccount"][];
         };
         /** @description The daily costs for a given customer. */
         CostBucket: {
@@ -567,6 +613,43 @@ export interface operations {
             };
             /** @description Failed to issue license key */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_cost_breakdown: {
+        parameters: {
+            query: {
+                startDate: string;
+                endDate: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Organization Cost Breakdown */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostBreakdownResponse"];
+                };
+            };
+            /** @description Missing or invalid startDate/endDate query params */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permissions */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -27,6 +27,11 @@ export type Region = components["schemas"]["Region"];
 export type Regions = components["schemas"]["Regions"];
 export type CreditBlock = components["schemas"]["CreditBlock"];
 export type DailyCosts = components["schemas"]["DailyCostResponse"];
+export type CostBreakdown = components["schemas"]["CostBreakdownResponse"];
+export type CostBreakdownAccount =
+  components["schemas"]["CostBreakdownAccount"];
+export type CostBreakdownCluster =
+  components["schemas"]["CostBreakdownCluster"];
 export type AllCosts = components["schemas"]["AllCosts"];
 export type DailyCostKey = keyof components["schemas"]["AllCosts"];
 export type Prices =
@@ -154,6 +159,26 @@ export async function getDailyCosts(
 ) {
   const { headers, ...options } = requestOptions;
   const { data, response } = await getClient().GET("/api/costs/daily", {
+    params: {
+      query: {
+        startDate: formatRFC3339(startDate),
+        endDate: formatRFC3339(endDate),
+      },
+    },
+    signal: requestOptions?.signal,
+    headers,
+    ...options,
+  });
+  return handleOpenApiResponseWithBody(data, response);
+}
+
+export async function getCostsBreakdown(
+  startDate: Date,
+  endDate: Date,
+  requestOptions: OpenApiRequestOptions = {},
+) {
+  const { headers, ...options } = requestOptions;
+  const { data, response } = await getClient().GET("/api/costs/breakdown", {
     params: {
       query: {
         startDate: formatRFC3339(startDate),
