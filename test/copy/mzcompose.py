@@ -472,32 +472,32 @@ def workflow_test_ss_193(c: Composition):
     c.up("materialized", "minio")
     conn = c.sql_connection()
     with conn.cursor() as cur:
-        cur.execute("CREATE TABLE numbers_with_precision (a DECIMAL(10, 2), b NUMERIC(10, 2))")
+        cur.execute(
+            "CREATE TABLE numbers_with_precision (a DECIMAL(10, 2), b NUMERIC(10, 2))"
+        )
         with cur.copy("COPY numbers_with_precision FROM STDIN") as copy:
-            copy.write('10.447\t10.447\n')
+            copy.write("10.447\t10.447\n")
         with cur.copy("COPY numbers_with_precision FROM STDIN (FORMAT CSV)") as copy:
-            copy.write('10.447,10.447\n')
+            copy.write("10.447,10.447\n")
 
         cur.execute("SELECT a, b FROM numbers_with_precision")
         rows = cur.fetchall()
         assert rows == [
-            (Decimal('10.45'), Decimal('10.45')),
-            (Decimal('10.45'), Decimal('10.45'))
+            (Decimal("10.45"), Decimal("10.45")),
+            (Decimal("10.45"), Decimal("10.45")),
         ], f"COPY FROM STDIN did not round values to the column scale: {rows}"
 
         # Round-trip scale-3 values through CSV and parquet files on S3 and
         # assert COPY FROM rounds them to the destination column's scale on read.
         cur.execute("CREATE SECRET minio_secret AS 'minioadmin'")
-        cur.execute(
-            """
+        cur.execute("""
             CREATE CONNECTION aws_conn TO AWS (
                 ACCESS KEY ID = 'minioadmin',
                 SECRET ACCESS KEY = SECRET minio_secret,
                 ENDPOINT = 'http://minio:9000/',
                 REGION = 'us-east-1'
             )
-            """
-        )
+            """)
 
         # Source carries scale-3 values that don't round evenly to scale 2.
         cur.execute("CREATE TABLE numbers_scale3 (a DECIMAL(10, 3), b NUMERIC(10, 3))")
@@ -520,7 +520,7 @@ def workflow_test_ss_193(c: Composition):
             cur.execute(f"SELECT a, b FROM numbers_from_{format}")
             rows = cur.fetchall()
             assert rows == [
-                (Decimal('10.45'), Decimal('10.45'))
+                (Decimal("10.45"), Decimal("10.45"))
             ], f"COPY FROM {format} did not round values to the column scale: {rows}"
 
 
