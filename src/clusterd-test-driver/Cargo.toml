@@ -45,6 +45,9 @@ mz-storage-types = { path = "../storage-types" }
 # `implementation` defaults to `Unimplemented`); the default path lowers faithfully
 # without it.
 mz-transform = { path = "../transform" }
+# Scrapes clusterd's Prometheus `/metrics` endpoint for the `metrics` command (the
+# observable behind the CLU-131 reproduction).
+reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 timely.workspace = true
 tokio = { workspace = true, features = ["full"] }

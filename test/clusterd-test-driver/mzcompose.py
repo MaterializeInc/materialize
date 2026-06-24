@@ -51,6 +51,10 @@ class HeadlessDriver(Service):
                 "mzbuild": "clusterd-test-driver",
                 "environment": [
                     "CLUSTERD_COMPUTE_ADDR=clusterd:2101",
+                    # clusterd's internal HTTP server, exposed by the Clusterd
+                    # service on 6878, serves the Prometheus `/metrics` the
+                    # `metrics` command scrapes.
+                    "CLUSTERD_METRICS_URL=http://clusterd:6878/metrics",
                     f"PERSIST_BLOB_URL={minio_blob_uri()}",
                     f"PERSIST_CONSENSUS_URL={CONSENSUS_URI}",
                     "DRIVER_PUBSUB_BIND=0.0.0.0:6879",
@@ -94,6 +98,7 @@ SCRIPTS = [
     "subscribe.spec",
     "join.spec",
     "index_and_mv.spec",
+    "clu_131.spec",
 ]
 
 

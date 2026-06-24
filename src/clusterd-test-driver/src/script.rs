@@ -426,6 +426,16 @@ pub enum Command {
         /// The new read frontier.
         frontier: u64,
     },
+    /// Drop a dataflow by sending `AllowCompaction` with the empty frontier, the
+    /// canonical way to drop a compute collection (it signals external readers want
+    /// nothing from it ever again). Distinct from `allow-compaction`, which advances
+    /// the read frontier to a finite timestamp; the empty frontier instead removes
+    /// the dataflow. It relaxes only read capabilities, so it does not seal the
+    /// collection's output shard.
+    DropDataflow {
+        /// The dropped collection's global id.
+        id: u64,
+    },
     /// Take a collection out of read-only mode via `AllowWrites`, letting its
     /// persist sink begin writing. Every dataflow starts read-only; indexes,
     /// subscribes, and peeks work regardless, but a materialized-view sink withholds
@@ -536,6 +546,39 @@ pub enum Command {
         #[serde(default)]
         updates: Vec<ConfigSetting>,
     },
+    /// Assert on a clusterd Prometheus metric scraped from its `/metrics` endpoint.
+    ///
+    /// `metric` is summed across all of its label series (a process-wide total),
+    /// optionally restricted to a single `select` label and optionally with a second
+    /// metric `minus` subtracted, so a counter difference can be expressed. The
+    /// assertion is level-triggered: the command polls until the value satisfies the
+    /// bounds (or the timeout elapses), so it doubles as a wait.
+    ///
+    /// The motivating use is the persist-sink correction buffer (CLU-131): its live
+    /// occupancy is `mz_persist_sink_correction_insertions_total` with
+    /// `minus=mz_persist_sink_correction_deletions_total`. A read-only MV sink holds a
+    /// roughly full-MV-size buffer (`min` large); a read-write sink under continuous
+    /// load consolidates it small (`max` small). With a bound, the golden output
+    /// states the satisfied bound, so it is independent of the exact value.
+    Metrics {
+        /// The metric name to sum.
+        metric: String,
+        /// An optional second metric whose sum is subtracted from `metric`'s.
+        #[serde(default)]
+        minus: Option<String>,
+        /// An optional `label=value` restricting the summed series.
+        #[serde(default)]
+        select: Option<String>,
+        /// Wait until the value is at least this much.
+        #[serde(default)]
+        min: Option<u64>,
+        /// Wait until the value is at most this much.
+        #[serde(default)]
+        max: Option<u64>,
+        /// Timeout in seconds; defaults to `DEFAULT_TIMEOUT_SECS`.
+        #[serde(default)]
+        timeout_secs: Option<u64>,
+    },
     /// Drop the current connection and reconnect, sending only `Hello`. Re-issue
     /// `create_instance`, replay the dataflows the replica should keep, then
     /// `initialization_complete` to close the reconciliation window.
@@ -575,6 +618,8 @@ pub struct ScriptState {
     mv_outputs: BTreeMap<u64, CollectionMetadata>,
     /// Next ephemeral id for the count sugar's dataflows.
     next_internal: u64,
+    /// clusterd's Prometheus `/metrics` URL, scraped by the `metrics` command.
+    metrics_url: String,
 }
 
 impl ScriptState {
@@ -591,6 +636,7 @@ impl ScriptState {
             indexes: BTreeMap::new(),
             mv_outputs: BTreeMap::new(),
             next_internal: INTERNAL_ID_BASE,
+            metrics_url: crate::target::metrics_url(),
         })
     }
 
@@ -812,6 +858,16 @@ impl ScriptState {
                 self.driver.send(ComputeCommand::AllowCompaction {
                     id: GlobalId::User(id),
                     frontier: Antichain::from_elem(Timestamp::from(frontier)),
+                })?;
+                Ok("ok".to_string())
+            }
+            Command::DropDataflow { id } => {
+                // The empty frontier is the canonical drop signal (see the command
+                // doc). It relaxes read capabilities, so the dataflow is removed
+                // without sealing its output shard.
+                self.driver.send(ComputeCommand::AllowCompaction {
+                    id: GlobalId::User(id),
+                    frontier: Antichain::new(),
                 })?;
                 Ok("ok".to_string())
             }
@@ -1059,6 +1115,57 @@ impl ScriptState {
                     .await?;
                 Ok(render_updates(&updates))
             }
+            Command::Metrics {
+                metric,
+                minus,
+                select,
+                min,
+                max,
+                timeout_secs,
+            } => {
+                let timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
+                let select = select
+                    .as_deref()
+                    .map(|s| {
+                        s.split_once('=').ok_or_else(|| {
+                            anyhow::anyhow!("select must be `label=value`, got {s:?}")
+                        })
+                    })
+                    .transpose()?;
+                let satisfied =
+                    |v: u64| min.map_or(true, |m| v >= m) && max.map_or(true, |m| v <= m);
+                // Level-triggered: poll until the value meets the bounds, so the
+                // command waits out a metric rising (`min`) or falling (`max`). The
+                // body is fetched once per poll so `metric` and `minus` are read from
+                // a single consistent snapshot.
+                let mut last = 0;
+                let polled = tokio::time::timeout(timeout, async {
+                    loop {
+                        let body = crate::metrics::fetch(&self.metrics_url).await?;
+                        let mut value = crate::metrics::sum_metric(&body, &metric, select)?;
+                        if let Some(minus) = &minus {
+                            value = value
+                                .saturating_sub(crate::metrics::sum_metric(&body, minus, select)?);
+                        }
+                        last = value;
+                        if satisfied(value) {
+                            return Ok::<_, anyhow::Error>(value);
+                        }
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                })
+                .await;
+                match polled {
+                    Ok(result) => {
+                        let value = result?;
+                        Ok(describe_metric(min, max, value))
+                    }
+                    Err(_) => anyhow::bail!(
+                        "metric value {last} did not satisfy {} in time",
+                        describe_metric(min, max, last)
+                    ),
+                }
+            }
             Command::CreateInstance {
                 expiration_offset,
                 arrangement_dictionary_compression,
@@ -1168,6 +1275,20 @@ fn render_rows(rows: &[Row]) -> String {
         .collect();
     lines.sort();
     lines.join("\n")
+}
+
+/// Render a `metrics` reading. With a bound, render the satisfied bound as
+/// deterministic golden text independent of the exact value (`value >= N`,
+/// `value <= N`, `N <= value <= M`). With no bound, it is a point read, so render the
+/// raw value (`value = N`) for exploration; that line is not deterministic across
+/// runs and is meant for `REWRITE`, not a golden assertion.
+fn describe_metric(min: Option<u64>, max: Option<u64>, value: u64) -> String {
+    match (min, max) {
+        (Some(min), Some(max)) => format!("{min} <= value <= {max}"),
+        (Some(min), None) => format!("value >= {min}"),
+        (None, Some(max)) => format!("value <= {max}"),
+        (None, None) => format!("value = {value}"),
+    }
 }
 
 /// Convert an optional `up_to` timestamp into a sink's exclusive upper antichain;

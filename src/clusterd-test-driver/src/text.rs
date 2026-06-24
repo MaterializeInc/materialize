@@ -472,6 +472,9 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
             id: req_u64(&args, "id")?,
             frontier: req_u64(&args, "frontier")?,
         },
+        "drop-dataflow" => Command::DropDataflow {
+            id: req_u64(&args, "id")?,
+        },
         "allow-writes" => Command::AllowWrites {
             id: req_u64(&args, "id")?,
         },
@@ -493,6 +496,17 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
         "await-subscribe" => Command::AwaitSubscribe {
             id: req_u64(&args, "id")?,
             up_to: req_u64(&args, "up-to")?,
+            timeout_secs: opt_u64(&args, "timeout-secs")?,
+        },
+        "metrics" => Command::Metrics {
+            metric: flags
+                .first()
+                .cloned()
+                .ok_or_else(|| anyhow!("metrics needs a metric name"))?,
+            minus: opt_string(&args, "minus"),
+            select: opt_string(&args, "select"),
+            min: opt_u64(&args, "min")?,
+            max: opt_u64(&args, "max")?,
             timeout_secs: opt_u64(&args, "timeout-secs")?,
         },
         "create-dataflow" => parse_create_dataflow(&args, &flags, body)?,
@@ -748,6 +762,49 @@ mod tests {
                 timeout_secs: Some(5),
             }
         );
+    }
+
+    /// `drop-dataflow` parses its id.
+    #[mz_ore::test]
+    fn parses_drop_dataflow() {
+        assert_eq!(
+            parse_command("drop-dataflow id=2001").unwrap(),
+            Command::DropDataflow { id: 2001 }
+        );
+    }
+
+    /// `metrics` parses its metric name (a bare token), optional `minus`/`select`
+    /// operands, bounds, and timeout.
+    #[mz_ore::test]
+    fn parses_metrics() {
+        assert_eq!(
+            parse_command(
+                "metrics mz_persist_sink_correction_insertions_total \
+                 minus=mz_persist_sink_correction_deletions_total min=100000 timeout-secs=120"
+            )
+            .unwrap(),
+            Command::Metrics {
+                metric: "mz_persist_sink_correction_insertions_total".to_string(),
+                minus: Some("mz_persist_sink_correction_deletions_total".to_string()),
+                select: None,
+                min: Some(100000),
+                max: None,
+                timeout_secs: Some(120),
+            }
+        );
+        assert_eq!(
+            parse_command("metrics my_metric select=worker_id=0 max=1000").unwrap(),
+            Command::Metrics {
+                metric: "my_metric".to_string(),
+                minus: None,
+                select: Some("worker_id=0".to_string()),
+                min: None,
+                max: Some(1000),
+                timeout_secs: None,
+            }
+        );
+        // A metric name is required.
+        assert!(parse_command("metrics min=1").is_err());
     }
 
     /// A file splits into stanzas, preserving comments and blanks, and round-trips
