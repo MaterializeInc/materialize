@@ -220,6 +220,39 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      # DRAFT: trial the Buildkite-hosted macOS runner alongside the MacStadium
+      # agent above. Mirrors lint-macos but targets the hosted queue and is
+      # soft_fail, so it validates the hosted runner without ever gating merges.
+      # Scoped to `main` to bound cost during the trial -- broaden (drop the
+      # `branches` key or gate on a label) once we're happy. Requires a hosted
+      # macOS queue keyed `mac-aarch64-hosted` in Buildkite (UI; see PR desc).
+      # Hosted agents are ephemeral and ship no Rust toolchain, so we install it
+      # at job start (no disk-cleanup hack needed -- the VM is destroyed after).
+      - id: lint-macos-hosted
+        label: ":rust: macOS Clippy (Buildkite hosted, trial)"
+        command: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          source "$$HOME/.cargo/env"
+          rustup component add clippy
+          brew install --quiet cmake
+          cargo clippy --all-targets -- -D warnings
+        env:
+          CARGO_INCREMENTAL: "0"
+          RUSTUP_TOOLCHAIN: $RUST_VERSION
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
+        depends_on: []
+        timeout_in_minutes: 45
+        branches: main
+        agents:
+          queue: mac-aarch64-hosted
+        soft_fail: true
+        coverage: skip
+        sanitizer: skip
+
       - id: lint-deps
         label: Lint dependencies
         command: bin/ci-builder run stable ci/test/lint-deps.sh
