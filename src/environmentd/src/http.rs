@@ -361,11 +361,10 @@ impl HttpServer {
                         .br(true)
                         .zstd(true),
                 )
-                // The global DefaultBodyLimit is applied as an outer layer in
-                // apply_default_layers. Disable it here so the webhook handler
-                // enforces WEBHOOK_MAX_REQUEST_SIZE_BYTES itself. The inner
-                // disable runs after the outer limit on the request path and
-                // overwrites the limit extension, so it wins.
+                // The webhook handler enforces WEBHOOK_MAX_REQUEST_SIZE_BYTES
+                // itself via to_bytes on a raw Body. This disable is defense-in-depth:
+                // it only matters if the handler ever returns to a Bytes extractor,
+                // which would otherwise inherit the global 5 MiB limit.
                 .layer(DefaultBodyLimit::disable())
                 .layer(
                     CorsLayer::new()
