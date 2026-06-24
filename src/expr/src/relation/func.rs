@@ -154,9 +154,8 @@ where
             continue;
         }
         let value = match datum {
-            Datum::Int16(i) => i128::from(i),
-            Datum::Int32(i) => i128::from(i),
-            Datum::Int64(i) => i128::from(i),
+            // int2/int4/int8 all unify to `Datum::Int` at the repr layer.
+            Datum::Int(i) => i128::from(i),
             other => panic!("unexpected non-integer datum in signed sum: {other:?}"),
         };
         // The dataflow accumulates `value * diff` in an `Overflowing<i128>`; we
@@ -2097,7 +2096,7 @@ impl AggregateFunc {
                 sum_signed_int_counted(datums, |accum| {
                     #[allow(clippy::as_conversions)]
                     let narrowed = accum as i64;
-                    Datum::Int64(narrowed)
+                    Datum::Int(narrowed)
                 })
             }
             AggregateFunc::SumInt64 => sum_signed_int_counted(datums, Datum::from),
@@ -4167,18 +4166,18 @@ mod tests {
 
         for count in [0_i64, 1] {
             let rows = func
-                .eval(&[Datum::Int64(count)], &temp_storage)
+                .eval(&[Datum::Int(count)], &temp_storage)
                 .unwrap_or_else(|e| panic!("count {count} should be accepted, got {e:?}"))
                 .count();
             assert_eq!(rows, 0, "count {count} should emit no guard rows");
         }
 
         assert_eq!(
-            func.eval(&[Datum::Int64(2)], &temp_storage).err(),
+            func.eval(&[Datum::Int(2)], &temp_storage).err(),
             Some(EvalError::MultipleRowsFromSubquery),
         );
         assert_eq!(
-            func.eval(&[Datum::Int64(-1)], &temp_storage).err(),
+            func.eval(&[Datum::Int(-1)], &temp_storage).err(),
             Some(EvalError::NegativeRowsFromSubquery),
         );
     }

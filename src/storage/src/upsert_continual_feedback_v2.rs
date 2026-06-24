@@ -926,11 +926,11 @@ mod test {
     }
 
     fn key(k: i64) -> UpsertKey {
-        UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(k)])))
+        UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int(k)])))
     }
 
     fn row(k: i64, v: i64) -> Row {
-        Row::pack_slice(&[Datum::Int64(k), Datum::Int64(v)])
+        Row::pack_slice(&[Datum::Int(k), Datum::Int(v)])
     }
 
     macro_rules! upsert_test {

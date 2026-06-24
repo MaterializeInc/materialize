@@ -75,17 +75,17 @@ fn order_aggregate_datums_benchmark(c: &mut Criterion) {
         for _i in 0..scale {
             datums.push(temp_storage.make_datum(|packer| {
                 let orig_row_and_args = temp_storage.make_datum(|packer| {
-                    packer.push(Datum::Int32(3));
-                    packer.push(Datum::Int32(545577777));
-                    packer.push(Datum::Int32(123456789));
+                    packer.push(Datum::Int(3));
+                    packer.push(Datum::Int(545577777));
+                    packer.push(Datum::Int(123456789));
                     packer.push(Datum::String("aaaaaaaaaa"));
                 });
 
                 // An early version had non-random stuff here, but surprisingly this is much faster
                 // to sort, so it's not representative.
-                //let order_by_col_1 = Datum::Int32((scale - i) as i32);
+                //let order_by_col_1 = Datum::Int((scale - i) as i32);
                 // This is faster, probably because Int32 is easier to decode than a Timestamp.
-                //let order_by_col_1 = Datum::Int32(distr.sample(&mut rng));
+                //let order_by_col_1 = Datum::Int(distr.sample(&mut rng));
                 // So, we generate a random timestamp. Timestamps are a common thing to order by in
                 // window functions.
                 let order_by_col_1 = Datum::TimestampTz(

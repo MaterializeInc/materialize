@@ -5382,7 +5382,7 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
                         func: TableFunc::GenerateSeriesUnoptimized,
                         exprs: vec![
                             start, stop,
-                            HirScalarExpr::literal(Datum::Int64(1), SqlScalarType::Int64),
+                            HirScalarExpr::literal(Datum::Int(1), SqlScalarType::Int64),
                         ],
                     },
                     column_names: vec!["generate_series_unoptimized".into()],

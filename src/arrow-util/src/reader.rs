@@ -1040,8 +1040,8 @@ mod tests {
 
         packer.extend([
             Datum::True,
-            Datum::Int32(42),
-            Datum::UInt64(10000),
+            Datum::Int(42),
+            Datum::UInt(10000),
             Datum::Float32(OrderedFloat::from(-1.1f32)),
             Datum::String("hello world"),
             Datum::Bytes(b"1010101"),
@@ -1052,7 +1052,7 @@ mod tests {
                 serde_json::json!({"code": 200, "email": "space_monkey@materialize.com"}),
             )
             .expect("failed to pack JSON");
-        packer.push_list([Datum::UInt32(200), Datum::UInt32(300)]);
+        packer.push_list([Datum::UInt(200), Datum::UInt(300)]);
 
         let null_row = Row::pack(vec![Datum::Null; 9]);
 
@@ -1248,11 +1248,11 @@ mod tests {
             .push_range(Range::new(Some((
                 RangeLowerBound {
                     inclusive: true,
-                    bound: Some(Datum::Int32(1)),
+                    bound: Some(Datum::Int(1)),
                 },
                 RangeUpperBound {
                     inclusive: true,
-                    bound: Some(Datum::Int32(10)),
+                    bound: Some(Datum::Int(10)),
                 },
             ))))
             .unwrap();
@@ -1266,11 +1266,11 @@ mod tests {
             .push_range(Range::new(Some((
                 RangeLowerBound {
                     inclusive: false,
-                    bound: Some(Datum::Int32(5)),
+                    bound: Some(Datum::Int(5)),
                 },
                 RangeUpperBound {
                     inclusive: false,
-                    bound: Some(Datum::Int32(15)),
+                    bound: Some(Datum::Int(15)),
                 },
             ))))
             .unwrap();

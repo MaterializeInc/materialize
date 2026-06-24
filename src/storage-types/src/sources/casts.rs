@@ -450,7 +450,7 @@ mod tests {
         let expr = cast_col0(CastFunc::CastStringToInt64);
         assert_eq!(
             expr.eval(&[Datum::String("-9000000000")], &arena).unwrap(),
-            Datum::from(-9_000_000_000)
+            Datum::from(-9_000_000_000i64)
         );
     }
 

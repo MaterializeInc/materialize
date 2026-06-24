@@ -87,7 +87,7 @@ fn make_row(key: u64) -> Row {
     let s = format!("k{:024x}", key);
     let mut row = Row::default();
     row.packer()
-        .extend([Datum::Int64(i64::reinterpret_cast(key)), Datum::String(&s)]);
+        .extend([Datum::Int(i64::reinterpret_cast(key)), Datum::String(&s)]);
     row
 }
 

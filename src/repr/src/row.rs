@@ -57,7 +57,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 
 /// A packed representation for `Datum`s.
 ///
-/// `Datum` is easy to work with but very space inefficient. A `Datum::Int32(42)`
+/// `Datum` is easy to work with but very space inefficient. A `Datum::Int(42)`
 /// is laid out in memory like this:
 ///
 ///   tag: 3
@@ -86,24 +86,24 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 ///
 /// ```
 /// # use mz_repr::{Row, Datum};
-/// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
-/// assert_eq!(row.unpack(), vec![Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)])
+/// let row = Row::pack_slice(&[Datum::Int(0), Datum::Int(1), Datum::Int(2)]);
+/// assert_eq!(row.unpack(), vec![Datum::Int(0), Datum::Int(1), Datum::Int(2)])
 /// ```
 ///
 /// `Row`s can be unpacked by iterating over them:
 ///
 /// ```
 /// # use mz_repr::{Row, Datum};
-/// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
-/// assert_eq!(row.iter().nth(1).unwrap(), Datum::Int32(1));
+/// let row = Row::pack_slice(&[Datum::Int(0), Datum::Int(1), Datum::Int(2)]);
+/// assert_eq!(row.iter().nth(1).unwrap(), Datum::Int(1));
 /// ```
 ///
 /// If you want random access to the `Datum`s in a `Row`, use `Row::unpack` to create a `Vec<Datum>`
 /// ```
 /// # use mz_repr::{Row, Datum};
-/// let row = Row::pack_slice(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// let row = Row::pack_slice(&[Datum::Int(0), Datum::Int(1), Datum::Int(2)]);
 /// let datums = row.unpack();
-/// assert_eq!(datums[1], Datum::Int32(1));
+/// assert_eq!(datums[1], Datum::Int(1));
 /// ```
 ///
 /// # Performance
@@ -2242,11 +2242,11 @@ impl RowPacker<'_> {
     /// let mut row = Row::default();
     /// row.packer().push_list_with(|row| {
     ///     row.push(Datum::String("age"));
-    ///     row.push(Datum::Int64(42));
+    ///     row.push(Datum::Int(42));
     /// });
     /// assert_eq!(
     ///     row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(),
-    ///     vec![Datum::String("age"), Datum::Int64(42)],
+    ///     vec![Datum::String("age"), Datum::Int(42)],
     /// );
     /// ```
     #[inline]
@@ -2350,7 +2350,7 @@ impl RowPacker<'_> {
     ///     // key
     ///     row.push(Datum::String("age"));
     ///     // value
-    ///     row.push(Datum::Int64(42));
+    ///     row.push(Datum::Int(42));
     ///
     ///     // key
     ///     row.push(Datum::String("name"));
@@ -2359,7 +2359,7 @@ impl RowPacker<'_> {
     /// });
     /// assert_eq!(
     ///     row.unpack_first().unwrap_map().iter().collect::<Vec<_>>(),
-    ///     vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))]
+    ///     vec![("age", Datum::Int(42)), ("name", Datum::String("bob"))]
     /// );
     /// ```
     pub fn push_dict_with<F, R>(&mut self, f: F) -> R
@@ -3508,7 +3508,7 @@ mod tests {
         let arena = RowArena::new();
         arena.reserve(4096);
         let _pad = arena.push_bytes(vec![0xAB; 5]);
-        let row = Row::pack_slice(&[Datum::String("hello"), Datum::Int64(42), Datum::True]);
+        let row = Row::pack_slice(&[Datum::String("hello"), Datum::Int(42), Datum::True]);
         assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
     }
 
@@ -3641,28 +3641,28 @@ mod tests {
             Datum::Null,
             Datum::False,
             Datum::True,
-            Datum::Int16(-21),
-            Datum::Int32(-42),
-            Datum::Int64(-2_147_483_648 - 42),
-            Datum::UInt8(0),
-            Datum::UInt8(1),
-            Datum::UInt16(0),
-            Datum::UInt16(1),
-            Datum::UInt16(1 << 8),
-            Datum::UInt32(0),
-            Datum::UInt32(1),
-            Datum::UInt32(1 << 8),
-            Datum::UInt32(1 << 16),
-            Datum::UInt32(1 << 24),
-            Datum::UInt64(0),
-            Datum::UInt64(1),
-            Datum::UInt64(1 << 8),
-            Datum::UInt64(1 << 16),
-            Datum::UInt64(1 << 24),
-            Datum::UInt64(1 << 32),
-            Datum::UInt64(1 << 40),
-            Datum::UInt64(1 << 48),
-            Datum::UInt64(1 << 56),
+            Datum::Int(-21),
+            Datum::Int(-42),
+            Datum::Int(-2_147_483_648 - 42),
+            Datum::UInt(0),
+            Datum::UInt(1),
+            Datum::UInt(0),
+            Datum::UInt(1),
+            Datum::UInt(1 << 8),
+            Datum::UInt(0),
+            Datum::UInt(1),
+            Datum::UInt(1 << 8),
+            Datum::UInt(1 << 16),
+            Datum::UInt(1 << 24),
+            Datum::UInt(0),
+            Datum::UInt(1),
+            Datum::UInt(1 << 8),
+            Datum::UInt(1 << 16),
+            Datum::UInt(1 << 24),
+            Datum::UInt(1 << 32),
+            Datum::UInt(1 << 40),
+            Datum::UInt(1 << 48),
+            Datum::UInt(1 << 56),
             Datum::Float32(OrderedFloat::from(-42.12)),
             Datum::Float64(OrderedFloat::from(-2_147_483_648.0 - 42.12)),
             Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
@@ -3702,13 +3702,13 @@ mod tests {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer
-            .try_push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
+            .try_push_array(&[DIM], vec![Datum::Int(1), Datum::Int(2)])
             .unwrap();
         let arr1 = row.unpack_first().unwrap_array();
         assert_eq!(arr1.dims().into_iter().collect::<Vec<_>>(), vec![DIM]);
         assert_eq!(
             arr1.elements().into_iter().collect::<Vec<_>>(),
-            vec![Datum::Int32(1), Datum::Int32(2)]
+            vec![Datum::Int(1), Datum::Int(2)]
         );
 
         // Pack a previously-constructed `Datum::Array` and verify that it
@@ -3721,14 +3721,14 @@ mod tests {
     #[mz_ore::test]
     fn test_multidimensional_array() {
         let datums = vec![
-            Datum::Int32(1),
-            Datum::Int32(2),
-            Datum::Int32(3),
-            Datum::Int32(4),
-            Datum::Int32(5),
-            Datum::Int32(6),
-            Datum::Int32(7),
-            Datum::Int32(8),
+            Datum::Int(1),
+            Datum::Int(2),
+            Datum::Int(3),
+            Datum::Int(4),
+            Datum::Int(5),
+            Datum::Int(6),
+            Datum::Int(7),
+            Datum::Int(8),
         ];
 
         let mut row = Row::default();
@@ -3770,7 +3770,7 @@ mod tests {
                 };
                 max_dims + 1
             ],
-            vec![Datum::Int32(4)],
+            vec![Datum::Int(4)],
         );
         assert_eq!(res, Err(InvalidArrayError::TooManyDimensions(max_dims + 1)));
         assert!(row.data.is_empty());
@@ -3786,7 +3786,7 @@ mod tests {
                     };
                     max_dims
                 ],
-                vec![Datum::Int32(4)],
+                vec![Datum::Int(4)],
             )
             .unwrap();
     }
@@ -3805,7 +3805,7 @@ mod tests {
                     length: 3,
                 },
             ],
-            vec![Datum::Int32(1), Datum::Int32(2)],
+            vec![Datum::Int(1), Datum::Int(2)],
         );
         assert_eq!(
             res,
@@ -3835,7 +3835,7 @@ mod tests {
                     length: 2,
                 },
             ],
-            vec![Datum::Int32(1), Datum::Int32(2)],
+            vec![Datum::Int(1), Datum::Int(2)],
         );
         assert_eq!(
             res,
@@ -3886,7 +3886,7 @@ mod tests {
             row.packer().push_dict_with(|row| {
                 if ok {
                     row.push(Datum::String("key"));
-                    row.push(Datum::Int32(42));
+                    row.push(Datum::Int(42));
                     Ok(7)
                 } else {
                     Err("fail")
@@ -3899,7 +3899,7 @@ mod tests {
 
         let row = pack(true)?;
         let mut dict = row.unpack_first().unwrap_map().iter();
-        assert_eq!(dict.next(), Some(("key", Datum::Int32(42))));
+        assert_eq!(dict.next(), Some(("key", Datum::Int(42))));
         assert_eq!(dict.next(), None);
 
         Ok(())
@@ -3914,28 +3914,28 @@ mod tests {
         let values_of_interest = vec![
             Datum::Null,
             Datum::False,
-            Datum::Int16(0),
-            Datum::Int32(0),
-            Datum::Int64(0),
-            Datum::UInt8(0),
-            Datum::UInt8(1),
-            Datum::UInt16(0),
-            Datum::UInt16(1),
-            Datum::UInt16(1 << 8),
-            Datum::UInt32(0),
-            Datum::UInt32(1),
-            Datum::UInt32(1 << 8),
-            Datum::UInt32(1 << 16),
-            Datum::UInt32(1 << 24),
-            Datum::UInt64(0),
-            Datum::UInt64(1),
-            Datum::UInt64(1 << 8),
-            Datum::UInt64(1 << 16),
-            Datum::UInt64(1 << 24),
-            Datum::UInt64(1 << 32),
-            Datum::UInt64(1 << 40),
-            Datum::UInt64(1 << 48),
-            Datum::UInt64(1 << 56),
+            Datum::Int(0),
+            Datum::Int(0),
+            Datum::Int(0),
+            Datum::UInt(0),
+            Datum::UInt(1),
+            Datum::UInt(0),
+            Datum::UInt(1),
+            Datum::UInt(1 << 8),
+            Datum::UInt(0),
+            Datum::UInt(1),
+            Datum::UInt(1 << 8),
+            Datum::UInt(1 << 16),
+            Datum::UInt(1 << 24),
+            Datum::UInt(0),
+            Datum::UInt(1),
+            Datum::UInt(1 << 8),
+            Datum::UInt(1 << 16),
+            Datum::UInt(1 << 24),
+            Datum::UInt(1 << 32),
+            Datum::UInt(1 << 40),
+            Datum::UInt(1 << 48),
+            Datum::UInt(1 << 56),
             Datum::Float32(OrderedFloat(0.0)),
             Datum::Float64(OrderedFloat(0.0)),
             Datum::from(numeric::Numeric::from(0)),
@@ -3965,8 +3965,8 @@ mod tests {
             arena.make_datum(|packer| {
                 packer
                     .push_range(Range::new(Some((
-                        RangeLowerBound::new(Datum::Int32(-1), true),
-                        RangeUpperBound::new(Datum::Int32(1), true),
+                        RangeLowerBound::new(Datum::Int(-1), true),
+                        RangeUpperBound::new(Datum::Int(1), true),
                     ))))
                     .unwrap();
             }),
@@ -4017,8 +4017,8 @@ mod tests {
         // unreachable when decoding a `ProtoRow`: each decoded bound pushes
         // exactly one datum (or fails), so only an in-process caller can hit it.
         for panicking_case in [
-            vec![vec![Datum::Int32(1)], vec![]],
-            vec![vec![Datum::Int32(1), Datum::Int32(2)], vec![]],
+            vec![vec![Datum::Int(1)], vec![]],
+            vec![vec![Datum::Int(1), Datum::Int(2)], vec![]],
         ] {
             #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
             let result = std::panic::catch_unwind(|| test_range_errors_inner(panicking_case));
@@ -4030,16 +4030,16 @@ mod tests {
         // error instead of panicking.
         for error_case in [
             vec![
-                vec![Datum::Int32(1), Datum::Int32(2)],
-                vec![Datum::Int32(3)],
+                vec![Datum::Int(1), Datum::Int(2)],
+                vec![Datum::Int(3)],
             ],
             vec![
-                vec![Datum::Int32(1)],
-                vec![Datum::Int32(2), Datum::Int32(3)],
+                vec![Datum::Int(1)],
+                vec![Datum::Int(2), Datum::Int(3)],
             ],
-            vec![vec![Datum::Int32(1)], vec![Datum::UInt16(2)]],
-            vec![vec![Datum::Null], vec![Datum::Int32(2)]],
-            vec![vec![Datum::Int32(1)], vec![Datum::Null]],
+            vec![vec![Datum::Int(1)], vec![Datum::UInt(2)]],
+            vec![vec![Datum::Null], vec![Datum::Int(2)]],
+            vec![vec![Datum::Int(1)], vec![Datum::Null]],
         ] {
             assert_eq!(
                 test_range_errors_inner(error_case),
@@ -4047,7 +4047,7 @@ mod tests {
             );
         }
 
-        let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
+        let e = test_range_errors_inner(vec![vec![Datum::Int(2)], vec![Datum::Int(1)]]);
         assert_eq!(e, Err(InvalidRangeError::MisorderedRangeBounds));
     }
 
@@ -4203,15 +4203,15 @@ mod tests {
         // Unequal lists should have different hashes (with asymptotic probability 1)
         let mut row_a = Row::default();
         row_a.packer().push_list_with(|p| {
-            p.push(Datum::Int32(1));
-            p.push(Datum::Int32(2));
+            p.push(Datum::Int(1));
+            p.push(Datum::Int(2));
         });
         let list_a = row_a.unpack_first().unwrap_list();
 
         let mut row_b = Row::default();
         row_b.packer().push_list_with(|p| {
-            p.push(Datum::Int32(1));
-            p.push(Datum::Int32(3));
+            p.push(Datum::Int(1));
+            p.push(Datum::Int(3));
         });
         let list_b = row_b.unpack_first().unwrap_list();
 
@@ -4228,23 +4228,23 @@ mod tests {
     fn test_datum_list_ordering() {
         let mut row_12 = Row::default();
         row_12.packer().push_list_with(|p| {
-            p.push(Datum::Int32(1));
-            p.push(Datum::Int32(2));
+            p.push(Datum::Int(1));
+            p.push(Datum::Int(2));
         });
         let list_12 = row_12.unpack_first().unwrap_list();
 
         let mut row_13 = Row::default();
         row_13.packer().push_list_with(|p| {
-            p.push(Datum::Int32(1));
-            p.push(Datum::Int32(3));
+            p.push(Datum::Int(1));
+            p.push(Datum::Int(3));
         });
         let list_13 = row_13.unpack_first().unwrap_list();
 
         let mut row_123 = Row::default();
         row_123.packer().push_list_with(|p| {
-            p.push(Datum::Int32(1));
-            p.push(Datum::Int32(2));
-            p.push(Datum::Int32(3));
+            p.push(Datum::Int(1));
+            p.push(Datum::Int(2));
+            p.push(Datum::Int(3));
         });
         let list_123 = row_123.unpack_first().unwrap_list();
 
@@ -4283,14 +4283,14 @@ mod tests {
         let mut row_a = Row::default();
         row_a.packer().push_dict_with(|p| {
             p.push(Datum::String("a"));
-            p.push(Datum::Int32(1));
+            p.push(Datum::Int(1));
         });
         let map_a = row_a.unpack_first().unwrap_map();
 
         let mut row_b = Row::default();
         row_b.packer().push_dict_with(|p| {
             p.push(Datum::String("a"));
-            p.push(Datum::Int32(2));
+            p.push(Datum::Int(2));
         });
         let map_b = row_b.unpack_first().unwrap_map();
 
@@ -4308,21 +4308,21 @@ mod tests {
         let mut row_a1 = Row::default();
         row_a1.packer().push_dict_with(|p| {
             p.push(Datum::String("a"));
-            p.push(Datum::Int32(1));
+            p.push(Datum::Int(1));
         });
         let map_a1 = row_a1.unpack_first().unwrap_map();
 
         let mut row_a2 = Row::default();
         row_a2.packer().push_dict_with(|p| {
             p.push(Datum::String("a"));
-            p.push(Datum::Int32(2));
+            p.push(Datum::Int(2));
         });
         let map_a2 = row_a2.unpack_first().unwrap_map();
 
         let mut row_b1 = Row::default();
         row_b1.packer().push_dict_with(|p| {
             p.push(Datum::String("b"));
-            p.push(Datum::Int32(1));
+            p.push(Datum::Int(1));
         });
         let map_b1 = row_b1.unpack_first().unwrap_map();
 
@@ -4340,7 +4340,7 @@ mod tests {
         let mut row_list_1 = Row::default();
         row_list_1
             .packer()
-            .push_list_with(|p| p.push(Datum::Int32(1)));
+            .push_list_with(|p| p.push(Datum::Int(1)));
         let list_1 = row_list_1.unpack_first().unwrap_list();
 
         let mut row_list_null = Row::default();
@@ -4356,7 +4356,7 @@ mod tests {
         let mut row_map_1 = Row::default();
         row_map_1.packer().push_dict_with(|p| {
             p.push(Datum::String("k"));
-            p.push(Datum::Int32(1));
+            p.push(Datum::Int(1));
         });
         let map_1 = row_map_1.unpack_first().unwrap_map();
 

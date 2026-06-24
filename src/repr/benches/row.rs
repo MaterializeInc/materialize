@@ -116,12 +116,12 @@ pub fn bench_sort(c: &mut Criterion) {
     let int_rows = (0..num_rows)
         .map(|_| {
             vec![
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
             ]
         })
         .collect::<Vec<_>>();
@@ -198,12 +198,12 @@ pub fn bench_pack(c: &mut Criterion) {
     let int_rows = (0..num_rows)
         .map(|_| {
             vec![
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
             ]
         })
         .collect::<Vec<_>>();
@@ -235,9 +235,9 @@ fn bench_filter(c: &mut Criterion) {
         .map(|_| {
             vec![
                 Datum::Date(random_date()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
-                Datum::Int32(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
+                Datum::Int(rng.random()),
             ]
         })
         .collect::<Vec<_>>();

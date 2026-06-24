@@ -272,7 +272,7 @@ impl JoinInputMapper {
     /// ]);
     ///
     /// // the specific data are not important here.
-    /// let data = vec![Datum::Int32(0), Datum::Int32(1)];
+    /// let data = vec![Datum::Int(0), Datum::Int(1)];
     /// let input0 = MirRelationExpr::constant(vec![data.clone()], schema.clone());
     /// let input1 = MirRelationExpr::constant(vec![data.clone()], schema.clone());
     /// let input2 = MirRelationExpr::constant(vec![data.clone()], schema.clone());
@@ -484,7 +484,7 @@ mod tests {
             func: BinaryFunc::AddInt32(func::AddInt32),
             expr1: Box::new(MirScalarExpr::column(2)),
             expr2: Box::new(MirScalarExpr::literal(
-                Ok(Datum::Int32(4)),
+                Ok(Datum::Int(4)),
                 ReprScalarType::Int,
             )),
         };

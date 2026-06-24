@@ -1491,8 +1491,8 @@ mod tests {
 
         let mut s = StateValue::<(), ()>::Consolidating(Consolidating::default());
 
-        let small_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(2)]));
-        let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(1)]));
+        let small_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int(2)]));
+        let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int(1)]));
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
         s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
         s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);

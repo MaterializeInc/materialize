@@ -776,7 +776,7 @@ mod tests {
     /// That's sufficient for the expr cache tests, since the cache mostly treats expressions as
     /// opaque objects.
     fn gen_local_expressions() -> LocalExpressions {
-        let datum = Datum::UInt64(rand::random());
+        let datum = Datum::UInt(rand::random());
 
         LocalExpressions {
             local_mir: OptimizedMirRelationExpr(MirRelationExpr::constant(

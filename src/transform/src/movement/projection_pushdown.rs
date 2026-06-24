@@ -578,9 +578,8 @@ fn collapse_unused_generate_series(func: &mut TableFunc, exprs: &mut Vec<MirScal
     // width (an argument's datum type does not necessarily match the series
     // width).
     let literal_i64 = |e: &MirScalarExpr| match e.as_literal() {
-        Some(Ok(Datum::Int16(v))) => Some(i64::from(v)),
-        Some(Ok(Datum::Int32(v))) => Some(i64::from(v)),
-        Some(Ok(Datum::Int64(v))) => Some(v),
+        // int2/int4/int8 all unify to `Datum::Int(i64)` at the repr layer.
+        Some(Ok(Datum::Int(v))) => Some(v),
         _ => None,
     };
     // Bail unless the step is a non-null, non-zero literal.
@@ -607,8 +606,8 @@ fn collapse_unused_generate_series(func: &mut TableFunc, exprs: &mut Vec<MirScal
         if let Ok(count) = i64::try_from(count) {
             *func = TableFunc::RepeatRowNonNegative;
             *exprs = vec![MirScalarExpr::literal_ok(
-                Datum::Int64(count),
-                ReprScalarType::Int64,
+                Datum::Int(count),
+                ReprScalarType::Int,
             )];
         }
         // A count beyond `i64` is left alone rather than collapsed: the
@@ -617,7 +616,7 @@ fn collapse_unused_generate_series(func: &mut TableFunc, exprs: &mut Vec<MirScal
     }
 
     let int32 = matches!(func, TableFunc::GenerateSeriesInt32);
-    let lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
+    let lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int(v), ReprScalarType::Int);
 
     // The series is non-empty exactly when `stop` is on the far side of `start`
     // in the direction of `step`. Comparing the original (un-widened) bounds is

@@ -2547,7 +2547,7 @@ mod tests {
                     lower_bound: 0,
                     length: 3,
                 }],
-                [Datum::UInt32(4), Datum::UInt32(5), Datum::UInt32(6)],
+                [Datum::UInt(4), Datum::UInt(5), Datum::UInt(6)],
             )
             .unwrap();
 
@@ -2587,11 +2587,11 @@ mod tests {
         let mut og_row = Row::default();
         {
             let mut packer = og_row.packer();
-            packer.push(Datum::Int64(100));
+            packer.push(Datum::Int(100));
             packer.push(Datum::String("hello world"));
             packer.push(Datum::True);
-            packer.push_list([Datum::UInt32(1), Datum::UInt32(2), Datum::UInt32(3)]);
-            packer.push_dict([("bar", Datum::Int16(9)), ("foo", Datum::Int16(3))]);
+            packer.push_list([Datum::UInt(1), Datum::UInt(2), Datum::UInt(3)]);
+            packer.push_dict([("bar", Datum::Int(9)), ("foo", Datum::Int(3))]);
         }
         let mut og_row_2 = Row::default();
         {
@@ -2639,9 +2639,9 @@ mod tests {
         {
             let mut packer = og_row.packer();
             packer.push_list_with(|inner| {
-                inner.push_list([Datum::Int64(1), Datum::Int64(2)]);
-                inner.push_list([Datum::Int64(5)]);
-                inner.push_list([Datum::Int64(9), Datum::Int64(99), Datum::Int64(999)]);
+                inner.push_list([Datum::Int(1), Datum::Int(2)]);
+                inner.push_list([Datum::Int(5)]);
+                inner.push_list([Datum::Int(9), Datum::Int(99), Datum::Int(999)]);
             });
         }
 
@@ -2691,9 +2691,9 @@ mod tests {
         {
             let mut packer = og_row.packer();
             packer.push_list_with(|inner| {
-                inner.push(Datum::Int64(42));
+                inner.push(Datum::Int(42));
                 inner.push(Datum::Null);
-                inner.push_list([Datum::UInt32(1), Datum::UInt32(2), Datum::UInt32(3)]);
+                inner.push_list([Datum::UInt(1), Datum::UInt(2), Datum::UInt(3)]);
             });
         }
         let null_row = Row::pack_slice(&[Datum::Null]);
@@ -2721,9 +2721,9 @@ mod tests {
         packer.extend([
             Datum::False,
             Datum::True,
-            Datum::Int16(1),
-            Datum::Int32(2),
-            Datum::Int64(3),
+            Datum::Int(1),
+            Datum::Int(2),
+            Datum::Int(3),
             Datum::Float32(4f32.into()),
             Datum::Float64(5f64.into()),
             Datum::Date(
@@ -2772,7 +2772,7 @@ mod tests {
                     lower_bound: 2,
                     length: 2,
                 }],
-                vec![Datum::Int32(31), Datum::Int32(32)],
+                vec![Datum::Int(31), Datum::Int(32)],
             )
             .expect("valid array");
         packer.push_list_with(|packer| {
@@ -2790,7 +2790,7 @@ mod tests {
             let mut i = 38;
             for _ in 0..20 {
                 row.push(Datum::String(&i.to_string()));
-                row.push(Datum::Int32(i + 1));
+                row.push(Datum::Int(i + 1));
                 i += 2;
             }
         });
@@ -2819,7 +2819,7 @@ mod tests {
         let mut og_row = Row::default();
         {
             let mut packer = og_row.packer();
-            packer.push(Datum::Int64(100));
+            packer.push(Datum::Int(100));
             packer.push(Datum::String("hello world"));
             packer.push(Datum::True);
         }
@@ -2841,7 +2841,7 @@ mod tests {
 
         let mut rnd_row = Row::default();
         decoder.decode(0, &mut rnd_row);
-        let expected_row = Row::pack_slice(&[Datum::Int64(100), Datum::True]);
+        let expected_row = Row::pack_slice(&[Datum::Int(100), Datum::True]);
         assert_eq!(expected_row, rnd_row);
 
         let mut rnd_row = Row::default();

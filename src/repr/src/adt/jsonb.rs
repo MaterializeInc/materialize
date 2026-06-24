@@ -70,7 +70,7 @@
 //! # use mz_repr::{Datum, Row};
 //! let mut row = Row::default();
 //! let mut packer = row.packer();
-//! packer.push(Datum::Int32(42));
+//! packer.push(Datum::Int(42));
 //! JsonbPacker::new(&mut packer).pack_str("[1, 2]")?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
