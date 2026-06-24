@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/decode.rs
-revision: ae8f529217
+revision: 460108c80d
 ---
 
 # mz-storage::decode
@@ -10,4 +10,4 @@ The module's two public functions, `render_decode_delimited` and `render_decode_
 `render_decode_delimited` handles pre-delimited message-per-record sources such as Kafka, while `render_decode_cdcv2` reconstructs a differential collection from CDCv2-encoded Avro streams.
 The `YieldingIter` helper prevents long-running decode loops from blocking the timely scheduler.
 The `decode` submodule contains only `avro` and `protobuf` decoders; there is no `csv` submodule.
-`WireFormat` variants are mapped to a `WriterSchemaProvider` before the decoder is constructed: `WireFormat::None` produces `WriterSchemaProvider::None`, `WireFormat::Confluent` resolves the optional CSR connection and calls `WriterSchemaProvider::confluent`, and `WireFormat::Glue` loads an AWS SDK config, constructs a Glue client, and calls `WriterSchemaProvider::glue`.
+All three `WireFormat` variants are reachable from SQL for sources. `WireFormat` variants are mapped to a `WriterSchemaProvider` before the decoder is constructed: `WireFormat::None` produces `WriterSchemaProvider::None`, `WireFormat::Confluent` resolves the optional CSR connection and calls `WriterSchemaProvider::confluent`, and `WireFormat::Glue` loads an AWS SDK config, constructs a Glue client, and calls `WriterSchemaProvider::glue`.

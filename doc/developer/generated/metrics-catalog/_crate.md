@@ -1,6 +1,6 @@
 ---
 source: src/metrics-catalog/src/main.rs
-revision: 83e4f88e27
+revision: 03de4421ba
 ---
 
 # mz-metrics-catalog
