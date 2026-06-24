@@ -512,10 +512,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             proto.latest_rollup_key.into_rust()?,
         );
         if let Some(field_diffs) = proto.field_diffs {
-            // `field_diffs` is decoded from an untrusted blob, so validate it and
-            // return a decode error on a malformed/crafted diff rather than a
-            // `debug_assert` (which panics under debug assertions / fuzzing and
-            // is compiled out in release, where the bad data flowed through).
+            // `field_diffs` is decoded from an untrusted blob, so validate it.
             field_diffs
                 .validate()
                 .map_err(TryFromProtoError::InvalidPersistState)?;
@@ -1097,11 +1094,9 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
 
         let diffs: Option<InlinedDiffs> = x.diffs.map(|diffs| diffs.into_rust()).transpose()?;
         if let Some(diffs) = &diffs {
-            // The diff bounds are validated against the latest rollup, which
-            // `State::latest_rollup` `.expect()`s to exist. A proto that carries
-            // diffs but no rollups is malformed, so reject it here rather than
-            // panicking. A rollup-less state with no diffs, such as a freshly
-            // initialized state, is fine and must still decode.
+            // `latest_rollup` below `.expect()`s a rollup to exist, so a proto
+            // with diffs but no rollups would panic. (A rollup-less state
+            // without diffs skips this block and decodes fine.)
             if state.collections.rollups.is_empty() {
                 return Err(TryFromProtoError::InvalidPersistState(
                     "rollup state has diffs but no rollups".into(),
@@ -1673,12 +1668,9 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
-                // An inline part carries its data in `kind`; the hollow-only
-                // fields must be unset. These are decoded from an untrusted
-                // blob, so validate and return a decode error rather than
-                // asserting (which panicked, even in release, on a
-                // malformed/crafted part). Found by the rollup_proto_roundtrip
-                // cargo-fuzz target.
+                // An inline part keeps its data in `kind`; the hollow-only
+                // fields must be unset. Decoded from an untrusted blob, so
+                // validate rather than assert.
                 if proto.encoded_size_bytes != 0
                     || !proto.key_lower.is_empty()
                     || proto.key_stats.is_some()
@@ -1924,9 +1916,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Description> for Description<T> {
 
     fn from_proto(proto: ProtoU64Description) -> Result<Self, TryFromProtoError> {
         let lower: Antichain<T> = proto.lower.into_rust_if_some("lower")?;
-        // `Description::new` asserts a non-empty lower frontier. `lower` is
-        // decoded from an untrusted blob, so validate it here and return a
-        // decode error rather than panicking on a crafted/corrupted batch.
+        // `Description::new` asserts a non-empty lower frontier; `lower` comes
+        // from an untrusted blob, so validate it here instead of panicking.
         if lower.elements().is_empty() {
             return Err(TryFromProtoError::InvalidPersistState(
                 "ProtoU64Description has an empty lower frontier".into(),
@@ -1985,9 +1976,8 @@ mod tests {
     #[mz_ore::test]
     fn rollup_inline_batch_part_with_hollow_fields_is_error() {
         // An inline `ProtoHollowBatchPart` carrying hollow-only fields (here a
-        // non-zero encoded_size_bytes) must decode to an error, not panic. It
-        // used to `assert!`, which fired even in release on a crafted/corrupted
-        // blob. Regression for the rollup_proto_roundtrip cargo-fuzz finding.
+        // non-zero encoded_size_bytes) must decode to an error, not panic.
+        // Regression for a rollup_proto_roundtrip fuzz finding.
         use mz_proto::ProtoType;
         use prost::Message;
         let bytes: &[u8] = &[
@@ -2003,9 +1993,8 @@ mod tests {
     #[mz_ore::test]
     fn rollup_batch_with_empty_lower_frontier_is_error() {
         // A `ProtoU64Description` with an empty lower frontier must decode to an
-        // error: `Description::new` asserts a non-empty lower, so a crafted batch
-        // used to panic. Regression for the rollup_proto_roundtrip cargo-fuzz
-        // finding.
+        // error: `Description::new` asserts a non-empty lower. Regression for a
+        // rollup_proto_roundtrip fuzz finding.
         use mz_proto::ProtoType;
         use prost::Message;
         let bytes: &[u8] = &[
@@ -2346,10 +2335,8 @@ mod tests {
     }
 
     /// A batch whose since is past the trace's since reconstructs without
-    /// tripping any spine assert but violates `Trace::validate`, which used
-    /// to run only under `debug_assert` (a panic in cargo-fuzz builds, silent
-    /// acceptance of corrupted state in release builds). It must be a decode
-    /// error.
+    /// tripping any spine assert but violates `Trace::validate`, which used to
+    /// run only under `debug_assert`. It must be a decode error.
     #[mz_ore::test]
     fn rollup_proto_with_batch_since_past_trace_since_is_rejected() {
         let proto = rollup_proto_with_trace(|trace| {
@@ -2360,8 +2347,8 @@ mod tests {
     }
 
     /// An absurd batch len overflows the spine's maintenance arithmetic
-    /// (`len.next_power_of_two()`, summing lens of merged batches), which
-    /// panics in builds with overflow checks. It must be a decode error.
+    /// (`len.next_power_of_two()`, summing merged batch lens). It must be a
+    /// decode error.
     #[mz_ore::test]
     fn rollup_proto_with_absurd_batch_len_is_rejected() {
         let proto = rollup_proto_with_trace(|trace| {
@@ -2375,9 +2362,8 @@ mod tests {
         assert!(err.contains("maximum trace size"), "{err}");
     }
 
-    /// An absurd spine batch level previously overflowed `level + 1` (a panic
-    /// in builds with overflow checks) and sized a `vec![]` allocation (an
-    /// abort). It must be a decode error.
+    /// An absurd spine batch level previously overflowed `level + 1` and sized
+    /// a giant `vec![]` allocation. It must be a decode error.
     #[mz_ore::test]
     fn rollup_proto_with_absurd_spine_level_is_rejected() {
         let proto = rollup_proto_with_trace(|trace| {
