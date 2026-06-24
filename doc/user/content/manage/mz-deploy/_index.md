@@ -11,7 +11,7 @@ menu:
 ---
 
 {{< warning >}}
-`mz-deploy` is a v0.1 release and is not yet recommended for production use.
+`mz-deploy` is a v0.2 release and is not yet recommended for production use.
 {{< /warning >}}
 
 `mz-deploy` is a CLI that manages your Materialize deployment from plain SQL
