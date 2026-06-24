@@ -1200,9 +1200,8 @@ mod tests {
     }
 
     /// Regression test for SS-193: when the destination column declares a
-    /// `max_scale`, the reader must round the decoded value to that scale
-    /// rather than preserving the source file's scale. This mirrors the
-    /// assignment-cast path so `COPY FROM PARQUET` agrees with `INSERT`.
+    /// `max_scale`, the reader should round the decoded value to that scale
+    /// rather than preserving the source file's scale.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn decimal_applies_destination_max_scale() {
@@ -1256,24 +1255,13 @@ mod tests {
         assert_eq!(num.0, expected, "Decimal256 did not round to max_scale");
     }
 
-    /// Rescaling the decoded value to the destination's `max_scale` (SS-193)
-    /// can push it past numeric's maximum precision: a higher scale appends
-    /// fractional digits, so a value with many integer digits that decodes
-    /// cleanly at a low scale overflows `NUMERIC_DATUM_MAX_PRECISION` (39) at a
-    /// high scale. The reader must surface that as an error rather than
-    /// silently truncating or panicking. Demonstrates that the *same* source
-    /// value can decode at one destination scale and fail at a larger one.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn decimal_rescale_to_higher_scale_overflows() {
         use mz_repr::adt::numeric::NumericMaxScale;
 
-        // A 33-digit integer (10^33 - 1). The source column has scale 0, so the
-        // parquet file stores this integer verbatim.
         let value: i128 = 10_i128.pow(33) - 1;
 
-        // Build the source array fresh per reader: `ArrowReader::new` consumes
-        // the `StructArray`.
         let build_batch = || {
             let mut dec128 = arrow::array::Decimal128Builder::new();
             dec128 = dec128.with_precision_and_scale(38, 0).unwrap();
@@ -1298,9 +1286,7 @@ mod tests {
                 .finish()
         };
 
-        // Lower scale (2): 33 integer digits + 2 fractional digits = 35
-        // significant digits, within the 39-digit limit, so the value decodes
-        // successfully and is rescaled to scale 2.
+        // Test working case with supportable scale then broken case.
         let reader = ArrowReader::new(&desc_with_scale(2), build_batch()).unwrap();
         let mut row = Row::default();
         reader
@@ -1311,16 +1297,12 @@ mod tests {
         rescale(&mut expected, 2).unwrap();
         assert_eq!(num.0, expected, "value did not rescale to scale 2");
 
-        // Higher scale (8): 33 + 8 = 41 significant digits exceeds the 39-digit
-        // maximum precision, so the same value now errors out instead of
-        // decoding.
         let reader = ArrowReader::new(&desc_with_scale(8), build_batch()).unwrap();
         let mut row = Row::default();
         let err = reader
             .read(0, &mut row)
             .expect_err("value must overflow at destination scale 8");
-        // `ArrowReader::read` wraps the column error with the row index, so
-        // check the full chain rather than just the top-level message.
+
         assert!(
             format!("{err:#}").contains("exceed maximum precision"),
             "unexpected error: {err:#}",
