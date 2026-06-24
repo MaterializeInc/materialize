@@ -113,12 +113,7 @@ pub struct DeferredPlan {
     pub plan: Plan,
     pub validity: PlanValidity,
     pub requires_locks: BTreeSet<CatalogItemId>,
-    /// Forwarded to the resumed `sequence_plan` so `rbac::check_plan` sees the
-    /// same dependencies as on the non-deferred path. Dropping these silently
-    /// bypassed `restrict_to_user_objects` for deferred reads (SQL-383).
     pub resolved_ids: ResolvedIds,
-    /// Kept separate from `resolved_ids` to mirror the `sequence_plan`
-    /// signature; see [`mz_sql::rbac::check_plan`].
     pub sql_impl_resolved_ids: ResolvedIds,
 }
 
@@ -260,8 +255,6 @@ impl Coordinator {
                     };
 
                     // Note: This plan is not guaranteed to run, it may get deferred again.
-                    // Resolved IDs are forwarded so the resumed `rbac::check_plan` sees the
-                    // same dependencies as the non-deferred path (SQL-383).
                     self.sequence_plan(
                         deferred.ctx,
                         deferred.plan,

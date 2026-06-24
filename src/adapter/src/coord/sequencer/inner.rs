@@ -2735,7 +2735,7 @@ impl Coordinator {
                             role_metadata,
                         ),
                         requires_locks: source_ids,
-                        // Writes don't track resolved IDs on this path.
+                        // Writes don't track resolved IDs.
                         resolved_ids: ResolvedIds::empty(),
                         sql_impl_resolved_ids: ResolvedIds::empty(),
                     };
