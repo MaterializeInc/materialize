@@ -740,6 +740,19 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
+        // Resolve the new cluster's cluster-scoped overrides now, so its first
+        // plan uses them rather than the env-wide values. Optimizer features are
+        // baked into immutable dataflows, so a value applied on a later sync tick
+        // cannot retrofit an already planned dataflow.
+        //
+        // TODO: this resolves only the cluster-scoped overrides. Replicas created
+        // in this same transaction reach the controller with env-wide config and
+        // pick up their replica-local overrides on the next sync tick, which is
+        // too late for render-frozen flags. The follow-up materialize#37158 folds
+        // replica resolution into the create transaction.
+        self.resolve_scoped_for_new_objects(&BTreeSet::from([cluster_id]), &BTreeSet::new())
+            .await;
+
         Ok(ExecuteResponse::CreatedCluster)
     }
 
@@ -941,6 +954,11 @@ impl Coordinator {
         }
 
         self.catalog_transact(Some(session), ops).await?;
+
+        // Resolve the new cluster's cluster-coherent scoped overrides now (see
+        // the managed path for rationale).
+        self.resolve_scoped_for_new_objects(&BTreeSet::from([id]), &BTreeSet::new())
+            .await;
 
         Ok(ExecuteResponse::CreatedCluster)
     }

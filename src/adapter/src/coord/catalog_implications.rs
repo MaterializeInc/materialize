@@ -1598,6 +1598,12 @@ impl Coordinator {
             .system_config()
             .enable_storage_introspection_logs();
 
+        // This replica's scoped (replica-local) overrides were pushed into the
+        // controller's per-replica layer before this loop, by the
+        // replica-scoped-configuration implication, so the replica's first
+        // configuration replays with them. Render-frozen flags make a later push
+        // too late, which is why the push precedes `create_replica`.
+
         self.controller
             .create_replica(
                 cluster_id,
