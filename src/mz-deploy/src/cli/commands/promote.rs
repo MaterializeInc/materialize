@@ -944,6 +944,13 @@ async fn execute_pending_sinks(client: &Client, plan: &DeploymentPlan) -> Result
 /// Apply replacement materialized views using data from the plan.
 ///
 /// Uses `plan.replacement_mvs` instead of re-querying.
+///
+/// Idempotent across a post-swap resume: `APPLY REPLACEMENT` consumes the
+/// staging MV, and the replacement-MV records are not deleted until
+/// `cleanup_apply_state`. A crash between recording the promotion and that
+/// cleanup leaves the records in place while their staging MVs are already
+/// gone, so re-running skips any replacement whose staging source MV no longer
+/// exists rather than erroring on the dropped staging schema.
 async fn apply_replacement_mvs(client: &Client, plan: &DeploymentPlan) -> Result<(), CliError> {
     if plan.replacement_mvs.is_empty() {
         verbose!("No replacement MVs to apply");
@@ -951,6 +958,25 @@ async fn apply_replacement_mvs(client: &Client, plan: &DeploymentPlan) -> Result
     }
 
     for record in &plan.replacement_mvs {
+        let already_applied = !client
+            .introspection()
+            .object_exists(
+                &record.target_database,
+                &record.replacement_schema,
+                &record.target_name,
+            )
+            .await
+            .map_err(CliError::Connection)?;
+        if already_applied {
+            verbose!(
+                "Skipping already-applied replacement {}.{}.{}",
+                record.target_database,
+                record.target_schema,
+                record.target_name
+            );
+            continue;
+        }
+
         let alter_sql = format!(
             "ALTER MATERIALIZED VIEW \"{}\".\"{}\".\"{}\"\
              APPLY REPLACEMENT \"{}\".\"{}\".\"{}\";",
