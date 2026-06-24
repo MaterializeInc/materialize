@@ -92,4 +92,4 @@ Certificate Authority (CA) rather than self-signed certificates.
 
 ## Node pool resizing
 
-{{% include-headless "self-managed-deployments/resize-node-pool" %}}
+{{% include-headless "/headless/self-managed-deployments/resize-node-pool" %}}
