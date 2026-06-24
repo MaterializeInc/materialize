@@ -14439,7 +14439,7 @@ Explained Query:
       →Arrange (#1{parent_address})
         →Fused with Child Map/Filter/Project
           Project: #0, #2
-          Map: list_slice_linear(#1{address}, 1, integer_to_bigint((list_length(#1{address}) - 1)))
+          Map: list_slice_linear(#1{address}, 1, (list_length(#1{address}) - 1))
             →Read l0
       →Arrange (#1{address})
         →Stream l0
@@ -14472,7 +14472,7 @@ Explained Query:
       →Arrange (#1{worker_id}, #2{parent_address})
         →Fused with Child Map/Filter/Project
           Project: #0, #1, #3
-          Map: list_slice_linear(#2{address}, 1, integer_to_bigint((list_length(#2{address}) - 1)))
+          Map: list_slice_linear(#2{address}, 1, (list_length(#2{address}) - 1))
             →Read l0
       →Arrange (#1{worker_id}, #2{address})
         →Stream l0
@@ -14710,7 +14710,7 @@ Explained Query:
           →Arranged mz_introspection.mz_dataflow_operators_per_worker
             Key: (#0, #1)
     cte l14 =
-      →Delta Join [%0:l11[#0{id}] » %4[#0] » %1:l12[#0{id}] » %2:l12[#1{address}] » %3:l9[#0{id}]] [%1:l12[#0{id}] » %4[#0] » %0:l11[#0{id}] » %2:l12[#1{address}] » %3:l9[#0{id}]] [%2:l12[#0{id}] » %3:l9[#0{id}] » %1:l12[list_slice_linear(#1{address}, 1, integer_to_bigint((list_length(#1{address}) - 1)))] » %4[#0] » %0:l11[#0{id}]] [%3:l9[#0{id}] » %2:l12[#0{id}] » %1:l12[list_slice_linear(#1{address}, 1, integer_to_bigint((list_length(#1{address}) - 1)))] » %4[#0] » %0:l11[#0{id}]] [%4[#0] » %1:l12[#0{id}] » %0:l11[#0{id}] » %2:l12[#1{address}] » %3:l9[#0{id}]]
+      →Delta Join [%0:l11[#0{id}] » %4[#0] » %1:l12[#0{id}] » %2:l12[#1{address}] » %3:l9[#0{id}]] [%1:l12[#0{id}] » %4[#0] » %0:l11[#0{id}] » %2:l12[#1{address}] » %3:l9[#0{id}]] [%2:l12[#0{id}] » %3:l9[#0{id}] » %1:l12[list_slice_linear(#1{address}, 1, (list_length(#1{address}) - 1))] » %4[#0] » %0:l11[#0{id}]] [%3:l9[#0{id}] » %2:l12[#0{id}] » %1:l12[list_slice_linear(#1{address}, 1, (list_length(#1{address}) - 1))] » %4[#0] » %0:l11[#0{id}]] [%4[#0] » %1:l12[#0{id}] » %0:l11[#0{id}] » %2:l12[#1{address}] » %3:l9[#0{id}]]
         path %0:
           after %4:
             Project: #0, #1, #4, #5
@@ -14732,7 +14732,7 @@ Explained Query:
             Project: #0, #3
             Filter: ((#1{name} = "Arranged TopK input") OR (#1{name} = "Arrange ReduceMinsMaxes") OR (#1{name} = "Arranged MinsMaxesHierarchical input"))
               →Read l11
-        →Arrange (#0{id}) (list_slice_linear(#1{address}, 1, integer_to_bigint((list_length(#1{address}) - 1))))
+        →Arrange (#0{id}) (list_slice_linear(#1{address}, 1, (list_length(#1{address}) - 1)))
           →Stream l12
         →Arrange (#0{id}) (#1{address})
           →Stream l12

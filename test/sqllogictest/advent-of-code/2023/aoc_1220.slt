@@ -145,7 +145,7 @@ Explained Query:
           ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
       Project (#3, #4) // { arity: 2 }
-        Map (regexp_split_to_array[" ", case_insensitive=false](#0{line}), substr(array_index(#2, 1), 2), btrim(array_index(#2, integer_to_bigint(#1{x})), ",")) // { arity: 5 }
+        Map (regexp_split_to_array[" ", case_insensitive=false](#0{line}), substr(array_index(#2, 1), 2), btrim(array_index(#2, #1{x}), ",")) // { arity: 5 }
           FlatMap generate_series(3, array_length(regexp_split_to_array[" ", case_insensitive=false](#0{line}), 1), 1) // { arity: 2 }
             Get l0 // { arity: 1 }
     cte l2 =

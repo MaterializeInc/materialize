@@ -1460,7 +1460,7 @@ Explained Query:
           ArrangeBy keys=[[#0{su_suppkey}]] // { arity: 1 }
             Distinct project=[#0{su_suppkey}] // { arity: 1 }
               Project (#0{su_suppkey}) // { arity: 1 }
-                Filter (integer_to_bigint((2 * #3{s_quantity})) > #4{sum_ol_quantity}) // { arity: 5 }
+                Filter ((2 * #3{s_quantity}) > #4{sum_ol_quantity}) // { arity: 5 }
                   Reduce group_by=[#0{su_suppkey}..=#3{s_quantity}] aggregates=[sum(#4{ol_quantity})] // { arity: 5 }
                     Project (#0{su_suppkey}..=#3{s_quantity}, #11{ol_quantity}) // { arity: 5 }
                       Filter (date_to_timestamp(#10{ol_delivery_d}) > 2010-05-23 12:00:00) // { arity: 15 }

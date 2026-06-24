@@ -201,7 +201,7 @@ Explained Query:
   With
     cte l0 =
       Project (#1, #2) // { arity: 2 }
-        Map (array_index(regexp_split_to_array[",", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
+        Map (array_index(regexp_split_to_array[",", case_insensitive=false](#0{input}), #1{r})) // { arity: 3 }
           FlatMap generate_series(1, array_length(regexp_split_to_array[",", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
             ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
@@ -303,7 +303,7 @@ Explained Query:
               Get l0 // { arity: 2 }
           Project (#2, #3) // { arity: 2 }
             Filter (char_length(#0{string}) > 0) // { arity: 4 }
-              Map (substr(#0{string}, 2), (((#1{hash} + integer_to_bigint(ascii(substr(#0{string}, 1, 1)))) * 17) % 256)) // { arity: 4 }
+              Map (substr(#0{string}, 2), (((#1{hash} + ascii(substr(#0{string}, 1, 1))) * 17) % 256)) // { arity: 4 }
                 Get l9 // { arity: 2 }
       cte l10 =
         Reduce aggregates=[sum(#0{hash})] // { arity: 1 }
@@ -317,7 +317,7 @@ Explained Query:
               Get l8 // { arity: 4 }
           Project (#0, #3, #4) // { arity: 3 }
             Filter (char_length(#1{string}) > 0) // { arity: 5 }
-              Map (substr(#1{string}, 2), (((#2{hash} + integer_to_bigint(ascii(substr(#1{string}, 1, 1)))) * 17) % 256)) // { arity: 5 }
+              Map (substr(#1{string}, 2), (((#2{hash} + ascii(substr(#1{string}, 1, 1))) * 17) % 256)) // { arity: 5 }
                 Get l11 // { arity: 3 }
     Return // { arity: 2 }
       With
@@ -361,7 +361,7 @@ Explained Query:
                     Get l15 // { arity: 3 }
                 Get l14 // { arity: 2 }
         cte l17 =
-          Reduce aggregates=[sum((((1 + #0{hash}) * #2{count}) * integer_to_bigint(#1{op})))] // { arity: 1 }
+          Reduce aggregates=[sum((((1 + #0{hash}) * #2{count}) * #1{op}))] // { arity: 1 }
             Project (#0, #1, #5{count}) // { arity: 3 }
               Join on=(#0 = #3 AND #2{min} = #4{min}) type=differential // { arity: 6 }
                 implementation

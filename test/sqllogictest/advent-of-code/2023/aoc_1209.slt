@@ -88,10 +88,10 @@ Explained Query:
       Distinct project=[#0..=#3] // { arity: 4 }
         Union // { arity: 4 }
           Project (#3, #0, #2, #4) // { arity: 4 }
-            Map (text_to_integer(array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), integer_to_bigint(#2{j}))), 1) // { arity: 5 }
+            Map (text_to_integer(array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), #2{j})), 1) // { arity: 5 }
               FlatMap generate_series(1, array_length(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 1), 1) // { arity: 3 }
                 Project (#1, #2) // { arity: 2 }
-                  Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{i}))) // { arity: 3 }
+                  Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), #1{i})) // { arity: 3 }
                     FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
                       ReadStorage materialize.public.input // { arity: 1 }
           Project (#8..=#11) // { arity: 4 }

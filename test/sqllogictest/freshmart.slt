@@ -710,15 +710,14 @@ Explained Query:
                                       Get l2
                           Get l0
                       Get l2
-              Project (#4{parent_id}, #1, #5)
-                Map (integer_to_bigint(#2))
-                  Join on=(#0{category_id} = #3{category_id}) type=differential
-                    ArrangeBy keys=[[#0{category_id}]]
-                      Get l3
-                    ArrangeBy keys=[[#0{category_id}]]
-                      Project (#0{category_id}, #2{parent_id})
-                        Filter (#2{parent_id}) IS NOT NULL
-                          ReadStorage materialize.public.categories
+              Project (#4{parent_id}, #1, #2)
+                Join on=(#0{category_id} = #3{category_id}) type=differential
+                  ArrangeBy keys=[[#0{category_id}]]
+                    Get l3
+                  ArrangeBy keys=[[#0{category_id}]]
+                    Project (#0{category_id}, #2{parent_id})
+                      Filter (#2{parent_id}) IS NOT NULL
+                        ReadStorage materialize.public.categories
     Return
       With
         cte l4 =

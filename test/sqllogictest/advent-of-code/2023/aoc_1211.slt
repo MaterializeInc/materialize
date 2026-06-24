@@ -206,7 +206,7 @@ Explained Query:
         Map (substr(#1{line}, #2{j}, 1)) // { arity: 4 }
           FlatMap generate_series(1, char_length(#1{line}), 1) // { arity: 3 }
             Project (#1, #2) // { arity: 2 }
-              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{i}))) // { arity: 3 }
+              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), #1{i})) // { arity: 3 }
                 FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
                   ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
@@ -302,7 +302,7 @@ Explained Query:
     cte l10 =
       ArrangeBy keys=[[]] // { arity: 2 }
         Project (#4, #5) // { arity: 2 }
-          Map (bigint_to_integer((integer_to_bigint(#0{r}) + #2{count})), bigint_to_integer((integer_to_bigint(#1{c}) + #3{count}))) // { arity: 6 }
+          Map (bigint_to_integer((#0{r} + #2{count})), bigint_to_integer((#1{c} + #3{count}))) // { arity: 6 }
             Get l9 // { arity: 4 }
     cte l11 =
       Reduce aggregates=[sum((abs((#0{r} - #2{r})) + abs((#1{c} - #3{c}))))] // { arity: 1 }
@@ -315,7 +315,7 @@ Explained Query:
     cte l12 =
       ArrangeBy keys=[[]] // { arity: 2 }
         Project (#4, #5) // { arity: 2 }
-          Map (bigint_to_integer((integer_to_bigint(#0{r}) + (999999 * #2{count}))), bigint_to_integer((integer_to_bigint(#1{c}) + (999999 * #3{count})))) // { arity: 6 }
+          Map (bigint_to_integer((#0{r} + (999999 * #2{count}))), bigint_to_integer((#1{c} + (999999 * #3{count})))) // { arity: 6 }
             Get l9 // { arity: 4 }
     cte l13 =
       Reduce aggregates=[sum((abs((#0{r} - #2{r})) + abs((#1{c} - #3{c}))))] // { arity: 1 }

@@ -954,13 +954,13 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
 ----
 Explained Query:
-  Project (#2, #1, #0{f1}) // { arity: 3 }
-    Filter (0 = integer_to_bigint(#0{f1})) // { arity: 3 }
-      Map (0, 123) // { arity: 3 }
+  Project (#1, #0{f1}, #0{f1}) // { arity: 3 }
+    Filter (#0{f1} = 0) // { arity: 2 }
+      Map (123) // { arity: 2 }
         ReadStorage materialize.public.t1 // { arity: 1 }
 
 Source materialize.public.t1
-  filter=((0 = integer_to_bigint(#0{f1})))
+  filter=((#0{f1} = 0))
 
 Target cluster: quickstart
 

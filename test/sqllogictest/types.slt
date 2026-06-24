@@ -1001,9 +1001,9 @@ SELECT coalesce(key, 0)
 FROM t1;
 ----
 Explained Query:
-  Project (#3) // { types: "(r_int32)" }
-    Map (coalesce(#0{key}, 0)) // { types: "(r_int32?, r_int32?, r_int32, r_int32)" }
-      ReadStorage materialize.public.t1 // { types: "(r_int32?, r_int32?, r_int32)" }
+  Project (#3) // { types: "(r_int)" }
+    Map (coalesce(#0{key}, 0)) // { types: "(r_int?, r_int?, r_int, r_int)" }
+      ReadStorage materialize.public.t1 // { types: "(r_int?, r_int?, r_int)" }
 
 Source materialize.public.t1
 
@@ -1017,9 +1017,9 @@ SELECT coalesce(key, n)
 FROM t1;
 ----
 Explained Query:
-  Project (#3) // { types: "(r_int32)" }
-    Map (coalesce(#0{key}, #2{n})) // { types: "(r_int32?, r_int32?, r_int32, r_int32)" }
-      ReadStorage materialize.public.t1 // { types: "(r_int32?, r_int32?, r_int32)" }
+  Project (#3) // { types: "(r_int)" }
+    Map (coalesce(#0{key}, #2{n})) // { types: "(r_int?, r_int?, r_int, r_int)" }
+      ReadStorage materialize.public.t1 // { types: "(r_int?, r_int?, r_int)" }
 
 Source materialize.public.t1
 
@@ -1034,11 +1034,11 @@ FROM t1
 GROUP BY key;
 ----
 Explained Query:
-  Project (#2, #1{sum_val}) // { types: "(r_int32, r_int64?)" }
-    Map (coalesce(#0{key}, 0)) // { types: "(r_int32?, r_int64?, r_int32)" }
-      Reduce group_by=[#0{key}] aggregates=[sum(#1{val})] // { types: "(r_int32?, r_int64?)" }
-        Project (#0{key}, #1{val}) // { types: "(r_int32?, r_int32?)" }
-          ReadStorage materialize.public.t1 // { types: "(r_int32?, r_int32?, r_int32)" }
+  Project (#2, #1{sum_val}) // { types: "(r_int, r_int?)" }
+    Map (coalesce(#0{key}, 0)) // { types: "(r_int?, r_int?, r_int)" }
+      Reduce group_by=[#0{key}] aggregates=[sum(#1{val})] // { types: "(r_int?, r_int?)" }
+        Project (#0{key}, #1{val}) // { types: "(r_int?, r_int?)" }
+          ReadStorage materialize.public.t1 // { types: "(r_int?, r_int?, r_int)" }
 
 Source materialize.public.t1
 
@@ -1053,9 +1053,9 @@ SELECT coalesce(key, val)
 FROM t1;
 ----
 Explained Query:
-  Project (#3) // { types: "(r_int32?)" }
-    Map (coalesce(#0{key}, #1{val})) // { types: "(r_int32?, r_int32?, r_int32, r_int32?)" }
-      ReadStorage materialize.public.t1 // { types: "(r_int32?, r_int32?, r_int32)" }
+  Project (#3) // { types: "(r_int?)" }
+    Map (coalesce(#0{key}, #1{val})) // { types: "(r_int?, r_int?, r_int, r_int?)" }
+      ReadStorage materialize.public.t1 // { types: "(r_int?, r_int?, r_int)" }
 
 Source materialize.public.t1
 
@@ -1069,9 +1069,9 @@ SELECT coalesce(key, val + 5)
 FROM t1;
 ----
 Explained Query:
-  Project (#3) // { types: "(r_int32?)" }
-    Map (coalesce(#0{key}, (#1{val} + 5))) // { types: "(r_int32?, r_int32?, r_int32, r_int32?)" }
-      ReadStorage materialize.public.t1 // { types: "(r_int32?, r_int32?, r_int32)" }
+  Project (#3) // { types: "(r_int?)" }
+    Map (coalesce(#0{key}, (#1{val} + 5))) // { types: "(r_int?, r_int?, r_int, r_int?)" }
+      ReadStorage materialize.public.t1 // { types: "(r_int?, r_int?, r_int)" }
 
 Source materialize.public.t1
 

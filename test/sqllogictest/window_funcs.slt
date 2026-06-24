@@ -227,7 +227,7 @@ With
   cte l2 =
     Map (true) // { arity: 2 }
       Distinct project=[#0] // { arity: 1 }
-        Filter (integer_to_bigint(#0{f1}) = #1{right_col0_0}) // { arity: 2 }
+        Filter (#0{f1} = #1{right_col0_0}) // { arity: 2 }
           Project (#0, #4) // { arity: 2 }
             Map (#3) // { arity: 5 }
               Project (#3..=#6) // { arity: 4 }
@@ -279,9 +279,9 @@ Explained Query:
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
-          Distinct project=[record_get[0](record_get[1](#0))] // { arity: 1 }
+          Distinct project=[record_get[0](#0)] // { arity: 1 }
             Project (#1) // { arity: 1 }
-              Filter (integer_to_bigint(record_get[0](record_get[1](#1))) = record_get[0](#1)) // { arity: 2 }
+              Filter (record_get[0](#1) = record_get[0](record_get[1](#1))) // { arity: 2 }
                 FlatMap unnest_list(#0{row_number}) // { arity: 2 }
                   Project (#1{row_number}) // { arity: 1 }
                     Reduce group_by=[#0{f1}] aggregates=[row_number[order_by=[]](row(list[row(#0{f1}, #1{f1}, #2{f2})]))] // { arity: 2 }

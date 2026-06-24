@@ -958,7 +958,7 @@ FROM nums
 ----
 Explained Query:
   Project (#9, #10) // { arity: 2 }
-    Map (((#0{x1} >> smallint_to_integer(#1{x2})) << smallint_to_integer(#2{x3})), ((#3{y1} << #4{y2}) >> #5{y3})) // { arity: 11 }
+    Map (((#0{x1} >> #1{x2}) << #2{x3}), ((#3{y1} << #4{y2}) >> #5{y3})) // { arity: 11 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums
@@ -993,7 +993,7 @@ FROM nums
 ----
 Explained Query:
   Project (#9, #10) // { arity: 2 }
-    Map (((#0{x1} >> smallint_to_integer(#1{x2})) & #2{x3}), ((#3{y1} << #4{y2}) & #5{y3})) // { arity: 11 }
+    Map (((#0{x1} >> #1{x2}) & #2{x3}), ((#3{y1} << #4{y2}) & #5{y3})) // { arity: 11 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums
@@ -1030,7 +1030,7 @@ FROM nums
 ----
 Explained Query:
   Project (#9..=#12) // { arity: 4 }
-    Map (((#0{x1} & #1{x2}) | #2{x3}), ((#3{y1} & #4{y2}) | #5{y3}), ((#6{z1} & #7{z2}) | #8{z3}), (integer_to_bigint((smallint_to_integer(#0{x1}) & #4{y2})) | #8{z3})) // { arity: 13 }
+    Map (((#0{x1} & #1{x2}) | #2{x3}), ((#3{y1} & #4{y2}) | #5{y3}), ((#6{z1} & #7{z2}) | #8{z3}), ((#0{x1} & #4{y2}) | #8{z3})) // { arity: 13 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums
@@ -1067,7 +1067,7 @@ FROM nums
 ----
 Explained Query:
   Project (#9..=#12) // { arity: 4 }
-    Map (((#0{x1} # #1{x2}) & #2{x3}), ((#3{y1} # #4{y2}) & #5{y3}), ((#6{z1} # #7{z2}) & #8{z3}), (integer_to_bigint((smallint_to_integer(#0{x1}) # #4{y2})) & #8{z3})) // { arity: 13 }
+    Map (((#0{x1} # #1{x2}) & #2{x3}), ((#3{y1} # #4{y2}) & #5{y3}), ((#6{z1} # #7{z2}) & #8{z3}), ((#0{x1} # #4{y2}) & #8{z3})) // { arity: 13 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums
@@ -1104,7 +1104,7 @@ FROM nums
 ----
 Explained Query:
   Project (#9..=#12) // { arity: 4 }
-    Map (((#0{x1} # #1{x2}) | #2{x3}), ((#3{y1} # #4{y2}) | #5{y3}), ((#6{z1} # #7{z2}) | #8{z3}), (integer_to_bigint((smallint_to_integer(#0{x1}) # #4{y2})) | #8{z3})) // { arity: 13 }
+    Map (((#0{x1} # #1{x2}) | #2{x3}), ((#3{y1} # #4{y2}) | #5{y3}), ((#6{z1} # #7{z2}) | #8{z3}), ((#0{x1} # #4{y2}) | #8{z3})) // { arity: 13 }
       ReadStorage materialize.public.nums // { arity: 9 }
 
 Source materialize.public.nums

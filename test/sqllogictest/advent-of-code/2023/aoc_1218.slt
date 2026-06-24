@@ -221,7 +221,7 @@ Explained Query:
   With
     cte l0 =
       Project (#1, #2) // { arity: 2 }
-        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), #1{r})) // { arity: 3 }
           FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
             ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
@@ -276,7 +276,7 @@ Explained Query:
         Distinct project=[#0..=#4] // { arity: 5 }
           Union // { arity: 5 }
             Project (#0, #1, #7..=#9) // { arity: 5 }
-              Map ((#0{r2} + integer_to_bigint((#4{dr} * #6{steps}))), (#1{c2} + integer_to_bigint((#5{dc} * #6{steps}))), (#2{rounds} + 1)) // { arity: 10 }
+              Map ((#0{r2} + (#4{dr} * #6{steps})), (#1{c2} + (#5{dc} * #6{steps})), (#2{rounds} + 1)) // { arity: 10 }
                 Join on=(#2{rounds} = #3{r}) type=differential // { arity: 7 }
                   implementation
                     %0:l6[#2{rounds}]K » %1:l0[#0{r}]K
