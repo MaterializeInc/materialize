@@ -59,7 +59,7 @@ from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.expression import ExprKind, expression
 from materialize.parallel_workload.settings import Complexity, Scenario
 
-MAX_COLUMNS = 5
+MAX_COLUMNS = 50
 MAX_INCLUDE_HEADERS = 5
 # Kept small on purpose. Views can nest (a view's inputs may themselves be
 # views), so a peek flattens into a deep join whose intermediate row count
@@ -70,22 +70,22 @@ MAX_INCLUDE_HEADERS = 5
 MAX_ROWS = 10
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
-MAX_DBS = 5
-MAX_SCHEMAS = 5
-MAX_TABLES = 5
-MAX_VIEWS = 15
-MAX_INDEXES = 15
-MAX_ROLES = 15
-MAX_WEBHOOK_SOURCES = 5
-MAX_KAFKA_SOURCES = 5
-MAX_MYSQL_SOURCES = 5
-MAX_SQL_SERVER_SOURCES = 5
-MAX_POSTGRES_SOURCES = 5
-MAX_LOADGEN_SOURCES = 5
-MAX_KAFKA_SINKS = 5
-MAX_ICEBERG_SINKS = 5
-MAX_TYPES = 5
-MAX_NETWORK_POLICIES = 3
+MAX_DBS = 50
+MAX_SCHEMAS = 50
+MAX_TABLES = 50
+MAX_VIEWS = 150
+MAX_INDEXES = 150
+MAX_ROLES = 150
+MAX_WEBHOOK_SOURCES = 50
+MAX_KAFKA_SOURCES = 50
+MAX_MYSQL_SOURCES = 50
+MAX_SQL_SERVER_SOURCES = 50
+MAX_POSTGRES_SOURCES = 50
+MAX_LOADGEN_SOURCES = 50
+MAX_KAFKA_SINKS = 50
+MAX_ICEBERG_SINKS = 50
+MAX_TYPES = 50
+MAX_NETWORK_POLICIES = 30
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
