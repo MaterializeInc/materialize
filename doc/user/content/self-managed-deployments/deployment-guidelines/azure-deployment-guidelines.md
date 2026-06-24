@@ -89,3 +89,7 @@ Certificate Authority (CA) rather than self-signed certificates.
 
 {{< include-md file="shared-content/self-managed/general-rules-for-upgrades.md"
 >}}
+
+## Node pool resizing
+
+{{% include-headless "self-managed-deployments/resize-node-pool" %}}

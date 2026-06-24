@@ -3,8 +3,10 @@ title: "Resize node pools"
 description: "Safely change the VM type of a node pool in a Self-Managed Materialize deployment."
 menu:
   main:
-    parent: "upgrading"
-    weight: 25
+    parent: "deployment-guidelines"
+    weight: 40
+aliases:
+  - /self-managed-deployments/upgrading/resize-node-pools/
 ---
 
 When you need a larger (or smaller) VM type for a node pool that Materialize
@@ -179,8 +181,8 @@ the right thing on its own.
 
 ## See also
 
+- [AWS deployment guidelines](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines/)
+- [Azure deployment guidelines](/self-managed-deployments/deployment-guidelines/azure-deployment-guidelines/)
+- [GCP deployment guidelines](/self-managed-deployments/deployment-guidelines/gcp-deployment-guidelines/)
 - [Upgrading](/self-managed-deployments/upgrading/) -- rollout configuration
   reference (`requestRollout`, `rolloutStrategy`)
-- [Install on Azure](/self-managed-deployments/installation/install-on-azure/)
-- [Install on GCP](/self-managed-deployments/installation/install-on-gcp/)
-- [Install on AWS](/self-managed-deployments/installation/install-on-aws/)
