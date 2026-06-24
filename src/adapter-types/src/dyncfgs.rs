@@ -221,6 +221,17 @@ pub const MCP_MAX_RESPONSE_SIZE: Config<usize> = Config::new(
     "Maximum size in bytes of MCP tool response content. Responses exceeding this limit are rejected with an error telling the agent to narrow its query.",
 );
 
+/// Maximum size (in bytes) of a webhook request body, measured after
+/// decompression. Requests whose body exceeds this limit are rejected with
+/// HTTP 413. Applies only to the webhook route; other HTTP routes use a
+/// separate static limit.
+pub const WEBHOOK_MAX_REQUEST_SIZE_BYTES: Config<usize> = Config::new(
+    "webhook_max_request_size_bytes",
+    // Keep in sync with the historical static limit in environmentd's HTTP server.
+    5 * 1024 * 1024,
+    "The maximum size in bytes of a webhook request body, measured after decompression.",
+);
+
 /// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
 /// a persist write + oracle call per DDL statement.
 pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
@@ -319,6 +330,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
+        .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&CONSOLE_OIDC_CLIENT_ID)
         .add(&CONSOLE_OIDC_SCOPES)
