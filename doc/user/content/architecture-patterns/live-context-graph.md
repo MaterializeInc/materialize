@@ -16,17 +16,14 @@ A **context graph** is the live, queryable model of your business: a set of data
 
 Each data product is a real noun in your business. Define it once in SQL; Materialize maintains it as the underlying systems change. Your applications, services, ML features, dashboards, and AI agents all read from the same live result. The relationships between products form the graph structure: a customer has orders, an order belongs to a store, a store has couriers.
 
-Materialize's context graph is always live and always correct. Changes propagate through every dependent product incrementally, without batch windows, without staleness, and with the strict serializability of a SQL query. Any consumer sees a consistent snapshot that respects real-time write ordering.
+Materialize's context graph is always live and always correct. Changes propagate through every dependent product incrementally, without batch windows, without staleness, and with strict serializability.
 
-In this architecture pattern, we'll walk you through how to setup a context graph.
+In this architecture pattern, we'll walk you through how to setup a context graph for your agents
 
 ## Architecture
-
-The full flow from operational sources through Materialize to consumers:
-
 ![Context graph architecture: operational sources flow through CDC into Materialize, which maintains live materialized views consumed via SQL by apps and dashboards, and via MCP by AI agents](/images/context_graph_architecture.avif)
 
-Sources stream changes into Materialize via CDC. Materialize maintains data products incrementally to keep the entire graph fresh. Applications and dashboards read via SQL over the PostgreSQL wire protocol. AI agents connect via the [Materialize MCP server](/integrations/mcp-server/), which exposes the context graph as a set of queryable tools.
+Materialize ingests changes from sources, such as Postgres databases and Kafka. Data products can be created via SQL, and are maintained incrementally to ensure they are kept fresh. Finally applications and dashboards read via SQL over the PostgreSQL wire protocol. AI agents can connect via the [Materialize MCP server](/integrations/mcp-server/).
 
 ## Ingest data from operational sources
 
