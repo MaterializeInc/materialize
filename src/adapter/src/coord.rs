@@ -2117,16 +2117,10 @@ impl Coordinator {
 
         // Partition the synced parameters by scope class, as the sync loop does,
         // so we evaluate exactly the flags in use at each scope.
-        let replica_param_names: Vec<&'static str> = system_config
-            .iter_synced()
-            .filter(|var| var.scope() == ParameterScope::Replica)
-            .map(|var| var.name())
-            .collect();
-        let cluster_param_names: Vec<&'static str> = system_config
-            .iter_synced()
-            .filter(|var| var.scope() == ParameterScope::Cluster)
-            .map(|var| var.name())
-            .collect();
+        let replica_param_names =
+            system_config.synced_param_names_in_scope(ParameterScope::Replica);
+        let cluster_param_names =
+            system_config.synced_param_names_in_scope(ParameterScope::Cluster);
 
         let params = SynchronizedParameters::new(system_config.clone());
         let mut evaluated = ScopedParameters::default();
