@@ -30,6 +30,13 @@
    configuration file. Include any additional configurations that you specify
    for your deployment.
 
+   <div class="code-tabs">
+   <ul class="nav-tabs"></ul>
+   <div class="tab-content">
+   <div class="tab-pane" title="v1alpha1" id="upgrade-operator-kind-v1alpha1">
+
+   {{ partial "self-managed/crd-version-note.html" "v1alpha1" }}
+
    ```shell
    helm upgrade my-materialize-operator materialize/materialize-operator \
    --namespace=materialize \
@@ -37,6 +44,29 @@
    -f upgrade-values.yaml \
    --set observability.podMetrics.enabled=true
    ```
+
+   </div>
+   <div class="tab-pane" title="v1" id="upgrade-operator-kind-v1">
+
+   {{ partial "self-managed/crd-version-note.html" "v1" }}
+
+   Enabling the `v1` CRD requires cert-manager (or your own certificate) and
+   API-server ingress to the operator on port `8001`. If you have not already
+   installed cert-manager, install it first (see the [Install on
+   kind](/self-managed-deployments/installation/install-on-local-kind/) guide).
+
+   ```shell
+   helm upgrade my-materialize-operator materialize/materialize-operator \
+   --namespace=materialize \
+   --version {{ $operator_version }} \
+   -f upgrade-values.yaml \
+   --set observability.podMetrics.enabled=true \
+   --set operator.args.installV1CRD=true
+   ```
+
+   </div>
+   </div>
+   </div>
 
 1. Verify that the operator is running:
 
@@ -66,29 +96,9 @@ deployment has not been configured with a license key:
    <div class="code-tabs">
    <ul class="nav-tabs"></ul>
    <div class="tab-content">
-   <div class="tab-pane" title="v1 (v26.30+)" id="local-kind-v1">
+   <div class="tab-pane" title="v1alpha1" id="local-kind-v1alpha1">
 
-   | Field | Description |
-   |-------|-------------|
-   | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{ $operator_version }}`. |
-   | `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`forceRollout` triggers a rollout even if no other changes exist.</li></ul> |
-
-
-   ```yaml
-   apiVersion: materialize.cloud/v1
-   kind: Materialize
-   metadata:
-     name: 12345678-1234-1234-1234-123456789012
-     namespace: materialize-environment
-   spec:
-     environmentdImageRef: materialize/environmentd:{{ $environmentd_version }} # Update version
-     # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
-     rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version.
-     backendSecretName: materialize-backend
-   ```
-
-   </div>
-   <div class="tab-pane" title="v1alpha1 (before v26.30)" id="local-kind-v1alpha1">
+   {{ partial "self-managed/crd-version-note.html" "v1alpha1" }}
 
    | Field | Description |
    |-------|-------------|
@@ -106,6 +116,30 @@ deployment has not been configured with a license key:
      environmentdImageRef: materialize/environmentd:{{ $environmentd_version }} # Update version
      requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID
    # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
+     rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version.
+     backendSecretName: materialize-backend
+   ```
+
+   </div>
+   <div class="tab-pane" title="v1" id="local-kind-v1">
+
+   {{ partial "self-managed/crd-version-note.html" "v1" }}
+
+   | Field | Description |
+   |-------|-------------|
+   | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{ $operator_version }}`. |
+   | `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`forceRollout` triggers a rollout even if no other changes exist.</li></ul> |
+
+
+   ```yaml
+   apiVersion: materialize.cloud/v1
+   kind: Materialize
+   metadata:
+     name: 12345678-1234-1234-1234-123456789012
+     namespace: materialize-environment
+   spec:
+     environmentdImageRef: materialize/environmentd:{{ $environmentd_version }} # Update version
+     # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
      rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version.
      backendSecretName: materialize-backend
    ```

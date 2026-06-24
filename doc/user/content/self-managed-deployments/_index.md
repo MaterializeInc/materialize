@@ -158,10 +158,12 @@ Materialize CR, see [Materialize CRD Field
 Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/).
 
 {{< tabs >}}
-{{< tab "v1 (v26.30+)" >}}
+{{< tab "v1alpha1" >}}
+
+{{< self-managed/crd-version-note "v1alpha1" >}}
 
 ```yaml
-apiVersion: materialize.cloud/v1
+apiVersion: materialize.cloud/v1alpha1
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012
@@ -172,10 +174,12 @@ spec:
 ```
 
 {{< /tab >}}
-{{< tab "v1alpha1 (before v26.30)" >}}
+{{< tab "v1" >}}
+
+{{< self-managed/crd-version-note "v1" >}}
 
 ```yaml
-apiVersion: materialize.cloud/v1alpha1
+apiVersion: materialize.cloud/v1
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012
@@ -194,13 +198,9 @@ creates all required Kubernetes resources.
 #### Modifying the custom resource
 
 {{< tabs >}}
-{{< tab "v1 (v26.30+)" >}}
+{{< tab "v1alpha1" >}}
 
-To modify a custom resource, update the CRD with your changes.
-When you apply the CRD, the operator will roll out the changes.
-
-{{< /tab >}}
-{{< tab "v1alpha1 (before v26.30)" >}}
+{{< self-managed/crd-version-note "v1alpha1" >}}
 
 To modify a custom resource, update the CRD with your changes, including the
 `requestRollout` field with a new UUID value. When you apply the CRD, the
@@ -210,6 +210,14 @@ operator will roll out the changes.
 If you do not specify a new `requestRollout` UUID, the operator
 watches for updates but does not roll out the changes.
 {{< /note >}}
+
+{{< /tab >}}
+{{< tab "v1" >}}
+
+{{< self-managed/crd-version-note "v1" >}}
+
+To modify a custom resource, update the CRD with your changes.
+When you apply the CRD, the operator will roll out the changes.
 
 {{< /tab >}}
 {{< /tabs >}}

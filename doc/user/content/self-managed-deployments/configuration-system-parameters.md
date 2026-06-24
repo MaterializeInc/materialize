@@ -68,22 +68,9 @@ Reference the ConfigMap in your Materialize custom resource by setting the
 `systemParameterConfigmapName` field to the name of your ConfigMap:
 
 {{< tabs >}}
-{{< tab "v1 (v26.30+)" >}}
+{{< tab "v1alpha1" >}}
 
-```yaml {hl_lines="9"}
-apiVersion: materialize.cloud/v1
-kind: Materialize
-metadata:
-  name: 12345678-1234-1234-1234-123456789012
-  namespace: materialize-environment
-spec:
-  environmentdImageRef: materialize/environmentd:v26.0.0
-  backendSecretName: materialize-backend
-  systemParameterConfigmapName: mz-system-params
-```
-
-{{< /tab >}}
-{{< tab "v1alpha1 (before v26.30)" >}}
+{{< self-managed/crd-version-note "v1alpha1" >}}
 
 ```yaml {hl_lines="9-10"}
 apiVersion: materialize.cloud/v1alpha1
@@ -92,10 +79,27 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.0.0
+  environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}}
   backendSecretName: materialize-backend
   systemParameterConfigmapName: mz-system-params
   requestRollout: 00000000-0000-0000-0000-000000000003 # Changing the CR requires a rollout
+```
+
+{{< /tab >}}
+{{< tab "v1" >}}
+
+{{< self-managed/crd-version-note "v1" >}}
+
+```yaml {hl_lines="9"}
+apiVersion: materialize.cloud/v1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}}
+  backendSecretName: materialize-backend
+  systemParameterConfigmapName: mz-system-params
 ```
 
 {{< /tab >}}
@@ -151,10 +155,12 @@ Materialize custom resource YAML and update it whenever you need to force a
 ConfigMap reload:
 
 {{< tabs >}}
-{{< tab "v1 (v26.30+)" >}}
+{{< tab "v1alpha1" >}}
+
+{{< self-managed/crd-version-note "v1alpha1" >}}
 
 ```yaml
-apiVersion: materialize.cloud/v1
+apiVersion: materialize.cloud/v1alpha1
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012
@@ -166,10 +172,12 @@ spec:
 ```
 
 {{< /tab >}}
-{{< tab "v1alpha1 (before v26.30)" >}}
+{{< tab "v1" >}}
+
+{{< self-managed/crd-version-note "v1" >}}
 
 ```yaml
-apiVersion: materialize.cloud/v1alpha1
+apiVersion: materialize.cloud/v1
 kind: Materialize
 metadata:
   name: 12345678-1234-1234-1234-123456789012

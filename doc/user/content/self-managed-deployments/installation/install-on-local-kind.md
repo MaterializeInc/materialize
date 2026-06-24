@@ -107,7 +107,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    kubectl get nodes --show-labels
    ```
 
-1. Recommended: Install cert-manager
+1. Install cert-manager
 
    Cert-manager is used for generating TLS certificates needed by the materialize operator
    for CRD conversion webhooks. It is currently only required if you enable the v1
@@ -286,6 +286,14 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
       ```shell
       kubectl apply -f sample-materialize.yaml
       ```
+
+      {{< tip >}}
+      **Optional — use the `v1` CRD.** If you enabled the `v1` CRD on the
+      operator, edit `sample-materialize.yaml` to set `apiVersion:
+      materialize.cloud/v1` and remove any `requestRollout` field before
+      applying. See [Adopting the v1
+      CRD](/self-managed-deployments/upgrading/#adopting-the-v1-crd).
+      {{< /tip >}}
 
     1. Verify the installation and check the status:
 

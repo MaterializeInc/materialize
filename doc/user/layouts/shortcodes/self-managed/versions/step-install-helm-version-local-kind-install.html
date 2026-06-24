@@ -3,6 +3,13 @@
 1. Install the Materialize Operator. The operator will be installed in the
    `materialize` namespace.
 
+   <div class="code-tabs">
+   <ul class="nav-tabs"></ul>
+   <div class="tab-content">
+   <div class="tab-pane" title="v1alpha1" id="install-operator-kind-v1alpha1">
+
+   {{ partial "self-managed/crd-version-note.html" "v1alpha1" }}
+
    ```shell
    helm install my-materialize-operator materialize/materialize-operator \
        --namespace=materialize --create-namespace \
@@ -10,3 +17,23 @@
        --set observability.podMetrics.enabled=true \
        -f sample-values.yaml
    ```
+
+   </div>
+   <div class="tab-pane" title="v1" id="install-operator-kind-v1">
+
+   {{ partial "self-managed/crd-version-note.html" "v1" }}
+
+   Enabling the `v1` CRD requires cert-manager, installed in an earlier step.
+
+   ```shell
+   helm install my-materialize-operator materialize/materialize-operator \
+       --namespace=materialize --create-namespace \
+       --version {{ $operator_version }} \
+       --set observability.podMetrics.enabled=true \
+       --set operator.args.installV1CRD=true \
+       -f sample-values.yaml
+   ```
+
+   </div>
+   </div>
+   </div>

@@ -131,11 +131,39 @@
        name="upgrade-major-version-restriction" %}}
        {{< /note >}}
 
+       <div class="code-tabs">
+       <ul class="nav-tabs"></ul>
+       <div class="tab-content">
+       <div class="tab-pane" title="v1alpha1" id="upgrade-operator-v1alpha1">
+
+       {{< self-managed/crd-version-note "v1alpha1" >}}
+
        ```shell
        helm upgrade -n materialize simple-demo materialize/materialize-operator  \
          -f my-values.yaml \
          --version {{< self-managed/versions/get-latest-version >}}
        ```
+
+       </div>
+       <div class="tab-pane" title="v1" id="upgrade-operator-v1">
+
+       {{< self-managed/crd-version-note "v1" >}}
+
+       Enabling the `v1` CRD requires cert-manager (or your own certificate) and
+       API-server ingress to the operator on port `8001`; see the [v26.30 upgrade
+       notes](/self-managed-deployments/upgrading/#upgrading-to-v2630-and-later-versions)
+       for prerequisites.
+
+       ```shell
+       helm upgrade -n materialize simple-demo materialize/materialize-operator  \
+         -f my-values.yaml \
+         --version {{< self-managed/versions/get-latest-version >}} \
+         --set operator.args.installV1CRD=true
+       ```
+
+       </div>
+       </div>
+       </div>
 
     1. Verify that the Operator is running:
 
@@ -187,11 +215,18 @@
   content: |
 
     **After** you have upgraded your Materialize Operator, upgrade your
-    Materialize instance(s) to the **APP Version** of the Operator. When
-    upgrading Materialize Instances versions, changes are not automatically
-    rolled out by the Operator in order to minimize unexpected downtime and
-    avoid connection drops at critical periods. Instead, the upgrade process
-    involves two steps:
+    Materialize instance(s) to the **APP Version** of the Operator.
+
+    <div class="code-tabs">
+    <ul class="nav-tabs"></ul>
+    <div class="tab-content">
+    <div class="tab-pane" title="v1alpha1" id="upgrade-instance-v1alpha1">
+
+    {{< self-managed/crd-version-note "v1alpha1" >}}
+
+    With `v1alpha1`, changes are not automatically rolled out by the Operator in
+    order to minimize unexpected downtime and avoid connection drops at critical
+    periods. Instead, the upgrade process involves two steps:
 
     - First, staging the version change to the Materialize custom resource.
     - Second, rolling out the changes via a `requestRollout` flag.
