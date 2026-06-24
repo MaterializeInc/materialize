@@ -208,7 +208,7 @@ fn scalar_type_and_array_to_reader(
                 array,
                 scale_factor,
                 precision,
-                max_scale: (*max_scale).map(|s| s.into_u8()),
+                destination_max_scale: (*max_scale).map(|s| s.into_u8()),
             })
         }
         (SqlScalarType::Numeric { max_scale }, DataType::Decimal256(precision, scale)) => {
@@ -231,7 +231,7 @@ fn scalar_type_and_array_to_reader(
                 array,
                 scale_factor,
                 precision,
-                max_scale: (*max_scale).map(|s| s.into_u8()),
+                destination_max_scale: (*max_scale).map(|s| s.into_u8()),
             })
         }
         (SqlScalarType::Bytes, DataType::Binary) => {
@@ -489,15 +489,13 @@ enum ColReader {
         array: Decimal128Array,
         scale_factor: Numeric,
         precision: usize,
-        /// The destination column's declared scale, if constrained.
-        max_scale: Option<u8>,
+        destination_max_scale: Option<u8>,
     },
     Decimal256 {
         array: Decimal256Array,
         scale_factor: Numeric,
         precision: usize,
-        /// The destination column's declared scale, if constrained.
-        max_scale: Option<u8>,
+        destination_max_scale: Option<u8>,
     },
 
     Binary(arrow::array::BinaryArray),
@@ -613,7 +611,7 @@ impl ColReader {
                 array,
                 scale_factor,
                 precision,
-                max_scale,
+                destination_max_scale,
             } => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
@@ -626,11 +624,8 @@ impl ColReader {
                     // Scale the number.
                     ctx.div(&mut num, scale_factor);
 
-                    // Round to the destination column's declared scale, matching
-                    // the assignment-cast path so COPY FROM agrees with INSERT
-                    // (SS-193).
-                    if let Some(max_scale) = max_scale {
-                        rescale(&mut num, *max_scale)?;
+                    if let Some(destination_max_scale) = destination_max_scale {
+                        rescale(&mut num, *destination_max_scale)?;
                     }
 
                     Ok::<_, anyhow::Error>(Datum::Numeric(OrderedDecimal(num)))
@@ -640,7 +635,7 @@ impl ColReader {
                 array,
                 scale_factor,
                 precision,
-                max_scale,
+                destination_max_scale,
             } => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
@@ -659,11 +654,8 @@ impl ColReader {
                     // Scale the number.
                     ctx.div(&mut num, scale_factor);
 
-                    // Round to the destination column's declared scale, matching
-                    // the assignment-cast path so COPY FROM agrees with INSERT
-                    // (SS-193).
-                    if let Some(max_scale) = max_scale {
-                        rescale(&mut num, *max_scale)?;
+                    if let Some(destination_max_scale) = destination_max_scale {
+                        rescale(&mut num, *destination_max_scale)?;
                     }
 
                     Ok::<_, anyhow::Error>(Datum::Numeric(OrderedDecimal(num)))
