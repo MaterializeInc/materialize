@@ -1,6 +1,10 @@
 ---
 title: "Live Context Graph"
+<<<<<<< Updated upstream
 description: "Model your business as a compounding ontology of live data products, the context graph, and build apps, services, and AI agents on top of it."
+=======
+description: "Model your business as a compounding ontology of live data products — the context graph — and build apps, services, and AI agents on top of it."
+>>>>>>> Stashed changes
 menu:
   main:
     parent: architecture-patterns
@@ -12,6 +16,7 @@ aliases:
 
 ## What is a live context graph?
 
+<<<<<<< Updated upstream
 A **context graph** is the live, queryable model of your business: a set of data products (customers, orders, stores, couriers) defined in SQL, kept current within about a second, and composed into a single coherent ontology that you can expose to your agents.
 
 Each data product is a real noun in your business. Define it once in SQL; Materialize maintains it as the underlying systems change. Your applications, services, ML features, dashboards, and AI agents all read from the same live result. The relationships between products form the graph structure: a customer has orders, an order belongs to a store, a store has couriers.
@@ -88,6 +93,24 @@ In Materialize, you can create live data products by defining Materialized Views
 
 ```mzsql
 CREATE MATERIALIZED VIEW customers AS
+=======
+A **context graph** is the live, queryable model of your business: a set of data products — customers, orders, stores, couriers — defined in SQL, kept current within about a second, and composed into a single coherent ontology.
+
+Each data product is a real noun in your business. Define it once in SQL; Materialize maintains it as the underlying systems change. Your applications, services, ML features, dashboards, and AI agents all read from the same live result. The relationships between products form the graph structure: a customer has orders, an order belongs to a store, a store has couriers.
+
+Materialize's context graph is always live and always correct. Changes propagate through every dependent product incrementally — without batch windows, without staleness, and with the strict serializability of a SQL query. Any consumer sees a consistent snapshot that respects real-time write ordering.
+
+## How to represent the nouns of your business as data products
+
+The objects you reason about (Customer, Order, Subscription, Store, Courier) are the nouns of your business. Each has a meaning, fields, identity, and relationships to other nouns. Almost none of them live in a single system.
+
+The Customer noun isn't in one place. Identity lives in the CRM, orders in the OMS, tickets in the support tool, payments in the billing system, fulfillment in the warehouse and dispatch systems. A consumer that wants the full Customer has to stitch the silos together itself, on every read.
+
+In Materialize, a live data product does the stitching once, in SQL, and keeps the result current:
+
+```mzsql
+CREATE VIEW customers AS
+>>>>>>> Stashed changes
   WITH order_summary AS (
     SELECT account_id, count(*) AS lifetime_orders
     FROM   erp.orders
@@ -95,7 +118,11 @@ CREATE MATERIALIZED VIEW customers AS
   ),
   ticket_summary AS (
     SELECT account_id, max(opened_at) AS last_ticket_at
+<<<<<<< Updated upstream
     FROM   crm.tickets
+=======
+    FROM   zendesk.tickets
+>>>>>>> Stashed changes
     GROUP BY account_id
   )
   SELECT a.account_id,
@@ -108,6 +135,7 @@ CREATE MATERIALIZED VIEW customers AS
   LEFT JOIN   ticket_summary t USING (account_id);
 ```
 
+<<<<<<< Updated upstream
 The materialized view is your business's authoritative statement of what a customer is. Each row is the live representation of one customer, joined across the sources you ingested. Open a ticket, place an order, change a plan, and the row reflects it within about a second. Materialize doesn't add a batch window on top of your source systems; whatever those systems publish, the row reflects within an incremental maintenance step. You don't write incremental update logic, schedule batch refreshes, or reconcile staleness windows.
 
 ## Create a compounding ontology of data products
@@ -118,6 +146,18 @@ Define Stores by joining the locations registry with inventory and active shifts
 
 ```mzsql
 CREATE MATERIALIZED VIEW stores AS
+=======
+The view is your business's authoritative statement of what a customer is. Each row is the live representation of one customer, joined across whatever silos own that state. Open a ticket, place an order, change a plan, and the row reflects it within about a second. Materialize doesn't add a batch window on top of your source systems; whatever those systems publish, the row reflects within an incremental maintenance step. You don't write incremental update logic, schedule batch refreshes, or reconcile staleness windows.
+
+## How to create a compounding ontology of data products
+
+Each live data product you define joins a few silos and yields one noun. As the ontology grows, you don't just gain a noun; you gain every combination of that noun with the ones already there. With ten silo-spanning nouns, you can express hundreds of derived views in plain SQL.
+
+Define Orders the same way you defined Customer, joining ERP orders with billing payments and warehouse fulfillment. Define Stores by joining the locations registry with inventory and active shifts:
+
+```mzsql
+CREATE VIEW stores AS
+>>>>>>> Stashed changes
   WITH inventory_summary AS (
     SELECT store_id, sum(on_hand) AS units_on_hand
     FROM   wms.inventory
@@ -139,10 +179,17 @@ CREATE MATERIALIZED VIEW stores AS
   LEFT JOIN   staffing_summary  st USING (store_id);
 ```
 
+<<<<<<< Updated upstream
 Now the operational question, which orders need intervention right now, is one materialized view over two existing nouns:
 
 ```mzsql
 CREATE MATERIALIZED VIEW at_risk_orders AS
+=======
+Now the operational question — which orders need intervention right now — is one view over two existing nouns:
+
+```mzsql
+CREATE VIEW at_risk_orders AS
+>>>>>>> Stashed changes
   SELECT o.order_id,
          o.account_id,
          o.placed_at,
@@ -159,6 +206,7 @@ CREATE MATERIALIZED VIEW at_risk_orders AS
           OR s.staff_on_shift = 0);
 ```
 
+<<<<<<< Updated upstream
 `at_risk_orders` doesn't exist in any operational system. It's a new noun defined over two existing nouns, built with no new source integration: pure SQL over what's already in the context graph. An agent asking "what should I escalate right now?" reads this view directly. The same applies to any combination: Customer x Order x Store, Store x Courier x Inventory, Courier x Order x Customer.
 
 The context graph models the nouns. The verbs (actions that change state) happen in your systems of action: order placement, account updates, ticket resolution. You take action in those systems; you observe the effects through the live context graph.
@@ -166,6 +214,15 @@ The context graph models the nouns. The verbs (actions that change state) happen
 ## Ensure a tight feedback loop with agents
 
 Agents need to observe, act, and then observe the consequences.
+=======
+`at_risk_orders` doesn't exist in any operational system. It's a new noun defined over two existing nouns, built with no new silo integration: pure SQL over what's already in the ontology. An agent asking "what should I escalate right now?" reads this view directly. The same applies to any combination: Customer × Order × Store, Store × Courier × Inventory, Courier × Order × Customer.
+
+Materialize's context graph models the nouns. The verbs — actions that change state — happen in your systems of action: order placement, account updates, ticket resolution. You take action in those systems; you observe the effects through the live context graph.
+
+## How to ensure a tight feedback loop with agents
+
+Observe → act → observe the consequences.
+>>>>>>> Stashed changes
 
 Because the context graph updates live, any consumer can take an action in its own system and watch the effect propagate through dependent nouns:
 
@@ -192,6 +249,7 @@ For agent builders, Materialize provides two primitives:
 - **Read:** typed queries over live rows in the context graph.
 - **Compose:** SQL functions and views that shape rows for an agent's task.
 
+<<<<<<< Updated upstream
 The [Materialize MCP server](/integrations/mcp-server/) exposes both primitives to agents as tool definitions over the SQL surface. An agent connects to the MCP server, discovers the available data products as tools, and queries them directly:
 
 ```
@@ -200,6 +258,9 @@ agent  ──► MCP server  ──► Materialize  ──► customers / at_ris
 ```
 
 To expose the context graph to an agent, point your MCP client at the Materialize MCP server endpoint. The server introspects the schema and generates one tool per view, with typed input and output schemas derived from the SQL definition.
+=======
+The MCP integration exposes both primitives to agents through tool definitions over the SQL surface.
+>>>>>>> Stashed changes
 
 Write-back happens through your existing systems. Materialize observes the changes from those systems and updates the context graph within about a second. The closed loop is only as fast as the source systems publish changes.
 
@@ -207,7 +268,14 @@ Once you've modeled your business as a context graph, the same graph serves ever
 
 ## Learn more
 
+<<<<<<< Updated upstream
 - [Quickstart](/get-started/quickstart/): build your first live data product.
 - [Reaction time, freshness, and query latency](/concepts/reaction-time/): the freshness contract.
 - [Serve results](/serve-results/): read the context graph from your applications and services.
 - [MCP integration](/integrations/mcp-server/): expose the context graph to AI agents.
+=======
+- [Quickstart](/get-started/quickstart/) — build your first live data product.
+- [Reaction time, freshness, and query latency](/concepts/reaction-time/) — the freshness contract.
+- [Serve results](/serve-results/) — read the context graph from your applications and services.
+- [MCP integration](/integrations/mcp-server/) — expose the context graph to AI agents.
+>>>>>>> Stashed changes
