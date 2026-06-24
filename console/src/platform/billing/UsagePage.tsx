@@ -29,13 +29,14 @@ import { MaterializeTheme } from "~/theme";
 import { nowUTC } from "~/util";
 import { formatCurrency } from "~/utils/format";
 
+import AccountClusterBreakdown from "./AccountClusterBreakdown";
 import DailyUsageChart, {
   chartHeightPx,
   legendHeightPx,
 } from "./DailyUsageChart";
 import InvoiceTable from "./InvoiceTable";
 import { UpgradedPlanDetails } from "./PlanDetails";
-import { useDailyCosts, useRecentInvoices } from "./queries";
+import { useCostsBreakdown, useDailyCosts, useRecentInvoices } from "./queries";
 import RegionSelect from "./RegionSelect";
 import SpendBreakdown from "./SpendBreakdown";
 import TimeRangeSelect from "./TimeRangeSelect";
@@ -211,6 +212,12 @@ const UsagePage = () => {
     isError: isDailyCostsError,
     error: dailyCostsError,
   } = useDailyCosts(timeRangeFilter, lastQueryTime);
+  const {
+    data: costBreakdown,
+    isLoading: isCostBreakdownLoading,
+    isError: isCostBreakdownError,
+    error: costBreakdownError,
+  } = useCostsBreakdown(timeRangeFilter, lastQueryTime);
 
   const chartTooltipRef = useRef<HTMLDivElement>(null);
 
@@ -226,6 +233,7 @@ const UsagePage = () => {
             "selects details"
             "chart details"
             "spend details"
+            "breakdown details"
             "invoices ."`}
           gridTemplateColumns="minmax(500px, 70%) minmax(300px, 3fr)"
           gridColumnGap={12}
@@ -266,6 +274,14 @@ const UsagePage = () => {
               region={regionFilter}
               dailyCosts={timeRangeCosts}
               totalDays={timeRangeFilter}
+            />
+          </GridItem>
+          <GridItem area="breakdown">
+            <AccountClusterBreakdown
+              breakdown={costBreakdown ?? null}
+              isLoading={isCostBreakdownLoading}
+              isError={isCostBreakdownError}
+              error={costBreakdownError}
             />
           </GridItem>
           <GridItem area="invoices">

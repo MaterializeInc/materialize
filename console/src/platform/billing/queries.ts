@@ -19,6 +19,7 @@ import {
 import {
   createStripeSetupIntent,
   detachPaymentMethod,
+  getCostsBreakdown,
   getCredits,
   getDailyCosts,
   Organization,
@@ -42,6 +43,18 @@ export const dailyCostQueryKeys = {
   list: (timeSpan: number, queryTime: Date) =>
     [
       ...dailyCostQueryKeys.all(),
+      buildQueryKeyPart("list", {
+        timeSpan,
+        queryTime,
+      }),
+    ] as const,
+};
+
+export const costBreakdownQueryKeys = {
+  all: () => buildGlobalQueryKey("costBreakdown"),
+  list: (timeSpan: number, queryTime: Date) =>
+    [
+      ...costBreakdownQueryKeys.all(),
       buildQueryKeyPart("list", {
         timeSpan,
         queryTime,
@@ -76,12 +89,7 @@ export function useRecentInvoices() {
   });
 }
 
-export function getTimeRange(span: number): [Date, Date] {
-  // Some fields on the usage page, such as the rolling average in the plan
-  // details component, requires a certain number of days' worth of data. That
-  // span of time may be greater than what is being visually filtered, so set
-  // the minimum-queried range to what the rolling average needs.
-  span = Math.max(span, ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS);
+function getDayAlignedRange(span: number): [Date, Date] {
   const endDate = startOfDay(addDays(nowUTC(), 1));
   endDate.setUTCHours(0, 0, 0, 0);
   const startDate = new Date(
@@ -93,6 +101,16 @@ export function getTimeRange(span: number): [Date, Date] {
   return [startDate, endDate];
 }
 
+export function getTimeRange(span: number): [Date, Date] {
+  // Some fields on the usage page, such as the rolling average in the plan
+  // details component, requires a certain number of days' worth of data. That
+  // span of time may be greater than what is being visually filtered, so set
+  // the minimum-queried range to what the rolling average needs.
+  return getDayAlignedRange(
+    Math.max(span, ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS),
+  );
+}
+
 export function useDailyCosts(timeSpan: number, queryTime: Date) {
   return useQuery({
     queryKey: dailyCostQueryKeys.list(timeSpan, queryTime),
@@ -100,6 +118,21 @@ export function useDailyCosts(timeSpan: number, queryTime: Date) {
       const [_, { timeSpan: queryTimeSpan }] = queryKey;
       const [startDate, endDate] = getTimeRange(queryTimeSpan);
       const response = await getDailyCosts(startDate, endDate, { signal });
+      return response.data;
+    },
+  });
+}
+
+export function useCostsBreakdown(timeSpan: number, queryTime: Date) {
+  return useQuery({
+    queryKey: costBreakdownQueryKeys.list(timeSpan, queryTime),
+    queryFn: async ({ queryKey, signal }) => {
+      const [_, { timeSpan: queryTimeSpan }] = queryKey;
+      // The breakdown is a single period total (not a sliced daily series), so
+      // query exactly the selected window rather than the rolling-average-
+      // extended range getTimeRange() returns.
+      const [startDate, endDate] = getDayAlignedRange(queryTimeSpan);
+      const response = await getCostsBreakdown(startDate, endDate, { signal });
       return response.data;
     },
   });

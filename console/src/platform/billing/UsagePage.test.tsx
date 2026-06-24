@@ -14,6 +14,7 @@ import { DailyCosts, Organization } from "~/api/cloudGlobalApi";
 import {
   buildCloudOrganizationsResponse,
   buildCloudRegionsReponse,
+  buildCostBreakdownResponse,
   buildCreditsResponse,
   buildDailyCostResponse,
   buildInvoicesResponse,
@@ -63,6 +64,7 @@ describe("UsagePage", () => {
       buildCloudRegionsReponse(),
       buildInvoicesResponse(),
       buildCreditsResponse(),
+      buildCostBreakdownResponse(),
       buildCloudOrganizationsResponse({
         payload: buildOrganization(),
       }),
@@ -100,6 +102,99 @@ describe("UsagePage", () => {
     await waitFor(async () =>
       expect(await screen.findByTestId("chart")).toBeVisible(),
     );
+  });
+
+  it("renders a per-account, per-cluster breakdown for a parent org", async () => {
+    server.use(buildDailyCostResponse());
+    server.use(
+      buildCostBreakdownResponse({
+        payload: {
+          accounts: [
+            {
+              external_customer_id: "parent-org",
+              clusters: [
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  amounts: { "price-compute": "10.00" },
+                },
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "compute.r1",
+                  amounts: { "price-compute": "4.00" },
+                },
+              ],
+            },
+            {
+              external_customer_id: "child-org",
+              clusters: [
+                {
+                  environment_id: "environment-child-0",
+                  cluster_grouping_key: "prod.r1",
+                  amounts: { "price-compute": "5.00" },
+                },
+                {
+                  environment_id: "environment-child-0",
+                  cluster_grouping_key: "prod.r2",
+                  amounts: { "price-compute": "2.00" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    // Both accounts and all clusters appear...
+    expect(
+      await screen.findByText("parent-org", {}, { timeout: 5_000 }),
+    ).toBeVisible();
+    expect(await screen.findByText("child-org")).toBeVisible();
+    for (const cluster of [
+      "quickstart.r1",
+      "compute.r1",
+      "prod.r1",
+      "prod.r2",
+    ]) {
+      expect(await screen.findByText(cluster)).toBeVisible();
+    }
+    // ...with per-account totals (14 = 10 + 4, 7 = 5 + 2) summed from the
+    // per-cluster amounts.
+    expect(await screen.findByText(formatCurrency(14))).toBeVisible();
+    expect(await screen.findByText(formatCurrency(7))).toBeVisible();
+  });
+
+  it("renders a single account for a standalone org", async () => {
+    server.use(buildDailyCostResponse());
+    server.use(
+      buildCostBreakdownResponse({
+        payload: {
+          accounts: [
+            {
+              external_customer_id: "standalone-org",
+              clusters: [
+                {
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "default.r1",
+                  amounts: { "price-compute": "3.00" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const accountRows = await screen.findAllByTestId(
+      "account-row",
+      {},
+      { timeout: 5_000 },
+    );
+    expect(accountRows).toHaveLength(1);
+    expect(await screen.findByText("standalone-org")).toBeVisible();
+    expect(await screen.findByText("default.r1")).toBeVisible();
   });
 
   it("changing the region filters the totals", async () => {
