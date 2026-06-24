@@ -164,6 +164,7 @@ pub(super) fn reduce_call_variadic(
             // Note: It's important that we have called `flatten_associative` above.
             e.undistribute_and_or();
             e.reduce_and_canonicalize_and_or();
+            reduce_complement_and_or(e, column_types);
         }
         VariadicFunc::TimezoneTimeVariadic(_)
             if exprs[0].is_literal() && exprs[2].is_literal_ok() =>
@@ -186,6 +187,47 @@ pub(super) fn reduce_call_variadic(
             };
         }
         _ => {}
+    }
+}
+
+/// Collapses an `AND`/`OR` that contains a complementary pair of operands, i.e.
+/// some operand `p` together with `NOT(p)`: `p OR NOT(p)` is `true` and
+/// `p AND NOT(p)` is `false`.
+///
+/// The rewrite fires only when `p` is guaranteed to evaluate to `true` or
+/// `false`. Under three-valued logic a `NULL` operand makes both `p` and
+/// `NOT(p)` `NULL`, so the call evaluates to `NULL` rather than its zero, and an
+/// erroring operand makes both error, so the call errors. We therefore require
+/// `p` to be non-nullable and infallible. When it is, the pair forces the
+/// call's zero (`true` for `OR`, `false` for `AND`), which then dominates every
+/// other operand regardless of their nulls or errors (the zero short-circuits
+/// past both), so the whole call collapses to that zero.
+///
+/// Assumes the operands have been canonicalized by
+/// [`MirScalarExpr::reduce_and_canonicalize_and_or`], which pushes `NOT` inward
+/// so that `p` and `NOT(p)` appear in this syntactic form.
+fn reduce_complement_and_or(e: &mut MirScalarExpr, column_types: &[ReprColumnType]) {
+    let MirScalarExpr::CallVariadic {
+        func: func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
+        exprs,
+    } = e
+    else {
+        return;
+    };
+    let has_complement = exprs.iter().any(|operand| {
+        let MirScalarExpr::CallUnary {
+            func: UnaryFunc::Not(_),
+            expr: inner,
+        } = operand
+        else {
+            return false;
+        };
+        // `inner` is the un-negated `p`. The pair only forces the zero if `p`
+        // itself is also an operand and can never be `NULL` or an error.
+        !inner.typ(column_types).nullable && !inner.could_error() && exprs.contains(&**inner)
+    });
+    if has_complement {
+        *e = func.zero_of_and_or();
     }
 }
 
