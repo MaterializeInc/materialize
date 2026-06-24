@@ -88,6 +88,6 @@ depending on your consistency and performance requirements.
 
 ## Learn more
 
-- [Live data products](/concepts/live-data-products/)
 - [Key concepts](/concepts/)
 - [Get started with Materialize](/get-started/quickstart)
+- [Build a live Context Graph](/architecture-patterns/live-context-graph/)
