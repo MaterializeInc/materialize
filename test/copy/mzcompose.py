@@ -503,21 +503,23 @@ def workflow_test_ss_193(c: Composition):
         cur.execute("CREATE TABLE numbers_scale3 (a DECIMAL(10, 3), b NUMERIC(10, 3))")
         cur.execute("INSERT INTO numbers_scale3 VALUES (10.447, 10.447)")
 
+        # The dynamic SQL below is encoded to bytes so it satisfies psycopg's
+        # LiteralString-typed query parameter.
         for format in ["csv", "parquet"]:
             cur.execute(
                 f"COPY (SELECT a, b FROM numbers_scale3) "
                 f"TO 's3://copytos3/test/ss_193/{format}' "
-                f"WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
+                f"WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')".encode()
             )
             cur.execute(
-                f"CREATE TABLE numbers_from_{format} (a DECIMAL(10, 2), b NUMERIC(10, 2))"
+                f"CREATE TABLE numbers_from_{format} (a DECIMAL(10, 2), b NUMERIC(10, 2))".encode()
             )
             cur.execute(
                 f"COPY INTO numbers_from_{format} "
                 f"FROM 's3://copytos3/test/ss_193/{format}' "
-                f"(FORMAT {format.upper()}, AWS CONNECTION = aws_conn)"
+                f"(FORMAT {format.upper()}, AWS CONNECTION = aws_conn)".encode()
             )
-            cur.execute(f"SELECT a, b FROM numbers_from_{format}")
+            cur.execute(f"SELECT a, b FROM numbers_from_{format}".encode())
             rows = cur.fetchall()
             assert rows == [
                 (Decimal("10.45"), Decimal("10.45"))
