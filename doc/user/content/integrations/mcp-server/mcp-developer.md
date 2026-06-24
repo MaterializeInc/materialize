@@ -18,10 +18,18 @@ process or external server is required.
 
 ## Overview
 
-The `materialize-developer` MCP server provides read-only access to the system
-catalog (`mz_*` tables). You can connect an MCP-compatible client (such as
-Claude Code, Claude Desktop, or Cursor) to the MCP server and ask natural
-language questions like:
+The `materialize-developer` MCP server exposes two read-only tools:
+
+- [`query_system_catalog`](/integrations/mcp-server/mcp-developer-tools/#query_system_catalog)
+  for system catalog (`mz_*`, `pg_catalog`, `information_schema`) lookups. Runs
+  on the catalog server cluster (`mz_catalog_server`); does not take a cluster
+  argument.
+- [`query`](/integrations/mcp-server/mcp-developer-tools/#query) for `SELECT`,
+  `SHOW`, and `EXPLAIN` (including `EXPLAIN ANALYZE`) against any object the
+  role can access. You must specify a cluster. Available starting in v26.30.
+
+You can connect an MCP-compatible client (such as Claude Code, Claude Desktop,
+or Cursor) to the MCP server and ask natural language questions like:
 
 - *Why is my materialized view stale?*
 - *How much memory is my cluster using?*
@@ -256,22 +264,21 @@ curl -X POST <baseURL>/api/mcp/developer \
 
 Once connected to the MCP server, you can ask natural language questions like:
 
-| Question | What the agent does |
-|----------|---------------------|
-| **Why is my materialized view stale?** | Checks materialization lag, hydration status, replica health, and source errors. |
-| **Why is my cluster running out of memory?** | Checks replica utilization, identifies the largest dataflows, and finds optimization opportunities via the built-in index advisor. |
-| **Has my source finished snapshotting yet?** | Checks source statistics and status. |
-| **How much memory is my cluster using?** | Checks replica utilization metrics across all clusters. |
-| **What's the health of my environment?** | Checks replica statuses, source and sink health, and resource utilization. |
-| **What can I optimize to save costs?** | Queries the index advisor for materialized views that can be dematerialized and indexes that can be dropped. |
+| Question | What the agent does | Tool |
+|----------|---------------------|------|
+| **Why is my materialized view stale?** | Checks materialization lag, hydration status, replica health, and source errors. Optionally runs `EXPLAIN ANALYZE MEMORY` on the materialized view. | `query_system_catalog`, plus `query` if the agent needs `EXPLAIN ANALYZE` |
+| **Why is my cluster running out of memory?** | Checks replica utilization, identifies the largest dataflows, and finds optimization opportunities via the built-in index advisor. | `query_system_catalog`, plus `query` for `EXPLAIN ANALYZE MEMORY` |
+| **Has my source finished snapshotting yet?** | Checks source statistics and status. | `query_system_catalog` |
+| **How much memory is my cluster using?** | Checks replica utilization metrics across all clusters. | `query_system_catalog` |
+| **What's the health of my environment?** | Checks replica statuses, source and sink health, and resource utilization. | `query_system_catalog` |
+| **What can I optimize to save costs?** | Queries the index advisor for materialized views that can be dematerialized and indexes that can be dropped. | `query_system_catalog` |
 
-The agent translates natural language questions into the appropriate system
-catalog queries and runs them via either the
-[`query_system_catalog`](/integrations/mcp-server/mcp-developer-tools/#query_system_catalog)
-tool (catalog lookups with no cluster needed) or the
-[`query`](/integrations/mcp-server/mcp-developer-tools/#query) tool
-(`EXPLAIN ANALYZE` and read-only queries against user objects, both of which
-require a cluster), then synthesizes the results.
+The agent picks the appropriate tool for each question. Most catalog lookups
+run on the catalog server cluster via
+[`query_system_catalog`](/integrations/mcp-server/mcp-developer-tools/#query_system_catalog);
+[`query`](/integrations/mcp-server/mcp-developer-tools/#query) is used when the
+question needs a specific cluster (for example, `EXPLAIN ANALYZE` against a
+materialized view or index, or reading user objects).
 
 ## Privileges
 

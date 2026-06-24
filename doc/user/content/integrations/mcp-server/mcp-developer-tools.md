@@ -14,8 +14,14 @@ menu:
 ### `query_system_catalog`
 
 Execute a read-only SQL query restricted to system catalog tables (`mz_*`,
-`pg_catalog`, `information_schema`). No cluster argument; prefer this for
-catalog lookups that do not need a cluster to run on.
+`pg_catalog`, `information_schema`). The tool does not take a cluster argument;
+the request runs on the catalog server cluster (`mz_catalog_server`).
+
+{{< tip >}}
+For system catalog lookups that can run on the `mz_catalog_server` cluster,
+prefer `query_system_catalog` over the
+[`query`](#query) tool.
+{{</ tip >}}
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -44,10 +50,10 @@ Only one statement per call is allowed. Write operations (`INSERT`, `UPDATE`,
 
 ### `query`
 
-Execute a read-only SQL query (`SELECT`, `SHOW`, or `EXPLAIN`) against any
-object the role can access, including system catalog and user objects. A
-cluster is required, which is what enables `EXPLAIN ANALYZE` and queries
-against indexed user objects.
+Available starting in v26.30. Execute a read-only SQL query (`SELECT`, `SHOW`,
+or `EXPLAIN`) against any object the role can access, including system catalog
+and user objects. You must specify a cluster to run `EXPLAIN ANALYZE` and
+queries against user objects.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -55,11 +61,13 @@ against indexed user objects.
 | `sql_query` | string | Yes | `SELECT`, `SHOW`, or `EXPLAIN` statement. |
 
 Only one statement per call is allowed. Write operations (`INSERT`, `UPDATE`,
-`CREATE`, etc.) are rejected. The tool is hidden when the operator has
-disabled it via [`enable_mcp_developer_query_tool`](/integrations/mcp-server/mcp-developer-config/).
+`CREATE`, etc.) are rejected. To disable the tool, see
+[`enable_mcp_developer_query_tool`](/integrations/mcp-server/mcp-developer-config/).
 
-For pure system catalog lookups that do not need a cluster, prefer
-[`query_system_catalog`](#query_system_catalog).
+{{< tip >}}
+For system catalog lookups that can run on the `mz_catalog_server` cluster,
+prefer [`query_system_catalog`](#query_system_catalog) over `query`.
+{{</ tip >}}
 
 **Example response:**
 
