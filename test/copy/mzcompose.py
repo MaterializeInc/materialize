@@ -489,11 +489,11 @@ def workflow_test_ss_193(c: Composition):
 
         # Round-trip scale-3 values through CSV and parquet files on S3 and
         # assert COPY FROM rounds them to the destination column's scale on read.
-        cur.execute("CREATE SECRET minio_secret AS 'minioadmin'")
+        cur.execute("CREATE SECRET aws_secret_ss_193 AS 'minioadmin'")
         cur.execute("""
-            CREATE CONNECTION aws_conn TO AWS (
+            CREATE CONNECTION aws_conn_ss_193 TO AWS (
                 ACCESS KEY ID = 'minioadmin',
-                SECRET ACCESS KEY = SECRET minio_secret,
+                SECRET ACCESS KEY = SECRET aws_secret_ss_193,
                 ENDPOINT = 'http://minio:9000/',
                 REGION = 'us-east-1'
             )
@@ -509,7 +509,7 @@ def workflow_test_ss_193(c: Composition):
             cur.execute(
                 f"COPY (SELECT a, b FROM numbers_scale3) "
                 f"TO 's3://copytos3/test/ss_193/{format}' "
-                f"WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')".encode()
+                f"WITH (AWS CONNECTION = aws_conn_ss_193, FORMAT = '{format}')".encode()
             )
             cur.execute(
                 f"CREATE TABLE numbers_from_{format} (a DECIMAL(10, 2), b NUMERIC(10, 2))".encode()
@@ -517,7 +517,7 @@ def workflow_test_ss_193(c: Composition):
             cur.execute(
                 f"COPY INTO numbers_from_{format} "
                 f"FROM 's3://copytos3/test/ss_193/{format}' "
-                f"(FORMAT {format.upper()}, AWS CONNECTION = aws_conn)".encode()
+                f"(FORMAT {format.upper()}, AWS CONNECTION = aws_conn_ss_193)".encode()
             )
             cur.execute(f"SELECT a, b FROM numbers_from_{format}".encode())
             rows = cur.fetchall()
