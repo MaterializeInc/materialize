@@ -877,6 +877,12 @@ impl Optimizer {
             Box::new(CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
+            // `RelationCSE` can deduplicate two branches of a union into a shared `Get`, which
+            // first exposes the `union(get, negate(get), ...)` shape that the logical passes never
+            // saw. Run `UnionBranchCancellation` here so these branches cancel; the trailing
+            // `fold_constants_fixpoint` then fuses the resulting empty constants and drops the now
+            // unused binding.
+            Box::new(UnionBranchCancellation),
             // `RelationCSE` can create new points of interest for `ProjectionPushdown`: If an MFP
             // is cut in half by `RelationCSE`, then we'd like to push projections behind the new
             // Get as much as possible. This is because a fork in the plan involves copying the

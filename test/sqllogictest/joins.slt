@@ -1176,10 +1176,6 @@ WHERE EXISTS (SELECT FROM c AS ref_7 WHERE EXISTS (SELECT ref_0."?column?" AS c2
 Explained Query:
   With
     cte l0 =
-      Distinct project=[] // { arity: 0 }
-        Project () // { arity: 0 }
-          ReadStorage materialize.public.c // { arity: 1 }
-    cte l1 =
       Union // { arity: 1 }
         Project (#2) // { arity: 1 }
           Map (null) // { arity: 3 }
@@ -1195,21 +1191,17 @@ Explained Query:
         implementation
           %0[×] » %1[×]
         ArrangeBy keys=[[]] // { arity: 0 }
-          Union // { arity: 0 }
-            Get l0 // { arity: 0 }
-            Negate // { arity: 0 }
-              Get l0 // { arity: 0 }
-            Constant // { arity: 0 }
-              - ()
+          Constant // { arity: 0 }
+            - ()
         ArrangeBy keys=[[]] // { arity: 1 }
           Union // { arity: 1 }
-            Get l1 // { arity: 1 }
+            Get l0 // { arity: 1 }
             Map (null) // { arity: 1 }
               Union // { arity: 0 }
                 Negate // { arity: 0 }
                   Distinct project=[] // { arity: 0 }
                     Project () // { arity: 0 }
-                      Get l1 // { arity: 1 }
+                      Get l0 // { arity: 1 }
                 Constant // { arity: 0 }
                   - ()
 
