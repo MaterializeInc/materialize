@@ -270,7 +270,7 @@ FROM t
                   "typ": {
                     "column_types": [
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": true
                       },
                       {
@@ -278,7 +278,7 @@ FROM t
                         "nullable": true
                       },
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": true
                       }
                     ],
@@ -296,7 +296,7 @@ FROM t
                           {
                             "literal": {
                               "data": [
-                                45,
+                                50,
                                 1
                               ]
                             },
@@ -305,7 +305,7 @@ FROM t
                           {
                             "literal": {
                               "data": [
-                                45,
+                                50,
                                 2
                               ]
                             },
@@ -313,7 +313,7 @@ FROM t
                           }
                         ],
                         "return_type": {
-                          "scalar_type": "Int32",
+                          "scalar_type": "Int64",
                           "nullable": false
                         }
                       }
@@ -330,13 +330,13 @@ FROM t
                           {
                             "Ok": {
                               "data": [
-                                45,
+                                50,
                                 10
                               ]
                             }
                           },
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": false
                           }
                         ]
@@ -346,13 +346,13 @@ FROM t
                           {
                             "Ok": {
                               "data": [
-                                45,
+                                50,
                                 20
                               ]
                             }
                           },
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": false
                           }
                         ]
@@ -362,12 +362,12 @@ FROM t
                           {
                             "Ok": {
                               "data": [
-                                44
+                                49
                               ]
                             }
                           },
                           {
-                            "scalar_type": "Int32",
+                            "scalar_type": "Int",
                             "nullable": false
                           }
                         ]

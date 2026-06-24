@@ -654,7 +654,7 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Int16`].
+    /// Panics if the datum is not [`Datum::Int`].
     #[track_caller]
     pub fn unwrap_int16(&self) -> i16 {
         match self {
@@ -668,7 +668,7 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Int32`].
+    /// Panics if the datum is not [`Datum::Int`].
     #[track_caller]
     pub fn unwrap_int32(&self) -> i32 {
         match self {
@@ -682,7 +682,7 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Int64`].
+    /// Panics if the datum is not [`Datum::Int`].
     #[track_caller]
     pub fn unwrap_int64(&self) -> i64 {
         match self {
@@ -695,7 +695,7 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::UInt8`].
+    /// Panics if the datum is not [`Datum::UInt`].
     #[track_caller]
     pub fn unwrap_uint8(&self) -> u8 {
         match self {
@@ -710,7 +710,7 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::UInt16`].
+    /// Panics if the datum is not [`Datum::UInt`].
     #[track_caller]
     pub fn unwrap_uint16(&self) -> u16 {
         match self {
@@ -724,7 +724,7 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::UInt32`].
+    /// Panics if the datum is not [`Datum::UInt`].
     #[track_caller]
     pub fn unwrap_uint32(&self) -> u32 {
         match self {
@@ -738,7 +738,7 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::UInt64`].
+    /// Panics if the datum is not [`Datum::UInt`].
     #[track_caller]
     pub fn unwrap_uint64(&self) -> u64 {
         match self {
@@ -1606,17 +1606,17 @@ impl fmt::Display for Datum<'_> {
 pub enum SqlScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
-    /// The type of [`Datum::Int16`].
+    /// The type of [`Datum::Int`].
     Int16,
-    /// The type of [`Datum::Int32`].
+    /// The type of [`Datum::Int`].
     Int32,
-    /// The type of [`Datum::Int64`].
+    /// The type of [`Datum::Int`].
     Int64,
-    /// The type of [`Datum::UInt16`].
+    /// The type of [`Datum::UInt`].
     UInt16,
-    /// The type of [`Datum::UInt32`].
+    /// The type of [`Datum::UInt`].
     UInt32,
-    /// The type of [`Datum::UInt64`].
+    /// The type of [`Datum::UInt`].
     UInt64,
     /// The type of [`Datum::Float32`].
     Float32,
@@ -1648,7 +1648,7 @@ pub enum SqlScalarType {
     },
     /// The type of [`Datum::Interval`].
     Interval,
-    /// A single byte character type backed by a [`Datum::UInt8`].
+    /// A single byte character type backed by a [`Datum::UInt`].
     ///
     /// PostgreSQL calls this type `"char"`. Note the quotes, which distinguish
     /// it from the type `SqlScalarType::Char`.
@@ -3976,38 +3976,40 @@ impl SqlScalarType {
         });
         static UINT16: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
-                Datum::from(0),
-                Datum::from(1),
+                // Typed `u16` so `Datum::from` resolves to `Datum::UInt`; an
+                // untyped literal would default to `i32` -> `Datum::Int`.
+                Datum::from(0u16),
+                Datum::from(1u16),
                 Datum::from(u16::MAX),
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::from(255),
-                Datum::from(256),
+                Datum::from(255u16),
+                Datum::from(256u16),
             ])
         });
         static UINT32: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
-                Datum::from(0),
-                Datum::from(1),
+                Datum::from(0u32),
+                Datum::from(1u32),
                 Datum::from(u32::MAX),
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::from(32767),
-                Datum::from(32768),
+                Datum::from(32767u32),
+                Datum::from(32768u32),
             ])
         });
         static UINT64: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
-                Datum::from(0),
-                Datum::from(1),
+                Datum::from(0u64),
+                Datum::from(1u64),
                 Datum::from(u64::MAX),
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::from(2147483647),
-                Datum::from(2147483648_i64),
+                Datum::from(2147483647u64),
+                Datum::from(2147483648u64),
             ])
         });
         static FLOAT32: LazyLock<Row> = LazyLock::new(|| {

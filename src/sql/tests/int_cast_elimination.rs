@@ -28,7 +28,7 @@ fn lower(hir: HirScalarExpr, eliminate: bool) -> MirScalarExpr {
     .expect("lowering an uncorrelated cast should succeed")
 }
 
-#[test]
+#[mz_ore::test]
 fn int_widening_cast_is_eliminated() {
     // CAST(5::int4 AS int8) -- a same-sign widening cast.
     let widening = || {
@@ -55,7 +55,7 @@ fn int_widening_cast_is_eliminated() {
     );
 }
 
-#[test]
+#[mz_ore::test]
 fn int_narrowing_cast_is_preserved() {
     // CAST(5::int8 AS int4) -- a narrowing cast that performs a real range check.
     let narrowing = || {
