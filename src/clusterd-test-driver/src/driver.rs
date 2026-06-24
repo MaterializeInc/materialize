@@ -16,7 +16,9 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::response::{FrontiersResponse, PeekResponse};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_PEEK_RESPONSE_STASH;
+use mz_compute_types::dyncfgs::{
+    ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA, ENABLE_PEEK_RESPONSE_STASH,
+};
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::{MapFilterProject, RowSetFinishing};
@@ -72,11 +74,13 @@ impl Driver {
     /// Sends `CreateInstance`, opening the compute instance (and the reconciliation
     /// window).
     ///
-    /// `expiration_offset`, `arrangement_dictionary_compression`, and `initial_config` are the
-    /// caller-settable [`InstanceConfig`] knobs; `logging` is left at its default
-    /// (introspection logging off — enabling it safely needs `index_logs` wiring)
-    /// and `peek_stash_persist_location` is necessarily the host's, since the driver
-    /// hosts persist.
+    /// `expiration_offset` is a caller-settable [`InstanceConfig`] knob. `logging` is left at its
+    /// default (introspection logging off, as enabling it safely needs `index_logs` wiring) and
+    /// `peek_stash_persist_location` is necessarily the host's, since the driver hosts persist.
+    ///
+    /// `arrangement_dictionary_compression` is pushed as the
+    /// `enable_arrangement_dictionary_compression_alpha` dyncfg in the `UpdateConfiguration` below,
+    /// which is where the replica captures it.
     ///
     /// `initial_config` is the create-time configuration snapshot the controller would build from
     /// its synced dyncfg. The replica applies it before create-time setup, so a script can assert
@@ -95,11 +99,14 @@ impl Driver {
             logging: Default::default(),
             expiration_offset,
             peek_stash_persist_location: self.host.location().clone(),
-            arrangement_dictionary_compression,
             initial_config,
         })))?;
         let mut dyncfg_updates = ConfigUpdates::default();
         dyncfg_updates.add(&ENABLE_PEEK_RESPONSE_STASH, false);
+        dyncfg_updates.add(
+            &ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
+            arrangement_dictionary_compression,
+        );
         self.send(ComputeCommand::UpdateConfiguration(Box::new(
             ComputeParameters {
                 dyncfg_updates,
