@@ -18,7 +18,7 @@ The live data products you build, together with the relationships between them, 
 
 The objects you reason about (Customer, Order, Subscription, Store, Courier) are the nouns of your business. Each has a meaning, fields, identity, and relationships to other nouns. Almost none of them live in a single system.
 
-The Customer noun isn't in one place. Identity lives in the CRM, orders in the OMS, tickets in the support tool, payments in the billing system, fulfillment in the warehouse and dispatch systems. The cloud era left you with one entity scattered across a dozen operational silos, each with its own schema, its own freshness, its own latency. A consumer that wants the full Customer has to stitch the silos together itself, on every read.
+The Customer noun isn't in one place. Identity lives in the CRM, orders in the OMS, tickets in the support tool, payments in the billing system, fulfillment in the warehouse and dispatch systems. A consumer that wants the full Customer has to stitch the silos together itself, on every read.
 
 In Materialize, a live data product does the stitching once, in SQL, and keeps the result current:
 
