@@ -35,8 +35,8 @@ CREATE TABLE pk_table (id int PRIMARY KEY, val text);
 INSERT INTO pk_table VALUES (1, 'a'), (2, 'b');
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
-# A table with a UNIQUE constraint: `(id, u)` 
-CREATE TABLE uniq_table (id int, u int, val text, UNIQUE (id, u));
+# A table with a UNIQUE constraint: `(id, u)`
+CREATE TABLE uniq_table (id int NOT NULL, u int NOT NULL, val text NOT NULL, UNIQUE (id, u));
 INSERT INTO uniq_table VALUES (1, 10, 'a'), (2, 20, 'b');
 ALTER TABLE uniq_table REPLICA IDENTITY FULL;
 
