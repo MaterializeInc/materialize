@@ -8,9 +8,9 @@ menu:
     identifier: 'concepts-live-data-products'
 ---
 
-## Materialize is for building the live data products of your business
+## Materialize lets you build live data products to represent your business
 
-A live data product is something real in your business: a customer, an order, an account, a store, a courier. You define it once, in SQL. Materialize keeps it up to date as the underlying systems change, fresh within about a second. Your applications, services, ML features, dashboards, and AI agents read the same live result.
+A live data product represents a real entity in your business: a customer, an order, an account, a store, a courier. You define it once, in SQL. Materialize keeps it up to date as the underlying systems change, fresh within about a second. Your applications, services, ML features, dashboards, and AI agents read the same live result.
 
 The live data products you build, together with the relationships between them, form your business's ontology: the typed, queryable model of the business.
 
