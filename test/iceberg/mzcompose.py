@@ -105,6 +105,18 @@ def workflow_mode_append(c: Composition) -> None:
     )
 
 
+def workflow_empty_source(c: Composition) -> None:
+    """A fresh Iceberg sink whose input closes after producing zero rows
+    commits one empty snapshot instead of stalling or erroring."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "empty-source.td",
+    )
+
+
 def _polaris_get(table_url: str, access_token: str) -> dict:
     """GET table metadata from Polaris REST API (always returns latest)."""
     req = urllib.request.Request(
