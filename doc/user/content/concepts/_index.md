@@ -20,7 +20,6 @@ The pages in this section introduces some of the key concepts in Materialize:
 Concept                                  | Description
 -----------------------------------------|-----
 [Reaction Time](/concepts/reaction-time) | Measures how quickly a system can reflect a change in input data and return an up-to-date query result. Defined as the sum of data freshness and query latency.
-[Live Data Products](/concepts/live-data-products/) | Building the nouns of your business as live SQL views that compose into your business's context graph.
 [Clusters](/concepts/clusters/)          | Clusters are isolated pools of compute resources for sources, sinks, indexes, materialized views, and ad-hoc queries.
 [Sources](/concepts/sources/)            | Sources describe an external system you want Materialize to read data from.
 [Views](/concepts/views/)    | Views represent a named query that you want to save for repeated execution. You can use **indexed views** and **materialized views** to incrementally maintain the results of views.
