@@ -13,14 +13,6 @@ aliases:
 
 {{% include-headless "/headless/materialize-intro/intro" %}}
 
-## Start here
-
-New to Materialize? [Building live data products of your
-business](/concepts/live-data-products/) explains what Materialize is for,
-how to think about it, and why it's the right foundation for the
-applications, services, and AI agents you build on top of your business
-data.
-
 {{< callout >}}
 ## What's new!
 
