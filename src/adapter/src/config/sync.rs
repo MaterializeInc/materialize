@@ -19,9 +19,9 @@ use tokio::time;
 use crate::Client;
 use crate::catalog::Catalog;
 use crate::config::{
-    ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
-    ScopedParameters, ScopedParametersScope, SynchronizedParameters, SystemParameterBackend,
-    SystemParameterFrontend, SystemParameterSyncConfig,
+    ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ScopedParameters,
+    ScopedParametersScope, SynchronizedParameters, SystemParameterBackend, SystemParameterFrontend,
+    SystemParameterSyncConfig,
 };
 
 /// Run a loop that periodically pulls system parameters defined in the
@@ -149,16 +149,8 @@ pub(crate) fn evaluate_scoped_parameters(
     // The synced parameters, partitioned by scope class. The scope declaration
     // bounds evaluation to exactly the flags in use: an environment with no
     // scoped flags evaluates neither pass.
-    let replica_param_names: Vec<&'static str> = system_config
-        .iter_synced()
-        .filter(|var| var.scope() == ParameterScope::Replica)
-        .map(|var| var.name())
-        .collect();
-    let cluster_param_names: Vec<&'static str> = system_config
-        .iter_synced()
-        .filter(|var| var.scope() == ParameterScope::Cluster)
-        .map(|var| var.name())
-        .collect();
+    let replica_param_names = system_config.synced_param_names_in_scope(ParameterScope::Replica);
+    let cluster_param_names = system_config.synced_param_names_in_scope(ParameterScope::Cluster);
 
     let replica = if replica_param_names.is_empty() {
         Default::default()
@@ -187,11 +179,7 @@ fn build_cluster_eval_contexts(
         .filter(|cluster| filter.is_none_or(|f| f.contains(&cluster.id)))
         .map(|cluster| ClusterEvalContext {
             cluster_id: cluster.id,
-            cluster: ClusterScopeContext {
-                id: cluster.id.to_string(),
-                name: cluster.name.clone(),
-                is_builtin: cluster.id.is_system(),
-            },
+            cluster: ClusterScopeContext::for_cluster(cluster.id, cluster.name.clone()),
         })
         .collect()
 }
@@ -211,12 +199,7 @@ fn build_replica_eval_contexts(
 
     let mut contexts = Vec::new();
     for cluster in catalog.clusters() {
-        let is_builtin = cluster.id.is_system();
-        let cluster_ctx = ClusterScopeContext {
-            id: cluster.id.to_string(),
-            name: cluster.name.clone(),
-            is_builtin,
-        };
+        let cluster_ctx = ClusterScopeContext::for_cluster(cluster.id, cluster.name.clone());
         for replica in cluster.replicas() {
             if filter.is_some_and(|f| !f.contains(&replica.replica_id)) {
                 continue;
@@ -225,21 +208,14 @@ fn build_replica_eval_contexts(
             let ReplicaLocation::Managed(location) = &replica.config.location else {
                 continue;
             };
-            let replica_ctx = ReplicaScopeContext {
-                id: replica.replica_id.to_string(),
-                name: replica.name.clone(),
-                is_builtin,
-                size: location.size.clone(),
-                size_family: location.allocation.family().to_string(),
-                cluster_id: cluster.id.to_string(),
-                cluster_name: cluster.name.clone(),
-            };
-            contexts.push(ReplicaEvalContext {
-                cluster_id: cluster.id,
-                replica_id: replica.replica_id,
-                cluster: cluster_ctx.clone(),
-                replica: replica_ctx,
-            });
+            contexts.push(ReplicaEvalContext::for_replica(
+                cluster.id,
+                cluster_ctx.clone(),
+                replica.replica_id,
+                replica.name.clone(),
+                location.size.clone(),
+                location.allocation.family().to_string(),
+            ));
         }
     }
     contexts
