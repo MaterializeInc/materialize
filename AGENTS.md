@@ -59,3 +59,66 @@ Never regenerate full Cargo.lock. When changing deps:
 ### Licensing
 
 Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].allow`) and `about.toml` (`accepted`). New dep with new license not already allowed: add SPDX identifier to both.
+
+## Guidance
+
+* When designing specs or implementing features, preserve the full scope and
+  capability of the solution. Do not substitute dynamic or generative
+  approaches with hardcoded data, skip automation that a reference
+  implementation provides, or simplify away the parts that make a feature
+  robust and maintainable. If a reference codebase generates data from an
+  authoritative source, our implementation should do the same, not ship a
+  static snapshot. When you feel tempted to reduce scope or take a shortcut,
+  flag it to the user and workshop an alternative together rather than silently
+  downgrading the design.
+* When making code changes, run cheap checkers/linters and formatters before
+  reporting success and/or committing changes. For Rust, these would be
+  `bin/fmt` and `cargo check`.
+* When debugging CI or lint failures, start by reproducing the exact failing
+  command locally and reading its output. Do not run generic checks (clippy,
+  fmt, grep) in a shotgun approach.
+* We value simplicity and clear abstractions. We especially care about
+  designing the interfaces or boundaries between components well. This includes
+  components, traits, interfaces, modules, and crates.
+* In code comments or inline documentation, we value clearly described
+  contracts and assumptions.
+* In code comments, we don't like "fluff" comments, comments that describe what
+  code does when it is obvious from the code. Good code should be readable. It
+  _is_ okay to call out tricky parts of the code or "nota benes".
+* In code comments and code documentation we value concise but complete
+  comments.
+* In code comments and documentation, don't refer to potential previous states
+  of the code, or things like future PRs, try not to use chronology in there,
+  except when it's needed to explain why a certain thing behaves as it does and
+  we need to record that knowledge. In general comments need to stand on their
+  own and make sense from just looking at them and the code around it, not
+  previous changes.
+* Avoid em-dashes and semicolons for structuring sentences, everywhere: code
+  comments, specs, design docs, all of it. Restructure with full stops and
+  commas instead. In most cases a sentence that wants an em-dash or semicolon
+  can just be split into two.
+* Our guidance applies both when writing new code or designs, or when we notice
+  deviations in code or architecture that we are working on. At the same time,
+  we want to keep our changes minimal so it's good to call out deviations and
+  then we can decide together what to do about it.
+
+## Code comments
+
+Specifics for code comments and documentation:
+
+Spend comments on the non-obvious: concurrency and async hazards (races,
+lease/handle expiry, values that must not be held across an await point),
+ordering constraints ("X must happen before Y, else Z"), invariants whose
+violation panics or corrupts data, restart/recovery semantics, the origin of
+magic constants, and why the obvious alternative was not taken. Idiomatic code
+(match arms, iterator chains, getters, logging) needs none.
+
+A doc comment is the caller's contract: a one-sentence summary, then only the
+invariants and semantics a caller must know. A self-evident public item needs
+only that one line. Don't narrate the body in rustdoc ("Phase 1 ... Phase
+2 ...", or enumerating a flag's branches). Reasoning about how or why the code
+works goes in an inline `//` at the decision point, or in a module-level `//!`
+when it is about how the pieces fit together. Document a struct field only when
+its meaning is subtle.
+
+Mark counterintuitive gotchas with `NOTE:` and future work with `TODO:`.
