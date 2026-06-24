@@ -3914,6 +3914,95 @@ fn webhook_too_large_request() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
+fn webhook_max_request_size() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Create a dedicated cluster and webhook source. Using a dedicated cluster
+    // avoids interfering with built-in clusters during testing.
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster \
+             FROM WEBHOOK BODY FORMAT BYTES",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = reqwest::Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_bytes",
+        server.http_local_addr(),
+    );
+
+    // Helper: POST a body of `len` bytes, return the HTTP status.
+    let post = |len: usize| {
+        let body = vec![b'a'; len];
+        server.runtime().block_on(async {
+            http_client
+                .post(&webhook_url)
+                .body(body)
+                .send()
+                .await
+                .expect("request failed")
+                .status()
+        })
+    };
+
+    // Default is 5 MiB: a 6 MiB body must be rejected with 413.
+    assert_eq!(post(6 * 1024 * 1024).as_u16(), 413);
+
+    // Raise the limit to 10 MiB and confirm the 6 MiB body is now accepted.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET webhook_max_request_size_bytes = 10485760")
+        .unwrap();
+    // The dyncfg propagates to the shared persist ConfigSet asynchronously,
+    // so retry briefly until the new limit takes effect.
+    Retry::default()
+        .max_duration(std::time::Duration::from_secs(30))
+        .retry(|_| {
+            if post(6 * 1024 * 1024).is_success() {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .expect("6 MiB body accepted after raising the limit to 10 MiB");
+
+    // Lower the limit below the default and confirm enforcement is live: a
+    // body that would have been accepted at the default is now rejected.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET webhook_max_request_size_bytes = 1024")
+        .unwrap();
+    Retry::default()
+        .max_duration(std::time::Duration::from_secs(30))
+        .retry(|_| {
+            if post(2048).as_u16() == 413 {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .expect("2 KiB body rejected after lowering the limit to 1 KiB");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 fn test_webhook_url_notice() {
     let server = test_util::TestHarness::default().start_blocking();
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
