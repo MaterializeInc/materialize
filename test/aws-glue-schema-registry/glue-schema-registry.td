@@ -25,6 +25,15 @@
 # registries are created by the workflow (mzcompose.py); the schemas inside them
 # are registered here so the schema bodies live in exactly one place.
 #
+# Scenarios that need container-lifecycle or connectivity control live in
+# companion files the moto workflow runs after this one (all moto-only, since
+# we can't restart against or take down real AWS):
+# glue-schema-registry-restart.td (Glue connection/sources survive a
+# Materialize restart), glue-schema-registry-runtime-errors.td (decode-time
+# unknown-UUID and transient-outage paths), and
+# glue-schema-registry-unreachable.td (connection validation fails cleanly when
+# the registry backend is down).
+#
 # Cross-schema references (CSR's `VALUE REFERENCES (...)`) are *intentionally*
 # not exercised here: AWS Glue Schema Registry has no equivalent concept
 # (`RegisterSchemaVersion` takes one self-contained JSON blob; there is no
