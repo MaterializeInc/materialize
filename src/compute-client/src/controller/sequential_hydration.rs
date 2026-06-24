@@ -25,7 +25,7 @@
 //! implementation. If the assumption ever ceases to hold, we will need to adjust the code in this
 //! module.
 //!
-//! Sequential hydration is enforeced by a `SequentialHydration` client that sits between the
+//! Sequential hydration is enforced by a `SequentialHydration` interceptor that sits between the
 //! controller and the `PartitionedState` client that splits commands across replica processes.
 //! This location is important:
 //!
@@ -37,39 +37,41 @@
 //!  * It also needs to be before the `PartitionedState` client because it needs to be able to
 //!    observe all compute commands. Clients behind `PartitionedState` are not guaranteed to do so,
 //!    since commands are only forwarded to the first process.
+//!
+//! `SequentialHydration` is a synchronous interceptor: the replica task feeds it every command it
+//! is about to send and every response it receives, and the interceptor returns the commands that
+//! should actually be sent to the replica. The task is responsible for sending those commands, so
+//! the interceptor holds no client and spawns no task of its own.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use mz_compute_types::dyncfgs::HYDRATION_CONCURRENCY;
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_eq_or_log;
-use mz_ore::task::AbortOnDropHandle;
 use mz_repr::{GlobalId, Timestamp};
-use mz_service::client::GenericClient;
 use timely::PartialOrder;
 use timely::progress::Antichain;
-use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{ComputeResponse, FrontiersResponse};
-use crate::service::ComputeClient;
 
 /// A shareable token.
 type Token = Arc<()>;
 
-/// A client enforcing sequential dataflow hydration.
+/// An interceptor enforcing sequential dataflow hydration.
+///
+/// The replica task drives this interceptor by feeding it the commands it intends to send (via
+/// [`SequentialHydration::absorb_command`]) and the responses it receives (via
+/// [`SequentialHydration::observe_response`]). Both methods return the commands the task should
+/// send to the replica, with `Schedule` commands held back or released according to the configured
+/// hydration concurrency.
 #[derive(Debug)]
 pub(super) struct SequentialHydration {
-    /// A sender for commands to the wrapped client.
-    command_tx: mpsc::UnboundedSender<ComputeCommand>,
-    /// A receiver for responses from the wrapped client.
-    response_rx: mpsc::UnboundedReceiver<Result<ComputeResponse, anyhow::Error>>,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
     /// Tracked metrics.
@@ -87,32 +89,17 @@ pub(super) struct SequentialHydration {
     /// Useful to efficiently determine how many collections are currently in the process of
     /// hydration, and thus how much capacity is available.
     hydration_token: Token,
-    /// Handle to the forwarder task, to abort it when `SequentialHydration` is dropped.
-    _forwarder_task: AbortOnDropHandle<()>,
 }
 
 impl SequentialHydration {
-    /// Create a new `SequentialHydration` client.
-    pub fn new<C>(client: C, dyncfg: Arc<ConfigSet>, metrics: ReplicaMetrics) -> Self
-    where
-        C: ComputeClient + 'static,
-    {
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let (response_tx, response_rx) = mpsc::unbounded_channel();
-        let forwarder = mz_ore::task::spawn(
-            || "sequential_hydration:forwarder",
-            forward_messages(client, command_rx, response_tx),
-        );
-
+    /// Create a new `SequentialHydration` interceptor.
+    pub(super) fn new(dyncfg: Arc<ConfigSet>, metrics: ReplicaMetrics) -> Self {
         Self {
-            command_tx,
-            response_rx,
             dyncfg,
             metrics,
             collections: Default::default(),
             hydration_queue: Default::default(),
             hydration_token: Default::default(),
-            _forwarder_task: forwarder.abort_on_drop(),
         }
     }
 
@@ -121,9 +108,9 @@ impl SequentialHydration {
         Arc::strong_count(&self.hydration_token) - 1
     }
 
-    /// Absorb a command and send resulting commands to the wrapped client.
-    fn absorb_command(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
-        // Whether to forward this command to the wrapped client.
+    /// Absorb a command the task intends to send, returning the commands it should actually send.
+    pub(super) fn absorb_command(&mut self, cmd: ComputeCommand) -> Vec<ComputeCommand> {
+        // Whether to forward this command to the replica.
         let mut forward = true;
 
         match &cmd {
@@ -156,16 +143,20 @@ impl SequentialHydration {
             _ => (),
         }
 
+        let mut commands = Vec::new();
         if forward {
-            self.command_tx.send(cmd)?;
+            commands.push(cmd);
         }
 
         // Schedule collections that are ready now.
-        self.hydrate_collections()
+        commands.extend(self.hydrate_collections());
+        commands
     }
 
-    /// Observe a response and send resulting commands to the wrapped client.
-    fn observe_response(&mut self, resp: &ComputeResponse) -> Result<(), anyhow::Error> {
+    /// Observe a response the task received, returning the commands it should send in reaction.
+    pub(super) fn observe_response(&mut self, resp: &ComputeResponse) -> Vec<ComputeCommand> {
+        let mut commands = Vec::new();
+
         if let ComputeResponse::Frontiers(
             id,
             FrontiersResponse {
@@ -194,13 +185,13 @@ impl SequentialHydration {
                         State::QueuedForHydration => {
                             // We are holding back the `Schedule` command for this collection. Send
                             // it now.
-                            self.command_tx.send(ComputeCommand::Schedule(*id))?;
+                            commands.push(ComputeCommand::Schedule(*id));
                         }
                         State::Hydrating(token) => {
                             // We freed some hydration capacity and may be able to start hydrating
                             // new collections.
                             drop(token);
-                            self.hydrate_collections()?;
+                            commands.extend(self.hydrate_collections());
                         }
                     }
                 } else {
@@ -209,11 +200,13 @@ impl SequentialHydration {
             }
         }
 
-        Ok(())
+        commands
     }
 
-    /// Allow hydration based on the available capacity.
-    fn hydrate_collections(&mut self) -> Result<(), anyhow::Error> {
+    /// Allow hydration based on the available capacity, returning the `Schedule` commands to send.
+    fn hydrate_collections(&mut self) -> Vec<ComputeCommand> {
+        let mut commands = Vec::new();
+
         let capacity = HYDRATION_CONCURRENCY.get(&self.dyncfg);
         while self.hydration_count() < capacity {
             let Some(id) = self.hydration_queue.pop_front() else {
@@ -226,7 +219,7 @@ impl SequentialHydration {
             };
 
             debug!(%id, "starting collection hydration");
-            self.command_tx.send(ComputeCommand::Schedule(id))?;
+            commands.push(ComputeCommand::Schedule(id));
 
             let token = Arc::clone(&self.hydration_token);
             collection.set_hydrating(token);
@@ -235,31 +228,7 @@ impl SequentialHydration {
         let queue_size = u64::cast_from(self.hydration_queue.len());
         self.metrics.inner.hydration_queue_size.set(queue_size);
 
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl GenericClient<ComputeCommand, ComputeResponse> for SequentialHydration {
-    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
-        self.absorb_command(cmd)
-    }
-
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
-        // `mpsc::UnboundedReceiver::recv` is documented as cancel safe.
-        match self.response_rx.recv().await {
-            Some(Ok(response)) => {
-                self.observe_response(&response)?;
-                Ok(Some(response))
-            }
-            Some(Err(error)) => Err(error), // client error
-            None => Ok(None),               // client disconnected
-        }
+        commands
     }
 }
 
@@ -303,48 +272,4 @@ enum State {
     QueuedForHydration,
     /// Collection is hydrating and waiting for hydration to complete.
     Hydrating(Token),
-}
-
-/// Forward messages between a pair of channels and a [`ComputeClient`].
-///
-/// This functions is run in its own task and exists to allow `SequentialHydration::recv` to be
-/// cancel safe even though it needs to send commands to the wrapped client, which isn't cancel
-/// safe.
-async fn forward_messages<C>(
-    mut client: C,
-    mut rx: mpsc::UnboundedReceiver<ComputeCommand>,
-    tx: mpsc::UnboundedSender<Result<ComputeResponse, anyhow::Error>>,
-) where
-    C: ComputeClient,
-{
-    loop {
-        tokio::select! {
-            command = rx.recv() => {
-                let Some(command) = command else {
-                    break; // `SequentialHydration` dropped
-                };
-                if let Err(error) = client.send(command).await {
-                    // Client produced an unrecoverable error.
-                    let _ = tx.send(Err(error));
-                    break;
-                }
-            }
-            response = client.recv() => {
-                let response = match response {
-                    Ok(Some(response)) => response,
-                    Ok(None) => {
-                        break; // client disconnected
-                    }
-                    Err(error) => {
-                        // Client produced an unrecoverable error.
-                        let _ = tx.send(Err(error));
-                        break;
-                    }
-                };
-                if tx.send(Ok(response)).is_err() {
-                    break; // `SequentialHydration` dropped
-                }
-            }
-        }
-    }
 }
