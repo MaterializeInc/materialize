@@ -1,6 +1,6 @@
 ---
 title: "What is Materialize?"
-description: "Learn more about Materialize"
+description: "Materialize is the live data layer for apps and AI agents — build live data products that represent your business, using just SQL."
 disable_list: true
 aliases:
   - /overview/what-is-materialize/
@@ -11,19 +11,43 @@ menu:
     weight: 5
 ---
 
-{{% include-headless "/headless/materialize-intro/intro" %}}
+# Materialize: The live data layer for apps and agents
+
+Materialize lets you build live data products to represent your business, using just SQL.
+
+[Try the quickstart →](/get-started/quickstart/)
+
+## How Materialize works
+
+### Real-time ingestion from sources
+
+Materialize connects natively to your operational systems — Postgres, MySQL, Kafka, webhooks — and ingests changes as they happen using Change Data Capture (CDC). Data flows in continuously; there are no batch windows or scheduled pulls.
+
+### Incremental view maintenance
+
+As new data arrives, Materialize updates view results incrementally rather than recalculating from scratch. Complex SQL — multi-way joins, aggregations, temporal filters — stays fresh within about a second. You write SQL once; Materialize handles the maintenance.
+
+### Standard SQL & PGWire support
+
+Materialize speaks standard SQL and the PostgreSQL wire protocol. Any application, dashboard, or BI tool that works with Postgres works with Materialize — no new query language, no new SDK. AI agents query the live context graph through the same SQL surface.
+
+### Consistency guaranteed
+
+By default, Materialize provides strict serializability: every query sees a consistent snapshot that respects real-time write ordering. No eventual consistency, no dual-write races, no stale reads. You can [tune the isolation level](/get-started/isolation-level/) depending on your performance requirements.
 
 ## Materialize offerings
 
 {{% include-headless "/headless/materialize-intro/offerings" %}}
 
-## Key features
+{{< callout >}}
+## What's new!
 
-Materialize combines the accessibility of SQL databases with a streaming engine
-that is horizontally scalable, highly available, and strongly consistent.
+- [Faster sink performance with up to 50% lower memory
+  usage](/releases/#v26220)
 
-### Incremental updates
+For more information on these and other changes, see the [Release Notes](/releases/).
 
+<<<<<<< Updated upstream
 In traditional databases, materialized views help you avoid re-running heavy
 queries, typically by caching queries to serve results faster. But you have
 to make a compromise between the freshness of the results, the cost of
@@ -91,3 +115,6 @@ depending on your consistency and performance requirements.
 - [Key concepts](/concepts/)
 - [Get started with Materialize](/get-started/quickstart)
 - [Build a live Context Graph](/architecture-patterns/live-context-graph/)
+=======
+{{</ callout >}}
+>>>>>>> Stashed changes
