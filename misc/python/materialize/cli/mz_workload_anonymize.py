@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,21 @@ from typing import Any
 import yaml
 
 from materialize import MZ_ROOT
+
+
+def _read_workload(path: str) -> dict[str, Any]:
+    """Load a workload from a YAML capture file."""
+    with open(path) as f:
+        return yaml.load(f, Loader=yaml.CSafeLoader)
+
+
+def _write_workload(workload: dict[str, Any], output: str) -> None:
+    """Write a workload to `output` (`-` for stdout)."""
+    if output == "-":
+        yaml.dump(workload, sys.stdout, Dumper=yaml.CSafeDumper)
+    else:
+        with open(output, "w") as f:
+            yaml.dump(workload, f, Dumper=yaml.CSafeDumper)
 
 
 def _locate_redactor() -> list[str] | None:
@@ -37,46 +53,186 @@ def _locate_redactor() -> list[str] | None:
     return None
 
 
+def _run_helper(request: dict[str, Any]) -> Any:
+    """Run the `mz-sql-anonymize` helper with a JSON request, return its JSON.
+
+    Callers must have ensured the helper is available (see `_locate_redactor`).
+    Raises if the helper errors (e.g. a statement could not be parsed).
+    """
+    cmd = _locate_redactor()
+    assert cmd is not None, "caller must ensure the helper is available"
+    proc = subprocess.run(
+        cmd, input=json.dumps(request), capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"{cmd[0]} failed:\n{proc.stderr}")
+    return json.loads(proc.stdout)
+
+
 def anonymize_sql_via_parser(
     sqls: list[str],
     mapping: dict[str, str],
+    keywords: list[str],
     rename_identifiers: bool,
     redact_literals: bool,
-) -> list[str | None] | None:
+    redact_numbers: bool,
+    consistent_names: bool,
+    salt: str,
+) -> list[str | None]:
     """Rename identifiers and/or redact literals in each SQL string via the AST.
 
     Uses the `mz-sql-anonymize` helper, which parses each statement with
     Materialize's own parser, renames identifier tokens per `mapping`, and (when
-    `redact_literals`) replaces literal values with `'<REDACTED>'`. Doing this on
-    the AST avoids the corruption a text regex causes (substring matches,
-    in-string rewrites, broken syntax).
+    `redact_literals`) replaces literal values — including typed option strings
+    like broker hosts. With `consistent_names` each such string is replaced by a
+    stable, valid `redacted_<hash>` token (the same input always maps to the
+    same token), so cross-references survive — e.g. a source's Kafka topic stays
+    linked to the rest of its config; without it the value becomes the inert
+    `'<REDACTED>'` placeholder. With `redact_numbers` it also redacts numeric
+    literals to the neutral literal `1` (not a string, which would not parse
+    where a number is required). `redact_numbers` is set for queries and for
+    view/materialized-view/index *bodies* (predicates like `WHERE ssn = 123` are
+    data), but NOT for tables/sources/sinks/clusters, whose numbers sit in option
+    positions (sizes, ports, replication factors, column defaults) that are
+    config replay needs valid. `salt` is a per-run random value mixed into every
+    `redacted_<hash>` token so they cannot be reversed by a dictionary attack on
+    the shared output; the same salt is passed for every call in one run so the
+    tokens stay consistent. Doing this on the AST avoids the corruption a text
+    regex causes (substring matches, in-string rewrites, broken syntax).
 
     Returns a list aligned with the input — the rewritten SQL, or None for a
-    statement that did not parse. Returns None for the whole batch if the helper
-    binary is unavailable or errors, signaling the caller to fall back to regex.
+    statement that did not parse. Raises if the helper binary errors; callers
+    must have ensured it is available (see `_locate_redactor`).
     """
-    cmd = _locate_redactor()
-    if cmd is None:
-        return None
-    request = {
-        "mapping": mapping,
-        "rename_identifiers": rename_identifiers,
-        "redact_literals": redact_literals,
-        "statements": sqls,
-    }
-    proc = subprocess.run(
-        cmd,
-        input=json.dumps(request),
-        capture_output=True,
-        text=True,
+    return _run_helper(
+        {
+            "mapping": mapping,
+            "keywords": keywords,
+            "rename_identifiers": rename_identifiers,
+            "redact_literals": redact_literals,
+            "redact_numbers": redact_numbers,
+            "consistent_names": consistent_names,
+            "salt": salt,
+            "statements": sqls,
+        }
     )
-    if proc.returncode != 0:
-        print(
-            f"warning: {cmd[0]} failed, falling back to regex:\n{proc.stderr}",
-            file=sys.stderr,
-        )
-        return None
-    return json.loads(proc.stdout)
+
+
+def collect_object_names_via_parser(
+    sqls: list[str], mapping: dict[str, str], keywords: list[str]
+) -> list[str]:
+    """Return object names referenced in `sqls` that are not in `mapping`.
+
+    Catches objects created/dropped *during* the capture window (dbt-built
+    views, transient deploy clusters, their schemas), which are absent from the
+    catalog snapshot the mapping is built from, so the caller can assign them
+    anonymized names before the rewrite. Uses the `mz-sql-anonymize` helper in
+    its collect mode; see `Request.collect` there.
+    """
+    return _run_helper(
+        {
+            "mapping": mapping,
+            "keywords": keywords,
+            "collect": True,
+            "statements": sqls,
+        }
+    )
+
+
+# Built-in system schemas. They qualify built-in types and functions throughout
+# captured DDL (e.g. a column typed `pg_catalog.uuid`, a call to
+# `mz_catalog.mz_version()`), so they are not user identifiers; renaming them
+# yields references to schemas that do not exist, breaking replay. Mirrors
+# `SYSTEM_SCHEMAS` in src/repr/src/namespaces.rs (plus the temp schema).
+SYSTEM_SCHEMAS = frozenset(
+    {
+        "mz_catalog",
+        "mz_catalog_unstable",
+        "pg_catalog",
+        "mz_internal",
+        "mz_introspection",
+        "information_schema",
+        "mz_unsafe",
+        "mz_temp",
+    }
+)
+
+
+# Mirror of `is_number_interval` in the mz-sql-anonymize helper. The helper keeps
+# (does not redact) two kinds of DDL string value, so the verify pass must not
+# flag them: a number-bearing duration (`'1s'`, `'5 minutes'`, `'00:05:00'`) and
+# a bare datetime-field keyword (a `date_trunc`/`date_part` argument). A duration
+# needs BOTH a magnitude and a unit: a bare unit word (`'y'`, `'min'`) and a bare
+# number or number sequence (`'123456789'`, `'555 1234'`) are data, not
+# durations, and ARE redacted/flagged.
+_DATE_FIELDS = frozenset(
+    {
+        "microseconds", "microsecond", "milliseconds", "millisecond",
+        "second", "minute", "hour", "day", "week", "month", "quarter", "year",
+        "decade", "century", "millennium", "dow", "doy", "isodow", "isoyear",
+        "epoch", "julian", "timezone", "timezone_hour", "timezone_minute",
+    }
+)  # fmt: skip
+_INTERVAL_UNITS = frozenset(
+    {
+        "microseconds", "microsecond", "us",
+        "milliseconds", "millisecond", "ms",
+        "seconds", "second", "secs", "sec", "s",
+        "minutes", "minute", "mins", "min", "m",
+        "hours", "hour", "hrs", "hr", "h",
+        "days", "day", "d", "weeks", "week", "w",
+        "months", "month", "mons", "mon",
+        "years", "year", "yrs", "yr", "y",
+    }
+)  # fmt: skip
+
+
+def _is_number(token: str) -> bool:
+    return (
+        token != ""
+        and all(c.isdigit() or c == "." for c in token)
+        and any(c.isdigit() for c in token)
+    )
+
+
+def is_interval_like(s: str) -> bool:
+    """Mirror of the helper's `is_interval_like`."""
+    s = s.strip()
+    if not s:
+        return False
+    # A bare datetime field (no magnitude) is kept for date_trunc/date_part.
+    if s.lower() in _DATE_FIELDS:
+        return True
+    # Otherwise a duration must carry both a numeric magnitude and a unit (or a
+    # colon-time word); a bare unit word or a bare number is data and gets
+    # redacted.
+    saw_number = False
+    saw_unit = False
+    for word in s.split():
+        word = word.lower()
+        if _is_number(word):
+            saw_number = True
+            continue
+        if (
+            ":" in word
+            and all(c.isdigit() or c in ":." for c in word)
+            and any(c.isdigit() for c in word)
+        ):
+            saw_number = True
+            saw_unit = True
+            continue
+        if word in _INTERVAL_UNITS:
+            saw_unit = True
+            continue
+        idx = next((i for i, c in enumerate(word) if c.isalpha()), None)
+        if idx is not None:
+            num, unit = word[:idx], word[idx:]
+            if _is_number(num) and unit in _INTERVAL_UNITS:
+                saw_number = True
+                saw_unit = True
+                continue
+        return False
+    return saw_number and saw_unit
 
 
 def keywords() -> set[str]:
@@ -93,6 +249,32 @@ def keywords() -> set[str]:
             for line in f.readlines()
             if not line.startswith("#") and len(line.strip()) > 0
         )
+    # System catalog identifiers (object/column/function/type names). A user
+    # view or query over the system catalog (e.g. `SELECT password_hash FROM
+    # mz_internal.mz_role_auth`) references built-in column/object names that are
+    # not user identifiers; renaming them yields columns that do not exist,
+    # breaking replay. See the file header for how it is generated.
+    with open(
+        MZ_ROOT / "test" / "workload-replay" / "system_catalog_identifiers.txt"
+    ) as f:
+        result |= set(
+            line.strip().lower()
+            for line in f.readlines()
+            if not line.startswith("#") and len(line.strip()) > 0
+        )
+    # Built-in load-generator output columns (l_quantity, c_acctbal, ...). MZ
+    # generates these itself for a load-generator source, so a view over one must
+    # reference the built-in names; renaming them yields columns that do not
+    # exist. See the file header for how it is generated.
+    with open(
+        MZ_ROOT / "test" / "workload-replay" / "load_generator_identifiers.txt"
+    ) as f:
+        result |= set(
+            line.strip().lower()
+            for line in f.readlines()
+            if not line.startswith("#") and len(line.strip()) > 0
+        )
+    result |= SYSTEM_SCHEMAS
     return result
 
 
@@ -151,10 +333,12 @@ RESERVED_FORMAT_KEYS = frozenset(
 )
 
 
-# Query statement types whose literals are non-sensitive config (session/system
-# settings such as timeouts and isolation). The anonymizer preserves these — see
-# `preserves_literals` in the mz-sql-anonymize helper — so verify must not flag
-# them. Cluster DDL is preserved too but lives in create_sql, handled separately.
+# Query statement types whose literals are non-sensitive config the anonymizer
+# preserves — this MUST mirror `preserves_literals` in the mz-sql-anonymize
+# helper so verify does not flag a literal the helper intentionally kept. Cluster
+# DDL (sizes, replication, schedules, timeouts) is preserved too and can appear
+# as a query (e.g. `CREATE CLUSTER`, `ALTER CLUSTER`) in the activity log, not
+# only in the `clusters` section.
 CONFIG_STATEMENT_TYPES = frozenset(
     {
         "set_variable",
@@ -162,6 +346,9 @@ CONFIG_STATEMENT_TYPES = frozenset(
         "set_transaction",
         "alter_system_set",
         "alter_system_reset",
+        "create_cluster",
+        "create_cluster_replica",
+        "alter_cluster",
     }
 )
 
@@ -205,13 +392,11 @@ def verify_anonymized(
 ) -> list[str]:
     """Best-effort scan of anonymized output for data that should have been scrubbed.
 
-    This is a backstop for the heuristic text substitution, not a proof: it
-    catches whole-word survivals of original identifiers (in any string,
-    including structural dict keys) and any single-quoted literal in SQL that
-    was not reduced to a placeholder ('<REDACTED>' from the parser-based path,
-    or 'literal_N' from the regex fallback). It cannot detect sensitive data
-    hidden in dollar-quoted strings, comments, or numeric literals when the
-    regex fallback is in use.
+    This is a backstop, not a proof: it catches whole-word survivals of original
+    identifiers (in any string, including structural dict keys) and any
+    single-quoted literal in SQL that was not reduced to the `'<REDACTED>'`
+    placeholder. It cannot detect sensitive data hidden in dollar-quoted strings
+    or comments.
 
     Cluster create_sql is exempt from the literal check: its literals (SIZE,
     replication factor, availability zones) are non-sensitive configuration that
@@ -219,27 +404,88 @@ def verify_anonymized(
     """
     problems: list[str] = []
 
-    # Identifiers that were actually renamed (keywords map to themselves).
-    identifier_checks: list[tuple[str, re.Pattern[str]]] = []
+    # Identifiers that were actually renamed (keywords map to themselves). Split
+    # into whole-word identifiers — the vast majority — and the rare ones with
+    # non-word characters. A word identifier survives as a `\b<id>\b` match iff
+    # it appears as a whole `\w+` token, so we tokenize each string once and
+    # intersect with this set: O(text) per string instead of O(mapping). At
+    # ~10^5 queries × ~10^4 renames the old per-identifier regex scan was
+    # billions of searches (minutes of CPU); this makes it linear.
+    word_originals: set[str] = set()
+    other_checks: list[tuple[str, re.Pattern[str]]] = []
     if args.identifiers:
         for original, anonymized in mapping.items():
             if original == anonymized:
                 continue
             if re.fullmatch(r"\w+", original):
-                pattern = re.compile(r"\b" + re.escape(original) + r"\b")
+                word_originals.add(original)
             else:
-                pattern = re.compile(re.escape(original))
-            identifier_checks.append((original, pattern))
+                other_checks.append((original, re.compile(re.escape(original))))
 
+    word_token = re.compile(r"\w+")
     string_literal = re.compile(r"'(?:[^']|'')*'")
-    placeholder = re.compile(r"^'(?:literal_\d+|<REDACTED>)'$")
+    # An anonymized string literal is one of:
+    #  - the inert `<REDACTED>` placeholder (query data literals),
+    #  - a stable `redacted_<hash>` token from consistent renaming (DDL data:
+    #    Kafka topics, hosts, external references),
+    #  - a query-local `local_<n>` name (a CTE/alias referenced as a string).
+    placeholder = re.compile(r"^'(?:<REDACTED>|redacted_[0-9a-f]+|local_[0-9]+)'$")
+    # A renamed catalog/collected object can legitimately appear as a string
+    # literal (e.g. a value referencing an object by name, or an upstream
+    # database that also shows up as an external reference); the anonymizer
+    # rewrote it to its anonymized name, which is safe. Identity entries (kept
+    # keywords/builtins mapped to themselves) are NOT renames, so excluding them
+    # keeps a data literal that merely spells a keyword (`'id'`, `'text'`) flagged.
+    anon_values = {anon for orig, anon in mapping.items() if orig != anon}
+
+    def is_anonymized_literal(literal: str) -> bool:
+        # `literal` includes the surrounding quotes; `content` is the value, with
+        # SQL `''` un-escaped to a single quote.
+        content = literal[1:-1].replace("''", "'")
+        return (
+            placeholder.fullmatch(literal) is not None
+            or content in anon_values
+            # Durations/intervals are non-sensitive config the helper keeps.
+            or is_interval_like(content)
+            # Inline Avro/Protobuf schemas (typed `String` fields) are kept
+            # verbatim so replay can decode against them; they are JSON.
+            or content.lstrip().startswith(("{", "["))
+        )
+
+    # `MAP[...]` options (e.g. `TOPIC CONFIG = MAP['retention.ms' => '...']`) are
+    # non-sensitive Kafka/topic config the anonymizer preserves verbatim, so
+    # their key/value string literals must not be flagged.
+    config_map = re.compile(r"MAP\[.*?\]", re.DOTALL)
+    # Vetted preserve-list options whose value the helper keeps verbatim (see
+    # `visit_kafka_sink_config_option_mut`): a fixed-enum config the replayed DDL
+    # needs valid. Exempt the value literal in the same option position, mirroring
+    # the helper precisely rather than blanket-accepting the enum word anywhere.
+    preserved_option = re.compile(
+        r"COMPRESSION TYPE\s*=?\s*'(?:[^']|'')*'", re.IGNORECASE
+    )
+    # `mz_load_generators.<gen>.<table>` references built-in load-generator
+    # outputs; the helper keeps the whole reference, so its components (which can
+    # be user-identifier words like `accounts`/`orders`) are not leaks.
+    load_generator_ref = re.compile(r"mz_load_generators(?:\.\w+)+")
+    # An `INTERVAL '…'` literal (a `Value::Interval`) keeps its value part
+    # verbatim (a duration magnitude, e.g. `INTERVAL '60' DAY`). It surfaces as a
+    # bare-number string literal but is config, not data, so exempt the value
+    # literal in THAT position only, not bare numbers anywhere, which would mask
+    # a leaked numeric-string predicate (an SSN/account id in a view body).
+    interval_value = re.compile(r"\bINTERVAL\s+('(?:[^']|'')*')", re.IGNORECASE)
 
     # The identifier check runs over identifier positions only: SQL text and
     # structural dict keys (e.g. a source child's fully-qualified key). It must
     # NOT scan arbitrary scalar values — a kept literal like 'secret note' can
     # contain a word that matches a renamed column without being a leak.
     def check_identifiers(location: str, text: str) -> None:
-        for original, pattern in identifier_checks:
+        if word_originals:
+            for token in set(word_token.findall(text)):
+                if token in word_originals:
+                    problems.append(
+                        f"{location}: original identifier {token!r} survived"
+                    )
+        for original, pattern in other_checks:
             if pattern.search(text):
                 problems.append(
                     f"{location}: original identifier {original!r} survived"
@@ -267,13 +513,37 @@ def verify_anonymized(
         return False
 
     for location, sql in _iter_sql(new):
-        check_identifiers(location, sql)
+        # Scan for surviving identifiers outside string literals only: a word
+        # inside a preserved literal (e.g. 'secret note' under --no-literals) is
+        # data, not an identifier reference. Renaming runs on the AST and never
+        # rewrites inside strings, so a real identifier leak shows up as a token.
+        # Also blank kept load-generator references, whose built-in component
+        # names are not user-identifier leaks.
+        scannable = load_generator_ref.sub(" ", string_literal.sub("''", sql))
+        check_identifiers(location, scannable)
         if args.literals and not literals_preserved(location):
+            exempt_spans = [m.span() for m in config_map.finditer(sql)]
+            exempt_spans += [m.span() for m in preserved_option.finditer(sql)]
+            exempt_spans += [m.span(1) for m in interval_value.finditer(sql)]
             for match in string_literal.finditer(sql):
-                if not placeholder.fullmatch(match.group(0)):
+                if any(start <= match.start() < end for start, end in exempt_spans):
+                    continue  # preserved config map entry or vetted option value
+                if not is_anonymized_literal(match.group(0)):
                     problems.append(
                         f"{location}: non-anonymized string literal {match.group(0)!r}"
                     )
+
+    # Bound parameters are redacted to the '<REDACTED>' placeholder (or kept as
+    # null); anything else is un-anonymized data.
+    if args.literals:
+        for i, query in enumerate(new.get("queries", [])):
+            params = query.get("params")
+            if isinstance(params, list):
+                for j, param in enumerate(params):
+                    if param is not None and param != "<REDACTED>":
+                        problems.append(
+                            f".queries[{i}].params[{j}]: non-anonymized bound parameter {param!r}"
+                        )
 
     return problems
 
@@ -310,16 +580,6 @@ def main() -> int:
         help="After anonymizing, scan the output for surviving original identifiers and "
         "non-anonymized string literals, and refuse to write if any are found.",
     )
-    parser.add_argument(
-        "--require-parser",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Require the mz-sql-anonymize parser for query literal redaction "
-        "(the default). With --no-require-parser, fall back to a weaker regex "
-        "that only redacts single-quoted strings (missing numbers, dollar-quoted "
-        "strings, and comments) when the parser binary is unavailable or a "
-        "statement does not parse.",
-    )
 
     parser.add_argument(
         "file",
@@ -343,10 +603,12 @@ def main() -> int:
         )
         return 1
 
-    with open(args.file) as f:
-        workload = yaml.load(f, Loader=yaml.CSafeLoader)
+    workload = _read_workload(args.file)
 
     kws = keywords()
+    # Passed to the helper so a query-local identifier (CTE/alias/constraint
+    # name) that shadows a keyword or builtin object/function/type is not renamed.
+    kw_list = sorted(kws)
 
     new = {
         "databases": {},
@@ -368,11 +630,21 @@ def main() -> int:
         "sinks": 0,
         "types": 0,
         "columns": 0,
-        "literals": 0,
     }
 
     def set_name(name: str, new_name: str) -> str:
         if args.identifiers:
+            # Rename consistently: the same original name always maps to the same
+            # anonymized name. The mapping is keyed by bare name and the AST
+            # rewriter renames every matching token identically, so a name seen
+            # more than once (e.g. a column name shared across the identically
+            # structured tables of a multi-tenant source) must reuse its existing
+            # entry. Overwriting it would desync the structural copy (set here,
+            # per occurrence) from the SQL the rewriter emits (which uses the
+            # final mapping) — e.g. a source's TEXT COLUMNS would name a column
+            # the subsource it belongs to no longer has, breaking replay.
+            if name in mapping:
+                return mapping[name]
             if name.lower() in kws:
                 new_name = name
             mapping[name] = new_name
@@ -380,24 +652,27 @@ def main() -> int:
         else:
             return name
 
-    # Matches a single-quoted SQL string literal, including '' escapes. Written
-    # without nested quantifiers to avoid catastrophic backtracking (ReDoS).
-    string_literal_pattern = re.compile(r"'(?:[^']|'')*'")
-
-    def anonymize_string_literal(match: re.Match[str]) -> str:
-        count["literals"] += 1
-        return f"'literal_{count['literals']}'"
-
-    def anonymize_literals_in_sql(sql: str) -> str:
-        return string_literal_pattern.sub(anonymize_string_literal, sql)
-
     def anonymize_column_default(column: dict[str, Any]) -> None:
-        """Anonymize string default values in columns."""
+        """Redact string default values in columns.
+
+        Defaults live as a structural field, not SQL, so the parser never sees
+        them; redact string ones here to the `'<REDACTED>'` placeholder. Numeric,
+        boolean, and function defaults (`5`, `true`, `now()`) have no string
+        literal and are kept as config (mirroring the AST's DDL redaction).
+
+        This is belt-and-suspenders: the column's `create_sql` is the
+        authoritative copy and is AST-redacted *and* verified; this structural
+        field only feeds replay's upstream-table DDL. So it errs conservative —
+        any string-literal rendering (`'x'`, `E'x'`, `B'x'`, `U&'x'`, `$$x$$`,
+        `'x'::type`) is redacted, even if that occasionally over-redacts.
+        """
         default = column.get("default")
-        if default is not None and default != "NULL":
-            if isinstance(default, str) and default.startswith("'"):
-                count["literals"] += 1
-                column["default"] = f"'literal_{count['literals']}'"
+        if (
+            isinstance(default, str)
+            and default != "NULL"
+            and re.match(r"[a-zA-Z]*&?'|\$", default)
+        ):
+            column["default"] = "'<REDACTED>'"
 
     for i, (name, cluster) in enumerate(workload["clusters"].items()):
         new_name = set_name(name, f"cluster_{i}")
@@ -538,50 +813,37 @@ def main() -> int:
 
     # --- Pass 2: rewrite SQL text ---
     #
-    # Identifier renaming and query-literal redaction run on the AST via the
-    # mz-sql-anonymize helper, which renames whole identifier tokens and redacts
-    # literal values without the corruption a text regex causes. DDL create_sql
-    # literals are still scrubbed with a blanket regex, because option strings
-    # (connection hosts/broker addresses, sink topics) are typed fields the AST
-    # — like the engine's own redacted Display — does not treat as redactable
-    # literals. Cluster/SET config literals (sizes, timeouts) are preserved by
-    # the helper and never regex-redacted here.
+    # All SQL — cluster/DDL create_sql and query sql — is rewritten on the AST by
+    # the mz-sql-anonymize helper, which renames whole identifier tokens and
+    # redacts literal values (including typed option strings like broker hosts)
+    # without the corruption a text regex causes. Cluster/SET config literals
+    # (sizes, timeouts) are preserved by the helper. The parser is mandatory: if
+    # the helper is missing or a statement does not parse, anonymization cannot
+    # be done safely and the tool refuses to write rather than leak.
 
-    binary_available = _locate_redactor() is not None
-    if not binary_available:
-        if args.require_parser:
-            print(
-                "error: mz-sql-anonymize helper not found, so SQL cannot be "
-                "anonymized with the parser. Build it with:\n"
-                "    cargo build --release -p mz-sql-anonymize\n"
-                "or pass --no-require-parser to fall back to a regex that renames "
-                "identifiers by text substitution (which can corrupt SQL) and only "
-                "redacts single-quoted string literals.",
-                file=sys.stderr,
-            )
-            return 1
+    if _locate_redactor() is None:
         print(
-            "warning: mz-sql-anonymize helper not found; falling back to regex "
-            "identifier substitution and literal redaction for all SQL "
-            "(--no-require-parser).",
+            "error: mz-sql-anonymize helper not found, so SQL cannot be "
+            "anonymized. Build it with:\n"
+            "    cargo build --release -p mz-sql-anonymize",
             file=sys.stderr,
         )
+        return 1
 
-    # Regex fallback, used only when the helper is unavailable or a statement
-    # does not parse. The identifier substitution is the corruption-prone
-    # heuristic the AST replaces; it is the degraded path.
-    fallback_pattern = (
-        re.compile("|".join(map(re.escape, sorted(mapping, key=len, reverse=True))))
-        if args.identifiers and mapping
-        else None
-    )
-
-    def fallback_rewrite(sql: str, redact: bool) -> str:
-        if fallback_pattern is not None:
-            sql = fallback_pattern.sub(lambda m: mapping[m.group(0)], sql)
-        if redact and args.literals:
-            sql = anonymize_literals_in_sql(sql)
-        return sql
+    # Augment the mapping with objects referenced in SQL but absent from the
+    # catalog snapshot — created/dropped during the capture window (dbt-built
+    # views, transient deploy clusters, their schemas). They get `object_N`
+    # names so they are anonymized everywhere the rewrite and the structural
+    # remap below run (SQL, query routing fields, SET cluster/database literals).
+    if args.identifiers:
+        all_sqls = [sql for _location, sql in _iter_sql(new)]
+        all_sqls += [
+            q["sql"] for q in workload["queries"] if isinstance(q.get("sql"), str)
+        ]
+        for i, name in enumerate(
+            collect_object_names_via_parser(all_sqls, mapping, kw_list), start=1
+        ):
+            mapping[name] = f"object_{i}"
 
     # Structural identifier fields that are not SQL text (the helper never sees
     # them): column type references, child schema/database, and query routing.
@@ -596,60 +858,97 @@ def main() -> int:
                     for column in source.get("columns", []):
                         if column["type"] in mapping:
                             column["type"] = mapping[column["type"]]
-                    for child in source.get("children", {}).values():
-                        # A child's schema/database may be a builtin or otherwise
-                        # uncaptured name not in the mapping; leave those as-is.
-                        child["schema"] = mapping.get(child["schema"], child["schema"])
-                        child["database"] = mapping.get(
-                            child["database"], child["database"]
-                        )
-                        for column in child["columns"]:
-                            if column["type"] in mapping:
-                                column["type"] = mapping[column["type"]]
+                    # Rebuild the children dict here, not in pass 1: a child's
+                    # fully-qualified key embeds its database/schema, which may be
+                    # mapped only later in pass 1 (different schema, processed
+                    # after this source). Built early, the key leaks the original
+                    # names; rebuilt now, the mapping is complete.
+                    children = source.get("children")
+                    if children is not None:
+                        rebuilt: dict[str, Any] = {}
+                        for child in children.values():
+                            # A child's schema/database may be a builtin or
+                            # otherwise uncaptured name not in the mapping; leave
+                            # those as-is.
+                            child["schema"] = mapping.get(
+                                child["schema"], child["schema"]
+                            )
+                            child["database"] = mapping.get(
+                                child["database"], child["database"]
+                            )
+                            for column in child["columns"]:
+                                if column["type"] in mapping:
+                                    column["type"] = mapping[column["type"]]
+                            rebuilt[
+                                f"{child['database']}.{child['schema']}.{child['name']}"
+                            ] = child
+                        source["children"] = rebuilt
         for query in workload["queries"]:
             query["cluster"] = mapping.get(query["cluster"], query["cluster"])
             query["database"] = mapping.get(query["database"], query["database"])
             query["search_path"] = [
                 mapping.get(schema, schema) for schema in query["search_path"]
             ]
+
+    # Bound query parameters (the `$1, $2, ...` a prepared statement was executed
+    # with) are user data values living as a structural list, not SQL, so the AST
+    # never sees them. Redact each to the same placeholder; replay maps it back
+    # to NULL (see pg_params_to_psycopg), as it does for redacted SQL literals.
+    if args.literals:
+        for query in workload["queries"]:
+            params = query.get("params")
+            if isinstance(params, list):
+                query["params"] = [None if p is None else "<REDACTED>" for p in params]
+
     for query in workload["queries"]:
         new["queries"].append(query)
 
-    # Rewrite each group of create_sql/sql strings through the helper. `redact`
-    # asks the AST to redact literals (queries); `regex_literals` applies the
-    # DDL literal regex on top (DDL, but not clusters, whose config is kept).
-    n_unparsed = 0
+    # Rewrite each group of create_sql/sql strings through the helper. A
+    # per-run random salt makes the `redacted_<hash>` tokens unguessable from the
+    # shared output while staying consistent across these calls. A statement that
+    # fails to parse is collected for the hard-error check below.
+    salt = secrets.token_hex(16)
+    unparsed: list[str] = []
 
     def anonymize_group(
         items: list[dict[str, Any]],
         key: str,
         *,
-        redact: bool,
-        regex_literals: bool,
+        redact_numbers: bool,
+        consistent_names: bool,
     ) -> None:
-        nonlocal n_unparsed
         targets = [d for d in items if isinstance(d.get(key), str)]
         if not targets:
             return
         sqls = [d[key] for d in targets]
-        results = (
-            anonymize_sql_via_parser(sqls, mapping, args.identifiers, redact)
-            if binary_available
-            else None
+        results = anonymize_sql_via_parser(
+            sqls,
+            mapping,
+            kw_list,
+            args.identifiers,
+            args.literals,
+            redact_numbers,
+            consistent_names,
+            salt,
         )
-        for i, d in enumerate(targets):
-            out = results[i] if results is not None else None
+        for d, out in zip(targets, results):
             if out is None:
-                if results is not None:
-                    n_unparsed += 1
-                d[key] = fallback_rewrite(d[key], redact=redact or regex_literals)
+                unparsed.append(d[key])
             else:
                 d[key] = out
-                if regex_literals and args.literals:
-                    d[key] = anonymize_literals_in_sql(d[key])
 
-    clusters = list(new["clusters"].values())
-    ddl: list[dict[str, Any]] = []
+    # All DDL uses consistent renaming so a redacted value (Kafka topic, external
+    # reference, connection host) maps to a stable valid token and stays linked
+    # across the config replay depends on. They split on numbers, though:
+    #  - View/MV/index *bodies* are queries; a number there (`WHERE ssn = 123`)
+    #    is data and is redacted, like the queries group.
+    #  - Tables/sources/sinks/clusters/types keep numbers: theirs sit in option
+    #    positions (sizes, ports, replication factors, column defaults) that are
+    #    config replay needs valid.
+    # Queries use the inert `<REDACTED>` placeholder for strings (no
+    # cross-statement linkage to preserve) and also redact numbers.
+    config_ddl: list[dict[str, Any]] = list(new["clusters"].values())
+    body_ddl: list[dict[str, Any]] = []
     for db in new["databases"].values():
         for schema in db.values():
             for group in (
@@ -662,26 +961,30 @@ def main() -> int:
                 "indexes",
                 "sinks",
             ):
+                target = (
+                    body_ddl
+                    if group in ("views", "materialized_views", "indexes")
+                    else config_ddl
+                )
                 for obj in schema[group].values():
-                    ddl.append(obj)
+                    target.append(obj)
                     if group == "sources":
-                        ddl.extend(obj.get("children", {}).values())
+                        config_ddl.extend(obj.get("children", {}).values())
 
-    # Clusters: rename only, keep config literals.
-    anonymize_group(clusters, "create_sql", redact=False, regex_literals=False)
-    # Other DDL: rename via AST, redact literals via regex (catches option strings).
-    anonymize_group(ddl, "create_sql", redact=False, regex_literals=True)
-    # Queries: rename + redact literals, both on the AST.
-    anonymize_group(new["queries"], "sql", redact=args.literals, regex_literals=False)
+    anonymize_group(
+        config_ddl, "create_sql", redact_numbers=False, consistent_names=True
+    )
+    anonymize_group(body_ddl, "create_sql", redact_numbers=True, consistent_names=True)
+    anonymize_group(new["queries"], "sql", redact_numbers=True, consistent_names=False)
 
-    if n_unparsed:
+    if unparsed:
         print(
-            f"warning: mz-sql-anonymize could not parse {n_unparsed} statement(s); "
-            "fell back to the regex for those (it only redacts single-quoted "
-            "strings, and its identifier substitution can corrupt SQL). The verify "
-            "pass still scans them.",
+            f"error: mz-sql-anonymize could not parse {len(unparsed)} statement(s); "
+            "they cannot be anonymized safely, so refusing to write. This likely "
+            "indicates an unsupported statement or a parser bug — please report it.",
             file=sys.stderr,
         )
+        return 1
 
     if args.verify:
         problems = verify_anonymized(new, mapping, args)
@@ -695,11 +998,7 @@ def main() -> int:
                 print(f"  {problem}", file=sys.stderr)
             return 1
 
-    if output == "-":
-        yaml.dump(new, sys.stdout, Dumper=yaml.CSafeDumper)
-    else:
-        with open(output, "w") as f:
-            yaml.dump(new, f, Dumper=yaml.CSafeDumper)
+    _write_workload(new, output)
 
     return 0
 

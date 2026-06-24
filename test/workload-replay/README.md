@@ -83,24 +83,38 @@ SQL by matching identifiers as substrings or inside string literals; the AST
 does not.
 
 *Literals (`--literals`, enabled by default):*
-- Query SQL is redacted on the AST, replacing every literal — strings, numbers,
-  hex strings, intervals — with `'<REDACTED>'`.
-- `create_sql` strings (connection hosts/users, sink topics, source options,
-  column defaults) → `'literal_1'`, `'literal_2'`, ... via a blanket regex. The
-  AST is not used for these because option values like broker addresses are
-  typed fields the parser does not treat as redactable literals (the engine's
-  own redacted Display leaves them intact too).
+All literal redaction is done on the AST by `mz-sql-anonymize`:
+- **Query string literals** become the inert `'<REDACTED>'` placeholder (which
+  replay binds as `NULL`). **DDL string values** (a topic, an upstream database,
+  an external reference, a connection host/user) are instead renamed
+  *consistently* to a stable `redacted_<hash>` token, so the same value lines up
+  everywhere replay cross-references it; a value that is a renamed catalog object
+  takes that object's anonymized name. Inline Avro schemas are anonymized in
+  place (field names follow the column renaming; upstream namespaces scrubbed) so
+  they stay valid and replayable.
+- **Numbers** are redacted (to the neutral literal `1`) where they are data: in
+  queries and in view/materialized-view/index **bodies** (`WHERE ssn =
+  123456789`). They are **kept** in option positions — cluster sizes, ports,
+  replication factors, numeric column defaults — which are config replay needs
+  valid. Hex strings are redacted; **intervals/durations** (`'1s'`, `INTERVAL
+  '60' DAY`, `date_trunc('year', …)`) are kept as non-sensitive config.
+- Built-in identifiers are never renamed: system-schema/-catalog names
+  (`pg_catalog`, `mz_internal`, and the columns/functions/types they expose) and
+  load-generator references/columns (`mz_load_generators.auction.accounts`,
+  `l_quantity`), so views/queries over them still resolve on replay.
+- The `redacted_<hash>` tokens are salted with a fresh per-run random value, so
+  they stay consistent within one anonymized file but cannot be reversed by a
+  dictionary attack on the shared output.
+- Bound query parameters (the `$1, $2, ...` values a prepared statement ran
+  with) live alongside the SQL, not in it; each is redacted to `<REDACTED>`,
+  which replay binds as `NULL`.
 - Cluster sizing/replication and session/system config (`SET`/`RESET`/`ALTER
   SYSTEM`, e.g. timeouts) are **preserved** — replay needs them and they are not
   sensitive.
 
-**The parser binary is required by default**: if it is not built, the tool
-errors rather than fall back to the corruption-prone regex for everything. Pass
-`--no-require-parser` to allow that fallback. Individual statements that do not
-parse fall back to the regex with a warning regardless, and the verify pass
-still scans them.
-
-Build the helper once (required for the default `--require-parser` mode):
+**The parser binary is required.** Anonymization runs entirely on Materialize's
+parsed AST, so the helper must be built. If it is missing, or a statement does
+not parse, the tool refuses to write rather than risk leaking. Build it once:
 ```bash
 cargo build --release -p mz-sql-anonymize
 ```
@@ -118,7 +132,6 @@ bin/mz-workload-anonymize <file> [OPTIONS]
 | `--identifiers` / `--no-identifiers` | Anonymize object names | enabled |
 | `--literals` / `--no-literals` | Anonymize literals | enabled |
 | `--verify` / `--no-verify` | Re-scan output for leaks and refuse to write if any are found | enabled |
-| `--require-parser` / `--no-require-parser` | Require the parser for query literals; error rather than fall back to the weaker regex | enabled |
 
 **Examples:**
 ```bash
@@ -134,7 +147,9 @@ bin/mz-workload-anonymize workload_prod.yml --no-identifiers -o workload_prod_an
 
 The anonymizer preserves SQL keywords and built-in Materialize objects while applying consistent mapping throughout the workload to maintain referential integrity.
 
-Note that the query and `create-sql` replacements are currently heuristics and can go wrong. If possible, share an unanonymized workload yaml file.
+Identifier renaming and literal redaction are done on the parsed AST, so they no
+longer corrupt SQL the way the previous text-regex approach could. If a workload
+is not sensitive, sharing it unanonymized still gives the most faithful replay.
 
 ### Workload Replay
 

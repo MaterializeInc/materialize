@@ -1,6 +1,6 @@
 [package]
 name = "mz-sql-anonymize"
-description = "A small CLI that redacts literals from SQL using Materialize's own parser."
+description = "A small CLI that renames identifiers and redacts literals in SQL using Materialize's own parser."
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
