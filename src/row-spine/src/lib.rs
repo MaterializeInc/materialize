@@ -23,8 +23,20 @@ pub use self::spines::{
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
+// The per-column compression layer. Exercised by tests today and wired into the
+// containers in a follow-up; allow it to land unused in the meantime.
+#[allow(dead_code)]
+mod codec;
+#[allow(dead_code)]
+mod huffman;
+
 /// Enable per-column dictionary compression in row containers.
 pub static DICTIONARY_COMPRESSION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Enable per-column codec compression (the `codec::RowCodec` framework) in row
+/// containers. Layers over raw row columns (not the dictionary codec).
+pub static COLUMN_COMPRESSION: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Spines specialized to contain `Row` types in keys and values.
@@ -150,11 +162,225 @@ mod spines {
 
 #[cfg(test)]
 mod tests {
-    use crate::DatumContainer;
+    use crate::codec::RowStats;
+    use crate::{DatumContainer, DatumSeq};
     use differential_dataflow::trace::implementations::BatchContainer;
     use mz_repr::adt::date::Date;
     use mz_repr::adt::interval::Interval;
     use mz_repr::{Datum, Row, SqlScalarType};
+    use timely::container::PushInto;
+
+    /// Push rows into a container carrying a per-column codec, then read them back
+    /// and confirm they round-trip through the encode/decode, compare, and
+    /// extend_datums paths.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts unsupported under miri
+    fn column_codec_container_round_trip() {
+        let rows: Vec<Row> = (0..300i64)
+            .map(|i| {
+                Row::pack_slice(&[
+                    Datum::Int64(i % 17),
+                    Datum::String("a repeated string value"),
+                    Datum::Int32(i32::try_from(i % 5).unwrap()),
+                ])
+            })
+            .collect();
+
+        let mut stats = RowStats::default();
+        for row in &rows {
+            stats.observe(DatumSeq::borrow_as(row).bytes_iter());
+        }
+        let codec = stats.build().expect("a codec is chosen");
+
+        let mut container = DatumContainer::with_capacity(rows.len());
+        container.install_column_codec(codec);
+        for row in &rows {
+            container.push_into(row);
+        }
+
+        assert_eq!(container.len(), rows.len());
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(&container.index(i).to_row(), row, "row {i} round-trips");
+        }
+
+        // Comparisons must match the rows' order (exercises thread-local scratch).
+        let probes = [0usize, 1, 5, 17, 100, rows.len() - 1];
+        for &i in &probes {
+            for &j in &probes {
+                let a = container.index(i);
+                let b = container.index(j);
+                assert_eq!(Ord::cmp(&a, &b), rows[i].cmp(&rows[j]), "cmp {i} vs {j}");
+                assert_eq!(a == b, rows[i] == rows[j], "eq {i} vs {j}");
+            }
+            assert!(container.index(i) == &rows[i], "eq vs literal row {i}");
+        }
+
+        // extend_datums decodes into the arena and yields the row's datums.
+        use mz_repr::fixed_length::ExtendDatums;
+        use mz_repr::{DatumVec, RowArena};
+        let arena = RowArena::new();
+        let mut datum_vec = DatumVec::new();
+        for &i in &probes {
+            let item = container.index(i);
+            let mut borrow = datum_vec.borrow();
+            item.extend_datums(&arena, &mut borrow, None);
+            let expected: Vec<Datum> = rows[i].iter().collect();
+            assert_eq!(&borrow[..], &expected[..], "extend_datums row {i}");
+        }
+    }
+
+    /// Pushing column-codec-encoded items from one container into another (as a
+    /// merge does) must route through the `item.column_codec.is_some()` branch:
+    /// decode the encoded item, then re-encode it under the target's codec.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts unsupported under miri
+    fn column_codec_merge_reencode() {
+        let rows: Vec<Row> = (0..300i64)
+            .map(|i| {
+                Row::pack_slice(&[
+                    Datum::Int64(i % 17),
+                    Datum::String("a repeated string value"),
+                    Datum::Int32(i32::try_from(i % 5).unwrap()),
+                ])
+            })
+            .collect();
+
+        let build_codec = || {
+            let mut stats = RowStats::default();
+            for row in &rows {
+                stats.observe(DatumSeq::borrow_as(row).bytes_iter());
+            }
+            stats.build().expect("a codec is chosen")
+        };
+
+        // Source container, codec-encoded.
+        let mut source = DatumContainer::with_capacity(rows.len());
+        source.install_column_codec(build_codec());
+        for row in &rows {
+            source.push_into(row);
+        }
+
+        // Merge target, also codec-encoded: pushing the source's already-encoded items
+        // must decode-then-re-encode them (the merge path), not copy raw bytes.
+        let mut merged = DatumContainer::with_capacity(rows.len());
+        merged.install_column_codec(build_codec());
+        for i in 0..source.len() {
+            merged.push_into(source.index(i));
+        }
+
+        assert_eq!(merged.len(), rows.len());
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(&merged.index(i).to_row(), row, "merged row {i} round-trips");
+        }
+    }
+
+    /// The real compaction path: `merge_capacity` must rebuild a per-column codec
+    /// from both inputs' retained stats (so compression survives the merge), and
+    /// the merged container must round-trip rows from both inputs — including
+    /// values present in only one side.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts unsupported under miri
+    fn column_codec_merge_capacity_preserves_compression() {
+        let rows1: Vec<Row> = (0..400i64)
+            .map(|i| {
+                Row::pack_slice(&[
+                    Datum::Int64(i % 7),
+                    Datum::String("a shared repeated value"),
+                ])
+            })
+            .collect();
+        let rows2: Vec<Row> = (0..400i64)
+            .map(|i| {
+                Row::pack_slice(&[
+                    Datum::Int64(i % 13),
+                    Datum::String("a shared repeated value"),
+                ])
+            })
+            .collect();
+        let build = |rows: &[Row]| {
+            let mut stats = RowStats::default();
+            for row in rows {
+                stats.observe(DatumSeq::borrow_as(row).bytes_iter());
+            }
+            stats.build().expect("a codec is chosen")
+        };
+
+        let mut c1 = DatumContainer::with_capacity(rows1.len());
+        c1.install_column_codec(build(&rows1));
+        for row in &rows1 {
+            c1.push_into(row);
+        }
+        let mut c2 = DatumContainer::with_capacity(rows2.len());
+        c2.install_column_codec(build(&rows2));
+        for row in &rows2 {
+            c2.push_into(row);
+        }
+
+        // Compact the two compressed containers via the real merge path.
+        let mut merged = DatumContainer::merge_capacity(&c1, &c2);
+        assert!(
+            merged.has_column_codec(),
+            "per-column compression must survive the merge"
+        );
+        for row in &rows1 {
+            merged.push_into(row);
+        }
+        for row in &rows2 {
+            merged.push_into(row);
+        }
+
+        let all: Vec<&Row> = rows1.iter().chain(rows2.iter()).collect();
+        assert_eq!(merged.len(), all.len());
+        for (i, row) in all.iter().enumerate() {
+            assert_eq!(
+                &merged.index(i).to_row(),
+                *row,
+                "merged row {i} round-trips"
+            );
+        }
+    }
+
+    /// Mid-formation install: a from-scratch container with column compression on
+    /// gathers rows raw until `STATS_THRESHOLD`, then installs a `build_safe` codec
+    /// and re-encodes the gathered prefix. Every row — prefix and suffix — must
+    /// round-trip, which exercises the prefix re-encode (the soundness-critical
+    /// part, since per-column codecs can't mix raw and encoded rows).
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts unsupported under miri
+    fn column_codec_mid_formation_install() {
+        use std::sync::atomic::Ordering;
+        let prev = crate::COLUMN_COMPRESSION.swap(true, Ordering::Relaxed);
+        let dict_prev = crate::DICTIONARY_COMPRESSION.swap(false, Ordering::Relaxed);
+
+        // A few thousand rows past STATS_THRESHOLD (64Ki) so install fires.
+        let n: usize = 64 * 1024 + 5000;
+        let opts = ["alpha-value", "beta-value", "gamma-value"];
+        let rows: Vec<Row> = (0..n)
+            .map(|i| {
+                Row::pack_slice(&[
+                    Datum::Int64(i64::try_from(i % 7).unwrap()),
+                    Datum::String(opts[i % opts.len()]),
+                ])
+            })
+            .collect();
+
+        let mut container = DatumContainer::with_capacity(rows.len());
+        for row in &rows {
+            container.push_into(row);
+        }
+
+        assert!(
+            container.has_column_codec(),
+            "a codec must be installed mid-formation once past STATS_THRESHOLD"
+        );
+        assert_eq!(container.len(), rows.len());
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(&container.index(i).to_row(), row, "row {i} round-trips");
+        }
+
+        crate::COLUMN_COMPRESSION.store(prev, Ordering::Relaxed);
+        crate::DICTIONARY_COMPRESSION.store(dict_prev, Ordering::Relaxed);
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
@@ -780,8 +1006,8 @@ mod dictionary {
 
         use super::super::row_codec::ColumnsCodec;
         use super::{DatumContainer, DatumSeq};
-        use crate::DICTIONARY_COMPRESSION;
         use crate::spines::{RowLayout, RowRowLayout, RowValLayout, ValRowLayout};
+        use crate::{COLUMN_COMPRESSION, DICTIONARY_COMPRESSION};
 
         /// Gather encoding statistics across `rows` and produce a codec from them.
         ///
@@ -799,6 +1025,29 @@ mod dictionary {
                 }
             }
             Some(ColumnsCodec::new_from([&stats]))
+        }
+
+        /// Gather per-column statistics over the raw row columns and select a
+        /// per-column [`RowCodec`](crate::codec::RowCodec).
+        ///
+        /// Returns `None` when column compression is disabled, a dictionary codec
+        /// is in use (the column codec layers over raw columns, not dictionary
+        /// output), or no column is worth compressing.
+        fn build_column_codec<'a>(
+            rows: impl IntoIterator<Item = &'a Row>,
+            dict: Option<&ColumnsCodec>,
+        ) -> Option<crate::codec::RowCodec> {
+            if !COLUMN_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed) || dict.is_some() {
+                return None;
+            }
+            let mut stats = crate::codec::RowStats::default();
+            for row in rows {
+                // Observe every row, including empty ones: `RowStats` uses arity (an empty
+                // row is arity 0) to decline building a codec for a mixed-arity container,
+                // which would otherwise decode short records off the end.
+                stats.observe(DatumSeq::borrow_as(row).bytes_iter());
+            }
+            stats.build()
         }
 
         pub struct RowRowBuilder<
@@ -840,6 +1089,18 @@ mod dictionary {
                         .iter()
                         .flat_map(|link| link.iter().map(|((_, v), _, _)| v)),
                 );
+                let key_column = build_column_codec(
+                    chain
+                        .iter()
+                        .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
+                    key_codec.as_ref(),
+                );
+                let val_column = build_column_codec(
+                    chain
+                        .iter()
+                        .flat_map(|link| link.iter().map(|((_, v), _, _)| v)),
+                    val_codec.as_ref(),
+                );
 
                 use differential_dataflow::trace::implementations::BuilderInput;
 
@@ -853,8 +1114,16 @@ mod dictionary {
                 // would contradict the `stats: None once codec installed` invariant.
                 builder.inner.result.keys.codec = key_codec;
                 builder.inner.result.keys.stats = None;
+                builder.inner.result.keys.column_stats = None;
                 builder.inner.result.vals.vals.codec = val_codec;
                 builder.inner.result.vals.vals.stats = None;
+                builder.inner.result.vals.vals.column_stats = None;
+                if let Some(codec) = key_column {
+                    builder.inner.result.keys.install_column_codec(codec);
+                }
+                if let Some(codec) = val_column {
+                    builder.inner.result.vals.vals.install_column_codec(codec);
+                }
 
                 for mut chunk in chain.drain(..) {
                     builder.push(&mut chunk);
@@ -902,6 +1171,12 @@ mod dictionary {
                         .iter()
                         .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
                 );
+                let key_column = build_column_codec(
+                    chain
+                        .iter()
+                        .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
+                    key_codec.as_ref(),
+                );
 
                 use differential_dataflow::trace::implementations::BuilderInput;
 
@@ -913,6 +1188,10 @@ mod dictionary {
                 // See `RowRowBuilder::seal`: drop the now-redundant stats gatherer.
                 builder.inner.result.keys.codec = key_codec;
                 builder.inner.result.keys.stats = None;
+                builder.inner.result.keys.column_stats = None;
+                if let Some(codec) = key_column {
+                    builder.inner.result.keys.install_column_codec(codec);
+                }
 
                 for mut chunk in chain.drain(..) {
                     builder.push(&mut chunk);
@@ -956,6 +1235,12 @@ mod dictionary {
                         .iter()
                         .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
                 );
+                let key_column = build_column_codec(
+                    chain
+                        .iter()
+                        .flat_map(|link| link.iter().map(|((k, _), _, _)| k)),
+                    key_codec.as_ref(),
+                );
 
                 use differential_dataflow::trace::implementations::BuilderInput;
 
@@ -967,6 +1252,10 @@ mod dictionary {
                 // See `RowRowBuilder::seal`: drop the now-redundant stats gatherer.
                 builder.inner.result.keys.codec = key_codec;
                 builder.inner.result.keys.stats = None;
+                builder.inner.result.keys.column_stats = None;
+                if let Some(codec) = key_column {
+                    builder.inner.result.keys.install_column_codec(codec);
+                }
 
                 for mut chunk in chain.drain(..) {
                     builder.push(&mut chunk);
@@ -1017,6 +1306,12 @@ mod dictionary {
                         .iter()
                         .flat_map(|link| link.iter().map(|((_, v), _, _)| v)),
                 );
+                let val_column = build_column_codec(
+                    chain
+                        .iter()
+                        .flat_map(|link| link.iter().map(|((_, v), _, _)| v)),
+                    val_codec.as_ref(),
+                );
 
                 use differential_dataflow::trace::implementations::BuilderInput;
 
@@ -1028,6 +1323,10 @@ mod dictionary {
                 // See `RowRowBuilder::seal`: drop the now-redundant stats gatherer.
                 builder.inner.result.vals.vals.codec = val_codec;
                 builder.inner.result.vals.vals.stats = None;
+                builder.inner.result.vals.vals.column_stats = None;
+                if let Some(codec) = val_column {
+                    builder.inner.result.vals.vals.install_column_codec(codec);
+                }
 
                 for mut chunk in chain.drain(..) {
                     builder.push(&mut chunk);
@@ -1042,13 +1341,27 @@ mod dictionary {
         /// Encoder/decoder used to translate between row bytes and the stored bytes.
         /// `None` until enough pushes have been observed (or if compression is disabled).
         codec: Option<ColumnsCodec>,
+        /// Per-column codec applied over the raw row columns before storing. `None`
+        /// unless installed at `seal()`. When present, the dictionary `codec` is
+        /// `None`, and each record in `inner` is `RowCodec`-encoded and must be
+        /// decoded before its bytes can be interpreted.
+        column_codec: Option<crate::codec::RowCodec>,
         /// The stored, possibly-encoded, row bytes.
         inner: super::bytes_container::BytesContainer,
         /// Staging buffer for ingested `Row` types.
         staging: Vec<u8>,
+        /// Staging buffer for `RowCodec`-encoded output, kept to avoid per-push
+        /// allocation when `column_codec` is installed.
+        column_staging: Vec<u8>,
         /// Statistics gatherer, used to build a safe codec after enough pushes.
         /// `None` once the codec has been installed or if compression is disabled.
         stats: Option<ColumnsCodec>,
+        /// Per-column stats gatherer for the mid-formation path: a from-scratch or
+        /// merged-from-uncompressed container observes rows raw until
+        /// `STATS_THRESHOLD`, then installs a `build_safe` codec (and re-encodes the
+        /// rows gathered so far). `None` once a `column_codec` is installed, when
+        /// the dictionary path is active, or when column compression is disabled.
+        column_stats: Option<crate::codec::RowStats>,
     }
 
     impl BatchContainer for DatumContainer {
@@ -1056,7 +1369,17 @@ mod dictionary {
         type ReadItem<'a> = DatumSeq<'a>;
 
         fn with_capacity(size: usize) -> Self {
-            let stats = if crate::DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed)
+            let dict_on = crate::DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed);
+            let stats = if dict_on {
+                Some(Default::default())
+            } else {
+                None
+            };
+            // Per-column gathering runs only when the dictionary path is off (the two
+            // are mutually exclusive) and column compression is on. A from-scratch
+            // container then observes rows raw until `STATS_THRESHOLD`.
+            let column_stats = if !dict_on
+                && crate::COLUMN_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed)
             {
                 Some(Default::default())
             } else {
@@ -1065,9 +1388,12 @@ mod dictionary {
 
             Self {
                 codec: None,
+                column_codec: None,
                 inner: BatchContainer::with_capacity(size),
                 staging: Vec::new(),
+                column_staging: Vec::new(),
                 stats,
+                column_stats,
             }
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
@@ -1082,25 +1408,66 @@ mod dictionary {
                 _ => None,
             };
 
+            // Per-column compression survives the merge the same way the dictionary
+            // codec does: rebuild from the union of both sides' retained stats
+            // (frequencies add, min/max widen, dictionaries union). A `RowCodec`
+            // carries its stats for exactly this. We only build one when *both*
+            // sides carry a codec — a codec must cover every merged row, and only
+            // both-sides stats describe the full union; if one side were raw, the
+            // rebuilt codec could miss its values (an out-of-range FoR residual or
+            // an absent dictionary entry). `new_from` may still return `None`
+            // (e.g. mixed arity), in which case the merged container stores raw.
+            let column_codec = match (&cont1.column_codec, &cont2.column_codec) {
+                (Some(c1), Some(c2)) => crate::codec::RowCodec::new_from([c1, c2]),
+                _ => None,
+            };
+
+            // When the merge could not rebuild a codec (the dominant case: one side
+            // was uncompressed, so it would poison the other), the merged container
+            // gathers per-column stats and installs one mid-formation once it grows
+            // past `STATS_THRESHOLD` — otherwise a large uncompressed accumulator
+            // would stay raw forever. Skip when the dictionary path is active or a
+            // codec already merged in.
+            let dict_on = crate::DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed);
+            let column_stats = if column_codec.is_none()
+                && !dict_on
+                && crate::COLUMN_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                Some(Default::default())
+            } else {
+                None
+            };
+
             Self {
                 codec,
+                column_codec,
                 inner: BatchContainer::merge_capacity(&cont1.inner, &cont2.inner),
                 staging: Vec::new(),
+                column_staging: Vec::new(),
                 stats: None,
+                column_stats,
             }
         }
         #[inline]
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
             let data = self.inner.index(index);
+            // When `column_codec` is set, `data` is `RowCodec`-encoded and `codec`
+            // is `None`; the `iter` we build is only a carrier of the bytes
+            // (lazy — nothing interprets them until a read path decodes via
+            // `column_codec`). Otherwise `data` is the decoded dictionary-or-raw
+            // bytes and `iter` is directly readable.
             let iter = if let Some(codec) = &self.codec {
                 codec.decode(data)
             } else {
                 // Safety: without a codec we only push rows or datumseqs into `self.inner`.
-                // Each retrieved byte slice should be row-encoded data, as long as we have
-                // not unset the codec in the interim.
+                // Each retrieved byte slice should be row-encoded data (or, when
+                // `column_codec` is set, RowCodec-encoded bytes decoded before use).
                 unsafe { ColumnsIter::without_codec(data) }
             };
-            DatumSeq { iter }
+            DatumSeq {
+                iter,
+                column_codec: self.column_codec.as_ref(),
+            }
         }
         #[inline(always)]
         fn len(&self) -> usize {
@@ -1114,6 +1481,10 @@ mod dictionary {
 
         #[inline(always)]
         fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned {
+            // Per-column-codec: decode through `to_row`.
+            if item.column_codec.is_some() {
+                return item.to_row();
+            }
             // Fast path: unencoded data is already row-formatted bytes.
             if item.iter.index.is_none() {
                 // SAFETY: `iter.data` is raw row-encoded bytes when there is no codec.
@@ -1124,6 +1495,11 @@ mod dictionary {
 
         #[inline(always)]
         fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
+            // Per-column-codec: decode through `to_row`.
+            if item.column_codec.is_some() {
+                *other = item.to_row();
+                return;
+            }
             // Fast path: unencoded data is already row-formatted bytes.
             if item.iter.index.is_none() {
                 let mut packer = other.packer();
@@ -1137,7 +1513,13 @@ mod dictionary {
         #[inline(always)]
         fn push_ref(&mut self, item: Self::ReadItem<'_>) {
             // Fast path: both sides unencoded — push raw bytes directly.
-            if self.codec.is_none() && self.stats.is_none() && item.iter.index.is_none() {
+            if self.codec.is_none()
+                && self.column_codec.is_none()
+                && self.stats.is_none()
+                && self.column_stats.is_none()
+                && item.iter.index.is_none()
+                && item.column_codec.is_none()
+            {
                 self.inner.push_ref(item.iter.data);
                 return;
             }
@@ -1147,7 +1529,11 @@ mod dictionary {
         #[inline(always)]
         fn push_own(&mut self, item: &Self::Owned) {
             // Fast path: container is unencoded — push raw row bytes directly.
-            if self.codec.is_none() && self.stats.is_none() {
+            if self.codec.is_none()
+                && self.column_codec.is_none()
+                && self.stats.is_none()
+                && self.column_stats.is_none()
+            {
                 self.inner.push_ref(item.data());
                 return;
             }
@@ -1158,13 +1544,22 @@ mod dictionary {
         fn clear(&mut self) {
             self.inner.clear();
             self.staging.clear();
+            self.column_staging.clear();
             // Reset to the same state as a fresh `with_capacity`: drop any installed
             // codec and restore stats gathering (if compression is enabled). Keeping a
             // now-empty codec would leave `codec.is_some()`, which permanently routes
             // pushes down the encode path with an empty dictionary and prevents the
             // `STATS_THRESHOLD` install logic from ever re-engaging compression.
             self.codec = None;
-            self.stats = if crate::DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed)
+            self.column_codec = None;
+            let dict_on = crate::DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed);
+            self.stats = if dict_on {
+                Some(Default::default())
+            } else {
+                None
+            };
+            self.column_stats = if !dict_on
+                && crate::COLUMN_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed)
             {
                 Some(Default::default())
             } else {
@@ -1181,12 +1576,68 @@ mod dictionary {
             // The staging buffer and the (possibly absent) codec and stats gatherer all
             // hold heap allocations that the bare `inner` accounting misses.
             callback(self.staging.len(), self.staging.capacity());
+            callback(self.column_staging.len(), self.column_staging.capacity());
             if let Some(codec) = &self.codec {
+                codec.heap_size(&mut callback);
+            }
+            if let Some(codec) = &self.column_codec {
                 codec.heap_size(&mut callback);
             }
             if let Some(stats) = &self.stats {
                 stats.heap_size(&mut callback);
             }
+            if let Some(stats) = &self.column_stats {
+                stats.heap_size(&mut callback);
+            }
+        }
+
+        /// Install a `build_safe` codec mid-formation and re-encode the rows already
+        /// stored raw, so the whole container is uniformly column-encoded.
+        ///
+        /// Per-column codecs are *positional* (decode walks the columns in order),
+        /// so unlike the tag-based dictionary they cannot have raw and encoded rows
+        /// coexist in one container. We therefore rewrite `inner`: decode each
+        /// already-stored raw row and re-encode it under `codec`. The re-encode also
+        /// repopulates the codec's retained stats (via `observe`), seeding the
+        /// re-harvest with the rows gathered before install.
+        fn install_column_codec_reencoding(&mut self, mut codec: crate::codec::RowCodec) {
+            let mut new_inner =
+                <super::bytes_container::BytesContainer as BatchContainer>::with_capacity(
+                    self.inner.len(),
+                );
+            for i in 0..self.inner.len() {
+                let raw = self.inner.index(i);
+                // `raw` is row-encoded bytes (gathered raw, no codec); split into
+                // columns the same way an uncoded read would.
+                let cols = unsafe { ColumnsIter::without_codec(raw) };
+                codec.observe(cols);
+                self.column_staging.clear();
+                codec.encode(cols, &mut self.column_staging);
+                new_inner.push_ref(&self.column_staging[..]);
+            }
+            self.inner = new_inner;
+            self.column_codec = Some(codec);
+            self.column_stats = None;
+        }
+
+        /// Install a per-column codec, applied over stored bytes. Used by the
+        /// builder `seal()` path. The container must be empty.
+        pub(crate) fn install_column_codec(&mut self, codec: crate::codec::RowCodec) {
+            debug_assert_eq!(
+                self.inner.len(),
+                0,
+                "codec installed on non-empty container"
+            );
+            self.column_codec = Some(codec);
+            // A pre-built codec (seal sees the whole chain) supersedes mid-formation
+            // gathering; drop the gatherer so we don't also accumulate stats.
+            self.column_stats = None;
+        }
+
+        /// Whether a per-column codec is installed (the data is column-compressed).
+        #[cfg(test)]
+        pub(crate) fn has_column_codec(&self) -> bool {
+            self.column_codec.is_some()
         }
     }
 
@@ -1227,6 +1678,59 @@ mod dictionary {
     impl PushInto<DatumSeq<'_>> for DatumContainer {
         #[inline]
         fn push_into(&mut self, item: DatumSeq<'_>) {
+            // A column-codec-encoded item (e.g. read from another container during
+            // a merge) must be decoded before it can be re-encoded into `self`.
+            if item.column_codec.is_some() {
+                let row = item.to_row();
+                self.push_into(DatumSeq::borrow_as(&row));
+                return;
+            }
+            // Per-column-codec store: encode the raw row columns (which implies no
+            // dictionary codec is installed). We also `observe` the row into the
+            // codec's retained stats, so a later merge can rebuild from the rows
+            // actually held here (re-harvest), not the union of everything merged.
+            if let Some(codec) = &mut self.column_codec {
+                debug_assert!(self.codec.is_none());
+                self.column_staging.clear();
+                codec.observe(item.bytes_iter());
+                codec.encode(item.bytes_iter(), &mut self.column_staging);
+                self.inner.push_ref(&self.column_staging[..]);
+                return;
+            }
+            // Per-column mid-formation: a from-scratch or merged-from-uncompressed
+            // container gathers stats raw until `STATS_THRESHOLD`, then installs a
+            // `build_safe` codec (re-encoding the rows gathered so far). Mutually
+            // exclusive with the dictionary path (`column_stats` is only set when the
+            // dictionary is off, so `codec`/`stats` are `None` here).
+            if self.column_stats.is_some() {
+                debug_assert!(self.codec.is_none() && self.stats.is_none());
+                if self.inner.len() >= STATS_THRESHOLD {
+                    // `build_safe` returns `None` if nothing is worth compressing;
+                    // then `column_stats` stays `None` (taken) and we store raw from
+                    // here on. Otherwise install + re-encode the gathered prefix.
+                    if let Some(codec) = self.column_stats.take().unwrap().build_safe() {
+                        self.install_column_codec_reencoding(codec);
+                    }
+                }
+                if let Some(codec) = &mut self.column_codec {
+                    self.column_staging.clear();
+                    codec.observe(item.bytes_iter());
+                    codec.encode(item.bytes_iter(), &mut self.column_staging);
+                    self.inner.push_ref(&self.column_staging[..]);
+                    return;
+                }
+                // Still gathering (threshold not reached): observe + store raw.
+                if let Some(stats) = &mut self.column_stats {
+                    stats.observe(item.bytes_iter());
+                }
+                self.staging.clear();
+                for slice in item.bytes_iter() {
+                    self.staging.extend_from_slice(slice);
+                }
+                self.inner.push_ref(&self.staging[..]);
+                self.staging.clear();
+                return;
+            }
             // Fast path: container and item are both unencoded.
             // This is the hot path when dictionary compression is disabled.
             if self.codec.is_none() && self.stats.is_none() && item.iter.index.is_none() {
@@ -1263,6 +1767,8 @@ mod dictionary {
         }
     }
 
+    use std::cell::RefCell;
+
     use mz_repr::{Datum, read_datum};
 
     /// A reference that can be resolved to a sequence of `Datum`s.
@@ -1274,13 +1780,18 @@ mod dictionary {
     #[derive(Debug)]
     pub struct DatumSeq<'a> {
         pub iter: ColumnsIter<'a>,
+        /// When `Some`, `iter.data` holds `RowCodec`-encoded bytes that must be
+        /// decoded (yielding raw row bytes) before `iter` can be interpreted; the
+        /// read paths below do so. `None` for the common directly-readable case.
+        pub column_codec: Option<&'a crate::codec::RowCodec>,
     }
 
     impl<'a> DatumSeq<'a> {
         #[inline(always)]
-        fn borrow_as(other: &'a RowRef) -> Self {
+        pub(crate) fn borrow_as(other: &'a RowRef) -> Self {
             Self {
                 iter: ColumnsCodec::borrow_row(other),
+                column_codec: None,
             }
         }
 
@@ -1293,12 +1804,63 @@ mod dictionary {
 
         #[inline]
         pub fn to_row(&self) -> Row {
+            if let Some(codec) = self.column_codec {
+                // `iter.data` is RowCodec-encoded; decode to raw row bytes in a reused
+                // per-thread scratch (the owned `Row` copies out of it), so the scan path
+                // doesn't allocate a throwaway decode buffer per row.
+                return DECODE_SCRATCH.with_borrow_mut(|buf| {
+                    buf.clear();
+                    codec.decode_into(self.iter.data, buf);
+                    unsafe { Row::from_bytes_unchecked(buf) }
+                });
+            }
             // Fast path: unencoded data is already row-formatted bytes.
             if self.iter.index.is_none() {
                 return unsafe { Row::from_bytes_unchecked(self.iter.data) };
             }
             Row::pack(*self)
         }
+
+        /// Return a directly-readable `DatumSeq`. When column-codec-encoded, decode
+        /// the record into `scratch` (raw row bytes) and view it; otherwise reborrow
+        /// `self`. Used by the comparison paths, which have no destination buffer of
+        /// their own; callers pass reusable thread-local scratch.
+        #[inline]
+        fn materialized<'s>(&self, scratch: &'s mut Vec<u8>) -> DatumSeq<'s>
+        where
+            'a: 's,
+        {
+            match self.column_codec {
+                None => DatumSeq {
+                    iter: self.iter,
+                    column_codec: None,
+                },
+                Some(codec) => {
+                    scratch.clear();
+                    codec.decode_into(self.iter.data, scratch);
+                    // SAFETY: decoded bytes are raw row-encoded data.
+                    let iter = unsafe { ColumnsIter::without_codec(scratch) };
+                    DatumSeq {
+                        iter,
+                        column_codec: None,
+                    }
+                }
+            }
+        }
+    }
+
+    thread_local! {
+        // Reusable per-thread decode buffers for comparing column-codec-encoded
+        // items. Two, so a comparison can hold both operands decoded at once.
+        // These retain the capacity of the largest row the thread has compared and
+        // never shrink; the high-water mark is one row's decoded bytes, so this is
+        // negligible and not worth a shrink policy.
+        static CMP_SCRATCH_A: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        static CMP_SCRATCH_B: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        // Reused decode buffer for the read paths (`to_row` / `extend_datums`), so a
+        // column-codec scan doesn't allocate a fresh buffer per row. Distinct from the
+        // compare scratches above; decode and compare never hold it at the same time.
+        static DECODE_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     }
 
     impl<'a> Copy for DatumSeq<'a> {}
@@ -1313,6 +1875,12 @@ mod dictionary {
     impl<'a, 'b> PartialEq<DatumSeq<'a>> for DatumSeq<'b> {
         #[inline(always)]
         fn eq(&self, other: &DatumSeq<'a>) -> bool {
+            // Column-codec-encoded: decode each operand into its own reusable scratch.
+            if self.column_codec.is_some() || other.column_codec.is_some() {
+                return CMP_SCRATCH_A.with_borrow_mut(|a| {
+                    CMP_SCRATCH_B.with_borrow_mut(|b| self.materialized(a) == other.materialized(b))
+                });
+            }
             // Fast path: both sides are unencoded raw row bytes.
             if self.iter.index.is_none() && other.iter.index.is_none() {
                 return self.iter.data == other.iter.data;
@@ -1324,6 +1892,16 @@ mod dictionary {
     impl<'a, 'b> PartialOrd<DatumSeq<'a>> for DatumSeq<'b> {
         #[inline(always)]
         fn partial_cmp(&self, other: &DatumSeq<'a>) -> Option<Ordering> {
+            // Column-codec-encoded: decode each operand into its own reusable scratch.
+            if self.column_codec.is_some() || other.column_codec.is_some() {
+                return CMP_SCRATCH_A.with_borrow_mut(|a| {
+                    CMP_SCRATCH_B.with_borrow_mut(|b| {
+                        // Disambiguate from `Iterator::partial_cmp` (DatumSeq is also
+                        // an iterator); we want the structural `PartialOrd`.
+                        PartialOrd::partial_cmp(&self.materialized(a), &other.materialized(b))
+                    })
+                });
+            }
             // Fast path: both sides are unencoded raw row bytes.
             if self.iter.index.is_none() && other.iter.index.is_none() {
                 let left = self.iter.data;
@@ -1392,6 +1970,9 @@ mod dictionary {
     impl<'a> DatumSeq<'a> {
         #[inline(always)]
         pub fn bytes_iter(self) -> ColumnsIter<'a> {
+            // Yields the stored bytes directly; column-codec-encoded items must be
+            // decoded before their bytes are interpreted (handled by callers).
+            debug_assert!(self.column_codec.is_none());
             self.iter
         }
     }
@@ -1400,6 +1981,10 @@ mod dictionary {
         type Item = Datum<'a>;
         #[inline(always)]
         fn next(&mut self) -> Option<Self::Item> {
+            debug_assert!(
+                self.column_codec.is_none(),
+                "decode is not via this iterator"
+            );
             // Delegate to `ColumnsIter`, which handles both the codec and no-codec
             // cases. The no-codec scan hot path is served directly by `extend_datums`
             // (which decodes without going through this iterator), so the only callers
@@ -1417,10 +2002,37 @@ mod dictionary {
         #[inline]
         fn extend_datums<'a>(
             &'a self,
-            _arena: &'a RowArena,
+            arena: &'a RowArena,
             target: &mut Vec<Datum<'a>>,
             max: Option<usize>,
         ) {
+            // Column-codec-encoded: decode the record into the arena (as raw row
+            // bytes), then read datums from there so they borrow the arena.
+            if let Some(codec) = self.column_codec {
+                // Decode into a reused per-thread scratch, then copy once into the arena (the
+                // datums must borrow stable arena storage). Avoids the per-row decode-buffer
+                // allocation the scan path previously paid.
+                let mut data: &'a [u8] = DECODE_SCRATCH.with_borrow_mut(|buf| {
+                    buf.clear();
+                    codec.decode_into(self.iter.data, buf);
+                    arena.push_bytes(buf.as_slice())
+                });
+                match max {
+                    Some(max) => {
+                        let mut n = 0;
+                        while n < max && !data.is_empty() {
+                            target.push(unsafe { read_datum(&mut data) });
+                            n += 1;
+                        }
+                    }
+                    None => {
+                        while !data.is_empty() {
+                            target.push(unsafe { read_datum(&mut data) });
+                        }
+                    }
+                }
+                return;
+            }
             // Branch on codec presence ONCE per row rather than once per datum.
             // With no codec (the common, feature-off case) push raw datums in a
             // tight loop, matching the pre-dictionary path; with a codec, fall
@@ -1461,8 +2073,9 @@ mod row_codec {
     pub use self::misra_gries::MisraGries;
     pub use columns::{ColumnsCodec, ColumnsIter};
     pub use dictionary::DictionaryCodec;
-    #[cfg(test)]
-    pub use dictionary::SAFE_TAG_BASE;
+    // Also consumed by `crate::codec`'s per-column dictionary, whose raw fall-through
+    // relies on the same "no datum first-byte reaches this value" invariant.
+    pub(crate) use dictionary::SAFE_TAG_BASE;
 
     // The codecs encode and decode `[u8]` data specific to the `[Row]` encoding. They
     // soundly decode data they themselves encoded from valid `[Row]` data, but may be

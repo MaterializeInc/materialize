@@ -1614,6 +1614,9 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_arrangement_column_compression_alpha"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_compute_peek_response_stash"] = (
             BOOLEAN_FLAG_VALUES
         )
