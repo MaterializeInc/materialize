@@ -105,3 +105,22 @@ steps:
           limit: 2
     concurrency: 1
     concurrency_group: deploy/console-impersonation
+
+  - id: deploy-helm-charts-rc
+    label: ":rocket: Helm Charts (release candidate)"
+    command: bin/ci-builder run stable misc/helm-charts/publish.sh
+    # Stable releases are weekly via publish-helm-charts pipeline
+    if: build.tag =~ /-rc\./
+    # Wait for RCs to be out
+    depends_on: deploy-docker
+    env:
+      CI_NO_TERRAFORM_BUMP: "1"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-aarch64-small
+    retry:
+      automatic:
+        - exit_status: "*"
+          limit: 2
+    concurrency: 1
+    concurrency_group: deploy/helm-charts
