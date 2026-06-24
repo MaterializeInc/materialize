@@ -8759,6 +8759,7 @@ dependencies = [
  "async-compression",
  "async-trait",
  "aws-credential-types",
+ "aws-sdk-glue",
  "aws-sdk-sts",
  "aws-types",
  "byteorder",
