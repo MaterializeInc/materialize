@@ -1662,6 +1662,69 @@ def workflow_redeploy_flags(c: Composition, parser: WorkflowArgumentParser) -> N
         )
         assert r.returncode != 0, "unknown schema should fail"
 
+    def schema_exists(name: str) -> bool:
+        return bool(
+            c.sql_query(
+                "SELECT 1 FROM mz_schemas s JOIN mz_databases d ON s.database_id = d.id "
+                f"WHERE s.name = '{name}' AND d.name = 'app'",
+                database="app",
+            )
+        )
+
+    def core_mv_count() -> int:
+        return len(
+            c.sql_query(
+                "SELECT 1 FROM mz_materialized_views mv "
+                "JOIN mz_schemas s ON mv.schema_id = s.id "
+                "JOIN mz_databases d ON s.database_id = d.id "
+                "WHERE d.name = 'app' AND s.name = 'core' "
+                "AND mv.name IN ('order_summary', 'user_activity')",
+                database="app",
+            )
+        )
+
+    with c.test_case("redeploy-all-promotes-stable-schema"):
+        assert core_mv_count() == 2, "precondition: production core MVs exist"
+        assert (
+            run_mz_deploy(
+                c,
+                "basic/v1",
+                "stage",
+                "--deploy-id",
+                "rfa",
+                "--allow-dirty",
+                "--redeploy-all",
+            ).returncode
+            == 0
+        )
+        assert schema_exists("core_rfa"), "stage should create staging schema core_rfa"
+        assert (
+            run_mz_deploy(
+                c,
+                "basic/v1",
+                "wait",
+                "rfa",
+                "--timeout",
+                "300",
+                "--allowed-lag",
+                "86400",
+            ).returncode
+            == 0
+        )
+        assert (
+            run_mz_deploy(
+                c, "basic/v1", "promote", "rfa", "--no-ready-check"
+            ).returncode
+            == 0
+        )
+
+        assert (
+            core_mv_count() == 2
+        ), "DATA LOSS: --redeploy-all promote dropped production core MVs"
+        assert not schema_exists(
+            "core_rfa"
+        ), "leaked orphan staging schema app.core_rfa; core not redeployed"
+
 
 def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Exercise `apply` re-runs for CONNECTION objects.

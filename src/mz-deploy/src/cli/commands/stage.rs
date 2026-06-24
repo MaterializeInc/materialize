@@ -223,7 +223,7 @@ pub async fn run(
         &client,
         &planned_project,
         &stage_name,
-        &forced_dirty_schemas,
+        forced_dirty_schemas,
         redeploy_all,
     )
     .await?
@@ -390,7 +390,7 @@ async fn analyze_project_changes<'a>(
     client: &Client,
     planned_project: &'a Project,
     stage_name: &str,
-    forced_dirty_schemas: &BTreeSet<SchemaQualifier>,
+    forced_dirty_schemas: BTreeSet<SchemaQualifier>,
     redeploy_all: bool,
 ) -> Result<Option<StageAnalysis<'a>>, CliError> {
     progress::stage_start("Analyzing project changes");
@@ -410,17 +410,20 @@ async fn analyze_project_changes<'a>(
     let new_snapshot = deployment_snapshot::build_snapshot_from_planned(planned_project)?;
     let production_snapshot = deployment_snapshot::load_from_database(client, None).await?;
 
-    // `--redeploy-all` forces the full-deployment path (every schema), which is
-    // the same path used on a first deploy. Otherwise diff against production,
-    // seeding any `--redeploy-schema` schemas as dirty.
-    let change_set = if redeploy_all || production_snapshot.objects.is_empty() {
+    let dirty_schemas = if redeploy_all {
+        new_snapshot.schemas.keys().cloned().collect()
+    } else {
+        forced_dirty_schemas
+    };
+
+    let change_set = if production_snapshot.objects.is_empty() {
         None
     } else {
         Some(ChangeSet::from_deployment_snapshot_comparison(
             &production_snapshot,
             &new_snapshot,
             planned_project,
-            forced_dirty_schemas,
+            &dirty_schemas,
         ))
     };
 
