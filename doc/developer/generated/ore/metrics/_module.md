@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/metrics.rs
-revision: 83e4f88e27
+revision: 03de4421ba
 ---
 
 # mz-ore::metrics
@@ -10,8 +10,9 @@ Provides the Materialize-wide Prometheus metrics infrastructure: a registry, met
 Key types and traits:
 
 * `MetricsRegistry` — wraps `prometheus::Registry` and adds support for postprocessors (called on every `gather()`), computed gauges, and a typed `register` method driven by the `MakeCollector` trait.
-* `metric!` macro / `MakeCollectorOpts` — ergonomic DSL for declaring metric options (name, help, labels, buckets, and an optional `visibility:` field) that feed into `MetricsRegistry::register`.
+* `metric!` macro / `MakeCollectorOpts` — ergonomic DSL for declaring metric options (name, help, labels, buckets, an optional `visibility:` field, and an optional `tags:` field) that feed into `MetricsRegistry::register`.
 * `MetricVisibility` — documentation-metadata enum with variants `Internal` (the default) and `Public`. Set via the `visibility:` field of the `metric!` macro and consumed by `bin/gen-metrics-catalog` to produce the user-facing metrics reference. It has no effect on metric behavior at runtime; the macro only type-checks the value at compile time.
+* `MetricTag` — documentation-metadata enum categorizing a metric in the user-facing metrics catalog. Variants include `Environment`, `Compute`, `Source`, and `Sink`. Set via the `tags:` field of the `metric!` macro and consumed by `bin/gen-metrics-catalog`. It has no effect at runtime.
 * `MakeCollector` — trait implemented for all standard Prometheus metric types; enables generic registration.
 * `DeleteOnDropWrapper<M>` — wraps a `MetricVec` so that only delete-on-drop child metrics can be created from it, preventing label leaks; re-exported type aliases (`CounterVec`, `GaugeVec`, `IntCounterVec`, etc.) shadow the raw Prometheus types.
 * `ComputedGenericGauge` / `ComputedGauge` / `ComputedIntGauge` / `ComputedUIntGauge` — gauges whose value is recomputed from a closure on every scrape.

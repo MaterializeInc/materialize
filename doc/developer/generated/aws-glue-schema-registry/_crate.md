@@ -1,6 +1,6 @@
 ---
 source: src/aws-glue-schema-registry/src/lib.rs
-revision: a8a4d88813
+revision: 460108c80d
 ---
 
 # mz-aws-glue-schema-registry
@@ -16,7 +16,7 @@ API client for the [AWS Glue Schema Registry](https://docs.aws.amazon.com/glue/l
 
 * `Client` — clone-friendly handle; `get_registry(name)` checks that a named registry exists (used by `GlueSchemaRegistryConnection::validate`); `get_schema_version_by_id(uuid)` fetches a writer schema by the UUID embedded in a Glue wire-format header (source decode); `get_schema_version_latest_by_name(registry, schema)` pins a reader schema at DDL time.
 * `Registry` — `name`, `arn`, `description`, `lifecycle_status` fields; `RegistryLifecycleStatus` mirrors the SDK enum with an `Unknown(String)` forward-compat escape hatch.
-* `SchemaVersion` — `schema_version_id`, `schema_arn`, `definition` (the format-specific schema text), `data_format` (`DataFormat` enum: `Avro`, `Json`, `Protobuf`, `Unknown`), `version_number`, `lifecycle_status`.
+* `SchemaVersion` — `schema_version_id`, `schema_arn`, `definition` (the format-specific schema text), `data_format` (`DataFormat` enum: `Avro`, `Json`, `Protobuf`, `Unknown`), `version_number`, `lifecycle_status` (`SchemaVersionLifecycleStatus`: `Available`, `Pending`, `Failure`, `Deleting`, `Unknown(String)`).
 * `GetRegistryError` / `GetSchemaVersionError` — `NotFound` (maps `EntityNotFoundException`) and `Other(String)` for everything else.
 * `ClientConfig` — takes an `SdkConfig`; `build()` constructs a `Client` infallibly.
 

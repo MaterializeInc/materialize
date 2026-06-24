@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: a8f4526d28
+revision: 6c2b81feaf
 ---
 
 # mz-sql::session::vars
@@ -14,3 +14,4 @@ Delegates to `definitions` for all variable declarations, `value` for parsing/fo
 All dyncfg-backed system variables are internal-only and not reachable via `ALTER SYSTEM SET` by environment superusers.
 The public `check_transaction_isolation_feature_flag(name, input, system_vars)` function enforces feature-flag gating for `transaction_isolation` levels that require a flag (`bounded staleness <duration>` requires `ENABLE_BOUNDED_STALENESS_ISOLATION`; `strong session serializable` requires `ENABLE_SESSION_TIMELINES`); it returns `Ok(())` for all other variables and for unparseable values. This function is shared across all assignment paths (`SET`, `SET TRANSACTION`, `ALTER ROLE ... SET`, connection options) so the gate cannot be bypassed by choosing a different syntax or letter case.
 Adding a new variant to `VarInput` or `OwnedVarInput` requires extending the `mz_catalog.mz_role_parameters` materialized view in `src/catalog/src/builtin/mz_catalog.rs`, which discriminates on the externally-tagged JSON shape of `OwnedVarInput` to format `parameter_value`.
+`is_timestamp_oracle_config_var` recognizes `mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT` in addition to the CRDB keepalive variables.

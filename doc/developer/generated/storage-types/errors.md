@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/errors.rs
-revision: eb1148a599
+revision: 2bd0f58824
 ---
 
 # storage-types::errors
@@ -8,3 +8,4 @@ revision: eb1148a599
 Defines the error taxonomy for storage dataflows, including `DecodeError` (malformed data) and `DecodeErrorKind`, envelope errors (`EnvelopeError`, `UpsertError`, `UpsertValueError`, `UpsertNullKeyError`), source-wide durable errors (`SourceError`, `SourceErrorDetails`), and `DataflowError` which unifies all of these alongside `EvalError`.
 Also defines connection-establishment errors `ContextCreationError` and `CsrConnectError`, and a `ContextCreationErrorExt` trait for ergonomic error mapping.
 All types implement protobuf serialization via `mz_proto::RustType` and can be persisted as part of the error stream alongside source data.
+The columnation impl for `EvalError` handles `InvalidRangeError::InvalidRangeData` alongside the other cloneable range error variants.

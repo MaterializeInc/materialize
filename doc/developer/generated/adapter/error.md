@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/error.rs
-revision: 208bf3b953
+revision: 2bd0f58824
 ---
 
 # adapter::error
@@ -12,3 +12,4 @@ The `From<OptimizerError>` conversion maps `OptimizerError::RestrictedFunction` 
 Several constructor helpers on `AdapterError` (e.g. `concurrent_dependency_drop_from_instance_missing`, `concurrent_dependency_drop_from_peek_error`) perform explicit error-kind conversions that are intentionally not automatic `From` impls.
 The `ShouldTerminateGracefully` trait (private) identifies errors — such as `FenceError::DeployGeneration` — that should cause a clean process exit rather than a panic.
 `RecursionLimitError` (from `mz_ore::stack`) carries a `std::backtrace::Backtrace` field and does not implement `Clone`; as a result, `AdapterError` is also not `Clone`.
+The `eval_error_code` helper maps `EvalError` variants to SQLSTATE codes exhaustively (no wildcard fallthrough to `XX000`). `InvalidRangeError::InvalidRangeData` maps to `SqlState::DATA_EXCEPTION`.
