@@ -591,6 +591,14 @@ pub async fn ensure_database_cdc_enabled(client: &mut Client) -> Result<(), SqlS
 pub async fn get_latest_restore_history_id(
     client: &mut Client,
 ) -> Result<Option<i32>, SqlServerError> {
+    // Azure SQL Database (the single-database PaaS) does not expose `msdb`, and has no
+    // SQL-Server-style restore history, so the query below is invalid there. Report "no
+    // restore history" for that edition; on every other edition run the query normally so
+    // real errors still surface. (See also the `sql_server_source_validate_restore_history`
+    // dyncfg, which governs how a *detected* restore-history change is treated.)
+    if is_azure_sql_database(client).await? {
+        return Ok(None);
+    }
     static LATEST_RESTORE_ID_QUERY: &str = "SELECT TOP 1 restore_history_id \
         FROM msdb.dbo.restorehistory \
         WHERE destination_database_name = DB_NAME() \
@@ -771,10 +779,40 @@ pub async fn ensure_snapshot_isolation_enabled(client: &mut Client) -> Result<()
     Ok(())
 }
 
+/// `SERVERPROPERTY('EngineEdition')` value for Azure SQL Database (the single-database
+/// PaaS). For reference, 3 = Enterprise/self-hosted and 8 = Azure SQL Managed Instance.
+/// See <https://learn.microsoft.com/en-us/sql/t-sql/functions/serverproperty-transact-sql>.
+const AZURE_SQL_DATABASE_ENGINE_EDITION: i32 = 5;
+
+/// Returns whether the connected server is Azure SQL Database (the single-database PaaS).
+///
+/// Azure SQL Database supports CDC (capture is driven by an internal scheduler), but
+/// unlike self-hosted SQL Server and Azure SQL Managed Instance it exposes no
+/// instance-level features — no SQL Server Agent, no `msdb`, no `sys.dm_server_services`.
+/// We detect it explicitly via `SERVERPROPERTY('EngineEdition')` rather than inferring it
+/// from query failures, so that genuine errors on other editions still surface.
+pub async fn is_azure_sql_database(client: &mut Client) -> Result<bool, SqlServerError> {
+    static ENGINE_EDITION_QUERY: &str = "SELECT CAST(SERVERPROPERTY('EngineEdition') AS int);";
+    let result = client.simple_query(ENGINE_EDITION_QUERY).await?;
+    match &result[..] {
+        [row] => Ok(row.try_get::<i32, _>(0)? == Some(AZURE_SQL_DATABASE_ENGINE_EDITION)),
+        other => Err(SqlServerError::InvariantViolated(format!(
+            "expected one row from SERVERPROPERTY('EngineEdition'), got {other:?}"
+        ))),
+    }
+}
+
 /// Ensure the SQL Server Agent is running.
 ///
-/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-server-services-transact-sql?view=azuresqldb-current&viewFallbackFrom=sql-server-ver17>
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-server-services-transact-sql>
 pub async fn ensure_sql_server_agent_running(client: &mut Client) -> Result<(), SqlServerError> {
+    // Azure SQL Database (the single-database PaaS) has no instance-level services, so
+    // `sys.dm_server_services` does not exist there and CDC capture is driven by an
+    // internal scheduler rather than the SQL Server Agent. Skip the Agent check for that
+    // edition; on every other edition require the Agent to be running, as before.
+    if is_azure_sql_database(client).await? {
+        return Ok(());
+    }
     static AGENT_STATUS_QUERY: &str = "SELECT status_desc FROM sys.dm_server_services WHERE servicename LIKE 'SQL Server Agent%';";
     let result = client.simple_query(AGENT_STATUS_QUERY).await?;
 
