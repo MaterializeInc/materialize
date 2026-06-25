@@ -3,27 +3,14 @@
 1. Install the Materialize Operator. The operator will be installed in the
    `materialize` namespace.
 
-   <div class="code-tabs">
-   <ul class="nav-tabs"></ul>
-   <div class="tab-content">
-   <div class="tab-pane" title="v1alpha1" id="install-operator-kind-v1alpha1">
-
-   {{ partial "self-managed/crd-version-note.html" "v1alpha1" }}
-
-   ```shell
-   helm install my-materialize-operator materialize/materialize-operator \
-       --namespace=materialize --create-namespace \
-       --version {{ $operator_version }} \
-       --set observability.podMetrics.enabled=true \
-       -f sample-values.yaml
-   ```
-
-   </div>
-   <div class="tab-pane" title="v1" id="install-operator-kind-v1">
-
-   {{ partial "self-managed/crd-version-note.html" "v1" }}
-
-   Enabling the `v1` CRD requires cert-manager, installed in an earlier step.
+   Starting in v26.30, you can choose between CRD versions
+   [`v1`](/self-managed-deployments/upgrading/#upgrading-to-v2630-and-later-versions)
+   and `v1alpha1`. The following enables the `v1` CRD version by setting
+   `operator.args.installV1CRD=true`. The `v1` CRD provides a [simplified
+   rollout
+   behavior](/self-managed-deployments/upgrading/#upgrading-to-v2630-and-later-versions),
+   but requires `cert-manager`, installed in an [earlier
+   step](#install-cert-manager) in this guide.
 
    ```shell
    helm install my-materialize-operator materialize/materialize-operator \
@@ -34,6 +21,6 @@
        -f sample-values.yaml
    ```
 
-   </div>
-   </div>
-   </div>
+   To remain on the default `v1alpha1` CRD version, omit `--set
+   operator.args.installV1CRD=true`. With `v1alpha1`, rollouts require manually
+   rotating a UUID.

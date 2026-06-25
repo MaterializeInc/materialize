@@ -187,13 +187,18 @@ authentication mechanisms.
    | `name_prefix` | Set a prefix for all resource names (e.g., `simple-demo`) as well as your release name for the Operator |
    | `region`      | Set the GCP region for the deployment (e.g., `us-central1`).  |
    | `license_key` | Set to your Materialize license key.     |
+   | `crd_version` | Set the CRD API version to use for the Materialize instance: `v1` (recommended) or `v1alpha1`. |
    | `labels`      | Set to the labels to apply to resources. |
 
-   ```bash
+   {{% include-from-yaml data="self_managed/installation"
+   name="installation-tfvars-crd-version-tip" %}}
+
+   ```hcl
    project_id  = "my-gcp-project"
    name_prefix = "simple-demo"
    region      = "us-central1"
    license_key = "your-materialize-license-key"
+   crd_version = "v1"   # Recommended. Default is v1alpha1; v1 is available starting in Materialize v26.30.
    labels = {
      environment = "demo"
      created_by  = "terraform"

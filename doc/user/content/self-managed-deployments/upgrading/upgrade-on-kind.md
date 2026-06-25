@@ -29,7 +29,7 @@ If you don't have Helm version 3.2.0+ installed, install. For details, see the
 ### `kubectl`
 
 This tutorial uses `kubectl`. To install, refer to the [`kubectl`
-documentationq](https://kubernetes.io/docs/tasks/tools/).
+documentation](https://kubernetes.io/docs/tasks/tools/).
 
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
@@ -43,7 +43,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 {{< important >}}
 
 The following procedure performs a rolling upgrade, where both the old and new
-Materialize instances are running before the the old instance are removed.
+Materialize instances are running before the old instance are removed.
 When performing a rolling upgrade, ensure you have enough resources to support
 having both the old and new Materialize instances running.
 

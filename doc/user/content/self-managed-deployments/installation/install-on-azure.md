@@ -173,13 +173,18 @@ authentication mechanisms.
 
 1. Create a `terraform.tfvars` file with the following variables:
 
-   - `subscription_id`: Azure subscription ID
-   - `resource_group_name`: Name for the resource group to create (e.g.
-     `mz-demo-rg`)
-   - `name_prefix`: Prefix for all resource names (e.g., `simple-demo`)
-   - `location`: Azure region for deployment (e.g., `westus2`)
-   - `license_key`: Materialize license key
-   - `tags`: Map of tags to apply to resources
+   | Variable      | Description                 |
+   | -----------   | ----------------------------|
+   | `subscription_id`     | Azure subscription ID. |
+   | `resource_group_name` | Name for the resource group to create (e.g., `mz-demo-rg`). |
+   | `name_prefix`         | Prefix for all resource names (e.g., `simple-demo`). |
+   | `location`            | Azure region for deployment (e.g., `westus2`). |
+   | `license_key`         | Materialize license key. |
+   | `crd_version`         | CRD API version to use for the Materialize instance: `v1` (recommended) or `v1alpha1`. |
+   | `tags`                | Map of tags to apply to resources. |
+
+   {{% include-from-yaml data="self_managed/installation"
+   name="installation-tfvars-crd-version-tip" %}}
 
    ```hcl
    subscription_id     = "your-subscription-id"
@@ -187,6 +192,7 @@ authentication mechanisms.
    name_prefix         = "simple-demo"
    location            = "westus2"
    license_key         = "your-materialize-license-key"
+   crd_version = "v1"   # Recommended. Default is v1alpha1; v1 is available starting in Materialize v26.30.
    tags = {
      environment = "demo"
    }

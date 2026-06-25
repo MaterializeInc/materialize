@@ -131,10 +131,17 @@
        name="upgrade-major-version-restriction" %}}
        {{< /note >}}
 
+       Select the tab for the CRD API version your deployment currently uses.
+       This step does not cover migrating from `v1alpha1` to `v1`; to migrate,
+       see [Adopting the v1
+       CRD](/self-managed-deployments/upgrading/#adopting-the-v1-crd). (The `v1`
+       CRD API version is available starting in Materialize v26.30 / Terraform
+       module v3.0.15.)
+
        <div class="code-tabs">
        <ul class="nav-tabs"></ul>
        <div class="tab-content">
-       <div class="tab-pane" title="v1alpha1" id="upgrade-operator-v1alpha1">
+       <div class="tab-pane" title="CRD v1alpha1" id="upgrade-operator-v1alpha1">
 
        {{< self-managed/crd-version-note "v1alpha1" >}}
 
@@ -145,14 +152,7 @@
        ```
 
        </div>
-       <div class="tab-pane" title="v1" id="upgrade-operator-v1">
-
-       {{< self-managed/crd-version-note "v1" >}}
-
-       Enabling the `v1` CRD requires cert-manager (or your own certificate) and
-       API-server ingress to the operator on port `8001`; see the [v26.30 upgrade
-       notes](/self-managed-deployments/upgrading/#upgrading-to-v2630-and-later-versions)
-       for prerequisites.
+       <div class="tab-pane" title="CRD v1" id="upgrade-operator-v1">
 
        ```shell
        helm upgrade -n materialize simple-demo materialize/materialize-operator  \
@@ -217,10 +217,17 @@
     **After** you have upgraded your Materialize Operator, upgrade your
     Materialize instance(s) to the **APP Version** of the Operator.
 
+    Select the tab for the CRD API version your deployment currently uses. This
+    step does not cover migrating from `v1alpha1` to `v1`; to migrate, see
+    [Adopting the v1
+    CRD](/self-managed-deployments/upgrading/#adopting-the-v1-crd). (The `v1`
+    CRD API version is available starting in Materialize v26.30 / Terraform
+    module v3.0.15.)
+
     <div class="code-tabs">
     <ul class="nav-tabs"></ul>
     <div class="tab-content">
-    <div class="tab-pane" title="v1alpha1" id="upgrade-instance-v1alpha1">
+    <div class="tab-pane" title="CRD v1alpha1" id="upgrade-instance-v1alpha1">
 
     {{< self-managed/crd-version-note "v1alpha1" >}}
 
