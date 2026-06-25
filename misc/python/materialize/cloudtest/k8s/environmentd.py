@@ -69,7 +69,9 @@ class EnvironmentdSecret(K8sSecret):
 class ListenersConfigMap(K8sConfigMap):
     def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
         super().__init__(namespace)
-        with open(f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json") as f:
+        with open(
+            f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json"
+        ) as f:
             data = f.read()
         self.configmap = V1ConfigMap(
             metadata=V1ObjectMeta(name="listeners-config"),

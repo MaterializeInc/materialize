@@ -87,13 +87,11 @@ class StartMz(MzcomposeAction):
         print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
 
         listeners_config_path = (
-            f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json"
+            f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/testdrive.json"
         )
 
         if not self.tag or self.tag >= MzVersion.parse_mz("v0.158.0-dev"):
-            listeners_config_path = (
-                f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive_sasl.json"
-            )
+            listeners_config_path = f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/testdrive_sasl.json"
 
         mz = Materialized(
             name=self.mz_service,

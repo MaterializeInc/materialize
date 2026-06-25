@@ -2032,7 +2032,7 @@ SERVICES = [
         sanity_restart=False,
         external_metadata_store=True,
         metadata_store="cockroach",
-        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth_https.json",
         support_external_clusterd=True,
     ),
     Mz(app_password=""),

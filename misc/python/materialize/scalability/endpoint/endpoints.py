@@ -185,7 +185,7 @@ class MaterializeContainer(MaterializeNonRemote):
                 image=self.image,
                 sanity_restart=False,
                 additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
-                listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive_sasl.json",
+                listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/testdrive_sasl.json",
             )
         ):
             self.composition.up("materialized")
