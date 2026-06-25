@@ -849,6 +849,49 @@ impl MirScalarExpr {
         }
     }
 
+    /// Whether [`Self::undistribute_and_or`] can rewrite `self` without changing
+    /// its error semantics.
+    ///
+    /// Undistribution recombines the operands *not* common to every disjunct into
+    /// a new AND/OR, changing the short-circuit context they evaluate in. Only a
+    /// dominating operand (`false`/`true`), not a NULL one, absorbs another
+    /// operand's error, so recombining a could-error operand can change whether a
+    /// row errors (e.g. `a OR (a AND <err>)` raises for a NULL `a`, but
+    /// undistributes to `a`). Operands common to every disjunct are factored out
+    /// unchanged and stay sound, which is what lets a shared temporal filter like
+    /// `mz_now() < <expr>` (whose cast can error) be factored out, as the renderer
+    /// requires.
+    fn undistribution_preserves_errors(&self) -> bool {
+        let MirScalarExpr::CallVariadic {
+            func: func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
+            exprs,
+        } = self
+        else {
+            return true;
+        };
+        // Fast path for the common case: with no erroring operand there is
+        // nothing to preserve, so skip the per-operand bookkeeping below.
+        // `could_error` recurses, so this also covers nested operands.
+        if !exprs.iter().any(|o| o.could_error()) {
+            return true;
+        }
+        let inner = func.switch_and_or();
+        // The operands of a disjunct (a non-`inner` disjunct is its own singleton).
+        let operands = |o: &MirScalarExpr| match o {
+            MirScalarExpr::CallVariadic { func, exprs } if *func == inner => exprs.clone(),
+            _ => vec![o.clone()],
+        };
+        let common = exprs
+            .iter()
+            .map(|o| BTreeSet::from_iter(operands(o)))
+            .reduce(|a, b| &a & &b)
+            .unwrap_or_default();
+        exprs
+            .iter()
+            .flat_map(operands)
+            .all(|op| !op.could_error() || common.contains(&op))
+    }
+
     /// AND/OR undistribution (factoring out) to apply at each `MirScalarExpr`.
     ///
     /// This method attempts to apply one of the [distribution laws][distributivity]
@@ -922,6 +965,11 @@ impl MirScalarExpr {
         while old_self != *self {
             old_self = self.clone();
             self.reduce_and_canonicalize_and_or(); // We don't want to deal with 1-arg AND/OR at the top
+
+            if !self.undistribution_preserves_errors() {
+                return;
+            }
+
             if let MirScalarExpr::CallVariadic {
                 exprs: outer_operands,
                 func: outer_func @ (VariadicFunc::Or(_) | VariadicFunc::And(_)),
@@ -2474,6 +2522,78 @@ impl RustType<ProtoDims> for (usize, usize) {
 mod tests {
     use super::*;
     use crate::scalar::func::variadic::Coalesce;
+
+    #[mz_ore::test]
+    fn test_reduce_and_or_preserves_operand_errors() {
+        // #37049: AND/OR are non-strict, so a `false`/`true` operand absorbs an
+        // erroring operand at runtime. `reduce` must not fold or absorb an
+        // erroring operand into an error the original never raises.
+        let bool_typ = ReprScalarType::Bool;
+        let types = vec![bool_typ.clone().nullable(true)];
+        let err = || MirScalarExpr::literal(Err(EvalError::DivisionByZero), bool_typ.clone());
+        let col = || MirScalarExpr::column(0);
+        let arena = RowArena::new();
+
+        // `x AND <err>` must not fold to the error: `false AND <err>` is `false`.
+        let mut and = col().and(err());
+        and.reduce(&types);
+        assert!(!and.is_literal_err(), "{and:?}");
+        assert_eq!(and.eval(&[Datum::False], &arena), Ok(Datum::False));
+
+        // `a OR (a AND <err>)` must not absorb to `a`: a NULL `a` surfaces the
+        // error (`NULL OR (NULL AND <err>)` = `<err>`).
+        let mut or = col().or(col().and(err()));
+        or.reduce(&types);
+        assert_ne!(or, col(), "{or:?}");
+        assert_eq!(or.eval(&[Datum::True], &arena), Ok(Datum::True));
+        assert_eq!(or.eval(&[Datum::False], &arena), Ok(Datum::False));
+        assert_eq!(
+            or.eval(&[Datum::Null], &arena),
+            Err(EvalError::DivisionByZero)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_reduce_and_or_undistributes_common_error() {
+        // CLU-137: undistribution must still factor out a could-error operand
+        // common to every disjunct (e.g. a temporal `mz_now() < <expr>`), so it
+        // becomes a standalone conjunct the renderer can extract. The reverted
+        // #37049 guard skipped undistribution for any could-error expression,
+        // burying such predicates inside the OR.
+        let bool_typ = ReprScalarType::Bool;
+        let types = vec![
+            bool_typ.clone().nullable(true),
+            bool_typ.clone().nullable(true),
+        ];
+        let err = || MirScalarExpr::literal(Err(EvalError::DivisionByZero), bool_typ.clone());
+        let arena = RowArena::new();
+
+        // `(a AND <err>) OR (b AND <err>)` --> `<err> AND (a OR b)`.
+        let original = MirScalarExpr::column(0)
+            .and(err())
+            .or(MirScalarExpr::column(1).and(err()));
+        let mut reduced = original.clone();
+        reduced.reduce(&types);
+        assert!(
+            matches!(
+                &reduced,
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::And(_),
+                    ..
+                }
+            ),
+            "common error operand not factored out: {reduced:?}"
+        );
+        // ...and error semantics are preserved over every assignment.
+        for a in [Datum::True, Datum::False, Datum::Null] {
+            for b in [Datum::True, Datum::False, Datum::Null] {
+                assert_eq!(
+                    reduced.eval(&[a, b], &arena),
+                    original.eval(&[a, b], &arena)
+                );
+            }
+        }
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`

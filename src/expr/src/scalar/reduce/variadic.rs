@@ -51,9 +51,22 @@ pub(super) fn reduce_call_variadic(
         *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
         return;
     }
-    if let Some(err) = exprs.iter().find_map(|x| x.as_literal_err()) {
-        *e = MirScalarExpr::literal(Err(err.clone()), e.typ(column_types).scalar_type);
-        return;
+    // Fold the call to an operand's literal error only when the function is
+    // strict in errors: any operand error must make the whole call error. The
+    // non-strict variadics are excluded, because they can absorb an operand's
+    // error at runtime: AND/OR via a dominating `false`/`true` operand
+    // (`false AND <error>` is `false`), and ErrorIfNull because it evaluates its
+    // message argument only when the first argument is null. Every other variadic
+    // here evaluates all of its operands, so the fold is valid. (Coalesce, also
+    // non-strict, bailed out above.)
+    if !matches!(
+        func,
+        VariadicFunc::And(_) | VariadicFunc::Or(_) | VariadicFunc::ErrorIfNull(_)
+    ) {
+        if let Some(err) = exprs.iter().find_map(|x| x.as_literal_err()) {
+            *e = MirScalarExpr::literal(Err(err.clone()), e.typ(column_types).scalar_type);
+            return;
+        }
     }
 
     // Per-function dispatch. Arms are mutually exclusive on discriminant; the

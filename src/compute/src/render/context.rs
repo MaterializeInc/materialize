@@ -938,7 +938,13 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
         mfp.optimize();
-        let mfp_plan = mfp.clone().into_plan().unwrap();
+        // NOTE: only an un-extractable temporal predicate makes `into_plan` fail;
+        // `ExprPrepMaintained` rejects those at plan time and peeks materialize
+        // `mz_now()`, so none reach render.
+        let mfp_plan = mfp
+            .clone()
+            .into_plan()
+            .expect("temporal predicate extractable");
 
         // If the MFP is trivial, we can just call `as_collection`.
         // In the case that we weren't going to apply the `key_val` optimization,
@@ -959,7 +965,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let max_demand = mfp.demand().last().map(|x| *x + 1).unwrap_or(0);
         mfp.permute_fn(|c| c, max_demand);
         mfp.optimize();
-        let mfp_plan = mfp.into_plan().unwrap();
+        let mfp_plan = mfp.into_plan().expect("temporal predicate extractable");
 
         let mut datum_vec = DatumVec::new();
         // Wrap in an `Rc` so that lifetimes work out.

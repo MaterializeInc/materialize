@@ -440,3 +440,73 @@ FROM (SELECT CAST('62143-12-31' AS date) + '200000 YEARS' AS c2
       FROM (SELECT
             FROM (SELECT FROM t) AS subq_0) AS subq_1
       WHERE pg_catalog."current_timestamp"() = pg_catalog.pg_postmaster_start_time()) AS subq_2;
+
+# Regression test for https://linear.app/materializeinc/issue/CLU-137
+#
+# A temporal predicate (`mz_now() < ...`) shared across both branches of a
+# disjunction of conjunctions must be factored out of the disjunction, so that
+# it becomes a standalone conjunct the renderer can extract as a temporal
+# bound. The factoring is done by `undistribute_and_or` during predicate
+# canonicalization. The error-propagation fix in #37049 had skipped
+# undistribution for any expression that could error, and `mz_now()` always
+# counts as could-error, so the temporal predicate stayed buried inside the OR
+# and the renderer panicked with "Unsupported temporal predicate".
+
+# A constant collection (`VALUES`) is readable at any logical time, so the MV
+# can be queried `AS OF` a small timestamp, like the `valid` MV above.
+statement ok
+CREATE VIEW clu137 (active, confirmed, enabled, label, valid_until) AS VALUES
+    (true,  true,  true,  CAST(NULL AS text), 10),
+    (true,  true,  true,  '',                 20),
+    (true,  true,  true,  'x',                30),
+    (false, true,  true,  NULL,               40);
+
+statement ok
+CREATE MATERIALIZED VIEW clu137_mv AS
+SELECT valid_until FROM clu137
+WHERE (active AND confirmed AND enabled AND label IS NULL AND mz_now() < valid_until)
+   OR (active AND confirmed AND enabled AND label = ''   AND mz_now() < valid_until);
+
+query I rowsort
+SELECT * FROM clu137_mv AS OF 5;
+----
+10
+20
+
+query I rowsort
+SELECT * FROM clu137_mv AS OF 15;
+----
+20
+
+query I rowsort
+SELECT * FROM clu137_mv AS OF 25;
+----
+
+# a non-common operand that could error keeps the shared temporal predicate
+# buried in the OR (factoring it out would change error semantics), so
+# extraction rejects it at plan time. A clean error, not a crash.
+statement ok
+CREATE VIEW clu137_fallible (active, label, divisor, valid_until) AS VALUES
+    (true, CAST(NULL AS text), 5, 10),
+    (true, '',                 5, 20);
+
+# `(100 / divisor) > 0` (can error) sits in only the second disjunct.
+statement error Unsupported temporal predicate
+CREATE MATERIALIZED VIEW clu137_fallible_mv AS
+SELECT valid_until FROM clu137_fallible
+WHERE (active AND label IS NULL AND mz_now() < valid_until)
+   OR (active AND label = '' AND mz_now() < valid_until AND (100 / divisor) > 0);
+
+# But a fallible operand common to every disjunct factors out fine: the limit is
+# commonality, not fallibility.
+statement ok
+CREATE MATERIALIZED VIEW clu137_common_fallible_mv AS
+SELECT valid_until FROM clu137_fallible
+WHERE (active AND label IS NULL AND mz_now() < valid_until AND (100 / divisor) > 0)
+   OR (active AND label = '' AND mz_now() < valid_until AND (100 / divisor) > 0);
+
+query I rowsort
+SELECT * FROM clu137_common_fallible_mv AS OF 5;
+----
+10
+20

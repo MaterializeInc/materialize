@@ -93,3 +93,16 @@ select coalesce(a, (select a/b from test)) from test;
 
 query error Evaluation error: division by zero
 select *, case when a = 5 then (select a/b from test) else 7 end from test;
+
+# Regression for #37049. AND/OR are non-strict: a `false`/`true` operand absorbs
+# an erroring operand at runtime (`false AND <error>` is `false`), so `reduce`
+# must not fold `x AND <error>` / `x OR <error>` to the error. Before the fix
+# these spuriously errored with division by zero (test.a = 1).
+query I
+select a from test where (a = 2) and (1/0 = 1);
+----
+
+query I
+select a from test where (a = 1) or (1/0 = 1);
+----
+1
