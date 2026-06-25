@@ -620,6 +620,118 @@ impl LirRelationExpr {
 
             let config = TransformConfig { monotonic_ids };
             Self::refine_single_time_consolidation(&mut dataflow, &config)?;
+
+            // For non-recursive delta joins in single-time dataflows, only the delta path for the
+            // first relation produces updates: the other paths discard updates at the as-of, which
+            // is the only time present. We keep just that path and, where the first input's
+            // arrangement existed solely to seed it, drop the arrangement and consume the input as a
+            // raw collection. This requires rewriting the path's initial closure to address the raw
+            // row layout rather than the arranged `(key, value)` layout.
+            for build_desc in dataflow.objects_to_build.iter_mut() {
+                // Worklist of plan nodes. `LetRec` bodies are explored but `LetRec` values are not,
+                // which excludes recursive (WMR) joins from this transform.
+                let mut todo = vec![&mut build_desc.plan];
+                while let Some(expr) = todo.pop() {
+                    match &mut expr.node {
+                        // TODO: also handle binary differential joins, which can likewise shed a
+                        // bespoke arrangement on their first input.
+                        LirRelationNode::Join {
+                            inputs,
+                            plan: JoinPlan::Delta(plan),
+                        } => {
+                            // Only the first relation's path survives at a single time.
+                            plan.path_plans.truncate(1);
+
+                            let source_relation = plan.path_plans[0].source_relation;
+                            // Replace the source input's bespoke arrangement with a raw collection,
+                            // but only when the surviving path's source is fed by an `ArrangeBy`
+                            // that exists solely to build that arrangement. A source backed directly
+                            // by an arranged import has no `ArrangeBy` node here, so this guard skips
+                            // it and the path keeps reading it arranged.
+                            if let Some(source_key) = plan.path_plans[0].source_key.clone() {
+                                if let LirRelationNode::ArrangeBy { forms, .. } =
+                                    &mut inputs[source_relation].node
+                                {
+                                    // Drop arrangement forms other than the source key, which the
+                                    // remaining path no longer needs.
+                                    forms.arranged.retain(|(key, _, _)| key == &source_key);
+                                    if let Some((to_key, permutation, thinning)) =
+                                        forms.arranged.pop()
+                                    {
+                                        // Make the input a raw collection and unset the source key.
+                                        // Clearing every arrangement form is safe: `truncate(1)`
+                                        // already dropped the sibling paths that were the only other
+                                        // consumers, and this `ArrangeBy` is private to this join
+                                        // input. What remains is the input's raw collection.
+                                        forms.raw = true;
+                                        forms.arranged.clear();
+                                        plan.path_plans[0].source_key = None;
+
+                                        // The initial closure addresses the arranged `(key, value)`
+                                        // layout: columns `[0, K)` are key datums and columns
+                                        // `[K, K + M)` are the thinned value datums. We rewrite it to
+                                        // address the raw row instead.
+                                        //
+                                        // `to_key` (length `K`) are the key expressions over a row.
+                                        // `permutation` (length `A`, the raw arity) maps each row
+                                        // column to its position in the `(key, value)` concatenation.
+                                        // `thinning` (length `M`) lists the row columns that form the
+                                        // value.
+                                        let key_len = to_key.len();
+                                        let row_arity = permutation.len();
+                                        let closure = &mut plan.path_plans[0].initial_closure;
+
+                                        // Step 1: rewrite `ready_equivalences`, which reference the
+                                        // arranged layout. A key column becomes its defining
+                                        // expression. A value column becomes the row column it was
+                                        // projected from.
+                                        for class in closure.ready_equivalences.iter_mut() {
+                                            for expr in class.iter_mut() {
+                                                let mut todo = vec![expr];
+                                                while let Some(expr) = todo.pop() {
+                                                    if let LirScalarExpr::Column(c, _) = expr {
+                                                        if let Some(key_expr) = to_key.get(*c) {
+                                                            *expr = key_expr.clone();
+                                                        } else {
+                                                            *c = thinning[*c - key_len];
+                                                        }
+                                                    } else {
+                                                        todo.extend(expr.children_mut());
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Step 2: rewrite the `before` MFP. Starting from a raw row,
+                                        // materialize the key datums and project to the arranged
+                                        // `(key, value)` layout the original MFP expects, then apply
+                                        // it.
+                                        let (m, f, p) = closure.before.as_map_filter_project();
+                                        let mfp = MapFilterProject::new(row_arity)
+                                            .map(to_key)
+                                            .project(
+                                                (row_arity..row_arity + key_len).chain(thinning),
+                                            )
+                                            .map(m)
+                                            .filter(f)
+                                            .project(p);
+                                        closure.before =
+                                            mfp.into_plan().unwrap().into_nontemporal().unwrap();
+                                    }
+                                }
+                            }
+
+                            todo.extend(inputs.iter_mut());
+                        }
+                        LirRelationNode::LetRec { body, .. } => {
+                            todo.push(body);
+                        }
+                        x => {
+                            todo.extend(x.children_mut());
+                        }
+                    }
+                }
+            }
         }
 
         soft_assert_eq_no_log!(dataflow.check_invariants(), Ok(()));
