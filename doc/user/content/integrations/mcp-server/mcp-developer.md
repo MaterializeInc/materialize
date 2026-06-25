@@ -18,21 +18,15 @@ process or external server is required.
 
 ## Overview
 
-The `materialize-developer` MCP server exposes two read-only tools:
-
-- [`query_system_catalog`](/integrations/mcp-server/mcp-developer-tools/#query_system_catalog)
-  for system catalog (`mz_*`, `pg_catalog`, `information_schema`) lookups. Runs
-  on the catalog server cluster (`mz_catalog_server`); does not take a cluster
-  argument.
-- [`query`](/integrations/mcp-server/mcp-developer-tools/#query) for `SELECT`,
-  `SHOW`, and `EXPLAIN` (including `EXPLAIN ANALYZE`) against any object the
-  role can access. You must specify a cluster. Available starting in v26.30.
-
 You can connect an MCP-compatible client (such as Claude Code, Claude Desktop,
-or Cursor) to the MCP server and ask natural language questions like:
+or Cursor) to the MCP server to:
 
-- *Why is my materialized view stale?*
-- *How much memory is my cluster using?*
+- Ask questions about the Materialize system
+  - *Why is my materialized view stale?*
+  - *How much memory is my cluster using?*
+- Run queries on your objects (Available starting in v26.30)
+  - *Using the quickstart cluster, SELECT * from my_mat_view;*
+  - *Using the quickstart cluster, examine the memory usage of my_mat_view with skew.*
 
 ## Connect to the MCP server
 
@@ -272,13 +266,15 @@ Once connected to the MCP server, you can ask natural language questions like:
 | **How much memory is my cluster using?** | Checks replica utilization metrics across all clusters. | `query_system_catalog` |
 | **What's the health of my environment?** | Checks replica statuses, source and sink health, and resource utilization. | `query_system_catalog` |
 | **What can I optimize to save costs?** | Queries the index advisor for materialized views that can be dematerialized and indexes that can be dropped. | `query_system_catalog` |
+| **Using the `quickstart` cluster, examine the memory usage of `my_mat_view` with skew.** | Runs `EXPLAIN ANALYZE MEMORY WITH SKEW` on the materialized view to report its memory usage and highlight data skew across workers. | `query` for `EXPLAIN ANALYZE MEMORY WITH SKEW` |
 
-The agent picks the appropriate tool for each question. Most catalog lookups
-run on the catalog server cluster via
+The agent picks the appropriate tool for each question. Most catalog lookups run
+on the catalog server cluster via
 [`query_system_catalog`](/integrations/mcp-server/mcp-developer-tools/#query_system_catalog);
-[`query`](/integrations/mcp-server/mcp-developer-tools/#query) is used when the
-question needs a specific cluster (for example, `EXPLAIN ANALYZE` against a
-materialized view or index, or reading user objects).
+[`query`](/integrations/mcp-server/mcp-developer-tools/#query) (available
+starting in v26.30) is used when the question needs a specific cluster (for
+example, `EXPLAIN ANALYZE` against a materialized view or index, or reading user
+objects).
 
 ## Privileges
 
