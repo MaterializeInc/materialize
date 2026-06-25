@@ -26,6 +26,10 @@ import { useParams } from "react-router-dom";
 
 import { MZ_PROBE_CLUSTER } from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
+import {
+  CLUSTER_UTILIZATION_OVERVIEW_VIEWS_VERSION,
+  selectClusterUtilizationOverviewView,
+} from "~/api/materialize/cluster/replicaUtilizationHistory";
 import Alert from "~/components/Alert";
 import ErrorBox from "~/components/ErrorBox";
 import { EventEmitterProvider } from "~/components/EventEmitter";
@@ -37,6 +41,7 @@ import { useFlags } from "~/hooks/useFlags";
 import { useTimePeriodMinutes } from "~/hooks/useTimePeriodSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { useAllClusters } from "~/store/allClusters";
+import { useEnvironmentGate } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { assert } from "~/util";
 
@@ -77,10 +82,22 @@ const ClusterOverview = () => {
   });
   const [selectedReplica, setSelectedReplica] = React.useState("all");
 
-  const bucketSizeMs = React.useMemo(
-    () => Math.max(timePeriodMinutes * 1000, MIN_BUCKET_SIZE_MS),
-    [timePeriodMinutes],
-  );
+  const hasNewUtilizationViews =
+    useEnvironmentGate(CLUSTER_UTILIZATION_OVERVIEW_VIEWS_VERSION) ?? false;
+
+  // When the selected range is served by a pre-materialized overview view, the
+  // view's fixed bucket size dictates the boundaries; otherwise (ad-hoc query)
+  // we derive a bucket size from the range, clamped to the metric sample rate.
+  const bucketSizeMs = React.useMemo(() => {
+    const overviewView = selectClusterUtilizationOverviewView(
+      timePeriodMinutes,
+      hasNewUtilizationViews,
+    );
+    return (
+      overviewView?.bucketSizeMs ??
+      Math.max(timePeriodMinutes * 1000, MIN_BUCKET_SIZE_MS)
+    );
+  }, [timePeriodMinutes, hasNewUtilizationViews]);
 
   const replicaId = selectedReplica === "all" ? undefined : selectedReplica;
 
