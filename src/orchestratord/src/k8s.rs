@@ -193,6 +193,7 @@ pub async fn register_crds(
 }
 
 /// Get the recommended Kubernetes labels (app.kubernetes.io/*)
+/// WARNING: this is duplicated in src/orchestrator/src/lib.rs and src/cloud-resources/src/crd.rs
 pub fn recommended_k8s_labels(app_name: String) -> BTreeMap<String, String> {
     let mut labels = BTreeMap::new();
     labels.insert(

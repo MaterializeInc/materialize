@@ -253,6 +253,7 @@ pub struct ServiceConfig {
 }
 
 /// Get the recommended Kubernetes labels (app.kubernetes.io/*)
+/// WARNING: this is duplicated in src/orchestratord/src/k8s.rs and src/cloud-resources/src/crd.rs
 pub fn recommended_k8s_labels(app_name: String) -> BTreeMap<String, String> {
     BTreeMap::from_iter([
         (

@@ -91,6 +91,7 @@ pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
 }
 
 /// Get the recommended Kubernetes labels (app.kubernetes.io/*)
+/// WARNING: this is duplicated in src/orchestrator/src/lib.rs and src/orchestratord/src/k8s.rs
 pub fn recommended_k8s_labels(app_name: Option<&str>) -> BTreeMap<String, String> {
     let mut labels = BTreeMap::new();
     labels.insert(
