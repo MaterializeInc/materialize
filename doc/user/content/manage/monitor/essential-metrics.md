@@ -2,12 +2,11 @@
 title: "Essential metrics"
 description: "The Prometheus metrics Materialize recommends building dashboards and alerts on."
 disable_list: true
-# TODO (SangJunBak): Unhide once ready to publish
-# menu:
-#   main:
-#     parent: "monitor"
-#     identifier: "monitor-essential-metrics"
-#     weight: 19
+menu:
+  main:
+    parent: "monitor"
+    identifier: "monitor-essential-metrics"
+    weight: 19
 ---
 
 This page lists the essential Prometheus metrics exposed by Materialize: the
