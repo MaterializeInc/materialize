@@ -1022,10 +1022,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     });
 
     let persist_clients = Arc::new(persist_clients);
-    // The persist client's `ConfigSet` is the process-wide live system dyncfg set:
-    // the storage controller mirrors the full dyncfg set into it on every
-    // `ALTER SYSTEM`. Capture the shared `Arc` here so we can thread it directly
-    // into the server config instead of reaching back through the controller.
     let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id.to_string(),

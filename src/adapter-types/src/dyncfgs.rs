@@ -227,7 +227,7 @@ pub const MCP_MAX_RESPONSE_SIZE: Config<usize> = Config::new(
 /// separate static limit.
 pub const WEBHOOK_MAX_REQUEST_SIZE_BYTES: Config<usize> = Config::new(
     "webhook_max_request_size_bytes",
-    // Keep in sync with the historical static limit in environmentd's HTTP server.
+    // Matches `MAX_REQUEST_SIZE`, the static limit the other environmentd HTTP routes use.
     5 * 1024 * 1024,
     "The maximum size in bytes of a webhook request body, measured after decompression.",
 );

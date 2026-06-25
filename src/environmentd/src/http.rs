@@ -175,9 +175,6 @@ pub struct HttpConfig {
     pub http_host_name: Option<String>,
     pub frontegg_oauth_issuer_url: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
-    /// Live, shared system dyncfg set. Not HTTP-specific by design, only by
-    /// usage: routes read it to observe current values without a coordinator
-    /// round-trip (e.g. the webhook route reads `WEBHOOK_MAX_REQUEST_SIZE_BYTES`).
     pub dyncfgs: Arc<ConfigSet>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,

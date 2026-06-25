@@ -138,10 +138,7 @@ pub struct Config {
     pub secrets_controller: Arc<dyn SecretsController>,
     /// VpcEndpoint controller configuration.
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
-    /// The process-wide live system dyncfg set. The storage controller mirrors
-    /// the full dyncfg set into this `ConfigSet` on every `ALTER SYSTEM`, so the
-    /// HTTP layer reads it to observe current values (e.g. the webhook request
-    /// size limit).
+    /// The process-wide live system dyncfg set.
     pub system_dyncfgs: Arc<ConfigSet>,
 
     // === Storage options. ===
