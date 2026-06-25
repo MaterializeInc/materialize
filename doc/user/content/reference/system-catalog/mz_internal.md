@@ -820,6 +820,19 @@ The `mz_sessions` table contains a row for each active session in the system.
 | `connected_at`   | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
 
 
+## `mz_overridden_system_parameters`
+
+The `mz_overridden_system_parameters` view contains a row for each system parameter whose
+environment-wide value differs from its default, as set by `ALTER SYSTEM`.
+Parameters left at their default are not listed.
+
+<!-- RELATION_SPEC mz_internal.mz_overridden_system_parameters -->
+| Field        | Type     | Meaning                                            |
+| ------------ | -------- | --------                                           |
+| `name`       | [`text`] | The name of the system parameter.                  |
+| `value`      | [`text`] | The environment-wide value of the system parameter. |
+
+
 ## `mz_cluster_system_parameters`
 
 The `mz_cluster_system_parameters` view contains a row for each cluster-coherent
