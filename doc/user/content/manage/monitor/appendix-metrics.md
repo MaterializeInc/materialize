@@ -3,12 +3,11 @@ title: "Appendix: Metrics"
 description: "Reference list of the Prometheus metrics exposed by Materialize."
 disable_toc: true
 disable_list: true
-# TODO (SangJunBak): Unhide once ready to publish
-# menu:
-#   main:
-#     parent: "monitor"
-#     identifier: "monitor-appendix-metrics"
-#     weight: 20
+menu:
+  main:
+    parent: "monitor"
+    identifier: "monitor-appendix-metrics"
+    weight: 20
 ---
 
 This page lists the Prometheus metrics exposed by Materialize, along with their
