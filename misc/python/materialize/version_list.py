@@ -393,6 +393,7 @@ def get_published_minor_mz_versions(
     include_filter: Callable[[MzVersion], bool] | None = None,
     exclude_current_minor_version: bool = False,
     max_version: MzVersion | None = None,
+    include_release_candidates: bool = False,
 ) -> list[MzVersion]:
     """
     Get the latest patch version for every minor version.
@@ -402,7 +403,9 @@ def get_published_minor_mz_versions(
     """
 
     # sorted in descending order
-    all_versions = get_all_mz_versions(newest_first=True)
+    all_versions = get_all_mz_versions(
+        newest_first=True, include_release_candidates=include_release_candidates
+    )
     minor_versions: dict[str, MzVersion] = {}
 
     version = MzVersion.parse_cargo()
@@ -443,6 +446,7 @@ def get_published_minor_mz_versions(
 
 def get_all_mz_versions(
     newest_first: bool = True,
+    include_release_candidates: bool = False,
 ) -> list[MzVersion]:
     """
     Get all mz versions based on git tags. Versions known to be invalid are excluded.
@@ -455,8 +459,7 @@ def get_all_mz_versions(
             version_type=MzVersion, newest_first=newest_first
         )
         if version not in INVALID_VERSIONS
-        # Exclude release candidates
-        and not version.prerelease
+        and (include_release_candidates or not version.prerelease)
     ]
 
 
