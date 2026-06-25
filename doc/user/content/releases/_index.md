@@ -15,6 +15,51 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.30.0
+*Released to Materialize Cloud: 2026-06-25* <br>
+*Released to Materialize Self-Managed: 2026-06-26* <br>
+
+### PostgreSQL Physical Replica Support {#v26.30-postgresql-physical-replica-support}
+Materialize now supports replicating from a physical PostgreSQL replica (hot standby), not just the primary server. This enables setups where the replication load is offloaded from the primary to a read replica.
+
+### Materialize CRD v1 for Self-Managed {#v26.30-materialize-crd-v1-for-self-managed}
+Self-managed Kubernetes deployments can now opt in to the v1 Materialize Custom Resource Definition, which simplifies rollout behavior by automatically detecting spec changes instead of requiring manual `requestRollout` fields. The v1 CRD is opt-in via the `operator.args.installV1CRD` Helm value; existing v1alpha1 deployments continue to work unchanged.
+
+### Improvements {#v26.30-improvements}
+- **MCP developer query tool**: The MCP developer endpoint now includes a `query` tool for running `SELECT`, `SHOW`, and `EXPLAIN` queries against user objects and clusters, mirroring the agent endpoint's query capability.
+- **MCP OAuth discovery for Frontegg**: The MCP server now advertises the Frontegg authorization server via RFC 9728 Protected Resource Metadata, enabling MCP clients that use standard OAuth discovery to connect to Materialize's MCP endpoints with Frontegg authentication.
+- **mz-debug OIDC and SASL authentication**: The `mz-debug` diagnostic tool now supports OIDC and SASL authentication modes in addition to password authentication.
+- **Faster LIKE pattern matching**: `LIKE` patterns with multiple `%` wildcards (e.g., `%a%a%a`) no longer exhibit super-linear matching time against long strings, while common patterns like `%substring%` remain on the fast string matcher.
+- **Fivetran Destination restored**: The Fivetran Destination integration, which was removed in v26.29.0, has been restored.
+
+### Bug Fixes {#v26.30-bug-fixes}
+- Fixed `IS [NOT] DISTINCT FROM` binding too loosely relative to `AND`/`OR`, causing `a IS DISTINCT FROM b AND c` to silently produce wrong results by parsing as `a IS DISTINCT FROM (b AND c)` instead of `(a IS DISTINCT FROM b) AND c`.
+- Fixed the query optimizer incorrectly propagating errors through `AND`/`OR` expressions, causing queries like `false AND <error>` to produce an error instead of returning `false`.
+- Fixed `GRANT ALL ON TABLE` and `REVOKE ALL ON TABLE` on views, materialized views, and sources only granting or revoking `SELECT` instead of the full table privilege set (`SELECT`, `INSERT`, `UPDATE`, `DELETE`).
+- Fixed MySQL sources incorrectly decoding zero-value `YEAR` columns during both snapshot and replication.
+- Fixed Avro-formatted sources failing to decode records after a nullable column's type was promoted to a wider numeric type (e.g., `int` to `double`).
+- Fixed `array_fill` incorrectly rejecting arrays between 128 MB and 256 MB due to an operator precedence bug in the size limit calculation.
+- Fixed `pg_catalog.pg_description` returning an error when any user object was named `pg_class`, `pg_type`, or `pg_namespace`.
+- Fixed CSV source ingestion crashing or silently producing corrupted rows when encountering malformed input.
+- Fixed `EXPLAIN ANALYZE` and `EXPLAIN ANALYZE CLUSTER` silently dropping every-other worker's results.
+- Fixed a panic when a `GROUP BY` clause repeated a positional column reference, such as `GROUP BY 1, 1`.
+- Fixed a panic when resizing a managed cluster that hosts a replica-targeted materialized view with a `COMMENT`.
+- Fixed a panic when decoding binary-format `numeric` values with an out-of-range scale in the wire header.
+- Fixed a panic when specifying out-of-range interval values in `WITH` options such as `INTROSPECTION INTERVAL` or `REFRESH EVERY`.
+- Fixed a panic when casting `regtype`, `regclass`, or `mz_aclitem` to text in contexts that disallow subqueries, such as a `RETURNING` clause.
+- Fixed a panic when setting a non-`MANUAL` schedule on a cluster with `REPLICATION FACTOR > 1`.
+- Fixed a crash when using `COPY FROM` with a URL or S3 source without specifying a format, or with an unsupported format like `TEXT` or `BINARY`.
+- Fixed table functions silently accepting unsupported `FILTER`, `OVER`, and `DISTINCT` clauses instead of returning an error.
+- Fixed `COPY TO STDOUT` silently accepting unsupported `ESCAPE` and `HEADER` options instead of returning an error.
+- Fixed `SHOW CREATE TABLE ... FROM SOURCE` emitting internal options that prevented the output from being replayed.
+- Fixed `SHOW CREATE TABLE` failing to round-trip for SQL Server and load generator sources due to incorrect database references.
+- Fixed multiple SQL parser and pretty-printer bugs that caused `SHOW CREATE` output to fail to reparse, including incorrect keyword quoting and operator precedence in displayed expressions.
+- Fixed Avro source ingestion crashing when encountering malformed input such as invalid block lengths, unbounded recursion, or unmatched schema references.
+- Fixed `COPY FROM STDIN` being able to exhaust the shared connection pool by holding blocking threads idle, which could stall all other queries in the environment.
+- Fixed a panic when creating a Kafka sink with a non-positive `TOPIC METADATA REFRESH INTERVAL`.
+- Fixed a panic when a Kafka topic refresh interval was set to less than 1 second.
+- Fixed the MCP `read_data_product` tool failing when the `restrict_to_user_objects` option was enabled.
+
 ## v26.29.0
 *Released to Materialize Cloud: 2026-06-18* <br>
 *Released to Materialize Self-Managed: 2026-06-19* <br>
