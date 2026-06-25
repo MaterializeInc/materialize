@@ -813,6 +813,364 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN INDEX "mz_internal"."mz_console_cluster_utilization_overview_24h_ind";
+----
+mz_internal.mz_console_cluster_utilization_overview_24h_ind:
+  →Arrange (#17{cluster_id})
+    →Stream mz_internal.mz_console_cluster_utilization_overview_24h
+
+mz_internal.mz_console_cluster_utilization_overview_24h:
+  →With
+    cte l0 =
+      →Distinct GroupAggregate
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #1..=#3
+            Filter: (#1) IS NOT NULL
+              →Arranged mz_internal.mz_cluster_replica_history
+                Key: (#6{dropped_at})
+          →Fused with Child Map/Filter/Project
+            Project: #0, #3, #2
+              →Arranged mz_catalog.mz_cluster_replicas
+                Key: (#0{id})
+    cte l1 =
+      →Map/Filter/Project
+        Filter: (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(00:05:00, #9, 1970-01-01 00:00:00 UTC) + 24:00:00)))
+          →Delta Join [%0:l0[#0{replica_id}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]] [%1:mz_cluster_replica_sizes[#0{size}] » %0:l0[#1{size}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}]] [%2:mz_cluster_replica_metrics_history[#0{replica_id}] » %0:l0[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]]
+            →Arrange (#0{replica_id}) (#1{size})
+              →Fused with Child Map/Filter/Project
+                Project: #0, #1
+                Filter: (#1{size}) IS NOT NULL
+                  →Arranged l0
+                    Key: (#0..=#2)
+            →Arranged mz_catalog.mz_cluster_replica_sizes
+            →Arranged mz_internal.mz_cluster_replica_metrics_history
+    cte l2 =
+      →Differential Join %0[#0..=#6] » %1[#0..=#6]
+        after %1:
+          Project: #0, #1, #7, #10..=#18
+          Map: (#9 / uint8_to_double((case when (0 = uint8_to_numeric(#3{cpu_nano_cores})) then null else #3{cpu_nano_cores} end * #6{processes}))), (#10 / uint8_to_double((case when (0 = uint8_to_numeric(#4{memory_bytes})) then null else #4{memory_bytes} end * #6{processes}))), (#11 / uint8_to_double((case when (0 = uint8_to_numeric(#5{disk_bytes})) then null else #5{disk_bytes} end * #6{processes}))), (#5{disk_bytes} * #6{processes}), (#4{memory_bytes} * #6{processes}), coalesce(#8, #13), timestamptz_bin(00:05:00, #0{occurred_at}, 1970-01-01 00:00:00 UTC)
+        →Temporally-Bucketed Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
+          Aggregations: max, max
+          Key:
+            Project: #6, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#5, #9..=#11
+              →Read l1
+        →Temporally-Bucketed Accumulable GroupAggregate
+          Simple aggregates: sum(uint8_to_double(#6{cpu_nano_cores})), sum(uint8_to_double(#7{memory_bytes})), sum(uint8_to_double(#8{disk_bytes}))
+          Key:
+            Project: #9, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#9
+              →Read l1
+    cte l3 =
+      →Delta Join [%0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%1[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%2[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%3[#1{replica_id}, #4{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%4[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %5:l0[#0{replica_id}]] [%5:l0[#0{replica_id}] » %0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}]]
+        →Arrange (#1{replica_id}) (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #6, #11, #12
+                  Map: coalesce(#3{memory_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #7, #11, #12
+                  Map: coalesce(#4{disk_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #5, #11, #12
+                  Map: coalesce(#5{cpu_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #4{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#5
+              →Non-monotonic TopK
+                Group By #4, #1
+                Order By #6 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #6, #7, #11..=#13
+                  Map: case when ((#3{memory_bytes}) IS NULL AND (#4{disk_bytes}) IS NULL) then null else ((coalesce(#3{memory_bytes}, 0) + coalesce(#4{disk_bytes}, 0)) / uint8_to_double(case when (0 = uint8_to_numeric((#9{total_memory_bytes} + #8{total_disk_bytes}))) then null else (#9{total_memory_bytes} + #8{total_disk_bytes}) end)) end, coalesce(#12{memory_and_disk_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #10..=#12
+                  Map: coalesce(#2{heap_bytes}, 0)
+                    →Read l2
+        →Arrange (#0{replica_id})
+          →Arranged l0
+    cte l4 =
+      →Differential Join %1[#0, #1] » %0:l3[#1, #3]
+        →Arrange (#1, #3)
+          →Stream l3
+        →Arrange (#0, #1)
+          →Map/Filter/Project
+            Project: #0, #1, #3
+              →Non-monotonic TopK
+                Group By #0, #1
+                Order By #2 desc nulls_first
+                Limit 1
+                →Differential Join %1:mz_cluster_replica_name_history[#1{id}] » %0[#0{replica_id}]
+                  after %0:
+                    Project: #0, #4, #1, #3
+                    Filter: ((#4{bucket_start} + 00:05:00) >= coalesce(#1{occurred_at}, 1970-01-01 00:00:00 UTC))
+                  →Arrange (#0{replica_id})
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #1, #3
+                          →Read l3
+                  →Arranged mz_internal.mz_cluster_replica_name_history
+    cte l5 =
+      →Differential Join %1[#1, #0] » %0:l4[#1{replica_id}, #3{bucket_start}]
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Stream l4
+        →Arrange (#1, #0)
+          →Temporally-Bucketed Non-incremental GroupAggregate
+            Aggregation: jsonb_agg[order_by=[]](row(coalesce(jsonbable_to_jsonb(jsonb_build_object("replicaId", jsonbable_to_jsonb(#0{replica_id}), "occurredAt", jsonbable_to_jsonb(timestamp_with_time_zone_to_text(#2{occurred_at})), "status", "offline", "reason", jsonbable_to_jsonb(#1{reason}))), json_null)))
+            Key:
+              Project: #3, #0
+              Map: timestamptz_bin(00:05:00, #2{occurred_at}, 1970-01-01 00:00:00 UTC)
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #4
+              Filter: (#1{process_id} = 0) AND (#2{status} = "offline") AND (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(00:05:00, #4{occurred_at}, 1970-01-01 00:00:00 UTC) + 24:00:00)))
+                →Arranged mz_internal.mz_cluster_replica_status_history
+                  Key: (#0{replica_id})
+  →Return
+    →Map/Filter/Project
+      Project: #1, #0, #2..=#5, #10, #8, #9, #11..=#13, #6, #7, #17, #18, #16, #15, #14
+      Map: (#1{bucket_start} + 00:05:00)
+        →Union
+          →Map/Filter/Project
+            Project: #0..=#17
+            Map: null
+              →Consolidating Union
+                →Negate Diffs
+                  →Fused with Child Map/Filter/Project
+                    Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                      →Read l5
+                →Fused with Child Map/Filter/Project
+                  Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                    →Read l4
+          →Fused with Child Map/Filter/Project
+            Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#17
+              →Read l5
+
+Used Indexes:
+  - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_status_history_ind (*** full scan ***)
+  - mz_internal.mz_cluster_replica_metrics_history_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_history_ind (*** full scan ***)
+  - mz_internal.mz_cluster_replica_name_history_ind (differential join)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN INDEX "mz_internal"."mz_console_cluster_utilization_overview_3h_ind";
+----
+mz_internal.mz_console_cluster_utilization_overview_3h_ind:
+  →Arrange (#17{cluster_id})
+    →Stream mz_internal.mz_console_cluster_utilization_overview_3h
+
+mz_internal.mz_console_cluster_utilization_overview_3h:
+  →With
+    cte l0 =
+      →Distinct GroupAggregate
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #1..=#3
+            Filter: (#1) IS NOT NULL
+              →Arranged mz_internal.mz_cluster_replica_history
+                Key: (#6{dropped_at})
+          →Fused with Child Map/Filter/Project
+            Project: #0, #3, #2
+              →Arranged mz_catalog.mz_cluster_replicas
+                Key: (#0{id})
+    cte l1 =
+      →Map/Filter/Project
+        Filter: (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(00:01:00, #9, 1970-01-01 00:00:00 UTC) + 03:00:00)))
+          →Delta Join [%0:l0[#0{replica_id}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]] [%1:mz_cluster_replica_sizes[#0{size}] » %0:l0[#1{size}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}]] [%2:mz_cluster_replica_metrics_history[#0{replica_id}] » %0:l0[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]]
+            →Arrange (#0{replica_id}) (#1{size})
+              →Fused with Child Map/Filter/Project
+                Project: #0, #1
+                Filter: (#1{size}) IS NOT NULL
+                  →Arranged l0
+                    Key: (#0..=#2)
+            →Arranged mz_catalog.mz_cluster_replica_sizes
+            →Arranged mz_internal.mz_cluster_replica_metrics_history
+    cte l2 =
+      →Differential Join %0[#0..=#6] » %1[#0..=#6]
+        after %1:
+          Project: #0, #1, #7, #10..=#18
+          Map: (#9 / uint8_to_double((case when (0 = uint8_to_numeric(#3{cpu_nano_cores})) then null else #3{cpu_nano_cores} end * #6{processes}))), (#10 / uint8_to_double((case when (0 = uint8_to_numeric(#4{memory_bytes})) then null else #4{memory_bytes} end * #6{processes}))), (#11 / uint8_to_double((case when (0 = uint8_to_numeric(#5{disk_bytes})) then null else #5{disk_bytes} end * #6{processes}))), (#5{disk_bytes} * #6{processes}), (#4{memory_bytes} * #6{processes}), coalesce(#8, #13), timestamptz_bin(00:01:00, #0{occurred_at}, 1970-01-01 00:00:00 UTC)
+        →Temporally-Bucketed Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
+          Aggregations: max, max
+          Key:
+            Project: #6, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#5, #9..=#11
+              →Read l1
+        →Temporally-Bucketed Accumulable GroupAggregate
+          Simple aggregates: sum(uint8_to_double(#6{cpu_nano_cores})), sum(uint8_to_double(#7{memory_bytes})), sum(uint8_to_double(#8{disk_bytes}))
+          Key:
+            Project: #9, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#9
+              →Read l1
+    cte l3 =
+      →Delta Join [%0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%1[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%2[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%3[#1{replica_id}, #4{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%4[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %5:l0[#0{replica_id}]] [%5:l0[#0{replica_id}] » %0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}]]
+        →Arrange (#1{replica_id}) (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #6, #11, #12
+                  Map: coalesce(#3{memory_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #7, #11, #12
+                  Map: coalesce(#4{disk_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #5, #11, #12
+                  Map: coalesce(#5{cpu_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #4{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#5
+              →Non-monotonic TopK
+                Group By #4, #1
+                Order By #6 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #6, #7, #11..=#13
+                  Map: case when ((#3{memory_bytes}) IS NULL AND (#4{disk_bytes}) IS NULL) then null else ((coalesce(#3{memory_bytes}, 0) + coalesce(#4{disk_bytes}, 0)) / uint8_to_double(case when (0 = uint8_to_numeric((#9{total_memory_bytes} + #8{total_disk_bytes}))) then null else (#9{total_memory_bytes} + #8{total_disk_bytes}) end)) end, coalesce(#12{memory_and_disk_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #10..=#12
+                  Map: coalesce(#2{heap_bytes}, 0)
+                    →Read l2
+        →Arrange (#0{replica_id})
+          →Arranged l0
+    cte l4 =
+      →Differential Join %1[#0, #1] » %0:l3[#1, #3]
+        →Arrange (#1, #3)
+          →Stream l3
+        →Arrange (#0, #1)
+          →Map/Filter/Project
+            Project: #0, #1, #3
+              →Non-monotonic TopK
+                Group By #0, #1
+                Order By #2 desc nulls_first
+                Limit 1
+                →Differential Join %1:mz_cluster_replica_name_history[#1{id}] » %0[#0{replica_id}]
+                  after %0:
+                    Project: #0, #4, #1, #3
+                    Filter: ((#4{bucket_start} + 00:01:00) >= coalesce(#1{occurred_at}, 1970-01-01 00:00:00 UTC))
+                  →Arrange (#0{replica_id})
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #1, #3
+                          →Read l3
+                  →Arranged mz_internal.mz_cluster_replica_name_history
+    cte l5 =
+      →Differential Join %1[#1, #0] » %0:l4[#1{replica_id}, #3{bucket_start}]
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Stream l4
+        →Arrange (#1, #0)
+          →Temporally-Bucketed Non-incremental GroupAggregate
+            Aggregation: jsonb_agg[order_by=[]](row(coalesce(jsonbable_to_jsonb(jsonb_build_object("replicaId", jsonbable_to_jsonb(#0{replica_id}), "occurredAt", jsonbable_to_jsonb(timestamp_with_time_zone_to_text(#2{occurred_at})), "status", "offline", "reason", jsonbable_to_jsonb(#1{reason}))), json_null)))
+            Key:
+              Project: #3, #0
+              Map: timestamptz_bin(00:01:00, #2{occurred_at}, 1970-01-01 00:00:00 UTC)
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #4
+              Filter: (#1{process_id} = 0) AND (#2{status} = "offline") AND (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(00:01:00, #4{occurred_at}, 1970-01-01 00:00:00 UTC) + 03:00:00)))
+                →Arranged mz_internal.mz_cluster_replica_status_history
+                  Key: (#0{replica_id})
+  →Return
+    →Map/Filter/Project
+      Project: #1, #0, #2..=#5, #10, #8, #9, #11..=#13, #6, #7, #17, #18, #16, #15, #14
+      Map: (#1{bucket_start} + 00:01:00)
+        →Union
+          →Map/Filter/Project
+            Project: #0..=#17
+            Map: null
+              →Consolidating Union
+                →Negate Diffs
+                  →Fused with Child Map/Filter/Project
+                    Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                      →Read l5
+                →Fused with Child Map/Filter/Project
+                  Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                    →Read l4
+          →Fused with Child Map/Filter/Project
+            Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#17
+              →Read l5
+
+Used Indexes:
+  - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_status_history_ind (*** full scan ***)
+  - mz_internal.mz_cluster_replica_metrics_history_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_history_ind (*** full scan ***)
+  - mz_internal.mz_cluster_replica_name_history_ind (differential join)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN INDEX "mz_internal"."mz_console_cluster_utilization_overview_ind";
 ----
 mz_internal.mz_console_cluster_utilization_overview_ind:
@@ -834,97 +1192,99 @@ mz_internal.mz_console_cluster_utilization_overview:
               →Arranged mz_catalog.mz_cluster_replicas
                 Key: (#0{id})
     cte l1 =
-      →Differential Join %0:l0[#0{replica_id}] » %1[#1{replica_id}]
-        after %1:
-          Project: #0..=#10
-          Map: timestamptz_bin(08:00:00, #1{occurred_at}, 1970-01-01 00:00:00 UTC)
-        →Arrange (#0{replica_id})
-          →Fused with Child Map/Filter/Project
-            Project: #0
-              →Arranged l0
-                Key: (#0..=#2)
-        →Arrange (#1{replica_id})
-          →Map/Filter/Project
-            Project: #0, #1, #9, #10, #14, #16, #18..=#21
-            Map: uint8_to_numeric(#7{processes}), uint8_to_double(case when (#12 = 0) then null else #7{processes} end), ((#8 / uint8_to_double(case when (0 = uint8_to_numeric(#3{cpu_nano_cores})) then null else #3{cpu_nano_cores} end)) / #13), uint8_to_numeric(#4{memory_bytes}), ((#9 / uint8_to_double(case when (#15 = 0) then null else #4{memory_bytes} end)) / #13), uint8_to_numeric(#5{disk_bytes}), ((#10 / uint8_to_double(case when (#17 = 0) then null else #5{disk_bytes} end)) / #13), ((#11 / uint8_to_double(case when (0 = uint8_to_numeric(#6{heap_limit})) then null else #6{heap_limit} end)) / #13), (#17 * #12), (#15 * #12)
-              →Temporally-Bucketed Accumulable GroupAggregate
-                Simple aggregates: sum(uint8_to_double(#6{cpu_nano_cores})), sum(uint8_to_double(#7{memory_bytes})), sum(uint8_to_double(#8{disk_bytes})), sum(uint8_to_double(#10{heap_bytes}))
-                Key:
-                  Project: #9, #0, #1, #3..=#5, #11, #2
-                →Map/Filter/Project
-                  Filter: (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(08:00:00, #9, 1970-01-01 00:00:00 UTC) + 14 days)))
-                    →Delta Join [%0:l0[#0{replica_id}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]] [%1:mz_cluster_replica_sizes[#0{size}] » %0:l0[#1{size}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}]] [%2:mz_cluster_replica_metrics_history[#0{replica_id}] » %0:l0[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]]
-                      →Arrange (#0{replica_id}) (#1{size})
-                        →Fused with Child Map/Filter/Project
-                          Project: #0, #1
-                          Filter: (#1{size}) IS NOT NULL
-                            →Arranged l0
-                              Key: (#0..=#2)
-                      →Arranged mz_catalog.mz_cluster_replica_sizes
-                      →Arranged mz_internal.mz_cluster_replica_metrics_history
+      →Map/Filter/Project
+        Filter: (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(01:00:00, #9, 1970-01-01 00:00:00 UTC) + 14 days)))
+          →Delta Join [%0:l0[#0{replica_id}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]] [%1:mz_cluster_replica_sizes[#0{size}] » %0:l0[#1{size}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}]] [%2:mz_cluster_replica_metrics_history[#0{replica_id}] » %0:l0[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]]
+            →Arrange (#0{replica_id}) (#1{size})
+              →Fused with Child Map/Filter/Project
+                Project: #0, #1
+                Filter: (#1{size}) IS NOT NULL
+                  →Arranged l0
+                    Key: (#0..=#2)
+            →Arranged mz_catalog.mz_cluster_replica_sizes
+            →Arranged mz_internal.mz_cluster_replica_metrics_history
     cte l2 =
-      →Delta Join [%0[#0{replica_id}] » %1[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%1[#0{replica_id}, #3{bucket_start}] » %0[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%2[#0{replica_id}, #3{bucket_start}] » %0[#0{replica_id}, #3{bucket_start}] » %1[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%3[#0{replica_id}, #4{bucket_start}] » %0[#0{replica_id}, #3{bucket_start}] » %1[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%4[#0{replica_id}, #3{bucket_start}] » %0[#0{replica_id}, #3{bucket_start}] » %1[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %5:l0[#0{replica_id}]] [%5:l0[#0{replica_id}] » %0[#0{replica_id}] » %1[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}]]
-        →Arrange (#0{replica_id}) (#0{replica_id}, #3{bucket_start})
+      →Differential Join %0[#0..=#6] » %1[#0..=#6]
+        after %1:
+          Project: #0, #1, #7, #10..=#18
+          Map: (#9 / uint8_to_double((case when (0 = uint8_to_numeric(#3{cpu_nano_cores})) then null else #3{cpu_nano_cores} end * #6{processes}))), (#10 / uint8_to_double((case when (0 = uint8_to_numeric(#4{memory_bytes})) then null else #4{memory_bytes} end * #6{processes}))), (#11 / uint8_to_double((case when (0 = uint8_to_numeric(#5{disk_bytes})) then null else #5{disk_bytes} end * #6{processes}))), (#5{disk_bytes} * #6{processes}), (#4{memory_bytes} * #6{processes}), coalesce(#8, #13), timestamptz_bin(01:00:00, #0{occurred_at}, 1970-01-01 00:00:00 UTC)
+        →Temporally-Bucketed Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
+          Aggregations: max, max
+          Key:
+            Project: #6, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#5, #9..=#11
+              →Read l1
+        →Temporally-Bucketed Accumulable GroupAggregate
+          Simple aggregates: sum(uint8_to_double(#6{cpu_nano_cores})), sum(uint8_to_double(#7{memory_bytes})), sum(uint8_to_double(#8{disk_bytes}))
+          Key:
+            Project: #9, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#9
+              →Read l1
+    cte l3 =
+      →Delta Join [%0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%1[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%2[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%3[#1{replica_id}, #4{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%4[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %5:l0[#0{replica_id}]] [%5:l0[#0{replica_id}] » %0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}]]
+        →Arrange (#1{replica_id}) (#1{replica_id}, #3{bucket_start})
           →Map/Filter/Project
             Project: #0..=#3
               →Non-monotonic TopK
-                Group By #3, #0
+                Group By #3, #1
                 Order By #4 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #5, #10, #11
-                  Map: coalesce(#2{memory_bytes}, 0)
-                    →Read l1
-        →Arrange (#0{replica_id}, #3{bucket_start})
+                  Project: #0, #1, #6, #11, #12
+                  Map: coalesce(#3{memory_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
           →Map/Filter/Project
             Project: #0..=#3
               →Non-monotonic TopK
-                Group By #3, #0
+                Group By #3, #1
                 Order By #4 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #6, #10, #11
-                  Map: coalesce(#3{disk_bytes}, 0)
-                    →Read l1
-        →Arrange (#0{replica_id}, #3{bucket_start})
+                  Project: #0, #1, #7, #11, #12
+                  Map: coalesce(#4{disk_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
           →Map/Filter/Project
             Project: #0..=#3
               →Non-monotonic TopK
-                Group By #3, #0
+                Group By #3, #1
                 Order By #4 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #4, #10, #11
-                  Map: coalesce(#4{cpu_percent}, 0)
-                    →Read l1
-        →Arrange (#0{replica_id}, #4{bucket_start})
+                  Project: #0, #1, #5, #11, #12
+                  Map: coalesce(#5{cpu_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #4{bucket_start})
           →Map/Filter/Project
             Project: #0..=#5
               →Non-monotonic TopK
-                Group By #4, #0
+                Group By #4, #1
                 Order By #6 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #5, #6, #10..=#12
-                  Map: case when ((#2{memory_bytes}) IS NULL AND (#3{disk_bytes}) IS NULL) then null else ((coalesce(#3{disk_bytes}, 0) + coalesce(#2{memory_bytes}, 0)) / numeric_to_double((#8{total_disk_bytes} + #9{total_memory_bytes}))) end, coalesce(#11{memory_and_disk_percent}, 0)
-                    →Read l1
-        →Arrange (#0{replica_id}, #3{bucket_start})
+                  Project: #0, #1, #6, #7, #11..=#13
+                  Map: case when ((#3{memory_bytes}) IS NULL AND (#4{disk_bytes}) IS NULL) then null else ((coalesce(#3{memory_bytes}, 0) + coalesce(#4{disk_bytes}, 0)) / uint8_to_double(case when (0 = uint8_to_numeric((#9{total_memory_bytes} + #8{total_disk_bytes}))) then null else (#9{total_memory_bytes} + #8{total_disk_bytes}) end)) end, coalesce(#12{memory_and_disk_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
           →Map/Filter/Project
             Project: #0..=#3
               →Non-monotonic TopK
-                Group By #3, #0
+                Group By #3, #1
                 Order By #4 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #7, #10, #11
-                  Map: coalesce(#7{heap_percent}, 0)
-                    →Read l1
+                  Project: #0, #1, #10..=#12
+                  Map: coalesce(#2{heap_bytes}, 0)
+                    →Read l2
         →Arrange (#0{replica_id})
           →Arranged l0
-    cte l3 =
-      →Differential Join %1[#0, #1] » %0:l2[#0, #3]
-        →Arrange (#0, #3)
-          →Stream l2
+    cte l4 =
+      →Differential Join %1[#0, #1] » %0:l3[#1, #3]
+        →Arrange (#1, #3)
+          →Stream l3
         →Arrange (#0, #1)
           →Map/Filter/Project
             Project: #0, #1, #3
@@ -935,32 +1295,32 @@ mz_internal.mz_console_cluster_utilization_overview:
                 →Differential Join %1:mz_cluster_replica_name_history[#1{id}] » %0[#0{replica_id}]
                   after %0:
                     Project: #0, #4, #1, #3
-                    Filter: ((#4{bucket_start} + 08:00:00) >= coalesce(#1{occurred_at}, 1970-01-01 00:00:00 UTC))
+                    Filter: ((#4{bucket_start} + 01:00:00) >= coalesce(#1{occurred_at}, 1970-01-01 00:00:00 UTC))
                   →Arrange (#0{replica_id})
                     →Distinct GroupAggregate
                       →Fused with Child Map/Filter/Project
-                        Project: #0, #3
-                          →Read l2
+                        Project: #1, #3
+                          →Read l3
                   →Arranged mz_internal.mz_cluster_replica_name_history
-    cte l4 =
-      →Differential Join %1[#1, #0] » %0:l3[#0{replica_id}, #3{bucket_start}]
-        →Arrange (#0{replica_id}, #3{bucket_start})
-          →Stream l3
+    cte l5 =
+      →Differential Join %1[#1, #0] » %0:l4[#1{replica_id}, #3{bucket_start}]
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Stream l4
         →Arrange (#1, #0)
           →Temporally-Bucketed Non-incremental GroupAggregate
             Aggregation: jsonb_agg[order_by=[]](row(coalesce(jsonbable_to_jsonb(jsonb_build_object("replicaId", jsonbable_to_jsonb(#0{replica_id}), "occurredAt", jsonbable_to_jsonb(timestamp_with_time_zone_to_text(#2{occurred_at})), "status", "offline", "reason", jsonbable_to_jsonb(#1{reason}))), json_null)))
             Key:
               Project: #3, #0
-              Map: timestamptz_bin(08:00:00, #2{occurred_at}, 1970-01-01 00:00:00 UTC)
+              Map: timestamptz_bin(01:00:00, #2{occurred_at}, 1970-01-01 00:00:00 UTC)
             →Fused with Child Map/Filter/Project
               Project: #0, #3, #4
-              Filter: (#1{process_id} = 0) AND (#2{status} = "offline") AND (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(08:00:00, #4{occurred_at}, 1970-01-01 00:00:00 UTC) + 14 days)))
+              Filter: (#1{process_id} = 0) AND (#2{status} = "offline") AND (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(01:00:00, #4{occurred_at}, 1970-01-01 00:00:00 UTC) + 14 days)))
                 →Arranged mz_internal.mz_cluster_replica_status_history
                   Key: (#0{replica_id})
   →Return
     →Map/Filter/Project
       Project: #1, #0, #2..=#5, #10, #8, #9, #11..=#13, #6, #7, #17, #18, #16, #15, #14
-      Map: (#1{bucket_start} + 08:00:00)
+      Map: (#1{bucket_start} + 01:00:00)
         →Union
           →Map/Filter/Project
             Project: #0..=#17
@@ -968,14 +1328,14 @@ mz_internal.mz_console_cluster_utilization_overview:
               →Consolidating Union
                 →Negate Diffs
                   →Fused with Child Map/Filter/Project
-                    Project: #0, #3, #2, #1, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
-                      →Read l4
+                    Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                      →Read l5
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #3, #2, #1, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
-                    →Read l3
+                  Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                    →Read l4
           →Fused with Child Map/Filter/Project
-            Project: #0, #3, #2, #1, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#17
-              →Read l4
+            Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#17
+              →Read l5
 
 Used Indexes:
   - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
@@ -4294,7 +4654,7 @@ mz_catalog.mz_indexes:
           Project: #2, #0, #1, #3, #4, #7, #5, #6
           Map: "s1"
       →Arrange (#1{name}) (#2{on_schema}, #3{on_name})
-        →Constant (76 rows)
+        →Constant (78 rows)
       →Arrange (empty key) (#1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3
@@ -4780,6 +5140,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_overridden_system_parameters";
+----
+mz_internal.mz_overridden_system_parameters:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#1, #2)
+  filter=(("ServerConfiguration" = (#0{data} ->> "kind")))
+  map=(((#0{data} -> "key") ->> "name"), ((#0{data} -> "value") ->> "value"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_pending_cluster_replicas";
 ----
 mz_internal.mz_pending_cluster_replicas:
@@ -4804,21 +5179,6 @@ Source mz_internal.mz_catalog_raw
   project=(#2..=#4)
   filter=(("ReplicaSystemConfiguration" = (#0{data} ->> "kind")))
   map=((#0{data} -> "key"), parse_catalog_id((#1 -> "replica_id")), (#1 ->> "name"), ((#0{data} -> "value") ->> "value"))
-
-Target cluster: mz_catalog_server
-
-EOF
-
-query T multiline
-EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_overridden_system_parameters";
-----
-mz_internal.mz_overridden_system_parameters:
-  →Read mz_internal.mz_catalog_raw
-
-Source mz_internal.mz_catalog_raw
-  project=(#1, #2)
-  filter=(("ServerConfiguration" = (#0{data} ->> "kind")))
-  map=(((#0{data} -> "key") ->> "name"), ((#0{data} -> "value") ->> "value"))
 
 Target cluster: mz_catalog_server
 
@@ -7237,6 +7597,36 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_console_cluster_utilization_overview_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_console_cluster_utilization_overview_24h";
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #1..=#17, #0, #18
+    →Indexed mz_internal.mz_console_cluster_utilization_overview_24h (using mz_internal.mz_console_cluster_utilization_overview_24h_ind)
+
+Used Indexes:
+  - mz_internal.mz_console_cluster_utilization_overview_24h_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_console_cluster_utilization_overview_3h";
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #1..=#17, #0, #18
+    →Indexed mz_internal.mz_console_cluster_utilization_overview_3h (using mz_internal.mz_console_cluster_utilization_overview_3h_ind)
+
+Used Indexes:
+  - mz_internal.mz_console_cluster_utilization_overview_3h_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
