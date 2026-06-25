@@ -284,18 +284,22 @@ pub(super) fn generate_source_export_statement_values(
     let mut constraints = vec![];
     for key in table.keys.clone() {
         let mut key_columns = vec![];
+        let mut all_key_cols_included = true;
 
         for col_num in key.cols {
-            let ident = Ident::new(
-                table
-                    .columns
-                    .iter()
-                    .find(|col| col.col_num == col_num)
-                    .expect("key exists as column")
-                    .name
-                    .clone(),
-            )?;
-            key_columns.push(ident);
+            match table.columns.iter().find(|col| col.col_num == col_num) {
+                Some(col) => {
+                    let ident = Ident::new(col.name.clone())?;
+                    key_columns.push(ident);
+                }
+                None => {
+                    all_key_cols_included = false;
+                    break;
+                }
+            }
+        }
+        if !all_key_cols_included {
+            continue;
         }
 
         let constraint = mz_sql_parser::ast::TableConstraint::Unique {

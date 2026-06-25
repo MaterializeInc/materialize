@@ -56,6 +56,7 @@ use crate::command::{
     CatalogDump, CatalogSnapshot, Command, CopyFromStdinWriter, ExecuteResponse, Response,
     SASLChallengeResponse, SASLVerifyProofResponse, SuperuserAttribute,
 };
+use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::{self, Metrics};
@@ -553,6 +554,45 @@ Issue a SQL query to get started. Need help?
         let (tx, rx) = oneshot::channel();
         self.send(Command::GetSystemVars { tx });
         rx.await.expect("coordinator unexpectedly gone")
+    }
+
+    /// Returns a snapshot of the catalog.
+    pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::CatalogSnapshot { tx });
+        let CatalogSnapshot { catalog } = rx.await.expect("coordinator unexpectedly gone");
+        catalog
+    }
+
+    /// Reconciles the coordinator's scoped feature-flag working copy towards
+    /// `overrides`. Used by the system-parameter sync loop from continuous
+    /// LaunchDarkly evaluation.
+    ///
+    /// `prune_scope` bounds which objects' rows the reconcile may remove (the
+    /// objects `overrides` was evaluated for). The sync loop passes the live
+    /// objects from its snapshot; `None` is a full replace, used by the
+    /// disabled-feature clear path. See
+    /// [`crate::catalog::Op::UpdateScopedSystemParameters`].
+    pub async fn update_scoped_system_parameters(
+        &self,
+        overrides: ScopedParameters,
+        prune_scope: Option<ScopedParametersScope>,
+    ) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::UpdateScopedSystemParameters {
+            overrides,
+            prune_scope,
+            tx,
+        });
+        let _ = rx.await;
+    }
+
+    /// Installs (or replaces) the shared system-parameter frontend on the
+    /// coordinator, letting the create-cluster / create-replica paths resolve a
+    /// new object's scoped overrides synchronously. Sent by the sync loop each
+    /// time it (re)initializes the frontend. Fire-and-forget.
+    pub fn install_scoped_system_parameter_frontend(&self, frontend: Arc<SystemParameterFrontend>) {
+        self.send(Command::InstallScopedSystemParameterFrontend { frontend });
     }
 
     #[instrument(level = "debug")]
@@ -1320,6 +1360,8 @@ impl SessionClient {
                 | Command::PrivilegedCancelRequest { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
+                | Command::UpdateScopedSystemParameters { .. }
+                | Command::InstallScopedSystemParameterFrontend { .. }
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }

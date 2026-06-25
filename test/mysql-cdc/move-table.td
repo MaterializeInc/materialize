@@ -9,10 +9,6 @@
 
 $ set-sql-timeout duration=1s
 
-# TODO: Reenable when https://linear.app/materializeinc/issue/SS-308 is fixed
-$ skip-if
-SELECT true
-
 #
 # Test move table
 #

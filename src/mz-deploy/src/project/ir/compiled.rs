@@ -508,13 +508,15 @@ impl DatabaseObject {
     /// External databases (not in the map) are untouched.
     pub fn rewrite_database_references(&mut self, db_map: &BTreeMap<String, String>) {
         let ident = self.stmt.ident();
-        let database = ident.database.as_deref().unwrap_or("unknown");
-        let schema = ident.schema.as_deref().unwrap_or("unknown");
-        let own_name = UnresolvedItemName(vec![
-            Ident::new(database).expect("valid ident"),
-            Ident::new(schema).expect("valid ident"),
-            Ident::new(&ident.object).expect("valid ident"),
-        ]);
+        let database = ident
+            .database
+            .clone()
+            .unwrap_or_else(|| Ident::new_unchecked("unknown"));
+        let schema = ident
+            .schema
+            .clone()
+            .unwrap_or_else(|| Ident::new_unchecked("unknown"));
+        let own_name = UnresolvedItemName(vec![database, schema, ident.object.clone()]);
         let fqn = FullyQualifiedName::try_from(own_name.clone())
             .expect("database, schema, and object are always present");
         let mut visitor = NormalizingVisitor::fully_qualifying_with_db_map(&fqn, Some(db_map));

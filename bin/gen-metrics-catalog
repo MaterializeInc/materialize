@@ -12,11 +12,13 @@
 # gen-metrics-catalog — regenerate the `metric!` catalog consumed by the docs.
 #
 # Walks the Rust source tree for `metric!` definitions and writes them to
-# doc/user/data/metrics.yml. CI runs this and fails if the result differs from
-# what's checked in (see ci/test/lint-main/checks/check-generation.sh).
+# doc/user/data/metrics.yml, or to the file given as the first argument.
+#
+# To verify the checked-in catalog is up to date, run
+# ci/test/lint-metrics-catalog.sh (pass --rewrite to update it).
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-cargo run --quiet -p mz-metrics-catalog -- src doc/user/data/metrics.yml
+cargo run --quiet -p mz-metrics-catalog -- src "${1:-doc/user/data/metrics.yml}"

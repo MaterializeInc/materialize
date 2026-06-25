@@ -131,6 +131,8 @@ impl Coordinator {
                     plan,
                     validity,
                     requires_locks: BTreeSet::default(),
+                    resolved_ids,
+                    sql_impl_resolved_ids,
                 };
                 // Defer op accepts an optional write lock, but there aren't any writes occurring
                 // here, since the map to `None`.

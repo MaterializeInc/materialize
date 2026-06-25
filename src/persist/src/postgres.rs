@@ -232,6 +232,10 @@ impl PostgresConsensusConfig {
             fn keepalives_retries(&self) -> u32 {
                 5
             }
+
+            fn statement_timeout(&self) -> Duration {
+                Duration::ZERO
+            }
         }
 
         let dyncfg = ConfigSet::default().add(&USE_POSTGRES_TUNED_QUERIES);

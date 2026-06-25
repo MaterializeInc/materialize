@@ -132,8 +132,9 @@ database-level statements:
 
 The `project.toml` file in your project root controls project-wide settings:
 
-- **`mz_version`** — the Materialize version used for local type-checking. Set
-  to `"cloud"` to use the latest cloud version.
+- **`mz_version`** — the Materialize version used to run `test` and `explain`
+  locally (it selects the Docker image). Set to `"cloud"` to use the latest
+  cloud version.
 - **`dependencies`** — external dependency declarations for objects your project
   references but does not own. See [Local development](/manage/mz-deploy/local-development/)
   for details.

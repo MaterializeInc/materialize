@@ -1,9 +1,9 @@
 # Adapter Guide
 
-General guidance for working on the adapter layer (`src/adapter/`), the
-coordinator, pgwire frontend, and related crates. This is a living document -
-add to it as you discover invariants, pitfalls, or non-obvious design
-decisions.
+General guidance for working on and reviewing the adapter layer
+(`src/adapter/`), the coordinator, pgwire frontend, and related crates. This is
+a living document: add to it as you discover invariants, pitfalls, or
+non-obvious design decisions.
 
 ## Architecture & Key Concepts
 
@@ -200,6 +200,29 @@ the replica into the working copy. For render-frozen settings that window is a
 correctness gap, not just a delay. The fix is to make the catalog the source of
 truth: write the value through the create transaction so the diff, and any later
 rebuild, include it.
+
+### A compare-and-append must be enforced by the transaction, not by a check before it
+
+A decision computed against a snapshot of catalog state and applied later (for
+example a background task that reads state, computes ops off the coordinator
+loop, then submits them for the loop to transact) must carry the precondition it
+was derived from, and that precondition must be enforced as part of the same
+transaction that applies it. Reading the current in-memory catalog, comparing it
+to the expected state, and then calling `catalog_transact` is not a
+compare-and-append. It is a time-of-check to time-of-use gap.
+
+- It is safe today only by the fragile accident that the coordinator loop does
+  not yield between the check and the durable commit. Any await later inserted
+  between them, or any move of the check off the loop, reopens the race.
+- It does not hold across writers. Another `environmentd` that commits a
+  conflicting change to the durable store between this node's in-memory check and
+  its durable commit is not detected. The durable layer does not re-validate a
+  per-object precondition, so the stale write lands and clobbers. This is the
+  same distributed stance as "No local-only assumptions" above.
+
+If you need conflict detection, evaluate the precondition atomically with the
+commit, a real compare-and-append against the durable store. A check that merely
+precedes the write on the loop is not that, even when it reads the right state.
 
 ## Rejected Optimizations
 

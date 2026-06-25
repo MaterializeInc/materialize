@@ -229,6 +229,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_scoped_system_parameters",
+            "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_upsert_v2",
             "false",
             ["true", "false"],
@@ -550,6 +555,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "crdb_keepalives_idle",
     "crdb_keepalives_interval",
     "crdb_keepalives_retries",
+    "pg_timestamp_oracle_statement_timeout",
     "persist_use_critical_since_txn",
     "use_global_txn_cache_source",
     "persist_batch_builder_max_outstanding_parts",

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { CloseIcon } from "@chakra-ui/icons";
 import {
   Box,
   BoxProps,
@@ -14,6 +15,7 @@ import {
   ButtonProps,
   Heading,
   HStack,
+  IconButton,
   StackProps,
   Text,
   useTheme,
@@ -36,6 +38,8 @@ export interface AlertProps extends BoxProps {
   showButton?: boolean;
   buttonText?: string;
   buttonProps?: ButtonProps & Partial<LinkProps>;
+  /** When set, renders a dismiss (X) button that calls this on click. */
+  onClose?: () => void;
 }
 
 function getColorScheme(
@@ -72,6 +76,7 @@ export const Alert = forwardRef(
       showButton = false,
       buttonText = "View details",
       buttonProps = {},
+      onClose,
       ...props
     }: AlertProps,
     ref,
@@ -128,6 +133,16 @@ export const Alert = forwardRef(
                   {buttonText}
                 </Button>
               </Box>
+            ) : null}
+            {onClose ? (
+              <IconButton
+                aria-label="Dismiss"
+                icon={<CloseIcon boxSize={3} />}
+                variant="ghost"
+                size="sm"
+                color={colors.foreground.secondary}
+                onClick={onClose}
+              />
             ) : null}
           </HStack>
         </Box>

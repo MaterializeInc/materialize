@@ -1419,31 +1419,20 @@ fn test_staging_objects_to_deploy_filter() {
     }
 }
 
+/// A deployed object whose name is a reserved keyword (e.g. `order`) is still
+/// recognized as a member of `objects_to_deploy` and has its references suffixed
+/// for staging.
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 #[mz_ore::test]
 fn test_staging_keyword_named_object_is_deployed() {
-    // Regression test for QA Finding 2: a deployed object whose name requires
-    // quoting (a reserved keyword such as `order`) must still be recognized as a
-    // member of objects_to_deploy and have its references suffixed for staging.
-    //
-    // The deploy set keys its object component the same way the dependency
-    // analyzer does — `ObjectId::new(db, schema, stmt.ident().object)`, where
-    // `ident().object` flows through `Ident`'s `AstDisplay` (the quoted form for
-    // keywords). References resolve through `ObjectId::from_item_name`, which uses
-    // the *same* `AstDisplay`. Both sides therefore agree, so the reference is
-    // correctly classified as internal and suffixed.
     let fqn = staging_test_fqn();
-
-    // Mirror how the deploy set stores a keyword-named object's id: the object
-    // component is `Ident::to_string()`, i.e. the quoted form.
-    let order_object = Ident::new("order").expect("valid ident").to_string();
 
     let external_deps = BTreeSet::new();
     let mut objects_to_deploy = BTreeSet::new();
     objects_to_deploy.insert(ObjectId::new(
         "materialize".to_string(),
         "public".to_string(),
-        order_object,
+        "order".to_string(),
     ));
 
     let replacement_objects = BTreeSet::new();

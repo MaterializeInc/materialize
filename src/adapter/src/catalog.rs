@@ -677,6 +677,51 @@ impl Catalog {
             .err_into()
     }
 
+    /// Allocate `amount` many user replica IDs. See
+    /// [`DurableCatalogState::allocate_user_replica_ids`].
+    pub async fn allocate_user_replica_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<ReplicaId>, Error> {
+        self.storage()
+            .await
+            .allocate_user_replica_ids(amount, commit_ts)
+            .await
+            .maybe_terminate("allocating user replica ids")
+            .err_into()
+    }
+
+    /// Allocate `amount` many system replica IDs. See
+    /// [`DurableCatalogState::allocate_system_replica_ids`].
+    pub async fn allocate_system_replica_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<ReplicaId>, Error> {
+        self.storage()
+            .await
+            .allocate_system_replica_ids(amount, commit_ts)
+            .await
+            .maybe_terminate("allocating system replica ids")
+            .err_into()
+    }
+
+    /// Allocate `amount` many replica IDs for `cluster_id`, picking user or
+    /// system IDs based on the cluster's ID type.
+    pub async fn allocate_replica_ids(
+        &self,
+        cluster_id: ClusterId,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<ReplicaId>, Error> {
+        if cluster_id.is_system() {
+            self.allocate_system_replica_ids(amount, commit_ts).await
+        } else {
+            self.allocate_user_replica_ids(amount, commit_ts).await
+        }
+    }
+
     /// Get the next system replica id without allocating it.
     pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
         self.storage()

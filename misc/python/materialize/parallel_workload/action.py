@@ -1519,6 +1519,7 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_scoped_system_parameters"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -1577,6 +1578,13 @@ class FlipFlagsAction(Action):
             "'1min'",
             "'1h'",
             "'7d'",
+        ]
+        # Keep these generous: a tight timeout would abort the oracle's own
+        # queries (they are retried, but it adds noise). "0s" leaves it unset.
+        self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
+            "'0s'",
+            "'30s'",
+            "'60s'",
         ]
         # Note: it's not safe to re-enable this flag after writing with `persist_validate_part_bounds_on_write`,
         # since those new-style parts may fail our old-style validation.

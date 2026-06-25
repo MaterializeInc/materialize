@@ -519,6 +519,12 @@ impl PeekClient {
 
         let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
             .override_from(&catalog.get_cluster(cluster.id()).config.features())
+            // A cluster-scoped LaunchDarkly rule beats a manual `FEATURES` pin.
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(cluster.id()),
+            )
             .override_from(&explain_ctx);
 
         if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
@@ -1242,7 +1248,14 @@ impl PeekClient {
                 if let Some(trace) = plan_insights_optimizer_trace {
                     let target_cluster = catalog.get_cluster(target_cluster_id);
                     let features = OptimizerFeatures::from(catalog.system_config())
-                        .override_from(&target_cluster.config.features());
+                        .override_from(&target_cluster.config.features())
+                        // A cluster-scoped LaunchDarkly rule beats a manual
+                        // `FEATURES` pin.
+                        .override_from(
+                            &catalog
+                                .state()
+                                .cluster_scoped_optimizer_overrides(target_cluster_id),
+                        );
                     let insights = trace
                         .into_plan_insights(
                             &features,

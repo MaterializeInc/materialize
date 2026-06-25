@@ -74,6 +74,7 @@ macro_rules! metric {
         $(, var_labels: [ $($vl_name:expr),* ])?
         $(, buckets: $bk_name:expr)?
         $(, visibility: $visibility:expr)?
+        $(, tags: [ $($tag:expr),* $(,)? ])?
         $(,)?
     ) => {{
         let const_labels = (&[
@@ -100,6 +101,9 @@ macro_rules! metric {
         // It has no runtime effect; we only type-check it here so a bad value is
         // a compile error rather than silently ignored.
         $(let _: $crate::metrics::MetricVisibility = $visibility;)?
+        // `tags` is documentation metadata for the metrics catalog.
+        // It has no runtime effect.
+        $($(let _: $crate::metrics::MetricTag = $tag;)*)?
         mk_opts
     }}
 }
@@ -129,6 +133,27 @@ pub enum MetricVisibility {
     /// alerts on. We do not guarantee stability for this group
     /// of metrics.
     Public,
+}
+
+/// A tag categorizing a metric in the user-facing metrics catalog.
+///
+/// It is set via the optional `tags:` field of [`metric!`] and
+/// consumed by the metrics catalog (`bin/gen-metrics-catalog`).
+/// It has no effect on the metric at runtime.
+///
+/// A metric may carry many tags, or none (the default). A tag names the
+/// grouping the metric is presented under in user-facing documentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MetricTag {
+    /// SQL Control plane metrics (client connections, availability, catalog).
+    Environment,
+    /// Metrics for compute objects (indexes, materialized views).
+    Compute,
+    /// Metrics for sources.
+    Source,
+    /// Metrics for sinks.
+    Sink,
 }
 
 /// The materialize metrics registry.
@@ -934,12 +959,12 @@ pub fn register_runtime_metrics(
     }
 }
 
-/// Returns the `(name, help, source)` of every Tokio runtime metric registered
-/// by [`register_runtime_metrics`].
+/// Returns the `(name, help, labels, source)` of every Tokio runtime metric
+/// registered by [`register_runtime_metrics`].
 #[cfg(feature = "async")]
-pub fn describe_runtime_metrics() -> Vec<(String, String, &'static str)> {
+pub fn describe_runtime_metrics() -> Vec<(String, String, Vec<String>, &'static str)> {
     // A current-thread runtime is enough to enumerate the metrics; we only read
-    // their names and help text, never their values.
+    // their names, help text, and labels, never their values.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("building a current-thread runtime");
@@ -948,7 +973,18 @@ pub fn describe_runtime_metrics() -> Vec<(String, String, &'static str)> {
     registry
         .gather()
         .into_iter()
-        .map(|mf| (mf.name().to_owned(), mf.help().to_owned(), file!()))
+        .map(|mf| {
+            // Every series in a family shares the same label keys, so the first
+            // metric's labels are representative.
+            let mut labels: Vec<String> = mf
+                .get_metric()
+                .first()
+                .map(|m| m.get_label().iter().map(|l| l.name().to_owned()).collect())
+                .unwrap_or_default();
+            labels.sort();
+            labels.dedup();
+            (mf.name().to_owned(), mf.help().to_owned(), labels, file!())
+        })
         .collect()
 }
 

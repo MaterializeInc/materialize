@@ -51,7 +51,7 @@ mod client;
 mod config;
 
 pub use client::{
-    Client, GetRegistryError, GetSchemaVersionError, Registry, RegistryLifecycleStatus,
+    Client, DataFormat, GetRegistryError, GetSchemaVersionError, Registry, RegistryLifecycleStatus,
     SchemaVersion, SchemaVersionLifecycleStatus,
 };
 pub use config::ClientConfig;

@@ -731,7 +731,15 @@ where
 }
 
 pub fn parse_uuid(s: &str) -> Result<Uuid, ParseError> {
-    s.trim()
+    let trimmed = s.trim();
+    // The `uuid` crate panics while constructing a parse error for some short,
+    // brace-wrapped inputs (e.g. `{}`, `{\0}`) because it mis-slices the input.
+    // Reject anything that can't be a UUID before handing it to the crate. The
+    // shortest valid form is 32 hex digits and every form is ASCII.
+    if trimmed.len() < 32 || !trimmed.is_ascii() {
+        return Err(ParseError::invalid_input_syntax("uuid", s));
+    }
+    trimmed
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("uuid", s).with_details(e))
 }
@@ -2197,5 +2205,20 @@ mod tests {
 
         let s = format!("{}{}", "x".repeat(62), "א");
         assert_eq!("x".repeat(62), parse_pg_legacy_name(&s));
+    }
+
+    #[mz_ore::test]
+    fn test_parse_uuid_rejects_non_uuid_input() {
+        // The `uuid` crate panics while constructing a parse error for some
+        // short, brace-wrapped inputs (e.g. `{}`, `{\0}`). `parse_uuid` must
+        // reject anything that can't be a UUID as an error, never panic.
+        // Regression for the value_decode_text cargo-fuzz finding.
+        for s in ["", "{}", "{\0}", "{", "}", "xyz", "{ }", "\u{0}\u{0}\u{0}"] {
+            assert!(parse_uuid(s).is_err(), "parse_uuid({s:?}) should be Err");
+        }
+        // Valid UUIDs (and their accepted forms) still parse.
+        assert!(parse_uuid("00000000-0000-0000-0000-000000000000").is_ok());
+        assert!(parse_uuid("{00000000-0000-0000-0000-000000000000}").is_ok());
+        assert!(parse_uuid("00000000000000000000000000000000").is_ok());
     }
 }

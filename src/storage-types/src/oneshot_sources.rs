@@ -9,14 +9,15 @@
 
 //! Types for oneshot sources.
 
+use derivative::Derivative;
 use mz_expr::SafeMfpPlan;
+use mz_ore::url::SensitiveUrl;
 use mz_pgcopy::CopyCsvFormatParams;
 use mz_repr::{CatalogItemId, RelationDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedReceiver;
-use url::Url;
 
 use crate::connections::aws::AwsConnection;
 
@@ -39,12 +40,14 @@ pub struct OneshotIngestionRequest {
     pub shape: ContentShape,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Derivative, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derivative(Debug)]
 pub enum ContentSource {
     Http {
-        url: Url,
+        url: SensitiveUrl,
     },
     AwsS3 {
+        #[derivative(Debug = "ignore")]
         connection: AwsConnection,
         connection_id: CatalogItemId,
         uri: String,

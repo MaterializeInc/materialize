@@ -116,7 +116,7 @@ struct GlobalArgs {
     #[arg(short, long, global = true, env = "MZ_DEPLOY_PROFILE")]
     profile: Option<String>,
 
-    /// Materialize Docker image to use for tests
+    /// Materialize Docker image to use for `test` and `explain`
     #[arg(long, value_name = "IMAGE", global = true)]
     docker_image: Option<String>,
 
@@ -314,6 +314,26 @@ enum Command {
         /// Add --output json for machine-readable output.
         #[arg(long)]
         dry_run: bool,
+
+        /// Force these schemas to redeploy even if unchanged.
+        ///
+        /// Each value must be a fully qualified `database.schema`. Repeatable,
+        /// and accepts a comma-separated list. Mutually exclusive with
+        /// --redeploy-all.
+        #[arg(
+            long,
+            value_name = "SCHEMA",
+            action = clap::ArgAction::Append,
+            value_delimiter = ',',
+            conflicts_with = "redeploy_all"
+        )]
+        redeploy_schema: Vec<String>,
+
+        /// Redeploy all schemas, ignoring change detection.
+        ///
+        /// Mutually exclusive with --redeploy-schema.
+        #[arg(long, conflicts_with = "redeploy_schema")]
+        redeploy_all: bool,
     },
 
     /// Initialize deployment tracking database and tables
@@ -987,6 +1007,8 @@ async fn run(args: Args) -> Result<(), CliError> {
             allow_dirty,
             no_rollback,
             dry_run,
+            redeploy_schema,
+            redeploy_all,
         } => {
             let settings = load_settings(true)?;
             cli::commands::stage::run(
@@ -995,6 +1017,8 @@ async fn run(args: Args) -> Result<(), CliError> {
                 allow_dirty,
                 no_rollback,
                 dry_run,
+                &redeploy_schema,
+                redeploy_all,
             )
             .await
         }

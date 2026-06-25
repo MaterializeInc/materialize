@@ -21,7 +21,7 @@ use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
     CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec,
-    IntCounterVec, MetricVecExt, MetricVisibility, MetricsRegistry,
+    IntCounterVec, MetricTag, MetricVecExt, MetricVisibility, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -83,6 +83,7 @@ impl ComputeControllerMetrics {
                 help: "The total number of compute commands sent.",
                 var_labels: ["instance_id", "replica_id", "command_type"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             command_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_command_message_bytes_total",
@@ -149,6 +150,7 @@ impl ComputeControllerMetrics {
                 help: "The size of the compute hydration queue.",
                 var_labels: ["instance_id", "replica_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             history_command_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_history_command_count",
@@ -171,6 +173,7 @@ impl ComputeControllerMetrics {
                 var_labels: ["instance_id", "result"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             connected_replica_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_connected_replica_count",

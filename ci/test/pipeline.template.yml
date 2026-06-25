@@ -478,6 +478,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: aws-glue-schema-registry
+        label: AWS Glue Schema Registry (Moto)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: aws-glue-schema-registry
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
     depends_on: build-aarch64
@@ -525,6 +536,7 @@ steps:
           ]
     agents:
       queue: hetzner-x86-64-4cpu-8gb
+    skip: "https://linear.app/materializeinc/issues/SQL-420"
 
   - id: source-sink-errors
     label: "S&S error reporting"
@@ -856,8 +868,8 @@ steps:
               composition: console
               run: sql-tests
         agents:
-          # SQL Server doesn't support ARM
-          queue: hetzner-x86-64-4cpu-8gb
+          # SQL Server doesn't support ARM: https://github.com/microsoft/mssql-docker/issues/944
+          queue: hetzner-x86-64-12cpu-24gb
         coverage: skip
         sanitizer: skip
 

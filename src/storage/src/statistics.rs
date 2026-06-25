@@ -29,8 +29,8 @@ use std::time::Instant;
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, IntGaugeVec, MetricVisibility,
-    MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, IntGaugeVec, MetricTag,
+    MetricVisibility, MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::statistics::{Gauge, SinkStatisticsUpdate, SourceStatisticsUpdate};
@@ -79,6 +79,7 @@ impl SourceStatisticsMetricDefs {
                 help: "The number of raw messages the worker has received from upstream.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Source],
             )),
             updates_staged: registry.register(metric!(
                 name: "mz_source_updates_staged",
@@ -95,6 +96,7 @@ impl SourceStatisticsMetricDefs {
                 help: "The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Source],
             )),
             bytes_indexed: registry.register(metric!(
                 name: "mz_source_bytes_indexed",
@@ -121,12 +123,14 @@ impl SourceStatisticsMetricDefs {
                 help: "The total number of _values_ (source-defined unit) present in upstream.",
                 var_labels: ["source_id", "worker_id", "shard_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Source],
             )),
             offset_committed: registry.register(metric!(
                 name: "mz_source_offset_committed",
                 help: "The total number of _values_ (source-defined unit) we have fully processed, and storage and committed.",
                 var_labels: ["source_id", "worker_id", "shard_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Source],
             )),
             snapshot_records_known: registry.register(metric!(
                 name: "mz_source_snapshot_records_known",
@@ -291,12 +295,14 @@ impl SinkStatisticsMetricDefs {
                 help: "The number of bytes staged but possibly not committed to the sink.",
                 var_labels: ["sink_id", "worker_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Sink],
             )),
             bytes_committed: registry.register(metric!(
                 name: "mz_sink_bytes_committed",
                 help: "The number of bytes committed to the sink.",
                 var_labels: ["sink_id", "worker_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Sink],
             )),
         }
     }

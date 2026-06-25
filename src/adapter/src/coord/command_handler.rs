@@ -272,6 +272,24 @@ impl Coordinator {
                     let _ = tx.send(result);
                 }
 
+                Command::UpdateScopedSystemParameters {
+                    overrides,
+                    prune_scope,
+                    tx,
+                } => {
+                    // Store the new working copy, persist it durably, and
+                    // reconcile it into the per-scope resolution boundaries.
+                    self.reconcile_scoped_system_parameters(overrides, prune_scope)
+                        .await;
+                    let _ = tx.send(());
+                }
+
+                Command::InstallScopedSystemParameterFrontend { frontend } => {
+                    // Keep the shared frontend so create-cluster / create-replica
+                    // can resolve scoped overrides synchronously at create time.
+                    self.scoped_frontend = Some(frontend);
+                }
+
                 Command::InjectAuditEvents {
                     events,
                     conn_id,

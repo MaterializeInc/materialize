@@ -42,13 +42,14 @@ use mz_sql_parser::ast::{
     CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption, CreateSubsourceOptionName,
     CreateTableFromSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier,
-    DocOnSchema, Expr, Function, FunctionArgs, Ident, KafkaSourceConfigOption,
-    KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption, LoadGeneratorOptionName,
-    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
-    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
-    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableFromSourceColumns,
-    TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
+    DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption, GlueAvroSeed, Ident,
+    KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
+    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
+    RefreshOptionValue, SourceEnvelope, SqlServerConfigOption, SqlServerConfigOptionName,
+    Statement, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
+    UnresolvedItemName,
 };
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -343,6 +344,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
     let mut avro_format_options = vec![];
     for_each_format(format, |doc_on_schema, fmt| match fmt {
         Format::Avro(AvroSchema::InlineSchema { .. })
+        | Format::Avro(AvroSchema::Glue { .. })
         | Format::Bytes
         | Format::Csv { .. }
         | Format::Json { .. }
@@ -633,6 +635,7 @@ async fn purify_create_sink(
     let mut csr_connection_ids = BTreeSet::new();
     for_each_format(format, |_, fmt| match fmt {
         Format::Avro(AvroSchema::InlineSchema { .. })
+        | Format::Avro(AvroSchema::Glue { .. })
         | Format::Bytes
         | Format::Csv { .. }
         | Format::Json { .. }
@@ -2310,6 +2313,21 @@ async fn purify_source_format_single(
                 .await?
             }
             AvroSchema::InlineSchema { .. } => {}
+            AvroSchema::Glue {
+                connection,
+                with_options,
+                seed,
+            } => {
+                purify_glue_connection_avro(
+                    catalog,
+                    options,
+                    connection,
+                    with_options,
+                    seed,
+                    storage_configuration,
+                )
+                .await?
+            }
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connection } => {
@@ -2527,6 +2545,103 @@ async fn purify_csr_connection_avro(
         })
     }
 
+    Ok(())
+}
+
+async fn purify_glue_connection_avro(
+    catalog: &dyn SessionCatalog,
+    options: &SourceFormatOptions,
+    connection: &ResolvedItemName,
+    with_options: &[GlueAvroOption<Aug>],
+    seed: &mut Option<GlueAvroSeed>,
+    storage_configuration: &StorageConfiguration,
+) -> Result<(), PlanError> {
+    use crate::pure::error::GluePurificationError;
+    let SourceFormatOptions::Kafka { .. } = options else {
+        sql_bail!("AWS Glue Schema Registry is only supported with Kafka sources")
+    };
+
+    let scx = StatementContext::new(None, &*catalog);
+    let item = scx.get_item_by_resolved_name(connection)?;
+    let full_name = scx.catalog.resolve_full_name(item.name());
+    // Structural validation below runs unconditionally — even when a seed is
+    // already present. The seed is not proof the rest of the statement is
+    // well-formed: the grammar accepts a user-written `SEED VALUE SCHEMA`, so a
+    // seeded statement may have arrived straight from a user rather than from
+    // our own re-parsed `create_sql`. Only the Glue *fetch* is safe to skip
+    // when seeded; the connection-type and `SCHEMA NAME` checks are not.
+    let Connection::GlueSchemaRegistry(gsr_connection) = item.connection()? else {
+        return Err(GluePurificationError::NotGlueConnection(full_name).into());
+    };
+
+    // Pull `SCHEMA NAME` out of the option bag. Required. Use the shared
+    // extractor (rather than a hand-rolled match) so non-string values get a
+    // proper "invalid value" error instead of being silently dropped.
+    let crate::plan::statement::ddl::GlueAvroOptionExtracted { schema_name, .. } =
+        with_options.to_vec().try_into()?;
+    let schema_name = schema_name.ok_or(GluePurificationError::MissingSchemaName)?;
+
+    if seed.is_some() {
+        // The schema is already pinned — either we purified this statement
+        // before and re-parsed it from persisted create_sql, or a user supplied
+        // the seed directly. Either way the reader schema is fixed, so skip the
+        // Glue lookup. (The structural checks above still ran.)
+        return Ok(());
+    }
+    let gsr_connection = gsr_connection.into_inline_connection(catalog);
+
+    // Build the SDK config the same way the storage decoder does at runtime
+    // — same auth, region, and endpoint override resolution.
+    let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+        .get(storage_configuration.config_set());
+    let sdk_config = gsr_connection
+        .aws_connection
+        .connection
+        .load_sdk_config(
+            &storage_configuration.connection_context,
+            gsr_connection.aws_connection.connection_id,
+            // We are in a normal tokio context during purification.
+            InTask::No,
+            enforce_external_addresses,
+        )
+        .await
+        .map_err(|e| GluePurificationError::LoadSdkConfigError(Arc::new(e)))?;
+    let glue_client = mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
+
+    let version = glue_client
+        .get_schema_version_latest_by_name(&gsr_connection.registry_name, &schema_name)
+        .await
+        .map_err(|e| GluePurificationError::SchemaLookupError {
+            registry: gsr_connection.registry_name.clone(),
+            schema: schema_name.clone(),
+            cause: Arc::new(e),
+        })?;
+    // The runtime decode path only handles Avro; reject other formats at
+    // planning time so the failure mode is a clear SQL error, not a
+    // permanent decode error on every record.
+    match &version.data_format {
+        Some(mz_aws_glue_schema_registry::DataFormat::Avro) => {}
+        other => {
+            return Err(GluePurificationError::UnsupportedDataFormat {
+                registry: gsr_connection.registry_name.clone(),
+                schema: schema_name.clone(),
+                format: other
+                    .as_ref()
+                    .map(|f| f.as_str().to_string())
+                    .unwrap_or_else(|| "<unspecified>".to_string()),
+            }
+            .into());
+        }
+    }
+    let value_schema =
+        version
+            .definition
+            .ok_or_else(|| GluePurificationError::EmptyDefinition {
+                registry: gsr_connection.registry_name.clone(),
+                schema: schema_name.clone(),
+            })?;
+
+    *seed = Some(GlueAvroSeed { value_schema });
     Ok(())
 }
 

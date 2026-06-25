@@ -21,7 +21,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
-use mz_service::client::GenericClient;
+use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_service::transport;
 use tokio::select;
@@ -39,7 +39,7 @@ use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
 
-type Client = SequentialHydration;
+type Client = Partitioned<ComputeCtpClient, ComputeCommand, ComputeResponse>;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
@@ -188,11 +188,7 @@ impl ReplicaTask {
                 keepalive_timeout,
                 self.metrics.clone(),
             )
-            .await
-            .map(|client| {
-                let dyncfg = Arc::clone(&self.dyncfg);
-                SequentialHydration::new(client, dyncfg, self.metrics.clone())
-            });
+            .await;
 
             self.metrics.observe_connect_time(connect_start.elapsed());
 
@@ -230,6 +226,12 @@ impl ReplicaTask {
     /// If no error condition is encountered, the task runs until the controller disconnects from
     /// the command channel, or the task is dropped.
     async fn run_message_loop(mut self, mut client: Client) -> Result<(), anyhow::Error> {
+        // The sequential hydration interceptor holds back `Schedule` commands and releases them as
+        // hydration capacity frees up. It is recreated per incarnation, matching the lifetime of
+        // the connection: any in-flight hydration state is reset when we reconnect.
+        let mut hydration =
+            SequentialHydration::new(Arc::clone(&self.dyncfg), self.metrics.clone());
+
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -241,7 +243,9 @@ impl ReplicaTask {
 
                     self.specialize_command(&mut command);
                     self.observe_command(&command);
-                    client.send(command).await?;
+                    for command in hydration.absorb_command(command) {
+                        client.send(command).await?;
+                    }
                 },
                 // Response from replica to forward to controller.
                 response = client.recv() => {
@@ -250,6 +254,10 @@ impl ReplicaTask {
                     };
 
                     self.observe_response(&response);
+
+                    for command in hydration.observe_response(&response) {
+                        client.send(command).await?;
+                    }
 
                     if self.response_tx.send((self.replica_id, self.epoch, response)).is_err() {
                         // Controller is no longer interested in this replica. Shut down.

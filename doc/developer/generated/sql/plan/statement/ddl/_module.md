@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: ccf3f8951a
+revision: 460108c80d
 ---
 
 # mz-sql::plan::statement::ddl
@@ -12,3 +12,4 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `TOPIC METADATA REFRESH INTERVAL` for Kafka sources and sinks is validated to be between 1 second and 1 hour (inclusive); intervals outside this range produce a planning error.
 `plan_create_connection` dispatches on `CreateConnectionType::GlueSchemaRegistry` to plan `CREATE CONNECTION ... FOR AWS GLUE SCHEMA REGISTRY`, guarded by the `ENABLE_GLUE_SCHEMA_REGISTRY` feature flag.
 `plan_alter_connection` maps `Connection::Gcp(_)` to `CreateConnectionType::Gcp`.
+`AvroSchema::Glue { connection, seed, .. }` in a source format is fully planned: the connection is resolved (must be a `Connection::GlueSchemaRegistry` item) and the seed (populated by purification) is required.

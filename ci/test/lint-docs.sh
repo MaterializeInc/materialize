@@ -21,5 +21,6 @@ try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --conf
 echo "<!doctype html>" > ci/www/public/index.html
 try htmltest -s ci/www/public -c doc/user/.htmltest.yml
 try ci/test/lint-docs-catalog.sh
+try ci/test/lint-metrics-catalog.sh
 
 try_status_report

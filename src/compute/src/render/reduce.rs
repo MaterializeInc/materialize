@@ -589,19 +589,16 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     move |key, source, target| {
                         let temp_storage = RowArena::new();
                         // Decode each input value's single datum into the arena, reusing one
-                        // scratch buffer; the datum is `Copy` and is copied into the `repeat`
-                        // before the buffer is overwritten on the next row.
+                        // scratch buffer; the datum is `Copy` and is copied out before the
+                        // buffer is overwritten on the next row. We pass the multiplicity
+                        // through (unlike in hierarchical aggregation) because we don't know
+                        // that the aggregation method is not sensitive to the number of
+                        // records. The aggregate decides how to consume it.
                         let mut val_scratch = vals1.borrow();
-                        // We respect the multiplicity here (unlike in hierarchical aggregation)
-                        // because we don't know that the aggregation method is not sensitive
-                        // to the number of records.
-                        let iter = source.iter().flat_map(|(v, w)| {
-                            // Note that in the non-positive case, this is wrong, but harmless because
-                            // our other reduction will produce an error.
-                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                        let iter = source.iter().map(|(v, w)| {
                             val_scratch.clear();
                             v.extend_datums(&temp_storage, &mut val_scratch, Some(1));
-                            std::iter::repeat(val_scratch[0]).take(count)
+                            (val_scratch[0], *w)
                         });
 
                         let mut datums_local = datums1.borrow();
@@ -634,11 +631,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         // This part is the same as in the `!fused_unnest_list` if branch above.
                         let temp_storage = RowArena::new();
                         let mut val_scratch = vals_key_1.borrow();
-                        let iter = source.iter().flat_map(|(v, w)| {
-                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                        let iter = source.iter().map(|(v, w)| {
                             val_scratch.clear();
                             v.extend_datums(&temp_storage, &mut val_scratch, Some(1));
-                            std::iter::repeat(val_scratch[0]).take(count)
+                            (val_scratch[0], *w)
                         });
 
                         // This is the part that is specific to the `fused_unnest_list` branch.
@@ -702,11 +698,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             let Some(mfp) = &mfp_after2 else { return };
                             let temp_storage = RowArena::new();
                             let mut val_scratch = vals2.borrow();
-                            let iter = source.iter().flat_map(|(v, w)| {
-                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                            let iter = source.iter().map(|(v, w)| {
                                 val_scratch.clear();
                                 v.extend_datums(&temp_storage, &mut val_scratch, Some(1));
-                                std::iter::repeat(val_scratch[0]).take(count)
+                                (val_scratch[0], *w)
                             });
 
                             let mut datums_local = datums2.borrow();
@@ -739,11 +734,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         move |key, source, target| {
                             let temp_storage = RowArena::new();
                             let mut val_scratch = vals_key_2.borrow();
-                            let iter = source.iter().flat_map(|(v, w)| {
-                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
+                            let iter = source.iter().map(|(v, w)| {
                                 val_scratch.clear();
                                 v.extend_datums(&temp_storage, &mut val_scratch, Some(1));
-                                std::iter::repeat(val_scratch[0]).take(count)
+                                (val_scratch[0], *w)
                             });
 
                             let mut datums_local = datums_key_2.borrow();
@@ -990,7 +984,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                 key.extend_datums(&temp_storage, &mut datums_local, None);
 
                                 // Decode every value row's datums into the arena, one column
-                                // per aggregate, then iterate them column-major below.
+                                // per aggregate, then iterate them column-major below. Min/max
+                                // hierarchical aggregates are multiplicity-insensitive, so each
+                                // row contributes once (`Diff::ONE`) regardless of `_cnt`.
                                 let arity = aggr_funcs2.len();
                                 let mut decoded = vals2.borrow();
                                 for (values, _cnt) in source.iter() {
@@ -998,8 +994,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                 }
                                 assert_eq!(decoded.len(), source.len() * arity);
                                 for (col, func) in aggr_funcs2.iter().enumerate() {
-                                    let column_iter =
-                                        (0..source.len()).map(|r| decoded[r * arity + col]);
+                                    let column_iter = (0..source.len())
+                                        .map(|r| (decoded[r * arity + col], Diff::ONE));
                                     datums_local.push(func.eval(column_iter, &temp_storage));
                                 }
                                 if let Result::Err(e) =
@@ -1027,7 +1023,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             let key_len = datums_local.len();
 
                             // Decode every value row's datums into the arena, one column
-                            // per aggregate, then iterate them column-major below.
+                            // per aggregate, then iterate them column-major below. Min/max
+                            // hierarchical aggregates are multiplicity-insensitive, so each
+                            // row contributes once (`Diff::ONE`) regardless of `_cnt`.
                             let arity = aggr_funcs.len();
                             let mut decoded = vals1.borrow();
                             for (values, _cnt) in source.iter() {
@@ -1035,8 +1033,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             }
                             assert_eq!(decoded.len(), source.len() * arity);
                             for (col, func) in aggr_funcs.iter().enumerate() {
-                                let column_iter =
-                                    (0..source.len()).map(|r| decoded[r * arity + col]);
+                                let column_iter = (0..source.len())
+                                    .map(|r| (decoded[r * arity + col], Diff::ONE));
                                 datums_local.push(func.eval(column_iter, &temp_storage));
                             }
 
@@ -1198,7 +1196,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 let mut row_builder = SharedRow::get();
                 let mut row_packer = row_builder.packer();
                 for (col, func) in aggrs.iter().enumerate() {
-                    let column_iter = (0..source.len()).map(|r| decoded[r * arity + col]);
+                    // Min/max hierarchical aggregates are multiplicity-insensitive, so each
+                    // row contributes once (`Diff::ONE`) regardless of `_cnt`.
+                    let column_iter =
+                        (0..source.len()).map(|r| (decoded[r * arity + col], Diff::ONE));
                     row_packer.push(func.eval(column_iter, &temp_storage));
                 }
                 // We only want to arrange the parts of the input that are not part of the output.

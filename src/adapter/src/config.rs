@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use mz_build_info::BuildInfo;
@@ -25,7 +25,10 @@ mod params;
 mod sync;
 
 pub use backend::SystemParameterBackend;
-pub use frontend::SystemParameterFrontend;
+pub use frontend::{
+    ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
+    SystemParameterFrontend,
+};
 pub use params::{ModifiedParameter, SynchronizedParameters};
 pub use sync::system_parameter_sync;
 
@@ -42,6 +45,22 @@ pub struct ScopedParameters {
     pub cluster: BTreeMap<ClusterId, BTreeMap<String, String>>,
     /// Replica-local overrides, keyed by replica id.
     pub replica: BTreeMap<ReplicaId, BTreeMap<String, String>>,
+}
+
+/// The set of objects a [`ScopedParameters`] update was evaluated for, used to
+/// bound which durable override rows the update may prune.
+///
+/// The update is authoritative only for objects in this set. The durable apply
+/// removes a row only when its owning object is in scope and the update no
+/// longer carries that override, so an object created after the update's
+/// evaluation snapshot, and the override it folded into its own create
+/// transaction, is not wiped by a concurrent full-state reconcile.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScopedParametersScope {
+    /// Cluster ids whose rows the update may prune.
+    pub clusters: BTreeSet<ClusterId>,
+    /// Replica ids whose rows the update may prune.
+    pub replicas: BTreeSet<ReplicaId>,
 }
 
 impl ScopedParameters {

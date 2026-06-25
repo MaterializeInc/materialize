@@ -83,6 +83,7 @@ CHANGES_MADE=1
 if [ $CHANGES_MADE -eq 1 ]; then
   # Copy new charts to gh-pages
   cp $RELEASE_DIR/*.tgz gh-pages/
+  touch gh-pages/.nojekyll
   # Update the repository index
   cd gh-pages
   git add .

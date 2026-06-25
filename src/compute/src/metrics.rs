@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{MetricVisibility, MetricsRegistry, UIntGauge, raw};
+use mz_ore::metrics::{MetricTag, MetricVisibility, MetricsRegistry, UIntGauge, raw};
 use mz_repr::{GlobalId, SharedRow};
 use prometheus::core::{AtomicF64, GenericCounter};
 use prometheus::proto::LabelPair;
@@ -123,6 +123,7 @@ impl ComputeMetrics {
                 help: "The number of dataflows in the replica's command history.",
                 var_labels: ["worker_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             reconciliation_reused_dataflows_count_total: registry.register(metric!(
                 name: "mz_compute_reconciliation_reused_dataflows_count_total",
@@ -139,6 +140,7 @@ impl ComputeMetrics {
                 help: "The total time spent maintaining arrangements.",
                 var_labels: ["worker_id"],
                 visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             arrangement_maintenance_active_info: registry.register(metric!(
                 name: "mz_arrangement_maintenance_active_info",

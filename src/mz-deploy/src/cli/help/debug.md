@@ -42,7 +42,7 @@ connectivity and configuration before running deployments.
 - **Profile not found** — List available profiles in `profiles.toml`
   or create one with the connection details.
 - **Docker not installed** — Install Docker from https://docs.docker.com/get-docker/.
-  Docker is required for `mz-deploy test`.
+  Docker is required for `mz-deploy test` and `mz-deploy explain`.
 - **Docker daemon not running** — Start Docker Desktop or the Docker daemon
   (`sudo systemctl start docker` on Linux).
 

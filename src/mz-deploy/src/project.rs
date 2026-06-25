@@ -187,7 +187,10 @@ mod plan_tests {
             .expect("planned project should expose object under suffixed database");
         let ident = obj.typed_object.stmt.ident();
         assert_eq!(
-            ident.database.as_deref(),
+            ident
+                .database
+                .as_ref()
+                .map(mz_sql_parser::ast::Ident::as_str),
             Some("mydb_dev"),
             "compiled CREATE statement should carry the suffixed database name",
         );

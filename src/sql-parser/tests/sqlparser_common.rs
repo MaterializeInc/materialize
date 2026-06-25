@@ -742,6 +742,7 @@ fn test_set_operation_leading_show_display_roundtrip() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn cast_operand_reparenthesized_after_nested_stripped() {
     use mz_sql_parser::ast::display::AstDisplay;
     use mz_sql_parser::ast::visit_mut::{self, VisitMut};
@@ -781,6 +782,7 @@ fn cast_operand_reparenthesized_after_nested_stripped() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn between_bound_reparenthesized_after_nested_stripped() {
     use mz_sql_parser::ast::display::AstDisplay;
     use mz_sql_parser::ast::visit_mut::{self, VisitMut};
@@ -834,6 +836,7 @@ fn between_bound_reparenthesized_after_nested_stripped() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn binary_op_operand_reparenthesized_after_nested_stripped() {
     use mz_sql_parser::ast::display::AstDisplay;
     use mz_sql_parser::ast::visit_mut::{self, VisitMut};
@@ -970,6 +973,7 @@ fn quantified_left_minimal_parens_after_nested_stripped() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn is_distinct_from_rhs_reparenthesized_after_nested_stripped() {
     use mz_sql_parser::ast::display::AstDisplay;
     use mz_sql_parser::ast::visit_mut::{self, VisitMut};
@@ -1019,6 +1023,7 @@ fn is_distinct_from_rhs_reparenthesized_after_nested_stripped() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn like_pattern_reparenthesized_after_nested_stripped() {
     use mz_sql_parser::ast::display::AstDisplay;
     use mz_sql_parser::ast::visit_mut::{self, VisitMut};
@@ -1069,6 +1074,7 @@ fn like_pattern_reparenthesized_after_nested_stripped() {
 }
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn postfix_access_receiver_reparenthesized_after_nested_stripped() {
     use mz_sql_parser::ast::display::AstDisplay;
     use mz_sql_parser::ast::visit_mut::{self, VisitMut};

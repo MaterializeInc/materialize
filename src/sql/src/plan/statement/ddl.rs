@@ -68,22 +68,23 @@ use mz_sql_parser::ast::{
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
-    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
+    FormatSpecifier, GlueAvroOption, GlueAvroOptionName, IcebergSinkConfigOption, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
+    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
+    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
+    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
+    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
+    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
-use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
+use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
     IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType,
@@ -1204,7 +1205,7 @@ fn plan_kafka_source_connection(
     let KafkaSourceConfigOptionExtracted {
         group_id_prefix,
         topic,
-        topic_metadata_refresh_interval,
+        mut topic_metadata_refresh_interval,
         start_timestamp: _, // purified into `start_offset`
         start_offset,
         seen: _,
@@ -1225,10 +1226,9 @@ fn plan_kafka_source_connection(
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
     }
-    if topic_metadata_refresh_interval < Duration::from_secs(1) {
-        // This is a librdkafka-enforced restriction that, if violated,
-        // would result in a runtime error for the source.
-        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
+    if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
+        // We enforce a minimum of 1 second refresh interval to prevent overloading the topic
+        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
     }
     let metadata_columns = include_metadata
         .into_iter()
@@ -2296,6 +2296,8 @@ fn source_sink_cluster_config<'a, 'ctx>(
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
 
+generate_extracted_config!(GlueAvroOption, (SchemaName, String));
+
 #[derive(Debug)]
 pub struct Schema {
     pub key_schema: Option<String>,
@@ -2304,8 +2306,10 @@ pub struct Schema {
     pub key_reference_schemas: Vec<String>,
     /// Reference schemas for the value schema, in dependency order.
     pub value_reference_schemas: Vec<String>,
-    pub csr_connection: Option<<ReferencedConnection as ConnectionAccess>::Csr>,
-    pub confluent_wire_format: bool,
+    /// Wire-format dispatch and the registry connection to fetch writer
+    /// schemas from. Built directly by each `AvroSchema` variant rather
+    /// than reconstructed from a (csr_connection, bool) pair downstream.
+    pub wire_format: WireFormat<ReferencedConnection>,
 }
 
 fn get_encoding_inner(
@@ -2320,8 +2324,7 @@ fn get_encoding_inner(
                 value_schema,
                 key_reference_schemas,
                 value_reference_schemas,
-                csr_connection,
-                confluent_wire_format,
+                wire_format,
             } = match schema {
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
@@ -2333,14 +2336,17 @@ fn get_encoding_inner(
                         confluent_wire_format,
                         ..
                     } = with_options.clone().try_into()?;
-
+                    let wire_format = if confluent_wire_format {
+                        WireFormat::Confluent { registry: None }
+                    } else {
+                        WireFormat::None
+                    };
                     Schema {
                         key_schema: None,
                         value_schema: schema.clone(),
                         key_reference_schemas: vec![],
                         value_reference_schemas: vec![],
-                        csr_connection: None,
-                        confluent_wire_format,
+                        wire_format,
                     }
                 }
                 AvroSchema::Csr {
@@ -2357,7 +2363,7 @@ fn get_encoding_inner(
                         Connection::Csr(_) => item.id(),
                         _ => {
                             sql_bail!(
-                                "{} is not a schema registry connection",
+                                "{} is not a Confluent Schema Registry connection",
                                 scx.catalog
                                     .resolve_full_name(item.name())
                                     .to_string()
@@ -2372,29 +2378,49 @@ fn get_encoding_inner(
                             value_schema: seed.value_schema.clone(),
                             key_reference_schemas: seed.key_reference_schemas.clone(),
                             value_reference_schemas: seed.value_reference_schemas.clone(),
-                            csr_connection: Some(csr_connection),
-                            confluent_wire_format: true,
+                            wire_format: WireFormat::Confluent {
+                                registry: Some(csr_connection),
+                            },
                         }
                     } else {
                         sql_bail!("Avro CSR seed resolution has not been performed")
                     }
                 }
-            };
+                AvroSchema::Glue {
+                    connection,
+                    with_options: _,
+                    seed,
+                } => {
+                    let item = scx.get_item_by_resolved_name(connection)?;
+                    let glue_connection = match item.connection()? {
+                        Connection::GlueSchemaRegistry(_) => item.id(),
+                        _ => {
+                            sql_bail!(
+                                "{} is not an AWS Glue Schema Registry connection",
+                                scx.catalog
+                                    .resolve_full_name(item.name())
+                                    .to_string()
+                                    .quoted()
+                            )
+                        }
+                    };
 
-            // Map the legacy (csr_connection, confluent_wire_format) pair to
-            // the unified `WireFormat`. `(Some, false)` is unreachable in
-            // practice (the planner only sets `confluent_wire_format = false`
-            // on inline schemas, which never carry a CSR connection) but is
-            // rejected explicitly here to keep the invariant local.
-            let wire_format = match (csr_connection.clone(), confluent_wire_format) {
-                (None, false) => WireFormat::None,
-                (None, true) => WireFormat::Confluent { registry: None },
-                (Some(c), true) => WireFormat::Confluent { registry: Some(c) },
-                (Some(_), false) => {
-                    sql_bail!(
-                        "internal error: AVRO source has CSR connection but \
-                         CONFLUENT WIRE FORMAT = false"
-                    )
+                    // `SCHEMA NAME` requiredness is enforced during
+                    // purification, which also populates `seed`. By the time
+                    // planning runs the option is guaranteed present.
+                    let Some(seed) = seed else {
+                        sql_bail!("Avro Glue seed resolution has not been performed");
+                    };
+
+                    Schema {
+                        key_schema: None,
+                        value_schema: seed.value_schema.clone(),
+                        key_reference_schemas: vec![],
+                        value_reference_schemas: vec![],
+                        wire_format: WireFormat::Glue {
+                            registry: Some(glue_connection),
+                        },
+                    }
                 }
             };
 
@@ -3779,7 +3805,7 @@ fn kafka_sink_builder(
         transactional_id_prefix,
         legacy_ids,
         topic_config,
-        topic_metadata_refresh_interval,
+        mut topic_metadata_refresh_interval,
         topic_partition_count,
         topic_replication_factor,
         seen: _,
@@ -3810,7 +3836,7 @@ fn kafka_sink_builder(
     } else if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
         // We enforce a minimum of 1 second here to prevent excessive refreshes, and ensure that
         // tokio::time::interval receives a valid (positive) duration.
-        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
+        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
     }
 
     let assert_positive = |val: Option<i32>, name: &str| {

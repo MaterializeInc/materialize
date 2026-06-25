@@ -10,7 +10,7 @@ menu:
 ---
 
 {{< warning >}}
-`mz-deploy` is a v0.1 release and is not yet recommended for production use.
+`mz-deploy` is a v0.2 release and is not yet recommended for production use.
 {{< /warning >}}
 
 `mz-deploy` is a deployment tool that gives you compile-time validation, unit

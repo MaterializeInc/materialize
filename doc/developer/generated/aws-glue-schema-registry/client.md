@@ -1,6 +1,6 @@
 ---
 source: src/aws-glue-schema-registry/src/client.rs
-revision: a8a4d88813
+revision: 460108c80d
 ---
 
 # mz-aws-glue-schema-registry::client
@@ -15,6 +15,6 @@ The Glue Schema Registry API client.
 
 `Registry` holds `name`, `arn`, `description`, and `lifecycle_status` (`RegistryLifecycleStatus`: `Available`, `Deleting`, or `Unknown(String)`).
 
-`SchemaVersion` holds `schema_version_id`, `schema_arn`, `definition` (the format-specific schema text, e.g. Avro JSON), `data_format` (`DataFormat`: `Avro`, `Json`, `Protobuf`, `Unknown(String)`), `version_number`, and `lifecycle_status`.
+`SchemaVersion` holds `schema_version_id`, `schema_arn`, `definition` (the format-specific schema text, e.g. Avro JSON), `data_format` (`DataFormat`: `Avro`, `Json`, `Protobuf`, `Unknown(String)`), `version_number`, and `lifecycle_status` (`SchemaVersionLifecycleStatus`: `Available`, `Pending`, `Failure`, `Deleting`, or `Unknown(String)`).
 
 All SDK enum wrappers carry an `Unknown(String)` forward-compat variant so callers get exhaustive matching without depending on the SDK types directly.
