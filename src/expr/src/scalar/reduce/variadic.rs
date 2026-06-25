@@ -51,17 +51,9 @@ pub(super) fn reduce_call_variadic(
         *e = MirScalarExpr::literal_null(e.typ(column_types).scalar_type);
         return;
     }
-    // Only a strict (null-propagating) function propagates an operand's error
-    // unconditionally. A non-strict function such as AND/OR has a dominating
-    // operand (`false`/`true`) that absorbs another operand's error at runtime
-    // — e.g. `false AND <error>` evaluates to `false` — so folding the whole
-    // call to the error here would introduce an error the evaluated expression
-    // never raises. (Coalesce, also non-strict, bailed out above.)
-    if func.propagates_nulls() {
-        if let Some(err) = exprs.iter().find_map(|x| x.as_literal_err()) {
-            *e = MirScalarExpr::literal(Err(err.clone()), e.typ(column_types).scalar_type);
-            return;
-        }
+    if let Some(err) = exprs.iter().find_map(|x| x.as_literal_err()) {
+        *e = MirScalarExpr::literal(Err(err.clone()), e.typ(column_types).scalar_type);
+        return;
     }
 
     // Per-function dispatch. Arms are mutually exclusive on discriminant; the
