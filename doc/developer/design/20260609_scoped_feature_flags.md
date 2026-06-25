@@ -209,29 +209,16 @@ the controller (to resolve a given replica's family at dyncfg-push time), and it
 versions and deploys with the rest of the size configuration rather than living
 in a second place that could drift.
 
-The `family` field need not be populated for every size up front, but the
-fallback must **fail safe**. A family should be assigned only when *positively
-identified* — `cc` via `is_cc`, `legacy` via membership in the known legacy set —
-and a size that matches neither (an unannotated new size, or an operator-defined
-one) must default to a **neutral family string** such as `other` that matches *no*
-curated rule. The tempting `is_cc ? "cc" : "legacy"` fallback is a footgun: it
-makes `legacy` the catch-all, so a brand-new size would silently match the
-motivating `replica_size_family = "legacy"` rule (e.g. "legacy keeps lgalloc") and
-inherit behavior it was never meant to have. Defaulting unknowns to a
-no-rule-matches `other` means an unannotated size gets only the environment-wide
-value until someone deliberately assigns its family.
+The `family` field need not be populated for every size up front.
+`ReplicaAllocation::family()` (`src/controller/src/clusters.rs`) returns the explicit `family` when set, and otherwise falls back to a value derived from `is_cc`: `cc` for modern sizes and `legacy` as the catch-all.
+This keeps the `cc` and `legacy` families targetable before every size gains an explicit `family` in the size configuration, which covers the motivating "legacy keeps lgalloc" rule on day one.
+A consequence worth noting: `legacy` is the default for any size that is neither explicitly annotated nor `is_cc`, so a brand-new, unannotated, non-cc size is reported as `legacy` and would match a `replica_size_family = "legacy"` rule.
+The mitigation is to give such sizes an explicit `family` when they are introduced, rather than relying on the fallback.
 
-The default must always yield a well-defined string, never fail or leave the
-attribute unset, because we do not control size (or cluster) naming everywhere. In
-**self-managed**, operators define their own replica sizes via
-`--cluster-replica-sizes`, with names we have never seen; `family()` must still
-return a string for them (`other`, per the above) so the `replica` context is
-always complete. In practice this is harmless there: the scoped mechanism is
-LD-driven, and self-managed deployments use the file-based system-parameter
-frontend (`SystemParameterFrontendClient::File`) or none — so they produce no
-scoped overrides and resolve to environment-wide defaults regardless of how sizes
-are named. The feature is effectively a cloud-fleet operability mechanism that
-degrades gracefully to env-wide elsewhere.
+The fallback always yields a well-defined string, never failing or leaving the attribute unset, because we do not control size (or cluster) naming everywhere.
+In **self-managed**, operators define their own replica sizes via `--cluster-replica-sizes`, with names we have never seen; `family()` still returns a string for them (`cc` or `legacy` per the fallback) so the `replica` context is always complete.
+In practice this is harmless there: the scoped mechanism is LD-driven, and self-managed deployments use the file-based system-parameter frontend (`SystemParameterFrontendClient::File`) or none — so they produce no scoped overrides and resolve to environment-wide defaults regardless of how sizes are named.
+The feature is effectively a cloud-fleet operability mechanism that degrades gracefully to env-wide elsewhere.
 
 We deliberately do **not** ask LD rule authors to derive the family from the
 size string with `startsWith` / `endsWith` operators. The family is a *curated
@@ -362,7 +349,7 @@ Lifecycle:
   evaluated): fall back to the environment-wide value — unavoidable, since we
   have never observed LD for it.
 - **Newly-created object:** a cluster or replica created between ticks does **not** wait for the next tick — it resolves its scoped overrides synchronously at creation.
-  See §Resolution, "Synchronous create-time resolution", for why (render-frozen flags make the window a correctness problem, not just a delay) and how (inline `variation` evaluation at the two scope boundaries), including the sub-tick restart residual for replica-local persistence.
+  See §Resolution, "Synchronous create-time resolution", for why (render-frozen flags make the window a correctness problem, not just a delay) and how (the overrides are evaluated inline and folded into the create transaction, so they are also persisted synchronously with no restart gap).
 
 Crucially, persisting does **not** reintroduce the recreate ambiguity that sank
 the `ALTER SYSTEM ... FOR CLUSTER` DDL alternative, because of the monotonic id
@@ -385,6 +372,7 @@ cases resolve at boundaries that already carry the right context:
 **(a) The compute controller's per-replica config push — replica-local flags (use case 2).**
 environmentd already pushes a dyncfg `ConfigSet` / `ConfigUpdates` to each replica through the controller, and knows each replica's cluster, size, and size family at push time.
 We resolve there: `effective = global ⊕ replica_local_override` for that replica, and **`clusterd` needs no changes** — it keeps reading its dyncfg set and simply receives size/replica-appropriate values.
+The push is not a direct controller call from the sync loop: the replica-local overrides are persisted through `Op::UpdateScopedSystemParameters`, and the per-replica controller push is derived from that committed diff as a *catalog implication* (`src/adapter/src/coord/catalog_implications`), which is also what carries a freshly-created replica's overrides before `create_replica`.
 Only the *compute* controller's per-replica dyncfg layer is pushed, but on `clusterd` that reaches storage too: compute and storage share one process, and the compute worker's configuration handler applies the pushed updates both to compute's worker `ConfigSet` and to the shared persist client `ConfigSet` that the co-located storage server reads.
 So the replica-local examples (persist pager, LZ4, persist client tuning, `lgalloc`) take effect on storage as well.
 The only thing this would miss is a future `Replica`-scoped config realized solely in the storage worker's own `ConfigSet` (applied only via the storage controller), which does not exist today.
@@ -431,14 +419,15 @@ paths read as symmetric ("resolution at existing boundaries") but are not.
 A cluster or replica created between sync ticks must resolve its scoped overrides synchronously at creation, not on the next tick.
 This is a correctness requirement, not a latency nicety: render-frozen flags — optimizer features baked into immutable dataflows, and any replica-local flag consumed only at dataflow-render time — turn the tick-latency window into a window in which the object renders permanently under the wrong values.
 It is feasible at no cost on the DDL path because `launchdarkly_server_sdk::Client::variation` is a synchronous, local evaluation against the SDK's streamed flag cache, with no network call, so an arbitrary new-object context evaluates correctly inline.
-The frontend is shared with the coordinator, and resolution happens at the two boundaries that match the two scopes:
+The frontend is shared with the coordinator.
+Both the new cluster's cluster-coherent and the new replicas' replica-local overrides are evaluated from the pre-allocated ids and *folded into the create transaction itself* (`scoped_overrides_create_op` appends an `Op::UpdateScopedSystemParameters` to the create ops in `src/adapter/src/coord/sequencer/inner/cluster.rs`).
+Folding into the create transaction, rather than resolving after it, means the committed diff drives both boundaries:
 
-* Replica-local overrides are pushed into the compute controller's per-replica layer *before* the controller installs the replica, so the replica's first configuration already carries them.
-* Cluster-coherent overrides are resolved right after the create transaction — the cluster id is known pre-transaction — so the cluster's first plan, a later and separately sequenced command, uses them.
+* The replica-local overrides reach the compute controller's per-replica dyncfg layer through the catalog implication derived from that diff, *before* `create_replica`, so the replica's first configuration already carries them.
+* The cluster-coherent overrides are in `CatalogState` as soon as the transaction commits, so the cluster's first plan — a later, separately sequenced command — uses them.
 
-The periodic sync loop remains the authoritative full-state writer.
-Replica-local persistence still lands on the next reconcile (≤ 1 tick), so an `environmentd` restart in that sub-tick window re-hydrates a just-created replica under environment-wide values until the first post-restart tick — an acknowledged, self-healing residual.
-Cluster-coherent overrides are persisted synchronously through reconcile and so do not have this gap.
+Because the overrides are committed in the create transaction, they are persisted synchronously: a just-created object's overrides survive an `environmentd` restart with no re-hydration gap.
+The periodic sync loop remains the authoritative full-state writer (`reconcile_scoped_system_parameters`), and the create-time fold and the loop are the only writers, both serialized on the coordinator loop and both persisting through the same `Op::UpdateScopedSystemParameters`.
 Both paths no-op when the gate is off or before the frontend is installed (the cold-cache environment-wide fallback).
 
 Precedence for replica-local flags, lowest to highest:
