@@ -420,9 +420,8 @@ impl Listeners {
                 metrics_registry: metrics_registry.clone(),
                 mcp_metrics: mcp_metrics.clone(),
                 oauth_metadata_metrics: oauth_metadata_metrics.clone(),
-                allowed_roles: listener.config.allowed_roles(),
                 internal_route_config: Arc::clone(&internal_route_config),
-                routes_enabled: listener.config.routes.clone(),
+                routes_enabled: listener.config.routes,
                 replica_http_locator: Arc::clone(&config.controller.replica_http_locator),
             };
             http_listener_handles.insert(name.clone(), listener.serve_http(http_config).await);
