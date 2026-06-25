@@ -30,14 +30,16 @@ language questions like:
 
 There are two ways to authenticate to the `materialize-developer` MCP server:
 
-- **OAuth** (recommended): Your MCP client signs you in through your browser; no
-  token to generate or store. Available for **Cloud** and for **Self-Managed**
-  [using SSO](/security/self-managed/sso/).
+- **OAuth**: Starting in v26.30, your MCP client can sign you in through your
+  browser; no token to generate or store. Available for **Cloud** and for
+  **Self-Managed** [using SSO](/security/self-managed/sso/).
 
 - **Token-based**: You provide Base64-encoded credentials (the MCP token) to the
   client. Available for **Cloud**, **Self-Managed**, and the **Emulator**.
 
-### Method 1: OAuth (recommended)
+### Method 1: OAuth
+
+*Available starting in v26.30*
 
 {{< note >}}
 

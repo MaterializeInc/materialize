@@ -33,20 +33,20 @@ There are two ways to authenticate to the `materialize-agent` MCP server. Your
 method determines whether you need to set up a dedicated agent query
 environment:
 
-- **OAuth** (Available for **Cloud** and for **Self-Managed** using
-  [SSO](/security/self-managed/sso/)): Your MCP client signs you in through your
+- **OAuth**: Starting in v26.30, your MCP client can sign you in through your
   browser. The agent connects as **your user role** with your existing
   privileges. You can **skip the environment setup** and go to [Method 1:
-  OAuth](#method-1-oauth).
+  OAuth](#method-1-oauth). Available for **Cloud** and for **Self-Managed**
+  using [SSO](/security/self-managed/sso/).
 
-- **Token-based** (Available for **Cloud**, **Self-Managed**, and the
-  **Emulator**): You provide Base64-encoded credentials (the MCP token) to the
+- **Token-based**: You provide Base64-encoded credentials (the MCP token) to the
   client. The agent connects as a dedicated, least-privilege **service account**
   (i.e., a separate login role acting as a service account). [Set up the agent
   query environment and data
   products](#set-up-the-agent-query-environment-and-data-products) first and
   then go to [Method 2: Token-based
-  authentication](#method-2-token-based-authentication).
+  authentication](#method-2-token-based-authentication). Available for
+  **Cloud**, **Self-Managed**, and the **Emulator**
 
 ## Set up the agent query environment and data products
 
@@ -260,6 +260,8 @@ authentication](#method-2-token-based-authentication), as described in
 [Connection methods](#connection-methods).
 
 ### Method 1: OAuth
+
+*Available starting in v26.30*
 
 {{< note >}}
 
