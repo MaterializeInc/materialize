@@ -477,6 +477,14 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     fn handle_create_instance(&mut self, config: InstanceConfig) {
+        // Seed the worker configuration with the controller's snapshot before applying it, so
+        // create-time setup observes controller-synced values rather than dyncfg defaults. The
+        // same values arrive again in the following `UpdateConfiguration`, which applies globally
+        // and keeps the configuration current. An empty snapshot leaves the defaults in place.
+        config
+            .initial_config
+            .apply(&self.compute_state.worker_config);
+
         // Ensure the state is consistent with the config before we initialize anything.
         self.compute_state.apply_worker_config();
 

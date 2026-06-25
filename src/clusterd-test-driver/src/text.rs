@@ -504,6 +504,8 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                 .transpose()
                 .context("argument `arrangement-dictionary-compression` is not a bool")?
                 .unwrap_or(false),
+            // Same `name type value` body rows as `update-configuration`.
+            initial_config: settings_from_body(body)?,
         },
         "update-configuration" => Command::UpdateConfiguration {
             updates: settings_from_body(body)?,
@@ -699,6 +701,7 @@ mod tests {
             Command::CreateInstance {
                 expiration_offset: None,
                 arrangement_dictionary_compression: false,
+                initial_config: vec![],
             }
         );
         assert_eq!(
@@ -709,6 +712,20 @@ mod tests {
             Command::CreateInstance {
                 expiration_offset: Some("30s".to_string()),
                 arrangement_dictionary_compression: true,
+                initial_config: vec![],
+            }
+        );
+        // The create-time snapshot is a `name type value` body, like `update-configuration`.
+        assert_eq!(
+            parse_command("create-instance\n  enable_my_flag bool true").unwrap(),
+            Command::CreateInstance {
+                expiration_offset: None,
+                arrangement_dictionary_compression: false,
+                initial_config: vec![ConfigSetting {
+                    name: "enable_my_flag".to_string(),
+                    ty: "bool".to_string(),
+                    value: "true".to_string(),
+                }],
             }
         );
 

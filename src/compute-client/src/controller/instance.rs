@@ -989,10 +989,12 @@ impl Instance {
         let instance_config = InstanceConfig {
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
             // The remaining fields are replica-specific and will be set in
-            // `ReplicaTask::specialize_command`.
+            // `ReplicaTask::specialize_command` (logging, expiration, dictionary compression) and
+            // `Instance::specialize_command_for_replica` (the initial config snapshot).
             logging: Default::default(),
             expiration_offset: Default::default(),
             arrangement_dictionary_compression: Default::default(),
+            initial_config: Default::default(),
         };
 
         self.send(ComputeCommand::CreateInstance(Box::new(instance_config)));
@@ -1107,36 +1109,55 @@ impl Instance {
 
         let target_replica = self.target_replica(&cmd);
 
-        // Borrow the overrides separately from `self.replicas` so the per-replica
+        // Borrow the overrides and dyncfg separately from `self.replicas` so the per-replica
         // specialization below does not conflict with the mutable replica borrow.
         let overrides = &self.replica_dyncfg_overrides;
+        let dyncfg = &self.dyncfg;
 
         if let Some(rid) = target_replica {
             if let Some(replica) = self.replicas.get_mut(&rid) {
-                let cmd = Self::specialize_command_for_replica(cmd, rid, overrides);
+                let cmd = Self::specialize_command_for_replica(cmd, rid, overrides, dyncfg);
                 let _ = replica.client.send(cmd);
             }
         } else {
             for (rid, replica) in self.replicas.iter_mut() {
-                let cmd = Self::specialize_command_for_replica(cmd.clone(), *rid, overrides);
+                let cmd =
+                    Self::specialize_command_for_replica(cmd.clone(), *rid, overrides, dyncfg);
                 let _ = replica.client.send(cmd);
             }
         }
     }
 
-    /// Specializes a command for a specific replica by merging that replica's
-    /// dyncfg override (if any) into an `UpdateConfiguration` command. All other
-    /// commands, and replicas without an override, are returned unchanged.
+    /// Specializes a command for a specific replica by merging that replica's dyncfg override into
+    /// its configuration. For `UpdateConfiguration` the override is merged into the update. For
+    /// `CreateInstance` the current dyncfg, with the override applied on top, is captured as the
+    /// initial config snapshot. All other commands are returned unchanged.
+    ///
+    /// The snapshot is built here, rather than baked into the history, so it reflects the dyncfg
+    /// and override values current at the time the command is sent or replayed to the replica.
     fn specialize_command_for_replica(
         mut cmd: ComputeCommand,
         replica_id: ReplicaId,
         overrides: &BTreeMap<ReplicaId, ConfigUpdates>,
+        dyncfg: &ConfigSet,
     ) -> ComputeCommand {
-        if let ComputeCommand::UpdateConfiguration(params) = &mut cmd
-            && let Some(over) = overrides.get(&replica_id)
-            && !over.updates.is_empty()
-        {
-            params.dyncfg_updates.extend(over.clone());
+        let over = overrides.get(&replica_id);
+        match &mut cmd {
+            ComputeCommand::UpdateConfiguration(params) => {
+                if let Some(over) = over
+                    && !over.updates.is_empty()
+                {
+                    params.dyncfg_updates.extend(over.clone());
+                }
+            }
+            ComputeCommand::CreateInstance(config) => {
+                let mut initial = ConfigUpdates::from(dyncfg);
+                if let Some(over) = over {
+                    initial.extend(over.clone());
+                }
+                config.initial_config = initial;
+            }
+            _ => {}
         }
         cmd
     }
@@ -1228,11 +1249,13 @@ impl Instance {
                 continue;
             }
 
-            // Re-apply this replica's dyncfg override to replayed config commands.
+            // Re-apply this replica's dyncfg override to replayed config commands, and rebuild the
+            // create-instance snapshot from the current dyncfg.
             let command = Self::specialize_command_for_replica(
                 command.clone(),
                 id,
                 &self.replica_dyncfg_overrides,
+                &self.dyncfg,
             );
             if client.send(command).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
@@ -3385,5 +3408,125 @@ impl Drop for ReplicaCollectionIntrospection {
         let row = self.write_frontier_row();
         let updates = vec![(row, Diff::MINUS_ONE)];
         self.send(IntrospectionType::ReplicaFrontiers, updates);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
+    use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
+    use mz_persist_types::PersistLocation;
+
+    use crate::protocol::command::{ComputeCommand, InstanceConfig};
+
+    use super::{Instance, ReplicaId};
+
+    fn create_instance_command() -> ComputeCommand {
+        ComputeCommand::CreateInstance(Box::new(InstanceConfig {
+            logging: Default::default(),
+            expiration_offset: None,
+            peek_stash_persist_location: PersistLocation::new_in_mem(),
+            arrangement_dictionary_compression: false,
+            initial_config: Default::default(),
+        }))
+    }
+
+    fn initial_config(cmd: &ComputeCommand) -> &ConfigUpdates {
+        match cmd {
+            ComputeCommand::CreateInstance(config) => &config.initial_config,
+            other => panic!("expected CreateInstance, got {other:?}"),
+        }
+    }
+
+    /// `CreateInstance` is specialized with a full snapshot of the instance-wide dyncfg, so the
+    /// replica seeds its worker config at create time rather than waiting for the first
+    /// `UpdateConfiguration`. This is the regression guard for create-time setup observing dyncfg
+    /// defaults.
+    #[mz_ore::test]
+    fn create_instance_snapshots_instance_wide_dyncfg() {
+        let dyncfg = ConfigSet::default()
+            .add(&ENABLE_COLUMN_PAGED_BATCHER)
+            .add(&ENABLE_MZ_JOIN_CORE);
+        let mut updates = ConfigUpdates::default();
+        updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
+        updates.add(&ENABLE_MZ_JOIN_CORE, false);
+        updates.apply(&dyncfg);
+
+        // A replica without an override sees exactly the instance-wide values.
+        let overrides = BTreeMap::new();
+        let cmd = Instance::specialize_command_for_replica(
+            create_instance_command(),
+            ReplicaId::User(1),
+            &overrides,
+            &dyncfg,
+        );
+        let snapshot = initial_config(&cmd);
+        assert_eq!(
+            snapshot.updates.get(ENABLE_COLUMN_PAGED_BATCHER.name()),
+            Some(&ConfigVal::Bool(true)),
+        );
+        assert_eq!(
+            snapshot.updates.get(ENABLE_MZ_JOIN_CORE.name()),
+            Some(&ConfigVal::Bool(false)),
+        );
+    }
+
+    /// A replica-scoped override beats the instance-wide value in the create-time snapshot, so a
+    /// create-time-frozen scoped flag reaches the replica with its override applied.
+    #[mz_ore::test]
+    fn create_instance_snapshot_applies_replica_override() {
+        let dyncfg = ConfigSet::default().add(&ENABLE_COLUMN_PAGED_BATCHER);
+        let mut updates = ConfigUpdates::default();
+        updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
+        updates.apply(&dyncfg);
+
+        let replica = ReplicaId::User(1);
+        let mut override_updates = ConfigUpdates::default();
+        override_updates.add(&ENABLE_COLUMN_PAGED_BATCHER, false);
+        let overrides = BTreeMap::from([(replica, override_updates)]);
+
+        let cmd = Instance::specialize_command_for_replica(
+            create_instance_command(),
+            replica,
+            &overrides,
+            &dyncfg,
+        );
+        assert_eq!(
+            initial_config(&cmd)
+                .updates
+                .get(ENABLE_COLUMN_PAGED_BATCHER.name()),
+            Some(&ConfigVal::Bool(false)),
+            "replica override should win over the instance-wide value",
+        );
+    }
+
+    /// `UpdateConfiguration` continues to merge the replica's override into the update.
+    #[mz_ore::test]
+    fn update_configuration_merges_replica_override() {
+        let dyncfg = ConfigSet::default().add(&ENABLE_COLUMN_PAGED_BATCHER);
+
+        let replica = ReplicaId::User(1);
+        let mut override_updates = ConfigUpdates::default();
+        override_updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
+        let overrides = BTreeMap::from([(replica, override_updates)]);
+
+        let cmd = Instance::specialize_command_for_replica(
+            ComputeCommand::UpdateConfiguration(Box::new(Default::default())),
+            replica,
+            &overrides,
+            &dyncfg,
+        );
+        match cmd {
+            ComputeCommand::UpdateConfiguration(params) => assert_eq!(
+                params
+                    .dyncfg_updates
+                    .updates
+                    .get(ENABLE_COLUMN_PAGED_BATCHER.name()),
+                Some(&ConfigVal::Bool(true)),
+            ),
+            other => panic!("expected UpdateConfiguration, got {other:?}"),
+        }
     }
 }

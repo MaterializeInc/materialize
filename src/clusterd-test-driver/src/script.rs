@@ -527,6 +527,11 @@ pub enum Command {
         /// Whether arrangements use dictionary compression.
         #[serde(default)]
         arrangement_dictionary_compression: bool,
+        /// The create-time dyncfg snapshot the controller would supply (`name type value` rows).
+        /// Applied to the replica's worker config before create-time setup, so a scenario can
+        /// assert that create-time work observes synced values rather than dyncfg defaults.
+        #[serde(default)]
+        initial_config: Vec<ConfigSetting>,
     },
     /// Send `UpdateConfiguration` with a table of dyncfg updates (`name type value`
     /// rows). Generic over any configuration; the peek-response stash is not settable
@@ -1062,6 +1067,7 @@ impl ScriptState {
             Command::CreateInstance {
                 expiration_offset,
                 arrangement_dictionary_compression,
+                initial_config,
             } => {
                 let expiration_offset = expiration_offset
                     .as_deref()
@@ -1071,8 +1077,18 @@ impl ScriptState {
                         })
                     })
                     .transpose()?;
-                self.driver
-                    .create_instance(expiration_offset, arrangement_dictionary_compression)?;
+                let mut initial = ConfigUpdates::default();
+                for setting in &initial_config {
+                    initial.add_dynamic(
+                        &setting.name,
+                        parse_config_val(&setting.ty, &setting.value)?,
+                    );
+                }
+                self.driver.create_instance(
+                    expiration_offset,
+                    arrangement_dictionary_compression,
+                    initial,
+                )?;
                 Ok("ok".to_string())
             }
             Command::UpdateConfiguration { updates } => {
