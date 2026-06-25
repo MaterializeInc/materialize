@@ -237,6 +237,15 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_system_privileges",
         ),
+        // The mz_cluster_replicas MV definition changed in 26.31.0-dev (the
+        // `availability_zone` column now aggregates the durable
+        // `availability_zones` list).
+        MigrationStep::replacement(
+            "26.31.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_cluster_replicas",
+        ),
     ]
 });
 
