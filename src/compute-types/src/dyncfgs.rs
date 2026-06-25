@@ -79,7 +79,8 @@ pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
     0.05,
     "Fraction of replica memory the column-paged batcher's tiered policy may hold resident \
      before spilling to the backend. Total budget = max(mem_limit * fraction, 128 MiB).",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Compress chunks the column-paged batcher spills, using lz4. Only
 /// meaningful when [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`] is `true`; the codec
@@ -116,7 +117,8 @@ pub const COLUMN_PAGED_BATCHER_SWAP_PAGEOUT: Config<bool> = Config::new(
     "Eagerly evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS \
      via `MADV_PAGEOUT` (they otherwise receive no madvise and are reclaimed only lazily). Only \
      meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
@@ -187,63 +189,72 @@ pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
     "enable_lgalloc_eager_reclamation",
     true,
     "Enable lgalloc's eager return behavior.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// The interval at which the background thread wakes.
 pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
     "lgalloc_background_interval",
     Duration::from_secs(1),
     "Scheduling interval for lgalloc's background worker.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const LGALLOC_FILE_GROWTH_DAMPENER: Config<usize> = Config::new(
     "lgalloc_file_growth_dampener",
     2,
     "Lgalloc's file growth dampener parameter.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const LGALLOC_LOCAL_BUFFER_BYTES: Config<usize> = Config::new(
     "lgalloc_local_buffer_bytes",
     64 << 20,
     "Lgalloc's local buffer bytes parameter.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// The bytes to reclaim (slow path) per size class, for each background thread activation.
 pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
     "lgalloc_slow_clear_bytes",
     128 << 20,
     "Clear byte size per size class for every invocation",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Interval to run the memory limiter. A zero duration disables the limiter.
 pub const MEMORY_LIMITER_INTERVAL: Config<Duration> = Config::new(
     "memory_limiter_interval",
     Duration::from_secs(10),
     "Interval to run the memory limiter. A zero duration disables the limiter.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Bias to the memory limiter usage factor.
 pub const MEMORY_LIMITER_USAGE_BIAS: Config<f64> = Config::new(
     "memory_limiter_usage_bias",
     1.,
     "Multiplicative bias to the memory limiter's limit.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Burst factor to memory limit.
 pub const MEMORY_LIMITER_BURST_FACTOR: Config<f64> = Config::new(
     "memory_limiter_burst_factor",
     0.,
     "Multiplicative burst factor to the memory limiter's limit.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Enable lgalloc for columnation.
 pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     "enable_columnation_lgalloc",
     true,
     "Enable allocating regions from lgalloc.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// The interval at which the compute server performs maintenance tasks.
 pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
