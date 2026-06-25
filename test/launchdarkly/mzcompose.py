@@ -53,10 +53,16 @@ LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
 # Unique feature flag keys for the scoped (per-cluster / per-replica) cases.
 LD_OPTIMIZER_FLAG_KEY = f"ci-test-optimizer-{BUILDKITE_JOB_ID}"
 LD_LGALLOC_FLAG_KEY = f"ci-test-lgalloc-{BUILDKITE_JOB_ID}"
+# Gate flag for the scoped feature. The gate is itself an LD-synced parameter,
+# so the sync loop is authoritative: a boot-time default is overwritten on the
+# first tick by LD's value. Enable it through LD instead, so the gate sticks.
+LD_SCOPED_GATE_FLAG_KEY = f"ci-test-scoped-gate-{BUILDKITE_JOB_ID}"
 # A cluster-coherent (optimizer) parameter and a replica-local parameter, both
 # declared scoped in their definitions.
 OPTIMIZER_PARAM = "enable_eager_delta_joins"
 LGALLOC_PARAM = "enable_lgalloc"
+# The feature gate that turns on scoped evaluation.
+SCOPED_GATE_PARAM = "enable_scoped_system_parameters"
 
 
 def context_rule(
@@ -304,6 +310,7 @@ def run_scoped_feature_flag_cases(
             f"max_result_size={LD_FEATURE_FLAG_KEY}",
             f"{OPTIMIZER_PARAM}={LD_OPTIMIZER_FLAG_KEY}",
             f"{LGALLOC_PARAM}={LD_LGALLOC_FLAG_KEY}",
+            f"{SCOPED_GATE_PARAM}={LD_SCOPED_GATE_FLAG_KEY}",
         ]
     )
     scoped_mz = Materialized(
@@ -314,8 +321,6 @@ def run_scoped_feature_flag_cases(
         ],
         additional_system_parameter_defaults={
             "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
-            # Scoped overrides are gated off by default. Opt in for these cases.
-            "enable_scoped_system_parameters": "true",
         },
         external_metadata_store=True,
     )
@@ -362,6 +367,19 @@ def run_scoped_feature_flag_cases(
             on=True,
             rules=[context_rule("replica", "replica_size_family", ["legacy"], 0)],
         )
+
+        # The scoped feature gate. Off by default, so opt in by serving `true`
+        # env-wide. Enabled through LD rather than a boot-time default because
+        # the gate is itself synced: the sync loop would clobber a boot default
+        # with LD's value on the first tick.
+        ld_client.create_flag(
+            LD_SCOPED_GATE_FLAG_KEY,
+            tags=["ci-test"],
+            variations=BOOL_VARIATIONS,
+            off_variation=0,
+            on_variation=1,
+        )
+        ld_client.update_targeting(LD_SCOPED_GATE_FLAG_KEY, on=True)
 
         with c.override(scoped_mz):
             c.up("materialized")
@@ -469,15 +487,10 @@ def run_scoped_feature_flag_cases(
             # the sync loop evaluate no scoped contexts and clear what it
             # previously persisted, so both collections empty out and resolution
             # reverts to env-wide. Turning it back on re-evaluates and restores.
-            c.testdrive(
-                "\n".join(
-                    [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
-                        "$ postgres-execute connection=mz_system",
-                        "ALTER SYSTEM SET enable_scoped_system_parameters = false",
-                    ]
-                )
-            )
+            # Toggle through LD, not `ALTER SYSTEM`: the gate is itself a synced
+            # parameter, so the sync loop is authoritative and would revert a
+            # local override on the next tick.
+            ld_client.update_targeting(LD_SCOPED_GATE_FLAG_KEY, on=False)
             sleep(5)
             c.testdrive(
                 "\n".join(
@@ -489,15 +502,7 @@ def run_scoped_feature_flag_cases(
                     ]
                 )
             )
-            c.testdrive(
-                "\n".join(
-                    [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
-                        "$ postgres-execute connection=mz_system",
-                        "ALTER SYSTEM SET enable_scoped_system_parameters = true",
-                    ]
-                )
-            )
+            ld_client.update_targeting(LD_SCOPED_GATE_FLAG_KEY, on=True)
             sleep(5)
             c.testdrive(
                 "\n".join(
@@ -571,7 +576,11 @@ def run_scoped_feature_flag_cases(
             )
             c.stop("materialized")
     finally:
-        for flag in (LD_OPTIMIZER_FLAG_KEY, LD_LGALLOC_FLAG_KEY):
+        for flag in (
+            LD_OPTIMIZER_FLAG_KEY,
+            LD_LGALLOC_FLAG_KEY,
+            LD_SCOPED_GATE_FLAG_KEY,
+        ):
             try:
                 ld_client.delete_flag(flag)
             except:
