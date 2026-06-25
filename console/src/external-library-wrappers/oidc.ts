@@ -21,7 +21,7 @@ export {
 } from "react-oidc-context";
 
 import { useQuery } from "@tanstack/react-query";
-import { UserManager, WebStorageStateStore } from "oidc-client-ts";
+import { User, UserManager, WebStorageStateStore } from "oidc-client-ts";
 
 import { apiClient } from "~/api/apiClient";
 import { useAppConfig } from "~/config/useAppConfig";
@@ -76,7 +76,7 @@ async function fetchOidcConfig(): Promise<OidcConfig> {
  */
 export class MzOidcUserManager {
   #userManager: UserManager;
-  #cachedIdToken: string | undefined;
+  #cachedToken: { value: string; expiresAtMs: number } | undefined;
 
   constructor(config: OidcConfig) {
     this.#userManager = new UserManager({
@@ -91,11 +91,11 @@ export class MzOidcUserManager {
     });
 
     this.#userManager.events.addUserLoaded((user) => {
-      this.#cachedIdToken = user.id_token;
+      this.#setCachedToken(user);
     });
 
     this.#userManager.events.addUserUnloaded(() => {
-      this.#cachedIdToken = undefined;
+      this.#cachedToken = undefined;
     });
 
     // Eagerly populate the cached token from storage so that API requests
@@ -103,14 +103,28 @@ export class MzOidcUserManager {
     // The userLoaded event only fires on sign-in/silent-renew, not on
     // loading an existing session from storage.
     this.#userManager.getUser().then((user) => {
-      if (user && !this.#cachedIdToken) {
-        this.#cachedIdToken = user.id_token;
+      if (user && !this.#cachedToken) {
+        this.#setCachedToken(user);
       }
     });
   }
 
+  // Don't send an expired id_token: the OIDC Bearer header makes environmentd
+  // validate it instead of the password session cookie, breaking password
+  // fallback.
   getIdToken(): string | undefined {
-    return this.#cachedIdToken;
+    if (!this.#cachedToken || this.#cachedToken.expiresAtMs <= Date.now()) {
+      return undefined;
+    }
+    return this.#cachedToken.value;
+  }
+
+  // Extract the id_token and its `exp` (the claim environmentd validates) up
+  // front, so getIdToken() can drop an expired token without decoding the JWT.
+  #setCachedToken(user: User) {
+    this.#cachedToken = user.id_token
+      ? { value: user.id_token, expiresAtMs: user.profile.exp * 1000 }
+      : undefined;
   }
 
   getUserManager(): UserManager {
