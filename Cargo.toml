@@ -361,7 +361,7 @@ futures = "0.3.32"
 futures-core = "0.3.32"
 futures-task = "0.3.32"
 futures-util = "0.3.32"
-gcp_auth = "0.12.6"
+gcp_auth = { version = "0.12.6", default-features = false, features = ["aws-lc-rs"] }
 glob = "0.3.3"
 globset = "0.4.18"
 governor = "0.10.1"

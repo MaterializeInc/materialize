@@ -989,7 +989,6 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: gcp
-        skip: "https://linear.app/materializeinc/issue/SS-279"
 
   - group: "Platform checks"
     key: platform-checks
