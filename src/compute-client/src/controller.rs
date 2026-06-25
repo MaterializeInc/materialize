@@ -551,6 +551,11 @@ impl ComputeController {
             instance.call(Instance::initialization_complete);
         }
 
+        // The replica also receives the current dyncfg create-time, folded into `CreateInstance`
+        // so create-time setup observes synced values. This `UpdateConfiguration` is still
+        // required: it carries the rest of `ComputeParameters` (workload class, max result size,
+        // tracing) and syncs the dyncfg into the persist config and metrics, none of which ride in
+        // `CreateInstance`. The overlapping dyncfg application is idempotent.
         let mut config_params = self.config.clone();
         config_params.workload_class = Some(workload_class);
         instance.call(|i| i.update_configuration(config_params));

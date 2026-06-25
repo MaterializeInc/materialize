@@ -72,26 +72,31 @@ impl Driver {
     /// Sends `CreateInstance`, opening the compute instance (and the reconciliation
     /// window).
     ///
-    /// `expiration_offset` and `arrangement_dictionary_compression` are the
+    /// `expiration_offset`, `arrangement_dictionary_compression`, and `initial_config` are the
     /// caller-settable [`InstanceConfig`] knobs; `logging` is left at its default
     /// (introspection logging off — enabling it safely needs `index_logs` wiring)
     /// and `peek_stash_persist_location` is necessarily the host's, since the driver
     /// hosts persist.
     ///
-    /// This also force-disables `ENABLE_PEEK_RESPONSE_STASH`: the driver reads peek
-    /// results inline, so a stashed peek would break [`Self::peek`]/`count`. It is
-    /// patched here rather than exposed as a configuration knob, so a script's
-    /// `update-configuration` cannot turn it back on.
+    /// `initial_config` is the create-time configuration snapshot the controller would build from
+    /// its synced dyncfg. The replica applies it before create-time setup, so a script can assert
+    /// that create-time work observes synced values rather than defaults. The peek-response stash
+    /// is always force-disabled on top of it: the driver reads peek results inline, so a stashed
+    /// peek would break [`Self::peek`]/`count`. It is patched here rather than exposed as a knob,
+    /// so neither `initial_config` nor a later `update-configuration` can turn it back on.
     pub fn create_instance(
         &self,
         expiration_offset: Option<Duration>,
         arrangement_dictionary_compression: bool,
+        mut initial_config: ConfigUpdates,
     ) -> anyhow::Result<()> {
+        initial_config.add(&ENABLE_PEEK_RESPONSE_STASH, false);
         self.send(ComputeCommand::CreateInstance(Box::new(InstanceConfig {
             logging: Default::default(),
             expiration_offset,
             peek_stash_persist_location: self.host.location().clone(),
             arrangement_dictionary_compression,
+            initial_config,
         })))?;
         let mut dyncfg_updates = ConfigUpdates::default();
         dyncfg_updates.add(&ENABLE_PEEK_RESPONSE_STASH, false);

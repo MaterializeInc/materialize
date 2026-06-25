@@ -596,6 +596,20 @@ impl ConfigUpdates {
     }
 }
 
+impl From<&ConfigSet> for ConfigUpdates {
+    /// Captures the current value of every config in the set as a dense set of
+    /// updates. Applying the result to another set seeded with the same configs
+    /// reproduces this set's values, regardless of which configs the other set
+    /// has previously had updated.
+    fn from(set: &ConfigSet) -> Self {
+        let mut updates = ConfigUpdates::default();
+        for entry in set.entries() {
+            updates.add_dynamic(entry.name(), entry.val());
+        }
+        updates
+    }
+}
+
 mod impls {
     use std::num::{ParseFloatError, ParseIntError};
     use std::str::ParseBoolError;
