@@ -712,7 +712,7 @@ impl Coordinator {
 
         if plan.validate {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let transient_revision = self.catalog().transient_revision();
+            let catalog = self.owned_catalog();
             let conn_id = ctx.session().conn_id().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
@@ -749,7 +749,7 @@ impl Coordinator {
                         connection_id,
                         connection_gid,
                         plan_validity: PlanValidity::new(
-                            transient_revision,
+                            &catalog,
                             resolved_ids.items().copied().collect(),
                             None,
                             None,
@@ -2728,7 +2728,7 @@ impl Coordinator {
                         ctx,
                         plan: Plan::ReadThenWrite(plan),
                         validity: PlanValidity::new(
-                            self.catalog.transient_revision(),
+                            &self.catalog,
                             source_ids.clone(),
                             None,
                             None,
@@ -3364,7 +3364,7 @@ impl Coordinator {
         let from_item_id = self.catalog().resolve_item_id(&plan.sink.from);
 
         let plan_validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::from_iter([plan.item_id, from_item_id]),
             Some(plan.in_cluster),
             None,
@@ -3695,7 +3695,7 @@ impl Coordinator {
                 .into_inline_connection(self.catalog().state());
 
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let transient_revision = self.catalog().transient_revision();
+            let catalog = self.owned_catalog();
             let conn_id = ctx.session().conn_id().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
@@ -3730,7 +3730,7 @@ impl Coordinator {
                             connection_id: id,
                             connection_gid,
                             plan_validity: PlanValidity::new(
-                                transient_revision,
+                                &catalog,
                                 dependency_ids.clone(),
                                 None,
                                 None,
@@ -4761,7 +4761,7 @@ impl Coordinator {
         let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan.clone();
 
         let plan_validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::from_iter([id, replacement_id]),
             None,
             None,

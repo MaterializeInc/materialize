@@ -1405,3 +1405,119 @@ def toxiproxy_start(c: Composition, jitter: int) -> None:
         },
     )
     assert r.status_code == 200, r
+
+
+# Pauses ROTATE in its off-thread `rotate_keys_ensure` task, between the
+# secret-store write and the catalog write. Must fire off the coordinator main
+# loop; pausing on-loop would freeze the coordinator and block this test's SET.
+# Defined in src/adapter/src/coord/sequencer/inner/secret.rs.
+ROTATE_KEYS_FAILPOINT = "rotate_keys_between_ensure_and_finish"
+
+# Substring of the Display impl of `AdapterError::ConcurrentDependencyMutation`
+# in src/adapter/src/error.rs; what we look for in the ROTATE error to confirm
+# `PlanValidity::check` caught the concurrent SET.
+ROTATE_KEYS_OCC_CONFLICT_MESSAGE = "was concurrently modified"
+
+
+def workflow_rotate_keys_race(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Regression test for SQL-272: ALTER CONNECTION ... ROTATE KEYS silently
+    reverts a concurrent ALTER CONNECTION SET (...).
+
+    `rotate_keys_ensure` is a read-modify-write with a wide window between the
+    catalog read and the catalog write. If ALTER CONNECTION SET (HOST = ...)
+    commits inside that window, the blind write at the end of ROTATE KEYS
+    overwrites the SET change with the pre-SET `create_sql`. ROTATE KEYS is one
+    of the few DDLs exempt from the global `serialized_ddl` lock (see
+    `must_serialize_ddl` in `command_handler.rs`) -- that exemption is what
+    opens the race window.
+
+    After the fix, ROTATE errors with `AdapterError::ConcurrentDependencyMutation`
+    instead of silently reverting. We force the interleaving deterministically
+    with the `rotate_keys_between_ensure_and_finish` failpoint, which pauses
+    ROTATE right after the secret-store write and before the catalog write.
+    """
+    parser.parse_args()
+
+    c.up("materialized")
+
+    # SSH validation needs a reachable bastion. This test only cares about
+    # catalog interaction, not the network, so VALIDATE = false lets us create
+    # and alter the connection without standing up a bastion.
+    c.sql(
+        "ALTER SYSTEM SET enable_connection_validation_syntax = true",
+        user="mz_system",
+        port=6877,
+    )
+
+    c.sql(dedent("""
+            CREATE CONNECTION ssh_conn TO SSH TUNNEL (
+                HOST 'initial_host',
+                USER 'mz',
+                PORT 22
+            ) WITH (VALIDATE = false);
+            """))
+
+    # `SET failpoints` calls `fail::cfg` (see src/sql/src/session/vars/value.rs),
+    # which writes to the process-global registry -- the pause applies to any
+    # session that later hits the named failpoint.
+    c.sql(f"SET failpoints = '{ROTATE_KEYS_FAILPOINT}=pause'")
+
+    rotate_err: Exception | None = None
+
+    def rotate() -> None:
+        nonlocal rotate_err
+        try:
+            with c.sql_cursor(reuse_connection=False) as cur:
+                cur.execute(b"ALTER CONNECTION ssh_conn ROTATE KEYS")
+        except Exception as e:
+            rotate_err = e
+
+    t_rotate = PropagatingThread(target=rotate, name="rotate")
+    t_rotate.start()
+
+    # Give ROTATE time to clone the catalog entry, write the new key to the
+    # secret store, and park at the failpoint. The slow part is the secret-
+    # store I/O; 1s is comfortably more than that on CI.
+    time.sleep(1)
+
+    # ROTATE is now blocked between ensure and finish. Commit the SET; this
+    # mutates ssh_conn's `create_sql` while ROTATE still holds the pre-SET
+    # snapshot.
+    c.sql(
+        "ALTER CONNECTION ssh_conn SET (HOST = 'altered_host') WITH (VALIDATE = false)"
+    )
+
+    # Release ROTATE. It will resume into `catalog_transact`, where
+    # `PlanValidity::check` should detect that ssh_conn's `create_sql` hash
+    # changed and return ConcurrentDependencyMutation.
+    c.sql(f"SET failpoints = '{ROTATE_KEYS_FAILPOINT}=off'")
+
+    t_rotate.join()
+
+    if rotate_err is None:
+        # ROTATE returning Ok means it overwrote the SET -- the original bug.
+        rows = c.sql_query("SHOW CREATE CONNECTION ssh_conn")
+        create_sql = rows[0][1]
+        raise Exception(
+            "TOCTOU race reproduced: ROTATE succeeded despite a concurrent "
+            "SET commit between ensure and finish.\n"
+            f"  SHOW CREATE CONNECTION returned: {create_sql}\n"
+            "This is SQL-272: ROTATE KEYS silently reverted the concurrent SET."
+        )
+
+    err_str = str(rotate_err)
+    if ROTATE_KEYS_OCC_CONFLICT_MESSAGE not in err_str:
+        raise Exception(
+            f"ROTATE failed but not with the expected OCC conflict: {rotate_err}"
+        )
+
+    # The SET should have stuck.
+    rows = c.sql_query("SHOW CREATE CONNECTION ssh_conn")
+    create_sql = rows[0][1]
+    if "altered_host" not in create_sql:
+        raise Exception(
+            "SET appears to have been lost despite ROTATE erroring.\n"
+            f"  SHOW CREATE CONNECTION returned: {create_sql}"
+        )
+
+    print(f"OK: ROTATE aborted with OCC conflict, SET preserved: {err_str}")

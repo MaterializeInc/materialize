@@ -354,7 +354,7 @@ impl Coordinator {
             .map(|id| self.catalog.resolve_item_id(id))
             .collect();
         let validity = PlanValidity::new(
-            catalog.transient_revision(),
+            &self.catalog,
             dependencies,
             Some(cluster.id()),
             target_replica,
@@ -461,7 +461,7 @@ impl Coordinator {
         let item_ids = id_bundle
             .iter()
             .map(|id| self.catalog().resolve_item_id(&id));
-        validity.extend_dependencies(item_ids);
+        validity.extend_dependencies(self.catalog(), item_ids);
 
         let determination = self.sequence_peek_timestamp(
             session,
