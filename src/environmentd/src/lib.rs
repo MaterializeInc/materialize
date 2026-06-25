@@ -418,7 +418,7 @@ impl Listeners {
                 allowed_origin: config.cors_allowed_origin.clone(),
                 allowed_origin_list: config.cors_allowed_origin_list.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
-                webhook_dyncfgs: Arc::clone(&config.system_dyncfgs),
+                dyncfgs: Arc::clone(&config.system_dyncfgs),
                 metrics: metrics.clone(),
                 metrics_registry: metrics_registry.clone(),
                 mcp_metrics: mcp_metrics.clone(),
