@@ -43,6 +43,12 @@ pub struct ComputeMetrics {
     // arrangements
     arrangement_maintenance_seconds_total: raw::CounterVec,
     arrangement_maintenance_active_info: raw::UIntGaugeVec,
+    // Per-worker monotone counters for arrangement heap size churn. Reconstruct
+    // the point-in-time resident size as (added - removed) at query time. Two
+    // monotone counters preserve activity that a single gauge would mask if the
+    // adds and removes happen between scrapes.
+    arrangement_size_bytes_added_total: raw::IntCounterVec,
+    arrangement_size_bytes_removed_total: raw::IntCounterVec,
 
     // timings
     //
@@ -145,6 +151,16 @@ impl ComputeMetrics {
             arrangement_maintenance_active_info: registry.register(metric!(
                 name: "mz_arrangement_maintenance_active_info",
                 help: "Whether maintenance is currently occuring.",
+                var_labels: ["worker_id"],
+            )),
+            arrangement_size_bytes_added_total: registry.register(metric!(
+                name: "mz_arrangement_size_bytes_added_total",
+                help: "Cumulative bytes added to arrangement heaps. Resident bytes is (added - removed). Undercounts allocator-internal fragmentation; do not treat as an authoritative memory total.",
+                var_labels: ["worker_id"],
+            )),
+            arrangement_size_bytes_removed_total: registry.register(metric!(
+                name: "mz_arrangement_size_bytes_removed_total",
+                help: "Cumulative bytes removed from arrangement heaps. Resident bytes is (added - removed). Includes the final retraction when an arrangement drops.",
                 var_labels: ["worker_id"],
             )),
             timely_step_duration_seconds: registry.register(metric!(
@@ -254,6 +270,12 @@ impl ComputeMetrics {
         let arrangement_maintenance_active_info = self
             .arrangement_maintenance_active_info
             .with_label_values(&[&worker]);
+        let arrangement_size_bytes_added_total = self
+            .arrangement_size_bytes_added_total
+            .with_label_values(&[&worker]);
+        let arrangement_size_bytes_removed_total = self
+            .arrangement_size_bytes_removed_total
+            .with_label_values(&[&worker]);
         let timely_step_duration_seconds = self
             .timely_step_duration_seconds
             .with_label_values(&[&worker]);
@@ -286,6 +308,8 @@ impl ComputeMetrics {
             metrics: self.clone(),
             arrangement_maintenance_seconds_total,
             arrangement_maintenance_active_info,
+            arrangement_size_bytes_added_total,
+            arrangement_size_bytes_removed_total,
             timely_step_duration_seconds,
             persist_peek_seconds,
             stashed_peek_seconds,
@@ -319,6 +343,11 @@ pub struct WorkerMetrics {
     /// to gain a sense that Materialize is stuck on maintenance before the
     /// maintenance completes
     pub(crate) arrangement_maintenance_active_info: UIntGauge,
+    /// Cumulative bytes added to arrangement heaps by this worker.
+    pub(crate) arrangement_size_bytes_added_total: IntCounter,
+    /// Cumulative bytes removed from arrangement heaps by this worker, including
+    /// the final retraction emitted when an arrangement drops.
+    pub(crate) arrangement_size_bytes_removed_total: IntCounter,
     /// Histogram of Timely step timings.
     pub(crate) timely_step_duration_seconds: Histogram,
     /// Histogram of persist peek durations.
