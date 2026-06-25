@@ -43,8 +43,8 @@ use super::matching_image_from_environmentd_image_ref;
 use crate::k8s::{apply_resource, delete_resource, get_resource};
 use crate::tls::issuer_ref_defined;
 use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::ManagedResource;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
+use mz_cloud_resources::crd::{ManagedResource, recommended_k8s_labels};
 use mz_ore::instrument;
 
 static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
@@ -1131,11 +1131,7 @@ fn create_environmentd_statefulset_object(
         "materialize.cloud/app".to_owned(),
         mz.environmentd_app_name(),
     );
-    pod_template_labels.insert("app".to_owned(), "environmentd".to_string());
-    pod_template_labels.insert(
-        "app.kubernetes.io/name".to_owned(),
-        "environmentd".to_string(),
-    );
+    pod_template_labels.extend(recommended_k8s_labels("environmentd".into()));
     pod_template_labels.extend(
         mz.spec
             .pod_labels
