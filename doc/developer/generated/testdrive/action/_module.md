@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action.rs
-revision: 849327076c
+revision: adbc532782
 ---
 
 # testdrive::action
@@ -9,4 +9,4 @@ Central module that defines the `Config`, `State`, `ControlFlow`, and `CatalogCo
 `Config` holds every connection parameter (Materialize PostgreSQL endpoints, Kafka broker, Schema Registry URL, AWS config, persist URLs, Fivetran destination URL and files path, etc.) and behavioral knobs (timeouts, retry parameters, result-rewrite mode).
 `State` is the mutable per-run context that carries live client handles, active variable substitutions, per-session regex, Fivetran destination connection details, and accumulated `Rewrite` records for result rewriting.
 The `Run` trait with its single `run` method is the dispatch point: the `PosCommand::run` implementation resolves a `BuiltinCommand` name to the appropriate action function across all submodules, performs variable substitution, and routes `SqlCommand`/`FailSqlCommand` to `action::sql`.
-Child modules cover every external system: `sql`, `consistency`, `kafka`, `postgres`, `mysql`, `duckdb`, `sql_server`, `schema_registry`, `s3`, `file`, `fivetran`, `http`, `webhook`, `persist`, `protobuf`, `psql`, `set`, `sleep`, `skip_if`, `skip_end`, `version_check`, and `nop`.
+Child modules cover every external system: `sql`, `consistency`, `kafka`, `postgres`, `mysql`, `duckdb`, `sql_server`, `schema_registry`, `s3`, `file`, `fivetran`, `glue`, `http`, `webhook`, `persist`, `protobuf`, `psql`, `set`, `sleep`, `skip_if`, `skip_end`, `version_check`, and `nop`.

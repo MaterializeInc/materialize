@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/analysis/deps.rs
-revision: 673fdb9d44
+revision: 8ee3def844
 ---
 
 # mz-deploy::project::analysis::deps
