@@ -573,12 +573,13 @@ where
 
 /// Builds the initial update stream of a delta path from a collection bundle.
 ///
-/// Demuxes over the two flavors of arrangement the bundle might hold for `source_key`, dispatching
-/// to the generic [`build_update_stream_trace`] for each.
+/// With a `source_key`, demuxes over the two flavors of arrangement the bundle might hold for that
+/// key, dispatching to the generic [`build_update_stream_trace`]. Without a `source_key`, the source
+/// relation is consumed as a raw (unarranged) collection via [`build_update_stream_stream`].
 fn build_update_stream<'scope, T>(
     bundle: &CollectionBundle<'scope, T>,
     as_of: Antichain<mz_repr::Timestamp>,
-    source_key: Vec<MirScalarExpr>,
+    source_key: Option<Vec<MirScalarExpr>>,
     source_relation: usize,
     initial_closure: JoinClosure,
 ) -> (
@@ -588,6 +589,15 @@ fn build_update_stream<'scope, T>(
 where
     T: RenderTimestamp,
 {
+    let Some(source_key) = source_key else {
+        // Build an update stream from the raw (unarranged) collection.
+        let (oks, errs) = bundle
+            .collection
+            .clone()
+            .expect("The unarranged collection doesn't exist.");
+        let (oks, errs2) = build_update_stream_stream(oks, as_of, source_relation, initial_closure);
+        return (oks, errs2.concat(errs));
+    };
     match bundle.arrangement(&source_key) {
         Some(ArrangementFlavor::Local(oks, errs)) => {
             let (oks, errs2) = build_update_stream_trace::<_, RowRowAgent<_, _>>(
@@ -723,4 +733,42 @@ where
         ok_stream.as_collection(),
         err_stream.as_collection().map(DataflowErrorSer::from),
     )
+}
+
+/// Builds the beginning of the update stream of a delta path from a raw collection.
+///
+/// This is the unarranged counterpart of [`build_update_stream_trace`]. Only the delta path for the
+/// first relation can be seeded from a raw collection, since the as-of filtering that the other
+/// paths rely on is only available from an arrangement's times. We assert that here.
+fn build_update_stream_stream<'scope, T>(
+    stream: VecCollection<'scope, T, Row, Diff>,
+    _as_of: Antichain<mz_repr::Timestamp>,
+    source_relation: usize,
+    initial_closure: JoinClosure,
+) -> (
+    VecCollection<'scope, T, Row, Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+{
+    // The other paths discard updates at the as-of, so only the first relation's path can be seeded
+    // from a raw collection that carries no per-update times to filter on.
+    assert_eq!(source_relation, 0);
+
+    type CB<C> = ConsolidatingContainerBuilder<C>;
+    stream.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("UpdateStream", {
+        // Reuseable allocation for unpacking.
+        let mut datums = DatumVec::new();
+        move |row| {
+            let mut row_builder = SharedRow::get();
+            let temp_storage = RowArena::new();
+            let mut datums_local = datums.borrow_with(&row);
+            initial_closure
+                .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                .map(|row| row.cloned())
+                .map_err(DataflowErrorSer::from)
+                .transpose()
+        }
+    })
 }
