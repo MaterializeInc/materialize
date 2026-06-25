@@ -80,6 +80,7 @@ use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
 use mz_controller::ReplicaHttpLocator;
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Error as FronteggError;
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
@@ -174,6 +175,7 @@ pub struct HttpConfig {
     pub http_host_name: Option<String>,
     pub frontegg_oauth_issuer_url: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
+    pub dyncfgs: Arc<ConfigSet>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
     pub mcp_metrics: mcp_metrics::McpMetrics,
@@ -206,6 +208,7 @@ pub struct WsState {
 pub struct WebhookState {
     adapter_client_rx: Delayed<mz_adapter::Client>,
     webhook_cache: WebhookAppenderCache,
+    dyncfgs: Arc<ConfigSet>,
 }
 
 #[derive(Clone, Debug)]
@@ -233,6 +236,7 @@ impl HttpServer {
             http_host_name,
             frontegg_oauth_issuer_url,
             concurrent_webhook_req,
+            dyncfgs,
             metrics,
             metrics_registry,
             mcp_metrics,
@@ -346,6 +350,7 @@ impl HttpServer {
                 .with_state(WebhookState {
                     adapter_client_rx: adapter_client_rx.clone(),
                     webhook_cache,
+                    dyncfgs,
                 })
                 .layer(
                     tower_http::decompression::RequestDecompressionLayer::new()
@@ -354,6 +359,11 @@ impl HttpServer {
                         .br(true)
                         .zstd(true),
                 )
+                // The webhook handler enforces WEBHOOK_MAX_REQUEST_SIZE_BYTES
+                // itself via to_bytes on a raw Body. This disable is defense-in-depth:
+                // it only matters if the handler ever returns to a Bytes extractor,
+                // which would otherwise inherit the global 5 MiB limit.
+                .layer(DefaultBodyLimit::disable())
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)

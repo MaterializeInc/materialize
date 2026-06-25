@@ -1022,6 +1022,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     });
 
     let persist_clients = Arc::new(persist_clients);
+    let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id.to_string(),
         &args.tracing.startup_log_filter,
@@ -1101,6 +1102,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 controller,
                 secrets_controller,
                 cloud_resource_controller,
+                system_dyncfgs,
                 // Storage options.
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
                 storage_usage_retention_period: args.storage_usage_retention_period,
