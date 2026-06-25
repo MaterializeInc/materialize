@@ -1589,6 +1589,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      skip: "Not enough capacity on Azure currently, see #operations"
       # Unreliable port-forward to Azure
       retry:
         automatic:
