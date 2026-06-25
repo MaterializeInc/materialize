@@ -269,7 +269,8 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES: Config<Option<usize>> = Config::new(
     None,
     "The maximum number of in-flight bytes emitted by persist_sources feeding \
      compute dataflows in non-cc clusters.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// The "physical backpressure" of `compute_dataflow_max_inflight_bytes_cc` has
 /// been replaced in cc replicas by persist lgalloc and we intend to remove it
@@ -280,7 +281,8 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES_CC: Config<Option<usize>> = Config::new(
     None,
     "The maximum number of in-flight bytes emitted by persist_sources feeding \
      compute dataflows in cc clusters.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// The term `n` in the growth rate `1 + 1/(n + 1)` for `ConsolidatingVec`.
 /// The smallest value `0` corresponds to the greatest allowed growth, of doubling.
