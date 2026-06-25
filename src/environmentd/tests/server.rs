@@ -3927,8 +3927,9 @@ fn webhook_max_request_size() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
-    // Create a dedicated cluster and webhook source. Using a dedicated cluster
-    // avoids interfering with built-in clusters during testing.
+    // Create a webhook source. Webhook ingestion runs in environmentd's HTTP
+    // path, not on a cluster, but CREATE SOURCE ... FROM WEBHOOK still requires
+    // a cluster assignment, so we create one.
     client
         .execute(
             "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
