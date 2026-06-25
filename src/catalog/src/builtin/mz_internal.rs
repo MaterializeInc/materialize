@@ -2866,6 +2866,49 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     }),
 });
 
+pub static MZ_OVERRIDDEN_SYSTEM_PARAMETERS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_overridden_system_parameters",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_OVERRIDDEN_SYSTEM_PARAMETERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("value", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("name", "The name of the system parameter."),
+            (
+                "value",
+                "The environment-wide value of the system parameter.",
+            ),
+        ]),
+        // Projects the durable `system_configurations` collection (the
+        // `ALTER SYSTEM` set) out of `mz_catalog_raw` (the durable catalog as
+        // JSON): the key is `{name}` and the value is `{value}`. This surfaces
+        // only parameters with an explicit environment-wide override, mirroring
+        // the cluster- and replica-scoped views. Parameters left at their
+        // default are absent.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL value
+) AS
+SELECT
+    data->'key'->>'name' AS name,
+    data->'value'->>'value' AS value
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'ServerConfiguration'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "system_parameter",
+            description: "Environment-wide system parameter overrides",
+            links: &const { [] },
+            column_semantic_types: &[],
+        }),
+    });
+
 pub static MZ_CLUSTER_SYSTEM_PARAMETERS: LazyLock<BuiltinMaterializedView> =
     LazyLock::new(|| BuiltinMaterializedView {
         name: "mz_cluster_system_parameters",

@@ -517,6 +517,10 @@ mz_optimizer_notices
 BASE TABLE
 materialize
 mz_internal
+mz_overridden_system_parameters
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_pending_cluster_replicas
 MATERIALIZED VIEW
 materialize
