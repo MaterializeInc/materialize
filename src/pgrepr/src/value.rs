@@ -938,13 +938,6 @@ impl Value {
 }
 
 /// Rescales `n` to the scale required by `constraints`, if any.
-///
-/// `COPY ... FROM` and parameter input decode values directly through
-/// `pgrepr`, bypassing the planner's assignment-cast path, so the destination's
-/// declared scale must be applied here. This mirrors the `(Numeric, Numeric)`
-/// assignment cast, which is itself just a [`rescale`] (see `AdjustNumericScale`
-/// in `mz-expr`). Shared by the text, CSV, and binary decode paths so they all
-/// agree on the value stored for a given typed numeric.
 fn rescale_numeric(
     mut n: OrderedDecimal<mz_repr_numeric::Numeric>,
     constraints: Option<&NumericConstraints>,
