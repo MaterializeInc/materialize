@@ -1193,6 +1193,7 @@ impl<'a> RunnerInner<'a> {
             persist_clients: Arc::clone(&persist_clients),
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
         };
+        let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
         let server_config = mz_environmentd::Config {
             catalog_config,
             timestamp_oracle_url: Some(timestamp_oracle_url),
@@ -1227,6 +1228,7 @@ impl<'a> RunnerInner<'a> {
             },
             secrets_controller,
             cloud_resource_controller: None,
+            system_dyncfgs,
             tls: None,
             frontegg: None,
             frontegg_oauth_issuer_url: None,
