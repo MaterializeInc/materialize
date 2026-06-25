@@ -6990,78 +6990,88 @@ JOIN root_times r USING (id)",
         },
     }),
 });
-/**
- * This view is used to display the cluster utilization over 14 days bucketed by 8 hours.
- * It's specifically for the Console's environment overview page to speed up load times.
- * This query should be kept in sync with MaterializeInc/console/src/api/materialize/cluster/replicaUtilizationHistory.ts
- */
-pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
-        name: "mz_console_cluster_utilization_overview",
-        schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_OID,
-        desc: RelationDesc::builder()
-            .with_column(
-                "bucket_start",
-                SqlScalarType::TimestampTz { precision: None }.nullable(false),
-            )
-            .with_column("replica_id", SqlScalarType::String.nullable(false))
-            .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
-            .with_column(
-                "max_memory_at",
-                SqlScalarType::TimestampTz { precision: None }.nullable(false),
-            )
-            .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
-            .with_column(
-                "max_disk_at",
-                SqlScalarType::TimestampTz { precision: None }.nullable(false),
-            )
-            .with_column(
-                "memory_and_disk_percent",
-                SqlScalarType::Float64.nullable(true),
-            )
-            .with_column(
-                "max_memory_and_disk_memory_percent",
-                SqlScalarType::Float64.nullable(true),
-            )
-            .with_column(
-                "max_memory_and_disk_disk_percent",
-                SqlScalarType::Float64.nullable(true),
-            )
-            .with_column(
-                "max_memory_and_disk_at",
-                SqlScalarType::TimestampTz { precision: None }.nullable(false),
-            )
-            .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
-            .with_column(
-                "max_heap_at",
-                SqlScalarType::TimestampTz { precision: None }.nullable(false),
-            )
-            .with_column("max_cpu_percent", SqlScalarType::Float64.nullable(true))
-            .with_column(
-                "max_cpu_at",
-                SqlScalarType::TimestampTz { precision: None }.nullable(false),
-            )
-            .with_column("offline_events", SqlScalarType::Jsonb.nullable(true))
-            .with_column(
-                "bucket_end",
-                SqlScalarType::TimestampTz { precision: None }.nullable(false),
-            )
-            .with_column("name", SqlScalarType::String.nullable(true))
-            .with_column("cluster_id", SqlScalarType::String.nullable(true))
-            .with_column("size", SqlScalarType::String.nullable(true))
-            .finish(),
-        column_comments: BTreeMap::new(),
-        sql: r#"WITH replica_history AS (
-  SELECT replica_id,
-    size,
-    cluster_id
+/// The output relation shared by all `mz_console_cluster_utilization_overview*`
+/// views. Every (bucket size, retention) variant produces the same columns so
+/// the Console can swap between them based on the selected time range.
+fn console_cluster_utilization_overview_desc() -> RelationDesc {
+    RelationDesc::builder()
+        .with_column(
+            "bucket_start",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
+        .with_column(
+            "max_memory_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
+        .with_column(
+            "max_disk_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "memory_and_disk_percent",
+            SqlScalarType::Float64.nullable(true),
+        )
+        .with_column(
+            "max_memory_and_disk_memory_percent",
+            SqlScalarType::Float64.nullable(true),
+        )
+        .with_column(
+            "max_memory_and_disk_disk_percent",
+            SqlScalarType::Float64.nullable(true),
+        )
+        .with_column(
+            "max_memory_and_disk_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
+        .with_column(
+            "max_heap_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("max_cpu_percent", SqlScalarType::Float64.nullable(true))
+        .with_column(
+            "max_cpu_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("offline_events", SqlScalarType::Jsonb.nullable(true))
+        .with_column(
+            "bucket_end",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("name", SqlScalarType::String.nullable(true))
+        .with_column("cluster_id", SqlScalarType::String.nullable(true))
+        .with_column("size", SqlScalarType::String.nullable(true))
+        .finish()
+}
+
+/// Builds the SQL body shared by the `mz_console_cluster_utilization_overview*`
+/// views, which power the Console's cluster utilization graphs.
+///
+/// There is one view per (bucket width, retention window) pair so the Console
+/// can read a pre-materialized, indexed rollup for each time range it offers
+/// instead of recomputing this (expensive) query on every page load. The bodies
+/// must be kept in sync with the equivalent ad-hoc query in the Console
+/// (`buildReplicaUtilizationHistoryQuery` in
+/// `console/src/api/materialize/cluster/replicaUtilizationHistory.ts`).
+///
+/// * `bin`: the `date_bin` bucket width, e.g. `1 MINUTE`.
+/// * `retention`: how much history the view retains, e.g. `3 HOURS`, enforced
+///   with a temporal `mz_now()` filter so the maintained arrangement stays
+///   bounded.
+/// * `group_size`: the expected number of metric samples per (replica, bucket),
+///   used for the `DISTINCT ON INPUT GROUP SIZE` top-k hint. Replica metrics are
+///   scraped roughly once per minute, so this is the bucket width in minutes.
+fn console_cluster_utilization_overview_sql(bin: &str, retention: &str, group_size: u32) -> String {
+    format!(
+        r#"WITH replica_history AS (
+  SELECT replica_id, size, cluster_id
   FROM mz_internal.mz_cluster_replica_history
   UNION
-  -- We need to union the current set of cluster replicas since mz_cluster_replica_history doesn't include system clusters
-  SELECT id AS replica_id,
-    size,
-    cluster_id
+  -- We union the current set of cluster replicas since mz_cluster_replica_history doesn't include system clusters.
+  SELECT id AS replica_id, size, cluster_id
   FROM mz_catalog.mz_cluster_replicas
 ),
 replica_metrics_history AS (
@@ -7069,14 +7079,22 @@ replica_metrics_history AS (
     m.occurred_at,
     m.replica_id,
     r.size,
-    (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0)) / NULLIF(s.processes, 0) AS cpu_percent,
-    (SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0)) / NULLIF(s.processes, 0) AS memory_percent,
-    (SUM(m.disk_bytes::float8) / NULLIF(s.disk_bytes, 0)) / NULLIF(s.processes, 0) AS disk_percent,
-    (SUM(m.heap_bytes::float8) / NULLIF(m.heap_limit, 0)) / NULLIF(s.processes, 0) AS heap_percent,
+    (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0) / NULLIF(s.processes, 0)) AS cpu_percent,
+    (SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)) AS memory_percent,
+    (SUM(m.disk_bytes::float8) / NULLIF(s.disk_bytes, 0) / NULLIF(s.processes, 0)) AS disk_percent,
     SUM(m.disk_bytes::float8) AS disk_bytes,
     SUM(m.memory_bytes::float8) AS memory_bytes,
-    s.disk_bytes::numeric * s.processes AS total_disk_bytes,
-    s.memory_bytes::numeric * s.processes AS total_memory_bytes
+    s.disk_bytes::float8 * s.processes AS total_disk_bytes,
+    s.memory_bytes::float8 * s.processes AS total_memory_bytes,
+    MAX(m.heap_bytes::float8) AS heap_bytes,
+    MAX(m.heap_limit) AS heap_limit,
+    -- heap_limit is NULL when clusterd isn't launched with --heap-limit (e.g.
+    -- the emulator's process orchestrator). Fall back to the size-based memory
+    -- percent so the chart still renders.
+    COALESCE(
+      MAX(m.heap_bytes::float8 / NULLIF(m.heap_limit, 0)),
+      SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)
+    ) AS heap_percent
   FROM
     replica_history AS r
     INNER JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
@@ -7088,154 +7106,113 @@ replica_metrics_history AS (
     s.cpu_nano_cores,
     s.memory_bytes,
     s.disk_bytes,
-    m.heap_limit,
     s.processes
 ),
 replica_utilization_history_binned AS (
-  SELECT m.occurred_at,
+  -- NOTE: we read directly from replica_metrics_history rather than re-joining
+  -- replica_history; every replica_id here already came from replica_history,
+  -- so the join was redundant (and could fan out a replica that changed size).
+  SELECT
+    m.occurred_at,
     m.replica_id,
     m.cpu_percent,
     m.memory_percent,
     m.memory_bytes,
     m.disk_percent,
     m.disk_bytes,
-    m.heap_percent,
     m.total_disk_bytes,
     m.total_memory_bytes,
+    m.heap_bytes,
+    m.heap_percent,
     m.size,
-    date_bin(
-      '8 HOURS',
-      occurred_at,
-      '1970-01-01'::timestamp
-    ) AS bucket_start
-  FROM replica_history AS r
-    JOIN replica_metrics_history AS m ON m.replica_id = r.replica_id
-  WHERE mz_now() <= date_bin(
-      '8 HOURS',
-      occurred_at,
-      '1970-01-01'::timestamp
-    ) + INTERVAL '14 DAYS'
+    date_bin('{bin}', m.occurred_at, '1970-01-01'::timestamp) AS bucket_start
+  FROM replica_metrics_history AS m
+  WHERE mz_now() <= date_bin('{bin}', m.occurred_at, '1970-01-01'::timestamp) + INTERVAL '{retention}'
 ),
--- For each (replica, bucket), take the (replica, bucket) with the highest memory
+-- For each (replica, bucket), take the sample with the highest memory.
 max_memory AS (
-  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start,
-    replica_id,
-    memory_percent,
-    occurred_at
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start, replica_id, memory_percent, occurred_at
   FROM replica_utilization_history_binned
-  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
-  ORDER BY bucket_start,
-    replica_id,
-    COALESCE(memory_bytes, 0) DESC
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = {group_size})
+  ORDER BY bucket_start, replica_id, COALESCE(memory_bytes, 0) DESC
 ),
+-- For each (replica, bucket), take the sample with the highest disk.
 max_disk AS (
-  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start,
-    replica_id,
-    disk_percent,
-    occurred_at
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start, replica_id, disk_percent, occurred_at
   FROM replica_utilization_history_binned
-  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
-  ORDER BY bucket_start,
-    replica_id,
-    COALESCE(disk_bytes, 0) DESC
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = {group_size})
+  ORDER BY bucket_start, replica_id, COALESCE(disk_bytes, 0) DESC
 ),
+-- For each (replica, bucket), take the sample with the highest cpu.
 max_cpu AS (
-  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start,
-    replica_id,
-    cpu_percent,
-    occurred_at
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start, replica_id, cpu_percent, occurred_at
   FROM replica_utilization_history_binned
-  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
-  ORDER BY bucket_start,
-    replica_id,
-    COALESCE(cpu_percent, 0) DESC
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = {group_size})
+  ORDER BY bucket_start, replica_id, COALESCE(cpu_percent, 0) DESC
 ),
 /*
- This is different
- from adding max_memory
- and max_disk per bucket because both
- values may not occur at the same time if the bucket interval is large.
- */
+  For each (replica, bucket), take the sample with the highest combined memory
+  and disk. This is different from adding max_memory and max_disk per bucket
+  because both values may not occur at the same time if the bucket interval is
+  large.
+*/
 max_memory_and_disk AS (
-  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start,
-    replica_id,
-    memory_percent,
-    disk_percent,
-    memory_and_disk_percent,
-    occurred_at
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start, replica_id, memory_percent, disk_percent, memory_and_disk_percent, occurred_at
   FROM (
-      SELECT *,
-        CASE
-          WHEN disk_bytes IS NULL
-          AND memory_bytes IS NULL THEN NULL
-          ELSE (COALESCE(disk_bytes, 0) + COALESCE(memory_bytes, 0))
-               / (total_disk_bytes::numeric + total_memory_bytes::numeric)
-        END AS memory_and_disk_percent
-      FROM replica_utilization_history_binned
-    ) AS max_memory_and_disk_inner
-  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
-  ORDER BY bucket_start,
-    replica_id,
-    COALESCE(memory_and_disk_percent, 0) DESC
+    SELECT *,
+      CASE
+        WHEN disk_bytes IS NULL AND memory_bytes IS NULL THEN NULL
+        ELSE (COALESCE(memory_bytes, 0) + COALESCE(disk_bytes, 0)) / NULLIF((total_memory_bytes + total_disk_bytes), 0)
+      END AS memory_and_disk_percent
+    FROM replica_utilization_history_binned
+  ) AS max_memory_and_disk_inner
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = {group_size})
+  ORDER BY bucket_start, replica_id, COALESCE(memory_and_disk_percent, 0) DESC
 ),
+-- For each (replica, bucket), take the sample with the highest heap.
 max_heap AS (
-  SELECT DISTINCT ON (bucket_start, replica_id)
-    bucket_start,
-    replica_id,
-    heap_percent,
-    occurred_at
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start, replica_id, heap_percent, occurred_at
   FROM replica_utilization_history_binned
-  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
-  ORDER BY bucket_start, replica_id, COALESCE(heap_percent, 0) DESC
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = {group_size})
+  ORDER BY bucket_start, replica_id, COALESCE(heap_bytes, 0) DESC
 ),
--- For each (replica, bucket), get its offline events at that time
+-- For each (replica, bucket), collect its offline events at that time.
 replica_offline_event_history AS (
-  SELECT date_bin(
-      '8 HOURS',
-      occurred_at,
-      '1970-01-01'::timestamp
-    ) AS bucket_start,
+  SELECT
+    date_bin('{bin}', occurred_at, '1970-01-01'::timestamp) AS bucket_start,
     replica_id,
     jsonb_agg(
       jsonb_build_object(
-        'replicaId',
-        rsh.replica_id,
-        'occurredAt',
-        rsh.occurred_at,
-        'status',
-        rsh.status,
-        'reason',
-        rsh.reason
+        'replicaId', rsh.replica_id,
+        'occurredAt', rsh.occurred_at,
+        'status', rsh.status,
+        'reason', rsh.reason
       )
     ) AS offline_events
-  FROM mz_internal.mz_cluster_replica_status_history AS rsh -- We assume the statuses for process 0 are the same as all processes
+  FROM mz_internal.mz_cluster_replica_status_history AS rsh
+  -- We assume the statuses for process 0 are the same as all processes.
   WHERE process_id = '0'
     AND status = 'offline'
-    AND mz_now() <= date_bin(
-      '8 HOURS',
-      occurred_at,
-      '1970-01-01'::timestamp
-    ) + INTERVAL '14 DAYS'
-  GROUP BY bucket_start,
-    replica_id
+    AND mz_now() <= date_bin('{bin}', occurred_at, '1970-01-01'::timestamp) + INTERVAL '{retention}'
+  GROUP BY bucket_start, replica_id
 )
 SELECT
   bucket_start,
   replica_id,
   max_memory.memory_percent,
-  max_memory.occurred_at as max_memory_at,
+  max_memory.occurred_at AS max_memory_at,
   max_disk.disk_percent,
-  max_disk.occurred_at as max_disk_at,
-  max_memory_and_disk.memory_and_disk_percent as memory_and_disk_percent,
-  max_memory_and_disk.memory_percent as max_memory_and_disk_memory_percent,
-  max_memory_and_disk.disk_percent as max_memory_and_disk_disk_percent,
-  max_memory_and_disk.occurred_at as max_memory_and_disk_at,
+  max_disk.occurred_at AS max_disk_at,
+  max_memory_and_disk.memory_and_disk_percent AS memory_and_disk_percent,
+  max_memory_and_disk.memory_percent AS max_memory_and_disk_memory_percent,
+  max_memory_and_disk.disk_percent AS max_memory_and_disk_disk_percent,
+  max_memory_and_disk.occurred_at AS max_memory_and_disk_at,
   max_heap.heap_percent,
-  max_heap.occurred_at as max_heap_at,
-  max_cpu.cpu_percent as max_cpu_percent,
-  max_cpu.occurred_at as max_cpu_at,
+  max_heap.occurred_at AS max_heap_at,
+  max_cpu.cpu_percent AS max_cpu_percent,
+  max_cpu.occurred_at AS max_cpu_at,
   replica_offline_event_history.offline_events,
-  bucket_start + INTERVAL '8 HOURS' as bucket_end,
+  bucket_start + INTERVAL '{bin}' AS bucket_end,
   replica_name_history.new_name AS name,
   replica_history.cluster_id,
   replica_history.size
@@ -7245,22 +7222,192 @@ JOIN max_cpu USING (bucket_start, replica_id)
 JOIN max_memory_and_disk USING (bucket_start, replica_id)
 JOIN max_heap USING (bucket_start, replica_id)
 JOIN replica_history USING (replica_id)
+/*
+  TOP k=1 over the name history via a LATERAL subquery + LIMIT: for each bucket,
+  get the most recent replica name as of the end of the bucket.
+*/
 CROSS JOIN LATERAL (
   SELECT new_name
-  FROM mz_internal.mz_cluster_replica_name_history as replica_name_history
-  WHERE replica_id = replica_name_history.id -- We treat NULLs as the beginning of time
-    AND bucket_start + INTERVAL '8 HOURS' >= COALESCE(
-      replica_name_history.occurred_at,
-      '1970-01-01'::timestamp
-    )
+  FROM mz_internal.mz_cluster_replica_name_history AS replica_name_history
+  WHERE replica_id = replica_name_history.id
+    -- We treat NULLs as the beginning of time.
+    AND bucket_start + INTERVAL '{bin}' >= COALESCE(replica_name_history.occurred_at, '1970-01-01'::timestamp)
   ORDER BY replica_name_history.occurred_at DESC
-  LIMIT '1'
+  LIMIT 1
 ) AS replica_name_history
 LEFT JOIN replica_offline_event_history USING (bucket_start, replica_id)"#,
+        bin = bin,
+        retention = retention,
+        group_size = group_size,
+    )
+}
+
+/// Schema for the un-binned 3-hour console cluster utilization base. Unlike the
+/// binned `_overview*` views, this exposes raw per-(replica, sample) metrics so
+/// the Console can bin client-side.
+fn console_cluster_utilization_unbinned_3h_desc() -> RelationDesc {
+    RelationDesc::builder()
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(true))
+        .with_column("size", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(true))
+        .with_column(
+            "occurred_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("cpu_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
+        .with_column(
+            "memory_and_disk_percent",
+            SqlScalarType::Float64.nullable(true),
+        )
+        .finish()
+}
+
+/// Builds the SQL for the un-binned 3-hour console cluster utilization base: one
+/// row per (replica, metric sample) over `retention`, with no `date_bin`/top-k,
+/// so the Console bins it client-side. The binned `_overview*` views handle the
+/// longer windows. A temporal `mz_now()` filter bounds the maintained
+/// arrangement. Kept in sync with the Console
+/// (`buildConsoleClusterUtilizationUnbinned3hQuery` in
+/// `replicaUtilizationHistory.ts`).
+fn console_cluster_utilization_unbinned_3h_sql(retention: &str) -> String {
+    format!(
+        r#"WITH replica_history AS (
+  -- Dedup to one row per replica (prefer the current size). Size is fixed per
+  -- replica so this is normally a no-op, but a stray duplicate size in history
+  -- would fan out the metrics join; with no Top-1 dedup here that would emit two
+  -- rows per (replica_id, occurred_at) and break the Console SUBSCRIBE upsert key.
+  SELECT DISTINCT ON (replica_id) replica_id, size, cluster_id
+  FROM (
+    -- We union the current set of cluster replicas since mz_cluster_replica_history doesn't include system clusters.
+    SELECT id AS replica_id, size, cluster_id, 0 AS source_rank
+    FROM mz_catalog.mz_cluster_replicas
+    UNION ALL
+    SELECT replica_id, size, cluster_id, 1 AS source_rank
+    FROM mz_internal.mz_cluster_replica_history
+  ) all_replicas
+  ORDER BY replica_id, source_rank
+),
+replica_metrics AS (
+  SELECT
+    m.occurred_at,
+    m.replica_id,
+    r.cluster_id,
+    r.size,
+    (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0) / NULLIF(s.processes, 0)) AS cpu_percent,
+    (SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)) AS memory_percent,
+    (SUM(m.disk_bytes::float8) / NULLIF(s.disk_bytes, 0) / NULLIF(s.processes, 0)) AS disk_percent,
+    COALESCE(
+      MAX(m.heap_bytes::float8 / NULLIF(m.heap_limit, 0)),
+      SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)
+    ) AS heap_percent,
+    CASE
+      WHEN SUM(m.disk_bytes::float8) IS NULL AND SUM(m.memory_bytes::float8) IS NULL THEN NULL
+      ELSE (COALESCE(SUM(m.memory_bytes::float8), 0) + COALESCE(SUM(m.disk_bytes::float8), 0))
+           / NULLIF((s.memory_bytes::float8 + s.disk_bytes::float8) * s.processes, 0)
+    END AS memory_and_disk_percent
+  FROM replica_history AS r
+    INNER JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
+    INNER JOIN mz_internal.mz_cluster_replica_metrics_history AS m ON m.replica_id = r.replica_id
+  -- No aggregation over time: one row per (replica, sample) so the Console bins
+  -- client-side. The temporal mz_now() filter keeps the maintained arrangement
+  -- bounded to the retention window.
+  WHERE mz_now() <= m.occurred_at + INTERVAL '{retention}'
+  GROUP BY
+    m.occurred_at,
+    m.replica_id,
+    r.cluster_id,
+    r.size,
+    s.cpu_nano_cores,
+    s.memory_bytes,
+    s.disk_bytes,
+    s.processes
+)
+SELECT
+  m.replica_id,
+  m.cluster_id,
+  m.size,
+  replica_name_history.new_name AS name,
+  m.occurred_at,
+  m.cpu_percent,
+  m.memory_percent,
+  m.disk_percent,
+  m.heap_percent,
+  m.memory_and_disk_percent
+FROM replica_metrics AS m
+/* Most recent replica name as of the sample time. */
+CROSS JOIN LATERAL (
+  SELECT new_name
+  FROM mz_internal.mz_cluster_replica_name_history AS replica_name_history
+  WHERE m.replica_id = replica_name_history.id
+    -- We treat NULLs as the beginning of time.
+    AND m.occurred_at >= COALESCE(replica_name_history.occurred_at, '1970-01-01'::timestamp)
+  ORDER BY replica_name_history.occurred_at DESC
+  LIMIT 1
+) AS replica_name_history"#,
+        retention = retention,
+    )
+}
+
+/**
+ * Displays cluster utilization over 14 days bucketed by 1 hour, for the
+ * Console's environment overview and cluster pages, to speed up load times.
+ * This view (and its `_3h`/`_24h` siblings) is kept in sync with
+ * MaterializeInc/console/src/api/materialize/cluster/replicaUtilizationHistory.ts
+ */
+pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
+        name: "mz_console_cluster_utilization_overview",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_OID,
+        desc: console_cluster_utilization_overview_desc(),
+        column_comments: BTreeMap::new(),
+        sql: Box::leak(
+            console_cluster_utilization_overview_sql("1 HOUR", "14 DAYS", 60).into_boxed_str(),
+        ),
         access: vec![PUBLIC_SELECT],
         ontology: None,
-    }
-});
+    });
+
+/**
+ * Un-binned cluster utilization over the last 3 hours, for the Console's "Last
+ * hour" / "Last 3 hours" graphs. Unlike the binned `_overview*` views, this
+ * exposes raw per-(replica, sample) metrics and the Console bins client-side.
+ * See `console_cluster_utilization_unbinned_3h_sql` for details.
+ */
+pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
+        name: "mz_console_cluster_utilization_overview_3h",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H_OID,
+        desc: console_cluster_utilization_unbinned_3h_desc(),
+        column_comments: BTreeMap::new(),
+        sql: Box::leak(console_cluster_utilization_unbinned_3h_sql("3 HOURS").into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
+/**
+ * Cluster utilization over the last 24 hours bucketed by 5 minutes, for the
+ * Console's "Last 6 hours" / "Last 24 hours" cluster utilization graphs. See
+ * `console_cluster_utilization_overview_sql` for details.
+ */
+pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
+        name: "mz_console_cluster_utilization_overview_24h",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H_OID,
+        desc: console_cluster_utilization_overview_desc(),
+        column_comments: BTreeMap::new(),
+        sql: Box::leak(
+            console_cluster_utilization_overview_sql("5 MINUTES", "24 HOURS", 5).into_boxed_str(),
+        ),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
 /**
  * Traces the blue/green deployment lineage in the audit log to determine all cluster
  * IDs that are logically the same cluster.
@@ -7563,6 +7710,24 @@ pub const MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND: BuiltinIndex = BuiltinInd
     oid: oid::INDEX_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_console_cluster_utilization_overview (cluster_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_console_cluster_utilization_overview_3h_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_console_cluster_utilization_overview_3h (cluster_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_console_cluster_utilization_overview_24h_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_console_cluster_utilization_overview_24h (cluster_id)",
     is_retained_metrics_object: false,
 };
 
