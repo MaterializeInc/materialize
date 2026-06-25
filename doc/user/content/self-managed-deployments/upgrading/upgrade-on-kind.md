@@ -43,7 +43,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 {{< important >}}
 
 The following procedure performs a rolling upgrade, where both the old and new
-Materialize instances are running before the old instance are removed.
+Materialize instances are running before the old instances are removed.
 When performing a rolling upgrade, ensure you have enough resources to support
 having both the old and new Materialize instances running.
 
