@@ -140,6 +140,11 @@ CREATE SOURCE mz_source
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1);
 ```
 
+### Reading from a physical standby
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-physical-standby" %}}
+
 ### Monitoring source progress
 
 By default, PostgreSQL sources expose progress metadata as a subsource that you
