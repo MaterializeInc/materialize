@@ -35,7 +35,7 @@ use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, get_resource, replace_resource},
+    k8s::{apply_resource, get_resource, recommended_k8s_labels, replace_resource},
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -354,10 +354,13 @@ impl Context {
             ..Default::default()
         };
 
+        let match_labels = pod_template_labels.clone();
+        pod_template_labels.extend(recommended_k8s_labels(balancer.app_name()));
+
         let deployment_spec = DeploymentSpec {
             replicas: Some(balancer.replicas()),
             selector: LabelSelector {
-                match_labels: Some(pod_template_labels.clone()),
+                match_labels: Some(match_labels),
                 ..Default::default()
             },
             strategy: Some(DeploymentStrategy {

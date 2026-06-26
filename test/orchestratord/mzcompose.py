@@ -1627,6 +1627,55 @@ class BalancerdExternalDnsNames(Modification):
         retry(check, 360)
 
 
+class RecommendedK8sLabels(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        pass
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.24.0"
+        ):
+            return
+
+        def get(kind: str, name: str) -> dict[str, Any]:
+            return json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        kind,
+                        name,
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+
+        def check() -> None:
+            pod = get_environmentd_data()["items"][0]
+            statefulset = get(
+                "statefulset", pod["metadata"]["labels"]["materialize.cloud/name"]
+            )
+            service = get("service", statefulset["spec"]["serviceName"])
+            for kind, obj in (("statefulset", statefulset), ("service", service)):
+                actual = obj["metadata"].get("labels", {}).get("app.kubernetes.io/name")
+                assert (
+                    actual == "environmentd"
+                ), f"Expected app.kubernetes.io/name=environmentd on {kind}/{obj['metadata']['name']}, got {actual!r}"
+
+        retry(check, 120)
+
+
 class AuthenticatorKind(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:

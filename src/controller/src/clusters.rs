@@ -729,6 +729,7 @@ impl Controller {
         let service = self.orchestrator.ensure_service(
             &service_name,
             ServiceConfig {
+                app_name: "clusterd".into(),
                 image: self.clusterd_image.clone(),
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {

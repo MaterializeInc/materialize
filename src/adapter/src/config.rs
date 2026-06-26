@@ -30,7 +30,6 @@ pub use frontend::{
     SystemParameterFrontend,
 };
 pub use params::{ModifiedParameter, SynchronizedParameters};
-pub(crate) use sync::evaluate_scoped_parameters;
 pub use sync::system_parameter_sync;
 
 /// Scoped (per-cluster and per-replica) system-parameter overrides, keyed by

@@ -67,7 +67,7 @@ async fn index_over_small_shard() {
     // `create_instance` also force-disables the peek-response stash, so peeks
     // return their rows inline.
     driver
-        .create_instance(None, false)
+        .create_instance(None, false, Default::default())
         .expect("create instance");
     driver
         .send(mz_compute_client::protocol::command::ComputeCommand::InitializationComplete)

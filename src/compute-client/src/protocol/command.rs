@@ -281,6 +281,16 @@ pub struct InstanceConfig {
     /// held fixed for the replica's lifetime, so flipping the flag only affects replicas created
     /// afterwards rather than retroactively changing arrangements across the environment.
     pub arrangement_dictionary_compression: bool,
+    /// A snapshot of the controller's dynamic configuration at replica creation, including any
+    /// replica-scoped overrides.
+    ///
+    /// The replica applies this to its worker configuration before running create-time setup, so
+    /// that work performed while handling `CreateInstance` (for example rendering introspection
+    /// dataflows) observes controller-synced values rather than dyncfg defaults. The values are
+    /// also delivered through the subsequent `UpdateConfiguration`, which applies globally and
+    /// keeps the configuration current for the replica's lifetime. An empty snapshot leaves the
+    /// worker at its defaults until that first `UpdateConfiguration`.
+    pub initial_config: ConfigUpdates,
 }
 
 impl InstanceConfig {
@@ -295,6 +305,10 @@ impl InstanceConfig {
     /// Dictionary compression is intentionally excluded from this check: it is captured at replica
     /// creation, so a change is always compatible and a running replica keeps the value it was
     /// created with (a new value is only picked up by replicas created afterwards).
+    ///
+    /// The initial config snapshot is likewise excluded: it carries dyncfg values that apply
+    /// globally and are kept current through `UpdateConfiguration`, so a difference across
+    /// reconnects is expected and does not require a restart.
     pub fn compatible_with(&self, other: &InstanceConfig) -> bool {
         // Destructure to protect against adding fields in the future.
         let InstanceConfig {
@@ -303,12 +317,15 @@ impl InstanceConfig {
             peek_stash_persist_location: self_peek_stash_persist_location,
             // Captured at replica creation; intentionally not part of compatibility (see above).
             arrangement_dictionary_compression: _,
+            // Globally-applied dyncfg snapshot, intentionally not part of compatibility (see above).
+            initial_config: _,
         } = self;
         let InstanceConfig {
             logging: other_logging,
             expiration_offset: other_offset,
             peek_stash_persist_location: other_peek_stash_persist_location,
             arrangement_dictionary_compression: _,
+            initial_config: _,
         } = other;
 
         // Logging is compatible if exactly the same.

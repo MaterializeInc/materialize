@@ -806,6 +806,7 @@ impl Listeners {
         let persist_clients =
             PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client);
         let persist_clients = Arc::new(persist_clients);
+        let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
 
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
@@ -884,6 +885,7 @@ impl Listeners {
                 },
                 secrets_controller,
                 cloud_resource_controller: None,
+                system_dyncfgs,
                 tls: config.tls,
                 frontegg: config.frontegg,
                 frontegg_oauth_issuer_url: None,

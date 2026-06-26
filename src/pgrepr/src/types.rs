@@ -1257,12 +1257,9 @@ impl From<&SqlScalarType> for Type {
             },
             SqlScalarType::Uuid => Type::Uuid,
             SqlScalarType::Numeric { max_scale } => Type::Numeric {
-                constraints: Some(NumericConstraints {
+                constraints: max_scale.map(|max_scale| NumericConstraints {
                     max_precision: i32::from(NUMERIC_DATUM_MAX_PRECISION),
-                    max_scale: match max_scale {
-                        Some(max_scale) => i32::from(max_scale.into_u8()),
-                        None => i32::from(NUMERIC_DATUM_MAX_PRECISION),
-                    },
+                    max_scale: i32::from(max_scale.into_u8()),
                 }),
             },
             SqlScalarType::RegClass => Type::RegClass,

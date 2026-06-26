@@ -120,6 +120,12 @@ pub enum AdapterError {
         dependency_kind: &'static str,
         dependency_id: String,
     },
+    /// A dependency's definition changed while a statement was being sequenced.
+    /// Raised by `PlanValidity::check` when a dependency's `create_sql` hash no
+    /// longer matches what we captured at plan time.
+    ConcurrentDependencyMutation {
+        dependency_id: String,
+    },
     CollectionUnreadable {
         id: String,
     },
@@ -753,6 +759,10 @@ impl AdapterError {
                 "Currently, DDL transactions fail when any other DDL happens concurrently, \
                  even on unrelated schemas/clusters.".into()
             ),
+            AdapterError::ConcurrentDependencyMutation { .. } => Some(
+                "Another session modified one of this statement's dependencies before \
+                 it could commit. Retry the statement.".into()
+            ),
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
             ),
@@ -810,6 +820,9 @@ impl AdapterError {
             AdapterError::CopyFormatError(_) => SqlState::BAD_COPY_FILE_FORMAT,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConcurrentDependencyDrop { .. } => SqlState::UNDEFINED_OBJECT,
+            AdapterError::ConcurrentDependencyMutation { .. } => {
+                SqlState::T_R_SERIALIZATION_FAILURE
+            }
             AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
@@ -1153,6 +1166,12 @@ impl fmt::Display for AdapterError {
                 dependency_id,
             } => {
                 write!(f, "{dependency_kind} '{dependency_id}' was dropped")
+            }
+            AdapterError::ConcurrentDependencyMutation { dependency_id } => {
+                write!(
+                    f,
+                    "catalog item '{dependency_id}' was concurrently modified"
+                )
             }
             AdapterError::CollectionUnreadable { id } => {
                 write!(f, "collection '{id}' is not readable at any timestamp")

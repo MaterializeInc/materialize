@@ -51,6 +51,12 @@
 
 mode cockroach
 
+# Start from a pristine server so no user objects (e.g. roles created by a
+# preceding file in the same run) leak into the constant-folded plans. Several
+# `information_schema` views embed the current set of role OIDs as a literal,
+# which would otherwise make this snapshot depend on run order.
+reset-server
+
 # `mz_internal.mz_wallclock_global_lag` is a monotonic top-1 over a temporal
 # filter; planning it folds `mz_now()` into a literal millisecond timestamp that
 # changes on every run. Mask that one literal so the snapshot stays stable. The
@@ -4394,7 +4400,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (22 rows)
+        →Constant (23 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -4798,6 +4804,21 @@ Source mz_internal.mz_catalog_raw
   project=(#2..=#4)
   filter=(("ReplicaSystemConfiguration" = (#0{data} ->> "kind")))
   map=((#0{data} -> "key"), parse_catalog_id((#1 -> "replica_id")), (#1 ->> "name"), ((#0{data} -> "value") ->> "value"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_overridden_system_parameters";
+----
+mz_internal.mz_overridden_system_parameters:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#1, #2)
+  filter=(("ServerConfiguration" = (#0{data} ->> "kind")))
+  map=(((#0{data} -> "key") ->> "name"), ((#0{data} -> "value") ->> "value"))
 
 Target cluster: mz_catalog_server
 
@@ -7019,7 +7040,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (22 rows)
+  →Constant (23 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8883,7 +8904,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_ontology_entity_types";
 ----
 Explained Query (fast path):
-  →Constant (131 rows)
+  →Constant (132 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8907,7 +8928,7 @@ Explained Query:
     cte l0 =
       →Differential Join %1:mz_schemas[#0{id}] » %2:mz_objects[#2{schema_id}] » %0[#0{schema_name}, #1{table_name}] » %3:mz_columns[#0{id}]
         →Arrange (#0{schema_name}, #1{table_name})
-          →Constant (131 rows)
+          →Constant (132 rows)
         →Arrange (#0{id})
           →Fused with Child Map/Filter/Project
             Project: #1, #3

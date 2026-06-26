@@ -94,6 +94,7 @@ SCRIPTS = [
     "subscribe.spec",
     "join.spec",
     "index_and_mv.spec",
+    "create_time_config.spec",
 ]
 
 

@@ -679,6 +679,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mcp_developer_query_tool",
     "mcp_max_response_size",
     "user_id_pool_batch_size",
+    "webhook_max_request_size_bytes",
 ]
 
 

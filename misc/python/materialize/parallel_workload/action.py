@@ -202,6 +202,7 @@ class Action:
                     "another session modified the catalog while this DDL transaction was open",
                     "was dropped while executing a statement",
                     "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
+                    "was concurrently modified",  # ConcurrentDependencyMutation (SQL-272)
                     "non-temporary items cannot depend on temporary item",  # TODO(def-): Fix?
                     "is not readable at any timestamp",  # Expected, due to object drops
                 ]
@@ -1654,6 +1655,12 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["webhook_max_request_size_bytes"] = [
+            # 1 MiB, 5 MiB (default), 10 MiB
+            "1048576",
+            "5242880",
+            "10485760",
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the

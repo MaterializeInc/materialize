@@ -989,7 +989,6 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: gcp
-        skip: "https://linear.app/materializeinc/issue/SS-279"
 
   - group: "Platform checks"
     key: platform-checks
@@ -1589,6 +1588,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      skip: "Not enough capacity on Azure currently, see #operations"
       # Unreliable port-forward to Azure
       retry:
         automatic:
@@ -2604,6 +2604,17 @@ steps:
                composition: race-condition
                args: [--runtime=1500, --scenario=concurrent]
          skip: "Not stable yet, not clear if this is a product issue"
+
+       - id: race-condition-rotate-keys
+         label: "ALTER CONNECTION ROTATE KEYS vs SET race"
+         depends_on: build-x86_64
+         timeout_in_minutes: 15
+         agents:
+           queue: hetzner-x86-64-4cpu-8gb
+         plugins:
+           - ./ci/plugins/mzcompose:
+               composition: race-condition
+               run: rotate-keys-race
 
   - group: Language
     key: language-tests

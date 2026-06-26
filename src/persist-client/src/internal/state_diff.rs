@@ -1360,6 +1360,27 @@ mod tests {
 
     use super::*;
 
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function on OS `linux`
+    fn proto_state_diff_invalid_field_diffs_is_error() {
+        // A `ProtoStateDiff` decoded from an untrusted blob whose field diffs
+        // fail `validate()` must convert to an error, not panic. We previously
+        // `debug_assert`ed validity, which panicked under debug assertions /
+        // fuzzing. Regression for the state_diff_proto_roundtrip cargo-fuzz
+        // finding.
+        use crate::internal::state::ProtoStateDiff;
+        use mz_proto::ProtoType;
+        use prost::Message;
+
+        let bytes: &[u8] = &[0x2a, 0x04, 0x08, 0x00, 0x68, 0x00, 0x40, 0x48];
+        let proto = ProtoStateDiff::decode(bytes).expect("crash input decodes as a proto");
+        let result: Result<StateDiff<u64>, _> = proto.into_rust();
+        assert!(
+            result.is_err(),
+            "invalid field diffs must be a decode error"
+        );
+    }
+
     /// Model a situation where a "leader" is constantly making changes to its state, and a "follower"
     /// is applying those changes as diffs.
     #[mz_ore::test]

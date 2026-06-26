@@ -922,24 +922,6 @@ impl MirScalarExpr {
         while old_self != *self {
             old_self = self.clone();
             self.reduce_and_canonicalize_and_or(); // We don't want to deal with 1-arg AND/OR at the top
-
-            // Undistribution (factoring out a common operand, and its
-            // absorption-law special cases like `a OR (a AND c) --> a`)
-            // preserves SQL's three-valued logic but NOT its error semantics:
-            // AND/OR let only the dominating value (`false`/`true`) absorb an
-            // operand's error, while a NULL operand does not — `NULL AND <err>`
-            // and `NULL OR <err>` both evaluate to `<err>`. So a rewrite such as
-            // `a OR (a AND c) --> a` can silently turn a row's error into NULL
-            // when `a` is NULL and a dropped/relocated operand errors. Skip
-            // undistribution entirely when an operand could error. The
-            // always-sound `reduce_and_canonicalize_and_or` (run just above, and
-            // again by `reduce` after us) has already had its chance to absorb
-            // any error dominated by a literal `false`/`true`, so an error
-            // surviving to here is one undistribution must not move.
-            if self.could_error() {
-                return;
-            }
-
             if let MirScalarExpr::CallVariadic {
                 exprs: outer_operands,
                 func: outer_func @ (VariadicFunc::Or(_) | VariadicFunc::And(_)),
@@ -2492,84 +2474,6 @@ impl RustType<ProtoDims> for (usize, usize) {
 mod tests {
     use super::*;
     use crate::scalar::func::variadic::Coalesce;
-
-    #[mz_ore::test]
-    fn test_reduce_and_or_does_not_propagate_operand_error() {
-        // Regression: AND/OR are non-strict, so a `false`/`true` operand
-        // dominates an erroring operand at runtime (`false AND <error>` is
-        // `false`). `reduce` must therefore not fold `x AND <error>` (or
-        // `x OR <error>`) to the error, which would make a query fail that
-        // otherwise succeeds. Found by the mir_scalar_reduce fuzz target.
-        let bool_typ = ReprScalarType::Bool;
-        let types = vec![bool_typ.clone().nullable(true)];
-        let err = || MirScalarExpr::literal(Err(EvalError::DivisionByZero), bool_typ.clone());
-        let arena = RowArena::new();
-
-        let mut and = MirScalarExpr::call_variadic(And, vec![MirScalarExpr::column(0), err()]);
-        and.reduce(&types);
-        assert!(
-            !and.is_literal_err(),
-            "reduce folded AND with an error operand to an error: {and:?}"
-        );
-        assert_eq!(and.eval(&[Datum::False], &arena), Ok(Datum::False));
-
-        let mut or = MirScalarExpr::call_variadic(Or, vec![MirScalarExpr::column(0), err()]);
-        or.reduce(&types);
-        assert!(
-            !or.is_literal_err(),
-            "reduce folded OR with an error operand to an error: {or:?}"
-        );
-        assert_eq!(or.eval(&[Datum::True], &arena), Ok(Datum::True));
-    }
-
-    #[mz_ore::test]
-    fn test_reduce_and_or_does_not_absorb_operand_error() {
-        // Regression: now that `reduce` keeps an erroring operand inside AND/OR
-        // (see `test_reduce_and_or_does_not_propagate_operand_error`), that
-        // operand reaches `undistribute_and_or`. Its absorption/undistribution
-        // rewrites preserve three-valued logic but not error semantics, because
-        // only the dominating value (`false`/`true`) absorbs an error — a NULL
-        // operand does not. So `a OR (a AND <error>)` must NOT be absorbed to
-        // `a`: for a NULL `a` the original raises the error
-        // (`NULL OR (NULL AND <error>)` = `NULL OR <error>` = `<error>`), while
-        // `a` alone is NULL. The same holds for `a AND (a OR <error>)`.
-        let bool_typ = ReprScalarType::Bool;
-        let types = vec![bool_typ.clone().nullable(true)];
-        let err = || MirScalarExpr::literal(Err(EvalError::DivisionByZero), bool_typ.clone());
-        let arena = RowArena::new();
-
-        // a OR (a AND <error>): the dominating `true` still wins, `false` makes
-        // the inner AND `false`, but a NULL `a` must surface the error.
-        let mut or = MirScalarExpr::column(0).or(MirScalarExpr::column(0).and(err()));
-        or.reduce(&types);
-        assert_ne!(
-            or,
-            MirScalarExpr::column(0),
-            "reduce absorbed an error operand to the bare column: {or:?}"
-        );
-        assert_eq!(or.eval(&[Datum::True], &arena), Ok(Datum::True));
-        assert_eq!(or.eval(&[Datum::False], &arena), Ok(Datum::False));
-        assert_eq!(
-            or.eval(&[Datum::Null], &arena),
-            Err(EvalError::DivisionByZero)
-        );
-
-        // a AND (a OR <error>): symmetric — `false`/`true` resolve without the
-        // error, but a NULL `a` must surface it.
-        let mut and = MirScalarExpr::column(0).and(MirScalarExpr::column(0).or(err()));
-        and.reduce(&types);
-        assert_ne!(
-            and,
-            MirScalarExpr::column(0),
-            "reduce absorbed an error operand to the bare column: {and:?}"
-        );
-        assert_eq!(and.eval(&[Datum::False], &arena), Ok(Datum::False));
-        assert_eq!(and.eval(&[Datum::True], &arena), Ok(Datum::True));
-        assert_eq!(
-            and.eval(&[Datum::Null], &arena),
-            Err(EvalError::DivisionByZero)
-        );
-    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`

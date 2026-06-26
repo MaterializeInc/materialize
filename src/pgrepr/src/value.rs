@@ -13,6 +13,7 @@ use std::{io, str};
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
+use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
 use mz_pgrepr_consts::oid::TYPE_INT2_OID;
@@ -22,6 +23,7 @@ use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
+use mz_repr::adt::numeric::{self as mz_repr_numeric, NumericMaxScale, rescale};
 use mz_repr::adt::pg_legacy_name::NAME_MAX_BYTES;
 use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -30,7 +32,7 @@ use mz_repr::{Datum, RowArena, RowPacker, RowRef, SqlRelationType, SqlScalarType
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
-use crate::types::{UINT2, UINT4, UINT8};
+use crate::types::{NumericConstraints, UINT2, UINT4, UINT8};
 use crate::value::error::IntoDatumError;
 use crate::{Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
 
@@ -711,7 +713,10 @@ impl Value {
                 },
             )?),
             Type::Name => Value::Name(strconv::parse_pg_legacy_name(s)),
-            Type::Numeric { .. } => Value::Numeric(Numeric(strconv::parse_numeric(s)?)),
+            Type::Numeric { constraints } => Value::Numeric(Numeric(rescale_numeric(
+                strconv::parse_numeric(s)?,
+                constraints.as_ref(),
+            )?)),
             Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
                 Value::Oid(strconv::parse_oid(s)?)
             }
@@ -815,7 +820,10 @@ impl Value {
                 })?;
             }
             Type::Name => packer.push(Datum::String(&strconv::parse_pg_legacy_name(s))),
-            Type::Numeric { .. } => packer.push(Datum::Numeric(strconv::parse_numeric(s)?)),
+            Type::Numeric { constraints } => packer.push(Datum::Numeric(rescale_numeric(
+                strconv::parse_numeric(s)?,
+                constraints.as_ref(),
+            )?)),
             Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
                 packer.push(Datum::UInt32(strconv::parse_oid(s)?))
             }
@@ -887,7 +895,13 @@ impl Value {
                 }
                 Ok(Value::Name(s))
             }
-            Type::Numeric { .. } => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
+            Type::Numeric { constraints } => {
+                let n = Numeric::from_sql(ty.inner(), raw)?;
+                Ok(Value::Numeric(Numeric(rescale_numeric(
+                    n.0,
+                    constraints.as_ref(),
+                )?)))
+            }
             Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
                 u32::from_sql(ty.inner(), raw).map(Value::Oid)
             }
@@ -921,6 +935,20 @@ impl Value {
             Type::AclItem => Err("aclitem has no binary encoding".into()),
         }
     }
+}
+
+/// Rescales `n` to the scale required by `constraints`, if any.
+fn rescale_numeric(
+    mut n: OrderedDecimal<mz_repr_numeric::Numeric>,
+    constraints: Option<&NumericConstraints>,
+) -> Result<OrderedDecimal<mz_repr_numeric::Numeric>, Box<dyn Error + Sync + Send>> {
+    if let Some(constraints) = constraints {
+        rescale(
+            &mut n.0,
+            NumericMaxScale::try_from(i64::from(constraints.max_scale()))?.into_u8(),
+        )?;
+    }
+    Ok(n)
 }
 
 fn encode_element(buf: &mut BytesMut, elem: Option<&Value>, ty: &Type) -> Result<(), io::Error> {
@@ -1019,5 +1047,38 @@ mod tests {
             decoded_int_array.map_err(|e| e.to_string()).unwrap_err(),
             "invalid input syntax for type array: Specifying array lower bounds is not supported: \"[0:0]={t}\"".to_string()
         );
+    }
+
+    /// Decoding a numeric must round it to the destination's declared scale,
+    /// and the text and binary paths must agree. `COPY ... FROM` relies on the
+    /// text/CSV side of this (SS-193); binary parameters rely on the binary
+    /// side. `COPY ... FORMAT BINARY` is unsupported, so the binary path is
+    /// exercised here rather than via mzcompose.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // numeric/decimal contexts unsupported under miri
+    fn decode_numeric_applies_destination_scale() {
+        // A `numeric(10, 2)` destination: scale 2.
+        let ty = Type::from(&SqlScalarType::Numeric {
+            max_scale: Some(NumericMaxScale::try_from(2_i64).unwrap()),
+        });
+        let expected = strconv::parse_numeric("10.45").unwrap();
+
+        // Encode an over-scale value (10.447, scale 3) to binary, then decode
+        // it back through the scale-2 type.
+        let input = Value::Numeric(Numeric(strconv::parse_numeric("10.447").unwrap()));
+        let mut buf = BytesMut::new();
+        input
+            .encode_binary(&ty, &mut buf)
+            .expect("encoding 10.447 as numeric must succeed");
+        let Value::Numeric(Numeric(binary)) = Value::decode_binary(&ty, &buf).unwrap() else {
+            panic!("decode_binary of a numeric must yield Value::Numeric");
+        };
+        assert_eq!(binary, expected, "binary decode did not rescale to scale 2");
+
+        // The text path must agree with the binary path.
+        let Value::Numeric(Numeric(text)) = Value::decode_text(&ty, b"10.447").unwrap() else {
+            panic!("decode_text of a numeric must yield Value::Numeric");
+        };
+        assert_eq!(text, expected, "text decode did not rescale to scale 2");
     }
 }
