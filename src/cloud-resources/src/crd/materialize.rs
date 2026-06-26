@@ -799,6 +799,10 @@ pub mod v1alpha1 {
                 ),
             ])
         }
+
+        fn app_name(&self) -> Option<&str> {
+            Some("environmentd")
+        }
     }
 
     impl From<v1::Materialize> for Materialize {
