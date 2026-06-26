@@ -20,7 +20,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Self-Managed: 2026-06-26* <br>
 
 ### PostgreSQL Physical Replica Support {#v26.30-postgresql-physical-replica-support}
-Materialize now supports replicating from a physical PostgreSQL replica (hot standby), not just the primary server. This enables setups where the replication load is offloaded from the primary to a read replica.
+Materialize now supports replicating from a physical PostgreSQL replica (hot standby), not just the primary server. This lets you offload replication load from the primary to a read replica. Connecting to a physical replica requires PostgreSQL 16 or later. If the replica is promoted to primary, the source fails and must be recreated, consistent with how Materialize handles a primary failover today.
+
+For more information, see [CREATE SOURCE: PostgreSQL](/sql/create-source/postgres/).
 
 ### MCP Developer Query Tool {#v26.30-mcp-developer-query-tool}
 The MCP developer endpoint now includes a `query` tool for running `SELECT`, `SHOW`, and `EXPLAIN` queries against user objects and clusters, mirroring the agent endpoint's query capability.
@@ -36,6 +38,7 @@ The MCP developer endpoint now includes a `query` tool for running `SELECT`, `SH
 - **mz-debug OIDC and SASL authentication**: The `mz-debug` diagnostic tool now supports OIDC and SASL authentication modes in addition to password authentication.
 - **Faster LIKE pattern matching**: `LIKE` patterns with multiple `%` wildcards (e.g., `%a%a%a`) no longer exhibit super-linear matching time against long strings, while common patterns like `%substring%` remain on the fast string matcher.
 - **Fivetran Destination restored**: The Fivetran Destination integration, which was removed in v26.29.0, has been restored.
+- **Self-managed monitoring docs refreshed**: Self-managed deployments now have a published reference of the metrics Materialize exposes: [essential metrics](/manage/monitor/essential-metrics/) and an [appendix of all metrics](/manage/monitor/appendix-metrics/). The self-managed monitoring guides for [Prometheus and Grafana](/manage/monitor/self-managed/prometheus/) and [Datadog](/manage/monitor/self-managed/datadog/) have been refreshed with updated scrape configurations and dashboards.
 
 ### Bug Fixes {#v26.30-bug-fixes}
 - Fixed `IS [NOT] DISTINCT FROM` binding too loosely relative to `AND`/`OR`, causing `a IS DISTINCT FROM b AND c` to silently produce wrong results by parsing as `a IS DISTINCT FROM (b AND c)` instead of `(a IS DISTINCT FROM b) AND c`.
