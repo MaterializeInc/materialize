@@ -155,6 +155,33 @@ where
     pub(crate) _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
 
+// Hand-written (rather than derived) so cloning does not require `K: Clone`
+// etc.: every field is an `Arc` or independently `Clone`. The `schema_cache`
+// clone shares the schema-lookup maps and applier, so clones reuse cached
+// schema fetches and only duplicate a small per-clone migration memo. Used to
+// run several `fetch_leased_part` calls concurrently, each on its own clone.
+impl<K, V, T, D> Clone for BatchFetcher<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Monoid + Codec64 + Send + Sync,
+{
+    fn clone(&self) -> Self {
+        Self {
+            cfg: self.cfg.clone(),
+            blob: Arc::clone(&self.blob),
+            metrics: Arc::clone(&self.metrics),
+            shard_metrics: Arc::clone(&self.shard_metrics),
+            shard_id: self.shard_id.clone(),
+            read_schemas: self.read_schemas.clone(),
+            schema_cache: self.schema_cache.clone(),
+            is_transient: self.is_transient,
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<K, V, T, D> BatchFetcher<K, V, T, D>
 where
     K: Debug + Codec,
