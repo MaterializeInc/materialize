@@ -1425,6 +1425,16 @@ impl SystemVars {
         self.iter().filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
     }
 
+    /// Returns the names of synced parameters declared in the given scope. Used
+    /// to bound scoped feature-flag evaluation to the flags in use at each scope
+    /// boundary.
+    pub fn synced_param_names_in_scope(&self, scope: ParameterScope) -> Vec<&'static str> {
+        self.iter_synced()
+            .filter(|var| var.scope() == scope)
+            .map(|var| var.name())
+            .collect()
+    }
+
     /// Returns an iterator over the configuration parameters that can be overriden per-Session.
     pub fn iter_session(&self) -> impl Iterator<Item = &dyn Var> {
         self.vars
