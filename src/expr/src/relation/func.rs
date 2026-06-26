@@ -154,9 +154,8 @@ where
             continue;
         }
         let value = match datum {
-            Datum::Int16(i) => i128::from(i),
-            Datum::Int32(i) => i128::from(i),
-            Datum::Int64(i) => i128::from(i),
+            // int2/int4/int8 all unify to `Datum::Int` at the repr layer.
+            Datum::Int(i) => i128::from(i),
             other => panic!("unexpected non-integer datum in signed sum: {other:?}"),
         };
         // The dataflow accumulates `value * diff` in an `Overflowing<i128>`; we
@@ -482,7 +481,7 @@ where
         .map(|(d, i)| {
             callers_temp_storage.make_datum(|packer| {
                 packer.push_list_with(|packer| {
-                    packer.push(Datum::Int64(i));
+                    packer.push(Datum::Int(i));
                     packer.push(d);
                 });
             })
@@ -549,7 +548,7 @@ where
         }.3).into_iter().map(|(d, i)| {
         callers_temp_storage.make_datum(|packer| {
             packer.push_list_with(|packer| {
-                packer.push(Datum::Int64(i));
+                packer.push(Datum::Int(i));
                 packer.push(d);
             });
         })
@@ -619,7 +618,7 @@ where
         }.2).into_iter().map(|(d, i)| {
         callers_temp_storage.make_datum(|packer| {
             packer.push_list_with(|packer| {
-                packer.push(Datum::Int64(i));
+                packer.push(Datum::Int(i));
                 packer.push(d);
             });
         })
@@ -2097,7 +2096,7 @@ impl AggregateFunc {
                 sum_signed_int_counted(datums, |accum| {
                     #[allow(clippy::as_conversions)]
                     let narrowed = accum as i64;
-                    Datum::Int64(narrowed)
+                    Datum::Int(narrowed)
                 })
             }
             AggregateFunc::SumInt64 => sum_signed_int_counted(datums, Datum::from),
@@ -2336,7 +2335,7 @@ impl AggregateFunc {
     /// input relation.
     pub fn default(&self) -> Datum<'static> {
         match self {
-            AggregateFunc::Count => Datum::Int64(0),
+            AggregateFunc::Count => Datum::Int(0),
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
             AggregateFunc::Dummy => Datum::Dummy,
@@ -3494,8 +3493,8 @@ fn acl_explode<'a>(
         let acl_item = acl_item.unwrap_acl_item();
         for privilege in acl_item.acl_mode.explode() {
             let row = [
-                Datum::UInt32(acl_item.grantor.0),
-                Datum::UInt32(acl_item.grantee.0),
+                Datum::UInt(acl_item.grantor.0.into()),
+                Datum::UInt(acl_item.grantee.0.into()),
                 Datum::String(temp_storage.push_string(privilege.to_string())),
                 // GRANT OPTION is not implemented, so we hardcode false.
                 Datum::False,
@@ -4125,7 +4124,7 @@ impl WithOrdinality {
                 let mut ordinals = next_ordinal..(next_ordinal + diff);
                 next_ordinal += diff;
                 // The maximum byte capacity we need for the original row and its ordinal.
-                let cap = row.data_len() + datum_size(&Datum::Int64(next_ordinal));
+                let cap = row.data_len() + datum_size(&Datum::Int(next_ordinal));
                 iter::from_fn(move || {
                     let ordinal = ordinals.next()?;
                     let mut row = if ordinals.is_empty() {
@@ -4137,7 +4136,7 @@ impl WithOrdinality {
                         new_row.clone_from(&row);
                         new_row
                     };
-                    RowPacker::for_existing_row(&mut row).push(Datum::Int64(ordinal));
+                    RowPacker::for_existing_row(&mut row).push(Datum::Int(ordinal));
                     Some((row, Diff::ONE))
                 })
             });
@@ -4167,18 +4166,18 @@ mod tests {
 
         for count in [0_i64, 1] {
             let rows = func
-                .eval(&[Datum::Int64(count)], &temp_storage)
+                .eval(&[Datum::Int(count)], &temp_storage)
                 .unwrap_or_else(|e| panic!("count {count} should be accepted, got {e:?}"))
                 .count();
             assert_eq!(rows, 0, "count {count} should emit no guard rows");
         }
 
         assert_eq!(
-            func.eval(&[Datum::Int64(2)], &temp_storage).err(),
+            func.eval(&[Datum::Int(2)], &temp_storage).err(),
             Some(EvalError::MultipleRowsFromSubquery),
         );
         assert_eq!(
-            func.eval(&[Datum::Int64(-1)], &temp_storage).err(),
+            func.eval(&[Datum::Int(-1)], &temp_storage).err(),
             Some(EvalError::NegativeRowsFromSubquery),
         );
     }

@@ -1719,8 +1719,8 @@ mod tests {
                         func: Eq.into(),
                         expr1: Box::new(MirScalarExpr::column(0)),
                         expr2: Box::new(MirScalarExpr::literal_ok(
-                            Datum::Int32(1727694505),
-                            ReprScalarType::Int32,
+                            Datum::Int(1727694505),
+                            ReprScalarType::Int,
                         )),
                     },
                 ),
@@ -1729,10 +1729,10 @@ mod tests {
             input_arity: 1,
         };
 
-        let relation = ReprRelationType::new(vec![ReprScalarType::Int32.nullable(true)]);
+        let relation = ReprRelationType::new(vec![ReprScalarType::Int.nullable(true)]);
         let arena = RowArena::new();
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
-        interpreter.push_column(0, ResultSpec::value(Datum::Int32(-1294725158)));
+        interpreter.push_column(0, ResultSpec::value(Datum::Int(-1294725158)));
         let spec = interpreter.mfp_filter(&mfp);
         assert!(spec.range.may_fail());
     }
@@ -1758,7 +1758,7 @@ mod tests {
     #[mz_ore::test]
     fn test_eval_range() {
         // Example inspired by the tumbling windows temporal filter in the docs
-        let period_ms = MirScalarExpr::literal_ok(Datum::Int64(10), ReprScalarType::Int64);
+        let period_ms = MirScalarExpr::literal_ok(Datum::Int(10), ReprScalarType::Int);
         let expr = MirScalarExpr::CallBinary {
             func: Gte.into(),
             expr1: Box::new(MirScalarExpr::CallUnmaterializable(
@@ -1777,7 +1777,7 @@ mod tests {
                 }),
             }),
         };
-        let relation = ReprRelationType::new(vec![ReprScalarType::Int64.nullable(false)]);
+        let relation = ReprRelationType::new(vec![ReprScalarType::Int.nullable(false)]);
 
         {
             // Non-overlapping windows

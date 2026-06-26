@@ -405,7 +405,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_row_collection() {
-        let a = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int16(42)]);
+        let a = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int(42)]);
         let b = Row::pack_slice(&[Datum::MzTimestamp(mz_repr::Timestamp::new(10))]);
 
         let collection = RowCollection::from([&a, &b]);
@@ -419,7 +419,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_merge() {
-        let a = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int16(42)]);
+        let a = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int(42)]);
         let b = Row::pack_slice(&[Datum::MzTimestamp(mz_repr::Timestamp::new(10))]);
 
         let mut a_col = RowCollection::from([&a]);
@@ -434,9 +434,9 @@ mod tests {
 
     #[mz_ore::test]
     fn test_sort() {
-        let a = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int16(42)]);
+        let a = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int(42)]);
         let b = Row::pack_slice(&[Datum::MzTimestamp(mz_repr::Timestamp::new(10))]);
-        let c = Row::pack_slice(&[Datum::True, Datum::String("hello world"), Datum::Int16(42)]);
+        let c = Row::pack_slice(&[Datum::True, Datum::String("hello world"), Datum::Int(42)]);
         let d = Row::pack_slice(&[Datum::MzTimestamp(mz_repr::Timestamp::new(9))]);
 
         let cols = {
@@ -464,7 +464,7 @@ mod tests {
     #[mz_ore::test]
     fn test_sorted_iter() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
-        let b = Row::pack_slice(&[Datum::UInt32(42)]);
+        let b = Row::pack_slice(&[Datum::UInt(42)]);
         let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
         let col = RowCollection::merge_sorted(
             &[
@@ -493,7 +493,7 @@ mod tests {
     #[mz_ore::test]
     fn test_sorted_iter_offset() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
-        let b = Row::pack_slice(&[Datum::UInt32(42)]);
+        let b = Row::pack_slice(&[Datum::UInt(42)]);
         let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
         let col = RowCollection::merge_sorted(
             &[
@@ -537,7 +537,7 @@ mod tests {
     #[mz_ore::test]
     fn test_sorted_iter_limit() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
-        let b = Row::pack_slice(&[Datum::UInt32(42)]);
+        let b = Row::pack_slice(&[Datum::UInt(42)]);
         let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(3).unwrap())], &[]);
         let col = RowCollection::merge_sorted(
             &[
@@ -607,13 +607,13 @@ mod tests {
 
     #[mz_ore::test]
     fn test_projected_row_iterator() {
-        let a = Row::pack_slice(&[Datum::String("hello world"), Datum::Int16(42)]);
+        let a = Row::pack_slice(&[Datum::String("hello world"), Datum::Int(42)]);
         let col = RowCollection::new(vec![(a.clone(), NonZeroUsize::new(2).unwrap())], &[]);
 
         // Project away the first column.
         let mut iter = col.into_row_iter().with_projection(vec![1]);
 
-        let projected_a = Row::pack_slice(&[Datum::Int16(42)]);
+        let projected_a = Row::pack_slice(&[Datum::Int(42)]);
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
         assert_eq!(iter.next(), None);
@@ -645,7 +645,7 @@ mod tests {
         // Swap the order of columns.
         let mut iter = col.into_row_iter().with_projection(vec![1, 0]);
 
-        let projected_a = Row::pack_slice(&[Datum::Int16(42), Datum::String("hello world")]);
+        let projected_a = Row::pack_slice(&[Datum::Int(42), Datum::String("hello world")]);
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
         assert_eq!(iter.next(), None);
@@ -655,7 +655,7 @@ mod tests {
     #[mz_ore::test]
     fn test_count_respects_limit_and_offset() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
-        let b = Row::pack_slice(&[Datum::UInt32(42)]);
+        let b = Row::pack_slice(&[Datum::UInt(42)]);
         let col = RowCollection::new(
             vec![
                 (a.clone(), NonZeroUsize::new(3).unwrap()),

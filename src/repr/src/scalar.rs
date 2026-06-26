@@ -87,20 +87,18 @@ pub enum Datum<'a> {
     False,
     /// The `true` boolean value.
     True,
-    /// A 16-bit signed integer.
-    Int16(i16),
-    /// A 32-bit signed integer.
-    Int32(i32),
-    /// A 64-bit signed integer.
-    Int64(i64),
-    /// An 8-bit unsigned integer.
-    UInt8(u8),
-    /// An 16-bit unsigned integer.
-    UInt16(u16),
-    /// A 32-bit unsigned integer.
-    UInt32(u32),
-    /// A 64-bit unsigned integer.
-    UInt64(u64),
+    /// A signed integer of up to 64 bits.
+    ///
+    /// The declared SQL width (smallint/int4/int8) is carried by the column's
+    /// `SqlScalarType`, not by the `Datum`. Operations that must respect a
+    /// narrower width (overflow checks, narrowing casts) do so explicitly; see
+    /// the per-width arithmetic/cast functions.
+    Int(i64),
+    /// An unsigned integer of up to 64 bits.
+    ///
+    /// As with [`Datum::Int`], the declared SQL width (uint2/uint4/uint8, and
+    /// the 1-byte `"char"` type) lives on the column's `SqlScalarType`.
+    UInt(u64),
     /// A 32-bit floating point number.
     Float32(OrderedFloat<f32>),
     /// A 64-bit floating point number.
@@ -186,13 +184,8 @@ impl Debug for Datum<'_> {
         match self {
             Datum::False => write!(f, "False"),
             Datum::True => write!(f, "True"),
-            Datum::Int16(x) => f.debug_tuple("Int16").field(&redact(x)).finish(),
-            Datum::Int32(x) => f.debug_tuple("Int32").field(&redact(x)).finish(),
-            Datum::Int64(x) => f.debug_tuple("Int64").field(&redact(x)).finish(),
-            Datum::UInt8(x) => f.debug_tuple("UInt8").field(&redact(x)).finish(),
-            Datum::UInt16(x) => f.debug_tuple("UInt16").field(&redact(x)).finish(),
-            Datum::UInt32(x) => f.debug_tuple("UInt32").field(&redact(x)).finish(),
-            Datum::UInt64(x) => f.debug_tuple("UInt64").field(&redact(x)).finish(),
+            Datum::Int(x) => f.debug_tuple("Int").field(&redact(x)).finish(),
+            Datum::UInt(x) => f.debug_tuple("UInt").field(&redact(x)).finish(),
             Datum::Float32(x) => f.debug_tuple("Float32").field(&redact(x)).finish(),
             Datum::Float64(x) => f.debug_tuple("Float64").field(&redact(x)).finish(),
             Datum::Date(x) => f.debug_tuple("Date").field(&redact(x)).finish(),
@@ -357,7 +350,7 @@ impl TryFrom<Datum<'_>> for i16 {
     #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
-            Datum::Int16(i) => Ok(i),
+            Datum::Int(i) => i16::try_from(i).map_err(|_| ()),
             _ => Err(()),
         }
     }
@@ -370,7 +363,7 @@ impl TryFrom<Datum<'_>> for Option<i16> {
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
-            Datum::Int16(i) => Ok(Some(i)),
+            Datum::Int(i) => i16::try_from(i).map(Some).map_err(|_| ()),
             _ => Err(()),
         }
     }
@@ -382,7 +375,7 @@ impl TryFrom<Datum<'_>> for i32 {
     #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
-            Datum::Int32(i) => Ok(i),
+            Datum::Int(i) => i32::try_from(i).map_err(|_| ()),
             _ => Err(()),
         }
     }
@@ -395,7 +388,7 @@ impl TryFrom<Datum<'_>> for Option<i32> {
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
-            Datum::Int32(i) => Ok(Some(i)),
+            Datum::Int(i) => i32::try_from(i).map(Some).map_err(|_| ()),
             _ => Err(()),
         }
     }
@@ -407,7 +400,7 @@ impl TryFrom<Datum<'_>> for i64 {
     #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
-            Datum::Int64(i) => Ok(i),
+            Datum::Int(i) => Ok(i),
             _ => Err(()),
         }
     }
@@ -420,7 +413,7 @@ impl TryFrom<Datum<'_>> for Option<i64> {
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
-            Datum::Int64(i) => Ok(Some(i)),
+            Datum::Int(i) => Ok(Some(i)),
             _ => Err(()),
         }
     }
@@ -432,7 +425,7 @@ impl TryFrom<Datum<'_>> for u16 {
     #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
-            Datum::UInt16(u) => Ok(u),
+            Datum::UInt(u) => u16::try_from(u).map_err(|_| ()),
             _ => Err(()),
         }
     }
@@ -445,7 +438,7 @@ impl TryFrom<Datum<'_>> for Option<u16> {
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
-            Datum::UInt16(u) => Ok(Some(u)),
+            Datum::UInt(u) => u16::try_from(u).map(Some).map_err(|_| ()),
             _ => Err(()),
         }
     }
@@ -457,7 +450,7 @@ impl TryFrom<Datum<'_>> for u32 {
     #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
-            Datum::UInt32(u) => Ok(u),
+            Datum::UInt(u) => u32::try_from(u).map_err(|_| ()),
             _ => Err(()),
         }
     }
@@ -470,7 +463,7 @@ impl TryFrom<Datum<'_>> for Option<u32> {
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
-            Datum::UInt32(u) => Ok(Some(u)),
+            Datum::UInt(u) => u32::try_from(u).map(Some).map_err(|_| ()),
             _ => Err(()),
         }
     }
@@ -482,7 +475,7 @@ impl TryFrom<Datum<'_>> for u64 {
     #[inline]
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
-            Datum::UInt64(u) => Ok(u),
+            Datum::UInt(u) => Ok(u),
             _ => Err(()),
         }
     }
@@ -495,7 +488,7 @@ impl TryFrom<Datum<'_>> for Option<u64> {
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::Null => Ok(None),
-            Datum::UInt64(u) => Ok(Some(u)),
+            Datum::UInt(u) => Ok(Some(u)),
             _ => Err(()),
         }
     }
@@ -661,11 +654,12 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Int16`].
+    /// Panics if the datum is not [`Datum::Int`].
     #[track_caller]
     pub fn unwrap_int16(&self) -> i16 {
         match self {
-            Datum::Int16(i) => *i,
+            Datum::Int(i) => i16::try_from(*i)
+                .unwrap_or_else(|_| panic!("Datum::unwrap_int16 out of range: {i}")),
             _ => panic!("Datum::unwrap_int16 called on {:?}", self),
         }
     }
@@ -674,11 +668,12 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Int32`].
+    /// Panics if the datum is not [`Datum::Int`].
     #[track_caller]
     pub fn unwrap_int32(&self) -> i32 {
         match self {
-            Datum::Int32(i) => *i,
+            Datum::Int(i) => i32::try_from(*i)
+                .unwrap_or_else(|_| panic!("Datum::unwrap_int32 out of range: {i}")),
             _ => panic!("Datum::unwrap_int32 called on {:?}", self),
         }
     }
@@ -687,11 +682,11 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::Int64`].
+    /// Panics if the datum is not [`Datum::Int`].
     #[track_caller]
     pub fn unwrap_int64(&self) -> i64 {
         match self {
-            Datum::Int64(i) => *i,
+            Datum::Int(i) => *i,
             _ => panic!("Datum::unwrap_int64 called on {:?}", self),
         }
     }
@@ -700,11 +695,13 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::UInt8`].
+    /// Panics if the datum is not [`Datum::UInt`].
     #[track_caller]
     pub fn unwrap_uint8(&self) -> u8 {
         match self {
-            Datum::UInt8(u) => *u,
+            Datum::UInt(u) => {
+                u8::try_from(*u).unwrap_or_else(|_| panic!("Datum::unwrap_uint8 out of range: {u}"))
+            }
             _ => panic!("Datum::unwrap_uint8 called on {:?}", self),
         }
     }
@@ -713,11 +710,12 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::UInt16`].
+    /// Panics if the datum is not [`Datum::UInt`].
     #[track_caller]
     pub fn unwrap_uint16(&self) -> u16 {
         match self {
-            Datum::UInt16(u) => *u,
+            Datum::UInt(u) => u16::try_from(*u)
+                .unwrap_or_else(|_| panic!("Datum::unwrap_uint16 out of range: {u}")),
             _ => panic!("Datum::unwrap_uint16 called on {:?}", self),
         }
     }
@@ -726,11 +724,12 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::UInt32`].
+    /// Panics if the datum is not [`Datum::UInt`].
     #[track_caller]
     pub fn unwrap_uint32(&self) -> u32 {
         match self {
-            Datum::UInt32(u) => *u,
+            Datum::UInt(u) => u32::try_from(*u)
+                .unwrap_or_else(|_| panic!("Datum::unwrap_uint32 out of range: {u}")),
             _ => panic!("Datum::unwrap_uint32 called on {:?}", self),
         }
     }
@@ -739,11 +738,11 @@ impl<'a> Datum<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if the datum is not [`Datum::UInt64`].
+    /// Panics if the datum is not [`Datum::UInt`].
     #[track_caller]
     pub fn unwrap_uint64(&self) -> u64 {
         match self {
-            Datum::UInt64(u) => *u,
+            Datum::UInt(u) => *u,
             _ => panic!("Datum::unwrap_uint64 called on {:?}", self),
         }
     }
@@ -1034,20 +1033,10 @@ impl<'a> Datum<'a> {
                     (Datum::False, _) => false,
                     (Datum::True, ReprScalarType::Bool) => true,
                     (Datum::True, _) => false,
-                    (Datum::Int16(_), ReprScalarType::Int16) => true,
-                    (Datum::Int16(_), _) => false,
-                    (Datum::Int32(_), ReprScalarType::Int32) => true,
-                    (Datum::Int32(_), _) => false,
-                    (Datum::Int64(_), ReprScalarType::Int64) => true,
-                    (Datum::Int64(_), _) => false,
-                    (Datum::UInt8(_), ReprScalarType::UInt8) => true,
-                    (Datum::UInt8(_), _) => false,
-                    (Datum::UInt16(_), ReprScalarType::UInt16) => true,
-                    (Datum::UInt16(_), _) => false,
-                    (Datum::UInt32(_), ReprScalarType::UInt32) => true,
-                    (Datum::UInt32(_), _) => false,
-                    (Datum::UInt64(_), ReprScalarType::UInt64) => true,
-                    (Datum::UInt64(_), _) => false,
+                    (Datum::Int(_), ReprScalarType::Int) => true,
+                    (Datum::Int(_), _) => false,
+                    (Datum::UInt(_), ReprScalarType::UInt) => true,
+                    (Datum::UInt(_), _) => false,
                     (Datum::Float32(_), ReprScalarType::Float32) => true,
                     (Datum::Float32(_), _) => false,
                     (Datum::Float64(_), ReprScalarType::Float64) => true,
@@ -1079,7 +1068,7 @@ impl<'a> Datum<'a> {
                             && array
                                 .elements
                                 .iter()
-                                .all(|e| is_instance_of_scalar(e, &ReprScalarType::Int16))
+                                .all(|e| is_instance_of_scalar(e, &ReprScalarType::Int))
                     }
                     (Datum::Array(_), _) => false,
                     (Datum::List(list), ReprScalarType::List { element_type, .. }) => list
@@ -1165,24 +1154,23 @@ impl<'a> Datum<'a> {
                     (Datum::False, _) => false,
                     (Datum::True, SqlScalarType::Bool) => true,
                     (Datum::True, _) => false,
-                    (Datum::Int16(_), SqlScalarType::Int16) => true,
-                    (Datum::Int16(_), _) => false,
-                    (Datum::Int32(_), SqlScalarType::Int32) => true,
-                    (Datum::Int32(_), _) => false,
-                    (Datum::Int64(_), SqlScalarType::Int64) => true,
-                    (Datum::Int64(_), _) => false,
-                    (Datum::UInt8(_), SqlScalarType::PgLegacyChar) => true,
-                    (Datum::UInt8(_), _) => false,
-                    (Datum::UInt16(_), SqlScalarType::UInt16) => true,
-                    (Datum::UInt16(_), _) => false,
-                    (Datum::UInt32(_), SqlScalarType::Oid) => true,
-                    (Datum::UInt32(_), SqlScalarType::RegClass) => true,
-                    (Datum::UInt32(_), SqlScalarType::RegProc) => true,
-                    (Datum::UInt32(_), SqlScalarType::RegType) => true,
-                    (Datum::UInt32(_), SqlScalarType::UInt32) => true,
-                    (Datum::UInt32(_), _) => false,
-                    (Datum::UInt64(_), SqlScalarType::UInt64) => true,
-                    (Datum::UInt64(_), _) => false,
+                    (
+                        Datum::Int(_),
+                        SqlScalarType::Int16 | SqlScalarType::Int32 | SqlScalarType::Int64,
+                    ) => true,
+                    (Datum::Int(_), _) => false,
+                    (
+                        Datum::UInt(_),
+                        SqlScalarType::PgLegacyChar
+                        | SqlScalarType::UInt16
+                        | SqlScalarType::Oid
+                        | SqlScalarType::RegClass
+                        | SqlScalarType::RegProc
+                        | SqlScalarType::RegType
+                        | SqlScalarType::UInt32
+                        | SqlScalarType::UInt64,
+                    ) => true,
+                    (Datum::UInt(_), _) => false,
                     (Datum::Float32(_), SqlScalarType::Float32) => true,
                     (Datum::Float32(_), _) => false,
                     (Datum::Float64(_), SqlScalarType::Float64) => true,
@@ -1295,49 +1283,49 @@ where
 impl<'a> From<i16> for Datum<'a> {
     #[inline]
     fn from(i: i16) -> Datum<'a> {
-        Datum::Int16(i)
+        Datum::Int(i.into())
     }
 }
 
 impl<'a> From<i32> for Datum<'a> {
     #[inline]
     fn from(i: i32) -> Datum<'a> {
-        Datum::Int32(i)
+        Datum::Int(i.into())
     }
 }
 
 impl<'a> From<i64> for Datum<'a> {
     #[inline]
     fn from(i: i64) -> Datum<'a> {
-        Datum::Int64(i)
+        Datum::Int(i)
     }
 }
 
 impl<'a> From<u8> for Datum<'a> {
     #[inline]
     fn from(u: u8) -> Datum<'a> {
-        Datum::UInt8(u)
+        Datum::UInt(u.into())
     }
 }
 
 impl<'a> From<u16> for Datum<'a> {
     #[inline]
     fn from(u: u16) -> Datum<'a> {
-        Datum::UInt16(u)
+        Datum::UInt(u.into())
     }
 }
 
 impl<'a> From<u32> for Datum<'a> {
     #[inline]
     fn from(u: u32) -> Datum<'a> {
-        Datum::UInt32(u)
+        Datum::UInt(u.into())
     }
 }
 
 impl<'a> From<u64> for Datum<'a> {
     #[inline]
     fn from(u: u64) -> Datum<'a> {
-        Datum::UInt64(u)
+        Datum::UInt(u)
     }
 }
 
@@ -1539,13 +1527,8 @@ impl fmt::Display for Datum<'_> {
             Datum::Null => f.write_str("null"),
             Datum::True => f.write_str("true"),
             Datum::False => f.write_str("false"),
-            Datum::Int16(num) => write!(f, "{}", num),
-            Datum::Int32(num) => write!(f, "{}", num),
-            Datum::Int64(num) => write!(f, "{}", num),
-            Datum::UInt8(num) => write!(f, "{}", num),
-            Datum::UInt16(num) => write!(f, "{}", num),
-            Datum::UInt32(num) => write!(f, "{}", num),
-            Datum::UInt64(num) => write!(f, "{}", num),
+            Datum::Int(num) => write!(f, "{}", num),
+            Datum::UInt(num) => write!(f, "{}", num),
             Datum::Float32(num) => write!(f, "{}", num),
             Datum::Float64(num) => write!(f, "{}", num),
             Datum::Date(d) => write!(f, "{}", d),
@@ -1623,17 +1606,17 @@ impl fmt::Display for Datum<'_> {
 pub enum SqlScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
-    /// The type of [`Datum::Int16`].
+    /// The type of [`Datum::Int`].
     Int16,
-    /// The type of [`Datum::Int32`].
+    /// The type of [`Datum::Int`].
     Int32,
-    /// The type of [`Datum::Int64`].
+    /// The type of [`Datum::Int`].
     Int64,
-    /// The type of [`Datum::UInt16`].
+    /// The type of [`Datum::UInt`].
     UInt16,
-    /// The type of [`Datum::UInt32`].
+    /// The type of [`Datum::UInt`].
     UInt32,
-    /// The type of [`Datum::UInt64`].
+    /// The type of [`Datum::UInt`].
     UInt64,
     /// The type of [`Datum::Float32`].
     Float32,
@@ -1665,7 +1648,7 @@ pub enum SqlScalarType {
     },
     /// The type of [`Datum::Interval`].
     Interval,
-    /// A single byte character type backed by a [`Datum::UInt8`].
+    /// A single byte character type backed by a [`Datum::UInt`].
     ///
     /// PostgreSQL calls this type `"char"`. Note the quotes, which distinguish
     /// it from the type `SqlScalarType::Char`.
@@ -2384,14 +2367,64 @@ macro_rules! impl_datum_type_copy {
     };
 }
 
+/// Like [`impl_datum_type_copy`], but for the fixed-width integer types, which
+/// all marshal through the unified [`Datum::Int`] / [`Datum::UInt`] variants.
+///
+/// `AsColumnType` still reports the width-specific `SqlScalarType` (so a
+/// function returning `i32` is correctly typed `int4`), but the in-memory
+/// `Datum` carries only the widened `i64`/`u64`. Input narrowing panics on an
+/// out-of-range value: that indicates a broken invariant (a value wider than
+/// its declared column type reached a function expecting the narrow type),
+/// which a width-respecting cast/arithmetic function should have prevented.
+macro_rules! impl_datum_type_int {
+    ($native:ty, $sql_variant:ident, $datum_variant:ident, $wide:ty) => {
+        impl AsColumnType for $native {
+            fn as_column_type() -> SqlColumnType {
+                SqlScalarType::$sql_variant.nullable(false)
+            }
+        }
+
+        impl<'a, E> InputDatumType<'a, E> for $native {
+            fn nullable() -> bool {
+                false
+            }
+
+            fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+                match res {
+                    Ok(Datum::$datum_variant(f)) => {
+                        Ok(<$native>::try_from(f).unwrap_or_else(|_| {
+                            panic!(concat!("out-of-range ", stringify!($native), ": {}"), f)
+                        }))
+                    }
+                    _ => Err(res),
+                }
+            }
+        }
+
+        impl<'a, E> OutputDatumType<'a, E> for $native {
+            fn nullable() -> bool {
+                false
+            }
+
+            fn fallible() -> bool {
+                false
+            }
+
+            fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+                Ok(Datum::$datum_variant(<$wide>::from(self)))
+            }
+        }
+    };
+}
+
 impl_datum_type_copy!(f32, Float32);
 impl_datum_type_copy!(f64, Float64);
-impl_datum_type_copy!(i16, Int16);
-impl_datum_type_copy!(i32, Int32);
-impl_datum_type_copy!(i64, Int64);
-impl_datum_type_copy!(u16, UInt16);
-impl_datum_type_copy!(u32, UInt32);
-impl_datum_type_copy!(u64, UInt64);
+impl_datum_type_int!(i16, Int16, Int, i64);
+impl_datum_type_int!(i32, Int32, Int, i64);
+impl_datum_type_int!(i64, Int64, Int, i64);
+impl_datum_type_int!(u16, UInt16, UInt, u64);
+impl_datum_type_int!(u32, UInt32, UInt, u64);
+impl_datum_type_int!(u64, UInt64, UInt, u64);
 impl_datum_type_copy!(Interval, Interval);
 impl_datum_type_copy!(Date, Date);
 impl_datum_type_copy!(NaiveTime, Time);
@@ -2854,7 +2887,11 @@ impl<'a, E> InputDatumType<'a, E> for PgLegacyChar {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::UInt8(a)) => Ok(PgLegacyChar(a)),
+            Ok(Datum::UInt(a)) => {
+                Ok(PgLegacyChar(u8::try_from(a).unwrap_or_else(|_| {
+                    panic!("out-of-range PgLegacyChar: {a}")
+                })))
+            }
             _ => Err(res),
         }
     }
@@ -2870,7 +2907,7 @@ impl<'a, E> OutputDatumType<'a, E> for PgLegacyChar {
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::UInt8(self.0))
+        Ok(Datum::UInt(self.0.into()))
     }
 }
 
@@ -2950,7 +2987,9 @@ impl<'a, E> InputDatumType<'a, E> for Oid {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::UInt32(a)) => Ok(Oid(a)),
+            Ok(Datum::UInt(a)) => Ok(Oid(
+                u32::try_from(a).unwrap_or_else(|_| panic!("out-of-range Oid: {a}"))
+            )),
             _ => Err(res),
         }
     }
@@ -2966,7 +3005,7 @@ impl<'a, E> OutputDatumType<'a, E> for Oid {
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::UInt32(self.0))
+        Ok(Datum::UInt(self.0.into()))
     }
 }
 
@@ -2983,7 +3022,9 @@ impl<'a, E> InputDatumType<'a, E> for RegClass {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::UInt32(a)) => Ok(RegClass(a)),
+            Ok(Datum::UInt(a)) => Ok(RegClass(
+                u32::try_from(a).unwrap_or_else(|_| panic!("out-of-range RegClass: {a}")),
+            )),
             _ => Err(res),
         }
     }
@@ -2999,7 +3040,7 @@ impl<'a, E> OutputDatumType<'a, E> for RegClass {
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::UInt32(self.0))
+        Ok(Datum::UInt(self.0.into()))
     }
 }
 
@@ -3016,7 +3057,9 @@ impl<'a, E> InputDatumType<'a, E> for RegProc {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::UInt32(a)) => Ok(RegProc(a)),
+            Ok(Datum::UInt(a)) => Ok(RegProc(
+                u32::try_from(a).unwrap_or_else(|_| panic!("out-of-range RegProc: {a}")),
+            )),
             _ => Err(res),
         }
     }
@@ -3032,7 +3075,7 @@ impl<'a, E> OutputDatumType<'a, E> for RegProc {
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::UInt32(self.0))
+        Ok(Datum::UInt(self.0.into()))
     }
 }
 
@@ -3049,7 +3092,9 @@ impl<'a, E> InputDatumType<'a, E> for RegType {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::UInt32(a)) => Ok(RegType(a)),
+            Ok(Datum::UInt(a)) => Ok(RegType(
+                u32::try_from(a).unwrap_or_else(|_| panic!("out-of-range RegType: {a}")),
+            )),
             _ => Err(res),
         }
     }
@@ -3065,7 +3110,7 @@ impl<'a, E> OutputDatumType<'a, E> for RegType {
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::UInt32(self.0))
+        Ok(Datum::UInt(self.0.into()))
     }
 }
 
@@ -3882,12 +3927,12 @@ impl SqlScalarType {
             LazyLock::new(|| Row::pack_slice(&[Datum::True, Datum::False]));
         static INT16: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
-                Datum::Int16(0),
-                Datum::Int16(1),
-                Datum::Int16(-1),
-                Datum::Int16(i16::MIN),
-                Datum::Int16(i16::MIN + 1),
-                Datum::Int16(i16::MAX),
+                Datum::from(0),
+                Datum::from(1),
+                Datum::from(-1),
+                Datum::from(i16::MIN),
+                Datum::from(i16::MIN + 1),
+                Datum::from(i16::MAX),
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
@@ -3895,74 +3940,76 @@ impl SqlScalarType {
                 // TODO[btv]: Add more datums around
                 // boundaries in VLE (e.g. negatives) if `test_smoketest_all_builtins` is
                 // fixed to be faster.
-                Datum::Int16(127),
-                Datum::Int16(128),
+                Datum::from(127),
+                Datum::from(128),
             ])
         });
         static INT32: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
-                Datum::Int32(0),
-                Datum::Int32(1),
-                Datum::Int32(-1),
-                Datum::Int32(i32::MIN),
-                Datum::Int32(i32::MIN + 1),
-                Datum::Int32(i32::MAX),
+                Datum::from(0),
+                Datum::from(1),
+                Datum::from(-1),
+                Datum::from(i32::MIN),
+                Datum::from(i32::MIN + 1),
+                Datum::from(i32::MAX),
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::Int32(32767),
-                Datum::Int32(32768),
+                Datum::from(32767),
+                Datum::from(32768),
             ])
         });
         static INT64: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
-                Datum::Int64(0),
-                Datum::Int64(1),
-                Datum::Int64(-1),
-                Datum::Int64(i64::MIN),
-                Datum::Int64(i64::MIN + 1),
-                Datum::Int64(i64::MAX),
+                Datum::from(0),
+                Datum::from(1),
+                Datum::from(-1),
+                Datum::from(i64::MIN),
+                Datum::from(i64::MIN + 1),
+                Datum::from(i64::MAX),
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::Int64(2147483647),
-                Datum::Int64(2147483648),
+                Datum::from(2147483647),
+                Datum::from(2147483648_i64),
             ])
         });
         static UINT16: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
-                Datum::UInt16(0),
-                Datum::UInt16(1),
-                Datum::UInt16(u16::MAX),
+                // Typed `u16` so `Datum::from` resolves to `Datum::UInt`; an
+                // untyped literal would default to `i32` -> `Datum::Int`.
+                Datum::from(0u16),
+                Datum::from(1u16),
+                Datum::from(u16::MAX),
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::UInt16(255),
-                Datum::UInt16(256),
+                Datum::from(255u16),
+                Datum::from(256u16),
             ])
         });
         static UINT32: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
-                Datum::UInt32(0),
-                Datum::UInt32(1),
-                Datum::UInt32(u32::MAX),
+                Datum::from(0u32),
+                Datum::from(1u32),
+                Datum::from(u32::MAX),
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::UInt32(32767),
-                Datum::UInt32(32768),
+                Datum::from(32767u32),
+                Datum::from(32768u32),
             ])
         });
         static UINT64: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
-                Datum::UInt64(0),
-                Datum::UInt64(1),
-                Datum::UInt64(u64::MAX),
+                Datum::from(0u64),
+                Datum::from(1u64),
+                Datum::from(u64::MAX),
                 // The following datums are
                 // around the boundaries introduced by
                 // variable-length int encoding
-                Datum::UInt64(2147483647),
-                Datum::UInt64(2147483648),
+                Datum::from(2147483647u64),
+                Datum::from(2147483648u64),
             ])
         });
         static FLOAT32: LazyLock<Row> = LazyLock::new(|| {
@@ -4124,7 +4171,7 @@ impl SqlScalarType {
             ])
         });
         static PGLEGACYCHAR: LazyLock<Row> =
-            LazyLock::new(|| Row::pack_slice(&[Datum::UInt8(u8::MIN), Datum::UInt8(u8::MAX)]));
+            LazyLock::new(|| Row::pack_slice(&[Datum::from(u8::MIN), Datum::from(u8::MAX)]));
         static PGLEGACYNAME: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
                 Datum::String(""),
@@ -4247,7 +4294,7 @@ impl SqlScalarType {
         static LIST: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
         static RECORD: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
         static OID: LazyLock<Row> =
-            LazyLock::new(|| Row::pack_slice(&[Datum::UInt32(u32::MIN), Datum::UInt32(u32::MAX)]));
+            LazyLock::new(|| Row::pack_slice(&[Datum::from(u32::MIN), Datum::from(u32::MAX)]));
         static MAP: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
         static INT2VECTOR: LazyLock<Row> = LazyLock::new(|| Row::pack_slice(&[]));
         static MZTIMESTAMP: LazyLock<Row> = LazyLock::new(|| {
@@ -4613,13 +4660,8 @@ impl Arbitrary for ReprScalarType {
         // A strategy for generating the leaf cases of ReprScalarType
         let leaf = Union::new(vec![
             Just(ReprScalarType::Bool).boxed(),
-            Just(ReprScalarType::UInt8).boxed(),
-            Just(ReprScalarType::UInt16).boxed(),
-            Just(ReprScalarType::UInt32).boxed(),
-            Just(ReprScalarType::UInt64).boxed(),
-            Just(ReprScalarType::Int16).boxed(),
-            Just(ReprScalarType::Int32).boxed(),
-            Just(ReprScalarType::Int64).boxed(),
+            Just(ReprScalarType::UInt).boxed(),
+            Just(ReprScalarType::Int).boxed(),
             Just(ReprScalarType::Float32).boxed(),
             Just(ReprScalarType::Float64).boxed(),
             Just(ReprScalarType::Numeric).boxed(),
@@ -4644,8 +4686,7 @@ impl Arbitrary for ReprScalarType {
 
         // There are a limited set of types we support in ranges.
         let range_leaf = Union::new(vec![
-            Just(ReprScalarType::Int32).boxed(),
-            Just(ReprScalarType::Int64).boxed(),
+            Just(ReprScalarType::Int).boxed(),
             Just(ReprScalarType::Date).boxed(),
             Just(ReprScalarType::Numeric).boxed(),
             Just(ReprScalarType::Timestamp).boxed(),
@@ -4724,13 +4765,11 @@ impl Arbitrary for ReprScalarType {
 #[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,
-    Int16,
-    Int32,
-    Int64,
-    UInt8, // also includes SqlScalarType::PgLegacyChar
-    UInt16,
-    UInt32, // also includes SqlScalarType::{Oid,RegClass,RegProc,RegType}
-    UInt64,
+    // A signed integer of up to 64 bits. Includes SqlScalarType::{Int16,Int32,Int64}.
+    Int,
+    // An unsigned integer of up to 64 bits. Includes
+    // SqlScalarType::{UInt16,UInt32,UInt64,PgLegacyChar,Oid,RegClass,RegProc,RegType}.
+    UInt,
     Float32,
     Float64,
     Numeric,
@@ -4844,13 +4883,8 @@ impl std::fmt::Display for ReprScalarType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ReprScalarType::Bool => write!(f, "r_bool"),
-            ReprScalarType::Int16 => write!(f, "r_int16"),
-            ReprScalarType::Int32 => write!(f, "r_int32"),
-            ReprScalarType::Int64 => write!(f, "r_int64"),
-            ReprScalarType::UInt8 => write!(f, "r_uint8"),
-            ReprScalarType::UInt16 => write!(f, "r_uint16"),
-            ReprScalarType::UInt32 => write!(f, "r_uint32"),
-            ReprScalarType::UInt64 => write!(f, "r_uint64"),
+            ReprScalarType::Int => write!(f, "r_int"),
+            ReprScalarType::UInt => write!(f, "r_uint"),
             ReprScalarType::Float32 => write!(f, "r_float32"),
             ReprScalarType::Float64 => write!(f, "r_float64"),
             ReprScalarType::Numeric => write!(f, "r_numeric"),
@@ -4896,13 +4930,8 @@ impl ReprScalarType {
     pub fn union(&self, scalar_type: &ReprScalarType) -> Result<Self, anyhow::Error> {
         match (self, scalar_type) {
             (ReprScalarType::Bool, ReprScalarType::Bool) => Ok(ReprScalarType::Bool),
-            (ReprScalarType::Int16, ReprScalarType::Int16) => Ok(ReprScalarType::Int16),
-            (ReprScalarType::Int32, ReprScalarType::Int32) => Ok(ReprScalarType::Int32),
-            (ReprScalarType::Int64, ReprScalarType::Int64) => Ok(ReprScalarType::Int64),
-            (ReprScalarType::UInt8, ReprScalarType::UInt8) => Ok(ReprScalarType::UInt8),
-            (ReprScalarType::UInt16, ReprScalarType::UInt16) => Ok(ReprScalarType::UInt16),
-            (ReprScalarType::UInt32, ReprScalarType::UInt32) => Ok(ReprScalarType::UInt32),
-            (ReprScalarType::UInt64, ReprScalarType::UInt64) => Ok(ReprScalarType::UInt64),
+            (ReprScalarType::Int, ReprScalarType::Int) => Ok(ReprScalarType::Int),
+            (ReprScalarType::UInt, ReprScalarType::UInt) => Ok(ReprScalarType::UInt),
             (ReprScalarType::Float32, ReprScalarType::Float32) => Ok(ReprScalarType::Float32),
             (ReprScalarType::Float64, ReprScalarType::Float64) => Ok(ReprScalarType::Float64),
             (ReprScalarType::Numeric, ReprScalarType::Numeric) => Ok(ReprScalarType::Numeric),
@@ -5011,12 +5040,12 @@ impl From<&SqlScalarType> for ReprScalarType {
     fn from(typ: &SqlScalarType) -> Self {
         match typ {
             SqlScalarType::Bool => ReprScalarType::Bool,
-            SqlScalarType::Int16 => ReprScalarType::Int16,
-            SqlScalarType::Int32 => ReprScalarType::Int32,
-            SqlScalarType::Int64 => ReprScalarType::Int64,
-            SqlScalarType::UInt16 => ReprScalarType::UInt16,
-            SqlScalarType::UInt32 => ReprScalarType::UInt32,
-            SqlScalarType::UInt64 => ReprScalarType::UInt64,
+            SqlScalarType::Int16 => ReprScalarType::Int,
+            SqlScalarType::Int32 => ReprScalarType::Int,
+            SqlScalarType::Int64 => ReprScalarType::Int,
+            SqlScalarType::UInt16 => ReprScalarType::UInt,
+            SqlScalarType::UInt32 => ReprScalarType::UInt,
+            SqlScalarType::UInt64 => ReprScalarType::UInt,
             SqlScalarType::Float32 => ReprScalarType::Float32,
             SqlScalarType::Float64 => ReprScalarType::Float64,
             SqlScalarType::Numeric { max_scale: _ } => ReprScalarType::Numeric,
@@ -5025,7 +5054,7 @@ impl From<&SqlScalarType> for ReprScalarType {
             SqlScalarType::Timestamp { precision: _ } => ReprScalarType::Timestamp,
             SqlScalarType::TimestampTz { precision: _ } => ReprScalarType::TimestampTz,
             SqlScalarType::Interval => ReprScalarType::Interval,
-            SqlScalarType::PgLegacyChar => ReprScalarType::UInt8,
+            SqlScalarType::PgLegacyChar => ReprScalarType::UInt,
             SqlScalarType::PgLegacyName => ReprScalarType::String,
             SqlScalarType::Bytes => ReprScalarType::Bytes,
             SqlScalarType::String => ReprScalarType::String,
@@ -5048,16 +5077,16 @@ impl From<&SqlScalarType> for ReprScalarType {
             } => ReprScalarType::Record {
                 fields: fields.into_iter().map(|(_, typ)| typ.into()).collect(),
             },
-            SqlScalarType::Oid => ReprScalarType::UInt32,
+            SqlScalarType::Oid => ReprScalarType::UInt,
             SqlScalarType::Map {
                 value_type,
                 custom_id: _,
             } => ReprScalarType::Map {
                 value_type: Box::new(value_type.as_ref().into()),
             },
-            SqlScalarType::RegProc => ReprScalarType::UInt32,
-            SqlScalarType::RegType => ReprScalarType::UInt32,
-            SqlScalarType::RegClass => ReprScalarType::UInt32,
+            SqlScalarType::RegProc => ReprScalarType::UInt,
+            SqlScalarType::RegType => ReprScalarType::UInt,
+            SqlScalarType::RegClass => ReprScalarType::UInt,
             SqlScalarType::Int2Vector => ReprScalarType::Int2Vector,
             SqlScalarType::MzTimestamp => ReprScalarType::MzTimestamp,
             SqlScalarType::Range { element_type } => ReprScalarType::Range {
@@ -5092,13 +5121,11 @@ impl SqlScalarType {
     pub fn from_repr(repr: &ReprScalarType) -> Self {
         match repr {
             ReprScalarType::Bool => SqlScalarType::Bool,
-            ReprScalarType::Int16 => SqlScalarType::Int16,
-            ReprScalarType::Int32 => SqlScalarType::Int32,
-            ReprScalarType::Int64 => SqlScalarType::Int64,
-            ReprScalarType::UInt8 => SqlScalarType::PgLegacyChar,
-            ReprScalarType::UInt16 => SqlScalarType::UInt16,
-            ReprScalarType::UInt32 => SqlScalarType::UInt32,
-            ReprScalarType::UInt64 => SqlScalarType::UInt64,
+            // Lossy, like `String` (which drops VarChar/Char): pick the widest
+            // SQL type as the canonical representative. Callers that need the
+            // true declared width take it from the catalog/RelationDesc, not here.
+            ReprScalarType::Int => SqlScalarType::Int64,
+            ReprScalarType::UInt => SqlScalarType::UInt64,
             ReprScalarType::Float32 => SqlScalarType::Float32,
             ReprScalarType::Float64 => SqlScalarType::Float64,
             ReprScalarType::Numeric => SqlScalarType::Numeric { max_scale: None },

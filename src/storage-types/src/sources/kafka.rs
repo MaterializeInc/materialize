@@ -474,7 +474,7 @@ impl SourceTimestamp for KafkaTimestamp {
             ))))
             .expect("pushing range must not generate errors");
 
-        packer.push(Datum::UInt64(self.timestamp().offset));
+        packer.push(Datum::UInt(self.timestamp().offset));
         row
     }
 
@@ -482,7 +482,7 @@ impl SourceTimestamp for KafkaTimestamp {
         let mut datums = row.iter();
 
         match (datums.next(), datums.next(), datums.next()) {
-            (Some(Datum::Range(range)), Some(Datum::UInt64(offset)), None) => {
+            (Some(Datum::Range(range)), Some(Datum::UInt(offset)), None) => {
                 let mut range = range.into_bounds(|b| b.datum());
                 //XXX: why do we have to canonicalize on read?
                 range.canonicalize().expect("ranges must be valid");

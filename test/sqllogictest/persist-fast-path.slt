@@ -199,11 +199,11 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT *
 ----
 Explained Query:
   Finish limit=10 output=[#0]
-    Filter (integer_to_bigint(#0{value}) > 0)
+    Filter (#0{value} > 0)
       ReadStorage materialize.public.numbers
 
 Source materialize.public.numbers
-  filter=((integer_to_bigint(#0{value}) > 0))
+  filter=((#0{value} > 0))
 
 Target cluster: quickstart
 

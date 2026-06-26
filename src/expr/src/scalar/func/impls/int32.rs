@@ -93,7 +93,9 @@ fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
     sqlname = "integer_to_bigint",
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastInt64ToInt32),
-    is_monotone = true
+    is_monotone = true,
+    // Same-sign widening is the identity on the unified `Datum::Int`.
+    is_eliminable_cast = true
 )]
 fn cast_int32_to_int64(a: i32) -> i64 {
     i64::from(a)

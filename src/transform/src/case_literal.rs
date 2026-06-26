@@ -368,16 +368,16 @@ mod tests {
 
     /// Helper: build an i64 literal.
     fn lit_i64(v: i64) -> MirScalarExpr {
-        MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64)
+        MirScalarExpr::literal_ok(Datum::Int(v), ReprScalarType::Int)
     }
 
     /// Wrap a scalar expression in a `Map` over a constant to allow applying the transform.
     fn wrap_in_map(scalar: MirScalarExpr) -> MirRelationExpr {
         MirRelationExpr::Map {
             input: Box::new(MirRelationExpr::constant(
-                vec![vec![Datum::Int64(0)]],
+                vec![vec![Datum::Int(0)]],
                 ReprRelationType::new(vec![ReprColumnType {
-                    scalar_type: ReprScalarType::Int64,
+                    scalar_type: ReprScalarType::Int,
                     nullable: false,
                 }]),
             )),
@@ -438,7 +438,7 @@ mod tests {
         // If(Eq(#0, NULL::int64), 10, If(Eq(#0, 2), 20, If(Eq(#0, 3), 30, 0)))
         // The NULL arm breaks the chain at the top level because
         // peek_eq_literal skips NULL literals, so arm1 doesn't match.
-        let null_lit = MirScalarExpr::literal(Ok(Datum::Null), ReprScalarType::Int64);
+        let null_lit = MirScalarExpr::literal(Ok(Datum::Null), ReprScalarType::Int);
         let expr = MirScalarExpr::column(0)
             .call_binary(null_lit, Eq)
             .if_then_else(
@@ -486,20 +486,20 @@ mod tests {
         // Spot-check evaluation.
         let arena = mz_repr::RowArena::new();
         assert_eq!(
-            result.eval(&[Datum::Int64(0)], &arena).unwrap(),
-            Datum::Int64(0)
+            result.eval(&[Datum::Int(0)], &arena).unwrap(),
+            Datum::Int(0)
         );
         assert_eq!(
-            result.eval(&[Datum::Int64(32)], &arena).unwrap(),
-            Datum::Int64(3200)
+            result.eval(&[Datum::Int(32)], &arena).unwrap(),
+            Datum::Int(3200)
         );
         assert_eq!(
-            result.eval(&[Datum::Int64(63)], &arena).unwrap(),
-            Datum::Int64(6300)
+            result.eval(&[Datum::Int(63)], &arena).unwrap(),
+            Datum::Int(6300)
         );
         assert_eq!(
-            result.eval(&[Datum::Int64(999)], &arena).unwrap(),
-            Datum::Int64(-1)
+            result.eval(&[Datum::Int(999)], &arena).unwrap(),
+            Datum::Int(-1)
         );
     }
 
@@ -513,20 +513,20 @@ mod tests {
         let arena = mz_repr::RowArena::new();
 
         // Input = 1 → output should be 10
-        let out = result.eval(&[Datum::Int64(1)], &arena).unwrap();
-        assert_eq!(out, Datum::Int64(10));
+        let out = result.eval(&[Datum::Int(1)], &arena).unwrap();
+        assert_eq!(out, Datum::Int(10));
 
         // Input = 2 → output should be 20
-        let out = result.eval(&[Datum::Int64(2)], &arena).unwrap();
-        assert_eq!(out, Datum::Int64(20));
+        let out = result.eval(&[Datum::Int(2)], &arena).unwrap();
+        assert_eq!(out, Datum::Int(20));
 
         // Input = 99 → output should be 0 (els)
-        let out = result.eval(&[Datum::Int64(99)], &arena).unwrap();
-        assert_eq!(out, Datum::Int64(0));
+        let out = result.eval(&[Datum::Int(99)], &arena).unwrap();
+        assert_eq!(out, Datum::Int(0));
 
         // Input = NULL → output should be 0 (els, since NULL = x is falsy)
         let out = result.eval(&[Datum::Null], &arena).unwrap();
-        assert_eq!(out, Datum::Int64(0));
+        assert_eq!(out, Datum::Int(0));
     }
 
     #[mz_ore::test]
@@ -575,15 +575,15 @@ mod tests {
         let arena = mz_repr::RowArena::new();
         assert_eq!(
             result.eval(&[Datum::String("a")], &arena).unwrap(),
-            Datum::Int64(1)
+            Datum::Int(1)
         );
         assert_eq!(
             result.eval(&[Datum::String("b")], &arena).unwrap(),
-            Datum::Int64(2)
+            Datum::Int(2)
         );
         assert_eq!(
             result.eval(&[Datum::String("z")], &arena).unwrap(),
-            Datum::Int64(0)
+            Datum::Int(0)
         );
     }
 }

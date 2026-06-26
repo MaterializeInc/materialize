@@ -363,7 +363,7 @@ fn pack_row<'a>(
 ) -> (&'a mz_repr::RowRef, &'a mz_repr::RowRef) {
     packer.pack_by_index(|row_packer, index| match index {
         // process_id
-        0 => row_packer.push(Datum::UInt64(u64::cast_from(process_id))),
+        0 => row_packer.push(Datum::UInt(u64::cast_from(process_id))),
         // metric_name
         1 => row_packer.push(Datum::String(metric_name)),
         // metric_type

@@ -53,7 +53,7 @@ materialize.public.mv_fusable_mfp_accumulable:
       project=(#1, #1)
     mfp_after
       project=(#0, #1)
-      filter=(((#3 - integer_to_bigint(#0{a})) > 2) AND ((#3 / integer_to_bigint((1 + #0{a}))) >= 1))
+      filter=(((#3 - #0{a}) > 2) AND ((#3 / (1 + #0{a})) >= 1))
       map=((#2 + 1))
     Get::PassArrangements materialize.public.t
       raw=true
@@ -95,7 +95,7 @@ materialize.public.mv_complex_mfp_accumulable:
       val_plan
         project=(#1, #1)
       mfp_after
-        filter=(((#3 - integer_to_bigint(#0{a})) > 2) AND ((#3 / integer_to_bigint((1 + #0{a}))) >= 1))
+        filter=(((#3 - #0{a}) > 2) AND ((#3 / (1 + #0{a})) >= 1))
         map=((#2 + 1))
       Get::PassArrangements materialize.public.t
         raw=true

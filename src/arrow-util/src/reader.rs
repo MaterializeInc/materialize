@@ -134,12 +134,8 @@ fn scalar_type_and_array_to_reader(
         }
         (SqlScalarType::Int16 | SqlScalarType::Int32 | SqlScalarType::Int64, DataType::Int8) => {
             let array = downcast_array::<Int8Array>(array);
-            let cast: fn(i8) -> Datum<'static> = match scalar_type {
-                SqlScalarType::Int16 => |x| Datum::Int16(i16::cast_from(x)),
-                SqlScalarType::Int32 => |x| Datum::Int32(i32::cast_from(x)),
-                SqlScalarType::Int64 => |x| Datum::Int64(i64::cast_from(x)),
-                _ => unreachable!("checked above"),
-            };
+            // All signed widths unify to `Datum::Int`.
+            let cast: fn(i8) -> Datum<'static> = |x| Datum::Int(i64::cast_from(x));
             Ok(ColReader::Int8 { array, cast })
         }
         (SqlScalarType::Int16, DataType::Int16) => {
@@ -156,12 +152,8 @@ fn scalar_type_and_array_to_reader(
             DataType::UInt8,
         ) => {
             let array = downcast_array::<UInt8Array>(array);
-            let cast: fn(u8) -> Datum<'static> = match scalar_type {
-                SqlScalarType::UInt16 => |x| Datum::UInt16(u16::cast_from(x)),
-                SqlScalarType::UInt32 => |x| Datum::UInt32(u32::cast_from(x)),
-                SqlScalarType::UInt64 => |x| Datum::UInt64(u64::cast_from(x)),
-                _ => unreachable!("checked above"),
-            };
+            // All unsigned widths unify to `Datum::UInt`.
+            let cast: fn(u8) -> Datum<'static> = |x| Datum::UInt(u64::cast_from(x));
             Ok(ColReader::UInt8 { array, cast })
         }
         (SqlScalarType::UInt16, DataType::UInt16) => {
@@ -572,30 +564,30 @@ impl ColReader {
             ColReader::Int16(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::Int16),
+                .map(|v| Datum::Int(v.into())),
             ColReader::Int32(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::Int32),
+                .map(|v| Datum::Int(v.into())),
             ColReader::Int64(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::Int64),
+                .map(Datum::Int),
             ColReader::UInt8 { array, cast } => {
                 array.is_valid(idx).then(|| array.value(idx)).map(cast)
             }
             ColReader::UInt16(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::UInt16),
+                .map(|v| Datum::UInt(v.into())),
             ColReader::UInt32(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::UInt32),
+                .map(|v| Datum::UInt(v.into())),
             ColReader::UInt64(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
-                .map(Datum::UInt64),
+                .map(Datum::UInt),
             ColReader::Float16 { array, cast } => {
                 array.is_valid(idx).then(|| array.value(idx)).map(cast)
             }
@@ -1064,8 +1056,8 @@ mod tests {
 
         packer.extend([
             Datum::True,
-            Datum::Int32(42),
-            Datum::UInt64(10000),
+            Datum::Int(42),
+            Datum::UInt(10000),
             Datum::Float32(OrderedFloat::from(-1.1f32)),
             Datum::String("hello world"),
             Datum::Bytes(b"1010101"),
@@ -1076,7 +1068,7 @@ mod tests {
                 serde_json::json!({"code": 200, "email": "space_monkey@materialize.com"}),
             )
             .expect("failed to pack JSON");
-        packer.push_list([Datum::UInt32(200), Datum::UInt32(300)]);
+        packer.push_list([Datum::UInt(200), Datum::UInt(300)]);
 
         let null_row = Row::pack(vec![Datum::Null; 9]);
 
@@ -1382,11 +1374,11 @@ mod tests {
             .push_range(Range::new(Some((
                 RangeLowerBound {
                     inclusive: true,
-                    bound: Some(Datum::Int32(1)),
+                    bound: Some(Datum::Int(1)),
                 },
                 RangeUpperBound {
                     inclusive: true,
-                    bound: Some(Datum::Int32(10)),
+                    bound: Some(Datum::Int(10)),
                 },
             ))))
             .unwrap();
@@ -1400,11 +1392,11 @@ mod tests {
             .push_range(Range::new(Some((
                 RangeLowerBound {
                     inclusive: false,
-                    bound: Some(Datum::Int32(5)),
+                    bound: Some(Datum::Int(5)),
                 },
                 RangeUpperBound {
                     inclusive: false,
-                    bound: Some(Datum::Int32(15)),
+                    bound: Some(Datum::Int(15)),
                 },
             ))))
             .unwrap();

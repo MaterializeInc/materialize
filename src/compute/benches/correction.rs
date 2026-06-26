@@ -165,7 +165,7 @@ fn make_correction(version: Version, metrics: &SinkMetrics) -> Corr {
 
 fn row(key: u64, value: u64) -> Row {
     let payload = format!("payload-{value:016}");
-    Row::pack_slice(&[Datum::UInt64(key), Datum::String(&payload)])
+    Row::pack_slice(&[Datum::UInt(key), Datum::String(&payload)])
 }
 
 /// Generate one batch of updates per distinct timestamp `0..num_ts`.

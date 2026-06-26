@@ -632,10 +632,10 @@ mod test {
             any::<i32>().prop_map(PropDatum::Int32).boxed(),
             (0..interesting_i32s.len())
                 .prop_map(move |i| {
-                    let Datum::Int32(val) = interesting_i32s[i] else {
+                    let Datum::Int(val) = interesting_i32s[i] else {
                         unreachable!("interesting int32 has non-i32s")
                     };
-                    PropDatum::Int32(val)
+                    PropDatum::Int32(i32::try_from(val).expect("interesting int32 fits i32"))
                 })
                 .boxed(),
             (-10i32..10).prop_map(PropDatum::Int32).boxed(),

@@ -342,13 +342,12 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 })();
 
                 if let Some(new_limit) = new_limit {
-                    limit =
-                        MirScalarExpr::literal_ok(Datum::Int64(new_limit), ReprScalarType::Int64);
+                    limit = MirScalarExpr::literal_ok(Datum::Int(new_limit), ReprScalarType::Int);
                 } else {
                     limit = limit.call_binary(
                         MirScalarExpr::literal_ok(
-                            Datum::UInt64(u64::cast_from(offset)),
-                            ReprScalarType::UInt64,
+                            Datum::UInt(u64::cast_from(offset)),
+                            ReprScalarType::UInt,
                         )
                         .call_unary(UnaryFunc::CastUint64ToInt64(CastUint64ToInt64)),
                         BinaryFunc::AddInt64(func::AddInt64),
@@ -642,7 +641,7 @@ where
                         // `key_datums[0]` is the hash; the key columns follow it.
                         let datum_limit = expr
                             .eval(&key_datums[1..], &temp_storage)
-                            .unwrap_or(Datum::Int64(0));
+                            .unwrap_or(Datum::Int(0));
                         Some(match datum_limit {
                             Datum::Null => Diff::MAX,
                             d => Diff::from(d.unwrap_int64()),
@@ -777,7 +776,7 @@ where
                             // If the limit errors, use a zero limit; errors are surfaced elsewhere.
                             let datum_limit = limit
                                 .eval(&key_datums, &temp_storage)
-                                .unwrap_or(mz_repr::Datum::Int64(0));
+                                .unwrap_or(mz_repr::Datum::Int(0));
                             if datum_limit == Datum::Null {
                                 i64::MAX
                             } else {

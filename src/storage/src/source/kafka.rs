@@ -1365,7 +1365,7 @@ fn construct_source_message(
     for kind in metadata_columns {
         match kind {
             KafkaMetadataKind::Partition => packer.push(Datum::from(pid)),
-            KafkaMetadataKind::Offset => packer.push(Datum::UInt64(offset)),
+            KafkaMetadataKind::Offset => packer.push(Datum::UInt(offset)),
             KafkaMetadataKind::Timestamp => {
                 let ts = msg
                     .timestamp()

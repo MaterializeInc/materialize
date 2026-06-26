@@ -1533,7 +1533,7 @@ mod tests {
         let lookup = FastPathPlan::PeekExisting(
             GlobalId::User(9),
             GlobalId::User(11),
-            Some(vec![Row::pack(Some(Datum::Int32(5)))]),
+            Some(vec![Row::pack(Some(Datum::Int(5)))]),
             MapFilterProject::new(3)
                 .filter(Some(
                     MirScalarExpr::column(0).call_unary(UnaryFunc::IsNull(IsNull)),

@@ -1037,8 +1037,8 @@ mod test {
             // We work with a hypothetical schema of (key int, value int).
 
             // The input will contain records for two keys, 0 and 1.
-            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
-            let key1 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(1)])));
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int(0)])));
+            let key1 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int(1)])));
 
             // We will assume that the kafka topic contains the following messages with their
             // associated reclocked timestamp:
@@ -1047,9 +1047,9 @@ mod test {
             //                                                  //    to maintain the associated cap to time 2
             //  3. {offset=3, key=0, value=1}    @ mz_time = 3
             //  4. {offset=4, key=0, value=2}    @ mz_time = 3  // <- messages 2 and 3 are reclocked to time 3
-            let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
-            let value3 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(1)]);
-            let value4 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(2)]);
+            let value1 = Row::pack_slice(&[Datum::Int(0), Datum::Int(0)]);
+            let value3 = Row::pack_slice(&[Datum::Int(0), Datum::Int(1)]);
+            let value4 = Row::pack_slice(&[Datum::Int(0), Datum::Int(2)]);
             let msg1 = (key0, Some(Ok(value1.clone())), 1);
             let msg2 = (key1, None, 2);
             let msg3 = (key0, Some(Ok(value3)), 3);
@@ -1104,8 +1104,8 @@ mod test {
 
         // The expected consolidated output contains only updates for key 0 which has the value 0
         // at timestamp 0 and the value 2 at timestamp 3
-        let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
-        let value4 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(2)]);
+        let value1 = Row::pack_slice(&[Datum::Int(0), Datum::Int(0)]);
+        let value4 = Row::pack_slice(&[Datum::Int(0), Datum::Int(2)]);
         let expected_output: Vec<(Result<Row, DataflowError>, _, _)> = vec![
             (Ok(value1.clone()), new_ts(0), Diff::ONE),
             (Ok(value1), new_ts(3), Diff::MINUS_ONE),
@@ -1233,7 +1233,7 @@ mod test {
             // We work with a hypothetical schema of (key int, value int).
 
             // The input will contain records for two keys, 0 and 1.
-            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int(0)])));
 
             // We will assume that the kafka topic contains the following messages with their
             // associated reclocked timestamp:
@@ -1241,7 +1241,7 @@ mod test {
             //  2. {offset=2, key=0, value=NULL} @ mz_time = 1
             //  3. {offset=3, key=0, value=0}    @ mz_time = 2
             //  4. {offset=4, key=0, value=NULL} @ mz_time = 2  // <- messages 3 and 4 are *BOTH* reclocked to time 2
-            let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+            let value1 = Row::pack_slice(&[Datum::Int(0), Datum::Int(0)]);
             let msg1 = ((key0, Some(Ok(value1.clone())), 1), mz_ts(0), Diff::ONE);
             let msg2 = ((key0, None, 2), mz_ts(1), Diff::ONE);
             let msg3 = ((key0, Some(Ok(value1.clone())), 3), mz_ts(2), Diff::ONE);
@@ -1297,7 +1297,7 @@ mod test {
 
         // The expected consolidated output contains only updates for key 0 which has the value 0
         // at timestamp 0 and the value 2 at timestamp 3
-        let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+        let value1 = Row::pack_slice(&[Datum::Int(0), Datum::Int(0)]);
         let expected_output: Vec<(Result<Row, DataflowError>, _, _)> = vec![
             (Ok(value1.clone()), mz_ts(0), Diff::ONE),
             (Ok(value1), mz_ts(1), Diff::MINUS_ONE),
@@ -1430,10 +1430,10 @@ mod test {
                     })
                 });
 
-            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
-            let key1 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(1)])));
-            let value0 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(1)]);
-            let value1 = Row::pack_slice(&[Datum::Int64(1), Datum::Int64(2)]);
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int(0)])));
+            let key1 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int(1)])));
+            let value0 = Row::pack_slice(&[Datum::Int(0), Datum::Int(1)]);
+            let value1 = Row::pack_slice(&[Datum::Int(1), Datum::Int(2)]);
 
             // External writer has advanced the feedback persist_upper to T = 10
             // WITHOUT the operator emitting anything itself.

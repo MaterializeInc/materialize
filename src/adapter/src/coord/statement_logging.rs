@@ -361,7 +361,7 @@ impl Coordinator {
                     .statement_logging
                     .throttling_state
                     .get_throttled_count();
-                mpsh_packer.push(Datum::UInt64(CastFrom::cast_from(throttled_count)));
+                mpsh_packer.push(Datum::UInt(CastFrom::cast_from(throttled_count)));
 
                 let sql_row = Row::pack([
                     Datum::TimestampTz(

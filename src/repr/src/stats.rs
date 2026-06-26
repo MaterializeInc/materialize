@@ -119,10 +119,10 @@ pub fn col_values<'a>(
             map_stats(stats, map_datum)
         }
         (SqlScalarType::PgLegacyChar, ColumnStatKinds::Primitive(U8(stats))) => {
-            map_stats(stats, Datum::UInt8)
+            map_stats(stats, |v| Datum::UInt(v.into()))
         }
         (SqlScalarType::UInt16, ColumnStatKinds::Primitive(U16(stats))) => {
-            map_stats(stats, Datum::UInt16)
+            map_stats(stats, |v| Datum::UInt(v.into()))
         }
         (
             SqlScalarType::UInt32
@@ -131,18 +131,18 @@ pub fn col_values<'a>(
             | SqlScalarType::RegProc
             | SqlScalarType::RegType,
             ColumnStatKinds::Primitive(U32(stats)),
-        ) => map_stats(stats, Datum::UInt32),
+        ) => map_stats(stats, |v| Datum::UInt(v.into())),
         (SqlScalarType::UInt64, ColumnStatKinds::Primitive(U64(stats))) => {
-            map_stats(stats, Datum::UInt64)
+            map_stats(stats, Datum::UInt)
         }
         (SqlScalarType::Int16, ColumnStatKinds::Primitive(I16(stats))) => {
-            map_stats(stats, Datum::Int16)
+            map_stats(stats, |v| Datum::Int(v.into()))
         }
         (SqlScalarType::Int32, ColumnStatKinds::Primitive(I32(stats))) => {
-            map_stats(stats, Datum::Int32)
+            map_stats(stats, |v| Datum::Int(v.into()))
         }
         (SqlScalarType::Int64, ColumnStatKinds::Primitive(I64(stats))) => {
-            map_stats(stats, Datum::Int64)
+            map_stats(stats, Datum::Int)
         }
         (SqlScalarType::Float32, ColumnStatKinds::Primitive(F32(stats))) => {
             map_stats(stats, |x| Datum::Float32(OrderedFloat(x)))

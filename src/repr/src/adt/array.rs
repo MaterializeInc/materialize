@@ -342,7 +342,7 @@ mod tests {
                     lower_bound: 1,
                     length: 2,
                 }],
-                [Datum::Int16(1), Datum::Int16(2)],
+                [Datum::Int(1), Datum::Int(2)],
             )
             .unwrap();
         let arr = row.unpack_first().unwrap_array();
@@ -391,7 +391,7 @@ mod tests {
                         length: 2,
                     },
                 ],
-                [Datum::Int16(1), Datum::Int16(2)],
+                [Datum::Int(1), Datum::Int(2)],
             )
             .unwrap();
         let arr = row.unpack_first().unwrap_array();

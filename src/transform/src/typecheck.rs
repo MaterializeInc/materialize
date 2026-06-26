@@ -633,20 +633,10 @@ fn datum_difference_with_column_type(
                 (Datum::False, _) => mismatch(datum, scalar_type),
                 (Datum::True, ReprScalarType::Bool) => Ok(()),
                 (Datum::True, _) => mismatch(datum, scalar_type),
-                (Datum::Int16(_), ReprScalarType::Int16) => Ok(()),
-                (Datum::Int16(_), _) => mismatch(datum, scalar_type),
-                (Datum::Int32(_), ReprScalarType::Int32) => Ok(()),
-                (Datum::Int32(_), _) => mismatch(datum, scalar_type),
-                (Datum::Int64(_), ReprScalarType::Int64) => Ok(()),
-                (Datum::Int64(_), _) => mismatch(datum, scalar_type),
-                (Datum::UInt8(_), ReprScalarType::UInt8) => Ok(()),
-                (Datum::UInt8(_), _) => mismatch(datum, scalar_type),
-                (Datum::UInt16(_), ReprScalarType::UInt16) => Ok(()),
-                (Datum::UInt16(_), _) => mismatch(datum, scalar_type),
-                (Datum::UInt32(_), ReprScalarType::UInt32) => Ok(()),
-                (Datum::UInt32(_), _) => mismatch(datum, scalar_type),
-                (Datum::UInt64(_), ReprScalarType::UInt64) => Ok(()),
-                (Datum::UInt64(_), _) => mismatch(datum, scalar_type),
+                (Datum::Int(_), ReprScalarType::Int) => Ok(()),
+                (Datum::Int(_), _) => mismatch(datum, scalar_type),
+                (Datum::UInt(_), ReprScalarType::UInt) => Ok(()),
+                (Datum::UInt(_), _) => mismatch(datum, scalar_type),
                 (Datum::Float32(_), ReprScalarType::Float32) => Ok(()),
                 (Datum::Float32(_), _) => mismatch(datum, scalar_type),
                 (Datum::Float64(_), ReprScalarType::Float64) => Ok(()),
@@ -690,7 +680,7 @@ fn datum_difference_with_column_type(
                     }
 
                     for e in array.elements().iter() {
-                        difference_with_scalar_type(&e, &ReprScalarType::Int16)
+                        difference_with_scalar_type(&e, &ReprScalarType::Int)
                             .map_err(|e| element_type_difference("int2vector", e))?;
                     }
 
@@ -2060,12 +2050,12 @@ mod tests {
 
     #[mz_ore::test]
     fn test_datum_type_difference() {
-        let datum = Datum::Int16(1);
+        let datum = Datum::Int(1);
 
         assert_ok!(datum_difference_with_column_type(
             &datum,
             &ReprColumnType {
-                scalar_type: ReprScalarType::Int16,
+                scalar_type: ReprScalarType::Int,
                 nullable: true,
             }
         ));
@@ -2073,7 +2063,7 @@ mod tests {
         assert_err!(datum_difference_with_column_type(
             &datum,
             &ReprColumnType {
-                scalar_type: ReprScalarType::Int32,
+                scalar_type: ReprScalarType::Int,
                 nullable: false,
             }
         ));
@@ -2139,7 +2129,7 @@ mod tests {
         let typ = ReprColumnType {
             scalar_type: ReprScalarType::Record {
                 fields: Box::new([ReprColumnType {
-                    scalar_type: ReprScalarType::UInt32,
+                    scalar_type: ReprScalarType::UInt,
                     nullable: false,
                 }]),
             },

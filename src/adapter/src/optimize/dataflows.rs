@@ -729,9 +729,9 @@ fn eval_unmaterializable_func(
                 .human_version(state.config().helm_chart_version.clone()),
         )),
         UnmaterializableFunc::MzVersionNum => {
-            pack(Datum::Int32(state.config().build_info.version_num()))
+            pack(Datum::from(state.config().build_info.version_num()))
         }
-        UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(i32::reinterpret_cast(
+        UnmaterializableFunc::PgBackendPid => pack(Datum::from(i32::reinterpret_cast(
             session.conn_id().unhandled(),
         ))),
         UnmaterializableFunc::PgPostmasterStartTime => {

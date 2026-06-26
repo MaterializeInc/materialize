@@ -39,7 +39,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
@@ -1449,11 +1449,9 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
                 // that the error happened in a LIMIT clause, so that we have better error msg for
                 // something like `SELECT 5 LIMIT 'aaa'`.
                 match limit.eval(&[], &arena)? {
-                    d @ Datum::Int64(v) if v >= 0 => {
-                        HirScalarExpr::literal(d, SqlScalarType::Int64)
-                    }
+                    d @ Datum::Int(v) if v >= 0 => HirScalarExpr::literal(d, SqlScalarType::Int64),
                     d @ Datum::Null => HirScalarExpr::literal(d, SqlScalarType::Int64),
-                    Datum::Int64(_) => sql_bail!("LIMIT must not be negative"),
+                    Datum::Int(_) => sql_bail!("LIMIT must not be negative"),
                     _ => sql_bail!("constant LIMIT expression must reduce to an INT or NULL value"),
                 }
             } else {
@@ -1472,7 +1470,7 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
     };
 
     let offset = match &q.offset {
-        None => HirScalarExpr::literal(Datum::Int64(0), SqlScalarType::Int64),
+        None => HirScalarExpr::literal(Datum::Int(0), SqlScalarType::Int64),
         Some(offset) => {
             let ecx = &ExprContext {
                 qcx,
@@ -1490,7 +1488,7 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
             let offset = if offset.is_constant() {
                 // Simplify it to a literal or error out. (E.g., the cast inserted above may fail.)
                 let offset_value = offset_into_value(offset)?;
-                HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64)
+                HirScalarExpr::literal(Datum::Int(offset_value), SqlScalarType::Int64)
             } else {
                 // The only case when this is allowed to not be a constant is if it contains
                 // parameters. (In which case, we'll later check that it's a constant after
@@ -2729,11 +2727,8 @@ fn plan_select_from_where(
                     relation_expr.map(map_exprs),
                     distinct_key,
                     order_by.iter().skip(distinct_len).cloned().collect(),
-                    Some(HirScalarExpr::literal(
-                        Datum::Int64(1),
-                        SqlScalarType::Int64,
-                    )),
-                    HirScalarExpr::literal(Datum::Int64(0), SqlScalarType::Int64),
+                    Some(HirScalarExpr::literal(Datum::Int(1), SqlScalarType::Int64)),
+                    HirScalarExpr::literal(Datum::Int(0), SqlScalarType::Int64),
                     group_size_hints.distinct_on_input_group_size,
                 );
             }
@@ -4517,7 +4512,7 @@ fn plan_slice_list(
             Some(p) => {
                 plan_expr(ecx, p)?.cast_to(ecx, CastContext::Explicit, &SqlScalarType::Int64)?
             }
-            None => HirScalarExpr::literal(Datum::Int64(default), SqlScalarType::Int64),
+            None => HirScalarExpr::literal(Datum::Int(default), SqlScalarType::Int64),
         })
     };
     for p in slices {
@@ -5785,11 +5780,13 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
         Value::Number(s) => {
             let d = strconv::parse_numeric(s.as_str())?;
             if !s.contains(&['E', '.'][..]) {
-                // Maybe representable as an int?
-                if let Ok(n) = d.0.try_into() {
-                    (Datum::Int32(n), SqlScalarType::Int32)
-                } else if let Ok(n) = d.0.try_into() {
-                    (Datum::Int64(n), SqlScalarType::Int64)
+                // Maybe representable as an int? The SQL type still records the
+                // narrowest width that fits (int4 preferred, then int8) even
+                // though the `Datum` itself is the unified `Datum::Int`.
+                if let Ok(n) = i32::try_from(d.0) {
+                    (Datum::Int(i64::from(n)), SqlScalarType::Int32)
+                } else if let Ok(n) = i64::try_from(d.0) {
+                    (Datum::Int(n), SqlScalarType::Int64)
                 } else {
                     (
                         Datum::Numeric(d),

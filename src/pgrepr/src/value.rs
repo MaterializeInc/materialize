@@ -134,17 +134,32 @@ impl Value {
             (Datum::Null, _) => None,
             (Datum::True, SqlScalarType::Bool) => Some(Value::Bool(true)),
             (Datum::False, SqlScalarType::Bool) => Some(Value::Bool(false)),
-            (Datum::Int16(i), SqlScalarType::Int16) => Some(Value::Int2(i)),
-            (Datum::Int32(i), SqlScalarType::Int32) => Some(Value::Int4(i)),
-            (Datum::Int64(i), SqlScalarType::Int64) => Some(Value::Int8(i)),
-            (Datum::UInt8(c), SqlScalarType::PgLegacyChar) => Some(Value::Char(c)),
-            (Datum::UInt16(u), SqlScalarType::UInt16) => Some(Value::UInt2(UInt2(u))),
-            (Datum::UInt32(oid), SqlScalarType::Oid) => Some(Value::Oid(oid)),
-            (Datum::UInt32(oid), SqlScalarType::RegClass) => Some(Value::Oid(oid)),
-            (Datum::UInt32(oid), SqlScalarType::RegProc) => Some(Value::Oid(oid)),
-            (Datum::UInt32(oid), SqlScalarType::RegType) => Some(Value::Oid(oid)),
-            (Datum::UInt32(u), SqlScalarType::UInt32) => Some(Value::UInt4(UInt4(u))),
-            (Datum::UInt64(u), SqlScalarType::UInt64) => Some(Value::UInt8(UInt8(u))),
+            // pgwire egress guardrail: the wire width comes from the declared
+            // `SqlScalarType`, and the unified `Datum::Int`/`UInt` is narrowed
+            // to it here. Out-of-range means a value exceeded its column type.
+            (Datum::Int(i), SqlScalarType::Int16) => {
+                Some(Value::Int2(i16::try_from(i).expect("int16 out of range")))
+            }
+            (Datum::Int(i), SqlScalarType::Int32) => {
+                Some(Value::Int4(i32::try_from(i).expect("int32 out of range")))
+            }
+            (Datum::Int(i), SqlScalarType::Int64) => Some(Value::Int8(i)),
+            (Datum::UInt(c), SqlScalarType::PgLegacyChar) => {
+                Some(Value::Char(u8::try_from(c).expect("\"char\" out of range")))
+            }
+            (Datum::UInt(u), SqlScalarType::UInt16) => Some(Value::UInt2(UInt2(
+                u16::try_from(u).expect("uint16 out of range"),
+            ))),
+            (Datum::UInt(oid), SqlScalarType::Oid)
+            | (Datum::UInt(oid), SqlScalarType::RegClass)
+            | (Datum::UInt(oid), SqlScalarType::RegProc)
+            | (Datum::UInt(oid), SqlScalarType::RegType) => {
+                Some(Value::Oid(u32::try_from(oid).expect("oid out of range")))
+            }
+            (Datum::UInt(u), SqlScalarType::UInt32) => Some(Value::UInt4(UInt4(
+                u32::try_from(u).expect("uint32 out of range"),
+            ))),
+            (Datum::UInt(u), SqlScalarType::UInt64) => Some(Value::UInt8(UInt8(u))),
             (Datum::Float32(f), SqlScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), SqlScalarType::Float64) => Some(Value::Float8(*f)),
             (Datum::Numeric(d), SqlScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
@@ -259,16 +274,16 @@ impl Value {
             Value::Bool(true) => Datum::True,
             Value::Bool(false) => Datum::False,
             Value::Bytea(b) => Datum::Bytes(buf.push_bytes(b)),
-            Value::Char(c) => Datum::UInt8(c),
+            Value::Char(c) => Datum::UInt(c.into()),
             Value::Date(d) => Datum::Date(d),
             Value::Float4(f) => Datum::Float32(f.into()),
             Value::Float8(f) => Datum::Float64(f.into()),
-            Value::Int2(i) => Datum::Int16(i),
-            Value::Int4(i) => Datum::Int32(i),
-            Value::Int8(i) => Datum::Int64(i),
-            Value::UInt2(u) => Datum::UInt16(u.0),
-            Value::UInt4(u) => Datum::UInt32(u.0),
-            Value::UInt8(u) => Datum::UInt64(u.0),
+            Value::Int2(i) => Datum::Int(i.into()),
+            Value::Int4(i) => Datum::Int(i.into()),
+            Value::Int8(i) => Datum::Int(i),
+            Value::UInt2(u) => Datum::UInt(u.0.into()),
+            Value::UInt4(u) => Datum::UInt(u.0.into()),
+            Value::UInt8(u) => Datum::UInt(u.0),
             Value::Jsonb(js) => buf.push_unary_row(js.0.into_row()),
             Value::List(elems) => {
                 let elem_pg_type = match typ {
@@ -304,7 +319,7 @@ impl Value {
                     })
                 })?
             }
-            Value::Oid(oid) => Datum::UInt32(oid),
+            Value::Oid(oid) => Datum::from(oid),
             Value::Record(_) => {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
@@ -773,16 +788,16 @@ impl Value {
             }
             Type::Bool => packer.push(Datum::from(strconv::parse_bool(s)?)),
             Type::Bytea => packer.push(Datum::Bytes(&strconv::parse_bytes(s)?)),
-            Type::Char => packer.push(Datum::UInt8(s.as_bytes().get(0).copied().unwrap_or(0))),
+            Type::Char => packer.push(Datum::from(s.as_bytes().get(0).copied().unwrap_or(0))),
             Type::Date => packer.push(Datum::Date(strconv::parse_date(s)?)),
             Type::Float4 => packer.push(Datum::Float32(strconv::parse_float32(s)?.into())),
             Type::Float8 => packer.push(Datum::Float64(strconv::parse_float64(s)?.into())),
-            Type::Int2 => packer.push(Datum::Int16(strconv::parse_int16(s)?)),
-            Type::Int4 => packer.push(Datum::Int32(strconv::parse_int32(s)?)),
-            Type::Int8 => packer.push(Datum::Int64(strconv::parse_int64(s)?)),
-            Type::UInt2 => packer.push(Datum::UInt16(strconv::parse_uint16(s)?)),
-            Type::UInt4 => packer.push(Datum::UInt32(strconv::parse_uint32(s)?)),
-            Type::UInt8 => packer.push(Datum::UInt64(strconv::parse_uint64(s)?)),
+            Type::Int2 => packer.push(Datum::from(strconv::parse_int16(s)?)),
+            Type::Int4 => packer.push(Datum::from(strconv::parse_int32(s)?)),
+            Type::Int8 => packer.push(Datum::from(strconv::parse_int64(s)?)),
+            Type::UInt2 => packer.push(Datum::from(strconv::parse_uint16(s)?)),
+            Type::UInt4 => packer.push(Datum::from(strconv::parse_uint32(s)?)),
+            Type::UInt8 => packer.push(Datum::from(strconv::parse_uint64(s)?)),
             Type::Interval { .. } => packer.push(Datum::Interval(strconv::parse_interval(s)?)),
             Type::Json => return Err("input of json types is not implemented".into()),
             Type::Jsonb => packer.push(strconv::parse_jsonb(s)?.into_row().unpack_first()),
@@ -825,7 +840,7 @@ impl Value {
                 constraints.as_ref(),
             )?)),
             Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
-                packer.push(Datum::UInt32(strconv::parse_oid(s)?))
+                packer.push(Datum::from(strconv::parse_oid(s)?))
             }
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into());

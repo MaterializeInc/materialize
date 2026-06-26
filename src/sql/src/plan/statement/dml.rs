@@ -245,7 +245,7 @@ fn plan_select_inner(
             };
             match limit {
                 Datum::Null => None,
-                Datum::Int64(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
+                Datum::Int(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
                 _ => {
                     soft_panic_or_log!("Valid literal limit must be asserted in `plan_select`");
                     sql_bail!("LIMIT must be a non-negative INT or NULL")

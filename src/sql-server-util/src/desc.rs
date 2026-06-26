@@ -729,19 +729,19 @@ impl SqlServerColumnDecodeType {
             (SqlScalarType::Int16, SqlServerColumnDecodeType::U8) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "u8"))?
-                .map(|val: u8| Datum::Int16(i16::cast_from(val))),
+                .map(|val: u8| Datum::Int(i64::from(val))),
             (SqlScalarType::Int16, SqlServerColumnDecodeType::I16) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "i16"))?
-                .map(Datum::Int16),
+                .map(|v: i16| Datum::Int(v.into())),
             (SqlScalarType::Int32, SqlServerColumnDecodeType::I32) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "i32"))?
-                .map(Datum::Int32),
+                .map(|v: i32| Datum::Int(v.into())),
             (SqlScalarType::Int64, SqlServerColumnDecodeType::I64) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "i64"))?
-                .map(Datum::Int64),
+                .map(Datum::Int),
             (SqlScalarType::Float32, SqlServerColumnDecodeType::F32) => data
                 .try_get(name)
                 .map_err(|_| SqlServerDecodeError::invalid_column(name, "f32"))?
@@ -1429,7 +1429,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             &rnd_row,
-            &Row::pack_slice(&[Datum::String("hello world"), Datum::True, Datum::Int32(42)])
+            &Row::pack_slice(&[Datum::String("hello world"), Datum::True, Datum::from(42)])
         );
 
         decoder

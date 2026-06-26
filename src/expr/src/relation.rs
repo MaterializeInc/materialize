@@ -1261,12 +1261,12 @@ impl MirRelationExpr {
     ///
     /// // A common schema for each input.
     /// let schema = ReprRelationType::new(vec![
-    ///     ReprScalarType::Int32.nullable(false),
-    ///     ReprScalarType::Int32.nullable(false),
+    ///     ReprScalarType::Int.nullable(false),
+    ///     ReprScalarType::Int.nullable(false),
     /// ]);
     ///
     /// // the specific data are not important here.
-    /// let data = vec![Datum::Int32(0), Datum::Int32(1)];
+    /// let data = vec![Datum::Int(0), Datum::Int(1)];
     ///
     /// // Three collections that could have been different.
     /// let input0 = MirRelationExpr::constant(vec![data.clone()], schema.clone());
@@ -2576,8 +2576,8 @@ impl AggregateExpr {
                 .clone()
                 .call_unary(UnaryFunc::IsNull(crate::func::IsNull))
                 .if_then_else(
-                    MirScalarExpr::literal_ok(Datum::Int64(0), ReprScalarType::Int64),
-                    MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
+                    MirScalarExpr::literal_ok(Datum::Int(0), ReprScalarType::Int),
+                    MirScalarExpr::literal_ok(Datum::Int(1), ReprScalarType::Int),
                 ),
 
             // SumInt16 takes Int16s as input, but outputs Int64s.
@@ -3092,7 +3092,7 @@ impl AggregateExpr {
             ListIndex,
             vec![
                 list,
-                MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
+                MirScalarExpr::literal_ok(Datum::Int(1), ReprScalarType::Int),
             ],
         );
 
@@ -3109,7 +3109,7 @@ impl AggregateExpr {
                     field_names: vec![ColumnName::from(col_name), ColumnName::from("?record?")],
                 },
                 vec![
-                    MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
+                    MirScalarExpr::literal_ok(Datum::Int(1), ReprScalarType::Int),
                     record,
                 ],
             )],
@@ -3136,7 +3136,7 @@ impl AggregateExpr {
         let value = offset
             .clone()
             .call_binary(
-                MirScalarExpr::literal_ok(Datum::Int32(0), ReprScalarType::Int32),
+                MirScalarExpr::literal_ok(Datum::Int(0), ReprScalarType::Int),
                 crate::func::Eq,
             )
             .if_then_else(expr, default_value);

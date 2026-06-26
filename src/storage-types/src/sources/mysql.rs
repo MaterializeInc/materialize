@@ -343,7 +343,7 @@ impl SourceTimestamp for GtidPartition {
     fn encode_row(&self) -> Row {
         let ts = match self.timestamp() {
             GtidState::Absent => Datum::Null,
-            GtidState::Active(id) => Datum::UInt64(id.get()),
+            GtidState::Active(id) => Datum::UInt(id.get()),
         };
         Row::pack(&[
             Datum::Uuid(self.interval().lower),
@@ -355,7 +355,7 @@ impl SourceTimestamp for GtidPartition {
     fn decode_row(row: &Row) -> Self {
         let mut datums = row.iter();
         match (datums.next(), datums.next(), datums.next(), datums.next()) {
-            (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::UInt64(ts)), None) => {
+            (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::UInt(ts)), None) => {
                 match ts {
                     0 => Partitioned::new_range(lower, upper, GtidState::Absent),
                     ts => Partitioned::new_range(

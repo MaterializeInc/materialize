@@ -455,9 +455,9 @@ Explained Query:
             Filter (#0{creationdate} < 2010-06-11 09:21:46 UTC) // { arity: 13 }
               ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
     Return // { arity: 7 }
-      Project (#0..=#2, #4{count}, #7, #5{sum}, #8) // { arity: 7 }
-        Map ((#5{sum} / bigint_to_numeric(case when (#6{count} = 0) then null else #6{count} end)), (bigint_to_numeric(#4{count}) / #3{cnt})) // { arity: 9 }
-          Reduce group_by=[#1..=#4] aggregates=[count(*), sum(integer_to_bigint(#0{length})), count(integer_to_bigint(#0{length}))] // { arity: 7 }
+      Project (#0..=#2, #4{count}, #6, #5{sum_length}, #7) // { arity: 7 }
+        Map ((#5{sum_length} / bigint_to_numeric(case when (#4{count} = 0) then null else #4{count} end)), (bigint_to_numeric(#4{count}) / #3{cnt})) // { arity: 8 }
+          Reduce group_by=[#1..=#4] aggregates=[count(*), sum(#0{length})] // { arity: 6 }
             CrossJoin type=differential // { arity: 5 }
               implementation
                 %1[×]U » %0:message[×]if
@@ -1479,7 +1479,7 @@ Explained Query:
           Get l5 // { arity: 2 }
       cte l7 =
         Project (#3, #4) // { arity: 2 }
-          Map (coalesce(#0{id}, #1{creatorpersonid}), (integer_to_bigint(case when (#0{id}) IS NULL then 0 else 100 end) + coalesce(#2{count}, 0))) // { arity: 5 }
+          Map (coalesce(#0{id}, #1{creatorpersonid}), (case when (#0{id}) IS NULL then 0 else 100 end + coalesce(#2{count}, 0))) // { arity: 5 }
             Union // { arity: 3 }
               Project (#2, #0{creatorpersonid}, #1{count}) // { arity: 3 }
                 Map (null) // { arity: 3 }
@@ -2826,9 +2826,8 @@ Explained Query:
                       Get l7 // { arity: 0 }
                     Constant // { arity: 0 }
                       - ()
-            Project (#1, #0) // { arity: 2 }
-              Map (true, -1) // { arity: 2 }
-                Get l7 // { arity: 0 }
+            Map (-1, true) // { arity: 2 }
+              Get l7 // { arity: 0 }
             Constant // { arity: 2 }
               - (1450, true)
               - (15393162796819, false)
@@ -2925,12 +2924,11 @@ Explained Query:
         Distinct project=[#0..=#5] // { arity: 6 }
           Union // { arity: 6 }
             Project (#1, #0, #0, #2..=#4) // { arity: 6 }
-              Map (0, false, 0) // { arity: 5 }
-                Union // { arity: 2 }
-                  Map (1450, false) // { arity: 2 }
-                    Get l16 // { arity: 0 }
-                  Map (15393162796819, true) // { arity: 2 }
-                    Get l16 // { arity: 0 }
+              Map (1450, false, 0, false, 0) // { arity: 5 }
+                Get l16 // { arity: 0 }
+            Project (#1, #0, #0, #2..=#4) // { arity: 6 }
+              Map (15393162796819, true, 0, false, 0) // { arity: 5 }
+                Get l16 // { arity: 0 }
             Project (#0..=#3, #7, #8) // { arity: 6 }
               Map ((#4{dead} OR coalesce((#3{w} > #6), false)), (#5{iter} + 1)) // { arity: 9 }
                 CrossJoin type=delta // { arity: 7 }
@@ -3937,15 +3935,12 @@ Explained Query:
         cte l7 =
           Distinct project=[#0..=#5] // { arity: 6 }
             Union // { arity: 6 }
-              Project (#1, #0{id}, #0{id}, #2..=#4) // { arity: 6 }
-                Map (0, false, 0) // { arity: 5 }
-                  Union // { arity: 2 }
-                    Project (#1{id}, #12) // { arity: 2 }
-                      Map (false) // { arity: 13 }
-                        ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(655)] // { arity: 12 }
-                    Project (#1{id}, #12) // { arity: 2 }
-                      Map (true) // { arity: 13 }
-                        ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(1138)] // { arity: 12 }
+              Project (#12, #1{id}, #1{id}, #13..=#15) // { arity: 6 }
+                Map (false, 0, false, 0) // { arity: 16 }
+                  ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(655)] // { arity: 12 }
+              Project (#12, #1{id}, #1{id}, #13..=#15) // { arity: 6 }
+                Map (true, 0, false, 0) // { arity: 16 }
+                  ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(1138)] // { arity: 12 }
               Project (#0..=#3, #7, #8) // { arity: 6 }
                 Map ((#4{dead} OR coalesce((#3{w} > #6), false)), (#5{iter} + 1)) // { arity: 9 }
                   CrossJoin type=delta // { arity: 7 }
@@ -4081,7 +4076,7 @@ Explained Query:
               Distinct project=[#0{dst}, #1] // { arity: 2 }
                 Union // { arity: 2 }
                   Project (#3{dst}, #5) // { arity: 2 }
-                    Map ((#1{w} + integer_to_bigint(#4{w}))) // { arity: 6 }
+                    Map ((#1{w} + #4{w})) // { arity: 6 }
                       Join on=(#0{dst} = #2{src}) type=differential // { arity: 5 }
                         implementation
                           %0:l0[#0{dst}]UK » %1:pathq20[#0{src}]KA
@@ -4187,7 +4182,7 @@ Explained Query:
           Distinct project=[#0{dst}, #1] // { arity: 2 }
             Union // { arity: 2 }
               Project (#3{dst}, #5) // { arity: 2 }
-                Map ((#1{w} + integer_to_bigint(#4{w}))) // { arity: 6 }
+                Map ((#1{w} + #4{w})) // { arity: 6 }
                   Join on=(#0{dst} = #2{src}) type=differential // { arity: 5 }
                     implementation
                       %0:l0[#0{dst}]UK » %1:pathq20[#0{src}]KA
@@ -4299,7 +4294,7 @@ Explained Query:
                 Distinct project=[#0{dst}..=#2] // { arity: 3 }
                   Union // { arity: 3 }
                     Project (#4{dst}, #6, #7) // { arity: 3 }
-                      Map ((#1{w} + integer_to_bigint(#5{w})), (#2{hops} + 1)) // { arity: 8 }
+                      Map ((#1{w} + #5{w}), (#2{hops} + 1)) // { arity: 8 }
                         Join on=(#0{dst} = #3{src}) type=differential // { arity: 6 }
                           implementation
                             %1:pathq20[#0{src}]KA » %0:l0[#0{dst}]K
@@ -4513,7 +4508,7 @@ Explained Query:
           TopK group_by=[#0, #1, #2{dst}] order_by=[#3 asc nulls_last, #4 desc nulls_first] limit=1 // { arity: 5 }
             Union // { arity: 5 }
               Project (#3, #4, #1{dst}, #7, #8) // { arity: 5 }
-                Map ((#6{w} + integer_to_bigint(#2{w})), false) // { arity: 9 }
+                Map ((#6{w} + #2{w}), false) // { arity: 9 }
                   Join on=(#0{src} = #5{dst}) type=differential // { arity: 7 }
                     implementation
                       %0:l1[#0{src}]KA » %1:l4[#2{dst}]K
@@ -4582,8 +4577,8 @@ Explained Query:
         cte l12 =
           Distinct project=[#0..=#5] // { arity: 6 }
             Union // { arity: 6 }
-              Project (#0..=#2{personid}, #4, #3, #5) // { arity: 6 }
-                Map (false, 0, 0) // { arity: 6 }
+              Project (#0..=#4, #3) // { arity: 6 }
+                Map (0, false) // { arity: 5 }
                   Distinct project=[#0..=#2{personid}] // { arity: 3 }
                     Union // { arity: 3 }
                       Project (#1, #0, #0) // { arity: 3 }

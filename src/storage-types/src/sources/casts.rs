@@ -171,7 +171,7 @@ impl CastFunc {
             CastFunc::CastStringToBool => {
                 Ok(Datum::from(strconv::parse_bool(a).map_err(parse_err)?))
             }
-            CastFunc::CastStringToPgLegacyChar => Ok(Datum::UInt8(
+            CastFunc::CastStringToPgLegacyChar => Ok(Datum::from(
                 PgLegacyChar(a.as_bytes().first().copied().unwrap_or(0)).0,
             )),
             CastFunc::CastStringToPgLegacyName => Ok(Datum::String(
@@ -182,13 +182,13 @@ impl CastFunc {
                 Ok(Datum::Bytes(arena.push_bytes(bytes)))
             }
             CastFunc::CastStringToInt16 => {
-                Ok(Datum::Int16(strconv::parse_int16(a).map_err(parse_err)?))
+                Ok(Datum::from(strconv::parse_int16(a).map_err(parse_err)?))
             }
             CastFunc::CastStringToInt32 => {
-                Ok(Datum::Int32(strconv::parse_int32(a).map_err(parse_err)?))
+                Ok(Datum::from(strconv::parse_int32(a).map_err(parse_err)?))
             }
             CastFunc::CastStringToInt64 => {
-                Ok(Datum::Int64(strconv::parse_int64(a).map_err(parse_err)?))
+                Ok(Datum::from(strconv::parse_int64(a).map_err(parse_err)?))
             }
             CastFunc::CastStringToFloat32 => {
                 let f: f32 = strconv::parse_float32(a).map_err(parse_err)?;
@@ -198,15 +198,15 @@ impl CastFunc {
                 let f: f64 = strconv::parse_float64(a).map_err(parse_err)?;
                 Ok(Datum::Float64(f.into()))
             }
-            CastFunc::CastStringToOid => Ok(Datum::UInt32(Oid(strconv::parse_oid(a)?).0)),
+            CastFunc::CastStringToOid => Ok(Datum::from(Oid(strconv::parse_oid(a)?).0)),
             CastFunc::CastStringToUint16 => {
-                Ok(Datum::UInt16(strconv::parse_uint16(a).map_err(parse_err)?))
+                Ok(Datum::from(strconv::parse_uint16(a).map_err(parse_err)?))
             }
             CastFunc::CastStringToUint32 => {
-                Ok(Datum::UInt32(strconv::parse_uint32(a).map_err(parse_err)?))
+                Ok(Datum::from(strconv::parse_uint32(a).map_err(parse_err)?))
             }
             CastFunc::CastStringToUint64 => {
-                Ok(Datum::UInt64(strconv::parse_uint64(a).map_err(parse_err)?))
+                Ok(Datum::from(strconv::parse_uint64(a).map_err(parse_err)?))
             }
             CastFunc::CastStringToDate => {
                 Ok(Datum::Date(strconv::parse_date(a).map_err(parse_err)?))
@@ -373,7 +373,7 @@ impl CastFunc {
                         };
                         // Int2Vector elements are always cast from string to int16.
                         let i: i16 = strconv::parse_int16(elem_text).map_err(parse_err)?;
-                        Ok(Datum::Int16(i))
+                        Ok(Datum::from(i))
                     })?;
                 // Construct a one-dimensional array from the parsed elements,
                 // matching array_create_scalar from mz_expr.
@@ -430,7 +430,7 @@ mod tests {
         let expr = cast_col0(CastFunc::CastStringToInt16);
         assert_eq!(
             expr.eval(&[Datum::String("32767")], &arena).unwrap(),
-            Datum::Int16(32767)
+            Datum::from(32767)
         );
     }
 
@@ -440,7 +440,7 @@ mod tests {
         let expr = cast_col0(CastFunc::CastStringToInt32);
         assert_eq!(
             expr.eval(&[Datum::String("42")], &arena).unwrap(),
-            Datum::Int32(42)
+            Datum::from(42)
         );
     }
 
@@ -450,7 +450,7 @@ mod tests {
         let expr = cast_col0(CastFunc::CastStringToInt64);
         assert_eq!(
             expr.eval(&[Datum::String("-9000000000")], &arena).unwrap(),
-            Datum::Int64(-9_000_000_000)
+            Datum::from(-9_000_000_000i64)
         );
     }
 
@@ -624,8 +624,8 @@ mod tests {
             Box::new(StorageScalarExpr::Column(0)),
             "should not fire".to_string(),
         );
-        let result = expr.eval(&[Datum::Int32(7)], &arena).unwrap();
-        assert_eq!(result, Datum::Int32(7));
+        let result = expr.eval(&[Datum::from(7)], &arena).unwrap();
+        assert_eq!(result, Datum::from(7));
     }
 
     // --- Error cases ---
@@ -661,17 +661,17 @@ mod tests {
     fn test_literal_unpacks_correctly() {
         use mz_repr::{ReprColumnType, ReprScalarType, Row};
         let mut row = Row::default();
-        row.packer().push(Datum::Int32(99));
+        row.packer().push(Datum::from(99));
         let expr = StorageScalarExpr::Literal(
             row,
             ReprColumnType {
-                scalar_type: ReprScalarType::Int32,
+                scalar_type: ReprScalarType::Int,
                 nullable: false,
             },
         );
         let arena = RowArena::new();
         let result = expr.eval(&[], &arena).unwrap();
-        assert_eq!(result, Datum::Int32(99));
+        assert_eq!(result, Datum::from(99));
     }
 
     // --- Column ---
@@ -680,9 +680,9 @@ mod tests {
     fn test_column_extracts_correct_datum() {
         let arena = RowArena::new();
         let expr = StorageScalarExpr::Column(2);
-        let datums = [Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)];
+        let datums = [Datum::from(0), Datum::from(1), Datum::from(2)];
         let result = expr.eval(&datums, &arena).unwrap();
-        assert_eq!(result, Datum::Int32(2));
+        assert_eq!(result, Datum::from(2));
     }
 
     // --- Error snapshot tests: hardcode expected EvalError variants.

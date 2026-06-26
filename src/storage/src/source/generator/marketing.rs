@@ -49,9 +49,9 @@ impl Generator for Marketing {
                 let mut customer = Row::with_capacity(3);
                 let mut packer = customer.packer();
 
-                packer.push(Datum::Int64(id.try_into().unwrap()));
+                packer.push(Datum::Int(id.try_into().unwrap()));
                 packer.push(Datum::String(email));
-                packer.push(Datum::Int64(rng.gen_range(5_000_000..10_000_000i64)));
+                packer.push(Datum::Int(rng.gen_range(5_000_000..10_000_000i64)));
 
                 (MarketingView::Customers, customer, Diff::ONE)
             })
@@ -67,11 +67,11 @@ impl Generator for Marketing {
                     let impression_id = counter;
                     counter += 1;
 
-                    packer.push(Datum::Int64(impression_id));
-                    packer.push(Datum::Int64(
+                    packer.push(Datum::Int(impression_id));
+                    packer.push(Datum::Int(
                         rng.gen_range(0..CUSTOMERS.len()).try_into().unwrap(),
                     ));
-                    packer.push(Datum::Int64(rng.gen_range(0..20i64)));
+                    packer.push(Datum::Int(rng.gen_range(0..20i64)));
                     let impression_time = now();
                     packer.push(Datum::TimestampTz(
                         to_datetime(impression_time)
@@ -89,7 +89,7 @@ impl Generator for Marketing {
 
                         let click_time = impression_time + rng.gen_range(20000..40000);
 
-                        packer.push(Datum::Int64(impression_id));
+                        packer.push(Datum::Int(impression_id));
                         packer.push(Datum::TimestampTz(
                             to_datetime(click_time)
                                 .try_into()
@@ -131,7 +131,7 @@ impl Generator for Marketing {
                         let mut prediction = Row::with_capacity(4);
                         let mut packer = prediction.packer();
 
-                        packer.push(Datum::Int64(lead.id));
+                        packer.push(Datum::Int(lead.id));
                         packer.push(Datum::String(bucket));
                         packer.push(Datum::TimestampTz(
                             to_datetime(now()).try_into().expect("timestamp must fit"),
@@ -150,12 +150,12 @@ impl Generator for Marketing {
 
                             let id = counter;
                             counter += 1;
-                            packer.push(Datum::Int64(id));
-                            packer.push(Datum::Int64(lead.id));
+                            packer.push(Datum::Int(id));
+                            packer.push(Datum::Int(lead.id));
                             packer.push(Datum::TimestampTz(
                                 to_datetime(now()).try_into().expect("timestamp must fit"),
                             ));
-                            packer.push(Datum::Int64(amount));
+                            packer.push(Datum::Int(amount));
 
                             pending.push((MarketingView::Coupons, coupon, Diff::ONE));
                         }
@@ -222,8 +222,8 @@ impl Lead {
     fn to_row(&self) -> Row {
         let mut row = Row::with_capacity(5);
         let mut packer = row.packer();
-        packer.push(Datum::Int64(self.id));
-        packer.push(Datum::Int64(self.customer_id));
+        packer.push(Datum::Int(self.id));
+        packer.push(Datum::Int(self.customer_id));
         packer.push(Datum::TimestampTz(
             to_datetime(self.created_at)
                 .try_into()
@@ -242,7 +242,7 @@ impl Lead {
         );
         packer.push(
             self.conversion_amount
-                .map(Datum::Int64)
+                .map(Datum::Int)
                 .unwrap_or(Datum::Null),
         );
 

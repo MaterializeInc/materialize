@@ -87,10 +87,10 @@ impl Generator for Tpch {
                     TpchView::Supplier => {
                         let nation = rng.gen_range(0..count_nation);
                         row.packer().extend([
-                            Datum::Int64(key),
+                            Datum::Int(key),
                             Datum::String(&pad_nine("Supplier", key)),
                             Datum::String(&v_string(&mut rng, 10, 40)), // address
-                            Datum::Int64(nation),
+                            Datum::Int(nation),
                             Datum::String(&phone(&mut rng, nation)),
                             Datum::Numeric(decimal(&mut rng, &mut ctx.cx, -999_99, 9_999_99, 100)), // acctbal
                             // TODO: add customer complaints and recommends, see 4.2.3.
@@ -114,9 +114,9 @@ impl Generator for Tpch {
                                 % ctx.tpch.count_supplier
                                 + 1;
                             row.packer().extend([
-                                Datum::Int64(key),
-                                Datum::Int64(suppkey),
-                                Datum::Int32(rng.gen_range(1..=9_999)), // availqty
+                                Datum::Int(key),
+                                Datum::Int(suppkey),
+                                Datum::Int(rng.gen_range(1..=9_999)), // availqty
                                 Datum::Numeric(decimal(&mut rng, &mut ctx.cx, 1_00, 1_000_00, 100)), // supplycost
                                 Datum::String(text_string(
                                     &mut rng,
@@ -131,12 +131,12 @@ impl Generator for Tpch {
                             ));
                         }
                         row.packer().extend([
-                            Datum::Int64(key),
+                            Datum::Int(key),
                             Datum::String(&name),
                             Datum::String(&format!("Manufacturer#{m}")),
                             Datum::String(&format!("Brand#{m}{n}")),
                             Datum::String(&syllables(&mut rng, TYPES)),
-                            Datum::Int32(rng.gen_range(1..=50)), // size
+                            Datum::Int(rng.gen_range(1..=50)), // size
                             Datum::String(&syllables(&mut rng, CONTAINERS)),
                             Datum::Numeric(partkey_retailprice(key)),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 49, 198)),
@@ -146,10 +146,10 @@ impl Generator for Tpch {
                     TpchView::Customer => {
                         let nation = rng.gen_range(0..count_nation);
                         row.packer().extend([
-                            Datum::Int64(key),
+                            Datum::Int(key),
                             Datum::String(&pad_nine("Customer", key)),
                             Datum::String(&v_string(&mut rng, 10, 40)), // address
-                            Datum::Int64(nation),
+                            Datum::Int(nation),
                             Datum::String(&phone(&mut rng, nation)),
                             Datum::Numeric(decimal(&mut rng, &mut ctx.cx, -999_99, 9_999_99, 100)), // acctbal
                             Datum::String(SEGMENTS.choose(&mut rng).unwrap()),
@@ -174,16 +174,16 @@ impl Generator for Tpch {
                     TpchView::Nation => {
                         let (name, region) = NATIONS[key_usize];
                         row.packer().extend([
-                            Datum::Int64(key),
+                            Datum::Int(key),
                             Datum::String(name),
-                            Datum::Int64(region),
+                            Datum::Int(region),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 114)),
                         ]);
                         row.clone()
                     }
                     TpchView::Region => {
                         row.packer().extend([
-                            Datum::Int64(key),
+                            Datum::Int(key),
                             Datum::String(REGIONS[key_usize]),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 115)),
                         ]);
@@ -291,10 +291,10 @@ impl Context {
             let receiptdate = date(&mut rng, &shipdate, 1..=30);
             let linestatus = if shipdate > *CURRENT_DATE { "O" } else { "F" };
             self.row_buffer.packer().extend([
-                Datum::Int64(key),
-                Datum::Int64(partkey),
-                Datum::Int64(suppkey),
-                Datum::Int32(linenumber.try_into().expect("must fit")),
+                Datum::Int(key),
+                Datum::Int(partkey),
+                Datum::Int(suppkey),
+                Datum::Int(linenumber.try_into().expect("must fit")),
                 Datum::Numeric(OrderedDecimal(quantity)),
                 Datum::Numeric(OrderedDecimal(extendedprice)),
                 Datum::Numeric(discount),
@@ -333,14 +333,14 @@ impl Context {
         self.cx.rescale(&mut totalprice, &Numeric::from(-2));
 
         self.row_buffer.packer().extend([
-            Datum::Int64(key),
-            Datum::Int64(custkey),
+            Datum::Int(key),
+            Datum::Int(custkey),
             Datum::String(orderstatus.unwrap()),
             Datum::Numeric(OrderedDecimal(totalprice)),
             Datum::Date(orderdate),
             Datum::String(PRIORITIES.choose(&mut rng).unwrap()),
             Datum::String(&pad_nine("Clerk", rng.gen_range(1..=self.tpch.count_clerk))),
-            Datum::Int32(0), // shippriority
+            Datum::Int(0), // shippriority
             Datum::String(text_string(&mut rng, &self.text_string_source, 19, 78)),
         ]);
         let order = self.row_buffer.clone();

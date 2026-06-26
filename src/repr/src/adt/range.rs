@@ -741,8 +741,12 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
             }
             // Valid range types are defined in typeconv.rs:validate_range_element_type
             Some(value) => match value {
-                d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d)?,
-                d @ Datum::Int64(_) => self.canonicalize_inner::<i64>(d)?,
+                // SPIKE FORCING-FUNCTION: the unified `Datum::Int` no longer
+                // distinguishes int4range from int8range, so we canonicalize at
+                // i64 width. This is wrong at the i32 boundary for int4range; a
+                // real implementation must thread the element's SQL width here
+                // (e.g. via the surrounding range's `SqlScalarType`).
+                d @ Datum::Int(_) => self.canonicalize_inner::<i64>(d)?,
                 d @ Datum::Date(_) => self.canonicalize_inner::<Date>(d)?,
                 Datum::Numeric(..) | Datum::Timestamp(..) | Datum::TimestampTz(..) => {}
                 d => unreachable!("{d:?} not yet supported in ranges"),

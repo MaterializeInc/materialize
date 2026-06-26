@@ -513,7 +513,7 @@ impl MirScalarExpr {
 
     pub fn as_literal_int64(&self) -> Option<i64> {
         match self.as_literal() {
-            Some(Ok(Datum::Int64(i))) => Some(i),
+            Some(Ok(Datum::Int(i))) => Some(i),
             _ => None,
         }
     }
@@ -2479,16 +2479,16 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
         let relation_type: Vec<ReprColumnType> = vec![
-            ReprScalarType::Int64.nullable(true),
-            ReprScalarType::Int64.nullable(true),
-            ReprScalarType::Int64.nullable(false),
+            ReprScalarType::Int.nullable(true),
+            ReprScalarType::Int.nullable(true),
+            ReprScalarType::Int.nullable(false),
         ]
         .into_iter()
         .collect();
         let col = MirScalarExpr::column;
-        let int64_typ = ReprScalarType::Int64;
+        let int64_typ = ReprScalarType::Int;
         let err = |e| MirScalarExpr::literal(Err(e), int64_typ.clone());
-        let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), int64_typ.clone());
+        let lit = |i| MirScalarExpr::literal_ok(Datum::Int(i), int64_typ.clone());
         let null = || MirScalarExpr::literal_null(int64_typ.clone());
 
         struct TestCase {

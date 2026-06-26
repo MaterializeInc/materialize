@@ -32,7 +32,7 @@ fn if_then_else(cond: MirScalarExpr, then: MirScalarExpr, els: MirScalarExpr) ->
 
 /// Build an i64 literal.
 fn lit_i64(v: i64) -> MirScalarExpr {
-    MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64)
+    MirScalarExpr::literal_ok(Datum::Int(v), ReprScalarType::Int)
 }
 
 /// Column reference.
@@ -56,9 +56,9 @@ fn build_case_literal(n: usize) -> MirScalarExpr {
     let scalar = build_if_chain(n);
     let mut relation = mz_expr::MirRelationExpr::Map {
         input: Box::new(mz_expr::MirRelationExpr::constant(
-            vec![vec![Datum::Int64(0)]],
+            vec![vec![Datum::Int(0)]],
             ReprRelationType::new(vec![ReprColumnType {
-                scalar_type: ReprScalarType::Int64,
+                scalar_type: ReprScalarType::Int,
                 nullable: false,
             }]),
         )),
@@ -95,7 +95,7 @@ fn bench_case_literal(c: &mut Criterion) {
         ];
 
         for &(scenario, input) in scenarios {
-            let datums = [Datum::Int64(input)];
+            let datums = [Datum::Int(input)];
 
             group.bench_function(format!("if_chain/{n}_arms/{scenario}"), |b| {
                 b.iter(|| black_box(&if_chain).eval(black_box(&datums), black_box(&arena)))

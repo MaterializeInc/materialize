@@ -542,7 +542,7 @@ impl StatementLoggingFrontend {
                 // Read throttled_count from shared state
                 let throttled_count = self.throttling_state.get_throttled_count();
 
-                mpsh_packer.push(Datum::UInt64(CastFrom::cast_from(throttled_count)));
+                mpsh_packer.push(Datum::UInt(CastFrom::cast_from(throttled_count)));
 
                 prepared_statement_event = Some(PreparedStatementEvent {
                     prepared_statement: mpsh_row,
@@ -895,7 +895,7 @@ pub(crate) fn pack_statement_execution_inner(
     packer.extend([
         Datum::String(&*transaction_isolation),
         (*execution_timestamp).into(),
-        Datum::UInt64(*transaction_id),
+        Datum::UInt(*transaction_id),
         match &transient_index_id {
             None => Datum::Null,
             Some(transient_index_id) => Datum::String(transient_index_id),

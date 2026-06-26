@@ -1678,7 +1678,7 @@ fn evaluate_partition_by(partition_by: &MirScalarExpr, row: &[Datum]) -> u64 {
     // user-facing `CREATE SINK` docs.
     let temp_storage = RowArena::new();
     match partition_by.eval(row, &temp_storage) {
-        Ok(Datum::UInt64(u)) => u,
+        Ok(Datum::UInt(u)) => u,
         Ok(datum) => {
             // If we are here the only valid type that we should be seeing is
             // null. Anything else is a bug in the planner.

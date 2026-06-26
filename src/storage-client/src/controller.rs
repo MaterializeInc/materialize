@@ -907,10 +907,10 @@ impl WallclockLag {
         }
     }
 
-    /// Convert this lag value into a [`Datum::UInt64`] or [`Datum::Null`].
+    /// Convert this lag value into a [`Datum::UInt`] or [`Datum::Null`].
     pub fn into_uint64_datum(self) -> Datum<'static> {
         match self {
-            Self::Seconds(secs) => Datum::UInt64(secs),
+            Self::Seconds(secs) => Datum::UInt(secs),
             Self::Undefined => Datum::Null,
         }
     }

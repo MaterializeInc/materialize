@@ -241,7 +241,7 @@ Explained Query:
           Map (substr(#1{line}, #2{start}, 1)) // { arity: 4 }
             FlatMap generate_series(1, char_length(#1{line}), 1) // { arity: 3 }
               Project (#1, #2) // { arity: 2 }
-                Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{row_idx}))) // { arity: 3 }
+                Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), #1{row_idx})) // { arity: 3 }
                   CrossJoin type=differential // { arity: 2 }
                     implementation
                       %0:input[×] » %1[×]

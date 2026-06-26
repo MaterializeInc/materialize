@@ -204,30 +204,30 @@ fn reduce_call_binary_identity(e: &mut MirScalarExpr) -> bool {
     // the identity may appear on either side rather than only the right).
     let zero_interval = Datum::Interval(Interval::default());
     let (identity, commutes) = match func {
-        AddInt16(_) => (Datum::Int16(0), true),
-        AddInt32(_) => (Datum::Int32(0), true),
-        AddInt64(_) => (Datum::Int64(0), true),
-        AddUint16(_) => (Datum::UInt16(0), true),
-        AddUint32(_) => (Datum::UInt32(0), true),
-        AddUint64(_) => (Datum::UInt64(0), true),
-        SubInt16(_) => (Datum::Int16(0), false),
-        SubInt32(_) => (Datum::Int32(0), false),
-        SubInt64(_) => (Datum::Int64(0), false),
-        SubUint16(_) => (Datum::UInt16(0), false),
-        SubUint32(_) => (Datum::UInt32(0), false),
-        SubUint64(_) => (Datum::UInt64(0), false),
-        MulInt16(_) => (Datum::Int16(1), true),
-        MulInt32(_) => (Datum::Int32(1), true),
-        MulInt64(_) => (Datum::Int64(1), true),
-        MulUint16(_) => (Datum::UInt16(1), true),
-        MulUint32(_) => (Datum::UInt32(1), true),
-        MulUint64(_) => (Datum::UInt64(1), true),
-        DivInt16(_) => (Datum::Int16(1), false),
-        DivInt32(_) => (Datum::Int32(1), false),
-        DivInt64(_) => (Datum::Int64(1), false),
-        DivUint16(_) => (Datum::UInt16(1), false),
-        DivUint32(_) => (Datum::UInt32(1), false),
-        DivUint64(_) => (Datum::UInt64(1), false),
+        AddInt16(_) => (Datum::Int(0), true),
+        AddInt32(_) => (Datum::Int(0), true),
+        AddInt64(_) => (Datum::Int(0), true),
+        AddUint16(_) => (Datum::UInt(0), true),
+        AddUint32(_) => (Datum::UInt(0), true),
+        AddUint64(_) => (Datum::UInt(0), true),
+        SubInt16(_) => (Datum::Int(0), false),
+        SubInt32(_) => (Datum::Int(0), false),
+        SubInt64(_) => (Datum::Int(0), false),
+        SubUint16(_) => (Datum::UInt(0), false),
+        SubUint32(_) => (Datum::UInt(0), false),
+        SubUint64(_) => (Datum::UInt(0), false),
+        MulInt16(_) => (Datum::Int(1), true),
+        MulInt32(_) => (Datum::Int(1), true),
+        MulInt64(_) => (Datum::Int(1), true),
+        MulUint16(_) => (Datum::UInt(1), true),
+        MulUint32(_) => (Datum::UInt(1), true),
+        MulUint64(_) => (Datum::UInt(1), true),
+        DivInt16(_) => (Datum::Int(1), false),
+        DivInt32(_) => (Datum::Int(1), false),
+        DivInt64(_) => (Datum::Int(1), false),
+        DivUint16(_) => (Datum::UInt(1), false),
+        DivUint32(_) => (Datum::UInt(1), false),
+        DivUint64(_) => (Datum::UInt(1), false),
         // Temporal: an all-zero interval added to or subtracted from a
         // timestamp, time, or interval. (Dates are absent: their interval
         // arithmetic changes the type to timestamp.)
@@ -241,18 +241,18 @@ fn reduce_call_binary_identity(e: &mut MirScalarExpr) -> bool {
         | SubTimeInterval(_) => (zero_interval, false),
         // Bitwise: zero is the identity for or/xor, all-ones for and, and a
         // shift distance of zero (always an `int4`) leaves the value alone.
-        BitOrInt16(_) | BitXorInt16(_) => (Datum::Int16(0), true),
-        BitOrInt32(_) | BitXorInt32(_) => (Datum::Int32(0), true),
-        BitOrInt64(_) | BitXorInt64(_) => (Datum::Int64(0), true),
-        BitOrUint16(_) | BitXorUint16(_) => (Datum::UInt16(0), true),
-        BitOrUint32(_) | BitXorUint32(_) => (Datum::UInt32(0), true),
-        BitOrUint64(_) | BitXorUint64(_) => (Datum::UInt64(0), true),
-        BitAndInt16(_) => (Datum::Int16(-1), true),
-        BitAndInt32(_) => (Datum::Int32(-1), true),
-        BitAndInt64(_) => (Datum::Int64(-1), true),
-        BitAndUint16(_) => (Datum::UInt16(u16::MAX), true),
-        BitAndUint32(_) => (Datum::UInt32(u32::MAX), true),
-        BitAndUint64(_) => (Datum::UInt64(u64::MAX), true),
+        BitOrInt16(_) | BitXorInt16(_) => (Datum::Int(0), true),
+        BitOrInt32(_) | BitXorInt32(_) => (Datum::Int(0), true),
+        BitOrInt64(_) | BitXorInt64(_) => (Datum::Int(0), true),
+        BitOrUint16(_) | BitXorUint16(_) => (Datum::UInt(0), true),
+        BitOrUint32(_) | BitXorUint32(_) => (Datum::UInt(0), true),
+        BitOrUint64(_) | BitXorUint64(_) => (Datum::UInt(0), true),
+        BitAndInt16(_) => (Datum::Int(-1), true),
+        BitAndInt32(_) => (Datum::Int(-1), true),
+        BitAndInt64(_) => (Datum::Int(-1), true),
+        BitAndUint16(_) => (Datum::UInt(u64::from(u16::MAX)), true),
+        BitAndUint32(_) => (Datum::UInt(u64::from(u32::MAX)), true),
+        BitAndUint64(_) => (Datum::UInt(u64::MAX), true),
         BitShiftLeftInt16(_)
         | BitShiftRightInt16(_)
         | BitShiftLeftInt32(_)
@@ -264,7 +264,7 @@ fn reduce_call_binary_identity(e: &mut MirScalarExpr) -> bool {
         | BitShiftLeftUint32(_)
         | BitShiftRightUint32(_)
         | BitShiftLeftUint64(_)
-        | BitShiftRightUint64(_) => (Datum::Int32(0), false),
+        | BitShiftRightUint64(_) => (Datum::Int(0), false),
         // Trimming the empty set of characters.
         Trim(_) | TrimLeading(_) | TrimTrailing(_) => (Datum::String(""), false),
         _ => return false,
@@ -459,9 +459,9 @@ mod tests {
 
     #[mz_ore::test]
     fn identity_operand_folds() {
-        let int32 = [ReprScalarType::Int32.nullable(true)];
+        let int32 = [ReprScalarType::Int.nullable(true)];
         let col = || MirScalarExpr::column(0);
-        let lit = |v| MirScalarExpr::literal_ok(Datum::Int32(v), ReprScalarType::Int32);
+        let lit = |v| MirScalarExpr::literal_ok(Datum::Int(v), ReprScalarType::Int);
 
         // Identity operands fold to the other operand, on either side for
         // commutative functions and on the right for the rest.

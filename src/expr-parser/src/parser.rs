@@ -1384,7 +1384,7 @@ mod analyses {
         let lookahead = input.lookahead1();
 
         let scalar_type = if input.look_and_eat(bigint, &lookahead) {
-            ReprScalarType::Int64
+            ReprScalarType::Int
         } else if input.look_and_eat(double, &lookahead) {
             input.parse::<precision>()?;
             ReprScalarType::Float64
@@ -1393,10 +1393,11 @@ mod analyses {
         } else if input.look_and_eat(character, &lookahead) {
             input.parse::<varying>()?;
             ReprScalarType::String
-        } else if input.look_and_eat(integer, &lookahead) {
-            ReprScalarType::Int32
-        } else if input.look_and_eat(smallint, &lookahead) {
-            ReprScalarType::Int16
+        } else if input.look_and_eat(integer, &lookahead)
+            || input.look_and_eat(smallint, &lookahead)
+        {
+            // int2/int4/int8 all collapse to the unified repr `Int`.
+            ReprScalarType::Int
         } else if input.look_and_eat(text, &lookahead) {
             ReprScalarType::String
         } else {

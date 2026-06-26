@@ -5489,7 +5489,7 @@ mod arrangement_sizes_pruner_tests {
         Row::pack_slice(&[
             Datum::String("r1"),
             Datum::String("u1"),
-            Datum::Int64(123),
+            Datum::Int(123),
             Datum::TimestampTz(dt.try_into().expect("fits in TimestampTz")),
         ])
     }

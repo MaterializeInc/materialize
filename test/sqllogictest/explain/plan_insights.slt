@@ -59,7 +59,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
                   "typ": {
                     "column_types": [
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": true
                       }
                     ],
@@ -160,7 +160,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
                   "typ": {
                     "column_types": [
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": true
                       }
                     ],
@@ -297,7 +297,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -322,7 +322,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 }
                               ],
@@ -339,7 +339,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 }
                               ],
@@ -489,7 +489,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
                   "typ": {
                     "column_types": [
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": true
                       }
                     ],
@@ -656,7 +656,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int32",
+                                "scalar_type": "Int",
                                 "nullable": true
                               }
                             ],
@@ -690,7 +690,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 }
                               ],
@@ -707,7 +707,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                             "typ": {
                               "column_types": [
                                 {
-                                  "scalar_type": "Int32",
+                                  "scalar_type": "Int",
                                   "nullable": true
                                 }
                               ],
@@ -854,7 +854,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
                   "typ": {
                     "column_types": [
                       {
-                        "scalar_type": "Int32",
+                        "scalar_type": "Int",
                         "nullable": true
                       }
                     ],
@@ -996,7 +996,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                               "typ": {
                                 "column_types": [
                                   {
-                                    "scalar_type": "Int32",
+                                    "scalar_type": "Int",
                                     "nullable": true
                                   }
                                 ],
@@ -1044,7 +1044,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                           "typ": {
                             "column_types": [
                               {
-                                "scalar_type": "Int64",
+                                "scalar_type": "Int",
                                 "nullable": false
                               }
                             ],
@@ -1072,7 +1072,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                                             "typ": {
                                               "column_types": [
                                                 {
-                                                  "scalar_type": "Int64",
+                                                  "scalar_type": "Int",
                                                   "nullable": false
                                                 }
                                               ],
@@ -1121,7 +1121,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                                     }
                                   },
                                   {
-                                    "scalar_type": "Int64",
+                                    "scalar_type": "Int",
                                     "nullable": false
                                   }
                                 ]
@@ -1211,7 +1211,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR CREATE VIEW V AS SELECT 1
               "Literal": [
                 {
                   "data": [
-                    45,
+                    50,
                     1
                   ]
                 },

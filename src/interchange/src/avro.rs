@@ -97,8 +97,8 @@ mod tests {
         let valid_pairings = vec![
             (SqlScalarType::Bool, Datum::True, Value::Boolean(true)),
             (SqlScalarType::Bool, Datum::False, Value::Boolean(false)),
-            (SqlScalarType::Int32, Datum::Int32(1), Value::Int(1)),
-            (SqlScalarType::Int64, Datum::Int64(1), Value::Long(1)),
+            (SqlScalarType::Int32, Datum::Int(1), Value::Int(1)),
+            (SqlScalarType::Int64, Datum::Int(1), Value::Long(1)),
             (
                 SqlScalarType::Float32,
                 Datum::Float32(OrderedFloat::from(1f32)),

@@ -91,7 +91,7 @@ mod tests {
         e.reduce(&bool_col);
         assert_eq!(e, col());
 
-        let int32 = [ReprScalarType::Int32.nullable(true)];
+        let int32 = [ReprScalarType::Int.nullable(true)];
         let mut e = col()
             .call_unary(func::BitNotInt32)
             .call_unary(func::BitNotInt32);
@@ -122,14 +122,14 @@ mod tests {
 
         // Integer negation errors on the minimum value, so eliding the double
         // negation would suppress that error; it must not fold.
-        let int64 = [ReprScalarType::Int64.nullable(true)];
+        let int64 = [ReprScalarType::Int.nullable(true)];
         let mut e = col().call_unary(func::NegInt64).call_unary(func::NegInt64);
         e.reduce(&int64);
         assert_ne!(e, col());
 
         // A widening cast roundtrip stays: the outer narrowing can error in
         // general, and the gate does not reason about images.
-        let int32 = [ReprScalarType::Int32.nullable(true)];
+        let int32 = [ReprScalarType::Int.nullable(true)];
         let mut e = col()
             .call_unary(func::CastInt32ToInt64)
             .call_unary(func::CastInt64ToInt32);

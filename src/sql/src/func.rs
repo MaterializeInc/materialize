@@ -3861,7 +3861,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     },
                     vec![
                         e,
-                        HirScalarExpr::literal(Datum::Int32(1), SqlScalarType::Int32),
+                        HirScalarExpr::literal(Datum::Int(1), SqlScalarType::Int32),
                         HirScalarExpr::literal_null(typ),
                     ],
                 );
@@ -3909,7 +3909,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     },
                     vec![
                         e,
-                        HirScalarExpr::literal(Datum::Int32(1), SqlScalarType::Int32),
+                        HirScalarExpr::literal(Datum::Int(1), SqlScalarType::Int32),
                         HirScalarExpr::literal_null(typ),
                     ],
                 );
@@ -3967,7 +3967,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                         func: TableFunc::GenerateSeriesInt32,
                         exprs: vec![
                             start, stop,
-                            HirScalarExpr::literal(Datum::Int32(1), SqlScalarType::Int32),
+                            HirScalarExpr::literal(Datum::Int(1), SqlScalarType::Int32),
                         ],
                     },
                     column_names: vec!["generate_series".into()],
@@ -3988,7 +3988,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                         func: TableFunc::GenerateSeriesInt64,
                         exprs: vec![
                             start, stop,
-                            HirScalarExpr::literal(Datum::Int64(1), SqlScalarType::Int64),
+                            HirScalarExpr::literal(Datum::Int(1), SqlScalarType::Int64),
                         ],
                     },
                     column_names: vec!["generate_series".into()],
@@ -4579,7 +4579,10 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 ecx.require_feature_flag(&vars::ENABLE_LIST_N_LAYERS)?;
                 let d = ecx.scalar_type(&e).unwrap_list_n_layers();
                 match i32::try_from(d) {
-                    Ok(d) => Ok(HirScalarExpr::literal(Datum::Int32(d), SqlScalarType::Int32)),
+                    Ok(d) => Ok(HirScalarExpr::literal(
+                        Datum::Int(i64::from(d)),
+                        SqlScalarType::Int32,
+                    )),
                     Err(_) => sql_bail!("list has more than {} layers", i32::MAX),
                 }
 
@@ -4706,7 +4709,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 => String, oid::FUNC_PRETTY_SQL;
             params!(String) => Operation::unary(|_ecx, s| {
                 let w: i32 = mz_sql_pretty::DEFAULT_WIDTH.try_into().expect("must fit");
-                let width = HirScalarExpr::literal(Datum::Int32(w), SqlScalarType::Int32);
+                let width = HirScalarExpr::literal(Datum::Int(i64::from(w)), SqlScalarType::Int32);
                 Ok(s.call_binary(width, func::PrettySql))
             }) => String, oid::FUNC_PRETTY_SQL_NOWIDTH;
         },
@@ -5382,7 +5385,7 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
                         func: TableFunc::GenerateSeriesUnoptimized,
                         exprs: vec![
                             start, stop,
-                            HirScalarExpr::literal(Datum::Int64(1), SqlScalarType::Int64),
+                            HirScalarExpr::literal(Datum::Int(1), SqlScalarType::Int64),
                         ],
                     },
                     column_names: vec!["generate_series_unoptimized".into()],

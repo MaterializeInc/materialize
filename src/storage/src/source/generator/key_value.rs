@@ -418,10 +418,10 @@ impl TransactionalSnapshotProducer {
             .flat_map(move |key| {
                 rng.fill_bytes(value_buffer.as_mut_slice());
                 let msg = Ok(SourceMessage {
-                    key: Row::pack_slice(&[Datum::UInt64(key)]),
-                    value: Row::pack_slice(&[Datum::UInt64(partition), Datum::Bytes(value_buffer)]),
+                    key: Row::pack_slice(&[Datum::UInt(key)]),
+                    value: Row::pack_slice(&[Datum::UInt(partition), Datum::Bytes(value_buffer)]),
                     metadata: if include_offset {
-                        Row::pack(&[Datum::UInt64(iter_round)])
+                        Row::pack(&[Datum::UInt(iter_round)])
                     } else {
                         Row::default()
                     },
@@ -533,10 +533,10 @@ impl UpdateProducer {
             .flat_map(move |key| {
                 rng.fill_bytes(value_buffer.as_mut_slice());
                 let msg = Ok(SourceMessage {
-                    key: Row::pack_slice(&[Datum::UInt64(key)]),
-                    value: Row::pack_slice(&[Datum::UInt64(partition), Datum::Bytes(value_buffer)]),
+                    key: Row::pack_slice(&[Datum::UInt(key)]),
+                    value: Row::pack_slice(&[Datum::UInt(partition), Datum::Bytes(value_buffer)]),
                     metadata: if include_offset {
-                        Row::pack(&[Datum::UInt64(iter_offset)])
+                        Row::pack(&[Datum::UInt(iter_offset)])
                     } else {
                         Row::default()
                     },

@@ -261,13 +261,13 @@ pub trait SourceTimestamp:
 
 impl SourceTimestamp for MzOffset {
     fn encode_row(&self) -> Row {
-        Row::pack([Datum::UInt64(self.offset)])
+        Row::pack([Datum::UInt(self.offset)])
     }
 
     fn decode_row(row: &Row) -> Self {
         let mut datums = row.iter();
         match (datums.next(), datums.next()) {
-            (Some(Datum::UInt64(offset)), None) => MzOffset::from(offset),
+            (Some(Datum::UInt(offset)), None) => MzOffset::from(offset),
             _ => panic!("invalid row {row:?}"),
         }
     }

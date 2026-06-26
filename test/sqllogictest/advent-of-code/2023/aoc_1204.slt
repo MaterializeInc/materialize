@@ -581,7 +581,7 @@ Explained Query:
         Union // { arity: 2 }
           Get l5 // { arity: 2 }
           Project (#2, #3{count}) // { arity: 2 }
-            Filter (integer_to_bigint(#2{card}) = (integer_to_bigint(#0{card}) + #4{step})) // { arity: 5 }
+            Filter (#2{card} = (#0{card} + #4{step})) // { arity: 5 }
               FlatMap generate_series(1, #1{score}, 1) // { arity: 5 }
                 CrossJoin type=differential // { arity: 4 }
                   implementation

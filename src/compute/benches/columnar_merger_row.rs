@@ -61,7 +61,7 @@ const SIZES: &[(&str, usize)] = &[
 ];
 
 /// Encoded Row payload size estimate used to derive element counts from
-/// byte targets. Each row carries `Datum::Int64(key)` plus a 24-char
+/// byte targets. Each row carries `Datum::Int(key)` plus a 24-char
 /// hex-string suffix; the columnar encoding is not byte-exact but lands
 /// near this number for both representations.
 const ROW_PAYLOAD_BYTES: usize = 32;
@@ -78,7 +78,7 @@ fn make_row(key: u64) -> Row {
     let s = format!("k{:024x}", key);
     let mut row = Row::default();
     row.packer()
-        .extend([Datum::Int64(i64::reinterpret_cast(key)), Datum::String(&s)]);
+        .extend([Datum::Int(i64::reinterpret_cast(key)), Datum::String(&s)]);
     row
 }
 
@@ -162,7 +162,7 @@ fn configs(n: usize) -> [(&'static str, Vec<Tuple>, Vec<Tuple>); 3] {
                     // string-suffix invariant intact.
                     let datums: Vec<Datum> = d.iter().collect();
                     let key = match datums[0] {
-                        Datum::Int64(k) => u64::reinterpret_cast(k) + n_u64,
+                        Datum::Int(k) => u64::reinterpret_cast(k) + n_u64,
                         _ => unreachable!(),
                     };
                     (make_row(key), t, r)

@@ -43,7 +43,7 @@ SELECT ((b - a) / 1) + 1 FROM ident
 ----
 Explained Query:
   Project (#4)
-    Map (((#1{b} - integer_to_bigint(#0{a})) + 1))
+    Map (((#1{b} - #0{a}) + 1))
       ReadStorage materialize.public.ident
 
 Source materialize.public.ident
