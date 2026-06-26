@@ -34,7 +34,6 @@ The MCP server for developers now includes a `query` tool for running `SELECT`, 
   **Upgrade impact**: If you replicate a `YEAR` column that can hold zero values, rows ingested before the upgrade retain their old representation (`0` or `1900`) until the upstream row is modified and re-decoded. To make all rows consistent and avoid potential source errors, drop and recreate the affected source (or subsource/table) after upgrading. Sources without zero-value `YEAR` data require no action.
 
 ### Improvements {#v26.30.1-improvements}
-- **MCP OAuth discovery for Frontegg**: The MCP server now advertises the Frontegg authorization server via RFC 9728 Protected Resource Metadata, enabling MCP clients that use standard OAuth discovery to connect to Materialize's MCP endpoints with Frontegg authentication.
 - **mz-debug OIDC and SASL authentication**: The `mz-debug` diagnostic tool now supports OIDC and SASL authentication modes in addition to password authentication.
 - **Faster LIKE pattern matching**: `LIKE` patterns with multiple `%` wildcards (e.g., `%a%a%a`) no longer exhibit super-linear matching time against long strings, while common patterns like `%substring%` remain on the fast string matcher.
 - **Fivetran Destination restored**: The Fivetran Destination integration, which was removed in v26.29.0, has been restored.
