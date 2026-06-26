@@ -27,22 +27,31 @@ def workflow_default(c: Composition) -> None:
         c.up("materialized")
         base = f"http://localhost:{c.port('materialized', 6876)}"
 
-        # Regression test for database-issues#11340. With `allowed_roles:
-        # Normal`, header-based Basic auth correctly rejects `mz_system`, but
-        # `/api/login` previously did not run the same role check — letting an
-        # internal role obtain a session cookie and bypass the policy on
-        # subsequent requests. Make sure `/api/login` enforces the listener's
-        # role policy directly and never mints a session for a disallowed role.
-        with c.test_case("session_login_rejects_disallowed_role"):
+        # Regression test for database-issues#11340. `/api/login` does not run
+        # the listener's role check itself, so a disallowed role (here
+        # `mz_system` on an `allowed_roles: Normal` listener) can authenticate
+        # and mint a session cookie. Authorization runs per request in the
+        # `http_authz` middleware instead, so that cookie is rejected on every
+        # protected route and the policy still can't be bypassed.
+        with c.test_case("session_cookie_for_disallowed_role_is_rejected"):
             s = requests.Session()
             r = s.post(
                 f"{base}/api/login",
                 json={"username": "mz_system", "password": "password"},
             )
-            assert r.status_code == 401, f"expected 401, got {r.status_code}: {r.text}"
             assert (
-                "mz_session" not in s.cookies
-            ), f"login rejection must not set a session cookie: {s.cookies}"
+                r.status_code == 200
+            ), f"expected login to succeed, got {r.status_code}: {r.text}"
+            assert (
+                "mz_session" in s.cookies
+            ), f"login should mint a session cookie: {s.cookies}"
+
+            # Reusing that session cookie on a protected route is rejected by
+            # the authorization middleware.
+            r = s.post(f"{base}/api/sql", json={"query": "SELECT 1"})
+            assert (
+                r.status_code == 401
+            ), f"expected 401 reusing disallowed-role session, got {r.status_code}: {r.text}"
 
     with c.override(
         Materialized(
