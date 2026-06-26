@@ -279,20 +279,32 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
 1. Install Materialize into a new `materialize-environment` namespace:
 
+   1. If you enabled the `v1` CRD when installing the operator, update
+      `sample-materialize.yaml` to use it.
+      [`v1`](/self-managed-deployments/upgrading/adopting-the-v1-crd/) provides
+      a simplified rollout behavior. In the `Materialize` resource section of
+      the file (`kind: Materialize`):
+      - Change the `apiVersion` from `materialize.cloud/v1alpha1` to
+        `materialize.cloud/v1`.
+      - Remove the `requestRollout` field, if present.
+
+      ```none
+      ---
+      apiVersion: materialize.cloud/v1     # <-- updated
+      kind: Materialize
+      metadata:
+
+      ```
+
+      To use the default `v1alpha1` CRD version instead, leave
+      `sample-materialize.yaml` unchanged.
+
    1. Use the `sample-materialize.yaml` file to create the
       `materialize-environment` namespace and install Materialize:
 
       ```shell
       kubectl apply -f sample-materialize.yaml
       ```
-
-      {{< tip >}}
-      **Optional — use the `v1` CRD.** If you enabled the `v1` CRD on the
-      operator, edit `sample-materialize.yaml` to set `apiVersion:
-      materialize.cloud/v1` and remove any `requestRollout` field before
-      applying. See [Adopting the v1
-      CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/).
-      {{< /tip >}}
 
     1. Verify the installation and check the status:
 

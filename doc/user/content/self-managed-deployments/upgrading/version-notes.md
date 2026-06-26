@@ -4,7 +4,7 @@ description: "Version-specific notes for upgrading Self-Managed Materialize."
 menu:
   main:
     parent: "upgrading"
-    weight: 5
+    weight: 55
 ---
 
 Review the notes for your target version before upgrading. For the general
