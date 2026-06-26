@@ -14,7 +14,14 @@ menu:
 ### `query_system_catalog`
 
 Execute a read-only SQL query restricted to system catalog tables (`mz_*`,
-`pg_catalog`, `information_schema`).
+`pg_catalog`, `information_schema`). The tool does not take a cluster argument;
+the request runs on the catalog server cluster (`mz_catalog_server`).
+
+{{< tip >}}
+For system catalog lookups that can run on the `mz_catalog_server` cluster,
+prefer `query_system_catalog` over the
+[`query`](#query) tool.
+{{</ tip >}}
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -34,6 +41,45 @@ Only one statement per call is allowed. Write operations (`INSERT`, `UPDATE`,
       {
         "type": "text",
         "text": "[\n  [\n    \"quickstart\",\n    \"ready\"\n  ],\n  [\n    \"mcp_cluster\",\n    \"ready\"\n  ]\n]"
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
+### `query`
+
+Available starting in v26.30. Execute a read-only SQL query (`SELECT`, `SHOW`,
+or `EXPLAIN`) against any object the role can access, including system catalog
+and user objects. You must specify a cluster to run `EXPLAIN ANALYZE` and
+queries against user objects.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `cluster` | string | Yes | Exact cluster name the query should run on. |
+| `sql_query` | string | Yes | `SELECT`, `SHOW`, or `EXPLAIN` statement. |
+
+Only one statement per call is allowed. Write operations (`INSERT`, `UPDATE`,
+`CREATE`, etc.) are rejected. To disable the tool, see
+[`enable_mcp_developer_query_tool`](/integrations/mcp-server/mcp-developer-config/).
+
+{{< tip >}}
+For system catalog lookups that can run on the `mz_catalog_server` cluster,
+prefer [`query_system_catalog`](#query_system_catalog) over `query`.
+{{</ tip >}}
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    \"Explained Query (fast path):\\n  →Constant (1 rows)\\n\\nTarget cluster: quickstart\\n\"\n  ]\n]"
       }
     ],
     "isError": false
