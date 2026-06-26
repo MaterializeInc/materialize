@@ -291,7 +291,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
       operator, edit `sample-materialize.yaml` to set `apiVersion:
       materialize.cloud/v1` and remove any `requestRollout` field before
       applying. See [Adopting the v1
-      CRD](/self-managed-deployments/upgrading/#adopting-the-v1-crd).
+      CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/).
       {{< /tip >}}
 
     1. Verify the installation and check the status:

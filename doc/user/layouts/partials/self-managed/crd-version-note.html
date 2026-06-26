@@ -5,7 +5,7 @@
        does for markdown links, so the raw <a> resolves under the deployed
        subdirectory. */ -}}
 {{- $base := strings.TrimRight "/" (urls.Parse site.BaseURL).Path -}}
-{{- $adopt := printf "%s/self-managed-deployments/upgrading/#adopting-the-v1-crd" $base -}}
+{{- $adopt := printf "%s/self-managed-deployments/upgrading/adopting-the-v1-crd/" $base -}}
 {{- if eq $v "v1alpha1" -}}
 <p><code>v1alpha1</code> is the default CRD version. With <code>v1alpha1</code>, rollouts require manually rotating a UUID. For a simplified rollout behavior, see <a href="{{ $adopt }}">Adopting the v1 CRD</a>.</p>
 {{- else -}}

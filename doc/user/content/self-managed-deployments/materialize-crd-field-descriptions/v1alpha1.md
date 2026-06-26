@@ -8,10 +8,12 @@ menu:
 ---
 
 {{< note >}}
-`v1alpha1` is the default CRD version (used before v26.30 and still the default).
+`v1alpha1` is the default CRD version (default). With v1alpha1, rollouts require manually rotating a UUID.
 Starting in v26.30, the [v1](/self-managed-deployments/materialize-crd-field-descriptions/v1/)
-CRD is available; to get its automatic-rollout behavior, see [Adopting the v1
-CRD](/self-managed-deployments/upgrading/#adopting-the-v1-crd).
+CRD is available and provides a simplified rollout behavior.
+
+To switch to `v1`, see [Adopting the v1
+CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/).
 {{</ note >}}
 
 {{% self-managed/materialize-crd-descriptions-v1alpha1 %}}

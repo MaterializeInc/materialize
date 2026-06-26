@@ -2,8 +2,13 @@
   content: |
     When upgrading:
 
-    - **Always** check the [version specific upgrade
-      notes](/self-managed-deployments/upgrading/#version-specific-upgrade-notes).
+    - **Always** check the [version-specific upgrade
+      notes](/self-managed-deployments/upgrading/version-notes/) for your target
+      version:
+      - [Upgrading to `v26.30` and later versions](/self-managed-deployments/upgrading/version-notes/#upgrading-to-v2630-and-later-versions)
+      - [Upgrading to `v26.1` and later versions](/self-managed-deployments/upgrading/version-notes/#upgrading-to-v261-and-later-versions)
+      - [Upgrading to `v26.0`](/self-managed-deployments/upgrading/version-notes/#upgrading-to-v260)
+      - [Upgrading between minor versions less than `v26`](/self-managed-deployments/upgrading/version-notes/#upgrading-between-minor-versions-less-than-v26)
 
     - {{< include-from-yaml data="self_managed/upgrades" name="upgrade-order-rule" >}}
 
@@ -134,7 +139,7 @@
        Select the tab for the CRD API version your deployment currently uses.
        This step does not cover migrating from `v1alpha1` to `v1`; to migrate,
        see [Adopting the v1
-       CRD](/self-managed-deployments/upgrading/#adopting-the-v1-crd). (The `v1`
+       CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/). (The `v1`
        CRD API version is available starting in Materialize v26.30 / Terraform
        module v3.0.15.)
 
@@ -220,7 +225,7 @@
     Select the tab for the CRD API version your deployment currently uses. This
     step does not cover migrating from `v1alpha1` to `v1`; to migrate, see
     [Adopting the v1
-    CRD](/self-managed-deployments/upgrading/#adopting-the-v1-crd). (The `v1`
+    CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/). (The `v1`
     CRD API version is available starting in Materialize v26.30 / Terraform
     module v3.0.15.)
 

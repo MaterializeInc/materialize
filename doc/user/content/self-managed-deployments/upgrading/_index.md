@@ -93,105 +93,23 @@ helm upgrade -n materialize my-demo materialize/operator \
 
 ## Upgrading Materialize Instances
 
-After upgrading the operator, upgrade each Materialize instance to the operator's
-**App Version** by updating its `environmentdImageRef`. For step-by-step
-instructions, use the [upgrade guide](#upgrade-guides) for your environment
-(Kind, AWS, Azure, or GCP). This section describes the rollout behavior those
-guides rely on.
-
-### CRD API versions
-
-Starting in v26.30, the Materialize Operator supports two CRD API versions:
-
-- **v1alpha1** (default) uses a two-step rollout: first stage the spec change,
-  then trigger a rollout with a new `requestRollout` UUID.
-- **v1** simplifies upgrades — rollouts trigger automatically when spec fields
-  change, removing the need to manually set a `requestRollout` UUID.
-
-Adopting v1 is **opt-in** for now. Upgrading the operator to v26.30+ does not
-change your existing v1alpha1 CRs or their behavior; you can continue using
-v1alpha1 and adopt v1 for individual instances at your own pace.
-
-{{< important >}}
-In the next major release, all Materialize CRs will be force upgraded to v1. You
-will still be able to apply v1alpha1 CRs, but they will be auto-converted to v1
-and use the v1 rollout behavior. We recommend opting in to v1 at your convenience
-to migrate on your own schedule before the upgrade is mandatory.
-{{< /important >}}
-
-## Adopting the v1 CRD
-
-Adopting v1 is opt-in and does not trigger a rollout on its own. Before you
-begin, ensure you have completed the prerequisites in the [v26.30 upgrade
-notes](#upgrading-to-v2630-and-later-versions) (cert-manager, network/firewall
-changes), and have enabled the v1 CRD by setting the Helm value
-`operator.args.installV1CRD=true` on the operator. Without this value, the
-operator only installs the v1alpha1 CRD version, and the Kubernetes API server
-rejects v1 CRs.
-
-### How it works
-
-The v1alpha1 CRD remains the storage version. When you submit a v1 CR, the
-operator's conversion webhook automatically converts it to v1alpha1 for storage.
-During conversion, the webhook computes a SHA256 hash of a subset of the spec
-fields and derives a deterministic `requestRollout` UUID from it. The hash covers
-the fields that affect the running `environmentd` (for example,
-`environmentdImageRef`, `environmentdExtraArgs`, `environmentdExtraEnv`, resource
-requirements, `podAnnotations`, `podLabels`, `authenticatorKind`, `enableRbac`,
-`rolloutStrategy`, and `forceRollout`). It excludes fields that do not require a
-rollout, such as `balancerd`/`console` resource requirements and replica counts.
-The operator triggers a rollout whenever `requestRollout` differs from the last
-completed rollout, so:
-
-- **Adopting v1 on an existing v1alpha1 instance typically triggers one
-  rollout.** The derived `requestRollout` is computed from the spec hash and will
-  not match the `requestRollout` you previously set by hand, so the instance
-  rolls out once even if nothing else in the spec changed. Adopt v1 during a
-  window where a rollout is acceptable.
-- **Once on v1, an unchanged spec does not trigger a rollout.** Reapplying the
-  same spec produces the same hash and the same derived `requestRollout`.
-  Changing a hashed spec field produces a new value and triggers a rollout
-  automatically.
-
-### Using kubectl
-
-To adopt v1 for an existing instance, apply your CR with `apiVersion:
-materialize.cloud/v1` and remove the `requestRollout` field:
-
-```shell
-kubectl apply -f - <<EOF
-apiVersion: materialize.cloud/v1
-kind: Materialize
-metadata:
-  name: <instance-name>
-  namespace: <materialize-instance-namespace>
-spec:
-  environmentdImageRef: <current-image-ref>
-  backendSecretName: <backend-secret-name>
-  # ... other spec fields (copy from your existing CR, removing requestRollout)
-EOF
-```
-
-### Using Terraform
-
-If you are managing your Materialize instance with the [Materialize Terraform
-modules](https://github.com/MaterializeInc/materialize-terraform-self-managed),
-set:
-
-```hcl
-crd_version     = "v1"
-request_rollout = null
-```
-
-### Returning to the v1alpha1 behavior
-
-You can go back to the v1alpha1 rollout behavior at any time by applying your CR
-with `apiVersion: materialize.cloud/v1alpha1` and an explicit `requestRollout`
-UUID.
+After upgrading the operator, upgrade each Materialize instance to the
+operator's **App Version** by updating its `environmentdImageRef`. For
+step-by-step instructions, use the [upgrade guide](#upgrade-guides) for your
+environment (Kind, AWS, Azure, or GCP). This section explains how instance
+rollouts work.
 
 ## Rollout configuration
 
-How you trigger a rollout depends on your CRD API version.
+Materialize supports two CRD API versions: `v1alpha1` (default) and `v1`
+(available starting in v26.30).
+
+How you trigger a rollout depends on the CRD API version of your instances.
+
+{{< tip >}}
+To migrate a `v1alpha1` instance to `v1`, see
+[Adopting the v1 CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/).
+{{< /tip >}}
 
 {{< tabs >}}
 {{< tab "v1alpha1" >}}
@@ -226,22 +144,25 @@ kubectl patch materialize <instance-name> \
 {{< /tab >}}
 {{< tab "v1" >}}
 
-With v1, the operator computes a hash of the spec fields and automatically
-triggers a rollout when the hash changes — there is no `requestRollout` field.
+With v1, updating the spec automatically triggers a rollout and there is no
+`requestRollout` field. For details on the underlying mechanism, see [How it
+works](/self-managed-deployments/upgrading/adopting-the-v1-crd/#how-it-works).
 
-Specify a new `UUID` value for `forceRollout` to trigger a rollout even when
-there are no other changes to the instance. The `forceRollout` value is included
-in the hash, so changing it produces a new hash and triggers a rollout. Set it in
-your manifest and reapply:
+To trigger a rollout even when there are no other changes to the instance,
+specify a new `UUID` value for `forceRollout`. That is:
 
-```yaml
-spec:
-  forceRollout: <new-uuid>  # e.g. the output of `uuidgen`
-```
+- Set it in your manifest:
 
-```shell
-kubectl apply -f materialize.yaml
-```
+  ```yaml
+  spec:
+    forceRollout: <new-uuid>  # e.g. the output of `uuidgen`
+  ```
+
+- Then reapply.
+
+  ```shell
+  kubectl apply -f materialize.yaml
+  ```
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -376,25 +297,13 @@ kubectl apply -f previous_materialize_configuration.yaml
 {{< /tab >}}
 {{< /tabs >}}
 
-## Version Specific Upgrade Notes
-
-### Upgrading to `v26.30` and later versions
-
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.30.md" >}}
-
-### Upgrading to `v26.1` and later versions
-
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.1.md" >}}
-
-### Upgrading to `v26.0`
-
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
-
-### Upgrading between minor versions less than `v26`
- - Prior to `v26`, you must upgrade at most one minor version at a time. For
-   example, upgrading from `v25.1.5` to `v25.2.16` is permitted.
-
 ## See also
+
+- [Version-specific upgrade
+  notes](/self-managed-deployments/upgrading/version-notes/)
+
+- [Adopting the v1
+  CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/)
 
 - [Materialize Operator
   Configuration](/self-managed-deployments/operator-configuration/)

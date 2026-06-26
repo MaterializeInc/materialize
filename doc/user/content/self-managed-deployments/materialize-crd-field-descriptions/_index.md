@@ -13,5 +13,5 @@ aliases:
 
 Select the CRD API version for your Materialize deployment:
 
-- [v1 (available starting v26.30+)](/self-managed-deployments/materialize-crd-field-descriptions/v1/)
-- [v1alpha1 (before v26.30)](/self-managed-deployments/materialize-crd-field-descriptions/v1alpha1/)
+- [v1 (Available starting v26.30+)](/self-managed-deployments/materialize-crd-field-descriptions/v1/)
+- [v1alpha1 (*default*)](/self-managed-deployments/materialize-crd-field-descriptions/v1alpha1/)
