@@ -108,6 +108,11 @@ steps:
       - id: unused-deps
         label: Unused dependencies
         command: bin/ci-builder run nightly bin/unused-deps
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
         depends_on: []
         timeout_in_minutes: 45
         agents:
@@ -117,6 +122,11 @@ steps:
       - id: check-package-isolation
         label: Package-isolated cargo check
         command: bin/ci-builder run stable bin/check-package-isolation
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
         depends_on: []
         timeout_in_minutes: 60
         parallelism: 8
@@ -127,6 +137,9 @@ steps:
       - id: cargo-deny-check-advisories
         label: Security advisories
         command: bin/ci-builder run stable cargo deny check advisories
+        inputs:
+          - Cargo.lock
+          - deny.toml
         depends_on: []
         timeout_in_minutes: 20
         agents:
