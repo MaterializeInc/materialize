@@ -157,6 +157,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_enable_s3_lgalloc_noncc_sizes", "true", ["true", "false"]
         ),
+        VariableSystemParameter(
+            "persist_source_fetch_concurrency", "1", ["1", "2", "8", "16"]
+        ),
         # -----
         # Others (ordered by name),
         VariableSystemParameter(
