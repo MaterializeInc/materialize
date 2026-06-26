@@ -313,6 +313,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SNAPSHOT)
         .add(&crate::cfg::SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES)
+        .add(&crate::cfg::SOURCE_FETCH_CONCURRENCY)
         .add(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS)
         .add(&COMPACTION_HEURISTIC_MIN_INPUTS)
         .add(&COMPACTION_HEURISTIC_MIN_PARTS)
@@ -499,6 +500,17 @@ pub const SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES: Config<usize> = Config::new(
     0,
     "While catching up to the hydration-time upper, the persist source coalesces \
      frontier downgrades until this many encoded bytes have been emitted (0 disables).",
+);
+
+/// Maximum number of part fetches the persist source issues concurrently, per
+/// worker. Concurrent fetches amortize the blob-store round-trip, which
+/// dominates when there are many small parts (e.g. a fine-grained hydration
+/// replay). `1` keeps the previous serial behavior.
+pub const SOURCE_FETCH_CONCURRENCY: Config<usize> = Config::new(
+    "persist_source_fetch_concurrency",
+    1,
+    "Maximum number of part fetches the persist source issues concurrently per worker \
+     (1 = serial).",
 );
 
 /// Migrate snapshots to use the critical since when opening a new read handle.
