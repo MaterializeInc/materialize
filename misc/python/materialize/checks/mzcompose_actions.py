@@ -18,6 +18,9 @@ from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.listener_config import (
+    resolve_listeners_config_path,
+)
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
@@ -86,12 +89,16 @@ class StartMz(MzcomposeAction):
         )
         print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
 
-        listeners_config_path = (
-            f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/testdrive.json"
+        # SASL listeners arrived in v0.158.0, so only newer versions get the
+        # sasl variant.
+        config_name = (
+            "testdrive_sasl"
+            if not self.tag or self.tag >= MzVersion.parse_mz("v0.158.0-dev")
+            else "testdrive"
         )
-
-        if not self.tag or self.tag >= MzVersion.parse_mz("v0.158.0-dev"):
-            listeners_config_path = f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/testdrive_sasl.json"
+        listeners_config_path = resolve_listeners_config_path(
+            self.tag or MzVersion.parse_cargo(), config_name
+        )
 
         mz = Materialized(
             name=self.mz_service,
