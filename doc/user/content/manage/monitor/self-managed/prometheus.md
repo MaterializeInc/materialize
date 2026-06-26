@@ -16,7 +16,7 @@ This guide walks you through the steps required to monitor the performance and
 overall health of your Materialize instance using Prometheus and Grafana.
 
 {{< important >}}
-Every monitoring setup is unique, so be sure to adopt the steps in this guide to your specific environment and requirements.
+Every monitoring setup is unique, so be sure to adapt the steps in this guide to your specific environment and requirements.
 {{< /important >}}
 
 ## Before you begin
@@ -89,8 +89,8 @@ Be sure to consult the documentation of the Prometheus Helm chart you are using 
 
     ![Image of Grafana datasource setup](/images/self-managed/grafana-prometheus-datasource-setup.png)
 
-4. Download dashboards from our [Grafana dashboards repository](https://materializeinc.github.io/materialize-monitoring/dashboards/grafana/)
+5. Download dashboards from our [Grafana dashboards repository](https://materializeinc.github.io/materialize-monitoring/dashboards/grafana/)
 
-5. [Import the dashboards using the Prometheus data source](https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/import-dashboards/#importing-a-dashboard)
+6. [Import the dashboards using the Prometheus data source](https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/import-dashboards/#importing-a-dashboard)
 
     ![Image of Grafana](/images/self-managed/grafana-monitoring-success.png)
