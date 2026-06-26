@@ -224,6 +224,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     default_timestamp_interval
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
+    enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
     enable_alter_table_add_column
     enable_binary_date_bin
@@ -417,6 +418,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     webhooks_secrets_caching_ttl_secs
     with_0dt_caught_up_check_allowed_lag
     with_0dt_caught_up_check_cutoff
+    with_0dt_caught_up_check_stability_period
     with_0dt_deployment_ddl_check_interval
     """.split())
 

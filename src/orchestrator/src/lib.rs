@@ -93,6 +93,11 @@ pub struct ServiceEvent {
     pub service_id: String,
     pub process_id: u64,
     pub status: ServiceStatus,
+    /// Cumulative number of times the underlying process has restarted, as
+    /// reported by the orchestrator. Monotonic for the lifetime of a process,
+    /// but can reset (e.g. when a pod is recreated). Orchestrators that don't
+    /// track restarts report 0.
+    pub restart_count: u64,
     pub time: DateTime<Utc>,
 }
 
