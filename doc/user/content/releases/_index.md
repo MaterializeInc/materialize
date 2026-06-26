@@ -22,8 +22,16 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 ### PostgreSQL Physical Replica Support {#v26.30-postgresql-physical-replica-support}
 Materialize now supports replicating from a physical PostgreSQL replica (hot standby), not just the primary server. This enables setups where the replication load is offloaded from the primary to a read replica.
 
+### MCP Developer Query Tool {#v26.30-mcp-developer-query-tool}
+The MCP developer endpoint now includes a `query` tool for running `SELECT`, `SHOW`, and `EXPLAIN` queries against user objects and clusters, mirroring the agent endpoint's query capability.
+
+### Advisory {#v26.30-advisory}
+
+- **MySQL zero-value YEAR columns**: This release changes how the MySQL source decodes zero-value `YEAR` columns (`0000`). Previously, zero values were decoded inconsistently: as `0` during the initial snapshot and as `1900` (an invalid year) from the binlog. Both are now decoded as the 4-digit string `0000`, matching MySQL's own representation. Non-zero years (1901–2155) are unaffected.
+
+  **Upgrade impact**: If you replicate a `YEAR` column that can hold zero values, rows ingested before the upgrade retain their old representation (`0` or `1900`) until the upstream row is modified and re-decoded. To make all rows consistent and avoid potential source errors, drop and recreate the affected source (or subsource/table) after upgrading. Sources without zero-value `YEAR` data require no action.
+
 ### Improvements {#v26.30-improvements}
-- **MCP developer query tool**: The MCP developer endpoint now includes a `query` tool for running `SELECT`, `SHOW`, and `EXPLAIN` queries against user objects and clusters, mirroring the agent endpoint's query capability.
 - **MCP OAuth discovery for Frontegg**: The MCP server now advertises the Frontegg authorization server via RFC 9728 Protected Resource Metadata, enabling MCP clients that use standard OAuth discovery to connect to Materialize's MCP endpoints with Frontegg authentication.
 - **mz-debug OIDC and SASL authentication**: The `mz-debug` diagnostic tool now supports OIDC and SASL authentication modes in addition to password authentication.
 - **Faster LIKE pattern matching**: `LIKE` patterns with multiple `%` wildcards (e.g., `%a%a%a`) no longer exhibit super-linear matching time against long strings, while common patterns like `%substring%` remain on the fast string matcher.
@@ -135,12 +143,6 @@ CREATE SINK my_gcp_iceberg_sink
 ```
 
 For more information, see [Syntax: CREATE SINK... INTO ICEBERG](/sql/create-sink/iceberg).
-
-### Advisory {#v26.29-advisory}
-
-- **MySQL zero-value YEAR columns**: This release changes how the MySQL source decodes zero-value `YEAR` columns (`0000`). Previously, zero values were decoded inconsistently: as `0` during the initial snapshot and as `1900` (an invalid year) from the binlog. Both are now decoded as the 4-digit string `0000`, matching MySQL's own representation. Non-zero years (1901–2155) are unaffected.
-
-  **Upgrade impact**: If you replicate a `YEAR` column that can hold zero values, rows ingested before the upgrade retain their old representation (`0` or `1900`) until the upstream row is modified and re-decoded. To make all rows consistent and avoid potential source errors, drop and recreate the affected source (or subsource/table) after upgrading. Sources without zero-value `YEAR` data require no action.
 
 ### Improvements {#v26.29-improvements}
 - **Correct SQLSTATEs for evaluation errors**: Evaluation errors such as division by zero, out-of-range casts, and invalid input now return their correct PostgreSQL-standard SQLSTATE codes instead of the generic `XX000` (internal error).
