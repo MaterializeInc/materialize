@@ -273,7 +273,8 @@ where
             rollups_to_remove_from_state,
         );
 
-        let mut states = if GC_USE_ACTIVE_GC.get(&machine.applier.cfg) {
+        let use_active_gc = GC_USE_ACTIVE_GC.get(&machine.applier.cfg);
+        let mut states = if use_active_gc {
             let diffs = machine
                 .applier
                 .state_versions
@@ -398,28 +399,42 @@ where
             .gc_seqno_held_parts
             .set(u64::cast_from(seqno_held_parts));
 
-        // verify that the "current" state (as of `fetch_all_live_states`) contains
-        // a rollup to the earliest state we fetched. this invariant isn't affected
-        // by the GC work we just performed, but it is a property of GC correctness
-        // overall / is a convenient place to run the assertion.
-        let valid_pre_gc_state = states
-            .state()
-            .collections
-            .rollups
-            .contains_key(&initial_seqno);
+        // verify that the current state contains a rollup to the earliest state
+        // we fetched. this invariant isn't affected by the GC work we just
+        // performed, but it is a property of GC correctness overall / is a
+        // convenient place to run the assertion.
+        //
+        // The check is only meaningful when `states` was built from
+        // `fetch_all_live_states`, where iterating to the end leaves
+        // `states.state()` at the genuine current state. Under active GC we only
+        // fetch diffs through `seqno_since`, so `states.state()` is the
+        // reconstructed state at `seqno_since`, not the current state. A rollup's
+        // entry is inserted into the rollups map by the `add_rollup` transition
+        // at a seqno strictly greater than the seqno it rolls up; when
+        // `seqno_since` precedes that insertion the reconstructed state legitimately
+        // lacks the entry and this check would false-fire. The active-GC path
+        // already validates the same invariant against fresh data when it resolves
+        // the rollup for `initial_seqno` above.
+        if !use_active_gc {
+            let valid_pre_gc_state = states
+                .state()
+                .collections
+                .rollups
+                .contains_key(&initial_seqno);
 
-        // this should never be true in the steady-state, but may be true the
-        // first time GC runs after fixing any correctness bugs related to our
-        // state version invariants. we'll make it an error so we can track
-        // any violations in Sentry, but opt not to panic because the root
-        // cause of the violation cannot be from this GC run (in fact, this
-        // GC run, assuming it's correct, should have fixed the violation!)
-        soft_assert_or_log!(
-            valid_pre_gc_state,
-            "earliest state fetched during GC did not have corresponding rollup: rollups = {:?}, state seqno = {}",
-            states.state().collections.rollups,
-            initial_seqno
-        );
+            // this should never be true in the steady-state, but may be true the
+            // first time GC runs after fixing any correctness bugs related to our
+            // state version invariants. we'll make it an error so we can track
+            // any violations in Sentry, but opt not to panic because the root
+            // cause of the violation cannot be from this GC run (in fact, this
+            // GC run, assuming it's correct, should have fixed the violation!)
+            soft_assert_or_log!(
+                valid_pre_gc_state,
+                "earliest state fetched during GC did not have corresponding rollup: rollups = {:?}, state seqno = {}",
+                states.state().collections.rollups,
+                initial_seqno
+            );
+        }
 
         report_step_timing(
             &machine
