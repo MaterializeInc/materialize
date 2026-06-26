@@ -1477,6 +1477,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: launchdarkly-flag-consistency
+        branches: "main"
 
   - group: E2E
     key: e2e
