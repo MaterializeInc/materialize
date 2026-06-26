@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
-use mz_adapter_types::dyncfgs::ENABLE_EXPRESSION_CACHE;
+use mz_adapter_types::dyncfgs::{
+    ENABLE_CONSOLE_CLUSTER_UTILIZATION_RECENT_INDEX, ENABLE_EXPRESSION_CACHE,
+};
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, ObjectType, VersionedEvent,
 };
@@ -195,7 +197,10 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let new_builtin_collections = add_new_remove_old_builtin_items_migration(&mut txn)?;
+            let new_builtin_collections = add_new_remove_old_builtin_items_migration(
+                &mut txn,
+                &config.system_parameter_defaults,
+            )?;
             let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
                 system_cluster: config.builtin_system_cluster_config,
                 catalog_server_cluster: config.builtin_catalog_server_cluster_config,
@@ -747,6 +752,7 @@ impl CatalogState {
 /// Returns the list of new builtin [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
+    system_parameter_defaults: &BTreeMap<String, String>,
 ) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
     let mut new_builtin_mappings = Vec::new();
     // Used to validate unique descriptions.
@@ -755,7 +761,36 @@ fn add_new_remove_old_builtin_items_migration(
     // We compare the builtin items that are compiled into the binary with the builtin items that
     // are persisted in the catalog to discover new and deleted builtin items.
     let mut builtins = Vec::new();
+
+    // Builtin indexes whose creation is gated behind a system flag. When the
+    // flag is off at boot the index is skipped here, so an existing one is
+    // dropped (indexes are exempt from the deletion guard below) and a new one
+    // is not created, removing its maintained arrangement and hydration cost.
+    let gated_off_indexes: BTreeSet<&str> = [(
+        "mz_console_cluster_utilization_recent_ind",
+        ENABLE_CONSOLE_CLUSTER_UTILIZATION_RECENT_INDEX.name(),
+    )]
+    .into_iter()
+    .filter(|&(_, flag)| {
+        // Effective value at boot: persisted or LaunchDarkly-synced system
+        // config, else a launch-time default, else the dyncfg default
+        // (enabled). Launch defaults aren't in the catalog txn yet at this
+        // point, so consult both sources.
+        let value = txn
+            .get_system_config(flag)
+            .or_else(|| system_parameter_defaults.get(flag).cloned());
+        match value {
+            Some(v) => !matches!(v.trim().to_lowercase().as_str(), "true" | "on" | "t" | "1"),
+            None => false,
+        }
+    })
+    .map(|(index_name, _)| index_name)
+    .collect();
+
     for builtin in BUILTINS::iter() {
+        if matches!(builtin, Builtin::Index(_)) && gated_off_indexes.contains(builtin.name()) {
+            continue;
+        }
         let desc = SystemObjectDescription {
             schema_name: builtin.schema().to_string(),
             object_type: builtin.catalog_item_type(),

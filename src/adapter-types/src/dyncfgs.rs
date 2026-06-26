@@ -127,6 +127,17 @@ pub const ENABLE_PASSWORD_AUTH: Config<bool> = Config::new(
     "Enable password authentication.",
 );
 
+/// Whether to create the `mz_console_cluster_utilization_recent` index on
+/// `mz_catalog_server`. Gating only the index (the view is free) lets an
+/// operator drop its maintained arrangement without a binary change, e.g. on a
+/// resource-constrained self-managed environment where it would otherwise grow
+/// `mz_catalog_server`'s memory or stall an upgrade at hydration.
+pub const ENABLE_CONSOLE_CLUSTER_UTILIZATION_RECENT_INDEX: Config<bool> = Config::new(
+    "enable_console_cluster_utilization_recent_index",
+    true,
+    "Create the mz_console_cluster_utilization_recent index on mz_catalog_server.",
+);
+
 /// OIDC issuer URL.
 pub const OIDC_ISSUER: Config<Option<&'static str>> =
     Config::new("oidc_issuer", None, "OIDC issuer URL.");
@@ -333,6 +344,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_PASSWORD_AUTH)
+        .add(&ENABLE_CONSOLE_CLUSTER_UTILIZATION_RECENT_INDEX)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
         .add(&OIDC_AUTHENTICATION_CLAIM)
