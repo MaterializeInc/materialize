@@ -857,10 +857,12 @@ impl MirScalarExpr {
     /// dominating operand (`false`/`true`), not a NULL one, absorbs another
     /// operand's error, so recombining a could-error operand can change whether a
     /// row errors (e.g. `a OR (a AND <err>)` raises for a NULL `a`, but
-    /// undistributes to `a`). Operands common to every disjunct are factored out
-    /// unchanged and stay sound, which is what lets a shared temporal filter like
-    /// `mz_now() < <expr>` (whose cast can error) be factored out, as the renderer
-    /// requires.
+    /// undistributes to `a`).
+    ///
+    /// Temporal predicates are exempt (see the `contains_temporal` check): a
+    /// shared `mz_now() <op> t` must stay liftable out of the OR or the dataflow
+    /// can't be planned, and `mz_now()` is unmaterializable so there is no runtime
+    /// error to preserve.
     fn undistribution_preserves_errors(&self) -> bool {
         let MirScalarExpr::CallVariadic {
             func: func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
@@ -869,6 +871,14 @@ impl MirScalarExpr {
         else {
             return true;
         };
+        // A shared temporal predicate (`mz_now() <op> t`) must stay liftable out
+        // of the OR, else the renderer can't extract its time bound and the view
+        // fails to plan (and an existing one fails to re-optimize on upgrade,
+        // halting environmentd). `mz_now()` is unmaterializable, so it carries no
+        // runtime value and there is no error semantics to preserve here anyway.
+        if self.contains_temporal() {
+            return true;
+        }
         // Fast path for the common case: with no erroring operand there is
         // nothing to preserve, so skip the per-operand bookkeeping below.
         // `could_error` recurses, so this also covers nested operands.
@@ -2593,6 +2603,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[mz_ore::test]
+    fn test_reduce_and_or_undistributes_temporal_despite_noncommon_error() {
+        // CLU-137: a temporal predicate `T = mz_now() < t` shared by every
+        // disjunct must still be factored out even when a disjunct also carries a
+        // *non-common* operand that could error (here `(#3 / #4) > 0`). Factoring
+        // T out is not error-preserving in that case, but the error-preservation
+        // guard exempts temporal predicates: T must stay extractable or the view
+        // can't be planned (and an existing one fails to re-optimize on upgrade).
+        let types = vec![
+            ReprScalarType::Bool.nullable(true),        // #0
+            ReprScalarType::Bool.nullable(true),        // #1
+            ReprScalarType::MzTimestamp.nullable(true), // #2
+            ReprScalarType::Int32.nullable(true),       // #3
+            ReprScalarType::Int32.nullable(true),       // #4
+        ];
+        let col = MirScalarExpr::column;
+        let temporal = || {
+            MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
+                .call_binary(col(2), func::Lt)
+        };
+        let noncommon_err = || {
+            col(3).call_binary(col(4), func::DivInt32).call_binary(
+                MirScalarExpr::literal_ok(Datum::Int32(0), ReprScalarType::Int32),
+                func::Gt,
+            )
+        };
+
+        // `(#0 AND T) OR (#1 AND T AND E)`: T common, E non-common, both could_error.
+        let mut reduced = col(0)
+            .and(temporal())
+            .or(col(1).and(temporal()).and(noncommon_err()));
+        reduced.reduce(&types);
+
+        // T is lifted to a top-level AND conjunct, so the renderer can extract it.
+        let factored_out = matches!(
+            &reduced,
+            MirScalarExpr::CallVariadic { func: VariadicFunc::And(_), exprs }
+                if exprs.contains(&temporal())
+        );
+        assert!(
+            factored_out,
+            "temporal predicate not factored out: {reduced:?}"
+        );
     }
 
     #[mz_ore::test]

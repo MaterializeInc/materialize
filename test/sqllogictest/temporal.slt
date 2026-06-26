@@ -482,31 +482,34 @@ query I rowsort
 SELECT * FROM clu137_mv AS OF 25;
 ----
 
-# a non-common operand that could error keeps the shared temporal predicate
-# buried in the OR (factoring it out would change error semantics), so
-# extraction rejects it at plan time. A clean error, not a crash.
+# A temporal predicate shared by every disjunct must stay extractable even when
+# a disjunct also has a non-common operand that could error (here
+# `(100 / divisor) > 0`). `undistribute_and_or` exempts temporal predicates from
+# its error-preservation guard, so `mz_now() < valid_until` is still factored out
+# of the OR and the view builds. Without the exemption it would fail to plan,
+# which would also break re-optimization of an existing such view on upgrade.
 statement ok
 CREATE VIEW clu137_fallible (active, label, divisor, valid_until) AS VALUES
     (true, CAST(NULL AS text), 5, 10),
     (true, '',                 5, 20);
 
-# `(100 / divisor) > 0` (can error) sits in only the second disjunct.
-statement error Unsupported temporal predicate
+statement ok
 CREATE MATERIALIZED VIEW clu137_fallible_mv AS
 SELECT valid_until FROM clu137_fallible
 WHERE (active AND label IS NULL AND mz_now() < valid_until)
    OR (active AND label = '' AND mz_now() < valid_until AND (100 / divisor) > 0);
 
-# But a fallible operand common to every disjunct factors out fine: the limit is
-# commonality, not fallibility.
-statement ok
-CREATE MATERIALIZED VIEW clu137_common_fallible_mv AS
-SELECT valid_until FROM clu137_fallible
-WHERE (active AND label IS NULL AND mz_now() < valid_until AND (100 / divisor) > 0)
-   OR (active AND label = '' AND mz_now() < valid_until AND (100 / divisor) > 0);
-
 query I rowsort
-SELECT * FROM clu137_common_fallible_mv AS OF 5;
+SELECT * FROM clu137_fallible_mv AS OF 5;
 ----
 10
 20
+
+query I rowsort
+SELECT * FROM clu137_fallible_mv AS OF 15;
+----
+20
+
+query I rowsort
+SELECT * FROM clu137_fallible_mv AS OF 25;
+----
