@@ -10,6 +10,9 @@ Guide][google-guide], which is well worth a read if you are unfamiliar. There
 are no notable conflicts between Google's guide and ours, but see the
 [Deviations from Google](#deviations) section for details.
 
+This is a guide, and there will be exceptions.  Use your best judgement when
+deviating from the guidelines.
+
 ## TL;DR
 
 The salient points, each linking to its detailed section below.
@@ -20,7 +23,7 @@ The salient points, each linking to its detailed section below.
     description reads "do X *and* Y *and* Z," split it. Never mix refactoring and
     behavior changes in the same RU.
 
-  * **[Keep PRs small](#pr-size-limits)** — ideally under 500 lines; reviewers
+  * **[Keep PRs small](#pr-size-limits)** — ideally under 500 lines changed; reviewers
     often ask to split PRs over 1000. Limit each RU to one team's
     [CODEOWNERS](/.github/CODEOWNERS) scope.
 
@@ -36,8 +39,9 @@ The salient points, each linking to its detailed section below.
     description is what lands on `main`. State user-visible effects in
     user-facing terms — [release notes](#release-notes) are generated from it.
 
-  * **[Self-review and pass CI](#polish-requirements)** before requesting
-    review; use draft PRs for early feedback.
+  * **[Open a draft PR first](#polish-requirements)**, self-review it (a great
+    stage to run an [AI review](#ai-assisted-review) too), and make sure it's
+    green in CI before you mark it ready and request review from others.
 
   * **[Test every behavior change](#testing)** — at a bare minimum, one added or
     modified test.
@@ -137,12 +141,14 @@ boundaries alone.
 #### Working with a dedicated partner
 
 The size limits exist because a reviewer typically has no context on your
-change. For a project, that assumption can be flipped. Pair an implementer with
-a dedicated reviewer/partner from the start: one writes the feature, the other
-reviews it and stays close to the design throughout. When the reviewer already
-shares your context, a larger diff is no longer overwhelming, so the pair can
-review by whatever unit fits the work rather than leaning on LOC caps to keep
-each piece digestible.
+change. For a project, you can flip that assumption: pair an implementer with a
+dedicated reviewer/partner from the start, so one writes the feature while the
+other reviews it and stays close to the design throughout.
+
+A large diff is still a lot to review, but a reviewer who already shares your
+context can absorb it far more readily. That lets the pair coordinate on how
+best to handle a large change rather than leaning on LOC caps: split it into
+smaller PRs, or walk through it together, whichever best fits the work.
 
 This applies equally to [stacked PRs](#stacked-prs) and to semantic-commit PRs.
 Agree up front on how you will review: per PR, per semantic commit, or by
@@ -450,8 +456,12 @@ sake of your reviewer!
 ### Polish requirements
 
 PRs that are submitted for review should meet your own standards for
-"mergeable." Before you click the "Create PR" button, or immediately afterwards,
-do a self-review of your PR to make sure it is up to snuff.
+"mergeable." The recommended workflow is to **open the PR as a
+[draft][draft-pr] first**, self-review it, and let CI run, then mark it ready
+and request review from others only once you've polished it and it's green.
+Opening as a draft keeps reviewers from being notified before the PR is ready,
+and gives you a place to see the full diff and CI results as your reviewer
+will.
 
 The self-review doesn't need to take more than a few minutes. The goal is to
 save your reviewer some time by filtering out glaring errors. Did you leave
@@ -460,6 +470,14 @@ commented-out code or debugging `println!`s strewn about? Did you add any dead
 code? Did you add any blank lines to unrelated files? Did you remember to add
 all the tests you intended to? Have you made the PR as simple and small as it
 can be?
+
+Your self-review is also a great point to run an [AI review](#ai-assisted-review)
+over your own change. The [`mz-pr-review`](/.agents/skills/mz-pr-review/SKILL.md)
+skill runs a structured pass against our standards and is well suited to
+catching missing tests, mechanical issues, and "did you consider X?" prompts
+before a human ever looks at the PR. As on the review side, you remain
+accountable for what you ship, so confirm or discard what it flags rather than
+taking its output at face value.
 
 The self-review is _not_ meant to add a large emotional burden before submitting
 a PR. You should not feel like PRs must be perfect before you can submit them!
