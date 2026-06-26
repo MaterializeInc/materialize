@@ -56,7 +56,8 @@ use mz_postgres_util::{
 };
 use mz_secrets::SecretsController;
 use mz_server_core::listeners::{
-    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpRoutesEnabled,
+    AllowedRoles, AuthenticatorKind, HttpListenerConfig, HttpRoutesEnabled,
+    LISTENERS_CONFIG_VERSION, ListenersConfig, RouteGroup,
 };
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
@@ -90,8 +91,7 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
 use crate::{
-    CatalogConfig, FronteggAuthenticator, HttpListenerConfig, ListenersConfig, SqlListenerConfig,
-    WebSocketAuth, WebSocketResponse,
+    CatalogConfig, FronteggAuthenticator, SqlListenerConfig, WebSocketAuth, WebSocketResponse,
 };
 
 pub static KAFKA_ADDRS: LazyLock<String> =
@@ -142,6 +142,7 @@ impl Default for TestHarness {
             frontegg: None,
             external_login_password_mz_system: None,
             listeners_config: ListenersConfig {
+                version: LISTENERS_CONFIG_VERSION.to_string(),
                 sql: btreemap![
                     "external".to_owned() => SqlListenerConfig {
                         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -158,39 +159,33 @@ impl Default for TestHarness {
                 ],
                 http: btreemap![
                     "external".to_owned() => HttpListenerConfig {
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                            authenticator_kind: AuthenticatorKind::None,
-                            allowed_roles: AllowedRoles::Normal,
-                            enable_tls: false,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: true,
-                            webhook: true,
-                            internal: false,
-                            metrics: false,
-                            profiling: false,
-                            mcp_agent: false,
-                            mcp_developer: false,
-                            console_config: true,
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        enable_tls: false,
+                        routes: HttpRoutesEnabled {
+                            base: RouteGroup::Enabled(AllowedRoles::Normal),
+                            webhook: RouteGroup::Enabled(AllowedRoles::Normal),
+                            internal: RouteGroup::Disabled,
+                            metrics: RouteGroup::Disabled,
+                            profiling: RouteGroup::Disabled,
+                            mcp_agent: RouteGroup::Disabled,
+                            mcp_developer: RouteGroup::Disabled,
+                            console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                         },
                     },
                     "internal".to_owned() => HttpListenerConfig {
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                            authenticator_kind: AuthenticatorKind::None,
-                            allowed_roles: AllowedRoles::NormalAndInternal,
-                            enable_tls: false,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: true,
-                            webhook: true,
-                            internal: true,
-                            metrics: true,
-                            profiling: true,
-                            mcp_agent: false,
-                            mcp_developer: false,
-                            console_config: true,
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        enable_tls: false,
+                        routes: HttpRoutesEnabled {
+                            base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            internal: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            mcp_agent: RouteGroup::Disabled,
+                            mcp_developer: RouteGroup::Disabled,
+                            console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         },
                     },
                 ],
@@ -302,7 +297,7 @@ impl TestHarness {
             listener.enable_tls = true;
         }
         for (_, listener) in &mut self.listeners_config.http {
-            listener.base.enable_tls = true;
+            listener.enable_tls = true;
         }
         self
     }
@@ -321,6 +316,7 @@ impl TestHarness {
         self.frontegg = Some(frontegg.clone());
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
+            version: LISTENERS_CONFIG_VERSION.to_string(),
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -337,39 +333,33 @@ impl TestHarness {
             },
             http: btreemap! {
                 "external".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::Frontegg,
-                        allowed_roles: AllowedRoles::Normal,
-                        enable_tls,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: false,
-                        metrics: false,
-                        profiling: false,
-                        mcp_agent: false,
-                        mcp_developer: false,
-                        console_config: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Frontegg,
+                    enable_tls,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::Normal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::Normal),
+                        internal: RouteGroup::Disabled,
+                        metrics: RouteGroup::Disabled,
+                        profiling: RouteGroup::Disabled,
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                     },
                 },
                 "internal".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: true,
-                        metrics: true,
-                        profiling: true,
-                        mcp_agent: false,
-                        mcp_developer: false,
-                        console_config: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
             },
@@ -386,6 +376,7 @@ impl TestHarness {
     ) -> Self {
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
+            version: LISTENERS_CONFIG_VERSION.to_string(),
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -402,39 +393,33 @@ impl TestHarness {
             },
             http: btreemap! {
                 "external".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::Oidc,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: false,
-                        metrics: false,
-                        profiling: false,
-                        mcp_agent: false,
-                        mcp_developer: false,
-                        console_config: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Oidc,
+                    enable_tls,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Disabled,
+                        metrics: RouteGroup::Disabled,
+                        profiling: RouteGroup::Disabled,
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
                 "internal".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: true,
-                        metrics: true,
-                        profiling: true,
-                        mcp_agent: false,
-                        mcp_developer: false,
-                        console_config: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
             },
@@ -472,6 +457,7 @@ impl TestHarness {
         self.external_login_password_mz_system = Some(mz_system_password);
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
+            version: LISTENERS_CONFIG_VERSION.to_string(),
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -482,39 +468,33 @@ impl TestHarness {
             },
             http: btreemap! {
                 "external".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::Password,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: true,
-                        metrics: false,
-                        profiling: true,
-                        mcp_agent: false,
-                        mcp_developer: false,
-                        console_config: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Password,
+                    enable_tls,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Enabled(AllowedRoles::Internal),
+                        metrics: RouteGroup::Disabled,
+                        profiling: RouteGroup::Enabled(AllowedRoles::Internal),
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
                 "metrics".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: false,
-                        webhook: false,
-                        internal: false,
-                        metrics: true,
-                        profiling: false,
-                        mcp_agent: false,
-                        mcp_developer: false,
-                        console_config: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Disabled,
+                        webhook: RouteGroup::Disabled,
+                        internal: RouteGroup::Disabled,
+                        metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        profiling: RouteGroup::Disabled,
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
             },
@@ -526,6 +506,7 @@ impl TestHarness {
         self.external_login_password_mz_system = Some(mz_system_password);
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
+            version: LISTENERS_CONFIG_VERSION.to_string(),
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -536,39 +517,33 @@ impl TestHarness {
             },
             http: btreemap! {
                 "external".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::Password,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: true,
-                        metrics: false,
-                        profiling: true,
-                        mcp_agent: false,
-                        mcp_developer: false,
-                        console_config: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Password,
+                    enable_tls,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        metrics: RouteGroup::Disabled,
+                        profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
                 "metrics".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: false,
-                        webhook: false,
-                        internal: false,
-                        metrics: true,
-                        profiling: false,
-                        mcp_agent: false,
-                        mcp_developer: false,
-                        console_config: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Disabled,
+                        webhook: RouteGroup::Disabled,
+                        internal: RouteGroup::Disabled,
+                        metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        profiling: RouteGroup::Disabled,
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
             },
@@ -658,8 +633,23 @@ impl TestHarness {
 
     pub fn with_mcp_routes(mut self, agent: bool, developer: bool) -> Self {
         for config in self.listeners_config.http.values_mut() {
-            config.routes.mcp_agent = agent;
-            config.routes.mcp_developer = developer;
+            // Match the MCP routes to the listener's `base` policy (falling back
+            // to `NormalAndInternal` if `base` is disabled, e.g. a metrics-only
+            // listener), then enable/disable them.
+            let roles = config
+                .routes
+                .base
+                .allowed_roles()
+                .unwrap_or(AllowedRoles::NormalAndInternal);
+            let group = |enabled| {
+                if enabled {
+                    RouteGroup::Enabled(roles)
+                } else {
+                    RouteGroup::Disabled
+                }
+            };
+            config.routes.mcp_agent = group(agent);
+            config.routes.mcp_developer = group(developer);
         }
         self
     }
