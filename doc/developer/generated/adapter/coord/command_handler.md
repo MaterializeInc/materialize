@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/command_handler.rs
-revision: 7258dad07f
+revision: 277b33e9c0
 ---
 
 # adapter::coord::command_handler

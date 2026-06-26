@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/explain_timestamp.rs
-revision: f936d67792
+revision: 277b33e9c0
 ---
 
 # adapter::coord::sequencer::inner::explain_timestamp

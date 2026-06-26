@@ -1,6 +1,6 @@
 ---
 source: src/orchestrator/src/lib.rs
-revision: b1c657d28e
+revision: b088d23e1d
 ---
 
 # mz-orchestrator
