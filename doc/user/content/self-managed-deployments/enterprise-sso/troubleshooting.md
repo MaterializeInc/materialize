@@ -36,9 +36,7 @@ you can see which component rejected the flow.
 |---|---|---|
 | Pods stuck in `ImagePullBackOff` | License key JWT missing the `ory` entitlement, or expired | Update `license_key` in tfvars, re-apply, restart the Ory pods |
 | `curl https://polis.example.com` times out, LB has zero endpoints | Service selector doesn't match polis pod labels | Confirm the LoadBalancer Service selector targets `app.kubernetes.io/name=polis, instance=polis` |
-| TLS handshake fails on polis hostname | Polis doesn't terminate TLS, the LB target is plain HTTP | The example deploys an nginx TLS proxy in front of Polis automatically; check that the `polis-tls-proxy` Deployment is running |
-| Helm chart pull fails with `403 Forbidden` on `helm-oel-polis` | OEL registry proxy doesn't serve OCI chart manifests | Set `ory_polis_oci_chart_key_file` to a GCP service-account key with read access on `helm-oel-polis` |
-| `exec /bin/sh: exec format error` in `polis-migration` pod | Migration job scheduled on an arm64 node, polis image is amd64-only | Add `polis_helm_values = { job = { nodeSelector = { workload = "polis-amd64" } } }` and ensure an amd64 node pool exists |
+| TLS handshake fails on polis hostname | Polis doesn't terminate TLS, the LB target is plain HTTP | The example deploys a pingap TLS proxy in front of Polis automatically; check that the `polis-tls-proxy` Deployment is running |
 | Polis SCIM endpoint URLs return `http://localhost:5225/...` | `EXTERNAL_URL` env var not set on Polis | Module sets it automatically from `external_url`; re-run `terraform apply` |
 | Polis logs `OAuth server not configured correctly for openid flow, check if JWT signing keys are loaded` | `OPENID_RSA_PRIVATE_KEY` and `OPENID_RSA_PUBLIC_KEY` missing | Module auto-generates and injects them; re-run `terraform apply` |
 | Polis logs `"pkcs8" must be PKCS#8 formatted string` | RSA private key was PKCS#1 | Module uses the PKCS#8 form; re-run `terraform apply` |

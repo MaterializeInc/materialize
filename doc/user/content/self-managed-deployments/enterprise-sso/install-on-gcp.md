@@ -1,20 +1,20 @@
 ---
-title: "Install on Azure"
-description: "Deploy the Ory-based enterprise SSO stack on Azure with Materialize."
+title: "Install on GCP"
+description: "Deploy the Ory-based enterprise SSO stack on GCP with Materialize."
 menu:
   main:
     parent: "enterprise-sso"
-    identifier: "enterprise-sso-azure"
-    weight: 20
+    identifier: "enterprise-sso-gcp"
+    weight: 30
 ---
 
 This guide walks through the
-[`azure/examples/enterprise`](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure/examples/enterprise)
+[`gcp/examples/enterprise`](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp/examples/enterprise)
 example in the [Materialize Terraform
 repository](https://github.com/MaterializeInc/materialize-terraform-self-managed),
 which extends the base [Install on
-Azure](/self-managed-deployments/installation/install-on-azure/) walkthrough
-with the Ory-based enterprise SSO stack on AKS.
+GCP](/self-managed-deployments/installation/install-on-gcp/) walkthrough with
+the Ory-based enterprise SSO stack on GKE.
 
 {{% self-managed/materialize-components-sentence %}} This example layers the
 Ory stack (Kratos, Hydra, the selfservice UI, and optional Polis) on top so
@@ -35,22 +35,22 @@ hostnames, and a cert-manager strategy.
 ## What Gets Created
 
 This example provisions everything from the base [Install on
-Azure](/self-managed-deployments/installation/install-on-azure/) guide, plus
-the additions below.
+GCP](/self-managed-deployments/installation/install-on-gcp/) guide, plus the
+additions below.
 
 ### Networking
 
 | Resource | Description |
 |----------|-------------|
 | Public Hostnames | Six browser-facing hostnames (Hydra, Kratos, the selfservice UI, optional Polis, the Materialize console, balancerd). DNS records are created by you after `terraform apply`. |
-| LoadBalancer Services | One per browser-facing service in the `ory` and `materialize-environment` namespaces. Backed by Azure standard load balancers. |
+| LoadBalancer Services | One per browser-facing service in the `ory` and `materialize-environment` namespaces. Backed by GCP network load balancers. |
 
 ### Database
 
 | Resource | Description |
 |----------|-------------|
-| Ory Azure PostgreSQL Flexible Server | Separate instance from the Materialize backend. PostgreSQL 18, `Standard_B1ms` SKU, 32GB storage, private endpoint only. |
-| Databases | `kratos`, `hydra`, plus `polis` when `enable_polis = true`. |
+| Ory Cloud SQL for PostgreSQL | Separate instance from the Materialize backend. PostgreSQL 18, `db-f1-micro` tier, private IP only. |
+| Databases | `kratos`, `hydra`, plus `polis` when `enable_polis = true`. Cloud SQL supports multiple databases on a single instance, so all three Ory components share this instance. |
 | User | `oryadmin` with auto-generated password. |
 
 ### Kubernetes Add-ons
@@ -72,23 +72,23 @@ the additions below.
 
 ## Prerequisites
 
-### Azure Account Requirements
+### GCP Account Requirements
 
-An active Azure subscription with permission to create:
+A Google account with permission to enable the required APIs on your project and to create:
 
-- Resource groups
-- Virtual networks, subnets, and NAT gateways
-- AKS clusters and node pools
-- Azure Database for PostgreSQL Flexible Servers
-- Storage accounts
-- Managed identities and role assignments
+- GKE clusters and node pools
+- Cloud SQL instances and VPC peering
+- Cloud Storage buckets
+- VPC networks, subnets, Cloud Router, Cloud NAT
+- Service accounts and IAM bindings
 
 ### Required Tools
 
 - [Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform)
-- [Azure CLI (`az`)](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
+- [gcloud CLI](https://cloud.google.com/sdk/docs/install)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
 - [Helm 3.2.0+](https://helm.sh/docs/intro/install/)
+- [GKE auth plugin](https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl#install_plugin)
 
 ### License Key
 
@@ -112,41 +112,44 @@ key](/self-managed-deployments/enterprise-sso/prerequisites/#license-key-with-th
 1. Open a terminal window.
 
 1. Clone the Materialize Terraform repository and go to the
-   `azure/examples/enterprise` directory:
+   `gcp/examples/enterprise` directory:
 
    ```bash
    git clone https://github.com/MaterializeInc/materialize-terraform-self-managed.git
-   cd materialize-terraform-self-managed/azure/examples/enterprise
+   cd materialize-terraform-self-managed/gcp/examples/enterprise
    ```
 
-1. Sign in to Azure and select the subscription you'll deploy into:
+1. Authenticate with Google Cloud and select your project:
 
    ```bash
-   az login
-   az account set --subscription <your-subscription-id>
+   gcloud auth application-default login
+   gcloud config set project <your-project-id>
    ```
 
 ### Step 2: Configure Terraform Variables
 
 1. Create a `terraform.tfvars` file with the required variables:
 
-   - `subscription_id`: Azure subscription ID
-   - `resource_group_name`: Name of the resource group to create
+   - `project_id`: GCP project ID
+   - `region`: GCP region (defaults to `us-central1`)
    - `name_prefix`: Prefix for all resource names
-   - `location`: Azure region
    - `license_key`: Materialize license key JWT with the `ory` entitlement
-   - `k8s_apiserver_authorized_networks`: CIDRs allowed to reach the AKS API server (required, no default)
+   - `k8s_apiserver_authorized_networks`: CIDRs allowed to reach the GKE master endpoint (required, no default)
    - `ory_hydra_fqdn`, `ory_ui_fqdn`, `ory_kratos_fqdn`, `materialize_console_fqdn`, `materialize_balancerd_fqdn`: Public hostnames for the browser-facing services
-   - `tags`: Map of tags to apply to resources
+   - `labels`: Map of labels to apply to resources
 
    ```hcl
-   subscription_id     = "12345678-1234-1234-1234-123456789012"
-   resource_group_name = "materialize-enterprise-rg"
-   name_prefix         = "mz-enterprise"
-   location            = "westus2"
-   license_key         = "your-materialize-license-key"
+   project_id  = "my-gcp-project-id"
+   region      = "us-central1"
+   name_prefix = "mz-enterprise"
+   license_key = "your-materialize-license-key"
 
-   k8s_apiserver_authorized_networks = ["0.0.0.0/0"]   # tighten for production
+   k8s_apiserver_authorized_networks = [
+     {
+       cidr_block   = "0.0.0.0/0"   # tighten for production
+       display_name = "lab"
+     },
+   ]
 
    ory_hydra_fqdn             = "hydra.example.com"
    ory_ui_fqdn                = "auth.example.com"
@@ -154,7 +157,7 @@ key](/self-managed-deployments/enterprise-sso/prerequisites/#license-key-with-th
    materialize_console_fqdn   = "console.example.com"
    materialize_balancerd_fqdn = "balancerd.example.com"
 
-   tags = {
+   labels = {
      environment = "demo"
    }
    ```
@@ -179,16 +182,16 @@ key](/self-managed-deployments/enterprise-sso/prerequisites/#license-key-with-th
    terraform apply
    ```
 
-   Expect 30 to 45 minutes for the full apply. The slowest parts are AKS
-   provisioning, the two Flexible Server instances, and the Materialize
-   instance reaching ready.
+   Expect 30 to 45 minutes for the full apply. The slowest parts are GKE
+   provisioning, the two Cloud SQL instances, and the Materialize instance
+   reaching ready.
 
 1. Configure `kubectl` against the new cluster:
 
    ```bash
-   az aks get-credentials \
-     --resource-group $(terraform output -raw resource_group_name) \
-     --name $(terraform output -raw aks_cluster_name)
+   gcloud container clusters get-credentials \
+     $(terraform output -raw gke_cluster_name) \
+     --region $(terraform output -raw gke_cluster_location)
    ```
 
 ### Step 4: Create DNS Records
@@ -208,20 +211,25 @@ providers](/self-managed-deployments/enterprise-sso/identity-providers/).
 You can override module inputs independently. For details on the per-cloud
 modules, see the [top-level
 README](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
-and the [Azure-specific
-README](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure).
+and the [GCP-specific
+README](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp).
 
-Notes specific to Azure:
+Notes specific to GCP:
 
-- **PostgreSQL version**: The example targets PostgreSQL 18 on Azure
-  Database for PostgreSQL Flexible Server. The `azurerm` provider declaration
-  in `versions.tf` is pinned at `>= 4.55.0` to support PG 18.
-- **AKS API server access**: `k8s_apiserver_authorized_networks` has no
-  default. Production deployments should pin a tight allowlist instead of
-  `0.0.0.0/0`.
-- **VM sizes**: Default node pool uses `Standard_D4ps_v6` (arm64). The
-  Materialize node pool uses `Standard_E*` instances. Adjust via
-  `materialize_nodepool` and the default pool size variables.
+- **Shared Cloud SQL instance for Ory**: Cloud SQL supports multiple databases
+  on a single instance, so Kratos, Hydra, and optional Polis share one
+  `db-f1-micro` instance with separate databases. (AWS, in contrast,
+  provisions one RDS instance per Ory component.)
+- **GKE master access**: `k8s_apiserver_authorized_networks` has no default.
+  Production deployments should pin a tight allowlist instead of `0.0.0.0/0`.
+- **Egress to the OEL proxy**: GKE nodes need outbound access to
+  `ory.registry.cloud.materialize.com` and `storage.googleapis.com`. The proxy
+  returns HTTP 307 redirects to signed GCS URLs for blob layers, which the
+  kubelet follows directly. Adjust your VPC firewall and Cloud NAT egress
+  rules accordingly.
+- **Node pools**: Default `e2-standard-8` for the generic pool;
+  `n2-highmem-8` with one local SSD for the Materialize pool. Override via the
+  `generic_nodepool` and `materialize_nodepool` variables.
 
 ## Cleanup
 
@@ -236,4 +244,4 @@ terraform destroy
 - [Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/)
 - [Operations](/self-managed-deployments/enterprise-sso/operations/)
 - [Troubleshooting](/self-managed-deployments/enterprise-sso/troubleshooting/)
-- [Install on Azure (base Materialize stack)](/self-managed-deployments/installation/install-on-azure/)
+- [Install on GCP (base Materialize stack)](/self-managed-deployments/installation/install-on-gcp/)
