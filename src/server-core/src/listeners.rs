@@ -214,3 +214,226 @@ impl ListenerConfig for HttpListenerConfig {
         }
     }
 }
+
+/// The HTTP listener config schema introduced in v0.147.0.
+pub mod v0_147_0 {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Serialize};
+
+    use super::{BaseListenerConfig, SqlListenerConfig};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ListenersConfig {
+        pub sql: BTreeMap<String, SqlListenerConfig>,
+        pub http: BTreeMap<String, HttpListenerConfig>,
+    }
+
+    /// The top-level `allowed_roles` (in `base`) applies to every route group;
+    /// it is expanded per group during migration.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct HttpListenerConfig {
+        #[serde(flatten)]
+        pub base: BaseListenerConfig,
+        pub routes: HttpRoutes,
+    }
+
+    /// A bool per route group; all groups share the listener's `allowed_roles`.
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    pub struct HttpRoutes {
+        pub base: bool,
+        pub webhook: bool,
+        pub internal: bool,
+        pub metrics: bool,
+        pub profiling: bool,
+        #[serde(default)]
+        pub mcp_agent: bool,
+        #[serde(default)]
+        pub mcp_developer: bool,
+        #[serde(default)]
+        pub console_config: bool,
+    }
+}
+
+impl From<v0_147_0::ListenersConfig> for ListenersConfig {
+    fn from(legacy: v0_147_0::ListenersConfig) -> Self {
+        let http = legacy
+            .http
+            .into_iter()
+            .map(|(name, listener)| (name, listener.into()))
+            .collect();
+        ListenersConfig {
+            version: LISTENERS_CONFIG_VERSION_0_147_0.to_string(),
+            sql: legacy.sql,
+            http,
+        }
+    }
+}
+
+impl From<v0_147_0::HttpListenerConfig> for HttpListenerConfig {
+    fn from(legacy: v0_147_0::HttpListenerConfig) -> Self {
+        // Migration: every enabled route group inherits the listener's single
+        // top-level `allowed_roles`.
+        let roles = legacy.base.allowed_roles;
+        let group = |enabled| {
+            if enabled {
+                RouteGroup::Enabled(roles)
+            } else {
+                RouteGroup::Disabled
+            }
+        };
+        HttpListenerConfig {
+            addr: legacy.base.addr,
+            authenticator_kind: legacy.base.authenticator_kind,
+            enable_tls: legacy.base.enable_tls,
+            routes: HttpRoutesEnabled {
+                base: group(legacy.routes.base),
+                webhook: group(legacy.routes.webhook),
+                internal: group(legacy.routes.internal),
+                metrics: group(legacy.routes.metrics),
+                profiling: group(legacy.routes.profiling),
+                mcp_agent: group(legacy.routes.mcp_agent),
+                mcp_developer: group(legacy.routes.mcp_developer),
+                console_config: group(legacy.routes.console_config),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(json: &str) -> ListenersConfig {
+        serde_json::from_reader(json.as_bytes()).expect("valid listeners config")
+    }
+
+    #[mz_ore::test]
+    fn legacy_migrates_to_per_group_inheriting_listener_role() {
+        // orchestratord builds the legacy `v0_147_0` shape to serve older
+        // environmentd and migrates it in-memory; every route group inherits the
+        // listener's single top-level role.
+        let legacy = v0_147_0::ListenersConfig {
+            sql: BTreeMap::new(),
+            http: BTreeMap::from([(
+                "external".to_string(),
+                v0_147_0::HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: "0.0.0.0:6876".parse().expect("addr"),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: v0_147_0::HttpRoutes {
+                        base: true,
+                        webhook: false,
+                        internal: true,
+                        metrics: false,
+                        profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: false,
+                    },
+                },
+            )]),
+        };
+        let migrated: ListenersConfig = legacy.into();
+        assert_eq!(migrated.version, LISTENERS_CONFIG_VERSION_0_147_0);
+        let routes = migrated.http["external"].routes;
+        assert_eq!(
+            routes.base,
+            RouteGroup::Enabled(AllowedRoles::NormalAndInternal)
+        );
+        assert_eq!(
+            routes.internal,
+            RouteGroup::Enabled(AllowedRoles::NormalAndInternal)
+        );
+        assert_eq!(routes.webhook, RouteGroup::Disabled);
+    }
+
+    #[mz_ore::test]
+    fn per_group_schema_parses() {
+        // Enabled groups carry their roles; disabled groups omit `allowed_roles`.
+        let json = r#"{
+            "version": "26.32.0",
+            "sql": {},
+            "http": {
+                "external": {
+                    "addr": "0.0.0.0:6876",
+                    "authenticator_kind": "None",
+                    "enable_tls": false,
+                    "routes": {
+                        "base": { "enabled": true, "allowed_roles": "Normal" },
+                        "webhook": { "enabled": false },
+                        "internal": { "enabled": true, "allowed_roles": "Internal" },
+                        "metrics": { "enabled": false },
+                        "profiling": { "enabled": false },
+                        "mcp_agent": { "enabled": false },
+                        "mcp_developer": { "enabled": false },
+                        "console_config": { "enabled": false }
+                    }
+                }
+            }
+        }"#;
+        let config = parse(json);
+        let routes = config.http["external"].routes;
+        assert_eq!(routes.base, RouteGroup::Enabled(AllowedRoles::Normal));
+        assert_eq!(routes.internal, RouteGroup::Enabled(AllowedRoles::Internal));
+        assert_eq!(routes.webhook, RouteGroup::Disabled);
+    }
+
+    #[mz_ore::test]
+    fn route_group_serializes_compactly() {
+        // Disabled omits `allowed_roles`; enabled includes it.
+        assert_eq!(
+            serde_json::to_string(&RouteGroup::Disabled).expect("serializes"),
+            r#"{"enabled":false}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&RouteGroup::Enabled(AllowedRoles::Internal))
+                .expect("serializes"),
+            r#"{"enabled":true,"allowed_roles":"Internal"}"#
+        );
+    }
+
+    #[mz_ore::test]
+    fn enabled_route_group_requires_allowed_roles() {
+        serde_json::from_str::<RouteGroup>(r#"{ "enabled": true }"#)
+            .expect_err("enabled group without allowed_roles must fail");
+    }
+
+    #[mz_ore::test]
+    fn round_trips_through_serialize() {
+        let json = r#"{
+            "version": "26.32.0",
+            "sql": {},
+            "http": {
+                "external": {
+                    "addr": "0.0.0.0:6876",
+                    "authenticator_kind": "None",
+                    "enable_tls": false,
+                    "routes": {
+                        "base": { "enabled": true, "allowed_roles": "Normal" },
+                        "webhook": { "enabled": false },
+                        "internal": { "enabled": true, "allowed_roles": "Internal" },
+                        "metrics": { "enabled": false },
+                        "profiling": { "enabled": false },
+                        "mcp_agent": { "enabled": false },
+                        "mcp_developer": { "enabled": false },
+                        "console_config": { "enabled": false }
+                    }
+                }
+            }
+        }"#;
+        let config = parse(json);
+        // `version` is a field, so a serialize/parse cycle round-trips it along
+        // with the rest of the config.
+        let serialized = serde_json::to_string(&config).expect("serializes");
+        let reparsed = parse(&serialized);
+        assert_eq!(config.version, reparsed.version);
+        assert_eq!(
+            config.http["external"].routes,
+            reparsed.http["external"].routes
+        );
+    }
+}

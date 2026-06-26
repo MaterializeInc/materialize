@@ -29,8 +29,8 @@ use k8s_openapi::{
 use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
 use mz_server_core::listeners::{
-    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpListenerConfig, HttpRoutesEnabled,
-    ListenersConfig, SqlListenerConfig,
+    AllowedRoles, AuthenticatorKind, BaseListenerConfig, LISTENERS_CONFIG_VERSION, ListenersConfig,
+    RouteGroup, SqlListenerConfig, v0_147_0,
 };
 use reqwest::{Client as HttpClient, StatusCode};
 use semver::{BuildMetadata, Prerelease, Version};
@@ -76,6 +76,17 @@ pub const V161: Version = Version::new(0, 161, 0);
 static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 1,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
+/// Version at which HTTP listeners moved `allowed_roles` to be per route group
+/// (the `ListenersConfig` schema). Older `environmentd` parses the legacy
+/// `v0_147_0::ListenersConfig` schema, so we serve that to them.
+static PER_ROUTE_GROUP_ROLES_VERSION: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 32,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -1291,18 +1302,17 @@ fn create_environmentd_statefulset_object(
     }
 }
 
-fn create_connection_info(
+fn create_v0_147_0_listeners_config(
     config: &super::Config,
     mz: &Materialize,
-    generation: u64,
-) -> ConnectionInfo {
+) -> v0_147_0::ListenersConfig {
     let external_enable_tls = issuer_ref_defined(
         &config.default_certificate_specs.internal,
         &mz.spec.internal_certificate_spec,
     );
     let authenticator_kind = mz.spec.authenticator_kind;
 
-    let mut listeners_config = ListenersConfig {
+    let mut listeners_config = v0_147_0::ListenersConfig {
         sql: btreemap! {
             "external".to_owned() => SqlListenerConfig{
                 addr: SocketAddr::new(
@@ -1325,7 +1335,7 @@ fn create_connection_info(
             },
         },
         http: btreemap! {
-            "external".to_owned() => HttpListenerConfig{
+            "external".to_owned() => v0_147_0::HttpListenerConfig{
                 base: BaseListenerConfig {
                     addr: SocketAddr::new(
                         IpAddr::V4(Ipv4Addr::new(0,0,0,0)),
@@ -1342,7 +1352,7 @@ fn create_connection_info(
                     allowed_roles: AllowedRoles::Normal,
                     enable_tls: external_enable_tls,
                 },
-                routes: HttpRoutesEnabled{
+                routes: v0_147_0::HttpRoutes{
                     base: true,
                     webhook: true,
                     internal: false,
@@ -1351,9 +1361,9 @@ fn create_connection_info(
                     mcp_agent: true,
                     mcp_developer: true,
                     console_config: true,
-                }
+                },
             },
-            "internal".to_owned() => HttpListenerConfig{
+            "internal".to_owned() => v0_147_0::HttpListenerConfig{
                 base: BaseListenerConfig {
                     addr: SocketAddr::new(
                         IpAddr::V4(Ipv4Addr::new(0,0,0,0)),
@@ -1364,7 +1374,7 @@ fn create_connection_info(
                     allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls: false,
                 },
-                routes: HttpRoutesEnabled{
+                routes: v0_147_0::HttpRoutes{
                     base: true,
                     webhook: true,
                     internal: true,
@@ -1373,11 +1383,13 @@ fn create_connection_info(
                     mcp_agent: true,
                     mcp_developer: true,
                     console_config: false,
-                }
+                },
             },
         },
     };
 
+    // For password/oidc/sasl auth, we want to get rid of the internal port and
+    // combine the external and internal listeners into a single listener.
     if matches!(
         authenticator_kind,
         AuthenticatorKind::Password | AuthenticatorKind::Sasl | AuthenticatorKind::Oidc
@@ -1398,7 +1410,7 @@ fn create_connection_info(
 
         listeners_config.http.insert(
             "metrics".to_owned(),
-            HttpListenerConfig {
+            v0_147_0::HttpListenerConfig {
                 base: BaseListenerConfig {
                     addr: SocketAddr::new(
                         IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
@@ -1408,7 +1420,7 @@ fn create_connection_info(
                     allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls: false,
                 },
-                routes: HttpRoutesEnabled {
+                routes: v0_147_0::HttpRoutes {
                     base: false,
                     webhook: false,
                     internal: false,
@@ -1420,9 +1432,56 @@ fn create_connection_info(
                 },
             },
         );
-    }
+    };
+    listeners_config
+}
 
-    let listeners_json = serde_json::to_string(&listeners_config).expect("known valid");
+fn create_connection_info(
+    config: &super::Config,
+    mz: &Materialize,
+    generation: u64,
+) -> ConnectionInfo {
+    let external_enable_tls = issuer_ref_defined(
+        &config.default_certificate_specs.internal,
+        &mz.spec.internal_certificate_spec,
+    );
+    let authenticator_kind = mz.spec.authenticator_kind;
+
+    let listeners_config = create_v0_147_0_listeners_config(config, mz);
+
+    // Serve each `environmentd` the schema its version understands. Newer
+    // versions parse the current (`ListenersConfig`) schema; older versions
+    // parse the legacy (`v0_147_0::ListenersConfig`) schema.
+    let listeners_json = if mz.meets_minimum_version(&PER_ROUTE_GROUP_ROLES_VERSION) {
+        // Convert the legacy `v0_147_0::ListenersConfig` schema to the current `ListenersConfig` schema.
+        // The main difference is instead of having a single `allowed_roles` property in the HTTP listener
+        // for all route groups, we now have a per-route group `allowed_roles` property. The migration cascades
+        // the top level `allowed_roles` into every route group.
+        let mut listeners_config: ListenersConfig = listeners_config.into();
+        // The migration stamps the legacy version; we are serving the current
+        // schema, so re-stamp it.
+        listeners_config.version = LISTENERS_CONFIG_VERSION.to_string();
+        // The sole reason for the new `ListenersConfig` schema is because for password/oidc/sasl
+        // authentication, we were allowing normal roles to access internal and profiling routes
+        // since we now have a single listener for both external and internal traffic. However we
+        // want to only allow internal roles to access these routes. Thus we set the `allowed_roles`
+        // for the internal and profiling route groups to `Internal` and leave the other route groups
+        // as `NormalAndInternal`.
+        if matches!(
+            authenticator_kind,
+            AuthenticatorKind::Password | AuthenticatorKind::Sasl | AuthenticatorKind::Oidc
+        ) {
+            listeners_config.http.get_mut("external").map(|listener| {
+                listener.routes.internal = RouteGroup::Enabled(AllowedRoles::Internal);
+                listener.routes.profiling = RouteGroup::Enabled(AllowedRoles::Internal);
+                listener
+            });
+        }
+
+        serde_json::to_string(&listeners_config).expect("known valid")
+    } else {
+        serde_json::to_string(&listeners_config).expect("known valid")
+    };
     let listeners_configmap = ConfigMap {
         binary_data: None,
         data: Some(btreemap! {
