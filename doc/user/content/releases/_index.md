@@ -22,9 +22,6 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 ### PostgreSQL Physical Replica Support {#v26.30-postgresql-physical-replica-support}
 Materialize now supports replicating from a physical PostgreSQL replica (hot standby), not just the primary server. This enables setups where the replication load is offloaded from the primary to a read replica.
 
-### Materialize CRD v1 for Self-Managed {#v26.30-materialize-crd-v1-for-self-managed}
-Self-managed Kubernetes deployments can now opt in to the v1 Materialize Custom Resource Definition, which simplifies rollout behavior by automatically detecting spec changes instead of requiring manual `requestRollout` fields. The v1 CRD is opt-in via the `operator.args.installV1CRD` Helm value; existing v1alpha1 deployments continue to work unchanged.
-
 ### Improvements {#v26.30-improvements}
 - **MCP developer query tool**: The MCP developer endpoint now includes a `query` tool for running `SELECT`, `SHOW`, and `EXPLAIN` queries against user objects and clusters, mirroring the agent endpoint's query capability.
 - **MCP OAuth discovery for Frontegg**: The MCP server now advertises the Frontegg authorization server via RFC 9728 Protected Resource Metadata, enabling MCP clients that use standard OAuth discovery to connect to Materialize's MCP endpoints with Frontegg authentication.
