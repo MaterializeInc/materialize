@@ -172,7 +172,7 @@ use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OwnedMutexGuard, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -1851,6 +1851,14 @@ pub struct Coordinator {
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
+
+    /// Signals that pending strict serializable reads should be re-checked
+    /// because the timestamp oracle may have advanced. Awaited at lower priority
+    /// than group commit in [`Coordinator::serve`]: a re-check only makes a read
+    /// ready if the oracle has advanced, and the oracle only advances via group
+    /// commit, so the re-check must never win over (and thereby starve) the group
+    /// commit it is waiting on.
+    linearize_reads_notify: Arc<Notify>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -3568,6 +3576,16 @@ impl Coordinator {
 
             let message_batch = self.metrics.message_batch.clone();
 
+            // A persisted `Notified` future for the linearize re-check signal.
+            // It must outlive a single loop iteration and be re-`set` only after
+            // it completes: a fresh `notified()` per iteration could drop a
+            // wakeup that arrives while a higher-priority branch wins the same
+            // poll, stranding pending reads. Keeping it pinned across iterations
+            // leaves it registered, so no wakeup is lost.
+            let linearize_reads_notify = Arc::clone(&self.linearize_reads_notify);
+            let linearize_reads_notified = linearize_reads_notify.notified();
+            tokio::pin!(linearize_reads_notified);
+
             loop {
                 // Before adding a branch to this select loop, please ensure that the branch is
                 // cancellation safe and add a comment explaining why. You can refer here for more
@@ -3677,6 +3695,20 @@ impl Coordinator {
                             messages.push(Message::GroupCommitInitiate(span, None));
                         }
                     },
+                    // Re-check pending strict serializable reads. Deliberately
+                    // placed below the group commit branches above: a re-check
+                    // only makes a read ready if the timestamp oracle has
+                    // advanced, and the oracle only advances via group commit, so
+                    // this must never win over (and thereby starve) group commit.
+                    // `Notify` coalesces re-arms into a single wakeup, so even
+                    // when a pending read sits just behind the oracle (re-armed
+                    // sub-millisecond), the lower branches (including the idle
+                    // watchdog) stay reachable. See the pin above for why the
+                    // future is persisted rather than recreated per iteration.
+                    () = linearize_reads_notified.as_mut() => {
+                        linearize_reads_notified.set(linearize_reads_notify.notified());
+                        messages.push(Message::LinearizeReads);
+                    }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
@@ -4702,6 +4734,7 @@ pub fn serve(
                     internal_cmd_tx,
                     group_commit_tx,
                     strict_serializable_reads_tx,
+                    linearize_reads_notify: Arc::new(Notify::new()),
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),

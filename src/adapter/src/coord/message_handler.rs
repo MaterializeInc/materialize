@@ -11,6 +11,7 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use std::collections::{BTreeMap, BTreeSet, btree_map};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
@@ -1128,14 +1129,15 @@ impl Coordinator {
         if !self.pending_linearize_read_txns.is_empty() {
             // Cap wait time to 1s.
             let remaining_ms = std::cmp::min(shortest_wait, Duration::from_millis(1_000));
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            // Signal the re-check via `linearize_reads_notify`, which `serve`
+            // awaits below group commit. A re-check only makes a read ready if
+            // the oracle has advanced, and the oracle only advances via group
+            // commit, so the re-check must never win over (and thereby starve)
+            // the group commit it is waiting on.
+            let linearize_reads_notify = Arc::clone(&self.linearize_reads_notify);
             task::spawn(|| "deferred_read_txns", async move {
                 tokio::time::sleep(remaining_ms).await;
-                // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::LinearizeReads);
-                if let Err(e) = result {
-                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                }
+                linearize_reads_notify.notify_one();
             });
         }
     }
