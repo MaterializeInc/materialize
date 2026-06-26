@@ -91,7 +91,7 @@ If you're planning a deployment for the first time, work through these
 pages in order:
 
 1. **[Prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/)** -- license key, DNS, cert-manager, Polis-specific requirements
-2. **Install on [Azure](/self-managed-deployments/enterprise-sso/install-on-azure/) / GCP / AWS** -- pick your cloud, walk through the example (GCP and AWS guides coming as those examples land)
+2. **Install on [Azure](/self-managed-deployments/enterprise-sso/install-on-azure/), [GCP](/self-managed-deployments/enterprise-sso/install-on-gcp/), or [AWS](/self-managed-deployments/enterprise-sso/install-on-aws/)** -- pick your cloud and walk through the example
 3. **[Configure identity providers](/self-managed-deployments/enterprise-sso/identity-providers/)** -- direct OIDC, SAML via Polis, SCIM provisioning
 4. **[Operations](/self-managed-deployments/enterprise-sso/operations/)** -- day-2 tasks: rotating credentials, adding OAuth2 clients, managing identities
 5. **[Troubleshooting](/self-managed-deployments/enterprise-sso/troubleshooting/)** -- common errors and fixes
