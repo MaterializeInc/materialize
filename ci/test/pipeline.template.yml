@@ -966,8 +966,8 @@ steps:
     coverage: skip
     sanitizer: skip
 
-  - id: nightly-if-release
-    label: Nightly for releases
+  - id: nightly
+    label: Nightly
     depends_on: devel-docker-tags
     trigger: nightly
     async: true

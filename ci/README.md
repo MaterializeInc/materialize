@@ -22,6 +22,38 @@ updating the image.
 Note that more complicated pipelines use [Docker Compose] to manage spinning up
 other services, like ZooKeeper.
 
+## Controlling CI for a pull request
+
+By default a PR push runs the "test" pipeline, trimmed to the steps whose inputs
+have changed relative to `main`. You can adjust what runs by adding labels to
+the PR. Labels are read by `mkpipeline.py` when the pipeline is generated, so a
+label change takes effect on the next push.
+
+* `ci-nightly`: also run the "nightly" pipeline on each push. Nightly is trimmed
+  to the steps whose inputs changed, the same way the test pipeline is. Running
+  all of Nightly on every push would be too much. Only Nightly builds triggered
+  this way are trimmed. Scheduled builds, release builds, and runs triggered
+  manually from the trigger page still run everything. Only steps that declare
+  `inputs` (or build mzbuild images) take part in a PR-triggered nightly. A
+  command-only step without inputs is trimmed out and will not run, so labeling a
+  PR to exercise such a step has no effect.
+* `ci-no-trim`: disable input-based trimming, so the full test pipeline runs.
+* `ci-no-test`: skip the test steps. The build still runs, but `mkpipeline.py`
+  exits non-zero so the build is red and the PR cannot be merged without tests.
+* `ci-no-build`: skip the build, which implies skipping the tests, and exit
+  non-zero so the PR cannot be merged without a build.
+
+`ci-no-test` and `ci-no-build` deliberately make the build red. They are for
+iterating quickly while keeping the PR unmergeable until the label is removed,
+not for landing changes. The reduced pipeline is still uploaded before the
+failure, so any steps that do run give feedback.
+
+When labels conflict, `ci-no-build` wins and skips everything, including any
+Nightly trigger. `ci-no-test` leaves the asynchronous Nightly trigger in place,
+so combining it with `ci-nightly` still fires Nightly even though the test steps
+are skipped. `ci-no-trim` applies only to the test pipeline. A `ci-nightly` run
+is always trimmed regardless.
+
 ## Build agents
 
 Buildkite ships a CloudFormation template that automatically scales build agent
