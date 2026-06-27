@@ -1,6 +1,6 @@
 ---
 source: src/interchange/src/avro/schema.rs
-revision: a0961fa95f
+revision: 1da51d042f
 ---
 
 # interchange::avro::schema

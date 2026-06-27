@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/memory/objects.rs
-revision: 80f8711523
+revision: 9d0b66c63c
 ---
 
 # catalog::memory::objects
@@ -11,6 +11,7 @@ Key types include `CatalogItem` (an enum over Table, Source, Log, View, Material
 `Index` and `MaterializedView` additionally carry `optimized_plan` (global MIR dataflow), `physical_plan` (LIR dataflow), and `dataflow_metainfo` (optimizer notices) fields, all `#[serde(skip)]` since they are populated after catalog replay and are not part of the durable representation.
 `CatalogItem` exposes `optimized_plan()`, `physical_plan()`, and `dataflow_metainfo()` accessors for the plan fields, and `plan_fields_mut()` for mutable access to all three plan fields at once on plan-bearing items (`Index`, `MaterializedView`); it returns `None` for other item kinds. `CatalogItem::update_timestamp_interval` updates the timestamp interval for a source and returns the previous `WithOptionValue<Raw>` if one was set, or `None`; it returns `Err(())` if called on a non-source item. `CatalogEntry` exposes `item_mut()` for in-place mutation.
 `ClusterVariantManaged` carries `auto_scaling_strategy` (`Option<AutoScalingStrategy>`), `reconfiguration` (`Option<ReconfigurationState>`), and `burst` (`Option<BurstState>`) in addition to the base cluster shape fields. `ReconfigurationState` is the in-memory mirror of the durable type, recording the target config, deadline, and `on_timeout` action for a graceful reconfiguration. `BurstState` is the in-memory mirror of the durable burst-state record, carrying `burst_size`, `linger_duration`, and an optional `steady_hydrated_at` timestamp.
+`ClusterReplicaProcessStatus` records the process status, a cumulative `restart_count` mirrored from the orchestrator, and the time of the most recent change to either field.
 `StateUpdate` and `StateUpdateKind` represent in-memory deltas applied during catalog replay and incremental updates. `StateUpdateKind` includes `ClusterSystemConfiguration` and `ReplicaSystemConfiguration` variants carrying the corresponding durable objects. `BootstrapStateUpdateKind` mirrors `StateUpdateKind` for the bootstrap phase and includes the same two variants; it converts to/from `StateUpdateKind` via `From`/`TryFrom` implementations.
 `DataSourceDesc` and `DataSource` describe how a source or table obtains its data (ingestion, introspection, webhook, progress, etc.).
 `Sink::envelope` returns `Some("append")` for the `SinkEnvelope::Append` variant in addition to `Some("debezium")` and `Some("upsert")`.
