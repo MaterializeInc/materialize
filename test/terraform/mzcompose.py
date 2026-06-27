@@ -883,7 +883,8 @@ class AWS(State):
 
         expected_image = f"materialize/environmentd:{expected_tag}"
 
-        for i in range(60):
+        # See QAR-129
+        for i in range(180):
             try:
                 # Get all environmentd pod images
                 pod_images = (
@@ -929,7 +930,7 @@ class AWS(State):
                 print(f"Failed to get pod images: {e}")
                 time.sleep(5)
         else:
-            print("WARNING: Upgrade verification timed out after 5 minutes")
+            print("WARNING: Upgrade verification timed out after 15 minutes")
             # Still log the final state for debugging
             pod_images = (
                 spawn.capture(
