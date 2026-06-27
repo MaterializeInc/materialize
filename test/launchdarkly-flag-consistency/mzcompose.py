@@ -224,6 +224,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     default_timestamp_interval
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
+    enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
     enable_alter_table_add_column
     enable_binary_date_bin
@@ -248,7 +249,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_load_generator_counter
     enable_load_generator_datums
     enable_managed_cluster_availability_zones
-    enable_mcp_developer_query_tool
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
@@ -414,9 +414,11 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     wallclock_global_lag_histogram_retention_interval
     wallclock_lag_histogram_period_interval
     wallclock_lag_history_retention_interval
+    webhook_max_request_size_bytes
     webhooks_secrets_caching_ttl_secs
     with_0dt_caught_up_check_allowed_lag
     with_0dt_caught_up_check_cutoff
+    with_0dt_caught_up_check_stability_period
     with_0dt_deployment_ddl_check_interval
     """.split())
 
@@ -479,9 +481,11 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "arrangement_size_history_collection_interval",
     "cluster_topology_spread_min_domains",
     "column_paged_batcher_budget_fraction",
+    "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
+    "enable_upsert_paged_spill",
     "enable_zero_downtime_cluster_reconfiguration",
     "kafka_client_id_enrichment_rules",
     "kafka_progress_record_fetch_timeout",
@@ -518,6 +522,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     allow_real_time_recency
     allowed_cluster_replica_sizes
     column_paged_batcher_budget_fraction
+    column_paged_batcher_lz4
     compute_dataflow_max_inflight_bytes
     compute_peek_response_stash_threshold_bytes
     compute_subscribe_snapshot_optimization
@@ -533,6 +538,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_new_outer_join_lowering
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
+    enable_upsert_paged_spill
     enable_upsert_v2
     enable_variadic_left_join_lowering
     grpc_client_http2_keep_alive_timeout

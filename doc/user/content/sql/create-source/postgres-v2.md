@@ -17,6 +17,8 @@ other_ref="[old reference page](/sql/create-source/postgres/)" include_blurb=tru
 {{% create-source-intro external_source="PostgreSQL" version="11+"
 create_table="/sql/create-table/" %}}
 
+PostgreSQL 16+ is required for connecting Materialize to a physical replica.
+
 ## Prerequisites
 
 {{% include-from-yaml data="postgres_source_details"
@@ -104,6 +106,11 @@ SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
 name="postgres-replication-slots-tip-list" %}}
 
 {{</ tip >}}
+
+### Reading from a physical standby
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-physical-standby" %}}
 
 ## Examples
 

@@ -33,11 +33,17 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.moto import Moto
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 # Moto-mode constants. workflow_aws derives its own per-run names.
 MOTO_AWS_ACCESS_KEY_ID = "test"
 MOTO_AWS_SECRET_ACCESS_KEY = "test"
+# testdrive's AWS client talks to moto directly. Materialize goes through
+# toxiproxy so a test can sever its link to the registry without disturbing
+# testdrive's schema registration. With no toxic set toxiproxy is a transparent
+# passthrough, so the happy-path scripts are unaffected.
 MOTO_AWS_ENDPOINT_URL = "http://moto:5000"
+GLUE_PROXY_ENDPOINT_URL = "http://toxiproxy:5000"
 
 REGISTRY_NAME_BASE = "mz-test-registry"
 OTHER_REGISTRY_NAME_BASE = "mz-other-registry"
@@ -55,12 +61,13 @@ DEFAULT_SCHEMA_NAME_BASE = "mz-default-schema"
 
 SERVICES = [
     Moto(),
+    Toxiproxy(),
     Kafka(),
     Materialized(
-        depends_on=["moto"],
+        depends_on=["moto", "toxiproxy"],
         environment_extra=[
             f"AWS_REGION={DEFAULT_CLOUD_REGION}",
-            f"AWS_ENDPOINT_URL={MOTO_AWS_ENDPOINT_URL}",
+            f"AWS_ENDPOINT_URL={GLUE_PROXY_ENDPOINT_URL}",
             f"AWS_ACCESS_KEY_ID={MOTO_AWS_ACCESS_KEY_ID}",
             f"AWS_SECRET_ACCESS_KEY={MOTO_AWS_SECRET_ACCESS_KEY}",
         ],
@@ -68,6 +75,10 @@ SERVICES = [
     Testdrive(
         default_timeout="30s",
         no_reset=True,
+        # Pin the seed so topic names stay stable across the several testdrive
+        # invocations a single run makes (main script, post-restart script,
+        # ...). The restart script references topics the main script created.
+        consistent_seed=True,
         # Point testdrive's AWS client at moto so the `glue-create-schema`
         # action registers schemas in the same backend Materialize reads from.
         # workflow_aws overrides this to talk to real AWS.
@@ -124,6 +135,42 @@ def _cleanup_glue(
             print(f"warning: failed to delete default-registry schema: {e}")
 
 
+def _testdrive_var_args(
+    *,
+    registry_name: str,
+    other_registry_name: str,
+    nonexistent_registry_name: str,
+    default_schema_name: str,
+) -> list[str]:
+    """Build the `--var` args shared by every testdrive file in a run.
+
+    Only the resources whose names must be unique per run and are managed here,
+    the registries and the shared default-registry schema, are passed in.
+    In-registry schema names are constants defined in the scripts, and every
+    schema body + version UUID is produced there by `glue-create-schema`.
+    """
+    return [
+        f"--var=registry-name={registry_name}",
+        f"--var=other-registry-name={other_registry_name}",
+        f"--var=default-registry-name={DEFAULT_REGISTRY_NAME}",
+        f"--var=nonexistent-registry-name={nonexistent_registry_name}",
+        f"--var=default-schema-name={default_schema_name}",
+    ]
+
+
+def _configure_glue_proxy(c: Composition) -> None:
+    """Create the toxiproxy proxy that fronts moto for Materialize."""
+    c.testdrive(input="""
+$ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+{
+  "name": "glue",
+  "listen": "0.0.0.0:5000",
+  "upstream": "moto:5000",
+  "enabled": true
+}
+""")
+
+
 def _run_testdrive(
     c: Composition,
     *,
@@ -133,22 +180,17 @@ def _run_testdrive(
     nonexistent_registry_name: str,
     default_schema_name: str,
 ) -> None:
+    var_args = _testdrive_var_args(
+        registry_name=registry_name,
+        other_registry_name=other_registry_name,
+        nonexistent_registry_name=nonexistent_registry_name,
+        default_schema_name=default_schema_name,
+    )
+
     # Bring up the AWS connection out-of-band so we can include SESSION TOKEN
     # only when present.
-    #
-    # Only the resources whose names must be unique per run and are managed here
-    # — the registries and the shared default-registry schema — are passed in.
-    # In-registry schema names are constants defined in the script, and every
-    # schema body + version UUID is produced there by `glue-create-schema`.
     c.testdrive(input=aws_conn_sql)
-    c.run_testdrive_files(
-        f"--var=registry-name={registry_name}",
-        f"--var=other-registry-name={other_registry_name}",
-        f"--var=default-registry-name={DEFAULT_REGISTRY_NAME}",
-        f"--var=nonexistent-registry-name={nonexistent_registry_name}",
-        f"--var=default-schema-name={default_schema_name}",
-        "glue-schema-registry.td",
-    )
+    c.run_testdrive_files(*var_args, "glue-schema-registry.td")
 
 
 def workflow_default(c: Composition) -> None:
@@ -178,7 +220,12 @@ def workflow_default(c: Composition) -> None:
         other_registry_name=OTHER_REGISTRY_NAME_BASE,
     )
 
-    c.up("kafka", "materialized")
+    c.up("toxiproxy", "kafka", "materialized")
+
+    # Insert toxiproxy between Materialize and moto. No toxic is set, so it is a
+    # transparent passthrough until the runtime-errors script cuts it. Created
+    # before any Materialize Glue call (the first is glue_conn's validate()).
+    _configure_glue_proxy(c)
 
     aws_conn_sql = f"""
 > CREATE SECRET aws_secret_access_key AS '{MOTO_AWS_SECRET_ACCESS_KEY}'
@@ -197,6 +244,34 @@ def workflow_default(c: Composition) -> None:
         nonexistent_registry_name="no-such-registry",
         default_schema_name=DEFAULT_SCHEMA_NAME_BASE,
     )
+
+    # The scenarios below need container-lifecycle or connectivity control, so
+    # they run here rather than inside the shared testdrive script. Moto-only:
+    # we can't restart against or take down real AWS, and all exercise
+    # Materialize-internal behavior moto reproduces faithfully.
+    var_args = _testdrive_var_args(
+        registry_name=REGISTRY_NAME_BASE,
+        other_registry_name=OTHER_REGISTRY_NAME_BASE,
+        nonexistent_registry_name="no-such-registry",
+        default_schema_name=DEFAULT_SCHEMA_NAME_BASE,
+    )
+
+    # Restart Materialize and confirm the Glue connection and sources rehydrate
+    # from the catalog and keep resolving + decoding against the registry. The
+    # pinned seed keeps the post-restart script pointed at the same topics.
+    c.kill("materialized")
+    c.up("materialized")
+    c.run_testdrive_files(*var_args, "glue-schema-registry-restart.td")
+
+    # Runtime (decode-time) error paths: a record with an unknown UUID is a
+    # permanent error, while a record arriving during a registry outage is
+    # transient and recovers. The script toggles the toxiproxy proxy itself.
+    c.run_testdrive_files(*var_args, "glue-schema-registry-runtime-errors.td")
+
+    # Registry-unreachable: kill the Glue backend, then confirm connection
+    # validation fails cleanly rather than hanging or panicking.
+    c.kill("moto")
+    c.run_testdrive_files(*var_args, "glue-schema-registry-unreachable.td")
 
 
 def workflow_aws(c: Composition) -> None:
@@ -313,6 +388,7 @@ def workflow_aws(c: Composition) -> None:
             Testdrive(
                 default_timeout="30s",
                 no_reset=True,
+                consistent_seed=True,
                 aws_region=region,
                 aws_endpoint=None,
                 aws_access_key_id=None,

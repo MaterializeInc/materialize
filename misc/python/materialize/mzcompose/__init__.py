@@ -105,6 +105,9 @@ def get_minimal_system_parameters(
         "grpc_client_http2_keep_alive_timeout": "5s",
         "ore_overflowing_behavior": "panic",
         "unsafe_enable_table_keys": "true",
+        # Keep the 0dt stability soak out of the critical path for tests. The
+        # production default is much higher. Dedicated workflows override this.
+        "with_0dt_caught_up_check_stability_period": "0s",
         "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)
     }
@@ -645,6 +648,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "with_0dt_caught_up_check_allowed_lag",
     "with_0dt_caught_up_check_cutoff",
     "enable_0dt_caught_up_replica_status_check",
+    "enable_0dt_caught_up_stability_check",
     "plan_insights_notice_fast_path_clusters_optimize_duration",
     "enable_expression_cache",
     "mz_metrics_lgalloc_map_refresh_interval",

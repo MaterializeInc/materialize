@@ -18,6 +18,14 @@ Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 {{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}
 
+{{< note >}}
+Connecting directly to your primary, as described here, is the recommended
+setup. In the exceptional case where you can't reconfigure the primary, or need
+to keep WAL-retention risk off it, you can point Materialize at a dedicated
+replica instead. See [Ingest from a dedicated PostgreSQL
+replica](/ingest-data/postgres/logical-replica/).
+{{< /note >}}
+
 ## Before you begin
 
 {{% include-from-yaml data="ingest_postgres" name="before-you-begin" %}}

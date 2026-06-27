@@ -1193,15 +1193,25 @@ class AlterIcebergSinkFromAction(Action):
             else:
                 # Avro schema migration checking can be quite strict, and we need to be not only
                 # compatible with the latest object's schema but all previous schemas.
-                # Only allow a conservative case for now: where all types and names match.
+                # Only allow a conservative case for now: where all names, types,
+                # and nullabilities match. Nullability matters because it flips an
+                # Avro field between a `["null", T]` union and a bare `T`, which the
+                # schema registry rejects as an incompatible change for an existing
+                # subject (the topic, hence subject, is unchanged by SET FROM).
+                # TODO: Switch back when SS-324 is fixed to make sure it errors
+                # instead of causing a stall
                 objs = []
-                old_cols = {c.name(True): c.data_type for c in old_object.columns}
+                old_cols = {
+                    c.name(True): (c.data_type, c.nullable) for c in old_object.columns
+                }
                 for o in exe.db.db_objects_without_views():
                     if isinstance(old_object, WebhookSource):
                         continue
                     if isinstance(o, WebhookSource):
                         continue
-                    new_cols = {c.name(True): c.data_type for c in o.columns}
+                    new_cols = {
+                        c.name(True): (c.data_type, c.nullable) for c in o.columns
+                    }
                     if old_cols == new_cols:
                         objs.append(o)
             if not objs:
@@ -1258,15 +1268,23 @@ class AlterKafkaSinkFromAction(Action):
             else:
                 # Avro schema migration checking can be quite strict, and we need to be not only
                 # compatible with the latest object's schema but all previous schemas.
-                # Only allow a conservative case for now: where all types and names match.
+                # Only allow a conservative case for now: where all names, types,
+                # and nullabilities match. Nullability matters because it flips an
+                # Avro field between a `["null", T]` union and a bare `T`, which the
+                # schema registry rejects as an incompatible change for an existing
+                # subject (the topic, hence subject, is unchanged by SET FROM).
                 objs = []
-                old_cols = {c.name(True): c.data_type for c in old_object.columns}
+                old_cols = {
+                    c.name(True): (c.data_type, c.nullable) for c in old_object.columns
+                }
                 for o in exe.db.db_objects_without_views():
                     if isinstance(old_object, WebhookSource):
                         continue
                     if isinstance(o, WebhookSource):
                         continue
-                    new_cols = {c.name(True): c.data_type for c in o.columns}
+                    new_cols = {
+                        c.name(True): (c.data_type, c.nullable) for c in o.columns
+                    }
                     if old_cols == new_cols:
                         objs.append(o)
             if not objs:
@@ -1840,6 +1858,8 @@ class FlipFlagsAction(Action):
             "enable_0dt_caught_up_check",
             "with_0dt_caught_up_check_allowed_lag",
             "with_0dt_caught_up_check_cutoff",
+            "with_0dt_caught_up_check_stability_period",
+            "enable_0dt_caught_up_stability_check",
             "enable_statement_lifecycle_logging",
             "enable_introspection_subscribes",
             "plan_insights_notice_fast_path_clusters_optimize_duration",

@@ -444,6 +444,112 @@ mod tests {
             Some("myreg")
         );
     }
+
+    // GlueSchemaCache::parse_version validates a fetched schema version before
+    // it is decoded against. Every failure here is permanent (a retry returns
+    // the same version), so each is cached rather than retried.
+
+    const GLUE_SCHEMA_ARN: &str = "arn:aws:glue:us-east-1:123456789012:schema/myreg/myschema";
+    const GLUE_SCHEMA_BODY: &str =
+        r#"{"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}]}"#;
+
+    fn glue_reader_schema() -> Schema {
+        parse_schema(GLUE_SCHEMA_BODY, &[]).expect("reader schema parses")
+    }
+
+    /// An otherwise-valid `Available` version; tests mutate one field to drive
+    /// a single rejection branch.
+    fn glue_schema_version() -> mz_aws_glue_schema_registry::SchemaVersion {
+        mz_aws_glue_schema_registry::SchemaVersion {
+            schema_version_id: Some("00000000-0000-0000-0000-000000000001".to_string()),
+            schema_arn: Some(GLUE_SCHEMA_ARN.to_string()),
+            definition: Some(GLUE_SCHEMA_BODY.to_string()),
+            data_format: Some(mz_aws_glue_schema_registry::DataFormat::Avro),
+            version_number: Some(1),
+            lifecycle_status: Some(
+                mz_aws_glue_schema_registry::SchemaVersionLifecycleStatus::Available,
+            ),
+        }
+    }
+
+    fn parse_glue_version(
+        version: mz_aws_glue_schema_registry::SchemaVersion,
+    ) -> Result<Schema, AvroError> {
+        GlueSchemaCache::parse_version(version, Uuid::nil(), "myreg", &glue_reader_schema())
+    }
+
+    #[mz_ore::test]
+    fn parse_version_accepts_matching_available_schema() {
+        parse_glue_version(glue_schema_version())
+            .expect("an Available schema in the expected registry should parse");
+    }
+
+    #[mz_ore::test]
+    fn parse_version_rejects_non_available_lifecycle() {
+        let mut version = glue_schema_version();
+        version.lifecycle_status =
+            Some(mz_aws_glue_schema_registry::SchemaVersionLifecycleStatus::Pending);
+        let err = parse_glue_version(version).expect_err("a non-Available version is refused");
+        assert!(err.to_string().contains("is not Available"), "got: {err}");
+    }
+
+    #[mz_ore::test]
+    fn parse_version_rejects_missing_definition() {
+        let mut version = glue_schema_version();
+        version.definition = None;
+        let err =
+            parse_glue_version(version).expect_err("a version without a definition is refused");
+        assert!(
+            err.to_string().contains("returned without a definition"),
+            "got: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn parse_version_rejects_missing_arn() {
+        let mut version = glue_schema_version();
+        version.schema_arn = None;
+        let err = parse_glue_version(version).expect_err("a version without an ARN is refused");
+        assert!(
+            err.to_string().contains("returned without a SchemaArn"),
+            "got: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn parse_version_rejects_unparseable_arn() {
+        let mut version = glue_schema_version();
+        version.schema_arn = Some("not-an-arn".to_string());
+        let err = parse_glue_version(version).expect_err("a malformed ARN is refused");
+        assert!(
+            err.to_string().contains("did not match the expected"),
+            "got: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn parse_version_rejects_registry_mismatch() {
+        // Same schema name, different registry: a UUID the credentials can
+        // resolve but that belongs to a registry this source isn't scoped to.
+        let mut version = glue_schema_version();
+        version.schema_arn =
+            Some("arn:aws:glue:us-east-1:123456789012:schema/otherreg/myschema".to_string());
+        let err = parse_glue_version(version).expect_err("a foreign-registry version is refused");
+        let msg = err.to_string();
+        assert!(msg.contains("lives in registry \"otherreg\""), "got: {msg}");
+        assert!(
+            msg.contains("configured for registry \"myreg\""),
+            "got: {msg}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn parse_version_rejects_invalid_json_definition() {
+        let mut version = glue_schema_version();
+        version.definition = Some("{ this is not json".to_string());
+        let err = parse_glue_version(version).expect_err("an unparseable definition is refused");
+        assert!(err.to_string().contains("Error parsing JSON"), "got: {err}");
+    }
 }
 
 /// Identifier carried in a wire-format header that points at the writer's

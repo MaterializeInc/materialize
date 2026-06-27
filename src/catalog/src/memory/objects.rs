@@ -540,6 +540,10 @@ impl From<ClusterReplica> for durable::ClusterReplica {
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ClusterReplicaProcessStatus {
     pub status: ClusterStatus,
+    /// Cumulative restart count of the process, mirrored from the orchestrator.
+    /// See [`mz_orchestrator::ServiceEvent::restart_count`].
+    pub restart_count: u64,
+    /// Time of the most recent change to `status` or `restart_count`.
     pub time: DateTime<Utc>,
 }
 

@@ -44,6 +44,9 @@ cannot modify your existing tables, here are some common alternatives:
   you want to replicate, setting these tables with `REPLICA IDENTITY FULL`. You
   can then use the sidecar for Materialize instead of your primary database.
 
+  For step-by-step instructions, see [Ingest from a dedicated PostgreSQL
+  replica](/ingest-data/postgres/logical-replica/).
+
 - **Debezium + Kafka**
 
   With [Debezium + Kafka](/ingest-data/postgres/postgres-debezium/), if the
