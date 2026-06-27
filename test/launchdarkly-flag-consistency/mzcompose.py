@@ -532,6 +532,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_eager_delta_joins
     enable_index_options
     enable_join_prioritize_arranged
+    enable_kafka_broker_matching_rules
     enable_lgalloc
     enable_logical_compaction_window
     enable_network_policies
