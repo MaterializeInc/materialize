@@ -2456,6 +2456,20 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-listener-config-version-skew
+        label: Orchestratord listener config version skew
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: listener-config-version-skew
+              args: [--recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
       - id: orchestratord-oidc-auth
         label: Orchestratord OIDC auth end-to-end
         artifact_paths: ["mz_debug_*.zip"]
