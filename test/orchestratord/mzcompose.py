@@ -3528,6 +3528,171 @@ def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> N
     )
 
 
+# environmentd in this half-open band only understands the legacy listener-config
+# schema; the new schema's parser first ships at the upper bound. The buggy
+# orchestratord gate sits at the lower bound, so it mis-serves the new schema to
+# this whole band. See `workflow_listener_config_version_skew`.
+LEGACY_LISTENER_SCHEMA_BAND = ("v26.31.0-dev.0", "v26.32.0-dev.0")
+
+
+def newest_legacy_listener_schema_version() -> MzVersion | None:
+    """Newest published environmentd in the band an operator built from this repo
+    can mis-serve, or None if empty. Queries the operator helm index directly
+    because `fetch_self_managed_versions` drops the prereleases (v26.31.0-rc.*)
+    that currently populate the band."""
+    low, high = (MzVersion.parse_mz(v) for v in LEGACY_LISTENER_SCHEMA_BAND)
+    index = yaml.safe_load(
+        requests.get(
+            "https://materializeinc.github.io/materialize/index.yaml", timeout=30
+        ).text
+    )
+    in_band = sorted(
+        v
+        for entry in index["entries"]["materialize-operator"]
+        if low <= (v := MzVersion.parse_mz(entry["appVersion"])) < high
+    )
+    return in_band[-1] if in_band else None
+
+
+def get_listeners_config() -> dict[str, Any] | None:
+    """Parsed `listeners.json` from the rendered listeners configmap, or None if
+    the operator has not created it yet."""
+    cms = spawn.capture(
+        ["kubectl", "get", "cm", "-n", "materialize-environment", "-o", "name"],
+        stderr=subprocess.STDOUT,
+    ).splitlines()
+    cm = next((cm for cm in cms if "listeners" in cm), None)
+    if cm is None:
+        return None
+    return json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                cm,
+                "-n",
+                "materialize-environment",
+                "-o",
+                r"jsonpath={.data.listeners\.json}",
+            ],
+            stderr=subprocess.STDOUT,
+        )
+    )
+
+
+def environmentd_container_status() -> dict[str, Any] | None:
+    """containerStatuses[0] of the environmentd pod, or None if not present yet."""
+    try:
+        items = get_environmentd_data().get("items", [])
+    except subprocess.CalledProcessError:
+        return None
+    if not items:
+        return None
+    statuses = items[0].get("status", {}).get("containerStatuses")
+    return statuses[0] if statuses else None
+
+
+def workflow_listener_config_version_skew(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    # Regression test for the stale orchestratord listener-config version gate
+    # (`PER_ROUTE_GROUP_ROLES_VERSION` in
+    # src/orchestratord/src/controller/materialize/generation.rs). environmentd
+    # parses MZ_LISTENERS_CONFIG_PATH strictly with no fallback, and the operator
+    # must serve each environmentd (per its target image ref) the schema its
+    # binary understands. A gate set below where the new schema actually ships
+    # serves the new schema to a legacy-only environmentd, which then crash-loops
+    # on boot. Other workflows miss this: they move operator and environmentd in
+    # lockstep, and the affected band holds only prereleases that
+    # get_all_self_managed_versions filters out. So we keep the operator on this
+    # repo's build and pin environmentd back to a published band version.
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    skew_version = newest_legacy_listener_schema_version()
+    if skew_version is None:
+        print(f"No published environmentd in {LEGACY_LISTENER_SCHEMA_BAND}, skipping")
+        return
+
+    definition = setup(c, args)
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"], str(skew_version)
+    )
+    print(f"operator {get_version(args.tag)} managing environmentd {skew_version}")
+
+    init(definition)
+    apply_materialize(definition)
+
+    # Let environmentd boot on the config the operator served it, and watch for a
+    # crash loop (the bug) vs a healthy start (the fix). The legacy binary cannot
+    # parse the new per-route-group schema, so it errors out of run() on boot and
+    # k8s backs it off into CrashLoopBackOff.
+    crashed = False
+    for _ in range(120):
+        time.sleep(5)
+        cs = environmentd_container_status()
+        if cs is None:
+            continue
+        if cs.get("ready"):
+            break
+        waiting = cs.get("state", {}).get("waiting", {}).get("reason")
+        if waiting == "CrashLoopBackOff" or cs.get("restartCount", 0) >= 3:
+            crashed = True
+            break
+
+    if crashed:
+        served = get_listeners_config() or {}
+        print(f"operator served listeners.json version={served.get('version')!r}")
+        # The previous (terminated) container's logs hold the listener-config
+        # parse error that aborted boot.
+        for cmd in (
+            [
+                "kubectl",
+                "logs",
+                "-l",
+                "app=environmentd",
+                "-n",
+                "materialize-environment",
+                "--previous",
+                "--tail=50",
+            ],
+            [
+                "kubectl",
+                "describe",
+                "pod",
+                "-l",
+                "app=environmentd",
+                "-n",
+                "materialize-environment",
+            ],
+        ):
+            try:
+                spawn.runv(cmd)
+            except subprocess.CalledProcessError:
+                pass
+        raise AssertionError(
+            f"environmentd {skew_version} crash-looped on boot: the operator "
+            f"served it the new listener-config schema it cannot parse. The "
+            f"PER_ROUTE_GROUP_ROLES_VERSION gate is stale (must match "
+            f"{LEGACY_LISTENER_SCHEMA_BAND[1]})."
+        )
+
+    # Not crash-looping: confirm environmentd booted and the rollout completed.
+    post_run_check(definition, expect_fail=False)
+
+
 def workflow_rollout_timeout(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Tests CLO-81: orchestratord automatically cancels an in-progress rollout
     # once it has been running longer than `spec.rolloutRequestTimeout`. A new
