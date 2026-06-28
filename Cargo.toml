@@ -434,7 +434,7 @@ owo-colors = "4.3.0"
 parquet = { version = "57", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
 paste = "1.0.15"
 pem = "3.0.6"
-phf = { version = "0.13.1", features = ["uncased"] }
+phf = { version = "0.14.0", features = ["uncased"] }
 phf_codegen = "0.13.1"
 pin-project = "1.1.13"
 postgres = "0.19.12"
