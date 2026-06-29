@@ -947,3 +947,57 @@ canonicalize
 (#0 = #1)
 ((#0 + 1) < 2147483647)
 ((#0 + 1) < #2)
+
+# Complementary-pair collapse: `p OR NOT(p)` --> true and `p AND NOT(p)` -->
+# false, but only when `p` is non-nullable and infallible.
+
+# Non-nullable, infallible `p`: collapses.
+reduce
+(call_variadic or [#0 (call_unary not #0)])
+[(bool false)]
+----
+true
+
+reduce
+(call_variadic and [#0 (call_unary not #0)])
+[(bool false)]
+----
+false
+
+# Extra operands do not block the collapse: the forced zero dominates them.
+reduce
+(call_variadic or [#0 (call_unary not #0) #1])
+[(bool false) (bool false)]
+----
+true
+
+reduce
+(call_variadic and [#0 (call_unary not #0) #1])
+[(bool false) (bool false)]
+----
+false
+
+# Nullable `p`: `NULL OR NOT(NULL)` is NULL, not true, so no collapse.
+reduce
+(call_variadic or [#0 (call_unary not #0)])
+[bool]
+----
+(#0 OR NOT(#0))
+
+reduce
+(call_variadic and [#0 (call_unary not #0)])
+[bool]
+----
+(#0 AND NOT(#0))
+
+# Fallible `p`: if `p` errors, both `p` and `NOT(p)` error, so the call errors
+# rather than evaluating to its zero. No collapse even though `p` is
+# non-nullable.
+reduce
+(call_variadic or [
+    (call_unary cast_string_to_bool #0)
+    (call_unary not (call_unary cast_string_to_bool #0))
+])
+[(string false)]
+----
+(NOT(text_to_boolean(#0)) OR text_to_boolean(#0))
