@@ -138,7 +138,7 @@ See the cloud-specific notes:
 - **Azure**: usually the OAuth2Client finalizer (see the symptom table
   above)
 - **AWS**: the AWS Load Balancer Controller can race with namespace
-  deletion. See [AWS-specific notes](/self-managed-deployments/enterprise-sso/install-on-aws/#destroy)
+  deletion. See [AWS-specific notes](/self-managed-deployments/enterprise-sso/install-on-aws/#cleanup)
 - **GCP**: the GKE master IP allocator can be slow; usually patience is
   the fix
 
