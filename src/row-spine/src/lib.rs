@@ -1753,21 +1753,11 @@ mod row_codec {
     #[cfg(test)]
     pub use dictionary::SAFE_TAG_BASE;
 
-    /// Deterministic hasher state for the codecs' hash maps.
-    ///
-    /// We fix the seeds (rather than letting `ahash` randomize per process) so the
-    /// heavy-hitter summaries — and therefore which values each codec compresses —
-    /// are identical across runs and replicas, preserving the determinism the old
-    /// `BTreeMap` backing provided. The seeds match `mz_timely_util`'s consolidation
-    /// hasher purely for consistency.
-    fn fixed_state() -> ahash::RandomState {
-        ahash::RandomState::with_seeds(
-            0x243f_6a88_85a3_08d3,
-            0x1319_8a2e_0370_7344,
-            0xa409_3822_299f_31d0,
-            0x082e_fa98_ec4e_6c89,
-        )
-    }
+    // Deterministic hasher state for the codecs' hash maps: a fixed-seed
+    // `ahash::RandomState` shared with `mz_timely_util`'s consolidation hasher, so
+    // the heavy-hitter summaries — and therefore which values each codec compresses
+    // — are identical across runs and replicas, as the old `BTreeMap` backing was.
+    use mz_timely_util::hash::fixed_state;
 
     // The codecs encode and decode `[u8]` data specific to the `[Row]` encoding. They
     // soundly decode data they themselves encoded from valid `[Row]` data, but may be
