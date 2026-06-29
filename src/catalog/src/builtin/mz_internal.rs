@@ -7079,13 +7079,13 @@ replica_metrics_history AS (
     m.occurred_at,
     m.replica_id,
     r.size,
-    (SUM(m.cpu_nano_cores::float8) / (NULLIF(s.cpu_nano_cores, 0) * s.processes)) AS cpu_percent,
-    (SUM(m.memory_bytes::float8) / (NULLIF(s.memory_bytes, 0) * s.processes)) AS memory_percent,
-    (SUM(m.disk_bytes::float8) / (NULLIF(s.disk_bytes, 0) * s.processes)) AS disk_percent,
+    (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0) / NULLIF(s.processes, 0)) AS cpu_percent,
+    (SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)) AS memory_percent,
+    (SUM(m.disk_bytes::float8) / NULLIF(s.disk_bytes, 0) / NULLIF(s.processes, 0)) AS disk_percent,
     SUM(m.disk_bytes::float8) AS disk_bytes,
     SUM(m.memory_bytes::float8) AS memory_bytes,
-    s.disk_bytes * s.processes AS total_disk_bytes,
-    s.memory_bytes * s.processes AS total_memory_bytes,
+    s.disk_bytes::float8 * s.processes AS total_disk_bytes,
+    s.memory_bytes::float8 * s.processes AS total_memory_bytes,
     MAX(m.heap_bytes::float8) AS heap_bytes,
     MAX(m.heap_limit) AS heap_limit,
     -- heap_limit is NULL when clusterd isn't launched with --heap-limit (e.g.
@@ -7093,7 +7093,7 @@ replica_metrics_history AS (
     -- percent so the chart still renders.
     COALESCE(
       MAX(m.heap_bytes::float8 / NULLIF(m.heap_limit, 0)),
-      SUM(m.memory_bytes::float8) / (NULLIF(s.memory_bytes, 0) * s.processes)
+      SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)
     ) AS heap_percent
   FROM
     replica_history AS r
@@ -7242,6 +7242,116 @@ LEFT JOIN replica_offline_event_history USING (bucket_start, replica_id)"#,
     )
 }
 
+/// Schema for the un-binned 3-hour console cluster utilization base. Unlike the
+/// binned `_overview*` views, this exposes raw per-(replica, sample) metrics so
+/// the Console can bin client-side.
+fn console_cluster_utilization_unbinned_3h_desc() -> RelationDesc {
+    RelationDesc::builder()
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(true))
+        .with_column("size", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(true))
+        .with_column(
+            "occurred_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("cpu_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
+        .with_column(
+            "memory_and_disk_percent",
+            SqlScalarType::Float64.nullable(true),
+        )
+        .finish()
+}
+
+/// Builds the SQL for the un-binned 3-hour console cluster utilization base: one
+/// row per (replica, metric sample) over `retention`, with no `date_bin`/top-k,
+/// so the Console bins it client-side. The binned `_overview*` views handle the
+/// longer windows. A temporal `mz_now()` filter bounds the maintained
+/// arrangement. Kept in sync with the Console
+/// (`buildConsoleClusterUtilizationUnbinned3hQuery` in
+/// `replicaUtilizationHistory.ts`).
+fn console_cluster_utilization_unbinned_3h_sql(retention: &str) -> String {
+    format!(
+        r#"WITH replica_history AS (
+  -- Dedup to one row per replica (prefer the current size). Size is fixed per
+  -- replica so this is normally a no-op, but a stray duplicate size in history
+  -- would fan out the metrics join; with no Top-1 dedup here that would emit two
+  -- rows per (replica_id, occurred_at) and break the Console SUBSCRIBE upsert key.
+  SELECT DISTINCT ON (replica_id) replica_id, size, cluster_id
+  FROM (
+    -- We union the current set of cluster replicas since mz_cluster_replica_history doesn't include system clusters.
+    SELECT id AS replica_id, size, cluster_id, 0 AS source_rank
+    FROM mz_catalog.mz_cluster_replicas
+    UNION ALL
+    SELECT replica_id, size, cluster_id, 1 AS source_rank
+    FROM mz_internal.mz_cluster_replica_history
+  ) all_replicas
+  ORDER BY replica_id, source_rank
+),
+replica_metrics AS (
+  SELECT
+    m.occurred_at,
+    m.replica_id,
+    r.cluster_id,
+    r.size,
+    (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0) / NULLIF(s.processes, 0)) AS cpu_percent,
+    (SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)) AS memory_percent,
+    (SUM(m.disk_bytes::float8) / NULLIF(s.disk_bytes, 0) / NULLIF(s.processes, 0)) AS disk_percent,
+    COALESCE(
+      MAX(m.heap_bytes::float8 / NULLIF(m.heap_limit, 0)),
+      SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0) / NULLIF(s.processes, 0)
+    ) AS heap_percent,
+    CASE
+      WHEN SUM(m.disk_bytes::float8) IS NULL AND SUM(m.memory_bytes::float8) IS NULL THEN NULL
+      ELSE (COALESCE(SUM(m.memory_bytes::float8), 0) + COALESCE(SUM(m.disk_bytes::float8), 0))
+           / NULLIF((s.memory_bytes::float8 + s.disk_bytes::float8) * s.processes, 0)
+    END AS memory_and_disk_percent
+  FROM replica_history AS r
+    INNER JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
+    INNER JOIN mz_internal.mz_cluster_replica_metrics_history AS m ON m.replica_id = r.replica_id
+  -- No aggregation over time: one row per (replica, sample) so the Console bins
+  -- client-side. The temporal mz_now() filter keeps the maintained arrangement
+  -- bounded to the retention window.
+  WHERE mz_now() <= m.occurred_at + INTERVAL '{retention}'
+  GROUP BY
+    m.occurred_at,
+    m.replica_id,
+    r.cluster_id,
+    r.size,
+    s.cpu_nano_cores,
+    s.memory_bytes,
+    s.disk_bytes,
+    s.processes
+)
+SELECT
+  m.replica_id,
+  m.cluster_id,
+  m.size,
+  replica_name_history.new_name AS name,
+  m.occurred_at,
+  m.cpu_percent,
+  m.memory_percent,
+  m.disk_percent,
+  m.heap_percent,
+  m.memory_and_disk_percent
+FROM replica_metrics AS m
+/* Most recent replica name as of the sample time. */
+CROSS JOIN LATERAL (
+  SELECT new_name
+  FROM mz_internal.mz_cluster_replica_name_history AS replica_name_history
+  WHERE m.replica_id = replica_name_history.id
+    -- We treat NULLs as the beginning of time.
+    AND m.occurred_at >= COALESCE(replica_name_history.occurred_at, '1970-01-01'::timestamp)
+  ORDER BY replica_name_history.occurred_at DESC
+  LIMIT 1
+) AS replica_name_history"#,
+        retention = retention,
+    )
+}
+
 /**
  * Displays cluster utilization over 14 days bucketed by 1 hour, for the
  * Console's environment overview and cluster pages, to speed up load times.
@@ -7263,20 +7373,19 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> =
     });
 
 /**
- * Cluster utilization over the last 3 hours bucketed by 1 minute, for the
- * Console's "Last hour" / "Last 3 hours" cluster utilization graphs. See
- * `console_cluster_utilization_overview_sql` for details.
+ * Un-binned cluster utilization over the last 3 hours, for the Console's "Last
+ * hour" / "Last 3 hours" graphs. Unlike the binned `_overview*` views, this
+ * exposes raw per-(replica, sample) metrics and the Console bins client-side.
+ * See `console_cluster_utilization_unbinned_3h_sql` for details.
  */
 pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H: LazyLock<BuiltinView> =
     LazyLock::new(|| BuiltinView {
         name: "mz_console_cluster_utilization_overview_3h",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H_OID,
-        desc: console_cluster_utilization_overview_desc(),
+        desc: console_cluster_utilization_unbinned_3h_desc(),
         column_comments: BTreeMap::new(),
-        sql: Box::leak(
-            console_cluster_utilization_overview_sql("1 MINUTE", "3 HOURS", 1).into_boxed_str(),
-        ),
+        sql: Box::leak(console_cluster_utilization_unbinned_3h_sql("3 HOURS").into_boxed_str()),
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });

@@ -2140,17 +2140,6 @@ impl<'a> Transaction<'a> {
         self.system_configurations.delete(|_k, _v| true, self.op_id);
     }
 
-    /// Returns the persisted value of system configuration `name`, if any. Used
-    /// during bootstrap to read a system parameter before the in-memory catalog
-    /// (and its `SystemVars`) has been seeded.
-    pub fn get_system_config(&self, name: &str) -> Option<String> {
-        self.system_configurations
-            .items()
-            .into_iter()
-            .find(|(k, _)| k.name == name)
-            .map(|(_, v)| v.value.clone())
-    }
-
     /// Returns the persisted cluster-coherent scoped system configurations.
     pub fn get_cluster_system_configurations(
         &self,
