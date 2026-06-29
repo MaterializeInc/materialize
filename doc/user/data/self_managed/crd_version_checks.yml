@@ -1,0 +1,30 @@
+- name: check-crd-version
+  content: |
+    To check the CRD version of the Materialize manifest that was applied, run
+    the following:
+
+    ```sh
+    terraform state show 'module.materialize_instance.kubectl_manifest.materialize_instance' \
+      | grep -iE 'api_?version|kind'
+    ```
+
+    If you renamed the module or are running multiple instances, you can find
+    module name(s) with `terraform state list | grep -i materialize_instance`.
+
+- name: check-crd-v1-enablement
+  content: |
+
+    To check whether `v1` CRD is enabled, list the versions that your Materialize
+    CRD serves:
+
+    ```sh
+    kubectl get crd materializes.materialize.cloud \
+      -o jsonpath='{range .spec.versions[*]}{.name} (served={.served}, storage={.  storage}){"\n"}{end}'
+    ```
+
+    - If the output lists both `v1` and `v1alpha1`, the `v1` CRD is enabled.
+      `v1alpha1` remains the storage version (`storage=true`); this is expected.
+
+    - If only `v1alpha1` is listed, the `v1` CRD is not enabled. You must set
+      `operator.args.installV1CRD=true` on the operator first before you can use
+      `v1`.

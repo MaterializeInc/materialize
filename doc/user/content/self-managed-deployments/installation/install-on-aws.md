@@ -251,6 +251,10 @@ authentication mechanisms.
    {{% include-from-yaml data="self_managed/installation"
    name="installation-verify-status" %}}
 
+1. Check the CRD version.
+   {{% include-from-yaml data="self_managed/crd_version_checks"
+   name="check-crd-version" %}}
+
 ### Step 5: Connect to Materialize
 
 Using the `nlb_dns_name` and `external_login_password_mz_system` from the Terraform
