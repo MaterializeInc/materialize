@@ -1,0 +1,49 @@
+/* Materialize brand fonts — sourced from www-temporary/apps/web/static/fonts */
+
+@font-face {
+    font-family: "Inter";
+    src: url("/fonts/inter/Inter-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Inter";
+    src: url("/fonts/inter/Inter-SemiBold.woff2") format("woff2");
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "FAIRE Sprig Sans";
+    src: url("/fonts/faire-sprig-sans/FAIRE-SprigSans-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "FAIRE Sprig Sans";
+    src: url("/fonts/faire-sprig-sans/FAIRE-SprigSans-Medium.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "FAIRE Sprig Sans Mono";
+    src: url("/fonts/faire-sprig-sans-mono/FAIRE-SprigSansMono-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "FAIRE Sprig Sans Mono";
+    src: url("/fonts/faire-sprig-sans-mono/FAIRE-SprigSansMono-Medium.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}

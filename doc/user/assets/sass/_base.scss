@@ -11,14 +11,35 @@ $rem-scale: 0.585;
 :root {
     --nav-height: #{rem(6.5)}; // Changes to height requires changes to partials/toc.html since custom scroll logic implementation
 
-    --h1: #{rem(4.0)};
+    // Brand typefaces (style guide): FAIRE Sprig Sans → headlines; Inter → body/UI; FAIRE Sprig Sans Mono → code
+    --font-body: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-heading: "FAIRE Sprig Sans", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "FAIRE Sprig Sans Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+    // Style guide rhythm
+    --leading-headline: 1.4;
+    --leading-code: 1.55;
+    --tracking-eyebrow: 0.05em;
+    --tracking-code: 0.05em;
+    --weight-body: 400;
+    --weight-body-emphasis: 500;
+    --weight-body-strong: 600;
+    --weight-heading: 500;
+
+    // Typography reference (docs content)
+    --h1: #{rem(3.9)};
     --h2: #{rem(2.8)};
     --h3: #{rem(2.1)};
     --h4: #{rem(1.7)};
     --h5: #{rem(1.6)};
-    --base: #{rem(1.6)};
+    --base: #{rem(1.5)};
     --sm: #{rem(1.4)};
     --xsm: #{rem(1.2)};
+    --leading-h1: 1.3;
+    --leading-h2: 1.4;
+    --leading-body: 1.625;
+    --tracking-h1: -0.02em;
+    --tracking-h2: -0.015em;
 
     @media(max-width: 850px) {
         --h1: #{rem(3.4)};
@@ -87,8 +108,56 @@ $rem-scale: 0.585;
     --table-orange: #ff9a3d;
     --table-orange-bg: #332113;
     --table-orange-border: #704017;
+    --table-yellow: #fbbf24;
+    --table-yellow-bg: rgba(251, 191, 36, 0.08);
+    --table-yellow-border: rgba(251, 191, 36, 0.22);
+    --table-blue-glow: rgba(124, 143, 255, 0.9);
     --table-radius: 14px;
     --table-shadow: 0 18px 50px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+
+    --surface-subtle: rgba(255, 255, 255, 0.015);
+    --surface-inset:  rgba(0, 0, 0, 0.25);
+    --surface-faint:  rgba(255, 255, 255, 0.01);
+    --border-subtle:  rgba(255, 255, 255, 0.06);
+    --border-faint:   rgba(255, 255, 255, 0.04);
+
+    --offerings-cols: minmax(170px, 220px) minmax(0, 1fr) minmax(150px, 190px);
+
+    // Page background mesh rhythm (theme sets colors only)
+    --docs-mesh-icons-step: #{rem(28)};
+    --docs-mesh-icons-step-sm: #{rem(24)};
+    --docs-mesh-dot-size: 1px;
+    --docs-mesh-dot-step: #{rem(3)};
+    --docs-mesh-dot-step-sm: #{rem(2.75)};
+    --docs-mesh-grid-minor-step: #{rem(2)};
+    --docs-mesh-grid-minor-step-sm: #{rem(1.75)};
+    --docs-mesh-grid-major-step: #{rem(8)};
+    --docs-mesh-grid-major-step-sm: #{rem(7)};
+
+    // Style guide palette (0326-083)
+    --sg-midnight: #100C21;
+    --sg-white: #FFFFFF;
+    --sg-violet: #7F4EFF;
+    --sg-lavender-1: #F2EDFF;
+    --sg-lavender-2: #C0B2E4;
+    --sg-lavender-3: #8F76CF;
+    --sg-lavender-4: #472F85;
+    --sg-lavender-5: #342260;
+    --sg-lavender-6: #2C1D52;
+    --sg-gray-1: #DED9EE;
+    --sg-gray-2: #9B97A3;
+    --sg-gray-3: #736F81;
+    --sg-gray-4: #403D4D;
+    --sg-gray-5: #201D2C;
+    --sg-heading: #F0EEFF;
+    --sg-body: #9B97A3;
+    --sg-inline-lifted: #E2E0F0;
+    --sg-link: #8F76CF;
+    --sg-link-hover: #B09EE0;
+    --sg-divider: #2A2745;
+    --sg-page-bg: #13111E;
+    --sg-teal-3: #00C2AA;
+    --sg-teal-5: #007567;
 }
 
 body.dark {
@@ -98,10 +167,11 @@ body.dark {
     --card: var(--black-mid);
     --card-light: var(--black-light);
     --color-scheme: dark;
-    --divider: var(--black-lighter);
-    --divider-light: var(--black-lightest);
+    --divider: var(--sg-divider);
+    --divider-light: var(--sg-divider);
 
-    --link: var(--color-purple-100);
+    --link: var(--sg-link);
+    --link-hover: var(--sg-link-hover);
 
     --code-block: var(--card-light);
     --code-simple: #c2c2c2;
@@ -112,10 +182,29 @@ body.dark {
     --code-green: #819A7B;
     --code-highlight: var(--code-blue);
 
-    --important: var(--color-white);
-    --sub: var(--gray-light);
-    --body: var(--gray);
+    --heading: var(--sg-heading);
+    --body: var(--sg-body);
+    --inline-lifted: var(--sg-inline-lifted);
+    --sub: var(--sg-lavender-2);
+    --caption: var(--sg-gray-2);
+    --important: var(--heading);
     --highlight: var(--color-teal-500);
+    --font-h4: var(--heading);
+
+    // Shared homepage promo surfaces (callout + offerings table)
+    --docs-card-surface: color-mix(in srgb, var(--card-light) 72%, var(--bg));
+    --docs-card-border: color-mix(in srgb, var(--divider-light) 88%, transparent);
+    --docs-card-divider: color-mix(in srgb, var(--divider-light) 55%, transparent);
+    --docs-card-divider-strong: color-mix(in srgb, var(--divider-light) 72%, transparent);
+    --docs-card-glow: color-mix(in srgb, var(--sg-lavender-6) 14%, transparent);
+    --docs-card-inset: color-mix(in srgb, var(--bg) 55%, transparent);
+
+    // Style guide background mesh (dark): grid + data icons + purple accent on the right
+    --docs-mesh-icons: url("/images/docs-mesh/data-icons-dark.svg");
+    --docs-mesh-dot: #1e293b;
+    --docs-mesh-grid-minor: rgba(255, 255, 255, 0.035);
+    --docs-mesh-grid-major: rgba(255, 255, 255, 0.065);
+    --docs-mesh-accent: color-mix(in srgb, var(--sg-lavender-6) 16%, transparent);
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} 0 rgba(0, 0, 0, 0.4);
     --note: #fffad411;
@@ -144,9 +233,16 @@ body.dark {
 
     --tab-bg: var(--gray-lightest);
     --tab-selected-bg: var(--tip-after);
-    --font-h4: var(--gray-lightest);
 
     --th-border: oklch(var(--color-teal-500-oklch) / 30%);
+
+    --offering-nested-border: var(--border-subtle);
+    --offering-nested-header-bg: color-mix(in srgb, var(--sg-lavender-6) 38%, var(--card-light));
+    --offering-nested-surface: var(--surface-inset);
+
+    --offering-edition-label: var(--sg-lavender-2);
+    --offering-edition-heading: var(--sg-lavender-2);
+    --offering-edition-value: var(--sg-lavender-3);
 }
 
 body.light {
@@ -159,7 +255,8 @@ body.light {
     --divider: var(--gray);
     --divider-light: var(--gray-lighter);
 
-    --link: var(--brand);
+    --link: var(--sg-violet);
+    --link-hover: var(--color-purple-700);
 
     --code-block: var(--code-block-light);
     --code-simple: #505050;
@@ -170,11 +267,28 @@ body.light {
     --code-green: #177500;
 
 
-    --important: var(--black);
-    --code-highlight: var(--important);
-    --sub: var(--black-lighter);
-    --body: var(--black-light);
-    --highlight: var(--purple-dark);
+    --heading: var(--sg-midnight);
+    --body: var(--sg-gray-4);
+    --inline-lifted: var(--sg-midnight);
+    --sub: var(--sg-gray-3);
+    --caption: var(--sg-gray-3);
+    --important: var(--heading);
+    --code-highlight: var(--heading);
+    --highlight: var(--sg-violet);
+    --font-h4: var(--heading);
+
+    --docs-card-surface: color-mix(in srgb, var(--card-light) 72%, var(--bg));
+    --docs-card-border: color-mix(in srgb, var(--divider-light) 88%, transparent);
+    --docs-card-divider: color-mix(in srgb, var(--divider-light) 55%, transparent);
+    --docs-card-divider-strong: color-mix(in srgb, var(--divider-light) 72%, transparent);
+    --docs-card-glow: color-mix(in srgb, var(--brand) 9%, transparent);
+    --docs-card-inset: color-mix(in srgb, var(--bg) 55%, transparent);
+
+    // Style guide background mesh (light): grid + data icons
+    --docs-mesh-icons: url("/images/docs-mesh/data-icons-light.svg");
+    --docs-mesh-dot: rgba(64, 61, 77, 0.095);
+    --docs-mesh-grid-minor: rgba(0, 0, 0, 0.024);
+    --docs-mesh-grid-major: rgba(0, 0, 0, 0.042);
 
     --note: #fffad411;
     --note-border: #b9a61545;
@@ -201,7 +315,20 @@ body.light {
 
     --tab-bg: var(--gray-lighter);
     --tab-selected-bg: var(--tip);
-    --font-h4: var(--gray-dark);
+
+    --surface-subtle: rgba(0, 0, 0, 0.025);
+    --surface-inset:  rgba(0, 0, 0, 0.04);
+    --surface-faint:  rgba(0, 0, 0, 0.015);
+    --border-subtle:  rgba(0, 0, 0, 0.10);
+    --border-faint:   rgba(0, 0, 0, 0.06);
+
+    --offering-nested-border: rgba(0, 0, 0, 0.09);
+    --offering-nested-header-bg: color-mix(in srgb, var(--sg-gray-1) 70%, var(--white-light));
+    --offering-nested-surface: color-mix(in srgb, var(--sg-gray-1) 22%, var(--white-light));
+
+    --offering-edition-label: var(--sg-violet);
+    --offering-edition-heading: var(--sg-gray-3);
+    --offering-edition-value: var(--sg-violet);
 
 }
 
@@ -214,15 +341,87 @@ body.light {
 }
 
 body {
-    font-family: "Geist", sans-serif;
-    color: var(--important);
+    font-family: var(--font-body);
+    color: var(--body);
     color-scheme: var(--color-scheme);
     background: var(--bg);
     font-size: var(--base);
-    line-height: 1.7;
-    font-weight: 300;
+    line-height: var(--leading-body);
+    font-weight: var(--weight-body);
     max-width: 100vw;
     overflow-x: hidden;
+    position: relative;
+
+    &::before {
+        content: "";
+        inset: 0;
+        pointer-events: none;
+        position: fixed;
+        z-index: -1;
+    }
+
+    &.dark::before {
+        background-color: #000;
+        background-image:
+            radial-gradient(ellipse 42% 85% at 100% 45%, var(--docs-mesh-accent) 0%, transparent 68%),
+            var(--docs-mesh-icons),
+            linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
+            linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
+            linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+            linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+            radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
+        background-position: center;
+        background-repeat: no-repeat, repeat, repeat, repeat, repeat, repeat, repeat;
+        @include docs-page-mesh-size(
+            var(--docs-mesh-icons-step),
+            var(--docs-mesh-grid-major-step),
+            var(--docs-mesh-grid-minor-step),
+            var(--docs-mesh-dot-step),
+            100% 100%
+        );
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.65) 0%, black 28%, black 100%);
+    }
+
+    &.light::before {
+        background-color: var(--bg);
+        @include docs-page-mesh-grid-layers;
+        background-position: center;
+        background-repeat: repeat;
+        @include docs-page-mesh-size(
+            var(--docs-mesh-icons-step),
+            var(--docs-mesh-grid-major-step),
+            var(--docs-mesh-grid-minor-step),
+            var(--docs-mesh-dot-step)
+        );
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.66) 45%, rgba(0, 0, 0, 0.46) 100%);
+    }
+
+    @media (max-width: 850px) {
+        &.dark::before {
+            @include docs-page-mesh-size(
+                var(--docs-mesh-icons-step-sm),
+                var(--docs-mesh-grid-major-step-sm),
+                var(--docs-mesh-grid-minor-step-sm),
+                var(--docs-mesh-dot-step-sm),
+                100% 100%
+            );
+        }
+
+        &.light::before {
+            @include docs-page-mesh-size(
+                var(--docs-mesh-icons-step-sm),
+                var(--docs-mesh-grid-major-step-sm),
+                var(--docs-mesh-grid-minor-step-sm),
+                var(--docs-mesh-dot-step-sm)
+            );
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        &::before {
+            background-attachment: scroll;
+        }
+    }
 
     @media(max-width: 500px) {
         font-size: rem(1.5);
@@ -268,46 +467,88 @@ input[type="submit"] {
     }
 }
 
-nav {
+.nav,
+.sidebar,
+.toc,
+.toc-wrapper,
+.footer {
+    a:not([class*="btn"]) {
+        color: var(--important);
+
+        &:hover,
+        &:focus {
+            text-decoration: none;
+        }
+    }
+
     .link-with-code {
-        color: var(--sub);
+        color: var(--important);
 
         &:hover,
         &:focus {
             text-decoration: underline;
-            color: var(--link);
+            color: var(--important);
+        }
+    }
+
+    .btn-ghost {
+        color: var(--important);
+
+        &:hover,
+        &:focus {
+            color: var(--important);
+            text-decoration: none;
         }
     }
 }
 
+.content a:not([class]),
 p > a,
 .note > a,
 .tip > a,
 .annotation > a,
-.link-with-code {
+.content .link-with-code {
     color: var(--link);
+    font-family: var(--font-body);
+    font-weight: var(--weight-body);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--link) 30%, transparent);
+    text-underline-offset: 3px;
+    transition: color 0.15s ease, text-decoration-color 0.15s ease;
 
     &:hover,
     &:focus {
+        color: var(--link-hover);
         text-decoration: underline;
-        color: var(--sub);
+        text-decoration-color: var(--link-hover);
+    }
+}
+
+.content .btn-ghost {
+    color: var(--important);
+
+    &:hover,
+    &:focus {
+        color: var(--important);
+        text-decoration: none;
     }
 }
 
 .annotation-title {
-    font-weight: 600;
+    font-family: var(--font-heading);
+    font-weight: 500;
+    line-height: var(--leading-headline);
     padding-bottom: rem(1.2);
 }
 
 a {
+    color: inherit;
+    text-decoration: none;
+
     &:hover,
     &:focus {
         text-decoration: underline;
-        color: var(--link);
     }
-
-    color: var(--sub);
-    text-decoration: none;
 }
 
 /*-------- Finish links color--------*/
@@ -316,11 +557,12 @@ a {
     display: inline-flex;
     justify-content: center;
     align-items: center;
+    font-family: var(--font-body);
     font-size: 12px;
     text-transform: uppercase;
     white-space: nowrap;
-    font-weight: 600;
-    letter-spacing: 0.1em;
+    font-weight: var(--weight-body);
+    letter-spacing: var(--tracking-eyebrow);
     background: var(--brand);
     color: var(--white);
     padding: rem(0.6) rem(1.2);
@@ -349,9 +591,10 @@ a {
     border: 1px solid var(--divider-light);
     border-radius: rem(0.75);
     background: var(--card-light);
-    color: var(--sub);
+    color: var(--important);
+    font-family: var(--font-body);
     font-size: var(--sm);
-    font-weight: 400;
+    font-weight: var(--weight-body);
     letter-spacing: 0;
     line-height: 1;
     text-decoration: none;

@@ -1,0 +1,94 @@
+<section class="whats-new-callout" aria-labelledby="whats-new-title">
+  <div class="whats-new-callout__header">
+    <div class="whats-new-callout__title-wrap">
+      <div class="whats-new-callout__sparkle" aria-hidden="true">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l1.8 5.3L19 10l-5.2 1.7L12 17l-1.8-5.3L5 10l5.2-1.7L12 3z"/>
+          <path d="M19 3v4"/>
+          <path d="M21 5h-4"/>
+          <path d="M5 16v3"/>
+          <path d="M6.5 17.5h-3"/>
+        </svg>
+      </div>
+      <h2 id="whats-new-title">What's new</h2>
+      {{- $releases := where .Site.Pages "Section" "releases" -}}
+      {{- $released := where $releases ".Params.released" true -}}
+      {{- $latest := index (sort $released "Date" "desc") 0 -}}
+      {{- with $latest -}}
+      <span class="whats-new-callout__version">{{ .Title | replaceRE "Materialize " "" }}</span>
+      {{- end -}}
+    </div>
+    <a class="whats-new-callout__release-link" href="/releases/">
+      Release notes
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M15 3h6v6"/>
+        <path d="M10 14 21 3"/>
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+      </svg>
+    </a>
+  </div>
+
+  <div class="whats-new-callout__items">
+    <a class="whats-new-callout__item" href="/releases/#mcp-server-for-agents">
+      <span class="whats-new-callout__item-icon" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="8" y="8" width="8" height="8" rx="1.8"/>
+          <path d="M9 2v3"/>
+          <path d="M15 2v3"/>
+          <path d="M9 19v3"/>
+          <path d="M15 19v3"/>
+          <path d="M2 9h3"/>
+          <path d="M2 15h3"/>
+          <path d="M19 9h3"/>
+          <path d="M19 15h3"/>
+          <path d="M12 12h.01"/>
+        </svg>
+      </span>
+      <span class="whats-new-callout__item-copy">
+        <span class="whats-new-callout__item-heading">
+          MCP server for agents
+          <span class="whats-new-callout__badge whats-new-callout__badge--new">New</span>
+        </span>
+        <span class="whats-new-callout__item-text">Give your production AI agents fresh context from Materialize</span>
+      </span>
+    </a>
+
+    <a class="whats-new-callout__item" href="/releases/#mcp-server-for-developers">
+      <span class="whats-new-callout__item-icon" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="5" width="16" height="5" rx="1.5"/>
+          <rect x="4" y="14" width="16" height="5" rx="1.5"/>
+          <path d="M8 7.5h.01"/>
+          <path d="M8 16.5h.01"/>
+        </svg>
+      </span>
+      <span class="whats-new-callout__item-copy">
+        <span class="whats-new-callout__item-heading">
+          MCP server for developers
+          <span class="whats-new-callout__badge whats-new-callout__badge--new">New</span>
+        </span>
+        <span class="whats-new-callout__item-text">Give coding agents observability into your Materialize environment</span>
+      </span>
+    </a>
+
+    <a class="whats-new-callout__item" href="/integrations/coding-agent-skills/">
+      <span class="whats-new-callout__item-icon" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l1.8 5.3L19 10l-5.2 1.7L12 17l-1.8-5.3L5 10l5.2-1.7L12 3z"/>
+          <path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15z"/>
+        </svg>
+      </span>
+      <span class="whats-new-callout__item-copy">
+        <span class="whats-new-callout__item-heading">
+          Agent skills
+          <span class="whats-new-callout__badge whats-new-callout__badge--preview">Preview</span>
+        </span>
+        <span class="whats-new-callout__item-text">Pre-built skill templates for common agentic patterns with Materialize</span>
+      </span>
+    </a>
+  </div>
+
+  <p class="whats-new-callout__footer">
+    For more information on these and other changes, see the <a href="/releases/">Release Notes</a>.
+  </p>
+</section>

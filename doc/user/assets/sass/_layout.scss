@@ -118,7 +118,7 @@ table.inline-headings {
     .DocSearch-Button-Placeholder {
         color: var(--body);
         font-size: rem(1.6);
-        font-weight: 300;
+        font-weight: var(--weight-body);
 
         @media(max-width: 768px) {
             display: initial;
@@ -230,8 +230,8 @@ table.inline-headings {
         position: relative;
         padding: 5px 26px 5px 10px;
         border-radius: 6px;
-        color: var(--sub);
-        font-weight: 300;
+        color: var(--important);
+        font-weight: var(--weight-body);
         line-height: 1.35;
         text-decoration: none;
         word-wrap: break-word;
@@ -240,7 +240,7 @@ table.inline-headings {
         &.active {
             color: var(--highlight);
             background: rgba(129, 154, 123, 0.18);
-            font-weight: 400;
+            font-weight: var(--weight-body-strong);
 
             &::before {
                 content: "";
@@ -299,7 +299,7 @@ table.inline-headings {
     }
 
     code {
-        font-family: "Geist Mono", Courier, monospace;
+        font-family: var(--font-mono);
     }
 
     .no-children>a,
@@ -333,8 +333,9 @@ table.inline-headings {
     li.level-1 {
         &>a {
             color: var(--important);
+            font-family: var(--font-heading);
             font-size: rem(1.55);
-            font-weight: 300;
+            font-weight: var(--weight-body);
             letter-spacing: 0;
             text-transform: none;
 
@@ -476,12 +477,13 @@ table.inline-headings {
 
     h2 {
         font-size: rem(1.4);
-        font-weight: 300;
+        font-weight: var(--weight-body);
         letter-spacing: 0;
+        line-height: var(--leading-headline);
         margin: 0 0 rem(1.4) 0;
         padding: 0;
         display: inline-block;
-        color: var(--sub);
+        color: var(--important);
         text-transform: none;
     }
 
@@ -504,8 +506,8 @@ table.inline-headings {
 
     a {
         display: block;
-        color: var(--sub);
-        font-weight: 300;
+        color: var(--important);
+        font-weight: var(--weight-body);
         line-height: 1.35;
         position: relative;
         text-decoration: none;
@@ -547,7 +549,7 @@ table.inline-headings {
     }
 
     code {
-        font-family: "Geist Mono", Courier, monospace;
+        font-family: var(--font-mono);
         font-variant-ligatures: none;
     }
 
@@ -556,9 +558,9 @@ table.inline-headings {
         margin-top: var(--x-small);
         padding-top: var(--x-small);
         border-top: 1px solid var(--divider-light);
-        color: var(--sub);
+        color: var(--important);
         font-size: var(--sm);
-        font-weight: 300;
+        font-weight: var(--weight-body);
         text-decoration: none;
 
         &:hover,
@@ -607,7 +609,7 @@ table.inline-headings {
     a:not([class]),
     button {
         color: var(--sub) !important;
-        font-weight: 300 !important;
+        font-weight: var(--weight-body) !important;
         text-decoration: none;
 
         &[href*="https://"] {

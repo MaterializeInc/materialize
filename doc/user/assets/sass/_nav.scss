@@ -52,7 +52,9 @@
     }
 
     a:not([class*="btn"]) {
-        font-weight: 300;
+        color: var(--important);
+        font-family: var(--font-body);
+        font-weight: var(--weight-body);
         text-decoration: none;
         border-bottom: none;
 
@@ -64,10 +66,16 @@
         }
     }
 
+    .btn {
+        font-family: var(--font-body);
+        font-weight: var(--weight-body);
+    }
+
     &-logo {
         display: flex;
         align-items: center;
-        font-weight: 600;
+        font-family: var(--font-heading);
+        font-weight: 500;
         font-size: rem(1.8);
         color: var(--important);
 
@@ -151,7 +159,7 @@ button.show-topics {
     display: none;
     margin: 0 0 var(--small) !important;
     text-align: left;
-    font-weight: 300;
+    font-weight: var(--weight-body);
     font-size: var(--base);
     color: var(--sub);
 

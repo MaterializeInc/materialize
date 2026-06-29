@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220">
+  <defs>
+    <pattern id="data-icons" width="220" height="220" patternUnits="userSpaceOnUse">
+      <g fill="none" stroke="#334155" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" opacity="0.38">
+        <!-- database -->
+        <g transform="translate(16 18) scale(1.08)">
+          <ellipse cx="8" cy="4.5" rx="5.5" ry="2"/>
+          <path d="M2.5 4.5v7c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2v-7"/>
+          <ellipse cx="8" cy="11.5" rx="5.5" ry="2"/>
+        </g>
+        <!-- bar chart -->
+        <g transform="translate(124 22) scale(1.08)">
+          <line x1="2" y1="13" x2="14" y2="13"/>
+          <rect x="3" y="8" width="2.2" height="5" rx="0.3"/>
+          <rect x="7" y="4" width="2.2" height="9" rx="0.3"/>
+          <rect x="11" y="9" width="2.2" height="4" rx="0.3"/>
+        </g>
+        <!-- table -->
+        <g transform="translate(68 102) scale(1.08)">
+          <rect x="2" y="2" width="12" height="11" rx="1"/>
+          <line x1="2" y1="6.5" x2="14" y2="6.5"/>
+          <line x1="8" y1="2" x2="8" y2="13"/>
+        </g>
+        <!-- stream nodes -->
+        <g transform="translate(156 86) scale(1.02)">
+          <circle cx="4" cy="8" r="2.2"/>
+          <circle cx="13" cy="3.5" r="2.2"/>
+          <circle cx="13" cy="12.5" r="2.2"/>
+          <path d="M6.2 7.2 L10.8 5"/>
+          <path d="M6.2 8.8 L10.8 11"/>
+        </g>
+        <!-- lightning / real-time -->
+        <g transform="translate(28 152) scale(1.02)">
+          <path d="M9 2 L5.5 8.5 H8.5 L6.5 14 L12 6.5 H9 Z"/>
+        </g>
+        <!-- code brackets -->
+        <g transform="translate(132 156) scale(1.08)">
+          <path d="M5.5 3.5 L2.5 8 L5.5 12.5"/>
+          <path d="M10.5 3.5 L13.5 8 L10.5 12.5"/>
+          <line x1="8.5" y1="2.5" x2="7.5" y2="13.5"/>
+        </g>
+        <!-- pipeline arrow -->
+        <g transform="translate(84 32) scale(1.02)">
+          <rect x="1" y="5" width="8" height="5" rx="1"/>
+          <path d="M11 7.5 H15"/>
+          <path d="M13.5 5.5 L15.5 7.5 L13.5 9.5"/>
+        </g>
+      </g>
+    </pattern>
+  </defs>
+  <rect width="220" height="220" fill="url(#data-icons)"/>
+</svg>
