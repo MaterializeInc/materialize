@@ -201,9 +201,9 @@ body.dark {
 
     // Style guide background mesh (dark): grid + data icons + purple accent on the right
     --docs-mesh-icons: url("/images/docs-mesh/data-icons-dark.svg");
-    --docs-mesh-dot: #1e293b;
-    --docs-mesh-grid-minor: rgba(255, 255, 255, 0.035);
-    --docs-mesh-grid-major: rgba(255, 255, 255, 0.065);
+    --docs-mesh-dot: color-mix(in srgb, #1e293b 50%, transparent);
+    --docs-mesh-grid-minor: rgba(255, 255, 255, 0.030);
+    --docs-mesh-grid-major: rgba(255, 255, 255, 0.055);
     --docs-mesh-accent: color-mix(in srgb, var(--sg-lavender-6) 16%, transparent);
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} 0 rgba(0, 0, 0, 0.4);
