@@ -97,6 +97,7 @@ const OidcConnectModal = ({
               <ConnectInstructions
                 userStr={userStr}
                 environmentdAddress={sqlAddress}
+                oidcEnabled
               />
               <VStack alignItems="stretch" spacing={2}>
                 <Text textStyle="heading-xs">ID Token</Text>
@@ -118,7 +119,9 @@ const OidcConnectModal = ({
               tabs={[
                 {
                   title: "MCP Server",
-                  children: <McpConnectInstructions userStr={userStr} />,
+                  children: (
+                    <McpConnectInstructions userStr={userStr} oidcEnabled />
+                  ),
                   icon: <ConnectionIcon w="4" h="4" />,
                 },
               ]}
