@@ -9,7 +9,7 @@
 
 $ set-sql-timeout duration=60s
 
-# TODO(def-) Reenable when database-issues#7900 is fixed
+# TODO(def-) Reenable when https://linear.app/materializeinc/issue/SS-310 is fixed
 $ skip-if
 SELECT true
 

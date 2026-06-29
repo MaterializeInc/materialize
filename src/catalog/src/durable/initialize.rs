@@ -792,6 +792,9 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
             },
             optimizer_feature_overrides: Default::default(),
             schedule: Default::default(),
+            auto_scaling_strategy: None,
+            reconfiguration: None,
+            burst: None,
         }),
         workload_class: None,
     })
@@ -802,7 +805,7 @@ fn default_replica_config(args: &BootstrapArgs) -> Result<ReplicaConfig, Catalog
     Ok(ReplicaConfig {
         location: ReplicaLocation::Managed {
             size: args.default_cluster_replica_size.to_string(),
-            availability_zone: None,
+            availability_zones: Vec::new(),
             internal: false,
             billed_as: None,
             pending: false,

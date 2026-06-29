@@ -438,6 +438,26 @@ SELECT object_name FROM mz_internal.mz_mcp_data_product_details ORDER BY object_
 "materialize"."agent_objects"."transfer_windows"
 COMPLETE 2
 
+# Regression pin for the lookup query that
+# `src/environmentd/src/http/mcp.rs:read_data_product` issues under
+# restriction. Joins against `mz_show_my_cluster_privileges` (allow-listed,
+# `pg_has_role` swapped for `mz_session_role_memberships()`) instead of
+# calling `has_cluster_privilege` directly, since that function's
+# `sql_impl` body references `mz_roles` and is still blocked.
+simple conn=agent_restricted,user=agent
+SELECT dp.cluster,
+       dp.cluster IS NULL OR cp.name IS NOT NULL AS has_cluster_usage
+FROM mz_internal.mz_mcp_data_products dp
+LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
+    ON cp.name = dp.cluster AND cp.privilege_type = 'USAGE'
+WHERE dp.object_name = '"materialize"."agent_objects"."next_arrivals"'
+ORDER BY (dp.cluster IS NOT NULL AND cp.name IS NOT NULL) DESC,
+         dp.cluster NULLS LAST
+LIMIT 1;
+----
+quickstart,t
+COMPLETE 1
+
 # mz_session_role_memberships() is callable in a restricted session (it only
 # exposes the current session's role chain, not the full system graph).
 # Verify it walks the full transitive chain: grant agent membership in a parent

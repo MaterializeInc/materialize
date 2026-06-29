@@ -382,7 +382,7 @@ def run(
             # environmentd will be stuck forever, the promoted environmentd can
             # take > 10 minutes to become responsive as well
             os._exit(0)
-        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9672 is fixed
+        # TODO: Reenable when https://linear.app/materializeinc/issue/DB-118 is fixed
         # print("Threads have not stopped within 10 minutes, exiting hard")
         # os._exit(1)
         os._exit(0)

@@ -56,7 +56,7 @@ def workflow_default(c: Composition) -> None:
         if name == "default":
             return
 
-        # TODO(def-): Reenable when database-issues#7775 is fixed
+        # TODO(def-): Reenable when https://linear.app/materializeinc/issue/SS-312 is fixed
         if name in ("bin-log-manipulations", "short-bin-log-retention"):
             return
 

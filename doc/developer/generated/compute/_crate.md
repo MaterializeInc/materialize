@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/lib.rs
-revision: 9727769b0d
+revision: f9be03fda1
 ---
 
 # mz-compute

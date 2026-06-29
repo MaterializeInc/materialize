@@ -113,6 +113,8 @@ pub struct DeferredPlan {
     pub plan: Plan,
     pub validity: PlanValidity,
     pub requires_locks: BTreeSet<CatalogItemId>,
+    pub resolved_ids: ResolvedIds,
+    pub sql_impl_resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug)]
@@ -237,10 +239,6 @@ impl Coordinator {
                 if let Err(e) = deferred.validity.check(self.catalog()) {
                     deferred.ctx.retire(Err(e))
                 } else {
-                    // Write statements never need to track resolved IDs (NOTE: This is not the
-                    // same thing as plan dependencies, which we do need to re-validate).
-                    let resolved_ids = ResolvedIds::empty();
-
                     // If we pre-acquired our locks, grant them to the session.
                     if let Some(locks) = write_locks {
                         let conn_id = deferred.ctx.session().conn_id().clone();
@@ -260,8 +258,8 @@ impl Coordinator {
                     self.sequence_plan(
                         deferred.ctx,
                         deferred.plan,
-                        resolved_ids,
-                        ResolvedIds::empty(),
+                        deferred.resolved_ids,
+                        deferred.sql_impl_resolved_ids,
                     )
                     .await;
                 }

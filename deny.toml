@@ -130,6 +130,26 @@ skip = [
     { name = "hashbrown", version = "0.16.1" },
     # Used by dynfmt; iceberg/typetag pulls in v0.4.
     { name = "erased-serde", version = "0.3.26" },
+    # gcp_auth → hyper-rustls → rustls-native-certs pulls newer versions
+    # while native-tls still pulls older versions.
+    { name = "core-foundation", version = "0.10.1" },
+    { name = "security-framework", version = "3.7.0" },
+    { name = "openssl-probe", version = "0.2.1" },
+    # reqsign (via iceberg-storage-opendal / opendal) pins older deps
+    # than the workspace.
+    { name = "jsonwebtoken", version = "9.3.1" },
+    { name = "quick-xml", version = "0.37.5" },
+    # aws-lc-rs (via jsonwebtoken 10) and ring pull different `untrusted`.
+    { name = "untrusted", version = "0.7.1" },
+    # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
+    { name = "spin", version = "0.5.2" },
+    # held back by tower-lsp 0.20 (mz-deploy LSP server)
+    { name = "dashmap", version = "5.5.3" },
+    { name = "tower", version = "0.4.13" },
+    # held back by rusqlite 0.32 (mz-deploy build cache)
+    { name = "hashlink", version = "0.9.1" },
+    # held back by owo-colors 4.3 (mz-deploy terminal styling)
+    { name = "supports-color", version = "2.1.0" },
 ]
 
 [[bans.deny]]
@@ -196,6 +216,8 @@ wrappers = [
     "rdkafka",
     "reqsign",
     "reqwest",
+    "rustls",
+    "sqlparser",
     "tokio-postgres",
     "tokio-tungstenite",
     "tracing-log",
@@ -204,11 +226,6 @@ wrappers = [
     "want",
     "zopfli",
 ]
-
-# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used.
-[[bans.deny]]
-name = "rustls"
 
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.
@@ -219,6 +236,7 @@ wrappers = [
     "findshlibs",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
+    "num-bigint-dig",
     "prometheus",
     "rayon-core",
     "sharded-slab",
@@ -263,6 +281,9 @@ ignore = [
     # rand unsoundness when a custom logger accesses ThreadRng during reseeding.
     # Affects transitive deps (rand 0.7.3 via http-types, rand 0.8.5 via fail/quickcheck/etc).
     "RUSTSEC-2026-0097",
+    # Allows private key leakage through timing information
+    # rsa is required through iceberg-storage-opendal
+    "RUSTSEC-2023-0071",
 ]
 
 # Must be manually kept in sync with about.toml.
@@ -273,7 +294,6 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "CC0-1.0",
-    "CDLA-Permissive-2.0",
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
@@ -281,10 +301,8 @@ allow = [
     "ISC",
     "MIT",
     "MPL-2.0",
-    "OpenSSL",
     "Zlib",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
 ]
 # copyleft is denied by default
 private = { ignore = true }

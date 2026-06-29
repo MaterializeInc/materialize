@@ -52,10 +52,10 @@ use mz_sql::names::{
     QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
-    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant, CreateSourcePlan,
-    HirRelationExpr, NetworkPolicyRule, PlanError, WebhookBodyFormat, WebhookHeaders,
-    WebhookValidation,
+    AutoScalingStrategy, ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant,
+    CreateSourcePlan, HirRelationExpr, NetworkPolicyRule, OnTimeoutAction, PlanError,
+    WebhookBodyFormat, WebhookHeaders, WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
@@ -414,6 +414,11 @@ impl Cluster {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
+                // Not surfaced in the create plan: these are controller-managed
+                // runtime state and (for the policy) a separate SQL surface.
+                auto_scaling_strategy: _,
+                reconfiguration: _,
+                burst: _,
             }) => {
                 let introspection = match logging {
                     ReplicaLogging {
@@ -535,6 +540,10 @@ impl From<ClusterReplica> for durable::ClusterReplica {
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ClusterReplicaProcessStatus {
     pub status: ClusterStatus,
+    /// Cumulative restart count of the process, mirrored from the orchestrator.
+    /// See [`mz_orchestrator::ServiceEvent::restart_count`].
+    pub restart_count: u64,
+    /// Time of the most recent change to `status` or `restart_count`.
     pub time: DateTime<Utc>,
 }
 
@@ -3290,30 +3299,205 @@ pub struct ClusterVariantManaged {
     pub replication_factor: u32,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
+    /// User-configured autoscaling policy, distinct from the in-flight runtime
+    /// records below. Shared with the durable layer, like [`ClusterSchedule`].
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
+    /// In-flight graceful reconfiguration the controller is converging on.
+    pub reconfiguration: Option<ReconfigurationState>,
+    /// In-flight hydration burst the controller is running.
+    pub burst: Option<BurstState>,
 }
 
 impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
     fn from(managed: ClusterVariantManaged) -> Self {
+        // Destructure the source (no `..`): a field added to either side is a
+        // compile error here until it's carried across the boundary.
+        let ClusterVariantManaged {
+            size,
+            availability_zones,
+            logging,
+            replication_factor,
+            optimizer_feature_overrides,
+            schedule,
+            auto_scaling_strategy,
+            reconfiguration,
+            burst,
+        } = managed;
         Self {
-            size: managed.size,
-            availability_zones: managed.availability_zones,
-            logging: managed.logging,
-            replication_factor: managed.replication_factor,
-            optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
-            schedule: managed.schedule,
+            size,
+            availability_zones,
+            logging,
+            replication_factor,
+            optimizer_feature_overrides: optimizer_feature_overrides.into(),
+            schedule,
+            auto_scaling_strategy,
+            reconfiguration: reconfiguration.map(Into::into),
+            burst: burst.map(Into::into),
         }
     }
 }
 
 impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
     fn from(managed: durable::ClusterVariantManaged) -> Self {
+        // Destructure the source (no `..`): a field added to either side is a
+        // compile error here until it's carried across the boundary.
+        let durable::ClusterVariantManaged {
+            size,
+            availability_zones,
+            logging,
+            replication_factor,
+            optimizer_feature_overrides,
+            schedule,
+            auto_scaling_strategy,
+            reconfiguration,
+            burst,
+        } = managed;
         Self {
-            size: managed.size,
-            availability_zones: managed.availability_zones,
-            logging: managed.logging,
-            replication_factor: managed.replication_factor,
-            optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
-            schedule: managed.schedule,
+            size,
+            availability_zones,
+            logging,
+            replication_factor,
+            optimizer_feature_overrides: optimizer_feature_overrides.into(),
+            schedule,
+            auto_scaling_strategy,
+            reconfiguration: reconfiguration.map(Into::into),
+            burst: burst.map(Into::into),
+        }
+    }
+}
+
+/// In-memory mirror of [`durable::ReconfigurationState`].
+///
+/// This runtime state lives only in the durable layer, so the memory layer
+/// carries its own `Serialize`/`Deserialize` mirror (to back the catalog
+/// `dump()`) and converts across the boundary, rather than embedding the
+/// durable-only type. The semantic contract lives on the durable type.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReconfigurationState {
+    pub target: ReconfigurationTarget,
+    pub deadline: Timestamp,
+    pub on_timeout: OnTimeoutAction,
+}
+
+impl From<ReconfigurationState> for durable::ReconfigurationState {
+    fn from(state: ReconfigurationState) -> Self {
+        // Destructure the source (no `..`): a field added to either side is a
+        // compile error here until it's carried across the boundary.
+        let ReconfigurationState {
+            target,
+            deadline,
+            on_timeout,
+        } = state;
+        Self {
+            target: target.into(),
+            deadline,
+            on_timeout,
+        }
+    }
+}
+
+impl From<durable::ReconfigurationState> for ReconfigurationState {
+    fn from(state: durable::ReconfigurationState) -> Self {
+        // Destructure the source (no `..`): a field added to either side is a
+        // compile error here until it's carried across the boundary.
+        let durable::ReconfigurationState {
+            target,
+            deadline,
+            on_timeout,
+        } = state;
+        Self {
+            target: target.into(),
+            deadline,
+            on_timeout,
+        }
+    }
+}
+
+/// In-memory mirror of [`durable::ReconfigurationTarget`].
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReconfigurationTarget {
+    pub size: String,
+    pub replication_factor: u32,
+    pub availability_zones: Vec<String>,
+    pub logging: ReplicaLogging,
+}
+
+impl From<ReconfigurationTarget> for durable::ReconfigurationTarget {
+    fn from(target: ReconfigurationTarget) -> Self {
+        // Destructure the source (no `..`): a field added to either side is a
+        // compile error here until it's carried across the boundary.
+        let ReconfigurationTarget {
+            size,
+            replication_factor,
+            availability_zones,
+            logging,
+        } = target;
+        Self {
+            size,
+            replication_factor,
+            availability_zones,
+            logging,
+        }
+    }
+}
+
+impl From<durable::ReconfigurationTarget> for ReconfigurationTarget {
+    fn from(target: durable::ReconfigurationTarget) -> Self {
+        // Destructure the source (no `..`): a field added to either side is a
+        // compile error here until it's carried across the boundary.
+        let durable::ReconfigurationTarget {
+            size,
+            replication_factor,
+            availability_zones,
+            logging,
+        } = target;
+        Self {
+            size,
+            replication_factor,
+            availability_zones,
+            logging,
+        }
+    }
+}
+
+/// In-memory mirror of [`durable::BurstState`].
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct BurstState {
+    pub burst_size: String,
+    pub linger_duration: Duration,
+    pub steady_hydrated_at: Option<Timestamp>,
+}
+
+impl From<BurstState> for durable::BurstState {
+    fn from(burst: BurstState) -> Self {
+        // Destructure the source (no `..`): a field added to either side is a
+        // compile error here until it's carried across the boundary.
+        let BurstState {
+            burst_size,
+            linger_duration,
+            steady_hydrated_at,
+        } = burst;
+        Self {
+            burst_size,
+            linger_duration,
+            steady_hydrated_at,
+        }
+    }
+}
+
+impl From<durable::BurstState> for BurstState {
+    fn from(burst: durable::BurstState) -> Self {
+        // Destructure the source (no `..`): a field added to either side is a
+        // compile error here until it's carried across the boundary.
+        let durable::BurstState {
+            burst_size,
+            linger_duration,
+            steady_hydrated_at,
+        } = burst;
+        Self {
+            burst_size,
+            linger_duration,
+            steady_hydrated_at,
         }
     }
 }
@@ -3504,6 +3688,15 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     fn schedule(&self) -> Option<&ClusterSchedule> {
         match &self.config.variant {
             ClusterVariant::Managed(ClusterVariantManaged { schedule, .. }) => Some(schedule),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    fn replication_factor(&self) -> Option<u32> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged {
+                replication_factor, ..
+            }) => Some(*replication_factor),
             ClusterVariant::Unmanaged => None,
         }
     }
@@ -3718,9 +3911,11 @@ pub enum StateUpdateKind {
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
+    ClusterSystemConfiguration(durable::objects::ClusterSystemConfiguration),
     NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
+    ReplicaSystemConfiguration(durable::objects::ReplicaSystemConfiguration),
     SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
     // Temporary items are not actually updated via the durable catalog, but
@@ -3814,9 +4009,11 @@ pub enum BootstrapStateUpdateKind {
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
+    ClusterSystemConfiguration(durable::objects::ClusterSystemConfiguration),
     NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
+    ReplicaSystemConfiguration(durable::objects::ReplicaSystemConfiguration),
     SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
     Item(durable::objects::Item),
@@ -3842,6 +4039,12 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
             }
             BootstrapStateUpdateKind::SystemConfiguration(kind) => {
                 StateUpdateKind::SystemConfiguration(kind)
+            }
+            BootstrapStateUpdateKind::ClusterSystemConfiguration(kind) => {
+                StateUpdateKind::ClusterSystemConfiguration(kind)
+            }
+            BootstrapStateUpdateKind::ReplicaSystemConfiguration(kind) => {
+                StateUpdateKind::ReplicaSystemConfiguration(kind)
             }
             BootstrapStateUpdateKind::SourceReferences(kind) => {
                 StateUpdateKind::SourceReferences(kind)
@@ -3885,6 +4088,12 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
             }
             StateUpdateKind::SystemConfiguration(kind) => {
                 Ok(BootstrapStateUpdateKind::SystemConfiguration(kind))
+            }
+            StateUpdateKind::ClusterSystemConfiguration(kind) => {
+                Ok(BootstrapStateUpdateKind::ClusterSystemConfiguration(kind))
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(kind) => {
+                Ok(BootstrapStateUpdateKind::ReplicaSystemConfiguration(kind))
             }
             StateUpdateKind::Cluster(kind) => Ok(BootstrapStateUpdateKind::Cluster(kind)),
             StateUpdateKind::NetworkPolicy(kind) => {

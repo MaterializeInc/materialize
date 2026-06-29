@@ -46,7 +46,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
     COMPUTE_REPLICA_EXPIRATION_OFFSET, ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
 };
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
@@ -551,6 +551,11 @@ impl ComputeController {
             instance.call(Instance::initialization_complete);
         }
 
+        // The replica also receives the current dyncfg create-time, folded into `CreateInstance`
+        // so create-time setup observes synced values. This `UpdateConfiguration` is still
+        // required: it carries the rest of `ComputeParameters` (workload class, max result size,
+        // tracing) and syncs the dyncfg into the persist config and metrics, none of which ride in
+        // `CreateInstance`. The overlapping dyncfg application is idempotent.
         let mut config_params = self.config.clone();
         config_params.workload_class = Some(workload_class);
         instance.call(|i| i.update_configuration(config_params));
@@ -631,6 +636,24 @@ impl ComputeController {
 
         // Remember updates for future clusters.
         self.config.update(config_params);
+    }
+
+    /// Replaces the per-replica dyncfg overrides for the given instances.
+    ///
+    /// This only stores the overrides; callers should follow with a
+    /// configuration push (e.g. [`Self::update_configuration`]) so existing
+    /// replicas observe the new values. Instances absent from `overrides` have
+    /// their overrides cleared, so a replica that no longer has an override
+    /// reverts to the environment-wide configuration. Used by the scoped
+    /// feature flags (replica-local) layer.
+    pub fn update_replica_dyncfg_overrides(
+        &mut self,
+        mut overrides: BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
+    ) {
+        for (id, instance) in self.instances.iter_mut() {
+            let instance_overrides = overrides.remove(id).unwrap_or_default();
+            instance.call(move |i| i.update_replica_dyncfg_overrides(instance_overrides));
+        }
     }
 
     /// Mark the end of any initialization commands.

@@ -516,7 +516,7 @@ class InsertWhereNotExists(Scenario):
                 ),
             ],
             conn_pool_size=100,
-            # TODO(def-): Bump per_second and add guarantees when database-issues#8510 is fixed
+            # TODO(def-): Bump per_second and add guarantees when https://linear.app/materializeinc/issue/DB-135 is fixed
         )
 
 

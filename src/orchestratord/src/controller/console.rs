@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use k8s_controller::TraceMetadata;
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec},
@@ -38,7 +39,7 @@ use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, get_resource, replace_resource},
+    k8s::{apply_resource, get_resource, recommended_k8s_labels, replace_resource},
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -401,10 +402,13 @@ ssl_certificate_key /nginx/tls/tls.key;",
             ..Default::default()
         };
 
+        let match_labels = pod_template_labels.clone();
+        pod_template_labels.extend(recommended_k8s_labels("console".into()));
+
         let deployment_spec = DeploymentSpec {
             replicas: Some(console.replicas()),
             selector: LabelSelector {
-                match_labels: Some(pod_template_labels.clone()),
+                match_labels: Some(match_labels),
                 ..Default::default()
             },
             template: PodTemplateSpec {
@@ -582,6 +586,7 @@ impl k8s_controller::Context for Context {
         &self,
         client: Client,
         console: &Self::Resource,
+        _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         if console.status.is_none() {
             let console_api: Api<Console> =

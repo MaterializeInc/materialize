@@ -234,7 +234,10 @@ impl<N: Sync> FdbTimestampOracle<N> {
             .transact_boxed(
                 &(),
                 |trx, ()| self.max_rs_trx(trx).boxed(),
-                TransactOption::default(),
+                // This transaction is a pure read, so it is safe to retry on a
+                // `commit_unknown_result` ("transaction may or may not have
+                // committed") error.
+                TransactOption::idempotent(),
             )
             .await?;
         Ok(max_ts)
@@ -280,6 +283,10 @@ where
         mz_foundationdb::init_network();
 
         let db = Arc::new(Database::new(None)?);
+        // In tests, bound transactions so an unresponsive server fails fast
+        // instead of hanging until the harness terminates the process.
+        #[cfg(test)]
+        mz_foundationdb::set_test_transaction_timeout(&db);
         let metrics = Arc::clone(&config.metrics);
         let prefix = fdb_config.prefix;
         let directory = DirectoryLayer::default();
@@ -340,6 +347,10 @@ where
         mz_foundationdb::init_network();
 
         let db = Arc::new(Database::new(None)?);
+        // In tests, bound transactions so an unresponsive server fails fast
+        // instead of hanging until the harness terminates the process.
+        #[cfg(test)]
+        mz_foundationdb::set_test_transaction_timeout(&db);
         let metrics = Arc::clone(&config.metrics);
         let prefix = fdb_config.prefix;
         let directory = DirectoryLayer::default();
@@ -482,7 +493,12 @@ where
                     .transact_boxed(
                         &proposed_next_ts,
                         |trx, proposed_next_ts| self.write_ts_trx(trx, **proposed_next_ts).boxed(),
-                        TransactOption::default(),
+                        // Safe to retry on a `commit_unknown_result` error: the
+                        // transaction re-reads `write_ts` and hands out
+                        // `max(write_ts + 1, proposed_next_ts)`, so a retry only
+                        // ever advances the timestamp further, preserving
+                        // monotonicity (it may skip a timestamp, which is fine).
+                        TransactOption::idempotent(),
                     )
                     .await
                     .map_err(anyhow::Error::from)
@@ -515,7 +531,8 @@ where
                     .transact_boxed(
                         &(),
                         |trx, ()| self.peek_write_ts_trx(trx).boxed(),
-                        TransactOption::default(),
+                        // Pure read, safe to retry on `commit_unknown_result`.
+                        TransactOption::idempotent(),
                     )
                     .await
                     .map_err(anyhow::Error::from)?
@@ -544,7 +561,8 @@ where
                     .transact_boxed(
                         &(),
                         |trx, ()| self.read_ts_trx(trx).boxed(),
-                        TransactOption::default(),
+                        // Pure read, safe to retry on `commit_unknown_result`.
+                        TransactOption::idempotent(),
                     )
                     .await
                     .map_err(anyhow::Error::from)?
@@ -576,7 +594,12 @@ where
                     .transact_boxed(
                         &write_ts,
                         |trx, write_ts| self.apply_write_trx(trx, **write_ts).boxed(),
-                        TransactOption::default(),
+                        // `apply_write_trx` only bumps `read_ts`/`write_ts` to
+                        // `GREATEST(current, write_ts)`, so it is idempotent and
+                        // safe to retry on a `commit_unknown_result` ("transaction
+                        // may or may not have committed") error rather than
+                        // panicking. This is the failure observed in PER-25.
+                        TransactOption::idempotent(),
                     )
                     .await
                     .map_err(anyhow::Error::from)
@@ -602,7 +625,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
-    #[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/10076 is fixed
     async fn test_fdb_timestamp_oracle() -> Result<(), anyhow::Error> {
         let config = FdbTimestampOracleConfig::new_for_test();
 
@@ -621,6 +643,10 @@ mod tests {
         })
         .await?;
 
+        // The network must be stopped before the process exits, otherwise the
+        // FoundationDB client can segfault during teardown. All oracles (and their
+        // `Database` handles) created above have been dropped by now, so the
+        // network thread join does not block.
         mz_foundationdb::shutdown_network();
 
         Ok(())

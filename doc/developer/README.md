@@ -70,6 +70,9 @@ land, and then browsed as reference material as you skill up on the codebase.
 
 * [reading.md](reading.md) contains a reading list.
 
+* [row-encoding.md](row-encoding.md) collects the size limits the in-memory
+  `Row` encoding and its datum types impose.
+
 * [sqllogictest.md](sqllogictest.md) contains detailed information about
   our SQL logic testing framework.
 

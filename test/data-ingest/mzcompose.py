@@ -115,8 +115,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "sql-server",
     )
 
-    # TODO: Reenable KafkaRoundtripExecutor when database-issues#8657 is fixed
-    # TODO: Reenable SqlServerExecutor when database-issues#9618 is fixed
+    # TODO: Reenable KafkaRoundtripExecutor when https://linear.app/materializeinc/issue/SS-303 is fixed
+    # TODO: Reenable SqlServerExecutor when https://linear.app/materializeinc/issue/SS-291 is fixed
     executor_classes = [MySqlExecutor, KafkaExecutor]
 
     with c.override(

@@ -21,8 +21,9 @@ Anyone is welcome to upgrade the version of Rust! Below is the list of things yo
 5. From the root of the repository run `cargo clippy --workspace --tests`, fix any new clippy lints
    that were introduced.
     * First try running `cargo fix`, that should go a long way in automatically fixing many of the lints.
-6. Check if Rust's unicode version has changed. If it has make sure to include in the release notes
-   what version it previously was, and what version it got bumped to.
+6. Check if Rust's unicode version has changed. If it has, state in the PR description
+   what version it previously was, and what version it got bumped to, so the release-notes
+   classifier (which reads PR descriptions) picks it up.
     * The [Releases](https://github.com/rust-lang/rust/releases) page for the Rust repository
       should mention if it's been changed. But the only way to know for sure it to
       [git blame the `UNICODE_VERSION` const](https://github.com/rust-lang/rust/blame/main/library/core/src/unicode/unicode_data.rs).

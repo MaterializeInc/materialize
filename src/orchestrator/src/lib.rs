@@ -93,6 +93,11 @@ pub struct ServiceEvent {
     pub service_id: String,
     pub process_id: u64,
     pub status: ServiceStatus,
+    /// Cumulative number of times the underlying process has restarted, as
+    /// reported by the orchestrator. Monotonic for the lifetime of a process,
+    /// but can reset (e.g. when a pod is recreated). Orchestrators that don't
+    /// track restarts report 0.
+    pub restart_count: u64,
     pub time: DateTime<Utc>,
 }
 
@@ -191,6 +196,8 @@ pub struct LabelSelector {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct ServiceConfig {
+    /// Static application name (usually present in labels)
+    pub app_name: String,
     /// An opaque identifier for the executable or container image to run.
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
@@ -248,6 +255,24 @@ pub struct ServiceConfig {
     pub disk_limit: Option<DiskLimit>,
     /// Node selector for this service.
     pub node_selector: BTreeMap<String, String>,
+}
+
+/// Get the recommended Kubernetes labels (app.kubernetes.io/*)
+/// WARNING: this is duplicated in src/orchestratord/src/k8s.rs and src/cloud-resources/src/crd.rs
+pub fn recommended_k8s_labels(app_name: String) -> BTreeMap<String, String> {
+    BTreeMap::from_iter([
+        (
+            "app.kubernetes.io/managed-by".to_owned(),
+            "materialize-operator".to_owned(),
+        ),
+        (
+            "app.kubernetes.io/part-of".to_owned(),
+            "materialize".to_owned(),
+        ),
+        ("app.kubernetes.io/name".to_owned(), app_name.to_owned()),
+        // legacy label
+        ("app".to_owned(), app_name.to_owned()),
+    ])
 }
 
 /// A named port associated with a service.

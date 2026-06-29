@@ -11,7 +11,7 @@
 # Ingest some more data and read it back
 #
 
-# TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9613 is fixed
+# TODO: Remove when https://linear.app/materializeinc/issue/SS-292 is fixed
 $ skip-if
 SELECT true
 

@@ -1397,6 +1397,29 @@ generate_series generate_series ordinality
 7  11  2
 NULL  12  3
 
+# FILTER, OVER, and DISTINCT are rejected at parse time in ROWS FROM, like in
+# PostgreSQL (func_expr_windowless).
+
+# Single-function ROWS FROM.
+query error Expected right parenthesis, found FILTER
+SELECT * FROM ROWS FROM (generate_series(1, 2) FILTER (WHERE true));
+
+query error Expected right parenthesis, found OVER
+SELECT * FROM ROWS FROM (generate_series(1, 2) OVER ());
+
+query error Expected right parenthesis, found number "1"
+SELECT * FROM ROWS FROM (generate_series(DISTINCT 1, 2));
+
+# Multi-function ROWS FROM.
+query error Expected right parenthesis, found FILTER
+SELECT * FROM ROWS FROM (generate_series(1, 2) FILTER (WHERE true), generate_series(3, 4));
+
+query error Expected right parenthesis, found OVER
+SELECT * FROM ROWS FROM (generate_series(1, 2) OVER (), generate_series(3, 4));
+
+query error Expected right parenthesis, found number "1"
+SELECT * FROM ROWS FROM (generate_series(DISTINCT 1, 2), generate_series(3, 4));
+
 # Multiple table funcs in SELECT projection.
 
 query II colnames rowsort

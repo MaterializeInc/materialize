@@ -73,6 +73,7 @@ use crate::catalog::{
     is_reserved_role_name, object_type_to_audit_object_type,
     system_object_type_to_audit_object_type,
 };
+use crate::config::{ScopedParameters, ScopedParametersScope};
 use crate::coord::ConnMeta;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::coord::cluster_scheduling::SchedulingDecision;
@@ -148,6 +149,7 @@ pub enum Op {
     },
     CreateClusterReplica {
         cluster_id: ClusterId,
+        replica_id: ReplicaId,
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
@@ -244,6 +246,21 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
+    /// Persists the durable cache of scoped (per-cluster and per-replica)
+    /// system parameters towards `scoped`. The handler diffs against the current
+    /// durable contents: it upserts changed/added entries and removes entries
+    /// the update no longer serves.
+    ///
+    /// `prune_scope` bounds removals to the objects the update was evaluated
+    /// for. `Some(scope)` removes a row only when its owning object is in
+    /// `scope`, so an object created after the update's evaluation snapshot, and
+    /// the override it folded into its own create transaction, survives a
+    /// concurrent full-state reconcile. `None` is an unscoped full replace, used
+    /// only by the disabled-feature clear path where no create-time writes race.
+    UpdateScopedSystemParameters {
+        scoped: ScopedParameters,
+        prune_scope: Option<ScopedParametersScope>,
+    },
     /// Injects audit events into the catalog.
     ///
     /// This is a nonstandard path used for manually appending audit events at the current time.
@@ -1313,6 +1330,7 @@ impl Catalog {
             }
             Op::CreateClusterReplica {
                 cluster_id,
+                replica_id,
                 name,
                 config,
                 owner_id,
@@ -1324,8 +1342,16 @@ impl Catalog {
                     )));
                 }
                 let cluster = state.get_cluster(cluster_id);
-                let id =
-                    tx.insert_cluster_replica(cluster_id, &name, config.clone().into(), owner_id)?;
+                // The replica id is allocated out-of-band by the durable
+                // allocator before the transaction, mirroring cluster and item
+                // ids. Nothing allocates a replica id in-apply.
+                tx.insert_cluster_replica_with_id(
+                    cluster_id,
+                    replica_id,
+                    &name,
+                    config.clone().into(),
+                    owner_id,
+                )?;
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
                     billed_as,
@@ -1338,7 +1364,7 @@ impl Catalog {
                         mz_audit_log::CreateClusterReplicaV4 {
                             cluster_id: cluster_id.to_string(),
                             cluster_name: cluster.name.clone(),
-                            replica_id: Some(id.to_string()),
+                            replica_id: Some(replica_id.to_string()),
                             replica_name: name.clone(),
                             logical_size: size.clone(),
                             billed_as: billed_as.clone(),
@@ -2691,6 +2717,89 @@ impl Catalog {
                     EventDetails::ResetAllV1,
                 )?;
             }
+            Op::UpdateScopedSystemParameters {
+                scoped,
+                prune_scope,
+            } => {
+                // Diff `scoped` against the durable cache and persist only the
+                // delta: upsert changed/added entries, then remove entries the
+                // update no longer serves. A removal for a still-live object is
+                // bounded by `prune_scope` so this update does not delete a row
+                // for an object it was not evaluated for (e.g. one created after
+                // the update's snapshot, whose override rode its own create
+                // transaction). `None` prunes unconditionally (the
+                // disabled-feature clear path). Rows whose owning object is no
+                // longer live are always pruned regardless of `prune_scope`,
+                // because nothing else garbage collects them and ids are never
+                // reused, so this lazily reclaims orphans left by dropped
+                // objects.
+                let live_clusters: BTreeSet<ClusterId> =
+                    tx.get_clusters().map(|cluster| cluster.id).collect();
+                let live_replicas: BTreeSet<ReplicaId> = tx
+                    .get_cluster_replicas()
+                    .map(|replica| replica.replica_id)
+                    .collect();
+                let prune_cluster = |id: &ClusterId| {
+                    prune_scope
+                        .as_ref()
+                        .map_or(true, |s| s.clusters.contains(id))
+                };
+                let prune_replica = |id: &ReplicaId| {
+                    prune_scope
+                        .as_ref()
+                        .map_or(true, |s| s.replicas.contains(id))
+                };
+
+                // Cluster-coherent scope.
+                let existing_cluster: BTreeMap<(ClusterId, String), String> = tx
+                    .get_cluster_system_configurations()
+                    .map(|c| ((c.cluster_id, c.name), c.value))
+                    .collect();
+                let mut desired_cluster: BTreeSet<(ClusterId, String)> = BTreeSet::new();
+                for (cluster_id, values) in &scoped.cluster {
+                    if !live_clusters.contains(cluster_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_cluster.insert((*cluster_id, name.clone()));
+                        if existing_cluster.get(&(*cluster_id, name.clone())) != Some(value) {
+                            tx.upsert_cluster_system_config(*cluster_id, name, value.clone())?;
+                        }
+                    }
+                }
+                for (cluster_id, name) in existing_cluster.into_keys() {
+                    if (!live_clusters.contains(&cluster_id) || prune_cluster(&cluster_id))
+                        && !desired_cluster.contains(&(cluster_id, name.clone()))
+                    {
+                        tx.remove_cluster_system_config(cluster_id, &name);
+                    }
+                }
+
+                // Replica-local scope.
+                let existing_replica: BTreeMap<(ReplicaId, String), String> = tx
+                    .get_replica_system_configurations()
+                    .map(|r| ((r.replica_id, r.name), r.value))
+                    .collect();
+                let mut desired_replica: BTreeSet<(ReplicaId, String)> = BTreeSet::new();
+                for (replica_id, values) in &scoped.replica {
+                    if !live_replicas.contains(replica_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_replica.insert((*replica_id, name.clone()));
+                        if existing_replica.get(&(*replica_id, name.clone())) != Some(value) {
+                            tx.upsert_replica_system_config(*replica_id, name, value.clone())?;
+                        }
+                    }
+                }
+                for (replica_id, name) in existing_replica.into_keys() {
+                    if (!live_replicas.contains(&replica_id) || prune_replica(&replica_id))
+                        && !desired_replica.contains(&(replica_id, name.clone()))
+                    {
+                        tx.remove_replica_system_config(replica_id, &name);
+                    }
+                }
+            }
             Op::InjectAuditEvents { events } => {
                 for event in events {
                     let id = tx.allocate_audit_log_id()?;
@@ -3010,31 +3119,33 @@ impl ObjectsToDrop {
 
                 // Implicitly drop materialized views that target this replica.
                 // When the target replica is gone, no replica advances the
-                // persist shard's upper frontier, causing reads to hang.
+                // persist shard's upper frontier, causing reads to hang. Cascade
+                // to anything depending on the implicitly-dropped MV so we don't
+                // leave dangling references in the catalog.
                 //
-                // Also cascade to anything depending on the implicitly-dropped
-                // MV so we don't leave dangling references in the catalog.
-                // Plan-driven drops already include these via
-                // `cluster_replica_dependents`; this branch handles internal
-                // callers that build `Op::DropObjects` directly without going
-                // through the plan stage.
+                // Plan-driven drops already include these dependents as their
+                // own `DropObjectInfo::Item` entries (the plan stage expands
+                // them via `cluster_replica_dependents`), so each one's comment
+                // is recorded by the top-of-function `self.comments` insert.
+                // This branch handles internal callers that build
+                // `Op::DropObjects` directly with only the replica, so we expand
+                // the dependents and record their comments ourselves.
+                //
+                // `seen` is seeded from the items already collected so that the
+                // plan-driven path (where the dependents are processed before
+                // the replica, in reverse-dependency order) does not re-add them
+                // here.
                 let mut seen: BTreeSet<ObjectId> =
                     self.items.iter().copied().map(ObjectId::Item).collect();
-                for item_id in &cluster.bound_objects {
-                    let entry = state.get_entry(item_id);
-                    if let CatalogItem::MaterializedView(mv) = entry.item()
-                        && mv.target_replica == Some(replica_id)
-                        && !seen.contains(&ObjectId::Item(*item_id))
-                    {
+                for dep in state.cluster_replica_dependents(cluster_id, replica_id, &mut seen) {
+                    if let ObjectId::Item(dep_id) = dep {
                         info!(
-                            "implicitly dropping materialized view {} because target replica was dropped",
-                            entry.name().item,
+                            "implicitly dropping {} because target replica was dropped",
+                            state.get_entry(&dep_id).name().item,
                         );
-                        for dep in state.item_dependents(*item_id, &mut seen) {
-                            if let ObjectId::Item(dep_id) = dep {
-                                self.items.push(dep_id);
-                            }
-                        }
+                        self.comments
+                            .insert(state.get_comment_id(ObjectId::Item(dep_id)));
+                        self.items.push(dep_id);
                     }
                 }
             }
@@ -3315,6 +3426,245 @@ mod tests {
             let all_t2 = state_all_at_once.try_get_entry(&id_t2).expect("all t2");
             assert_eq!(inc_t2.name(), all_t2.name());
             assert_eq!(inc_t2.owner_id, all_t2.owner_id);
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// Exercises the diff-and-prune semantics of the
+    /// `Op::UpdateScopedSystemParameters` apply handler over the cluster scope.
+    /// Covers four behaviors: upsert of a desired row, the bounded-prune
+    /// protection that spares a live cluster outside `prune_scope`, removal of a
+    /// stale in-scope row, and the orphan-prune that reclaims a row whose owning
+    /// cluster was dropped even though that id is absent from `prune_scope`.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_transact_update_scoped_system_parameters_prune() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
+        use mz_controller_types::ClusterId;
+
+        use crate::catalog::DropObjectInfo;
+        use crate::config::{ScopedParameters, ScopedParametersScope};
+
+        Catalog::with_debug(|mut catalog| async move {
+            let param = "max_query_result_size".to_string();
+            let value = "1MB".to_string();
+
+            // Allocate and create two live clusters, A and B, the same way
+            // production code does.
+            let commit_ts = catalog.current_upper().await;
+            let cluster_a = catalog
+                .allocate_user_cluster_id(commit_ts)
+                .await
+                .expect("allocate cluster A");
+            let commit_ts = catalog.current_upper().await;
+            let cluster_b = catalog
+                .allocate_user_cluster_id(commit_ts)
+                .await
+                .expect("allocate cluster B");
+
+            let make_cluster_op = |id: ClusterId, name: &str| Op::CreateCluster {
+                id,
+                name: name.to_string(),
+                introspection_sources: Vec::new(),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+                config: ClusterConfig {
+                    variant: ClusterVariant::Unmanaged,
+                    workload_class: None,
+                },
+            };
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![
+                        make_cluster_op(cluster_a, "test_cluster_a"),
+                        make_cluster_op(cluster_b, "test_cluster_b"),
+                    ],
+                )
+                .await
+                .expect("create clusters");
+
+            // Reads the durable cluster system configuration rows.
+            async fn rows(catalog: &Catalog) -> BTreeSet<(ClusterId, String, String)> {
+                let mut storage = catalog.storage().await;
+                let tx = storage.transaction().await.expect("open transaction");
+                tx.get_cluster_system_configurations()
+                    .map(|c| (c.cluster_id, c.name, c.value))
+                    .collect()
+            }
+
+            let scope_with = |ids: &[ClusterId]| ScopedParametersScope {
+                clusters: ids.iter().copied().collect(),
+                replicas: BTreeSet::new(),
+            };
+            let cluster_scoped = |id: ClusterId| {
+                let mut cluster = BTreeMap::new();
+                let mut overrides = BTreeMap::new();
+                overrides.insert(param.clone(), value.clone());
+                cluster.insert(id, overrides);
+                ScopedParameters {
+                    cluster,
+                    replica: BTreeMap::new(),
+                }
+            };
+            let empty_scoped = || ScopedParameters {
+                cluster: BTreeMap::new(),
+                replica: BTreeMap::new(),
+            };
+
+            // Behavior 1: upsert. A is live and in scope, so the row is created.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_a),
+                        prune_scope: Some(scope_with(&[cluster_a])),
+                    }],
+                )
+                .await
+                .expect("upsert A");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_a, param.clone(), value.clone())),
+                "upsert must create the row for A"
+            );
+
+            // Set up an additional row for B so the prune cases have something to
+            // act on.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_b),
+                        prune_scope: Some(scope_with(&[cluster_b])),
+                    }],
+                )
+                .await
+                .expect("upsert B");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_b, param.clone(), value.clone())),
+                "setup must create the row for B"
+            );
+
+            // Behavior 2: bounded prune. Running with empty `scoped` and a scope
+            // that excludes the live cluster B must leave B's row intact, because
+            // the update was not authoritative for B.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: empty_scoped(),
+                        prune_scope: Some(scope_with(&[cluster_a])),
+                    }],
+                )
+                .await
+                .expect("bounded prune");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_b, param.clone(), value.clone())),
+                "a live cluster outside prune_scope must keep its row"
+            );
+
+            // Behavior 3: stale in-scope prune. A is live and in scope but not
+            // desired, so its row is removed.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: empty_scoped(),
+                        prune_scope: Some(scope_with(&[cluster_a])),
+                    }],
+                )
+                .await
+                .expect("stale in-scope prune");
+            assert!(
+                !rows(&catalog)
+                    .await
+                    .iter()
+                    .any(|(id, _, _)| *id == cluster_a),
+                "a live in-scope undesired row must be removed"
+            );
+
+            // Behavior 4: orphan prune. Re-create A's row, drop cluster A, then run
+            // the update with a scope that does NOT contain A. The sync loop only
+            // ever places live ids in prune_scope, so the orphan must still be
+            // reclaimed because its owning cluster is no longer live.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_a),
+                        prune_scope: Some(scope_with(&[cluster_a])),
+                    }],
+                )
+                .await
+                .expect("re-create A row");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_a, param.clone(), value.clone())),
+                "re-created row for A must exist"
+            );
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::DropObjects(vec![DropObjectInfo::Cluster(cluster_a)])],
+                )
+                .await
+                .expect("drop cluster A");
+
+            // B is the only live cluster the sync loop would have evaluated, so
+            // only B appears in prune_scope. A's id is deliberately absent.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_b),
+                        prune_scope: Some(scope_with(&[cluster_b])),
+                    }],
+                )
+                .await
+                .expect("orphan prune");
+            assert!(
+                !rows(&catalog)
+                    .await
+                    .iter()
+                    .any(|(id, _, _)| *id == cluster_a),
+                "orphan row for a dropped cluster must be removed even when absent from prune_scope"
+            );
 
             catalog.expire().await;
         })

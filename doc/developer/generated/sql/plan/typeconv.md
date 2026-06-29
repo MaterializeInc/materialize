@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/typeconv.rs
-revision: 51c628afa3
+revision: 8d8fc0d557
 ---
 
 # mz-sql::plan::typeconv

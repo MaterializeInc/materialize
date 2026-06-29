@@ -7,6 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! In-memory `Tag`-based encoding of a tuple of `Datum`s.
+//!
+//! See `doc/developer/row-encoding.md` for the size limits this encoding and
+//! its datum types impose.
+
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
@@ -808,13 +813,30 @@ pub struct DatumDictTypedIter<'a, T> {
 /// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
 #[derive(Debug)]
 pub struct RowArena {
-    // Semantically, this field would be better represented by a `Vec<Box<[u8]>>`,
-    // as once the arena takes ownership of a byte vector the vector is never
-    // modified. But `RowArena::push_bytes` takes ownership of a `Vec<u8>`, so
-    // storing that `Vec<u8>` directly avoids an allocation. The cost is
-    // additional memory use, as the vector may have spare capacity, but row
-    // arenas are short lived so this is the better tradeoff.
+    // A stack of byte regions, used as a bump allocator. Bytes handed to
+    // `push_bytes` are *copied* into the active (last) region and a reference
+    // into that region is returned.
+    //
+    // The invariant that keeps returned references valid for the arena's
+    // lifetime is that a region is never reallocated once it holds data: when
+    // the active region lacks spare capacity for a push we allocate a *new*,
+    // larger region rather than growing the current one (which would move its
+    // bytes and dangle outstanding references). The outer `Vec` may itself
+    // reallocate as regions are added, but that only moves the `Vec<u8>`
+    // headers, not the heap buffers they own, so references remain valid.
+    //
+    // `clear` retains only the largest region (emptied) to right-size the arena
+    // for reuse; reusing one region across `clear` cycles makes a steady-state
+    // workload (e.g. decoding rows one at a time) allocation-free.
     inner: RefCell<Vec<Vec<u8>>>,
+    // A single recycled scratch buffer backing `RowArena::writer`. A writer takes ownership of this
+    // buffer (or allocates a fresh one if absent), builds into it, and on drop returns it here for
+    // the next writer to reuse — so building values incrementally does not allocate per use once the
+    // buffer reaches its high-water mark. Holding `Option` (rather than the buffer directly) means
+    // `writer` borrows this cell only transiently, to take and return the buffer, never across the
+    // writer's lifetime. That keeps nested writers sound: a writer obtained while another is live
+    // finds the slot empty and allocates its own buffer instead of double-borrowing.
+    scratch: RefCell<Option<Vec<u8>>>,
 }
 
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
@@ -2545,7 +2567,17 @@ impl RowPacker<'_> {
         // information.
         let cardinality = match dims {
             [] => 0,
-            dims => dims.iter().map(|d| d.length).product(),
+            // Saturate the product: a cardinality that overflows `usize` is
+            // impossibly large (no array can hold that many elements), so it can
+            // never equal the actual `nelements` and the check below rejects it as
+            // `WrongCardinality`. A plain `product()` would panic under overflow
+            // checks (debug/fuzz) and silently wrap in release — and a wrapped
+            // value could even spuriously match `nelements`, accepting a corrupt
+            // array (e.g. dims claiming `[2^32, 2^32]` wrap to 0 elements).
+            dims => dims
+                .iter()
+                .map(|d| d.length)
+                .fold(1usize, usize::saturating_mul),
         };
         if nelements != cardinality {
             self.row.data.truncate(start);
@@ -2588,7 +2620,10 @@ impl RowPacker<'_> {
         let mut cardinality: usize = 1;
         for dim in dims {
             num_dims += 1;
-            cardinality *= dim.length;
+            // Saturate: an overflowing cardinality is impossibly large and is
+            // rejected by the `nelements` check below. See the matching note in
+            // `push_array_with_unchecked`.
+            cardinality = cardinality.saturating_mul(dim.length);
 
             self.row
                 .data
@@ -2781,17 +2816,23 @@ impl RowPacker<'_> {
         let mut dataz = &self.row.data[datum_check..];
         while !dataz.is_empty() {
             let d = unsafe { read_datum(&mut dataz) };
-            assert!(d != Datum::Null, "cannot push Datum::Null into range");
+            // These checks only fail when decoding untrusted/corrupted bytes;
+            // valid callers always push consistent, non-null bounds. Return an
+            // error rather than asserting so a crafted proto doesn't panic.
+            if d == Datum::Null {
+                self.row.data.truncate(start);
+                return Err(InvalidRangeError::InvalidRangeData.into());
+            }
 
             match seen {
                 None => seen = Some(d),
                 Some(seen) => {
                     let seen_kind = DatumKind::from(seen);
                     let d_kind = DatumKind::from(d);
-                    assert!(
-                        seen_kind == d_kind,
-                        "range contains inconsistent data; expected {seen_kind:?} but got {d_kind:?}"
-                    );
+                    if seen_kind != d_kind {
+                        self.row.data.truncate(start);
+                        return Err(InvalidRangeError::InvalidRangeData.into());
+                    }
 
                     if seen > d {
                         self.row.data.truncate(start);
@@ -2802,10 +2843,10 @@ impl RowPacker<'_> {
             actual_datums += 1;
         }
 
-        assert!(
-            actual_datums == expected_datums,
-            "finite values must each push exactly one value; expected {expected_datums} but got {actual_datums}"
-        );
+        if actual_datums != expected_datums {
+            self.row.data.truncate(start);
+            return Err(InvalidRangeError::InvalidRangeData.into());
+        }
 
         Ok(())
     }
@@ -3033,49 +3074,119 @@ impl RowArena {
     pub fn new() -> Self {
         RowArena {
             inner: RefCell::new(vec![]),
+            scratch: RefCell::new(None),
         }
     }
 
-    /// Creates a `RowArena` with a hint of how many rows will be created in the arena, to avoid
-    /// reallocations of its internal vector.
+    /// Creates a `RowArena` with an initial region sized to hold `capacity` bytes, to avoid
+    /// reallocations as the first datums are created in the arena.
     pub fn with_capacity(capacity: usize) -> Self {
+        let mut inner = Vec::new();
+        if capacity > 0 {
+            inner.push(Vec::with_capacity(capacity));
+        }
         RowArena {
-            inner: RefCell::new(Vec::with_capacity(capacity)),
+            inner: RefCell::new(inner),
+            scratch: RefCell::new(None),
         }
     }
 
-    /// Does a `reserve` on the underlying `Vec`. Call this when you expect `additional` more datums
-    /// to be created in this arena.
+    /// Ensures the active region can hold at least `additional` more bytes without allocating a
+    /// new region. Call this when you expect to push roughly `additional` bytes next.
     pub fn reserve(&self, additional: usize) {
-        self.inner.borrow_mut().reserve(additional);
+        if additional == 0 {
+            return;
+        }
+        let mut inner = self.inner.borrow_mut();
+        match inner.last_mut() {
+            // The active region is empty, so nothing references it yet and it is safe to grow it
+            // in place (a reallocation cannot dangle a live reference).
+            Some(active) if active.is_empty() => {
+                if active.capacity() < additional {
+                    active.reserve_exact(additional);
+                }
+            }
+            // The active region holds live data; we cannot grow it without moving those bytes, so
+            // stage a fresh region. Size it like `push_bytes` does (at least double the current
+            // region) so a sequence of small `reserve`s still yields at most log-many regions
+            // rather than many small ones.
+            Some(active) => {
+                let new_cap = std::cmp::max(additional, active.capacity().saturating_mul(2));
+                inner.push(Vec::with_capacity(new_cap));
+            }
+            None => inner.push(Vec::with_capacity(additional)),
+        }
     }
 
-    /// Take ownership of `bytes` for the lifetime of the arena.
+    /// Copies `bytes` into the arena and returns a reference valid for its lifetime.
+    ///
+    /// Accepts anything that derefs to `[u8]` (e.g. `Vec<u8>`, `&[u8]`); the bytes are copied, so
+    /// the caller's allocation is not retained.
     #[allow(clippy::transmute_ptr_to_ptr)]
-    pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
+    pub fn push_bytes<'a, B: Deref<Target = [u8]>>(&'a self, bytes: B) -> &'a [u8] {
+        let bytes: &[u8] = &bytes;
+        let need = bytes.len();
+        if need == 0 {
+            return &[];
+        }
         let mut inner = self.inner.borrow_mut();
-        inner.push(bytes);
-        let owned_bytes = &inner[inner.len() - 1];
+
+        // Find or create a region with spare capacity for `need` bytes, never growing a region
+        // that already holds data (see the type-level comment for why this preserves references).
+        let has_room = inner
+            .last()
+            .map_or(false, |region| region.capacity() - region.len() >= need);
+        if !has_room {
+            let last_cap = inner.last().map_or(0, |region| region.capacity());
+            let new_cap = std::cmp::max(need, last_cap.saturating_mul(2));
+            inner.push(Vec::with_capacity(new_cap));
+        }
+
+        let region = inner.last_mut().expect("region present");
+        let start = region.len();
+        region.extend_from_slice(bytes);
+        let copied = &region[start..];
         unsafe {
             // This is safe because:
-            //   * We only ever append to self.inner, so the byte vector
-            //     will live as long as the arena.
-            //   * We return a reference to the byte vector's contents, so it's
-            //     okay if self.inner reallocates and moves the byte
-            //     vector.
-            //   * We don't allow access to the byte vector itself, so it will
-            //     never reallocate.
-            transmute::<&[u8], &'a [u8]>(owned_bytes)
+            //   * `copied` references bytes inside `region`'s heap buffer, which we just sized to
+            //     fit without reallocating; that buffer is never resized again while it holds data
+            //     (we allocate a new region instead), so the reference stays valid.
+            //   * The buffer lives as long as the arena: regions are only dropped by `clear`/`drop`,
+            //     both of which take `&mut`/ownership, so no `&'a self`-tied reference can outlive
+            //     them.
+            //   * Pushing further regions may reallocate `self.inner`, but that moves only the
+            //     `Vec<u8>` headers, not the heap buffers they own.
+            transmute::<&[u8], &'a [u8]>(copied)
         }
     }
 
-    /// Take ownership of `string` for the lifetime of the arena.
+    /// Copies `string` into the arena and returns a reference valid for its lifetime.
     pub fn push_string<'a>(&'a self, string: String) -> &'a str {
-        let owned_bytes = self.push_bytes(string.into_bytes());
+        let copied = self.push_bytes(string.as_bytes());
         unsafe {
-            // This is safe because we know it was a `String` just before.
-            std::str::from_utf8_unchecked(owned_bytes)
+            // This is safe because we just copied the bytes of a valid `String`.
+            std::str::from_utf8_unchecked(copied)
         }
+    }
+
+    /// Returns a growable, writeable byte buffer for assembling a value incrementally.
+    ///
+    /// Write into it with [`RowArenaBuf::push`], [`RowArenaBuf::extend_from_slice`], or
+    /// [`std::io::Write`], then call [`RowArenaBuf::finish`] to copy the result into the arena and
+    /// obtain a reference valid for the arena's lifetime. The backing buffer is a single scratch
+    /// allocation reused across writers, so this lets a producer that builds bytes piecewise (e.g.
+    /// decoding a row) avoid managing its own scratch.
+    ///
+    /// Nested writers are sound but not free: a writer obtained while another is still live can't
+    /// reuse the (in-use) scratch, so it allocates its own buffer. Steady-state, non-nested use
+    /// stays allocation-free.
+    pub fn writer(&self) -> RowArenaBuf<'_> {
+        // Take the recycled buffer if one is available, else allocate a fresh one. The cell is
+        // borrowed only for this `take`, never for the writer's lifetime, so a nested `writer` call
+        // doesn't double-borrow: it simply finds the slot empty and allocates its own buffer.
+        let mut buf = self.scratch.borrow_mut().take().unwrap_or_default();
+        buf.clear();
+        RowArenaBuf { arena: self, buf }
     }
 
     /// Take ownership of `row` for the lifetime of the arena, returning a
@@ -3084,19 +3195,12 @@ impl RowArena {
     /// If we had an owned datum type, this method would be much clearer, and
     /// would be called `push_owned_datum`.
     pub fn push_unary_row<'a>(&'a self, row: Row) -> Datum<'a> {
-        let mut inner = self.inner.borrow_mut();
-        inner.push(row.data.into_vec());
+        let copied = self.push_bytes(row.data());
         unsafe {
-            // This is safe because:
-            //   * We only ever append to self.inner, so the row data will live
-            //     as long as the arena.
-            //   * We force the row data into its own heap allocation--
-            //     importantly, we do NOT store the SmallVec, which might be
-            //     storing data inline--so it's okay if self.inner reallocates
-            //     and moves the row.
-            //   * We don't allow access to the byte vector itself, so it will
-            //     never reallocate.
-            let datum = read_datum(&mut &inner[inner.len() - 1][..]);
+            // This is safe because `copied` is a valid encoding of a single datum (we just packed
+            // it into `row`), backed by the arena for the lifetime `'a`. Copying the bytes also
+            // sidesteps the `Row`'s inline (`SmallVec`) storage entirely.
+            let datum = read_datum(&mut &copied[..]);
             transmute::<Datum<'_>, Datum<'a>>(datum)
         }
     }
@@ -3104,19 +3208,10 @@ impl RowArena {
     /// Equivalent to `push_unary_row` but returns a `DatumNested` rather than a
     /// `Datum`.
     fn push_unary_row_datum_nested<'a>(&'a self, row: Row) -> DatumNested<'a> {
-        let mut inner = self.inner.borrow_mut();
-        inner.push(row.data.into_vec());
+        let copied = self.push_bytes(row.data());
         unsafe {
-            // This is safe because:
-            //   * We only ever append to self.inner, so the row data will live
-            //     as long as the arena.
-            //   * We force the row data into its own heap allocation--
-            //     importantly, we do NOT store the SmallVec, which might be
-            //     storing data inline--so it's okay if self.inner reallocates
-            //     and moves the row.
-            //   * We don't allow access to the byte vector itself, so it will
-            //     never reallocate.
-            let nested = DatumNested::extract(&mut &inner[inner.len() - 1][..]);
+            // Safe for the same reasons as `push_unary_row`.
+            let nested = DatumNested::extract(&mut &copied[..]);
             transmute::<DatumNested<'_>, DatumNested<'a>>(nested)
         }
     }
@@ -3183,14 +3278,118 @@ impl RowArena {
     }
 
     /// Clear the contents of the arena.
+    ///
+    /// Retains the single largest region (emptied) so the arena can be reused without
+    /// reallocating; a workload that clears between uses of similar size becomes allocation-free.
     pub fn clear(&mut self) {
-        self.inner.borrow_mut().clear();
+        let inner = self.inner.get_mut();
+        // Keep only the largest-capacity region, reset to empty, and drop the rest. Because region
+        // capacities only ever grow (each new region at least doubles the previous), the largest is
+        // normally the last; we scan for it defensively, which is cheap given log-many regions.
+        if let Some(largest) = (0..inner.len()).max_by_key(|&i| inner[i].capacity()) {
+            inner.swap(0, largest);
+            inner.truncate(1);
+            inner[0].clear();
+        }
     }
 }
 
 impl Default for RowArena {
     fn default() -> RowArena {
         RowArena::new()
+    }
+}
+
+/// A growable, writeable byte buffer that builds a value into a [`RowArena`].
+///
+/// Obtained from [`RowArena::writer`]. Behaves like a writeable byte slice (push/extend bytes,
+/// read back as `&[u8]`); [`RowArenaBuf::finish`] copies the assembled bytes into the arena and
+/// returns a reference valid for the arena's lifetime. The buffer is owned for the writer's
+/// lifetime and, on drop, returned to the arena to be reused by the next writer.
+#[derive(Debug)]
+pub struct RowArenaBuf<'a> {
+    arena: &'a RowArena,
+    buf: Vec<u8>,
+}
+
+impl<'a> RowArenaBuf<'a> {
+    /// Appends a single byte.
+    pub fn push(&mut self, byte: u8) {
+        self.buf.push(byte);
+    }
+
+    /// Appends a slice of bytes.
+    pub fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.buf.extend_from_slice(bytes);
+    }
+
+    /// The bytes written so far.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buf
+    }
+
+    /// The number of bytes written so far.
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Whether no bytes have been written.
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// Copies the written bytes into the arena, returning a reference valid for its lifetime.
+    pub fn finish(self) -> &'a [u8] {
+        // `self` is dropped at the end of this call, returning `buf` to the arena for reuse; the
+        // returned reference points into a committed region, not `buf`, so it stays valid.
+        self.arena.push_bytes(self.buf.as_slice())
+    }
+
+    /// Like [`RowArenaBuf::finish`], but returns the bytes as a `&str`.
+    ///
+    /// Intended for buffers written via [`std::fmt::Write`] (e.g. `write!`), whose contents are
+    /// valid UTF-8. Panics if the bytes are not valid UTF-8.
+    pub fn finish_str(self) -> &'a str {
+        let bytes = self.arena.push_bytes(self.buf.as_slice());
+        std::str::from_utf8(bytes).expect("RowArenaBuf::finish_str on non-UTF-8 contents")
+    }
+}
+
+impl<'a> Drop for RowArenaBuf<'a> {
+    fn drop(&mut self) {
+        // Return the buffer to the arena so the next writer can reuse its allocation. We keep only
+        // one buffer: if the slot is already occupied — an outer writer is still live, or a nested
+        // writer beat us to it — we drop ours rather than growing an unbounded pool. The borrow is
+        // transient and never overlaps a live writer's, so this can't double-borrow.
+        let mut slot = self.arena.scratch.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(std::mem::take(&mut self.buf));
+        }
+    }
+}
+
+impl<'a> std::ops::Deref for RowArenaBuf<'a> {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.buf
+    }
+}
+
+impl<'a> std::io::Write for RowArenaBuf<'a> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> std::fmt::Write for RowArenaBuf<'a> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.buf.extend_from_slice(s.as_bytes());
+        Ok(())
     }
 }
 
@@ -3329,6 +3528,136 @@ mod tests {
             row.push(Datum::String("c"));
         });
         assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_growth_keeps_references() {
+        // References returned by `push_bytes` must stay valid as later pushes allocate new
+        // regions; this exercises the "never resize a region that holds data" invariant.
+        let arena = RowArena::new();
+        let chunks: Vec<Vec<u8>> = (0..128u16)
+            .map(|i| vec![u8::try_from(i % 256).unwrap(); usize::from(i % 13) + 1])
+            .collect();
+        let refs: Vec<&[u8]> = chunks
+            .iter()
+            .map(|c| arena.push_bytes(c.as_slice()))
+            .collect();
+        for (i, r) in refs.iter().enumerate() {
+            assert_eq!(*r, chunks[i].as_slice());
+        }
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_unary_row_at_offset() {
+        // A row pushed after other bytes lands at a non-zero offset within a region; reading it
+        // back must not depend on the row starting at offset zero or on any alignment.
+        let arena = RowArena::new();
+        arena.reserve(4096);
+        let _pad = arena.push_bytes(vec![0xAB; 5]);
+        let row = Row::pack_slice(&[Datum::String("hello"), Datum::Int64(42), Datum::True]);
+        assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_clear_reuse() {
+        // After `clear` the arena retains a region and remains usable across cycles.
+        let mut arena = RowArena::new();
+        for i in 0..100u8 {
+            let _ = arena.push_bytes(vec![i; 16]);
+        }
+        arena.clear();
+        assert_eq!(arena.push_bytes(vec![7u8; 8]), &[7u8; 8]);
+        assert_eq!(arena.push_string("after clear".to_owned()), "after clear");
+        arena.clear();
+        let empty: &[u8] = &[];
+        assert_eq!(arena.push_bytes(Vec::<u8>::new()), empty);
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_writer() {
+        use std::io::Write;
+
+        let arena = RowArena::new();
+
+        // Build a value incrementally and commit it.
+        let mut w = arena.writer();
+        let mut expected = Vec::new();
+        for i in 0..1000u16 {
+            let byte = u8::try_from(i % 256).unwrap();
+            w.push(byte);
+            expected.push(byte);
+            w.extend_from_slice(&[byte, byte]);
+            expected.extend_from_slice(&[byte, byte]);
+        }
+        assert_eq!(w.as_slice(), expected.as_slice());
+        assert_eq!(w.len(), expected.len());
+        let first = w.finish();
+        assert_eq!(first, expected.as_slice());
+
+        // A second writer reuses the scratch; its result is independent of the first, which stays
+        // valid because `finish` copied it into the arena.
+        let mut w2 = arena.writer();
+        write!(w2, "hello").unwrap();
+        let second = w2.finish();
+        assert_eq!(second, b"hello");
+        assert_eq!(first, expected.as_slice());
+
+        // An empty writer commits to an empty slice.
+        let empty: &[u8] = &[];
+        assert_eq!(arena.writer().finish(), empty);
+
+        // Abandoning a writer without finishing is fine; the next writer starts empty.
+        {
+            let mut w3 = arena.writer();
+            w3.extend_from_slice(b"discarded");
+        }
+        assert_eq!(arena.writer().as_slice(), empty);
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_writer_nested() {
+        // Reentrancy: a writer obtained while another is still live must not panic (no `RefCell`
+        // double-borrow) and must not disturb the outer writer. The nested writer just gets its own
+        // buffer; the outer one keeps building independently.
+        let arena = RowArena::new();
+
+        let mut outer = arena.writer();
+        outer.extend_from_slice(b"outer-before-");
+
+        // Take a second writer while `outer` is still live -- the case that double-borrowed before.
+        let inner_bytes = {
+            let mut inner = arena.writer();
+            inner.extend_from_slice(b"inner");
+            // The outer writer is unaffected by the nested one.
+            assert_eq!(outer.as_slice(), b"outer-before-");
+            inner.finish()
+        };
+        assert_eq!(inner_bytes, b"inner");
+
+        // `outer` is intact and still writable after the nested writer committed.
+        outer.extend_from_slice(b"after");
+        let outer_bytes = outer.finish();
+        assert_eq!(outer_bytes, b"outer-before-after");
+        // Both committed slices stay valid and independent.
+        assert_eq!(inner_bytes, b"inner");
+
+        // Once all writers have dropped, the recycled buffer is reusable (and cleared on acquire).
+        let mut again = arena.writer();
+        again.extend_from_slice(b"reused");
+        assert_eq!(again.finish(), b"reused");
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_writer_fmt() {
+        use std::fmt::Write;
+
+        // Format text into the writer (e.g. building a cast-to-string result) and commit as `&str`.
+        let arena = RowArena::new();
+        let mut w = arena.writer();
+        for i in 0..5 {
+            write!(w, "{i},").unwrap();
+        }
+        assert_eq!(w.finish_str(), "0,1,2,3,4,");
     }
 
     #[mz_ore::test]
@@ -3535,6 +3864,36 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_array_cardinality_overflow() {
+        // Dimension lengths whose product overflows `usize` must be rejected as
+        // a `WrongCardinality` error, not panic (under overflow checks) or wrap
+        // (in release, which could spuriously accept a corrupt array). The
+        // product saturates to `usize::MAX`, which no real element count matches.
+        let mut row = Row::default();
+        let res = row.packer().try_push_array(
+            &[
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: usize::MAX,
+                },
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: 2,
+                },
+            ],
+            vec![Datum::Int32(1), Datum::Int32(2)],
+        );
+        assert_eq!(
+            res,
+            Err(InvalidArrayError::WrongCardinality {
+                actual: 2,
+                expected: usize::MAX,
+            })
+        );
+        assert!(row.data.is_empty());
+    }
+
+    #[mz_ore::test]
     fn test_nesting() {
         let mut row = Row::default();
         row.packer().push_dict_with(|row| {
@@ -3699,8 +4058,23 @@ mod tests {
             r
         }
 
+        // A finite bound whose closure pushes zero values violates the
+        // `push_range_with` caller contract and still panics. This is
+        // unreachable when decoding a `ProtoRow`: each decoded bound pushes
+        // exactly one datum (or fails), so only an in-process caller can hit it.
         for panicking_case in [
             vec![vec![Datum::Int32(1)], vec![]],
+            vec![vec![Datum::Int32(1), Datum::Int32(2)], vec![]],
+        ] {
+            #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
+            let result = std::panic::catch_unwind(|| test_range_errors_inner(panicking_case));
+            assert_err!(result);
+        }
+
+        // Inconsistent bound counts, mismatched datum kinds, and Null bounds are
+        // all reachable from a crafted/corrupted `ProtoRow`, so they return an
+        // error instead of panicking.
+        for error_case in [
             vec![
                 vec![Datum::Int32(1), Datum::Int32(2)],
                 vec![Datum::Int32(3)],
@@ -3709,14 +4083,14 @@ mod tests {
                 vec![Datum::Int32(1)],
                 vec![Datum::Int32(2), Datum::Int32(3)],
             ],
-            vec![vec![Datum::Int32(1), Datum::Int32(2)], vec![]],
             vec![vec![Datum::Int32(1)], vec![Datum::UInt16(2)]],
             vec![vec![Datum::Null], vec![Datum::Int32(2)]],
             vec![vec![Datum::Int32(1)], vec![Datum::Null]],
         ] {
-            #[allow(clippy::disallowed_methods)] // not using enhanced panic handler in tests
-            let result = std::panic::catch_unwind(|| test_range_errors_inner(panicking_case));
-            assert_err!(result);
+            assert_eq!(
+                test_range_errors_inner(error_case),
+                Err(InvalidRangeError::InvalidRangeData)
+            );
         }
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);

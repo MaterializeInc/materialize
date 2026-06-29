@@ -381,6 +381,9 @@ mod relation {
                 width: 3,
             },
             "generate_series" => GenerateSeriesInt64,
+            // Both int widths display as `generate_series`; this spelling lets a
+            // test pin the 32-bit variant (e.g. its widening casts) on input.
+            "generate_series_i32" => GenerateSeriesInt32,
             "jsonb_object_keys" => JsonbObjectKeys,
             _ => Err(Error::new(ident.span(), "unsupported function name"))?,
         };

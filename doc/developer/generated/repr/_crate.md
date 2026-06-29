@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/lib.rs
-revision: c0559e3dbe
+revision: f29f4227b6
 ---
 
 # mz-repr
@@ -12,7 +12,7 @@ The lingua franca of Materialize: defines the core data types that all layers of
 * `scalar` — `Datum` (value enum), `DatumKind`, and a dual-type system: `SqlScalarType` (SQL-level, with modifiers like `VarChar`, `Char`, `Oid`) and `ReprScalarType` (repr-level, collapsed variants); `SqlScalarBaseType`/`ReprScalarBaseType` enum-kind tags; `SqlContainerType` trait; proptest support types and strategies (gated behind `cfg(any(test, feature = "proptest"))`)
 * `relation` — `RelationDesc`, `ColumnName`, and a matching dual-type split: `SqlColumnType`/`SqlRelationType` (SQL-level) and `ReprColumnType`/`ReprRelationType` (repr-level); `SemanticType` (catalog ontology column annotations); schema evolution (`RelationDescDiff`, `VersionedRelationDesc`); `backport_nullability` for reconciling nullability across the two type layers
 * `relation_and_scalar` — shared protobuf definitions bridging the `relation` and `scalar` modules
-* `row` — `Row`, `RowPacker`, `RowRef`, `RowArena`, `DatumList<'a, T>` (generic over `T`, defaulting to `Datum<'a>`), `DatumMap`, `SharedRow`; Arrow columnar encoding (`encode`); abstract iteration (`iter`)
+* `row` — `Row`, `RowPacker`, `RowRef`, `RowArena`, `RowArenaBuf`, `DatumList<'a, T>` (generic over `T`, defaulting to `Datum<'a>`), `DatumMap`, `SharedRow`; Arrow columnar encoding (`encode`); abstract iteration (`iter`)
 * `update` — `Rows` (a compact contiguous-byte sequence of encoded rows), `RowsBuilder`, `SharedSlice`, `UpdateCollection`, and `UpdateCollectionBuilder`; provides the low-level storage substrate used by sorted row collections
 * `adt` — PostgreSQL-compatible ADTs: arrays, char, date, datetime, interval, JSONB, ACL items, numeric, range, regex, system OIDs, timestamps, varchar
 * `timestamp` — `Timestamp` (system-wide `u64` millisecond type implementing Timely/differential traits)
@@ -24,7 +24,7 @@ The lingua franca of Materialize: defines the core data types that all layers of
 * `namespaces` — well-known schema name constants
 * `optimize` — `OptimizerFeatures`, `OptimizerFeatureOverrides`, and `OverrideFrom` trait
 * `refresh_schedule` — REFRESH EVERY/AT schedule representation
-* `fixed_length` — `ToDatumIter` abstraction
+* `fixed_length` — `ExtendDatums` abstraction
 * `datum_vec` — reusable `Datum` scratch buffer
 * `bytes` — PostgreSQL-compatible `ByteSize`
 * `user` — external user auth metadata

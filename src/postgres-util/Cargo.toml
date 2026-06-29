@@ -13,7 +13,7 @@ workspace = true
 anyhow.workspace = true
 itertools.workspace = true
 mz-cloud-resources = { path = "../cloud-resources", optional = true }
-mz-ore = { path = "../ore", features = ["async"], optional = true }
+mz-ore = { path = "../ore", default-features = false, features = ["async"], optional = true }
 mz-proto = { path = "../proto", optional = true }
 mz-repr = { path = "../repr", optional = true }
 mz-sql-parser = { path = "../sql-parser" }

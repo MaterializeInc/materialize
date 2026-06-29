@@ -401,6 +401,108 @@ def is_ghcr_image_pushed(name: str) -> bool:
     return exists
 
 
+# Registry HTTP statuses that indicate a transient problem rather than a
+# definitive answer about visibility, so the public check retries instead of
+# concluding the image is private.
+_TRANSIENT_REGISTRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _get_with_retries(url: str, **kwargs: Any) -> requests.Response | None:
+    """GET `url`, retrying transient failures; returns None if all retries fail."""
+    for sleep_time in [2, 5, 10, None]:
+        try:
+            response = requests.get(url, timeout=10, **kwargs)
+        except requests.RequestException as e:
+            if sleep_time is None:
+                print(f"Error requesting {url}: {e}")
+                return None
+        else:
+            if response.status_code not in _TRANSIENT_REGISTRY_STATUSES:
+                return response
+        if sleep_time is not None:
+            time.sleep(sleep_time)
+    return None
+
+
+# These intentionally do *not* share code with `is_*_image_pushed`: those check
+# existence, authenticate when possible, and cache hits in `known-docker-images`.
+# These check *public visibility*, so they must stay anonymous (no auth
+# fallback) and uncached. They return a tri-state so callers can tell a private
+# repo (actionable) apart from a registry blip (retry the build), see
+# `_get_with_retries` returning None:
+#   True  -> definitively public
+#   False -> definitively not public (private, or repo does not exist)
+#   None  -> could not determine (transient registry/network error)
+
+
+def _json_dict_or_none(response: requests.Response) -> dict[str, Any] | None:
+    """Parse `response` as a JSON object, or None if the body isn't one.
+
+    A malformed body must read as "couldn't determine" (None), not crash the
+    caller out of the tri-state handling and fail the whole build.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def is_docker_image_public(name: str) -> bool | None:
+    """Whether the Docker Hub repository for `name` is public (tri-state).
+
+    Reads repository metadata (`is_private`) via the Hub API rather than the
+    registry, which both avoids the registry's anonymous pull-rate limit (see
+    `mz_image_tag_exists`) and is tag-independent. A 404 means the repo is
+    private or absent; transient errors yield None rather than a false "private".
+    """
+    repo = name.rsplit(":", 1)[0]
+    response = _get_with_retries(f"https://hub.docker.com/v2/repositories/{repo}/")
+    if response is None:
+        return None
+    if response.status_code == 404:
+        return False
+    if response.status_code != 200:
+        return None
+    body = _json_dict_or_none(response)
+    return None if body is None else not body.get("is_private", True)
+
+
+def is_ghcr_image_public(name: str) -> bool | None:
+    """Whether the GHCR repository for `name` is public (tri-state).
+
+    Requests an *anonymous* pull token and lists tags: a public repo authorizes
+    the anonymous client (200), a private or missing one rejects it (401/403/404).
+    Like the Docker Hub check, this is tag-independent.
+    """
+    image = name.removeprefix("ghcr.io/").rsplit(":", 1)[0]
+    token_response = _get_with_retries(
+        "https://ghcr.io/token", params={"scope": f"repository:{image}:pull"}
+    )
+    if token_response is None:
+        return None
+    if token_response.status_code in (401, 403):
+        return False
+    if token_response.status_code != 200:
+        return None
+    body = _json_dict_or_none(token_response)
+    if body is None or "token" not in body:
+        return None
+    token = body["token"]
+    response = _get_with_retries(
+        f"https://ghcr.io/v2/{image}/tags/list",
+        params={"n": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if response is None:
+        return None
+    if response.status_code == 200:
+        return True
+    if response.status_code in (401, 403, 404):
+        return False
+    return None
+
+
 def chmod_x(path: Path) -> None:
     """Set the executable bit on a file or directory."""
     # https://stackoverflow.com/a/30463972/1122351
@@ -1010,21 +1112,25 @@ class ResolvedImage:
             # Push to both registries in parallel. With the docker driver,
             # the image is already in the local daemon after --load, so
             # docker push is the same mechanism buildx --push uses internally.
-            procs = []
-            for tag in [docker_tag, ghcr_tag]:
-                procs.append(
+            pending = [docker_tag, ghcr_tag]
+            for sleep_time in [5, 10, 20, 40, 60, None]:
+                procs = [
                     subprocess.Popen(
                         ["docker", "push", tag],
                         stdout=sys.stderr,
                         stderr=sys.stderr,
                     )
-                )
-            failures = []
-            for proc in procs:
-                if proc.wait() != 0:
-                    failures.append(proc.args)
-            if failures:
-                raise subprocess.CalledProcessError(1, failures[0])
+                    for tag in pending
+                ]
+                pending = [tag for tag, proc in zip(pending, procs) if proc.wait() != 0]
+                if not pending:
+                    break
+                if sleep_time is None:
+                    raise subprocess.CalledProcessError(
+                        1, ["docker", "push", pending[0]]
+                    )
+                print(f"docker push failed for {pending}, retrying in {sleep_time}s")
+                time.sleep(sleep_time)
 
     def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
@@ -1092,6 +1198,21 @@ class ResolvedImage:
             ui.say(f"{spec} already exists")
             return True
         return False
+
+    def is_public(self) -> tuple[bool | None, bool | None]:
+        """Report whether the image's repo is public on (Docker Hub, GHCR).
+
+        Each element is True (public), False (private/absent), or None (could
+        not determine). Non-publishable images are reported as public on both,
+        since they are never pushed and so the check does not apply to them.
+        """
+        if not self.publish:
+            return (True, True)
+        spec = self.spec()
+        if spec.startswith(GHCR_PREFIX):
+            spec = spec.removeprefix(GHCR_PREFIX)
+        ghcr_spec = f"{GHCR_PREFIX}{spec}"
+        return (is_docker_image_public(spec), is_ghcr_image_public(ghcr_spec))
 
     def run(
         self,

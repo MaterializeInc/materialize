@@ -17,7 +17,7 @@ use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, MetricsRegistry, Rule,
+    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, MetricsRegistry,
     UIntGaugeVec,
 };
 use mz_repr::GlobalId;
@@ -51,21 +51,6 @@ pub struct StorageControllerMetrics {
     shared: ControllerMetrics,
 }
 
-fn instance_name_rule() -> Rule {
-    Rule::ClusterNameLookup {
-        cluster_id_label: "instance_id".into(),
-        output_label: "instance_name".into(),
-    }
-}
-
-fn replica_name_rule() -> Rule {
-    Rule::ReplicaNameLookup {
-        cluster_id_label: "instance_id".into(),
-        replica_id_label: "replica_id".into(),
-        output_label: "replica_name".into(),
-    }
-}
-
 impl StorageControllerMetrics {
     pub fn new(metrics_registry: &MetricsRegistry, shared: ControllerMetrics) -> Self {
         Self {
@@ -73,25 +58,21 @@ impl StorageControllerMetrics {
                 name: "mz_storage_commands_total",
                 help: "The total number of storage commands sent.",
                 var_labels: ["instance_id", "replica_id", "command_type"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             command_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_storage_command_message_bytes_total",
                 help: "The total number of bytes sent in storage command messages.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             responses_total: metrics_registry.register(metric!(
                 name: "mz_storage_responses_total",
                 help: "The total number of storage responses received.",
                 var_labels: ["instance_id", "replica_id", "response_type"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             response_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_storage_response_message_bytes_total",
                 help: "The total number of bytes received in storage response messages.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             regressed_offset_known: metrics_registry.register(metric!(
                 name: "mz_storage_regressed_offset_known",
@@ -102,25 +83,21 @@ impl StorageControllerMetrics {
                 name: "mz_storage_controller_history_command_count",
                 help: "The number of commands in the controller's command history.",
                 var_labels: ["instance_id", "command_type"],
-                rules: [instance_name_rule()],
             )),
             connected_replica_count: metrics_registry.register(metric!(
                 name: "mz_storage_controller_connected_replica_count",
                 help: "The number of replicas successfully connected to the storage controller.",
                 var_labels: ["instance_id"],
-                rules: [instance_name_rule()],
             )),
             replica_connects_total: metrics_registry.register(metric!(
                 name: "mz_storage_controller_replica_connects_total",
                 help: "The total number of replica (re-)connections made by the storage controller.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
             replica_connect_wait_time_seconds_total: metrics_registry.register(metric!(
                 name: "mz_storage_controller_replica_connect_wait_time_seconds_total",
                 help: "The total time the storage controller spent waiting for replica (re-)connection.",
                 var_labels: ["instance_id", "replica_id"],
-                rules: [instance_name_rule(), replica_name_rule()],
             )),
 
             shared,

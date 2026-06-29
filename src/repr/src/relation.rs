@@ -1034,6 +1034,16 @@ impl RustType<ProtoRelationDesc> for RelationDesc {
             };
             Box::new(itertools::repeat_n(val, proto.names.len()))
         } else {
+            // Reject mismatched lengths explicitly rather than panicking via
+            // `zip_eq` below, since this branch is reachable from untrusted
+            // proto bytes.
+            if proto.names.len() != proto.metadata.len() {
+                return Err(TryFromProtoError::InvalidFieldError(format!(
+                    "ProtoRelationDesc: names ({}) and metadata ({}) length mismatch",
+                    proto.names.len(),
+                    proto.metadata.len()
+                )));
+            }
             Box::new(proto.metadata.into_iter())
         };
 

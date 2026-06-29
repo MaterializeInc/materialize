@@ -1,6 +1,6 @@
 ---
 source: src/postgres-client/src/lib.rs
-revision: 5d439bc71e
+revision: 6c2b81feaf
 ---
 
 # mz-postgres-client

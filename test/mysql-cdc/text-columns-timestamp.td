@@ -56,6 +56,16 @@ COMMIT;
   WITH (TEXT COLUMNS = (created_at, updated_at, archived_at, born_at, mid_at));
 > COMMIT
 
+# Block until the snapshot is fully ingested before issuing the
+# post-snapshot inserts, so those rows go through the binlog decode
+# path rather than being absorbed into the snapshot.
+> SELECT id, created_at, updated_at, archived_at, born_at, mid_at FROM products ORDER BY id;
+1 "2024-04-03 10:15:13" "2024-04-03 10:15:13.123456" "2024-04-03 10:15:13" "2024-04-03 10:15:13.123456" "2024-04-03 10:15:13.1234"
+2 "0000-00-00 00:00:00" "0000-00-00 00:00:00.000000" "0000-00-00 00:00:00" "0000-00-00 00:00:00.000000" "0000-00-00 00:00:00.0000"
+3 <null> <null> <null> <null> <null>
+7 <null> <null> "1001-01-01 00:00:00" "1001-01-01 00:00:00.000001" "1001-01-01 00:00:00.0001"
+8 <null> <null> "9999-12-31 23:59:59" "9999-12-31 23:59:59.999999" "9999-12-31 23:59:59.9999"
+
 # Post-snapshot rows exercise the replication / binlog decode path,
 # which uses a different mysql_common::Value variant than the snapshot.
 $ mysql-execute name=mysql

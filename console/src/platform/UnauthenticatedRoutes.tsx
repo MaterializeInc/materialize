@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { Navigate, Route } from "react-router-dom";
 
-import { LOGIN_PATH } from "~/api/materialize/auth";
+import { hasActiveSession, LOGIN_PATH } from "~/api/materialize/auth";
 import { LaunchDarklyProvider } from "~/components/LaunchDarkly";
 import LoadingScreen from "~/components/LoadingScreen";
 import { type SelfManagedAppConfig } from "~/config/AppConfig";
@@ -26,6 +27,26 @@ import { SentryRoutes } from "~/sentry";
 
 import { Login } from "./auth/Login";
 import { OidcCallback } from "./auth/OidcCallback";
+
+// Redirect already-signed-in users off the login page. The password session
+// cookie is httpOnly, so probe the server; a live OIDC token skips the probe.
+const LoginRoute = () => {
+  const { data: oidcManager } = useOidcManagerQuery();
+  const hasOidcToken = Boolean(oidcManager?.getIdToken());
+
+  const { data: hasCookieSession } = useQuery({
+    queryKey: ["hasActiveSession"],
+    queryFn: hasActiveSession,
+    enabled: !hasOidcToken,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  if (hasOidcToken || hasCookieSession) {
+    return <Navigate to="/" replace />;
+  }
+  return <Login />;
+};
 
 const OidcAuthGuard = ({ children }: React.PropsWithChildren) => {
   const { isLoading, data: auth } = useOidcManagerQuery();
@@ -55,7 +76,7 @@ const SelfManagedRoutes = ({
     <SentryRoutes>
       {(appConfig.authMode === "Password" ||
         appConfig.authMode === "Sasl" ||
-        isOidc) && <Route path={LOGIN_PATH} element={<Login />} />}
+        isOidc) && <Route path={LOGIN_PATH} element={<LoginRoute />} />}
       {isOidc && <Route path="/auth/callback" element={<OidcCallback />} />}
       <Route
         path="*"

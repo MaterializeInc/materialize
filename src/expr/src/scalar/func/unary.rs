@@ -463,6 +463,7 @@ derive_unary!(
     JsonbTypeof,
     JsonbStripNulls,
     JsonbPretty,
+    ParseCatalogAclMode,
     ParseCatalogCreateSql,
     ParseCatalogId,
     ParseCatalogPrivileges,

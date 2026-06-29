@@ -519,6 +519,12 @@ impl PeekClient {
 
         let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
             .override_from(&catalog.get_cluster(cluster.id()).config.features())
+            // A cluster-scoped LaunchDarkly rule beats a manual `FEATURES` pin.
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(cluster.id()),
+            )
             .override_from(&explain_ctx);
 
         if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
@@ -1242,7 +1248,14 @@ impl PeekClient {
                 if let Some(trace) = plan_insights_optimizer_trace {
                     let target_cluster = catalog.get_cluster(target_cluster_id);
                     let features = OptimizerFeatures::from(catalog.system_config())
-                        .override_from(&target_cluster.config.features());
+                        .override_from(&target_cluster.config.features())
+                        // A cluster-scoped LaunchDarkly rule beats a manual
+                        // `FEATURES` pin.
+                        .override_from(
+                            &catalog
+                                .state()
+                                .cluster_scoped_optimizer_overrides(target_cluster_id),
+                        );
                     let insights = trace
                         .into_plan_insights(
                             &features,
@@ -1548,7 +1561,7 @@ impl PeekClient {
                         real_time_recency_ts,
                         &IsolationLevel::Serializable,
                         read_holds.clone(),
-                        upper,
+                        upper.clone(),
                     )?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     session
@@ -1558,6 +1571,36 @@ impl PeekClient {
                             .as_ref()])
                         .observe(f64::cast_lossy(u64::from(
                             strict.saturating_sub(*serializable),
+                        )));
+                }
+            }
+        }
+        if !det.respond_immediately()
+            && isolation_level.is_bounded_staleness()
+            && real_time_recency_ts.is_none()
+        {
+            // Note down the difference between BoundedStaleness and Serializable into a metric.
+            if let Some(bs_ts) = det.timestamp_context.timestamp() {
+                let (serializable_det, _tmp_read_holds) =
+                    <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
+                        session,
+                        id_bundle,
+                        when,
+                        timeline_context,
+                        oracle_read_ts,
+                        real_time_recency_ts,
+                        &IsolationLevel::Serializable,
+                        read_holds.clone(),
+                        upper,
+                    )?;
+                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
+                    session
+                        .metrics()
+                        .timestamp_difference_for_bounded_staleness_ms(&[compute_instance
+                            .to_string()
+                            .as_ref()])
+                        .observe(f64::cast_lossy(u64::from(
+                            serializable.saturating_sub(*bs_ts),
                         )));
                 }
             }

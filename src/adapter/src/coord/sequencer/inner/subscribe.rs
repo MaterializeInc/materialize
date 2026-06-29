@@ -222,7 +222,7 @@ impl Coordinator {
             .map(|id| self.catalog().resolve_item_id(id))
             .collect();
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             dependencies,
             Some(cluster_id),
             replica_id,
@@ -268,6 +268,7 @@ impl Coordinator {
         let debug_name = format!("subscribe-{}", sink_id);
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster_id).config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
             .override_from(&explain_ctx);
 
         // Build an optimizer for this SUBSCRIBE.
@@ -295,6 +296,7 @@ impl Coordinator {
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.clone())?;
                     // Add introduced indexes as validity dependencies.
                     validity.extend_dependencies(
+                        &catalog,
                         global_mir_plan
                             .id_bundle(optimizer.cluster_id())
                             .iter()
@@ -574,6 +576,7 @@ impl Coordinator {
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
             .override_from(&config.features);
 
         let rows = optimizer_trace

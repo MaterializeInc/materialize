@@ -36,7 +36,7 @@ use mz_expr::{
 };
 use mz_ore::cast::CastLossy;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
-use mz_repr::fixed_length::ToDatumIter;
+use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
@@ -319,7 +319,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 move |key, _input, output| {
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums1.borrow();
-                    key.extend_datums(&mut datums_local, None);
+                    key.extend_datums(&temp_storage, &mut datums_local, None);
 
                     // Note that the key contains all the columns in a `Distinct` and that `mfp_after` is
                     // required to preserve the key. Therefore, if `mfp_after` maps, then it must project
@@ -353,7 +353,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 let Some(mfp) = &mfp_after2 else { return };
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums2.borrow();
-                key.extend_datums(&mut datums_local, None);
+                key.extend_datums(&temp_storage, &mut datums_local, None);
 
                 if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
                     output.push((e.into(), Diff::ONE));
@@ -429,7 +429,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 move |key, input, output| {
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums1.borrow();
-                    key.extend_datums(&mut datums_local, None);
+                    key.extend_datums(&temp_storage, &mut datums_local, None);
                     let key_len = datums_local.len();
 
                     for ((_, row), _) in input.iter() {
@@ -457,7 +457,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         // aggregate, we only need to look for MFP errors here.
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums2.borrow();
-                        key.extend_datums(&mut datums_local, None);
+                        key.extend_datums(&temp_storage, &mut datums_local, None);
 
                         for ((_, row), _) in input.iter() {
                             datums_local.push(row.unpack_first());
@@ -558,6 +558,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let mut datums2 = DatumVec::new();
         let mut datums_key_1 = DatumVec::new();
         let mut datums_key_2 = DatumVec::new();
+        // Scratch buffers for decoding each input value's (single) datum into the
+        // arena, so the aggregates iterate arena-resident datums rather than the
+        // packed value bytes — a prerequisite for compressed value representations.
+        let mut vals1 = DatumVec::new();
+        let mut vals2 = DatumVec::new();
+        let mut vals_key_1 = DatumVec::new();
+        let mut vals_key_2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
         let func2 = func.clone();
 
@@ -580,19 +587,22 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 .clone()
                 .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
                     move |key, source, target| {
-                        // We respect the multiplicity here (unlike in hierarchical aggregation)
-                        // because we don't know that the aggregation method is not sensitive
-                        // to the number of records.
-                        let iter = source.iter().flat_map(|(v, w)| {
-                            // Note that in the non-positive case, this is wrong, but harmless because
-                            // our other reduction will produce an error.
-                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                            std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
+                        let temp_storage = RowArena::new();
+                        // Decode each input value's single datum into the arena, reusing one
+                        // scratch buffer; the datum is `Copy` and is copied out before the
+                        // buffer is overwritten on the next row. We pass the multiplicity
+                        // through (unlike in hierarchical aggregation) because we don't know
+                        // that the aggregation method is not sensitive to the number of
+                        // records. The aggregate decides how to consume it.
+                        let mut val_scratch = vals1.borrow();
+                        let iter = source.iter().map(|(v, w)| {
+                            val_scratch.clear();
+                            v.extend_datums(&temp_storage, &mut val_scratch, Some(1));
+                            (val_scratch[0], *w)
                         });
 
-                        let temp_storage = RowArena::new();
                         let mut datums_local = datums1.borrow();
-                        key.extend_datums(&mut datums_local, None);
+                        key.extend_datums(&temp_storage, &mut datums_local, None);
                         let key_len = datums_local.len();
                         datums_local.push(
                         // Note that this is not necessarily a window aggregation, in which case
@@ -619,15 +629,17 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
                     move |key, source, target| {
                         // This part is the same as in the `!fused_unnest_list` if branch above.
-                        let iter = source.iter().flat_map(|(v, w)| {
-                            let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                            std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
+                        let temp_storage = RowArena::new();
+                        let mut val_scratch = vals_key_1.borrow();
+                        let iter = source.iter().map(|(v, w)| {
+                            val_scratch.clear();
+                            v.extend_datums(&temp_storage, &mut val_scratch, Some(1));
+                            (val_scratch[0], *w)
                         });
 
                         // This is the part that is specific to the `fused_unnest_list` branch.
-                        let temp_storage = RowArena::new();
                         let mut datums_local = datums_key_1.borrow();
-                        key.extend_datums(&mut datums_local, None);
+                        key.extend_datums(&temp_storage, &mut datums_local, None);
                         let key_len = datums_local.len();
                         for datum in func
                             .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
@@ -684,16 +696,16 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
                             // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                             let Some(mfp) = &mfp_after2 else { return };
-                            let iter = source.iter().flat_map(|&(mut v, ref w)| {
-                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                                // This would ideally use `to_datum_iter` but we cannot as it needs to
-                                // borrow `v` and only presents datums with that lifetime, not any longer.
-                                std::iter::repeat(v.next().unwrap()).take(count)
+                            let temp_storage = RowArena::new();
+                            let mut val_scratch = vals2.borrow();
+                            let iter = source.iter().map(|(v, w)| {
+                                val_scratch.clear();
+                                v.extend_datums(&temp_storage, &mut val_scratch, Some(1));
+                                (val_scratch[0], *w)
                             });
 
-                            let temp_storage = RowArena::new();
                             let mut datums_local = datums2.borrow();
-                            key.extend_datums(&mut datums_local, None);
+                            key.extend_datums(&temp_storage, &mut datums_local, None);
                             datums_local.push(
                                 func2.eval_with_fast_window_agg::<
                                     _,
@@ -720,16 +732,16 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         &format!("{name} Error Check"),
                         move |key, source, target| {
-                            let iter = source.iter().flat_map(|&(mut v, ref w)| {
-                                let count = usize::try_from(w.into_inner()).unwrap_or(0);
-                                // This would ideally use `to_datum_iter` but we cannot as it needs to
-                                // borrow `v` and only presents datums with that lifetime, not any longer.
-                                std::iter::repeat(v.next().unwrap()).take(count)
+                            let temp_storage = RowArena::new();
+                            let mut val_scratch = vals_key_2.borrow();
+                            let iter = source.iter().map(|(v, w)| {
+                                val_scratch.clear();
+                                v.extend_datums(&temp_storage, &mut val_scratch, Some(1));
+                                (val_scratch[0], *w)
                             });
 
-                            let temp_storage = RowArena::new();
                             let mut datums_local = datums_key_2.borrow();
-                            key.extend_datums(&mut datums_local, None);
+                            key.extend_datums(&temp_storage, &mut datums_local, None);
                             let key_len = datums_local.len();
                             for datum in func2
                                 .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
@@ -911,6 +923,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // Allocations for the two closures.
                 let mut datums1 = DatumVec::new();
                 let mut datums2 = DatumVec::new();
+                // Scratch buffers for decoding the input values (one column per aggregate)
+                // into the arena, so the aggregates iterate arena-resident datums rather
+                // than the packed value bytes.
+                let mut vals1 = DatumVec::new();
+                let mut vals2 = DatumVec::new();
                 let mfp_after1 = mfp_after.clone();
                 let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
                 let aggr_funcs2 = aggr_funcs.clone();
@@ -964,15 +981,21 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                 let Some(mfp) = &mfp_after2 else { return };
                                 let temp_storage = RowArena::new();
                                 let mut datums_local = datums2.borrow();
-                                key.extend_datums(&mut datums_local, None);
+                                key.extend_datums(&temp_storage, &mut datums_local, None);
 
-                                let mut source_iters = source
-                                    .iter()
-                                    .map(|(values, _cnt)| *values)
-                                    .collect::<Vec<_>>();
-                                for func in aggr_funcs2.iter() {
-                                    let column_iter = (0..source_iters.len())
-                                        .map(|i| source_iters[i].next().unwrap());
+                                // Decode every value row's datums into the arena, one column
+                                // per aggregate, then iterate them column-major below. Min/max
+                                // hierarchical aggregates are multiplicity-insensitive, so each
+                                // row contributes once (`Diff::ONE`) regardless of `_cnt`.
+                                let arity = aggr_funcs2.len();
+                                let mut decoded = vals2.borrow();
+                                for (values, _cnt) in source.iter() {
+                                    values.extend_datums(&temp_storage, &mut decoded, None);
+                                }
+                                assert_eq!(decoded.len(), source.len() * arity);
+                                for (col, func) in aggr_funcs2.iter().enumerate() {
+                                    let column_iter = (0..source.len())
+                                        .map(|r| (decoded[r * arity + col], Diff::ONE));
                                     datums_local.push(func.eval(column_iter, &temp_storage));
                                 }
                                 if let Result::Err(e) =
@@ -996,16 +1019,22 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         move |key, source, target| {
                             let temp_storage = RowArena::new();
                             let mut datums_local = datums1.borrow();
-                            key.extend_datums(&mut datums_local, None);
+                            key.extend_datums(&temp_storage, &mut datums_local, None);
                             let key_len = datums_local.len();
 
-                            let mut source_iters = source
-                                .iter()
-                                .map(|(values, _cnt)| *values)
-                                .collect::<Vec<_>>();
-                            for func in aggr_funcs.iter() {
-                                let column_iter = (0..source_iters.len())
-                                    .map(|i| source_iters[i].next().unwrap());
+                            // Decode every value row's datums into the arena, one column
+                            // per aggregate, then iterate them column-major below. Min/max
+                            // hierarchical aggregates are multiplicity-insensitive, so each
+                            // row contributes once (`Diff::ONE`) regardless of `_cnt`.
+                            let arity = aggr_funcs.len();
+                            let mut decoded = vals1.borrow();
+                            for (values, _cnt) in source.iter() {
+                                values.extend_datums(&temp_storage, &mut decoded, None);
+                            }
+                            assert_eq!(decoded.len(), source.len() * arity);
+                            for (col, func) in aggr_funcs.iter().enumerate() {
+                                let column_iter = (0..source.len())
+                                    .map(|r| (decoded[r * arity + col], Diff::ONE));
                                 datums_local.push(func.eval(column_iter, &temp_storage));
                             }
 
@@ -1128,6 +1157,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 "Arranged MinsMaxesHierarchical input",
             );
 
+        // Scratch buffer for decoding the input values (one column per aggregate) into the
+        // arena, so the aggregates iterate arena-resident datums rather than the packed bytes.
+        let mut value_datums = DatumVec::new();
         let reduced = arranged_input.clone().mz_reduce_abelian::<_, Bu, Tr>(
             "Reduced Fallibly MinsMaxesHierarchical",
             move |key, source, target| {
@@ -1151,17 +1183,24 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     }
                 }
 
+                // Decode every value row's datums into the arena, one column per aggregate,
+                // then iterate them column-major below.
+                let temp_storage = RowArena::new();
+                let arity = aggrs.len();
+                let mut decoded = value_datums.borrow();
+                for (values, _cnt) in source.iter() {
+                    values.extend_datums(&temp_storage, &mut decoded, None);
+                }
+                assert_eq!(decoded.len(), source.len() * arity);
+
                 let mut row_builder = SharedRow::get();
                 let mut row_packer = row_builder.packer();
-
-                let mut source_iters = source
-                    .iter()
-                    .map(|(values, _cnt)| *values)
-                    .collect::<Vec<_>>();
-                for func in aggrs.iter() {
+                for (col, func) in aggrs.iter().enumerate() {
+                    // Min/max hierarchical aggregates are multiplicity-insensitive, so each
+                    // row contributes once (`Diff::ONE`) regardless of `_cnt`.
                     let column_iter =
-                        (0..source_iters.len()).map(|i| source_iters[i].next().unwrap());
-                    row_packer.push(func.eval(column_iter, &RowArena::new()));
+                        (0..source.len()).map(|r| (decoded[r * arity + col], Diff::ONE));
+                    row_packer.push(func.eval(column_iter, &temp_storage));
                 }
                 // We only want to arrange the parts of the input that are not part of the output.
                 // More specifically, we want to arrange it so that `input.concat(&output.negate())`
@@ -1258,7 +1297,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 move |key, input, output| {
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums1.borrow();
-                    key.extend_datums(&mut datums_local, None);
+                    key.extend_datums(&temp_storage, &mut datums_local, None);
                     let key_len = datums_local.len();
                     let accum = &input[0].1;
                     for monoid in accum.iter() {
@@ -1284,7 +1323,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     move |key, input, output| {
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums2.borrow();
-                        key.extend_datums(&mut datums_local, None);
+                        key.extend_datums(&temp_storage, &mut datums_local, None);
                         let accum = &input[0].1;
                         for monoid in accum.iter() {
                             datums_local.extend(monoid.finalize().iter());
@@ -1453,7 +1492,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums1.borrow();
-                    key.extend_datums(&mut datums_local, None);
+                    key.extend_datums(&temp_storage, &mut datums_local, None);
                     let key_len = datums_local.len();
                     for (aggr, accum) in full_aggrs.iter().zip_eq(accums) {
                         datums_local.push(finalize_accum(&aggr.func, accum, total));
@@ -1512,7 +1551,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     let Some(mfp) = &mfp_after2 else { return };
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums2.borrow();
-                    key.extend_datums(&mut datums_local, None);
+                    key.extend_datums(&temp_storage, &mut datums_local, None);
                     for (aggr, accum) in full_aggrs2.iter().zip_eq(accums) {
                         datums_local.push(finalize_accum(&aggr.func, accum, total));
                     }

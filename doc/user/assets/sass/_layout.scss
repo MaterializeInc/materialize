@@ -362,10 +362,8 @@ table.inline-headings {
     padding: var(--x-small) rem(2);
     position: sticky;
     top: 0;
-    overflow-y: auto;
     font-size: var(--sm);
     padding-bottom: 8.5rem;
-    height: 100vh;
 
     &-top {
         margin-top: var(--pico);

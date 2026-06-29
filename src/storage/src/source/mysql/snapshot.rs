@@ -237,6 +237,8 @@ pub(crate) fn render<'scope>(
                     .mysql_source_timeouts
                     .snapshot_lock_wait_timeout
                 {
+                    // Interpolating a `Duration` integer; not parameterizable in MySQL `SET`.
+                    #[allow(clippy::disallowed_methods)]
                     lock_conn
                         .query_drop(format!(
                             "SET @@session.lock_wait_timeout = {}",
@@ -246,10 +248,13 @@ pub(crate) fn render<'scope>(
                 }
 
                 trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
-                match lock_conn
+                // `lock_clauses` is built from `MySqlTableName::Display`, which
+                // escapes both schema and table via `quote_identifier`.
+                #[allow(clippy::disallowed_methods)]
+                let lock_result = lock_conn
                     .query_drop(format!("LOCK TABLES {lock_clauses}"))
-                    .await
-                {
+                    .await;
+                match lock_result {
                     // Handle the case where a table we are snapshotting has been dropped or renamed.
                     Err(mysql_async::Error::Server(mysql_async::ServerError {
                         code,
@@ -337,6 +342,7 @@ pub(crate) fn render<'scope>(
                 // From https://dev.mysql.com/doc/refman/8.0/en/datetime.html: "MySQL converts TIMESTAMP values
                 // from the current time zone to UTC for storage, and back from UTC to the current time zone
                 // for retrieval. (This does not occur for other types such as DATETIME.)"
+                #[allow(clippy::disallowed_methods)] // static SQL string
                 tx.query_drop("set @@session.time_zone = '+00:00'").await?;
 
                 // Configure query execution time based on param. We want to be able to
@@ -348,6 +354,8 @@ pub(crate) fn render<'scope>(
                     .mysql_source_timeouts
                     .snapshot_max_execution_time
                 {
+                    // Interpolating an integer millis value; not parameterizable in MySQL `SET`.
+                    #[allow(clippy::disallowed_methods)]
                     tx.query_drop(format!(
                         "SET @@session.max_execution_time = {}",
                         timeout.as_millis()
@@ -356,6 +364,7 @@ pub(crate) fn render<'scope>(
                 }
 
                 // We have started our transaction so we can unlock the tables.
+                #[allow(clippy::disallowed_methods)] // static SQL string
                 lock_conn.query_drop("UNLOCK TABLES").await?;
                 lock_conn.disconnect().await?;
 
@@ -567,6 +576,9 @@ where
 {
     let mut stats = TableStatistics::default();
 
+    // `MySqlTableName::Display` escapes both identifier components via
+    // `quote_identifier`, so this interpolation is safe; not parameterizable.
+    #[allow(clippy::disallowed_methods)]
     let count_row: Option<u64> = conn
         .query_first(format!("SELECT COUNT(*) FROM {}", table))
         .wall_time()

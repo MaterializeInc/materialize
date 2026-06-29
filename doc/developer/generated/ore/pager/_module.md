@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/pager.rs
-revision: 68b35c5959
+revision: 7615b242e2
 ---
 
 # mz-ore::pager
@@ -23,6 +23,7 @@ Explicit pager for cold data. Moves `Vec<u64>` chunks out of active memory into 
 * `try_take` — fallible counterpart; on `Err`, `dst` may hold partial data.
 * `backend()` / `set_backend(b)` — read or set the process-global active backend. The selection is stored in an `AtomicU8`.
 * `set_scratch_dir(root)` (re-exported from `file`) — configure the scratch directory for the file backend before using `Backend::File`.
+* `advise_pageout(bytes)` (re-exported from `swap`) — issues `MADV_PAGEOUT` over the given byte slice, proactively swapping out pages without transferring ownership; a no-op on non-Linux targets.
 
 ## Submodules
 

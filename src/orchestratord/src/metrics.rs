@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use axum::{Extension, Router, body::Body, routing::get};
-use http::{Method, Request, Response, StatusCode};
+use http::{HeaderMap, Method, Request, Response, StatusCode};
 use prometheus::{Encoder, TextEncoder};
 use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
 use tracing::{Level, Span};
@@ -68,17 +69,15 @@ fn add_tracing_layer<S>(router: Router<S>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    router.layer(TraceLayer::new_for_http()
-                .make_span_with(|request: &Request<Body>| {
-                    // This ugly macro is needed, unfortunately (and
-                    // copied from tower-http), because
-                    // `tracing::span!` required the level argument to
-                    // be static. Meaning we can't just pass
-                    // `self.level`.
-                    // Don't log Authorization headers
-                    let mut headers = request.headers().clone();
-                    _ = headers.remove(http::header::AUTHORIZATION);
-                    macro_rules! make_span {
+    router.layer(
+        TraceLayer::new_for_http()
+            .make_span_with(|request: &Request<Body>| {
+                // This ugly macro is needed, unfortunately (and
+                // copied from tower-http), because
+                // `tracing::span!` required the level argument to
+                // be static. Meaning we can't just pass
+                // `self.level`.
+                macro_rules! make_span {
                         ($level:expr) => {
                             tracing::span!(
                                 $level,
@@ -86,44 +85,72 @@ where
                                 "request.uri" = %request.uri(),
                                 "request.version" = ?request.version(),
                                 "request.method" = %request.method(),
-                                "request.headers" = ?headers,
+                                "request.headers" = tracing::field::Empty,
                                 "response.status" = tracing::field::Empty,
                                 "response.status_code" = tracing::field::Empty,
                                 "response.headers" = tracing::field::Empty,
                             )
                         }
                     }
-                    if request.uri().path() == "/api/health" || request.method() == Method::OPTIONS {
-                        return make_span!(Level::DEBUG);
-                    }
+                let span = if ["/api/health", "/metrics"].contains(&request.uri().path())
+                    || request.method() == Method::OPTIONS
+                {
+                    make_span!(Level::DEBUG)
+                } else {
                     make_span!(Level::INFO)
-                })
-                .on_response(|response: &Response<Body>, _latency, span: &Span| {
-                    span.record(
-                        "response.status",
-                        &tracing::field::display(response.status()),
-                    );
-                    span.record(
-                        "response.status_code",
-                        &tracing::field::display(response.status().as_u16()),
-                    );
-                    span.record(
-                        "response.headers",
-                        &tracing::field::debug(response.headers()),
-                    );
-                    // Emit an event at the same level as the span. For the same reason as noted in the comment
-                    // above we can't use `tracing::event!(dynamic_level, ...)` since the level argument
-                    // needs to be static
-                    let level = span.metadata().map(|m| m.level()).unwrap_or(&Level::DEBUG);
-                    if level == &Level::DEBUG {
-                        tracing::debug!(msg = "HTTP response generated", response = ?response, status_code = response.status().as_u16());
-                    } else {
-                        tracing::info!(msg = "HTTP response generated", response = ?response, status_code = response.status().as_u16());
-                    }
-                })
-                .on_failure(
-                    |error: ServerErrorsFailureClass, _latency: Duration, _span: &Span| {
-                        tracing::warn!(msg = "HTTP request handling error", error = ?error);
-                    },
-                ))
+                };
+
+                if let Ok(s) = serde_json::to_string(&display_headers(request.headers().clone())) {
+                    span.record("request.headers", s);
+                }
+
+                span
+            })
+            .on_response(|response: &Response<Body>, _latency, span: &Span| {
+                span.record(
+                    "response.status",
+                    &tracing::field::display(response.status()),
+                );
+                span.record("response.status_code", response.status().as_u16());
+                if let Ok(s) = serde_json::to_string(&display_headers(response.headers().clone())) {
+                    span.record("response.headers", s);
+                }
+
+                // Emit an event at the same level as the span. For the same reason as noted in the comment
+                // above we can't use `tracing::event!(dynamic_level, ...)` since the level argument
+                // needs to be static
+                if span
+                    .metadata()
+                    .and_then(|m| Some(m.level()))
+                    .unwrap_or(&Level::DEBUG)
+                    == &Level::DEBUG
+                {
+                    tracing::debug!("HTTP response generated");
+                } else {
+                    tracing::info!("HTTP response generated");
+                }
+            })
+            .on_failure(
+                |error: ServerErrorsFailureClass, _latency: Duration, _span: &Span| {
+                    tracing::warn!(error = ?error, "HTTP request handling error");
+                },
+            ),
+    )
+}
+
+fn display_headers(mut headers: HeaderMap) -> BTreeMap<String, String> {
+    // Don't log Authorization headers
+    _ = headers.remove(http::header::AUTHORIZATION);
+
+    headers
+        .into_iter()
+        .filter_map(|(k, v)| {
+            k.map(|k| {
+                (
+                    k.to_string(),
+                    String::from_utf8_lossy(v.as_bytes()).to_string(),
+                )
+            })
+        })
+        .collect()
 }

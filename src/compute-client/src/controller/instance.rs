@@ -26,7 +26,7 @@ use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
     ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::channel::instrumented_unbounded_channel;
@@ -140,6 +140,13 @@ pub(super) struct Instance {
     workload_class: Option<String>,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState>,
+    /// Per-replica dyncfg overrides, merged into the `UpdateConfiguration`
+    /// command sent to each replica (and into the command-history replay used
+    /// to hydrate new replicas). Populated from the scoped feature flags
+    /// (replica-local) layer; empty by default, in which case every replica
+    /// receives the unmodified environment-wide configuration. Stores only the
+    /// values that differ from the environment-wide value, so the map is sparse.
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
     /// Currently installed compute collections.
     ///
     /// New entries are added for all collections exported from dataflows created through
@@ -345,7 +352,7 @@ impl Instance {
         client: ReplicaClient,
         config: ReplicaConfig,
         epoch: u64,
-    ) {
+    ) -> Result<(), read_holds::ReadHoldIssuerHungUp> {
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
         let metrics = self.metrics.for_replica(id);
@@ -359,6 +366,7 @@ impl Instance {
         );
 
         // Add per-replica collection state.
+        let mut shutdown_input = None;
         for (collection_id, collection) in &self.collections {
             // Skip log collections not maintained by this replica,
             // and collections targeted at a different replica.
@@ -378,11 +386,42 @@ impl Instance {
                 collection.read_frontier().to_owned()
             };
 
-            let input_read_holds = collection.storage_dependencies.values().cloned().collect();
+            // Cloning a `ReadHold` fails when its issuer has hung up. For these holds the issuer
+            // is the `StorageCollections`, which doesn't hang up as long as the `Instance` exists,
+            // except during process shutdown, when the tokio runtime drops tasks in arbitrary
+            // order. In that case there is no way of correctly initializing the per-replica
+            // collection state, so we give up. We still add the replica itself, to keep the
+            // bookkeeping consistent with the controller's, and then signal the unrecoverable
+            // error to the caller, which shuts the instance down.
+            let mut input_read_holds = Vec::with_capacity(collection.storage_dependencies.len());
+            let mut hung_up = Vec::new();
+            for hold in collection.storage_dependencies.values() {
+                match hold.try_clone() {
+                    Ok(hold) => input_read_holds.push(hold),
+                    Err(read_holds::ReadHoldIssuerHungUp(input_id)) => hung_up.push(input_id),
+                }
+            }
+            if !hung_up.is_empty() {
+                tracing::error!(
+                    replica_id = %id,
+                    %collection_id,
+                    ?hung_up,
+                    "giving up on adding replica collections: storage read hold issuers hung \
+                     up, the process is shutting down",
+                );
+                shutdown_input = hung_up.into_iter().next();
+                break;
+            }
+
             replica.add_collection(*collection_id, as_of, input_read_holds);
         }
 
         self.replicas.insert(id, replica);
+
+        match shutdown_input {
+            Some(input_id) => Err(read_holds::ReadHoldIssuerHungUp(input_id)),
+            None => Ok(()),
+        }
     }
 
     /// Enqueue the given response for delivery to the controller clients.
@@ -813,6 +852,7 @@ impl Instance {
             read_only,
             workload_class,
             replicas,
+            replica_dyncfg_overrides: _,
             collections,
             log_sources: _,
             peeks,
@@ -918,6 +958,7 @@ impl Instance {
             read_only,
             workload_class: None,
             replicas: Default::default(),
+            replica_dyncfg_overrides: Default::default(),
             collections,
             log_sources,
             peeks: Default::default(),
@@ -948,10 +989,12 @@ impl Instance {
         let instance_config = InstanceConfig {
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
             // The remaining fields are replica-specific and will be set in
-            // `ReplicaTask::specialize_command`.
+            // `ReplicaTask::specialize_command` (logging, expiration, dictionary compression) and
+            // `Instance::specialize_command_for_replica` (the initial config snapshot).
             logging: Default::default(),
             expiration_offset: Default::default(),
             arrangement_dictionary_compression: Default::default(),
+            initial_config: Default::default(),
         };
 
         self.send(ComputeCommand::CreateInstance(Box::new(instance_config)));
@@ -1043,23 +1086,90 @@ impl Instance {
         );
     }
 
+    /// Terminate the [`Instance::run`] loop, causing the instance task to shut down.
+    ///
+    /// Unlike [`Instance::shutdown`], this does not assert that the instance has no replicas
+    /// left. We use it to react to unrecoverable errors that can only occur during process
+    /// shutdown, such as a storage read hold issuer hanging up while we rehydrate a replica.
+    fn initiate_shutdown(&mut self) {
+        // Replacing `command_rx` with a fresh, sender-less channel makes the next `recv` in
+        // [`Instance::run`] return `None`, terminating the loop.
+        let (_tx, rx) = mpsc::unbounded_channel();
+        self.command_rx = rx;
+    }
+
     /// Sends a command to replicas of this instance.
     #[mz_ore::instrument(level = "debug")]
     fn send(&mut self, cmd: ComputeCommand) {
         // Record the command so that new replicas can be brought up to speed.
+        // We record the *base* (un-specialized) command, so that the per-replica
+        // dyncfg overrides are re-applied at replay time in `add_replica` rather
+        // than baked into the shared history.
         self.history.push(cmd.clone());
 
         let target_replica = self.target_replica(&cmd);
 
+        // Borrow the overrides and dyncfg separately from `self.replicas` so the per-replica
+        // specialization below does not conflict with the mutable replica borrow.
+        let overrides = &self.replica_dyncfg_overrides;
+        let dyncfg = &self.dyncfg;
+
         if let Some(rid) = target_replica {
             if let Some(replica) = self.replicas.get_mut(&rid) {
+                let cmd = Self::specialize_command_for_replica(cmd, rid, overrides, dyncfg);
                 let _ = replica.client.send(cmd);
             }
         } else {
-            for replica in self.replicas.values_mut() {
-                let _ = replica.client.send(cmd.clone());
+            for (rid, replica) in self.replicas.iter_mut() {
+                let cmd =
+                    Self::specialize_command_for_replica(cmd.clone(), *rid, overrides, dyncfg);
+                let _ = replica.client.send(cmd);
             }
         }
+    }
+
+    /// Specializes a command for a specific replica by merging that replica's dyncfg override into
+    /// its configuration. For `UpdateConfiguration` the override is merged into the update. For
+    /// `CreateInstance` the current dyncfg, with the override applied on top, is captured as the
+    /// initial config snapshot. All other commands are returned unchanged.
+    ///
+    /// The snapshot is built here, rather than baked into the history, so it reflects the dyncfg
+    /// and override values current at the time the command is sent or replayed to the replica.
+    fn specialize_command_for_replica(
+        mut cmd: ComputeCommand,
+        replica_id: ReplicaId,
+        overrides: &BTreeMap<ReplicaId, ConfigUpdates>,
+        dyncfg: &ConfigSet,
+    ) -> ComputeCommand {
+        let over = overrides.get(&replica_id);
+        match &mut cmd {
+            ComputeCommand::UpdateConfiguration(params) => {
+                if let Some(over) = over
+                    && !over.updates.is_empty()
+                {
+                    params.dyncfg_updates.extend(over.clone());
+                }
+            }
+            ComputeCommand::CreateInstance(config) => {
+                let mut initial = ConfigUpdates::from(dyncfg);
+                if let Some(over) = over {
+                    initial.extend(over.clone());
+                }
+                config.initial_config = initial;
+            }
+            _ => {}
+        }
+        cmd
+    }
+
+    /// Replaces the per-replica dyncfg overrides. Callers should follow this
+    /// with a configuration push (e.g. `update_configuration`) so that existing
+    /// replicas observe the new overrides.
+    pub(super) fn update_replica_dyncfg_overrides(
+        &mut self,
+        overrides: BTreeMap<ReplicaId, ConfigUpdates>,
+    ) {
+        self.replica_dyncfg_overrides = overrides;
     }
 
     /// Determine the target replica for a compute command. Retrieves the
@@ -1139,7 +1249,15 @@ impl Instance {
                 continue;
             }
 
-            if client.send(command.clone()).is_err() {
+            // Re-apply this replica's dyncfg override to replayed config commands, and rebuild the
+            // create-instance snapshot from the current dyncfg.
+            let command = Self::specialize_command_for_replica(
+                command.clone(),
+                id,
+                &self.replica_dyncfg_overrides,
+                &self.dyncfg,
+            );
+            if client.send(command).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
                 // restart the connection as well as this rehydration.
                 tracing::warn!("Replica {:?} connection terminated during hydration", id);
@@ -1148,7 +1266,14 @@ impl Instance {
         }
 
         // Add replica to tracked state.
-        self.add_replica_state(id, client, config, epoch);
+        if self.add_replica_state(id, client, config, epoch).is_err() {
+            // A storage read hold issuer hung up, which only happens during process shutdown.
+            // There is no way to correctly bring up the replica anymore, so we shut the instance
+            // down instead of running on with half-initialized replica state. `add_replica_state`
+            // has already logged the details and inserted the replica to keep our bookkeeping
+            // consistent with the controller's.
+            self.initiate_shutdown();
+        }
 
         Ok(())
     }
@@ -3283,5 +3408,125 @@ impl Drop for ReplicaCollectionIntrospection {
         let row = self.write_frontier_row();
         let updates = vec![(row, Diff::MINUS_ONE)];
         self.send(IntrospectionType::ReplicaFrontiers, updates);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
+    use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
+    use mz_persist_types::PersistLocation;
+
+    use crate::protocol::command::{ComputeCommand, InstanceConfig};
+
+    use super::{Instance, ReplicaId};
+
+    fn create_instance_command() -> ComputeCommand {
+        ComputeCommand::CreateInstance(Box::new(InstanceConfig {
+            logging: Default::default(),
+            expiration_offset: None,
+            peek_stash_persist_location: PersistLocation::new_in_mem(),
+            arrangement_dictionary_compression: false,
+            initial_config: Default::default(),
+        }))
+    }
+
+    fn initial_config(cmd: &ComputeCommand) -> &ConfigUpdates {
+        match cmd {
+            ComputeCommand::CreateInstance(config) => &config.initial_config,
+            other => panic!("expected CreateInstance, got {other:?}"),
+        }
+    }
+
+    /// `CreateInstance` is specialized with a full snapshot of the instance-wide dyncfg, so the
+    /// replica seeds its worker config at create time rather than waiting for the first
+    /// `UpdateConfiguration`. This is the regression guard for create-time setup observing dyncfg
+    /// defaults.
+    #[mz_ore::test]
+    fn create_instance_snapshots_instance_wide_dyncfg() {
+        let dyncfg = ConfigSet::default()
+            .add(&ENABLE_COLUMN_PAGED_BATCHER)
+            .add(&ENABLE_MZ_JOIN_CORE);
+        let mut updates = ConfigUpdates::default();
+        updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
+        updates.add(&ENABLE_MZ_JOIN_CORE, false);
+        updates.apply(&dyncfg);
+
+        // A replica without an override sees exactly the instance-wide values.
+        let overrides = BTreeMap::new();
+        let cmd = Instance::specialize_command_for_replica(
+            create_instance_command(),
+            ReplicaId::User(1),
+            &overrides,
+            &dyncfg,
+        );
+        let snapshot = initial_config(&cmd);
+        assert_eq!(
+            snapshot.updates.get(ENABLE_COLUMN_PAGED_BATCHER.name()),
+            Some(&ConfigVal::Bool(true)),
+        );
+        assert_eq!(
+            snapshot.updates.get(ENABLE_MZ_JOIN_CORE.name()),
+            Some(&ConfigVal::Bool(false)),
+        );
+    }
+
+    /// A replica-scoped override beats the instance-wide value in the create-time snapshot, so a
+    /// create-time-frozen scoped flag reaches the replica with its override applied.
+    #[mz_ore::test]
+    fn create_instance_snapshot_applies_replica_override() {
+        let dyncfg = ConfigSet::default().add(&ENABLE_COLUMN_PAGED_BATCHER);
+        let mut updates = ConfigUpdates::default();
+        updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
+        updates.apply(&dyncfg);
+
+        let replica = ReplicaId::User(1);
+        let mut override_updates = ConfigUpdates::default();
+        override_updates.add(&ENABLE_COLUMN_PAGED_BATCHER, false);
+        let overrides = BTreeMap::from([(replica, override_updates)]);
+
+        let cmd = Instance::specialize_command_for_replica(
+            create_instance_command(),
+            replica,
+            &overrides,
+            &dyncfg,
+        );
+        assert_eq!(
+            initial_config(&cmd)
+                .updates
+                .get(ENABLE_COLUMN_PAGED_BATCHER.name()),
+            Some(&ConfigVal::Bool(false)),
+            "replica override should win over the instance-wide value",
+        );
+    }
+
+    /// `UpdateConfiguration` continues to merge the replica's override into the update.
+    #[mz_ore::test]
+    fn update_configuration_merges_replica_override() {
+        let dyncfg = ConfigSet::default().add(&ENABLE_COLUMN_PAGED_BATCHER);
+
+        let replica = ReplicaId::User(1);
+        let mut override_updates = ConfigUpdates::default();
+        override_updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
+        let overrides = BTreeMap::from([(replica, override_updates)]);
+
+        let cmd = Instance::specialize_command_for_replica(
+            ComputeCommand::UpdateConfiguration(Box::new(Default::default())),
+            replica,
+            &overrides,
+            &dyncfg,
+        );
+        match cmd {
+            ComputeCommand::UpdateConfiguration(params) => assert_eq!(
+                params
+                    .dyncfg_updates
+                    .updates
+                    .get(ENABLE_COLUMN_PAGED_BATCHER.name()),
+                Some(&ConfigVal::Bool(true)),
+            ),
+            other => panic!("expected UpdateConfiguration, got {other:?}"),
+        }
     }
 }

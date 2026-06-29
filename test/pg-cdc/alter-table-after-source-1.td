@@ -160,7 +160,7 @@ INSERT INTO add_columns VALUES (2, 'ab');
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE remove_column DROP COLUMN f2;
 
-# TODO: Back to contains:altered when database-issues#7900 is fixed
+# TODO: Back to contains:altered when https://linear.app/materializeinc/issue/SS-310 is fixed
 ! SELECT * from remove_column;
 regex:(altered|incompatible schema change)
 

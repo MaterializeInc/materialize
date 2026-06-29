@@ -22,6 +22,38 @@ updating the image.
 Note that more complicated pipelines use [Docker Compose] to manage spinning up
 other services, like ZooKeeper.
 
+## Controlling CI for a pull request
+
+By default a PR push runs the "test" pipeline, trimmed to the steps whose inputs
+have changed relative to `main`. You can adjust what runs by adding labels to
+the PR. Labels are read by `mkpipeline.py` when the pipeline is generated, so a
+label change takes effect on the next push.
+
+* `ci-nightly`: also run the "nightly" pipeline on each push. Nightly is trimmed
+  to the steps whose inputs changed, the same way the test pipeline is. Running
+  all of Nightly on every push would be too much. Only Nightly builds triggered
+  this way are trimmed. Scheduled builds, release builds, and runs triggered
+  manually from the trigger page still run everything. Only steps that declare
+  `inputs` (or build mzbuild images) take part in a PR-triggered nightly. A
+  command-only step without inputs is trimmed out and will not run, so labeling a
+  PR to exercise such a step has no effect.
+* `ci-no-trim`: disable input-based trimming, so the full test pipeline runs.
+* `ci-no-test`: skip the test steps. The build still runs, but `mkpipeline.py`
+  exits non-zero so the build is red and the PR cannot be merged without tests.
+* `ci-no-build`: skip the build, which implies skipping the tests, and exit
+  non-zero so the PR cannot be merged without a build.
+
+`ci-no-test` and `ci-no-build` deliberately make the build red. They are for
+iterating quickly while keeping the PR unmergeable until the label is removed,
+not for landing changes. The reduced pipeline is still uploaded before the
+failure, so any steps that do run give feedback.
+
+When labels conflict, `ci-no-build` wins and skips everything, including any
+Nightly trigger. `ci-no-test` leaves the asynchronous Nightly trigger in place,
+so combining it with `ci-nightly` still fires Nightly even though the test steps
+are skipped. `ci-no-trim` applies only to the test pipeline. A `ci-nightly` run
+is always trimmed regardless.
+
 ## Build agents
 
 Buildkite ships a CloudFormation template that automatically scales build agent
@@ -138,30 +170,6 @@ recent macOS versions.
 
 The agent runs as the default MacStadium `administrator` user, since there isn't
 an easy way to isolate builds on macOS.
-
-The GitHub Actions runner also needs to be installed for CI on
-[MaterializeInc/homebrew-crosstools]. Running two separate CI agents on the same
-machine is not ideal, as both Buildkite and GitHub Actions might schedule jobs
-on the same agent concurrently. But homebrew-crosstools is not active enough to
-warrant its own dedicated agent; nor is it easy to run CI for a Homebrew tap on
-Buildkite. Homebrew's CI tooling is very tightly coupled to GitHub Actions.
-
-To configure a GitHub Actions agent:
-
-1. Follow the instructions for creating a self-hosted runner in our GitHub
-   Enterprise account: https://github.com/enterprises/materializeinc/settings/actions/runners/new
-
-2. Run `./config.sh` and follow the interactive configuration prompts, applying
-   the label `macos-x86_64` or `macos-aarch64` depending on the platform.
-
-3. Skip the step that says `run.sh` and run `./svc.sh install && ./svc.sh start`
-   instead to install a launchd configuration that automatically starts the
-   GitHub Actions agent on boot.
-
-4. On ARM, the service needs to run under Rosetta until [actions/runner#805]
-   is resolved. Prefix the calls to `config.sh` and `svc.sh` with `arch -x86_64`
-   to accomplish this, as in `arch -x86_64 ./config.sh`.
-
 
 ## Agent security
 
@@ -323,7 +331,5 @@ $ gdb -p <FAULTY-PROCESS-PID>
 [Docker Compose]: https://docs.docker.com/compose/
 [MacStadium]: https://www.macstadium.com
 [materialized-docker]: https://hub.docker.com/repository/docker/materialize/materialized
-[MaterializeInc/homebrew-crosstools]: https://github.com/MaterializeInc/homebrew-crosstools
 [materializer GitHub user]: https://github.com/materializer
-[actions/runner#805]: https://github.com/actions/runner/issues/805
 [elastic-yml]: https://s3.amazonaws.com/buildkite-aws-stack/latest/aws-stack.yml

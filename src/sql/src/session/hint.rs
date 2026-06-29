@@ -91,7 +91,6 @@ impl ApplicationNameHint {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "psql" => ApplicationNameHint::Psql(Private),
-            "dbt" => ApplicationNameHint::Dbt(Private),
             "web_console" => ApplicationNameHint::WebConsole(Private),
             "web_console_shell" => ApplicationNameHint::WebConsoleShell(Private),
             "mz_psql" => ApplicationNameHint::MzPsql(Private),
@@ -108,6 +107,8 @@ impl ApplicationNameHint {
             x if x.starts_with("terraform-provider-materialize") => {
                 ApplicationNameHint::TerraformProviderMaterialize(Private)
             }
+            // dbt provides the version as a suffix.
+            x if x.starts_with("dbt") => ApplicationNameHint::Dbt(Private),
             // DataGrip provides the version as a suffix.
             x if x.starts_with("datagrip") => ApplicationNameHint::DataGrip(Private),
             // DBeaver provides the version as a suffix.

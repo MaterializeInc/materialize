@@ -25,13 +25,16 @@ aws-smithy-runtime-api.workspace = true
 aws-types.workspace = true
 bytes.workspace = true
 columnation.workspace = true
+csv-core.workspace = true
 dec.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
+gcp_auth.workspace = true
 hex.workspace = true
 http.workspace = true
 itertools.workspace = true
 mysql_async.workspace = true
+mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }

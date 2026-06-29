@@ -748,6 +748,12 @@ CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY ASSERT NOT NULL x) AS SELECT
 query error invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "213503982001"
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '213503982001' days) AS SELECT * FROM t2;
 
+# An interval whose microseconds fit in u64 but not i64 must error gracefully
+# rather than panic when unparsed (e.g. for mz_materialized_view_refresh_strategies).
+# See database-issues SQL-361.
+query error REFRESH interval too large
+CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '150000000 days') AS SELECT * FROM t2;
+
 query error REFRESH interval must be at least 1 ms
 CREATE MATERIALIZED VIEW mv_bad
   WITH (REFRESH EVERY '999 microseconds')
@@ -1691,6 +1697,40 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
 ----
 COMPLETE 0
+
+# Switching a managed cluster to a non-MANUAL SCHEDULE while its REPLICATION FACTOR is greater
+# than 1 must be rejected. Otherwise the cluster would be left in an invalid state (a refresh
+# schedule implies a replication factor of 0 or 1), which used to make SHOW CREATE CLUSTER panic
+# the coordinator (see database-issues SQL-215). This is placed at the end of the scheduling
+# section so that creating/dropping this cluster doesn't pollute the audit-event queries above.
+statement ok
+CREATE CLUSTER c_schedule_rf (SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 2);
+
+statement error SCHEDULE cannot be set to anything other than MANUAL while the cluster's REPLICATION FACTOR is greater than 1; set the REPLICATION FACTOR to 1 first
+ALTER CLUSTER c_schedule_rf SET (SCHEDULE = ON REFRESH);
+
+# The rejected ALTER left the cluster unchanged, and SHOW CREATE CLUSTER still works.
+query T multiline
+SELECT create_sql FROM (SHOW CREATE CLUSTER c_schedule_rf);
+----
+CREATE CLUSTER "c_schedule_rf" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL)
+EOF
+
+# Lowering the REPLICATION FACTOR to 1 first lets the schedule change succeed.
+statement ok
+ALTER CLUSTER c_schedule_rf SET (REPLICATION FACTOR = 1);
+
+statement ok
+ALTER CLUSTER c_schedule_rf SET (SCHEDULE = ON REFRESH);
+
+query T multiline
+SELECT create_sql FROM (SHOW CREATE CLUSTER c_schedule_rf);
+----
+CREATE CLUSTER "c_schedule_rf" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '00:00:00'))
+EOF
+
+statement ok
+DROP CLUSTER c_schedule_rf;
 
 ## EXPLAIN FILTER PUSHDOWN can be run on materialized views in this file
 

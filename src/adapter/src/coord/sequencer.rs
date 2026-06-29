@@ -124,18 +124,15 @@ impl Coordinator {
                 tracing::debug!(%conn_id, "deferring plan for startup appends");
 
                 let role_metadata = ctx.session().role_metadata().clone();
-                let validity = PlanValidity::new(
-                    self.catalog.transient_revision(),
-                    dependencies,
-                    None,
-                    None,
-                    role_metadata,
-                );
+                let validity =
+                    PlanValidity::new(&self.catalog, dependencies, None, None, role_metadata);
                 let deferred_plan = DeferredPlan {
                     ctx,
                     plan,
                     validity,
                     requires_locks: BTreeSet::default(),
+                    resolved_ids,
+                    sql_impl_resolved_ids,
                 };
                 // Defer op accepts an optional write lock, but there aren't any writes occurring
                 // here, since the map to `None`.

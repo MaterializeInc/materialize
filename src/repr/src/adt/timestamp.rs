@@ -258,25 +258,22 @@ pub trait TimestampLike:
     }
 
     fn truncate_microseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_micro_opt(
-            self.hour(),
-            self.minute(),
-            self.second(),
-            self.nanosecond() / 1_000,
-        )
-        .unwrap();
+        // Use `with_nanosecond` rather than `from_hms_micro_opt`: the latter only
+        // accepts a leap-second sub-second (>= 1s) when `sec == 59`, so a value
+        // carrying chrono's leap representation at any other second (reachable
+        // from a parsed `:60` literal) would be `None` and panic. `with_nanosecond`
+        // accepts the whole [0, 2s) range, preserving the value.
+        let time = NaiveTime::from_hms_opt(self.hour(), self.minute(), self.second())
+            .and_then(|t| t.with_nanosecond((self.nanosecond() / 1_000) * 1_000))
+            .expect("hour/minute/second/nanosecond came from a valid time");
 
         Self::new(self.date(), time)
     }
 
     fn truncate_milliseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_milli_opt(
-            self.hour(),
-            self.minute(),
-            self.second(),
-            self.nanosecond() / 1_000_000,
-        )
-        .unwrap();
+        let time = NaiveTime::from_hms_opt(self.hour(), self.minute(), self.second())
+            .and_then(|t| t.with_nanosecond((self.nanosecond() / 1_000_000) * 1_000_000))
+            .expect("hour/minute/second/nanosecond came from a valid time");
 
         Self::new(self.date(), time)
     }
@@ -901,9 +898,11 @@ impl RustType<ProtoNaiveDateTime> for CheckedTimestamp<NaiveDateTime> {
     }
 
     fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            t: NaiveDateTime::from_proto(proto)?,
-        })
+        // Go through `from_timestamplike` so out-of-range values are
+        // rejected here. Pushing them into a `Row` succeeds, but
+        // `read_datum` would panic when reconstructing the timestamp.
+        CheckedTimestamp::from_timestamplike(NaiveDateTime::from_proto(proto)?)
+            .map_err(|err| TryFromProtoError::InvalidFieldError(err.to_string()))
     }
 }
 
@@ -913,9 +912,8 @@ impl RustType<ProtoNaiveDateTime> for CheckedTimestamp<DateTime<Utc>> {
     }
 
     fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            t: DateTime::<Utc>::from_proto(proto)?,
-        })
+        CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_proto(proto)?)
+            .map_err(|err| TryFromProtoError::InvalidFieldError(err.to_string()))
     }
 }
 
@@ -1115,6 +1113,27 @@ mod test {
         assert_round_to_precision(high, 4, 8210266790400123500);
         assert_round_to_precision(high, 5, 8210266790400123460);
         assert_round_to_precision(high, 6, 8210266790400123457);
+    }
+
+    #[mz_ore::test]
+    fn test_round_to_precision_leap_second_off_minute() {
+        // Regression: parsing a `:60` literal can leave chrono's leap-second
+        // representation (sub-second >= 1s) on a second other than `:59` (after
+        // time-zone math). Rounding such a value, as the string->timestamp cast
+        // does, must not panic. `truncate_microseconds`/`truncate_milliseconds`
+        // previously rebuilt the time with `from_hms_{micro,milli}_opt`, whose
+        // leap sub-second range is only valid at `:59`, and unwrapped the `None`.
+        let leap = NaiveDate::from_ymd_opt(3, 3, 17)
+            .unwrap()
+            .and_hms_opt(12, 30, 56)
+            .unwrap()
+            .with_nanosecond(1_000_000_000)
+            .unwrap();
+        let ts = CheckedTimestamp::try_from(leap).unwrap();
+        for precision in [None, Some(0), Some(3), Some(6)] {
+            ts.round_to_precision(precision.map(TimestampPrecision))
+                .unwrap();
+        }
     }
 
     #[mz_ore::test]

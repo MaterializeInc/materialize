@@ -331,7 +331,7 @@ http
 {"queries":[{"query":"select $1::decimal+2 as col","params":["nan"]}]}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[["NaN"]],"desc":{"columns":[{"name":"col","type_oid":1700,"type_len":-1,"type_mod":2555947}]},"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[["NaN"]],"desc":{"columns":[{"name":"col","type_oid":1700,"type_len":-1,"type_mod":-1}]},"notices":[]}]}
 
 # Null string value parameters
 http

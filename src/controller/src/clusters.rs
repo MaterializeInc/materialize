@@ -95,6 +95,16 @@ pub struct ReplicaAllocation {
     /// T-shirt size.
     #[serde(default = "default_true")]
     pub is_cc: bool,
+    /// The size *family* this size belongs to, e.g. the size `D.1-xsmall`
+    /// belongs to family `D` and the legacy t-shirt sizes belong to family
+    /// `legacy`. The family is the coarse axis and is *not* a prefix of the size
+    /// name in general. Used as the
+    /// `replica_size_family` attribute when evaluating replica-local scoped
+    /// feature flags (see the scoped feature flags design). When unset, the
+    /// family falls back to a value derived from [`Self::is_cc`] via
+    /// [`ReplicaAllocation::family`].
+    #[serde(default)]
+    pub family: Option<String>,
     /// Whether instances of this type use swap as the spill-to-disk mechanism.
     #[serde(default)]
     pub swap_enabled: bool,
@@ -104,6 +114,24 @@ pub struct ReplicaAllocation {
     /// Additional node selectors.
     #[serde(default)]
     pub selectors: BTreeMap<String, String>,
+}
+
+impl ReplicaAllocation {
+    /// The name of the size family this allocation belongs to, used as the
+    /// `replica_size_family` attribute when evaluating replica-local scoped
+    /// feature flags.
+    ///
+    /// Falls back to a value derived from [`Self::is_cc`] when [`Self::family`]
+    /// is unset: `"cc"` for modern sizes and `"legacy"` for the legacy t-shirt
+    /// sizes. This keeps the legacy family targetable even before every size
+    /// gains an explicit `family` in the size configuration.
+    pub fn family(&self) -> &str {
+        match &self.family {
+            Some(family) => family.as_str(),
+            None if self.is_cc => "cc",
+            None => "legacy",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -146,6 +174,7 @@ fn test_replica_allocation_deserialization() {
             cpu_request: None,
             cpu_exclusive: false,
             is_cc: true,
+            family: None,
             swap_enabled: true,
             scale: NonZero::new(16).unwrap(),
             workers: NonZero::new(1).unwrap(),
@@ -182,6 +211,7 @@ fn test_replica_allocation_deserialization() {
             cpu_request: None,
             cpu_exclusive: true,
             is_cc: true,
+            family: None,
             swap_enabled: false,
             scale: NonZero::new(1).unwrap(),
             workers: NonZero::new(1).unwrap(),
@@ -196,6 +226,40 @@ fn test_replica_allocation_deserialization() {
     assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
     let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
     assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+fn test_replica_allocation_family() {
+    let parse = |json: &str| -> ReplicaAllocation {
+        serde_json::from_str(json).expect("deserialization from JSON succeeds")
+    };
+
+    // An explicit `family` is used verbatim.
+    assert_eq!(
+        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "family": "D"}"#).family(),
+        "D"
+    );
+    // Without an explicit `family`, modern (`is_cc`) sizes fall back to "cc".
+    // `is_cc` defaults to true.
+    assert_eq!(
+        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#).family(),
+        "cc"
+    );
+    // Without an explicit `family`, legacy (non-`is_cc`) sizes fall back to
+    // "legacy".
+    assert_eq!(
+        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "is_cc": false}"#).family(),
+        "legacy"
+    );
+    // An explicit family wins even for a legacy size.
+    assert_eq!(
+        parse(
+            r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "is_cc": false, "family": "legacy-special"}"#
+        )
+        .family(),
+        "legacy-special"
+    );
 }
 
 /// Configures the location of a cluster replica.
@@ -287,18 +351,6 @@ pub struct UnmanagedReplicaLocation {
     pub computectl_addrs: Vec<String>,
 }
 
-/// Information about availability zone constraints for replicas.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ManagedReplicaAvailabilityZones {
-    /// Specified if the `Replica` is from `MANAGED` cluster,
-    /// and specifies if there is an `AVAILABILITY ZONES`
-    /// constraint. Empty lists are represented as `None`.
-    FromCluster(Option<Vec<String>>),
-    /// Specified if the `Replica` is from a non-`MANAGED` cluster,
-    /// and specifies if there is a specific `AVAILABILITY ZONE`.
-    FromReplica(Option<String>),
-}
-
 /// The location of a managed replica.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ManagedReplicaLocation {
@@ -310,21 +362,18 @@ pub struct ManagedReplicaLocation {
     pub internal: bool,
     /// Optional SQL size parameter used for billing.
     pub billed_as: Option<String>,
-    /// The replica's availability zones, if specified.
+    /// The availability zones the replica may be placed in; empty means
+    /// unconstrained.
     ///
-    /// This is either the replica's specific `AVAILABILITY ZONE`,
-    /// or the zones placed here during replica concretization
-    /// from the `MANAGED` cluster config.
+    /// For a replica of a managed cluster this is the cluster's
+    /// `AVAILABILITY ZONES` pool; for a replica of an unmanaged cluster it is
+    /// the single user-pinned `AVAILABILITY ZONE`, as a zero- or one-element
+    /// list.
     ///
-    /// We skip serialization (which is used for some validation
-    /// in tests) as the latter case is a "virtual" piece of information,
-    /// that exists only at runtime.
-    ///
-    /// An empty list of availability zones is concretized as `None`,
-    /// as the on-disk serialization of `MANAGED CLUSTER AVAILABILITY ZONES`
-    /// is an empty list if none are specified
+    /// Not serialized: this is re-derived from the cluster config at
+    /// concretization, not read back from a durable record.
     #[serde(skip)]
-    pub availability_zones: ManagedReplicaAvailabilityZones,
+    pub availability_zones: Vec<String>,
     /// Whether the replica is pending reconfiguration
     pub pending: bool,
 }
@@ -349,6 +398,9 @@ pub struct ClusterEvent {
     pub replica_id: ReplicaId,
     pub process_id: ProcessId,
     pub status: ClusterStatus,
+    /// Cumulative restart count of the process, propagated from the orchestrator.
+    /// See [`mz_orchestrator::ServiceEvent::restart_count`].
+    pub restart_count: u64,
     pub time: DateTime<Utc>,
 }
 
@@ -587,6 +639,7 @@ impl Controller {
                 replica_id,
                 process_id: event.process_id,
                 status: event.status,
+                restart_count: event.restart_count,
                 time: event.time,
             };
 
@@ -680,6 +733,7 @@ impl Controller {
         let service = self.orchestrator.ensure_service(
             &service_name,
             ServiceConfig {
+                app_name: "clusterd".into(),
                 image: self.clusterd_image.clone(),
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {
@@ -818,10 +872,9 @@ impl Controller {
                     ),
                     ("cluster-name".into(), cluster_name),
                 ]),
-                availability_zones: match location.availability_zones {
-                    ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
-                    ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
-                },
+                // An empty list means no AZ constraint; a non-empty one pins
+                // placement to those zones.
+                availability_zones: Some(location.availability_zones).filter(|azs| !azs.is_empty()),
                 // This provides the orchestrator with some label selectors that
                 // are used to constraint the scheduling of replicas, based on
                 // its internal configuration.

@@ -677,6 +677,51 @@ impl Catalog {
             .err_into()
     }
 
+    /// Allocate `amount` many user replica IDs. See
+    /// [`DurableCatalogState::allocate_user_replica_ids`].
+    pub async fn allocate_user_replica_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<ReplicaId>, Error> {
+        self.storage()
+            .await
+            .allocate_user_replica_ids(amount, commit_ts)
+            .await
+            .maybe_terminate("allocating user replica ids")
+            .err_into()
+    }
+
+    /// Allocate `amount` many system replica IDs. See
+    /// [`DurableCatalogState::allocate_system_replica_ids`].
+    pub async fn allocate_system_replica_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<ReplicaId>, Error> {
+        self.storage()
+            .await
+            .allocate_system_replica_ids(amount, commit_ts)
+            .await
+            .maybe_terminate("allocating system replica ids")
+            .err_into()
+    }
+
+    /// Allocate `amount` many replica IDs for `cluster_id`, picking user or
+    /// system IDs based on the cluster's ID type.
+    pub async fn allocate_replica_ids(
+        &self,
+        cluster_id: ClusterId,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<ReplicaId>, Error> {
+        if cluster_id.is_system() {
+            self.allocate_system_replica_ids(amount, commit_ts).await
+        } else {
+            self.allocate_user_replica_ids(amount, commit_ts).await
+        }
+    }
+
     /// Get the next system replica id without allocating it.
     pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
         self.storage()
@@ -1030,17 +1075,24 @@ impl Catalog {
         location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
+        allow_disabled: bool,
     ) -> Result<ReplicaLocation, Error> {
-        self.state
-            .concretize_replica_location(location, allowed_sizes, allowed_availability_zones)
+        self.state.concretize_replica_location(
+            location,
+            allowed_sizes,
+            allowed_availability_zones,
+            allow_disabled,
+        )
     }
 
     pub(crate) fn ensure_valid_replica_size(
         &self,
         allowed_sizes: &[String],
         size: &String,
+        allow_disabled: bool,
     ) -> Result<(), Error> {
-        self.state.ensure_valid_replica_size(allowed_sizes, size)
+        self.state
+            .ensure_valid_replica_size(allowed_sizes, size, allow_disabled)
     }
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
@@ -2252,6 +2304,7 @@ mod tests {
 
     use itertools::Itertools;
     use mz_catalog::memory::objects::CatalogItem;
+    use mz_postgres_util::{query, sql};
     use tokio_postgres::NoTls;
     use tokio_postgres::types::Type;
     use uuid::Uuid;
@@ -2798,8 +2851,9 @@ mod tests {
                 name: String,
             }
 
-            let pg_proc: BTreeMap<_, _> = client
-                .query(
+            let pg_proc: BTreeMap<_, _> = query(
+                &client,
+                sql!(
                     "SELECT
                     p.oid,
                     proname,
@@ -2807,30 +2861,33 @@ mod tests {
                     prorettype,
                     proretset
                 FROM pg_proc p
-                JOIN pg_namespace n ON p.pronamespace = n.oid",
-                    &[],
-                )
-                .await
-                .expect("pg query failed")
-                .into_iter()
-                .map(|row| {
-                    let oid: u32 = row.get("oid");
-                    let pg_proc = PgProc {
-                        name: row.get("proname"),
-                        arg_oids: row.get("proargtypes"),
-                        ret_oid: row.get("prorettype"),
-                        ret_set: row.get("proretset"),
-                    };
-                    (oid, pg_proc)
-                })
-                .collect();
+                JOIN pg_namespace n ON p.pronamespace = n.oid"
+                ),
+                &[],
+            )
+            .await
+            .expect("pg query failed")
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let pg_proc = PgProc {
+                    name: row.get("proname"),
+                    arg_oids: row.get("proargtypes"),
+                    ret_oid: row.get("prorettype"),
+                    ret_set: row.get("proretset"),
+                };
+                (oid, pg_proc)
+            })
+            .collect();
 
-            let pg_type: BTreeMap<_, _> = client
-                .query(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type",
-                    &[],
-                )
-                .await
+            let pg_type: BTreeMap<_, _> = query(
+                &client,
+                sql!(
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type"
+                ),
+                &[],
+            )
+            .await
                 .expect("pg query failed")
                 .into_iter()
                 .map(|row| {
@@ -2847,20 +2904,23 @@ mod tests {
                 })
                 .collect();
 
-            let pg_oper: BTreeMap<_, _> = client
-                .query("SELECT oid, oprname, oprresult FROM pg_operator", &[])
-                .await
-                .expect("pg query failed")
-                .into_iter()
-                .map(|row| {
-                    let oid: u32 = row.get("oid");
-                    let pg_oper = PgOper {
-                        name: row.get("oprname"),
-                        oprresult: row.get("oprresult"),
-                    };
-                    (oid, pg_oper)
-                })
-                .collect();
+            let pg_oper: BTreeMap<_, _> = query(
+                &client,
+                sql!("SELECT oid, oprname, oprresult FROM pg_operator"),
+                &[],
+            )
+            .await
+            .expect("pg query failed")
+            .into_iter()
+            .map(|row| {
+                let oid: u32 = row.get("oid");
+                let pg_oper = PgOper {
+                    name: row.get("oprname"),
+                    oprresult: row.get("oprresult"),
+                };
+                (oid, pg_oper)
+            })
+            .collect();
 
             let conn_catalog = catalog.for_system_session();
             let resolve_type_oid = |item: &str| {

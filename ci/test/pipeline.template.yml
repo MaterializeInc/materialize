@@ -246,7 +246,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-x86-64-dedi-32cpu-128gb-cargo-test
+          queue: hetzner-x86-64-dedi-48cpu-192gb
         coverage: skip
         sanitizer: skip
 
@@ -289,7 +289,7 @@ steps:
           composition: cargo-test
           ci-builder: stable
     agents:
-      queue: hetzner-x86-64-dedi-32cpu-128gb-cargo-test
+      queue: hetzner-x86-64-dedi-48cpu-192gb
 
   - id: testdrive
     label: "Testdrive"
@@ -393,6 +393,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: pg-cdc-standby
+        label: Postgres CDC against a physical standby
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc-standby]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-standby
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
   - group: Connection
     key: connection-tests
     steps:
@@ -407,6 +418,17 @@ steps:
               composition: ssh-connection
         agents:
           queue: hetzner-x86-64-8cpu-16gb
+
+      - id: fivetran-destination-tests
+        label: Fivetran Destination
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/fivetran-destination]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: fivetran-destination
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
 
   - group: Kafka
     key: kafka-tests
@@ -453,6 +475,17 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-low-watermark
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: aws-glue-schema-registry
+        label: AWS Glue Schema Registry (Moto)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: aws-glue-schema-registry
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
@@ -535,6 +568,22 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: clusterd-test-driver
+    label: Clusterd test driver
+    # Depend on both builds: the `clusterd-test-driver` image changes every commit,
+    # so its arch-specific tag is pushed late in its build. `mkpipeline` may switch
+    # this aarch64 job to an x86_64 agent (Hetzner aarch64 availability), so waiting
+    # for only one build races the other arch's freshly-built image (it would fail
+    # to pull `clusterd-test-driver:mzbuild-…: not found`). Waiting for both is safe.
+    depends_on: [build-aarch64, build-x86_64]
+    timeout_in_minutes: 20
+    inputs: [test/clusterd-test-driver]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: clusterd-test-driver
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
@@ -721,6 +770,18 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: mz-deploy
+    label: "mz-deploy"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [src/mz-deploy, test/mz-deploy]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: mz-deploy
+          ci-builder: stable
+    agents:
+      queue: hetzner-x86-64-4cpu-8gb
+
   - group: Docs
     key: docs-tests
     steps:
@@ -806,8 +867,8 @@ steps:
               composition: console
               run: sql-tests
         agents:
-          # SQL Server doesn't support ARM
-          queue: hetzner-x86-64-4cpu-8gb
+          # SQL Server doesn't support ARM: https://github.com/microsoft/mssql-docker/issues/944
+          queue: hetzner-x86-64-12cpu-24gb
         coverage: skip
         sanitizer: skip
 
@@ -905,8 +966,8 @@ steps:
     coverage: skip
     sanitizer: skip
 
-  - id: nightly-if-release
-    label: Nightly for releases
+  - id: nightly
+    label: Nightly
     depends_on: devel-docker-tags
     trigger: nightly
     async: true

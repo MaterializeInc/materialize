@@ -14,10 +14,8 @@ import argparse
 import datetime
 
 from materialize.cli.scratch import check_required_vars
-from materialize.cli.scratch.create import MAX_AGE_DAYS, multi_json
+from materialize.cli.scratch.create import MAX_AGE_DAYS, load_machine_descs
 from materialize.scratch import (
-    MZ_ROOT,
-    MachineDesc,
     get_instance,
     launch_cluster,
     mssh,
@@ -32,10 +30,25 @@ from materialize.scratch import (
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "machine",
+        nargs="?",
+        default=None,
         help=(
             "Machine config name from misc/scratch (e.g. dev-box). "
             "Used only when creating a new instance."
         ),
+    )
+    parser.add_argument(
+        "--instance-type",
+        type=str,
+        help=(
+            "Override the EC2 instance type. The AMI is derived from its "
+            "architecture. May be used without a machine config."
+        ),
+    )
+    parser.add_argument(
+        "--size-gb",
+        type=int,
+        help="Override the root volume size in GiB.",
     )
     parser.add_argument(
         "--max-age-days",
@@ -46,9 +59,12 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    # Read the machine config
-    with open(MZ_ROOT / "misc" / "scratch" / f"{args.machine}.json") as f:
-        descs = [MachineDesc.model_validate(obj) for obj in multi_json(f.read())]
+    # Read the machine config, applying any overrides.
+    descs = load_machine_descs(
+        args.machine,
+        instance_type=args.instance_type,
+        size_gb=args.size_gb,
+    )
 
     if len(descs) != 1:
         raise RuntimeError(
@@ -69,14 +85,15 @@ def run(args: argparse.Namespace) -> None:
         pass
 
     # No existing instance — create one
-    say(f"No existing instance found, creating from {args.machine}...")
+    label = args.machine or args.instance_type
+    say(f"No existing instance found, creating from {label}...")
 
     max_age = datetime.timedelta(days=args.max_age_days)
     extra_tags = {"LaunchedBy": whoami()}
     instances = launch_cluster(
         descs,
         extra_tags=extra_tags,
-        delete_after=datetime.datetime.utcnow() + max_age,
+        delete_after=datetime.datetime.now(datetime.timezone.utc) + max_age,
     )
 
     print("Launched:")

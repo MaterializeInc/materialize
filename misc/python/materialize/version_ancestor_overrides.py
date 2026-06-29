@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "ParallelDataflows":
+        # PR#32095 (Dictionary compressed arrangements) increased wallclock by ~10%
+        min_ancestor_mz_version_per_commit[
+            "90644c483749ce746da002f69dbd8bd2835ef9d0"
+        ] = MzVersion.parse_mz("v26.29.0")
+
     if scenario_class_name == "Retraction":
         # PR#36386 (timely-util: switch Column::Align to Vec<u64>) increases clusterd memory
         min_ancestor_mz_version_per_commit[

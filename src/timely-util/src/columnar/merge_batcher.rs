@@ -856,6 +856,58 @@ mod tests {
         assert_eq!(out, vec![((0, 0), 0, 1), ((5, 0), 0, 2), ((10, 0), 0, 1)]);
     }
 
+    /// Regression: under the disabled (always-resident) pager, shipped chunks
+    /// must be serialized into a fitting `Column::Align`, never parked as
+    /// `Column::Typed`. A `Typed` result carries `Column::merge_from`'s
+    /// worst-case `reserve_for` capacity; leaving it in the chain across merge
+    /// rounds was the dominant source of merge-batcher resident memory. Only
+    /// the live accumulator (`result`) and not-yet-shipped heads may be
+    /// `Typed` — every entry that reaches the sink should be `Align`.
+    #[mz_ore::test]
+    fn merge_chains_ships_fitting_align() {
+        let pager = ColumnPager::disabled();
+        // Interleaved keys force the per-record merge path: records flow
+        // through the `result` accumulator and ship as a merged chunk rather
+        // than passing a head through wholesale.
+        let q1 = to_chain(vec![col(&[((0, 0), 0, 1), ((2, 0), 0, 1)])], &pager);
+        let q2 = to_chain(vec![col(&[((1, 0), 0, 1), ((3, 0), 0, 1)])], &pager);
+
+        let mut output: Vec<PagedColumn<KvUpdate>> = Vec::new();
+        let mut stash: Vec<Column<KvUpdate>> = Vec::new();
+        merge_chains(
+            FetchIter::new(q1, &pager),
+            FetchIter::new(q2, &pager),
+            |paged| output.push(paged),
+            &mut stash,
+        );
+
+        assert!(!output.is_empty(), "merge produced no chunks");
+        for entry in &output {
+            match entry {
+                PagedColumn::Resident(col, _) => assert!(
+                    matches!(col, Column::Align(_)),
+                    "shipped chunk parked as non-Align resident: {:?}",
+                    std::mem::discriminant(col),
+                ),
+                other => panic!(
+                    "disabled pager should ship Resident, got a paged variant: {:?}",
+                    std::mem::discriminant(other)
+                ),
+            }
+        }
+
+        // Sanity: data round-trips through the fitting Align buffers.
+        assert_eq!(
+            collect_pc(&output, &pager),
+            vec![
+                ((0, 0), 0, 1),
+                ((1, 0), 0, 1),
+                ((2, 0), 0, 1),
+                ((3, 0), 0, 1)
+            ],
+        );
+    }
+
     /// Same merge, force-paged: chains stay in `Paged` form throughout, and
     /// the consolidated result still matches.
     #[mz_ore::test]

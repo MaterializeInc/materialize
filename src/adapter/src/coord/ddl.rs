@@ -1140,6 +1140,7 @@ impl Coordinator {
                             | ConnectionDetails::GlueSchemaRegistry(_)
                             | ConnectionDetails::Ssh { .. }
                             | ConnectionDetails::Aws(_)
+                            | ConnectionDetails::Gcp(_)
                             | ConnectionDetails::IcebergCatalog(_) => {}
                         },
                         CatalogItem::Table(_) => {
@@ -1291,6 +1292,7 @@ impl Coordinator {
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
+                | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
@@ -1316,6 +1318,7 @@ impl Coordinator {
                 | ConnectionDetails::GlueSchemaRegistry(_)
                 | ConnectionDetails::Ssh { .. }
                 | ConnectionDetails::Aws(_)
+                | ConnectionDetails::Gcp(_)
                 | ConnectionDetails::IcebergCatalog(_) => {}
             }
         }

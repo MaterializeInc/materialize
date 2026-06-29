@@ -100,7 +100,7 @@ impl Coordinator {
     ) -> Result<SecretStage, AdapterError> {
         // No dependencies.
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::new(),
             None,
             None,
@@ -262,7 +262,7 @@ impl Coordinator {
         // delete of the secret, the persisted secret is in an unknown state (but will be cleaned up
         // if needed at next envd boot), but we will still return success.
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::new(),
             None,
             None,
@@ -282,6 +282,8 @@ impl Coordinator {
         let caching_secrets_reader = self.caching_secrets_reader.clone();
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut secret_as)?;
+        let contents = std::str::from_utf8(&payload).expect("validated as UTF-8 by extract_secret");
+        self.check_secret_content_guards_of_dependents(id, contents)?;
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
             || "alter secret ensure",
@@ -302,13 +304,22 @@ impl Coordinator {
         // secret is unknown, and if the rotate ensure'd after the delete (i.e.,
         // the secret is persisted to the secret store but not the catalog), the
         // secret will be cleaned up during next envd boot.
+        //
+        // ROTATE KEYS is a read-modify-write of the connection's `create_sql`
+        // (see `rotate_keys_ensure` below: it re-reads the entry, rewrites the
+        // PUBLIC KEY options, and writes the result back via `Op::UpdateItem`).
+        // Arm the `create_sql`-hash check so a concurrent `ALTER CONNECTION SET`
+        // committing inside the off-thread window fails ROTATE with
+        // `ConcurrentDependencyMutation` instead of being silently clobbered by
+        // the blind write at the end.
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::from_iter(std::iter::once(id)),
             None,
             None,
             ctx.session().role_metadata().clone(),
-        );
+        )
+        .with_dependency_hash_check(self.catalog());
         let stage = SecretStage::RotateKeysEnsure(RotateKeysSecretEnsure { validity, id });
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
@@ -374,6 +385,13 @@ impl Coordinator {
                     name: entry.name,
                     to_item,
                 }];
+
+                // Pause between the secret-store write and the catalog write so a concurrent ALTER
+                // CONNECTION SET can commit. Runs in the off-thread ensure task, not the
+                // coordinator main loop, so the pause won't freeze the coordinator (which would
+                // block that SET).
+                fail::fail_point!("rotate_keys_between_ensure_and_finish");
+
                 let stage = SecretStage::RotateKeysFinish(RotateKeysSecretFinish { validity, ops });
                 Ok(Box::new(stage))
             }

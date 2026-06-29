@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar/merge_batcher.rs
-revision: 225aeaa79f
+revision: 5d6bfccaf8
 ---
 
 # timely-util::columnar::merge_batcher

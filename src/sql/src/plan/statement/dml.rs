@@ -978,7 +978,9 @@ GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
                             from.push("LEFT JOIN per_worker_memory pwm USING (global_id, lir_id)");
 
                             if let Some(worker_id) = worker_id {
-                                predicates.push(format!("pwm.worker_id = {worker_id}"));
+                                predicates.push(format!(
+                                    "(pwm.worker_id = {worker_id} OR pwm.worker_id IS NULL OR {worker_id} IS NULL)"
+                                ));
                             } else {
                                 worker_id = Some("pwm.worker_id");
                                 columns.push("pwm.worker_id AS worker_id");
@@ -1035,7 +1037,9 @@ GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
                             from.push("LEFT JOIN per_worker_cpu pwc USING (global_id, lir_id)");
 
                             if let Some(worker_id) = worker_id {
-                                predicates.push(format!("pwc.worker_id = {worker_id}"));
+                                predicates.push(format!(
+                                    "(pwc.worker_id = {worker_id} OR pwc.worker_id IS NULL OR {worker_id} IS NULL)"
+                                ));
                             } else {
                                 worker_id = Some("pwc.worker_id");
                                 columns.push("pwc.worker_id AS worker_id");
@@ -1159,7 +1163,9 @@ pub fn plan_explain_analyze_cluster(
                     let mut set_worker_id = false;
                     if let Some(worker_id) = worker_id {
                         // join condition if we're showing skew for more than one property
-                        predicates.push(format!("om.worker_id = {worker_id}"));
+                        predicates.push(format!(
+                            "(om.worker_id = {worker_id} OR om.worker_id IS NULL OR {worker_id} IS NULL)"
+                        ));
                     } else {
                         worker_id = Some("om.worker_id");
                         columns.push("om.worker_id AS worker_id");
@@ -1308,7 +1314,9 @@ GROUP BY pomt.global_id
                     let mut set_worker_id = false;
                     if let Some(worker_id) = worker_id {
                         // join condition if we're showing skew for more than one property
-                        predicates.push(format!("oc.worker_id = {worker_id}"));
+                        predicates.push(format!(
+                            "(oc.worker_id = {worker_id} OR oc.worker_id IS NULL OR {worker_id} IS NULL)"
+                        ));
                     } else {
                         worker_id = Some("oc.worker_id");
                         columns.push("oc.worker_id AS worker_id");
@@ -1951,7 +1959,7 @@ fn plan_copy_from(
     target: &CopyTarget<Aug>,
     table_name: ResolvedItemName,
     columns: Vec<Ident>,
-    format: CopyFormat,
+    format: Option<CopyFormat>,
     options: CopyOptionExtracted,
 ) -> Result<Plan, PlanError> {
     fn only_available_with_csv<T>(option: Option<T>, param: &str) -> Result<(), PlanError> {
@@ -2000,6 +2008,20 @@ fn plan_copy_from(
             }
         }
         CopyTarget::Stdout => bail_never_supported!("COPY FROM {} not supported", target),
+    };
+
+    // COPY FROM a URL or S3 bucket only supports CSV and Parquet. Unlike COPY
+    // FROM STDIN there's no sensible default format, so one must be specified
+    // explicitly. Reject unsupported formats here in planning; the coordinator
+    // relies on this and would otherwise soft-panic.
+    let format = match &source {
+        CopyFromSource::Stdin => format.unwrap_or(CopyFormat::Text),
+        CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => match format {
+            None => sql_bail!("COPY FROM <expr> requires a FORMAT option"),
+            Some(CopyFormat::Text) => bail_unsupported!("FORMAT TEXT"),
+            Some(CopyFormat::Binary) => bail_unsupported!("FORMAT BINARY"),
+            Some(format @ (CopyFormat::Csv | CopyFormat::Parquet)) => format,
+        },
     };
 
     let params = match format {
@@ -2119,8 +2141,17 @@ pub fn plan_copy(
             if options.quote.is_some() {
                 sql_bail!("COPY TO does not support QUOTE option yet");
             }
+            if options.escape.is_some() {
+                sql_bail!("COPY TO does not support ESCAPE option yet");
+            }
             if options.null.is_some() {
                 sql_bail!("COPY TO does not support NULL option yet");
+            }
+            // `HEADER false` is the default and already honored; only an
+            // enabled header is unimplemented. Silently accepting it would
+            // make clients strip the first data row as a presumed header.
+            if options.header == Some(true) {
+                sql_bail!("COPY TO does not support HEADER option yet");
             }
             match relation {
                 CopyRelation::Named { .. } => sql_bail!("named with COPY TO STDOUT unsupported"),
@@ -2139,14 +2170,9 @@ pub fn plan_copy(
             }
         }
         (CopyDirection::From, target) => match relation {
-            CopyRelation::Named { name, columns } => plan_copy_from(
-                scx,
-                target,
-                name,
-                columns,
-                format.unwrap_or(CopyFormat::Text),
-                options,
-            ),
+            CopyRelation::Named { name, columns } => {
+                plan_copy_from(scx, target, name, columns, format, options)
+            }
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
         (CopyDirection::To, CopyTarget::Expr(to_expr)) => {

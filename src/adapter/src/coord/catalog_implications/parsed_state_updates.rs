@@ -64,6 +64,13 @@ pub enum ParsedStateUpdateKind {
         log: LogVariant,
         index_id: GlobalId,
     },
+    /// A replica-scoped system-parameter override changed. The implication
+    /// re-pushes the complete per-replica dyncfg layer from the catalog working
+    /// copy, so it does not consume `durable`. We keep the row only so it shows
+    /// up in the `tracing::trace!` of the parsed update.
+    ReplicaSystemConfiguration {
+        durable: durable::objects::ReplicaSystemConfiguration,
+    },
 }
 
 /// Potentially generate a [ParsedStateUpdate] that corresponds to the given
@@ -98,9 +105,14 @@ pub fn parse_state_update(
         StateUpdateKind::IntrospectionSourceIndex(isi) => {
             Some(parse_introspection_source_index_update(isi))
         }
+        StateUpdateKind::ReplicaSystemConfiguration(durable) => {
+            Some(ParsedStateUpdateKind::ReplicaSystemConfiguration { durable })
+        }
         _ => {
             // The controllers are currently not interested in other kinds of
-            // changes to the catalog.
+            // changes to the catalog. Cluster-scoped system-parameter overrides
+            // are read at plan time and have no controller effect, so they stay
+            // here too.
             None
         }
     };
@@ -208,5 +220,44 @@ fn parse_cluster_replica_update(
     ParsedStateUpdateKind::ClusterReplica {
         durable_cluster_replica,
         parsed_cluster_replica: parsed_cluster_replica.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_catalog::durable::objects::ReplicaSystemConfiguration;
+    use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+    use mz_controller_types::ReplicaId;
+    use mz_repr::Timestamp;
+
+    use crate::catalog::Catalog;
+
+    use super::{ParsedStateUpdateKind, parse_state_update};
+
+    /// A replica-scoped system-parameter change must produce a parsed update so
+    /// the controller push fires. It was previously dropped as a change the
+    /// controllers were not interested in.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function on OS `linux`
+    async fn replica_system_configuration_is_parsed() {
+        Catalog::with_debug(|catalog| async move {
+            let durable = ReplicaSystemConfiguration {
+                replica_id: ReplicaId::User(1),
+                name: "persist_pager".to_string(),
+                value: "on".to_string(),
+            };
+            let update = StateUpdate {
+                kind: StateUpdateKind::ReplicaSystemConfiguration(durable),
+                ts: Timestamp::MIN,
+                diff: StateDiff::Addition,
+            };
+            let parsed = parse_state_update(catalog.state(), update)
+                .expect("replica system configuration must produce a parsed update");
+            assert!(matches!(
+                parsed.kind,
+                ParsedStateUpdateKind::ReplicaSystemConfiguration { .. }
+            ));
+        })
+        .await
     }
 }

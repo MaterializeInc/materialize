@@ -61,7 +61,7 @@ see the Terraform module repositories for [Amazon MSK](https://github.com/Materi
 and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink).
 {{</ note >}}
 
-{{% network-security/privatelink-kafka %}}
+{{% include-headless "/headless/privatelink/privatelink-kafka" %}}
 
 {{< /tab >}}
 

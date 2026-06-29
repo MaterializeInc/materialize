@@ -262,6 +262,7 @@ cleanup() {
   mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml' -printf '%P\n'; find . -maxdepth 1 -name 'mz_debug_*.log' -printf '%P\n'; find . -maxdepth 1 -name 'slt*.diff' -printf '%P\n')
   artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 
+  TRUFFLEHOG_PID=""
   if is_truthy "${CI_HEAP_PROFILES:-}"; then
       STOP_RUNNING=true
   else
@@ -269,6 +270,7 @@ cleanup() {
       {
         bin/ci-builder run "$builder" trufflehog --no-update --no-verification --filter-entropy 5.0 --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase,cannyio,uplead,tatumio filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
       } &
+      TRUFFLEHOG_PID=$!
   fi
 
   unset CI_EXTRA_ARGS # We don't want extra args for the annotation
@@ -278,7 +280,15 @@ cleanup() {
   {
     buildkite-agent artifact upload "$artifacts_str"
   } &
-  wait
+  UPLOAD_PID=$!
+  # Wait only for the background jobs spawned above, by explicit PID. A bare
+  # `wait` here never returns when this cleanup runs as the SIGTERM trap of a
+  # timed-out job: the trap interrupted the script's outer `wait "$pid"`, whose
+  # stale job-table entry makes bare `wait` hang (or loop forever printing
+  # "wait: pid N is not a child of this shell"), eating the cancellation grace
+  # period before error annotation and docker cleanup ever run.
+  # shellcheck disable=SC2086
+  wait "$UPLOAD_PID" $TRUFFLEHOG_PID
   ci_unimportant_heading "Annotating errors"
   bin/ci-builder run "$builder" bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
   buildkite-agent artifact upload "ci-annotate-errors.log" &

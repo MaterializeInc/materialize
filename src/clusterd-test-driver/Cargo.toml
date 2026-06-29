@@ -1,0 +1,63 @@
+[package]
+name = "mz-clusterd-test-driver"
+description = "Headless frontend to clusterd for scripted compute tests."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+mz-compute-client = { path = "../compute-client" }
+mz-compute-types = { path = "../compute-types" }
+mz-dyncfg = { path = "../dyncfg" }
+mz-expr = { path = "../expr" }
+# The repo's MzReflect-free MIR-from-text parser (the `.spec` test syntax), so
+# `define` authors MIR in the readable pretty form rather than a hand-rolled
+# JSON vocabulary.
+mz-expr-parser = { path = "../expr-parser" }
+# Used by the binary to configure tracing. It also keeps orchestrator-tracing's
+# `tokio-console` feature enabled, which must stay consistent with mz-ore's
+# `tokio-console` (pulled transitively via mz-compute-client) when this bin is
+# built in the same cargo invocation as orchestratord — otherwise
+# orchestrator-tracing fails to compile (E0063 on `TracingConfig::tokio_console`).
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
+# default-features = false to avoid pulling mz-ore's default `tokio-console`
+# feature: this bin can be grouped into a single cargo build with other images'
+# bins (e.g. orchestratord), and enabling tokio-console there breaks
+# orchestrator-tracing, which is built with its own tokio-console feature off.
+mz-ore = { path = "../ore", default-features = false, features = [
+    "async",
+    "tracing",
+    "metrics",
+] }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-types = { path = "../persist-types" }
+mz-repr = { path = "../repr" }
+mz-service = { path = "../service" }
+mz-storage-types = { path = "../storage-types" }
+# Optional MIR dataflow optimizer, run only by `create-dataflow ... optimize`.
+# Needed for shapes that don't lower from raw MIR (notably joins, whose
+# `implementation` defaults to `Unimplemented`); the default path lowers faithfully
+# without it.
+mz-transform = { path = "../transform" }
+serde = { workspace = true, features = ["derive"] }
+timely.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tokio-stream.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The `test` feature provides the `#[mz_ore::test]` macro; it is only needed
+# when building tests, not the production binary, so keep it out of the bin's
+# feature set (see the [dependencies] mz-ore comment).
+mz-ore = { path = "../ore", features = ["test"] }
+tempfile.workspace = true
+
+[package.metadata.cargo-udeps.ignore]
+normal = []

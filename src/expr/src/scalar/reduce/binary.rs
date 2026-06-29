@@ -14,6 +14,7 @@ use std::mem;
 use itertools::Itertools;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_repr::adt::datetime::DateTimeUnits;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::regex::Regex;
 use mz_repr::{Datum, ReprColumnType, ReprScalarType, RowArena};
 
@@ -50,6 +51,15 @@ pub(super) fn reduce_call_binary(
         *e = MirScalarExpr::literal(Err(err.clone()), e.typ(column_types).scalar_type);
         return;
     }
+
+    // Calls where a literal operand makes the call the identity function on
+    // the other operand reduce to that operand.
+    if reduce_call_binary_identity(e) {
+        return;
+    }
+    let MirScalarExpr::CallBinary { func, expr1, expr2 } = e else {
+        unreachable!()
+    };
 
     // Per-function dispatch. Each precompile fires only if its literal-shaped
     // argument is present; otherwise the call falls through unchanged.
@@ -166,6 +176,107 @@ pub(super) fn reduce_call_binary(
             mem::swap(expr1, expr2);
         }
         _ => reduce_call_binary_eq_record(e),
+    }
+}
+
+/// Rewrites a call whose literal operand makes it the identity function on
+/// the other operand to that operand, returning whether it fired.
+///
+/// Only patterns that can change neither error nor null behavior are listed:
+/// evaluation at the identity operand is infallible for every listed function
+/// (division by one cannot error; adding an all-zero interval cannot leave
+/// the timestamp domain; trimming the empty character set cannot grow the
+/// string), every listed function propagates nulls, and the surviving operand
+/// has the value and type of the original call. Functions that can error even
+/// at their identity are deliberately absent: e.g. `text_concat` and
+/// `repeat(s, 1)` re-validate the length of an oversized operand, so eliding
+/// them would suppress that error. Floats are also absent: `-0.0 + 0.0` is
+/// `+0.0`, so the additive identities are not exact, and we keep the float
+/// story all-or-nothing for legibility. Numerics are absent pending an answer
+/// on result scale.
+fn reduce_call_binary_identity(e: &mut MirScalarExpr) -> bool {
+    use BinaryFunc::*;
+    let MirScalarExpr::CallBinary { func, expr1, expr2 } = e else {
+        unreachable!()
+    };
+    // For each function: the literal datum under which the call is the
+    // identity on the other operand, and whether the function commutes (so
+    // the identity may appear on either side rather than only the right).
+    let zero_interval = Datum::Interval(Interval::default());
+    let (identity, commutes) = match func {
+        AddInt16(_) => (Datum::Int16(0), true),
+        AddInt32(_) => (Datum::Int32(0), true),
+        AddInt64(_) => (Datum::Int64(0), true),
+        AddUint16(_) => (Datum::UInt16(0), true),
+        AddUint32(_) => (Datum::UInt32(0), true),
+        AddUint64(_) => (Datum::UInt64(0), true),
+        SubInt16(_) => (Datum::Int16(0), false),
+        SubInt32(_) => (Datum::Int32(0), false),
+        SubInt64(_) => (Datum::Int64(0), false),
+        SubUint16(_) => (Datum::UInt16(0), false),
+        SubUint32(_) => (Datum::UInt32(0), false),
+        SubUint64(_) => (Datum::UInt64(0), false),
+        MulInt16(_) => (Datum::Int16(1), true),
+        MulInt32(_) => (Datum::Int32(1), true),
+        MulInt64(_) => (Datum::Int64(1), true),
+        MulUint16(_) => (Datum::UInt16(1), true),
+        MulUint32(_) => (Datum::UInt32(1), true),
+        MulUint64(_) => (Datum::UInt64(1), true),
+        DivInt16(_) => (Datum::Int16(1), false),
+        DivInt32(_) => (Datum::Int32(1), false),
+        DivInt64(_) => (Datum::Int64(1), false),
+        DivUint16(_) => (Datum::UInt16(1), false),
+        DivUint32(_) => (Datum::UInt32(1), false),
+        DivUint64(_) => (Datum::UInt64(1), false),
+        // Temporal: an all-zero interval added to or subtracted from a
+        // timestamp, time, or interval. (Dates are absent: their interval
+        // arithmetic changes the type to timestamp.)
+        AddInterval(_) => (zero_interval, true),
+        SubInterval(_)
+        | AddTimestampInterval(_)
+        | AddTimestampTzInterval(_)
+        | AddTimeInterval(_)
+        | SubTimestampInterval(_)
+        | SubTimestampTzInterval(_)
+        | SubTimeInterval(_) => (zero_interval, false),
+        // Bitwise: zero is the identity for or/xor, all-ones for and, and a
+        // shift distance of zero (always an `int4`) leaves the value alone.
+        BitOrInt16(_) | BitXorInt16(_) => (Datum::Int16(0), true),
+        BitOrInt32(_) | BitXorInt32(_) => (Datum::Int32(0), true),
+        BitOrInt64(_) | BitXorInt64(_) => (Datum::Int64(0), true),
+        BitOrUint16(_) | BitXorUint16(_) => (Datum::UInt16(0), true),
+        BitOrUint32(_) | BitXorUint32(_) => (Datum::UInt32(0), true),
+        BitOrUint64(_) | BitXorUint64(_) => (Datum::UInt64(0), true),
+        BitAndInt16(_) => (Datum::Int16(-1), true),
+        BitAndInt32(_) => (Datum::Int32(-1), true),
+        BitAndInt64(_) => (Datum::Int64(-1), true),
+        BitAndUint16(_) => (Datum::UInt16(u16::MAX), true),
+        BitAndUint32(_) => (Datum::UInt32(u32::MAX), true),
+        BitAndUint64(_) => (Datum::UInt64(u64::MAX), true),
+        BitShiftLeftInt16(_)
+        | BitShiftRightInt16(_)
+        | BitShiftLeftInt32(_)
+        | BitShiftRightInt32(_)
+        | BitShiftLeftInt64(_)
+        | BitShiftRightInt64(_)
+        | BitShiftLeftUint16(_)
+        | BitShiftRightUint16(_)
+        | BitShiftLeftUint32(_)
+        | BitShiftRightUint32(_)
+        | BitShiftLeftUint64(_)
+        | BitShiftRightUint64(_) => (Datum::Int32(0), false),
+        // Trimming the empty set of characters.
+        Trim(_) | TrimLeading(_) | TrimTrailing(_) => (Datum::String(""), false),
+        _ => return false,
+    };
+    if matches!(expr2.as_literal(), Some(Ok(d)) if d == identity) {
+        *e = expr1.take();
+        true
+    } else if commutes && matches!(expr1.as_literal(), Some(Ok(d)) if d == identity) {
+        *e = expr2.take();
+        true
+    } else {
+        false
     }
 }
 
@@ -336,4 +447,77 @@ fn precompile_is_like(
             .call_unary(UnaryFunc::IsLikeMatch(func::IsLikeMatch(matcher))),
         Err(err) => MirScalarExpr::literal(Err(err), e.typ(column_types).scalar_type),
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::adt::interval::Interval;
+    use mz_repr::{Datum, ReprScalarType};
+
+    use crate::MirScalarExpr;
+    use crate::scalar::func;
+
+    #[mz_ore::test]
+    fn identity_operand_folds() {
+        let int32 = [ReprScalarType::Int32.nullable(true)];
+        let col = || MirScalarExpr::column(0);
+        let lit = |v| MirScalarExpr::literal_ok(Datum::Int32(v), ReprScalarType::Int32);
+
+        // Identity operands fold to the other operand, on either side for
+        // commutative functions and on the right for the rest.
+        for mut e in [
+            col().call_binary(lit(0), func::AddInt32),
+            lit(0).call_binary(col(), func::AddInt32),
+            col().call_binary(lit(0), func::SubInt32),
+            col().call_binary(lit(1), func::MulInt32),
+            lit(1).call_binary(col(), func::MulInt32),
+            col().call_binary(lit(1), func::DivInt32),
+            col().call_binary(lit(0), func::BitOrInt32),
+            col().call_binary(lit(0), func::BitXorInt32),
+            col().call_binary(lit(-1), func::BitAndInt32),
+            col().call_binary(lit(0), func::BitShiftLeftInt32),
+            col().call_binary(lit(0), func::BitShiftRightInt32),
+        ] {
+            e.reduce(&int32);
+            assert_eq!(e, col(), "expected fold to the column");
+        }
+
+        // Non-identity literals, and identities on the wrong side of a
+        // non-commutative function, do not fold to the operand.
+        for mut e in [
+            col().call_binary(lit(1), func::AddInt32),
+            lit(0).call_binary(col(), func::SubInt32),
+            lit(1).call_binary(col(), func::DivInt32),
+            col().call_binary(lit(0), func::BitAndInt32),
+        ] {
+            e.reduce(&int32);
+            assert_ne!(e, col(), "expected no fold to the column");
+        }
+    }
+
+    #[mz_ore::test]
+    fn identity_operand_folds_trim_and_interval() {
+        let col = || MirScalarExpr::column(0);
+
+        let string = [ReprScalarType::String.nullable(true)];
+        let empty = || MirScalarExpr::literal_ok(Datum::String(""), ReprScalarType::String);
+        for f in [
+            crate::BinaryFunc::Trim(func::Trim),
+            crate::BinaryFunc::TrimLeading(func::TrimLeading),
+            crate::BinaryFunc::TrimTrailing(func::TrimTrailing),
+        ] {
+            let mut e = col().call_binary(empty(), f);
+            e.reduce(&string);
+            assert_eq!(e, col());
+        }
+
+        let timestamp = [ReprScalarType::Timestamp {}.nullable(true)];
+        let zero = MirScalarExpr::literal_ok(
+            Datum::Interval(Interval::default()),
+            ReprScalarType::Interval,
+        );
+        let mut e = col().call_binary(zero, func::AddTimestampInterval);
+        e.reduce(&timestamp);
+        assert_eq!(e, col());
+    }
 }

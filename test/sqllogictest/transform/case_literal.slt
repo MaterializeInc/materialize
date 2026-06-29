@@ -242,6 +242,8 @@ FROM t WHERE y = 'null'
 0
 
 # Verify JSON serialization of a CaseLiteral plan succeeds.
+# The global ID churns across runs, so replace it with a placeholder.
+replace ("User": )\d+  ${1}<ID>
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
 SELECT
@@ -264,7 +266,7 @@ FROM t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": <ID>
                     }
                   },
                   "typ": {
@@ -388,7 +390,7 @@ FROM t
   "sources": [
     {
       "id": {
-        "User": 1
+        "User": <ID>
       },
       "op": null
     }

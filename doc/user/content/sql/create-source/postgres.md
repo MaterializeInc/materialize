@@ -17,7 +17,8 @@ other_ref="[new reference page](/sql/create-source/postgres-v2)"
 include_blurb=true >}}
 
 {{% create-source/intro %}}
-Materialize supports PostgreSQL (11+) as a data source. To connect to a
+Materialize supports PostgreSQL (11+) as a data source. PostgreSQL 16+ is
+required for connecting Materialize to a physical replica. To connect to a
 PostgreSQL instance, you first need to [create a connection](#creating-a-connection)
 that specifies access and authentication parameters.
 Once created, a connection is **reusable** across multiple `CREATE SOURCE`
@@ -138,6 +139,11 @@ CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1);
 ```
+
+### Reading from a physical standby
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-physical-standby" %}}
 
 ### Monitoring source progress
 

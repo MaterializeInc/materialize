@@ -36,13 +36,11 @@ use mz_catalog::memory::objects::{
     TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
-    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation,
-    UnmanagedReplicaLocation,
+    ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
-use mz_orchestrator::DiskLimit;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -55,7 +53,7 @@ use mz_repr::namespaces::{
     UNSTABLE_SCHEMAS,
 };
 use mz_repr::network_policy_id::NetworkPolicyId;
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
@@ -99,6 +97,7 @@ use tracing::{debug, warn};
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
 use crate::catalog::{Catalog, ConnCatalog};
+use crate::config::ScopedParameters;
 use crate::coord::{ConnMeta, infer_sql_type_for_catalog};
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
@@ -140,6 +139,15 @@ pub struct CatalogState {
 
     #[serde(skip)]
     pub(super) system_configuration: Arc<SystemVars>,
+    /// In-memory mirror of the durable scoped (per-cluster and per-replica)
+    /// system-parameter cache, maintained by `apply.rs` from the durable
+    /// collections. Resolution reads from here: the optimizer's per-cluster
+    /// feature overrides (`cluster_scoped_optimizer_overrides`) and the
+    /// coordinator's per-replica dyncfg push. See the scoped feature flags
+    /// design. Skipped in the consistency-check snapshot because it is fully
+    /// derived from the durable catalog.
+    #[serde(skip)]
+    pub(super) scoped_system_parameters: ScopedParameters,
     pub(super) default_privileges: Arc<DefaultPrivileges>,
     pub(super) system_privileges: Arc<PrivilegeMap>,
     pub(super) comments: Arc<CommentsMap>,
@@ -320,6 +328,7 @@ impl CatalogState {
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             availability_zones: Default::default(),
             system_configuration: Arc::new(SystemVars::default()),
+            scoped_system_parameters: Default::default(),
             egress_addresses: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
@@ -2300,6 +2309,27 @@ impl CatalogState {
         &self.system_configuration
     }
 
+    /// Returns the cluster-coherent scoped optimizer-feature overrides for
+    /// `cluster_id` from the in-memory scoped-parameter working copy, or empty
+    /// if the cluster has none.
+    pub fn cluster_scoped_optimizer_overrides(
+        &self,
+        cluster_id: ClusterId,
+    ) -> OptimizerFeatureOverrides {
+        self.scoped_system_parameters
+            .cluster
+            .get(&cluster_id)
+            .cloned()
+            .map(OptimizerFeatureOverrides::from)
+            .unwrap_or_default()
+    }
+
+    /// Returns the entire scoped system-parameter working copy, read by the
+    /// coordinator's scoped-parameter reconcile path.
+    pub fn scoped_system_parameters(&self) -> &ScopedParameters {
+        &self.scoped_system_parameters
+    }
+
     /// Return a mutable reference to the current system configuration.
     pub fn system_config_mut(&mut self) -> &mut SystemVars {
         Arc::make_mut(&mut self.system_configuration)
@@ -2380,6 +2410,7 @@ impl CatalogState {
         location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
+        allow_disabled: bool,
     ) -> Result<ReplicaLocation, Error> {
         let location = match location {
             mz_catalog::durable::ReplicaLocation::Unmanaged {
@@ -2401,18 +2432,17 @@ impl CatalogState {
             }
             mz_catalog::durable::ReplicaLocation::Managed {
                 size,
-                availability_zone,
+                // The AZ list the replica was provisioned under: provisioning
+                // paths pass the cluster's pool as `allowed_availability_zones`
+                // to stamp it, while rebuilds from durable state pass `None` to
+                // keep it. For an unmanaged cluster's replica it is the single
+                // user-pinned AZ.
+                availability_zones,
                 billed_as,
                 internal,
                 pending,
             } => {
-                if allowed_availability_zones.is_some() && availability_zone.is_some() {
-                    let message = "tried concretize managed replica with specific availability zones and availability zone";
-                    return Err(Error {
-                        kind: ErrorKind::Internal(message.to_string()),
-                    });
-                }
-                self.ensure_valid_replica_size(allowed_sizes, &size)?;
+                self.ensure_valid_replica_size(allowed_sizes, &size, allow_disabled)?;
                 let cluster_replica_sizes = &self.cluster_replica_sizes;
 
                 ReplicaLocation::Managed(ManagedReplicaLocation {
@@ -2421,13 +2451,9 @@ impl CatalogState {
                         .get(&size)
                         .expect("catalog out of sync")
                         .clone(),
-                    availability_zones: match (availability_zone, allowed_availability_zones) {
-                        (Some(az), _) => ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
-                        (None, Some([])) => ManagedReplicaAvailabilityZones::FromCluster(None),
-                        (None, Some(azs)) => {
-                            ManagedReplicaAvailabilityZones::FromCluster(Some(azs.to_vec()))
-                        }
-                        (None, None) => ManagedReplicaAvailabilityZones::FromReplica(None),
+                    availability_zones: match allowed_availability_zones {
+                        Some(azs) => azs.to_vec(),
+                        None => availability_zones,
                     },
                     size,
                     billed_as,
@@ -2439,31 +2465,17 @@ impl CatalogState {
         Ok(location)
     }
 
-    /// Return whether the given replica size requests a disk.
-    ///
-    /// Note that here we treat replica sizes that enable swap as _not_ requesting disk. For swap
-    /// replicas, the provided disk limit is informational and mostly ignored. Whether an instance
-    /// has access to swap depends on the configuration of the node it gets scheduled on, and is
-    /// not something we can know at this point.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the given size doesn't exist in `cluster_replica_sizes`.
-    pub(crate) fn cluster_replica_size_has_disk(&self, size: &str) -> bool {
-        let alloc = &self.cluster_replica_sizes.0[size];
-        !alloc.swap_enabled && alloc.disk_limit != Some(DiskLimit::ZERO)
-    }
-
     pub(crate) fn ensure_valid_replica_size(
         &self,
         allowed_sizes: &[String],
         size: &String,
+        allow_disabled: bool,
     ) -> Result<(), Error> {
         let cluster_replica_sizes = &self.cluster_replica_sizes;
 
         if !cluster_replica_sizes.0.contains_key(size)
             || (!allowed_sizes.is_empty() && !allowed_sizes.contains(size))
-            || cluster_replica_sizes.0[size].disabled
+            || (!allow_disabled && cluster_replica_sizes.0[size].disabled)
         {
             let mut entries = cluster_replica_sizes
                 .enabled_allocations()
@@ -2776,6 +2788,7 @@ impl ConnectionResolver for CatalogState {
             Ssh(conn) => Ssh(conn),
             Aws(conn) => Aws(conn),
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
+            Gcp(conn) => Gcp(conn),
             MySql(conn) => MySql(conn.into_inline_connection(self)),
             SqlServer(conn) => SqlServer(conn.into_inline_connection(self)),
             IcebergCatalog(conn) => IcebergCatalog(conn.into_inline_connection(self)),

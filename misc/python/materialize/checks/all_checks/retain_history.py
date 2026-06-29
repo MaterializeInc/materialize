@@ -21,7 +21,7 @@ def schemas() -> str:
 
 
 @disabled(
-    "database-issues#7310 and compaction not predicable and now() not appropriate while mz_now() not applicable"
+    "https://linear.app/materializeinc/issue/DB-144 and compaction not predicable and now() not appropriate while mz_now() not applicable"
 )
 class RetainHistoryOnMv(Check):
     def initialize(self) -> Testdrive:
@@ -251,7 +251,7 @@ class RetainHistoryOnMv(Check):
 
 
 @disabled(
-    "database-issues#7310 and compaction not predicable and now() not appropriate while mz_now() not applicable"
+    "https://linear.app/materializeinc/issue/DB-144 and compaction not predicable and now() not appropriate while mz_now() not applicable"
 )
 class RetainHistoryOnKafkaSource(Check):
     def initialize(self) -> Testdrive:

@@ -48,6 +48,7 @@ def get_minor_versions() -> list[MzVersion]:
             exclude_current_minor_version=True,
             limit=4,
             max_version=current_version,
+            include_release_candidates=True,
         )
     return _minor_versions
 

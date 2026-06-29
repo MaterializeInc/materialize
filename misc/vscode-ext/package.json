@@ -1,0 +1,78 @@
+{
+  "name": "mz-deploy",
+  "displayName": "Materialize mz-deploy",
+  "description": "SQL language support for mz-deploy projects: go-to-definition, hover, completion, diagnostics, and code lenses for running tests and explaining objects.",
+  "version": "0.1.3",
+  "publisher": "MaterializeInc",
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://github.com/MaterializeInc/materialize/tree/main/misc/vscode-ext",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MaterializeInc/materialize.git",
+    "directory": "misc/vscode-ext"
+  },
+  "bugs": {
+    "url": "https://github.com/MaterializeInc/materialize/issues"
+  },
+  "keywords": [
+    "materialize",
+    "mz-deploy",
+    "sql",
+    "lsp",
+    "language-server"
+  ],
+  "engines": {
+    "vscode": "^1.88.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "icon": "icons/mz-logo.png",
+  "activationEvents": [
+    "workspaceContains:project.toml"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "npm run typecheck && esbuild src/extension.ts --bundle --outfile=out/extension.js --platform=node --target=node18 --external:vscode --format=cjs --minify --sourcemap",
+    "watch": "esbuild src/extension.ts --bundle --outfile=out/extension.js --platform=node --target=node18 --external:vscode --format=cjs --sourcemap --watch",
+    "package": "npm run build && vsce package",
+    "publish": "npm run build && vsce publish"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "mz-deploy",
+      "properties": {
+        "mz-deploy.path": {
+          "type": "string",
+          "default": "mz-deploy",
+          "description": "Path to the mz-deploy binary. Defaults to `mz-deploy` (resolved through your $PATH at spawn time)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "mz-deploy.switchProfile",
+        "title": "mz-deploy: Switch Profile"
+      }
+    ],
+    "languages": [
+      {
+        "id": "toml",
+        "filenames": [
+          "types.lock"
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "@types/vscode": "^1.88.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.3"
+  }
+}

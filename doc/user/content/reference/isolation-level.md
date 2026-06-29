@@ -20,11 +20,21 @@ visible to a transaction during its execution.
 
 Materialize accepts the following isolation levels:
 
+{{< if-unreleased "v26.29" >}}
 | Isolation level | Behavior in Materialize |
 | --- | --- |
 | [**Strict Serializable**](#strict-serializable) | **Default.** Provides serializability and linearizability. |
 | [**Serializable**](#serializable) | Provides serializability but not linearizability. |
 | Read Uncommitted, Read Committed, Repeatable Read | Accepted for compatibility; treated as Serializable. |
+{{< /if-unreleased >}}
+{{< if-released "v26.29" >}}
+| Isolation level | Behavior in Materialize |
+| --- | --- |
+| [**Strict Serializable**](#strict-serializable) | **Default.** Provides serializability and linearizability. |
+| [**Serializable**](#serializable) | Provides serializability but not linearizability. |
+| [**Bounded Staleness `<duration>`**](#bounded-staleness) | **Public preview.** Serves reads at a timestamp at most `<duration>` stale; never blocks, errors if the bound cannot be met. |
+| Read Uncommitted, Read Committed, Repeatable Read | Accepted for compatibility; treated as Serializable. |
+{{< /if-released >}}
 
 ## Serializable
 
@@ -142,6 +152,99 @@ made available to us (e.g., querying PostgreSQL for the replication slot's LSN).
     Real-time recency queries return at least all data visible to Materialize
     when our client connection communicates with the external system.
 
+{{< if-released "v26.29" >}}
+## Bounded Staleness
+
+{{< public-preview />}}
+
+The Bounded Staleness isolation level lets you trade exact freshness for
+predictable latency. A query under bounded staleness is served at a timestamp
+that is at most `<duration>` stale—but never blocks waiting for input
+collections to catch up. If no timestamp within `<duration>` of "now" is
+available, the query errors immediately.
+
+This sits between [Serializable](#serializable) (no freshness ceiling) and
+[Strict Serializable](#strict-serializable) (always freshest, may wait for
+inputs to advance) on the freshness/latency spectrum. What distinguishes
+bounded staleness is that it never waits on input frontiers — it errors
+instead.
+
+### Syntax
+
+```mzsql
+SET TRANSACTION_ISOLATION TO 'bounded staleness <duration>';
+```
+
+`<duration>` is a duration string like `5s`, `500ms`, or `1m 30s` (compact
+forms like `1m30s` are also accepted). It must be greater than `0`.
+
+Bounded staleness is set through the `transaction_isolation` session variable,
+as shown above. Because it carries a duration, it cannot be set via the
+`BEGIN ... ISOLATION LEVEL` keyword form, which only accepts the standard
+isolation-level names.
+
+For example:
+
+```mzsql
+-- Read data no more than 5 seconds stale, never block.
+SET TRANSACTION_ISOLATION TO 'bounded staleness 5s';
+
+-- A tighter bound for dashboards.
+SET TRANSACTION_ISOLATION TO 'bounded staleness 250ms';
+```
+
+### Behavior
+
+When a query runs under bounded staleness, Materialize picks the freshest
+timestamp at which every queried collection has data, subject to the constraint
+that the timestamp is no more than `<duration>` stale relative to the current
+logical time. The query never blocks waiting for sources, materialized views,
+or indexes to advance. If even the freshest available timestamp is more than
+`<duration>` stale, the query errors with `SQLSTATE 40001`
+(`serialization_failure`):
+
+```
+ERROR: cannot serve query under bounded staleness 5s; freshest available
+       timestamp is 7000ms older than the bound
+```
+
+`40001` is a serialization failure; how to react is up to the application.
+Common responses include retrying, falling back to a different isolation level,
+or surfacing a "data unavailable" state.
+
+### Restrictions
+
+- **Read-only.** Writes (`INSERT`, `UPDATE`, `DELETE`, `COPY FROM`) are not
+  permitted under bounded staleness. The first write in a session running at
+  this isolation level errors.
+
+- **Mutually exclusive with `real_time_recency`.** Setting both errors at
+  session-variable validation time.
+
+- **Single timeline.** Bounded staleness only applies to queries on the
+  standard wall-clock timeline. Queries that touch other timelines error at
+  planning time.
+
+- **Bound must be greater than `0`.** A bound of zero is rejected; use
+  [Strict Serializable](#strict-serializable) if you need exact freshness.
+
+### When to use Bounded Staleness
+
+Pick bounded staleness when predictable latency matters more than perfect
+freshness, and "data is too stale" is a more useful signal than blocking.
+Common cases: dashboards, metric panels, alert evaluation.
+
+- Prefer [Strict Serializable](#strict-serializable) when you need
+  linearizable, end-to-end fresh reads, or when your application is willing to
+  wait for the freshest data.
+
+- Prefer [Serializable](#serializable) when you do not need a freshness bound
+  at all and want the simplest, lowest-latency reads.
+
+- Bounded staleness is read-only: if your session needs writes, use one of the
+  other isolation levels.
+{{< /if-released >}}
+
 ## Isolation levels and query latency
 
 Strict Serializable provides stronger consistency guarantees but may have slower
@@ -161,6 +264,12 @@ reads than Serializable.
   of linearizability. However, if a consistent snapshot is not available, the
   query blocks until one becomes available.
 
+{{< if-released "v26.29" >}}
+- **Bounded Staleness** never waits for writes to propagate. It serves the
+  freshest consistent snapshot within the staleness bound, and errors
+  immediately when no such snapshot exists instead of blocking.
+{{< /if-released >}}
+
 ## Setting isolation level
 
 {{< tip >}}
@@ -175,8 +284,9 @@ You can set the isolation level using the session-level [configuration parameter
 SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 ```
 
-You can also set the isolation level for an explicit transaction block as part
-of the [`BEGIN` statement](/sql/begin); for example:
+For `STRICT SERIALIZABLE` and `SERIALIZABLE`, you can also set the isolation
+level for an explicit transaction block as part of the [`BEGIN`
+statement](/sql/begin); for example:
 
 ```mzsql
 BEGIN ISOLATION LEVEL STRICT SERIALIZABLE;

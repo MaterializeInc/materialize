@@ -361,8 +361,16 @@ fn pack_val_as_datum(
                         }
                     }
                     Some(MySqlColumnMeta::Year) => {
-                        let val = from_value_opt::<u16>(value)?;
-                        packer.push(Datum::String(&val.to_string()));
+                        let mut val = from_value_opt::<u16>(value)?;
+                        // mysql_common incorrectly handles MySQL YEAR type, which has a valid range
+                        // of 1901-2155 (https://dev.mysql.com/doc/refman/8.0/en/year.html)
+                        //
+                        // We treat the value 1900 as the zero-value year - "0000"
+                        // https://github.com/blackbeam/rust_mysql_common/blob/v0.35.5/src/binlog/value.rs#L124-L129
+                        if val == 1900 {
+                            val = 0;
+                        }
+                        packer.push(Datum::String(&format!("{val:04}")));
                     }
                     Some(MySqlColumnMeta::Date) => {
                         // Some MySQL dates are invalid in chrono/NaiveDate (e.g. 0000-00-00), so

@@ -658,7 +658,7 @@ INSERT INTO test_table VALUES (1, 'Alice'), (2, 'Bob');
 
 #### `$ duckdb-query name=... [sort-rows=true]`
 
-Executes a query against a named DuckDB connection and verifies the output. The first line of the command body is the SQL query. The remaining lines are the expected output, with columns separated by spaces.
+Executes a query against a named DuckDB connection and verifies the output. The first line of the command body is the SQL query. The remaining lines are the expected output, with columns separated by spaces. `duckdb-query` executions are automatically retried the same way regular testdrive queries are.
 
 ```
 $ duckdb-query name=duckdb
@@ -796,6 +796,29 @@ The schema to use
 
 For data that contains a key, the schema of the key
 
+##### `confluent-wire-format=(true|false)`
+
+For `format=avro`, whether to frame each message with the Confluent Schema
+Registry wire format (a magic byte followed by a 4-byte schema ID). Defaults to
+`true`, unless `glue-schema-version-id` is set (in which case it defaults to
+`false`, and setting it to `true` is an error). Set to `false` to emit a bare
+Avro datum with no framing.
+
+##### `references=subject[,subject...]`
+
+For `format=avro` with `confluent-wire-format`, a comma-separated list of
+Confluent Schema Registry subjects that the schema references. Transitive
+references are resolved automatically. Not supported with
+`glue-schema-version-id`. `key-references` is the equivalent for the key schema.
+
+##### `glue-schema-version-id=UUID`
+
+For `format=avro`, frame each message with the AWS Glue Schema Registry wire
+format (header byte `0x03`, a compression byte, then the given 16-byte
+schema-version UUID) instead of the Confluent format. Mutually exclusive with
+`confluent-wire-format=true` and with `references`. `key-glue-schema-version-id`
+is the equivalent for the key schema.
+
 ##### `key-terminator=str`
 
 For data provided as `format=bytes key-format=bytes`, the separator between the key and the data in the test
@@ -919,6 +942,56 @@ defined at the schema registry. Also waits for the kafka topic to exist.
 
 This action is useful to fortify tests that expect an external party, e.g.
 Debezium, to upload a particular schema.
+
+## Actions on AWS Glue Schema Registry
+
+#### `$ glue-create-schema name=... [registry=...] [set-version-id-var=VAR] [schema=...] [data-format=avro] [compatibility=backward]`
+
+Register a schema in AWS Glue Schema Registry and, optionally, stash the
+returned schema-version UUID in a testdrive variable.
+
+The schema definition is taken from the `schema` argument when present (typically
+a `${...}` reference to a schema defined with `$ set`), otherwise from the
+command body.
+
+The recommended pattern keeps each schema body in exactly one place: define it
+once as a pretty-printed `$ set` variable, then reference that variable both here
+(to register the schema) and in `kafka-ingest` (to frame records with the
+returned version id):
+
+```
+$ set my-schema={
+    "type": "record", "name": "row",
+    "fields": [{"name": "a", "type": "long"}]
+  }
+
+$ glue-create-schema registry=my-registry name=my-schema set-version-id-var=my-version-id schema=${my-schema}
+
+$ kafka-ingest format=avro topic=my-topic glue-schema-version-id=${my-version-id} schema=${my-schema}
+{"a": 1}
+```
+
+Arguments:
+
+* The required `name` argument is the schema name.
+* The optional `registry` argument is the registry name. Omit it to target
+  Glue's implicit default registry (`default-registry`).
+* The optional `set-version-id-var` argument names a testdrive variable to
+  receive the returned `SchemaVersionId`. Omit it when the schema is referenced
+  only by name (e.g. a negative test that registers a schema just to be
+  rejected).
+* The optional `schema` argument supplies the schema definition; if absent, the
+  command body is used.
+* The optional `data-format` argument is one of `avro` (default), `json`, or
+  `protobuf`.
+* The optional `compatibility` argument defaults to `backward`.
+
+Registering a name that already exists registers a *new version* of that schema
+rather than failing — which is how schema-evolution tests register v2 atop v1.
+
+This action talks to whatever AWS Glue endpoint testdrive's AWS client is
+configured for (e.g. moto in CI, or real AWS); see the `Testdrive` mzcompose
+service's `aws_*` parameters.
 
 ## Actions on REST services
 

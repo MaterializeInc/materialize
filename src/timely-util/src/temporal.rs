@@ -207,6 +207,18 @@ impl<S: Bucket> BucketChain<S> {
         self.content.len()
     }
 
+    /// An iterator over the buckets in the chain, in time order.
+    #[inline]
+    pub fn buckets(&self) -> impl Iterator<Item = &S> {
+        self.content.values().map(|(_, storage)| storage)
+    }
+
+    /// A mutable iterator over the buckets in the chain, in time order.
+    #[inline]
+    pub fn buckets_mut(&mut self) -> impl Iterator<Item = &mut S> {
+        self.content.values_mut().map(|(_, storage)| storage)
+    }
+
     /// Split the bucket specified by `(bits, offset, storage)` and insert the new buckets.
     /// Updates `fuel`.
     ///

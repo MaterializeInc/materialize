@@ -18,6 +18,14 @@ Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 {{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}
 
+{{< note >}}
+Connecting directly to your primary, as described here, is the recommended
+setup. In the exceptional case where you can't reconfigure the primary, or need
+to keep WAL-retention risk off it, you can point Materialize at a dedicated
+replica instead. See [Ingest from a dedicated PostgreSQL
+replica](/ingest-data/postgres/logical-replica/).
+{{< /note >}}
+
 ## Before you begin
 
 {{% include-from-yaml data="ingest_postgres" name="before-you-begin" %}}
@@ -139,16 +147,7 @@ option.
     If you have set up a security group for your PostgreSQL instance, you must
     ensure that it allows traffic on the health check port.
 
-    **Remarks**:
-
-    a. Network Load Balancers do not have associated security groups. Therefore,
-    the security groups for your targets must use IP addresses to allow
-    traffic.
-
-    b. You can't use the security groups for the clients as a source in the
-    security groups for the targets. Therefore, the security groups for your
-    targets must use the IP addresses of the clients to allow traffic. For more
-    details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+    {{% include-from-yaml data="privatelink/create-privatelink-connections" name="nlb-security-group-remarks" %}}
 
 1. Create a VPC [endpoint
     service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)

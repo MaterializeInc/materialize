@@ -42,7 +42,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_repr::{Datum, Row};
 
-    use crate::avro::Decoder;
+    use crate::avro::{Decoder, WriterSchemaProvider};
 
     #[mz_ore::test(tokio::test)]
     async fn test_error_followed_by_success() {
@@ -51,7 +51,8 @@ mod tests {
 "name": "test",
 "fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
 }"#;
-        let mut decoder = Decoder::new(schema, &[], None, "Test".to_string(), false).unwrap();
+        let mut decoder =
+            Decoder::new(schema, &[], WriterSchemaProvider::None, "Test".to_string()).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
         assert_err!(decoder.decode(&mut bad_bytes).await.unwrap());
@@ -78,16 +79,11 @@ impl Decoder {
     pub fn new(
         reader_schema: &str,
         reader_reference_schemas: &[String],
-        ccsr_client: Option<mz_ccsr::Client>,
+        writer_schemas: crate::avro::WriterSchemaProvider,
         debug_name: String,
-        confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
-        let csr_avro = AvroSchemaResolver::new(
-            reader_schema,
-            reader_reference_schemas,
-            ccsr_client,
-            confluent_wire_format,
-        )?;
+        let csr_avro =
+            AvroSchemaResolver::new(reader_schema, reader_reference_schemas, writer_schemas)?;
 
         Ok(Decoder {
             csr_avro,
@@ -123,7 +119,7 @@ impl Decoder {
             .with_context(|| {
                 format!(
                     "unable to decode row {}",
-                    match csr_schema_id {
+                    match &csr_schema_id {
                         Some(id) => format!("(Avro schema id = {:?})", id),
                         None => "".to_string(),
                     }

@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
 /// Whether rendering should use `half_join2` rather than DD's `half_join` for delta joins.
 ///
@@ -41,7 +41,8 @@ pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
     false,
     "Use the columnar-native paged merge batcher at arrange sites. When `false` (default), \
      arranges fall back to the legacy columnation `Col2ValBatcher` / `RowRowBuilder` path.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Allow the column-paged batcher's pager to actually evict chunks
 /// under memory pressure. Only meaningful when
@@ -56,7 +57,8 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     false,
     "Allow the column-paged batcher's pager to evict chunks under memory pressure. Only \
      meaningful when `enable_column_paged_batcher = true`.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Total resident-byte budget the column-paged batcher's tiered policy
 /// (`mz_timely_util::column_pager::policy::TieredPolicy`) is allowed to
@@ -91,6 +93,29 @@ pub const COLUMN_PAGED_BATCHER_LZ4: Config<bool> = Config::new(
     false,
     "Compress column-paged batcher chunks with lz4 on the spill path. Only meaningful when \
      `enable_column_paged_batcher_spill = true`.",
+)
+.scoped(ParameterScope::Replica);
+
+/// Proactively evict the column-paged batcher's lz4-compressed spill chunks
+/// from RSS via `MADV_PAGEOUT` when spilling to the swap backend. Only
+/// meaningful when [`COLUMN_PAGED_BATCHER_LZ4`] is `true` and the active
+/// backend is swap (no scratch directory): on that path the compressed bytes
+/// stay resident in the process address space and currently receive no madvise
+/// at all, so the kernel reclaims them only lazily under LRU pressure.
+/// `MADV_PAGEOUT` instead swaps them out eagerly at spill time, holding RSS at
+/// the budget rather than letting it drift up to the pressure cliff. A later
+/// page-in re-faults the pages — cheap because lz4 shrank the byte volume,
+/// which is what makes eager eviction pay off on this path.
+///
+/// Off by default: the eager-reclaim syscall is the one kernel interaction the
+/// pager design singled out as risky, so it stays gated until proven on the
+/// target workload.
+pub const COLUMN_PAGED_BATCHER_SWAP_PAGEOUT: Config<bool> = Config::new(
+    "column_paged_batcher_swap_pageout",
+    false,
+    "Eagerly evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS \
+     via `MADV_PAGEOUT` (they otherwise receive no madvise and are reclaimed only lazily). Only \
+     meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
 );
 
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
@@ -154,7 +179,8 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
 );
 
 /// Enable lgalloc.
-pub const ENABLE_LGALLOC: Config<bool> = Config::new("enable_lgalloc", true, "Enable lgalloc.");
+pub const ENABLE_LGALLOC: Config<bool> =
+    Config::new("enable_lgalloc", true, "Enable lgalloc.").scoped(ParameterScope::Replica);
 
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
@@ -440,7 +466,7 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
 /// Set to zero to disable scraping and retract any existing data.
 pub const COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL: Config<Duration> = Config::new(
     "compute_prometheus_introspection_scrape_interval",
-    Duration::from_secs(1),
+    Duration::from_secs(10),
     "The collection interval for the Prometheus metrics introspection source. Set to zero to disable.",
 );
 
@@ -513,4 +539,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)
+        .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
 }

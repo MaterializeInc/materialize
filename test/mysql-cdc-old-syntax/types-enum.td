@@ -76,7 +76,7 @@ $ mysql-execute name=mysql
 ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val2', 'val1', 'val3', 'val4');
 INSERT INTO enum_type VALUES ('val1', 'val1');
 
-# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/7776 is fixed
+# TODO: Reenable when https://linear.app/materializeinc/issue/SS-311 is fixed
 $ skip-if
 SELECT true
 
