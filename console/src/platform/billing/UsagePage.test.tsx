@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import React, { ReactElement } from "react";
 
 import { DailyCosts, Organization } from "~/api/cloudGlobalApi";
@@ -116,11 +116,13 @@ describe("UsagePage", () => {
                 {
                   environment_id: "environment-parent-0",
                   cluster_grouping_key: "quickstart.r1",
+                  region: "aws/us-east-1",
                   amounts: { "price-compute": "10.00" },
                 },
                 {
                   environment_id: "environment-parent-0",
                   cluster_grouping_key: "compute.r1",
+                  region: "aws/us-east-1",
                   amounts: { "price-compute": "4.00" },
                 },
               ],
@@ -131,11 +133,13 @@ describe("UsagePage", () => {
                 {
                   environment_id: "environment-child-0",
                   cluster_grouping_key: "prod.r1",
+                  region: "aws/us-east-1",
                   amounts: { "price-compute": "5.00" },
                 },
                 {
                   environment_id: "environment-child-0",
                   cluster_grouping_key: "prod.r2",
+                  region: "aws/us-east-1",
                   amounts: { "price-compute": "2.00" },
                 },
               ],
@@ -146,7 +150,8 @@ describe("UsagePage", () => {
     );
     renderComponent(<UsagePage />);
 
-    // Both accounts and all clusters appear...
+    // Both accounts and all clusters appear, each cluster row region-qualified
+    // ("aws/us-east-1 / <cluster>"), matching the daily "Spend between …" table.
     expect(
       await screen.findByText("parent-org", {}, { timeout: 5_000 }),
     ).toBeVisible();
@@ -157,7 +162,9 @@ describe("UsagePage", () => {
       "prod.r1",
       "prod.r2",
     ]) {
-      expect(await screen.findByText(cluster)).toBeVisible();
+      expect(
+        await screen.findByText(`aws/us-east-1 / ${cluster}`),
+      ).toBeVisible();
     }
     // ...with per-account totals (14 = 10 + 4, 7 = 5 + 2) summed from the
     // per-cluster amounts.
@@ -177,7 +184,16 @@ describe("UsagePage", () => {
                 {
                   environment_id: "environment-standalone-0",
                   cluster_grouping_key: "default.r1",
+                  region: "aws/us-east-1",
                   amounts: { "price-compute": "3.00" },
+                },
+                {
+                  // Storage/egress rows have an empty cluster_grouping_key and
+                  // render as "<region> / Storage".
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-storage": "0.50" },
                 },
               ],
             },
@@ -194,7 +210,15 @@ describe("UsagePage", () => {
     );
     expect(accountRows).toHaveLength(1);
     expect(await screen.findByText("standalone-org")).toBeVisible();
-    expect(await screen.findByText("default.r1")).toBeVisible();
+    // Scope cluster-label lookups to this table: SpendBreakdown ("Spend between
+    // …") renders the same "<region> / Storage" text from the daily costs.
+    const breakdown = within(
+      await screen.findByTestId("account-cluster-breakdown"),
+    );
+    expect(
+      await breakdown.findByText("aws/us-east-1 / default.r1"),
+    ).toBeVisible();
+    expect(await breakdown.findByText("aws/us-east-1 / Storage")).toBeVisible();
   });
 
   it("changing the region filters the totals", async () => {

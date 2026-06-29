@@ -308,6 +308,12 @@ export interface components {
              *     that have no per-cluster breakdown.
              */
             cluster_grouping_key: string;
+            /**
+             * @description Cloud region in `provider/region` form, e.g. "aws/us-east-1" (event
+             *     property `region`). Lets the frontend qualify each row ("aws/us-east-1 /
+             *     Storage"), matching the daily "Spend between …" table.
+             */
+            region: string;
             /** @description Map from price_id to the computed dollar amount (e.g. "1.23"). */
             amounts: {
                 [key: string]: string;

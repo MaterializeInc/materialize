@@ -34,7 +34,11 @@ import { formatBytes, isSafari } from "~/util";
 import { DATE_FORMAT_SHORT, formatDateInUtc } from "~/utils/dateFormat";
 import { formatCurrency } from "~/utils/format";
 
-import { costUnits } from "./constants";
+import {
+  baseCellStyles,
+  costUnits,
+  resourceTypePaddingLeft,
+} from "./constants";
 import { ResourceBreakdown, ResourceMeasurement } from "./types";
 import { summarizeResourceCosts } from "./utils";
 
@@ -137,17 +141,6 @@ const CreditsMetric = ({ credits }: { credits: number }) => {
       <span>{rounded} credits</span>
     </Tooltip>
   );
-};
-
-const resourceTypePaddingLeft = 4 + 4 + 2; // table cell + width of caret + caret/label gap
-
-const baseCellStyles = {
-  px: 4,
-  my: "auto",
-  display: "flex",
-  alignItems: "center",
-  height: 8,
-  borderBottom: "1px solid",
 };
 
 function getMinWithDefault(left: number, right: number): number {
@@ -401,7 +394,7 @@ const ResourceGroup = ({
  * StackOverflow post where someone encounters a similar issue:
  *  https://stackoverflow.com/q/77927259/214197
  */
-const SafariSafeCollapse = ({
+export const SafariSafeCollapse = ({
   children,
   isCollapsed,
   rowCount,
