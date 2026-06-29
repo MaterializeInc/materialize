@@ -63,13 +63,15 @@ import {
   fetchClusterReplicasWithUtilization,
 } from "~/api/materialize/cluster/replicasWithUtilization";
 import {
+  CLUSTER_UTILIZATION_OVERVIEW_VIEWS_VERSION,
   fetchReplicaUtilizationHistory,
   ReplicaUtilizationHistoryParameters,
+  selectClusterUtilizationOverviewView,
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
 import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
 import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
 import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
-import { DEFAULT_OPTIONS as TIME_PERIOD_OPTIONS } from "~/hooks/useTimePeriodSelect";
+import { useEnvironmentGate } from "~/store/environments";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 import { sortLagInfo } from "~/utils/freshness";
 
@@ -441,9 +443,6 @@ export function useMaterializationLag(params: MaterializationLagParams) {
   });
 }
 
-type TimePeriodOptionValues =
-  (typeof TIME_PERIOD_OPTIONS)[keyof typeof TIME_PERIOD_OPTIONS];
-
 /**
  * Fetches a normalized table of an object, the lag between its direct parent, and
  * the lag between its source/table objects
@@ -452,30 +451,36 @@ export function useReplicaUtilizationHistory(
   params: ReplicaUtilizationHistoryFilters,
   queryOptions?: { enabled?: boolean },
 ) {
+  // Older environments only have the pre-existing 8h/14d overview view; gate the
+  // new per-timeframe views on the release that introduces them. The selected
+  // bucketSizeMs (in `params`) already reflects this, so the query key changes
+  // when the gate flips.
+  const hasNewViews =
+    useEnvironmentGate(CLUSTER_UTILIZATION_OVERVIEW_VIEWS_VERSION) ?? false;
   return useQuery({
-    queryKey: clusterQueryKeys.replicaUtilizationHistory(params),
+    queryKey: [
+      ...clusterQueryKeys.replicaUtilizationHistory(params),
+      hasNewViews,
+    ],
     refetchInterval: 20_000,
     enabled: queryOptions?.enabled,
     queryFn: async ({ queryKey, signal }) => {
-      const [, queryKeyParams] = queryKey;
-
       const endDate = new Date();
-      const startDate = subMinutes(endDate, queryKeyParams.timePeriodMinutes);
+      const startDate = subMinutes(endDate, params.timePeriodMinutes);
 
-      const last14DaysOptionValue: TimePeriodOptionValues = "Last 14 days";
-
-      const last14DaysTimePeriodMinutes = Number(
-        Object.entries(TIME_PERIOD_OPTIONS).find(
-          ([_, option]) => option === last14DaysOptionValue,
-        )?.[0],
+      // Use the finest pre-materialized overview view that covers the selected
+      // range; ranges not served by a view (e.g. 30 days, or any short range on
+      // an older environment) fall back to the ad-hoc query.
+      const overviewView = selectClusterUtilizationOverviewView(
+        params.timePeriodMinutes,
+        hasNewViews,
       );
 
       const data = await fetchReplicaUtilizationHistory({
         params: {
-          ...queryKeyParams,
+          ...params,
           startDate: startDate.toISOString(),
-          shouldUseConsoleClusterUtilizationOverviewView:
-            queryKeyParams.timePeriodMinutes === last14DaysTimePeriodMinutes,
+          consoleOverviewViewName: overviewView?.viewName,
         },
         queryKey,
         requestOptions: { signal },

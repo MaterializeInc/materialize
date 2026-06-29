@@ -15,13 +15,17 @@ import {
   buildQueryKeyPart,
   buildRegionQueryKey,
 } from "~/api/buildQueryKeySchema";
-import { fetchReplicaUtilizationHistory } from "~/api/materialize/cluster/replicaUtilizationHistory";
+import {
+  CLUSTER_UTILIZATION_OVERVIEW_VIEWS_VERSION,
+  fetchReplicaUtilizationHistory,
+} from "~/api/materialize/cluster/replicaUtilizationHistory";
 import {
   ClusterReplicaDetails,
   fetchClusterDetails,
 } from "~/api/materialize/environment-overview/clusterDetails";
 import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
 import { DataPoint } from "~/components/FreshnessGraph/types";
+import { useEnvironmentGate } from "~/store/environments";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 import { sortLagInfo } from "~/utils/freshness";
 
@@ -51,11 +55,22 @@ const environmentOverviewQueryKeys = {
 };
 
 const UTILIZATION_LOOKBACK_DAYS = 14;
+// The 14-day overview view (mz_console_cluster_utilization_overview) is bucketed
+// by 1 hour on environments with the new views and 8 hours on older ones;
+// gap-filling and the query must align to the view's actual bucket size.
+const ONE_HOUR_IN_MS = 60 * 60 * 1000;
 const EIGHT_HOURS_IN_MS = 8 * 60 * 60 * 1000;
 
 export function useClusterMemDiskUtilization() {
+  const bucketSizeMs =
+    (useEnvironmentGate(CLUSTER_UTILIZATION_OVERVIEW_VIEWS_VERSION) ?? false)
+      ? ONE_HOUR_IN_MS
+      : EIGHT_HOURS_IN_MS;
   return useSuspenseQuery({
-    queryKey: environmentOverviewQueryKeys.clusterMemDiskUtilization(),
+    queryKey: [
+      ...environmentOverviewQueryKeys.clusterMemDiskUtilization(),
+      bucketSizeMs,
+    ],
     queryFn: async ({ queryKey, signal }) => {
       const endDate = new Date();
 
@@ -69,9 +84,10 @@ export function useClusterMemDiskUtilization() {
           }),
           fetchReplicaUtilizationHistory({
             params: {
-              bucketSizeMs: EIGHT_HOURS_IN_MS,
+              bucketSizeMs,
               startDate: startDate.toISOString(),
-              shouldUseConsoleClusterUtilizationOverviewView: true,
+              consoleOverviewViewName:
+                "mz_console_cluster_utilization_overview",
             },
             queryKey,
             requestOptions: { signal },
@@ -210,7 +226,7 @@ export function useClusterMemDiskUtilization() {
           endMs: endDate.getTime(),
           minBucketStartMs: replicaUtilizationHistoryRes.minBucketStartMs,
           maxBucketEndMs: replicaUtilizationHistoryRes.maxBucketEndMs,
-          bucketSizeMs: EIGHT_HOURS_IN_MS,
+          bucketSizeMs,
         });
 
         if (buckets) {

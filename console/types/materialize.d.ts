@@ -1047,6 +1047,12 @@ export interface MzConsoleClusterUtilizationOverview {
   size: string | null;
 }
 
+export type MzConsoleClusterUtilizationOverview24h =
+  MzConsoleClusterUtilizationOverview;
+
+export type MzConsoleClusterUtilizationOverview3h =
+  MzConsoleClusterUtilizationOverview;
+
 export interface MzDatabases {
   /**
    * Materialize's unique ID for the database.
@@ -4280,6 +4286,8 @@ export interface DB {
   mz_compute_operator_hydration_statuses_per_worker: MzComputeOperatorHydrationStatusesPerWorker;
   mz_connections: MzConnections;
   mz_console_cluster_utilization_overview: MzConsoleClusterUtilizationOverview;
+  mz_console_cluster_utilization_overview_24h: MzConsoleClusterUtilizationOverview24h;
+  mz_console_cluster_utilization_overview_3h: MzConsoleClusterUtilizationOverview3h;
   mz_databases: MzDatabases;
   mz_dataflow_addresses: MzDataflowAddresses;
   mz_dataflow_addresses_per_worker: MzDataflowAddressesPerWorker;

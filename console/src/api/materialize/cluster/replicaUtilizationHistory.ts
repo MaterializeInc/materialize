@@ -15,6 +15,95 @@ import { executeSqlV2, queryBuilder } from "~/api/materialize";
 
 import { fetchClusterDeploymentLineage } from "./clusterDeploymentLineage";
 
+/**
+ * The built-in, indexed views that pre-compute the cluster utilization overview
+ * at a fixed bucket size and retention window (defined in `builtin.rs` in
+ * MaterializeInc/materialize). The Console queries the finest
+ * (shortest-retention) view that still covers the requested time range, so each
+ * cluster page load is a cheap indexed lookup against `mz_catalog_server`
+ * rather than a full recompute of the rollup.
+ *
+ * Ordered finest-grained first so `selectClusterUtilizationOverviewView` returns
+ * the smallest covering view.
+ */
+export const CLUSTER_UTILIZATION_OVERVIEW_VIEWS = [
+  {
+    name: "mz_console_cluster_utilization_overview_3h",
+    bucketSizeMs: 60_000, // 1 minute
+    maxTimePeriodMinutes: 180, // 3 hours
+  },
+  {
+    name: "mz_console_cluster_utilization_overview_24h",
+    bucketSizeMs: 300_000, // 5 minutes
+    maxTimePeriodMinutes: 1440, // 24 hours
+  },
+  {
+    name: "mz_console_cluster_utilization_overview",
+    bucketSizeMs: 3_600_000, // 1 hour
+    maxTimePeriodMinutes: 20160, // 14 days
+  },
+] as const;
+
+export type ConsoleClusterUtilizationOverviewViewName =
+  (typeof CLUSTER_UTILIZATION_OVERVIEW_VIEWS)[number]["name"];
+
+export type ClusterUtilizationOverviewViewSelection = {
+  viewName: ConsoleClusterUtilizationOverviewViewName;
+  // The fixed bucket size of the selected view, in milliseconds. Callers should
+  // use this for rendering rather than their own bucketSizeMs, since the view
+  // dictates the bucket boundaries.
+  bucketSizeMs: number;
+};
+
+/**
+ * The first Materialize release that ships the `_3h`/`_24h` overview views and
+ * the 1h-bucket 14d view (DB PR). On environments older than this, only the
+ * pre-existing 8h/14d `mz_console_cluster_utilization_overview` view is
+ * available, so we gate on the version with `useEnvironmentGate` and fall back
+ * to the previous behavior.
+ *
+ * TODO(cluster-utilization-views): set to the actual release version once the
+ * DB PR merges; conservatively the next minor after the current dev line.
+ */
+export const CLUSTER_UTILIZATION_OVERVIEW_VIEWS_VERSION = "26.32.0-dev";
+
+// Legacy 14d view bucket size (8h) on environments predating the new views.
+const LEGACY_14D_BUCKET_SIZE_MS = 8 * 60 * 60 * 1000;
+// "Last 14 days" in the console's time-period options.
+const LAST_14_DAYS_MINUTES = 20160;
+
+/**
+ * Returns the indexed overview view that covers `timePeriodMinutes` with the
+ * finest available bucket size, or `undefined` if the range isn't served by a
+ * view (in which case the caller falls back to the ad-hoc
+ * `buildReplicaUtilizationHistoryQuery`).
+ *
+ * `hasNewViews` should come from
+ * `useEnvironmentGate(CLUSTER_UTILIZATION_OVERVIEW_VIEWS_VERSION)`. When false
+ * (older environment), only the "Last 14 days" range is served, by the
+ * pre-existing 8h view — matching the console's behavior before the new views.
+ */
+export function selectClusterUtilizationOverviewView(
+  timePeriodMinutes: number,
+  hasNewViews: boolean,
+): ClusterUtilizationOverviewViewSelection | undefined {
+  if (hasNewViews) {
+    const view = CLUSTER_UTILIZATION_OVERVIEW_VIEWS.find(
+      (v) => timePeriodMinutes <= v.maxTimePeriodMinutes,
+    );
+    return view
+      ? { viewName: view.name, bucketSizeMs: view.bucketSizeMs }
+      : undefined;
+  }
+  if (timePeriodMinutes === LAST_14_DAYS_MINUTES) {
+    return {
+      viewName: "mz_console_cluster_utilization_overview",
+      bucketSizeMs: LEGACY_14D_BUCKET_SIZE_MS,
+    };
+  }
+  return undefined;
+}
+
 export type ReplicaUtilizationHistoryParameters = {
   // Filter per cluster
   clusterIds?: string[];
@@ -27,8 +116,9 @@ export type ReplicaUtilizationHistoryParameters = {
   // Size of the time buckets in milliseconds
   bucketSizeMs: number;
 
-  // Whether to use the console cluster utilization overview view
-  shouldUseConsoleClusterUtilizationOverviewView?: boolean;
+  // When set, query this pre-materialized overview view instead of computing the
+  // rollup ad-hoc. Choose it with `selectClusterUtilizationOverviewView`.
+  consoleOverviewViewName?: ConsoleClusterUtilizationOverviewViewName;
 };
 // We have an equivalent query in `builtin.rs` in the MaterializeInc/materialize.
 // This should query should be kept in sync with `mz_console_cluster_utilization_overview`.
@@ -41,22 +131,31 @@ export function buildReplicaUtilizationHistoryQuery({
 }: ReplicaUtilizationHistoryParameters) {
   const bucketSizeMsSqlStr = sql.raw(`${bucketSizeMs}`);
   const startDateLit = sql.lit(startDate);
-  const endDateLit = sql.lit(startDate);
 
   const dateBinOrigin = sql.lit("1970-01-01");
 
+  const hasClusterFilter = clusterIds !== undefined && clusterIds.length > 0;
+
   let query = queryBuilder
-    .with("replica_history", (qb) =>
-      qb
+    // We push the cluster filter all the way down into replica_history so the
+    // entire rollup (metrics aggregation, per-bucket argmax, the multi-way join)
+    // only ever processes the target cluster's replicas. Otherwise the optimizer
+    // computes the whole fleet's metrics and discards all but one cluster at the
+    // very end. See the analysis in MaterializeInc/materialize builtin.rs.
+    .with("replica_history", (qb) => {
+      let history = qb
         .selectFrom("mz_cluster_replica_history")
-        .select(["replica_id", "cluster_id", "size"])
-        // We need to union the current set of cluster replicas since mz_cluster_replica_history doesn't account for system clusters
-        .union(
-          qb
-            .selectFrom("mz_cluster_replicas")
-            .select(["id as replica_id", "cluster_id", "size"]),
-        ),
-    )
+        .select(["replica_id", "cluster_id", "size"]);
+      // We need to union the current set of cluster replicas since mz_cluster_replica_history doesn't account for system clusters
+      let current = qb
+        .selectFrom("mz_cluster_replicas")
+        .select(["id as replica_id", "cluster_id", "size"]);
+      if (hasClusterFilter) {
+        history = history.where("cluster_id", "in", clusterIds);
+        current = current.where("cluster_id", "in", clusterIds);
+      }
+      return history.union(current);
+    })
     .with("replica_name_history", (qb) =>
       qb
         .selectFrom("mz_cluster_replica_name_history")
@@ -128,13 +227,12 @@ export function buildReplicaUtilizationHistoryQuery({
         ]),
     )
     .with("replica_utilization_history_binned", (qb) => {
+      // We read directly from replica_metrics_history rather than re-joining
+      // replica_history; every replica_id here already came from replica_history
+      // (that's how replica_metrics_history was built), so the join was
+      // redundant and could fan out a replica that changed size.
       let cte = qb
-        .selectFrom("replica_history as r")
-        .innerJoin(
-          "replica_metrics_history as m",
-          "m.replica_id",
-          "r.replica_id",
-        )
+        .selectFrom("replica_metrics_history as m")
         .select([
           "m.occurred_at",
           "m.replica_id",
@@ -172,7 +270,7 @@ export function buildReplicaUtilizationHistoryQuery({
           sql<Date>`
             date_bin(
               '${bucketSizeMsSqlStr} MILLISECONDS',
-              TIMESTAMP ${endDateLit},
+              TIMESTAMP ${sql.lit(endDate)},
               TIMESTAMP ${dateBinOrigin}
             )`,
         );
@@ -308,6 +406,16 @@ export function buildReplicaUtilizationHistoryQuery({
         )
         .groupBy(["bucket_start", "replica_id"]);
 
+      // Restrict the (otherwise full-scanned) status history to the target
+      // cluster's replicas. Because mz_cluster_replica_status_history is indexed
+      // on replica_id, this becomes a lookup rather than a scan of every
+      // replica's offline events across the whole deployment.
+      if (hasClusterFilter) {
+        cte = cte.where("replica_id", "in", (eb) =>
+          eb.selectFrom("replica_history").select("replica_id"),
+        );
+      }
+
       if (endDate) {
         cte = cte.where(
           (eb) =>
@@ -316,7 +424,7 @@ export function buildReplicaUtilizationHistoryQuery({
           sql<Date>`
             date_bin(
               '${bucketSizeMsSqlStr} MILLISECONDS',
-              TIMESTAMP ${endDateLit},
+              TIMESTAMP ${sql.lit(endDate)},
               TIMESTAMP ${dateBinOrigin}
             )`,
         );
@@ -411,9 +519,9 @@ export function buildReplicaUtilizationHistoryQuery({
     ])
     .orderBy("bucketStart");
 
-  if (clusterIds !== undefined && clusterIds.length > 0) {
-    query = query.where("replica_history.cluster_id", "in", clusterIds);
-  }
+  // NOTE: the cluster filter is already pushed into the replica_history CTE
+  // above, and the final `JOIN replica_history` restricts the output to that
+  // cluster's replicas, so no top-level cluster_id filter is needed here.
 
   if (replicaId) {
     query = query.where("max_memory.replica_id", "=", replicaId);
@@ -423,18 +531,23 @@ export function buildReplicaUtilizationHistoryQuery({
 }
 
 /**
- * This is an optimized version of buildReplicaUtilizationHistoryQuery
- * that uses a time period of 14 days and a bucket of 8 hours via a built-in index+view.
+ * An optimized version of buildReplicaUtilizationHistoryQuery that reads from
+ * one of the pre-materialized, indexed `mz_console_cluster_utilization_overview*`
+ * views instead of recomputing the rollup. `viewName` selects the bucket
+ * size / retention window (see `selectClusterUtilizationOverviewView`); each
+ * view is indexed on `cluster_id`, so filtering by cluster is an indexed lookup.
  */
 export function buildConsoleClusterUtilizationOverviewQuery({
+  viewName,
   clusterIds,
   replicaId,
 }: {
+  viewName: ConsoleClusterUtilizationOverviewViewName;
   clusterIds?: string[];
   replicaId?: string;
 }) {
   let query = queryBuilder
-    .selectFrom("mz_console_cluster_utilization_overview")
+    .selectFrom(viewName)
     .select([
       "bucket_start as bucketStart",
       "replica_id as replicaId",
@@ -553,8 +666,9 @@ export async function fetchReplicaUtilizationHistory({
     clusterIds: clusterIdsFilter,
   }).compile();
 
-  if (params.shouldUseConsoleClusterUtilizationOverviewView) {
+  if (params.consoleOverviewViewName) {
     utilizationQuery = buildConsoleClusterUtilizationOverviewQuery({
+      viewName: params.consoleOverviewViewName,
       clusterIds: clusterIdsFilter,
       replicaId: params.replicaId,
     }).compile();
