@@ -9,8 +9,11 @@
 
 //! AWS configuration for sources and sinks.
 
+use std::time::Duration;
+
 use anyhow::{Context, anyhow, bail};
 use aws_config::sts::AssumeRoleProvider;
+use aws_config::timeout::TimeoutConfig;
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_sdk_sts::error::SdkError;
@@ -35,6 +38,13 @@ use crate::{
     configuration::StorageConfiguration,
     connections::{ConnectionContext, StringOrSecret},
 };
+
+/// Connect timeout for the STS calls that resolve AssumeRole credentials.
+///
+/// Deliberately more generous than the AWS SDK default (~3.1s) so that an
+/// overloaded cluster, where the connect can't complete promptly, does not fail
+/// credential resolution and stall the dependent operation.
+const CREDENTIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// AWS connection configuration.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -176,7 +186,21 @@ impl AwsAssumeRole {
 
         // Load the default SDK configuration to use for the assume role
         // operations themselves.
-        let assume_role_sdk_config = mz_aws_util::defaults().load().await;
+        //
+        // Override the connect timeout. The SDK default (~3.1s) is too aggressive
+        // when the cluster is overloaded: the STS connect can't complete in time,
+        // credential resolution fails, and the dependent operation (e.g. loading
+        // an Iceberg table) errors. Retrying with backoff alone does not help,
+        // because every attempt hits the same short deadline. A longer connect
+        // timeout lets an attempt finish the handshake despite scheduling delay.
+        let assume_role_sdk_config = mz_aws_util::defaults()
+            .timeout_config(
+                TimeoutConfig::builder()
+                    .connect_timeout(CREDENTIAL_CONNECT_TIMEOUT)
+                    .build(),
+            )
+            .load()
+            .await;
 
         // The default session name identifies the environment and the
         // connection.
