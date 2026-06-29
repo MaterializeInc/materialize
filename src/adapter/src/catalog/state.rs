@@ -2396,6 +2396,11 @@ impl CatalogState {
         // We exclude role_auth_by_id because it contains password information
         // which should not be included in the dump.
         dump_obj.remove("role_auth_by_id");
+        // The mock authentication nonce is a server-wide secret used to derive
+        // deterministic mock SASL challenges for absent or password-less roles.
+        // Leaking it would re-enable the username enumeration the mock challenge
+        // defends against, so it must not appear in the dump either.
+        dump_obj.remove("mock_authentication_nonce");
 
         // Emit as pretty-printed JSON.
         Ok(serde_json::to_string_pretty(&dump).expect("cannot fail on serde_json::Value"))
