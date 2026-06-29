@@ -165,6 +165,79 @@ REVOKE CREATECLUSTER ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
+# CREATE NETWORK POLICY
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_network_policies = on;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE NETWORK POLICY np_joe (RULES (r (address='0.0.0.0/0', action='allow', direction='ingress')));
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATENETWORKPOLICY privileges on SYSTEM
+
+simple conn=child,user=child
+CREATE NETWORK POLICY np_child (RULES (r (address='0.0.0.0/0', action='allow', direction='ingress')));
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'child' role needs CREATENETWORKPOLICY privileges on SYSTEM
+
+simple conn=mz_system,user=mz_system
+GRANT CREATENETWORKPOLICY ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+# The stored AclMode round-trips as exactly 'P', not 'P' plus stray bits.
+# Locks the display down so a future privilege constant added next to
+# CREATE_NETWORK_POLICY can't silently alias it.
+query T
+SELECT privileges::text FROM mz_system_privileges
+WHERE mz_internal.mz_aclitem_grantee(privileges) = (SELECT id FROM mz_roles WHERE name = 'joe')
+----
+joe=P/mz_system
+
+# After the grant, both joe (direct) and child (inherited via role membership)
+# can create a network policy.
+simple conn=joe,user=joe
+CREATE NETWORK POLICY np_joe (RULES (r (address='0.0.0.0/0', action='allow', direction='ingress')));
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE NETWORK POLICY np_child (RULES (r (address='0.0.0.0/0', action='allow', direction='ingress')));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY np_joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY np_child;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATENETWORKPOLICY ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+# After REVOKE the SYSTEM privileges row is gone (no stray bits left over).
+query I
+SELECT count(*) FROM mz_system_privileges
+WHERE mz_internal.mz_aclitem_grantee(privileges) = (SELECT id FROM mz_roles WHERE name = 'joe')
+----
+0
+
+# And the bare CREATE NETWORK POLICY is denied again.
+simple conn=joe,user=joe
+CREATE NETWORK POLICY np_joe (RULES (r (address='0.0.0.0/0', action='allow', direction='ingress')));
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATENETWORKPOLICY privileges on SYSTEM
+
 # CREATE CLUSTER REPLICA
 
 simple conn=mz_system,user=mz_system

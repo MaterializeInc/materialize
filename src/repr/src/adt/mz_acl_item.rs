@@ -96,11 +96,13 @@ bitflags! {
         const USAGE = 1 << 8;
         const CREATE = 1 << 9;
 
-        // Materialize custom privileges.
+        // Materialize custom privileges. Grow downward from bit 31 so the
+        // upper 32 bits stay reserved for grant options (bit `n + 32` is the
+        // grant-option slot for bit `n`).
         const CREATE_CLUSTER = 1 << 29;
         const CREATE_DB = 1 << 30;
         const CREATE_ROLE = 1 << 31;
-        const CREATE_NETWORK_POLICY = 1 << 32;
+        const CREATE_NETWORK_POLICY = 1 << 28;
 
         // No additional privileges should be defined at a bit larger than 1 << 31. Those bits are
         // reserved for grant options.
