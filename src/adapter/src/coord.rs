@@ -697,6 +697,7 @@ pub struct PeekStageCopyTo {
     optimizer: optimize::copy_to::Optimizer,
     global_lir_plan: optimize::copy_to::GlobalLirPlan,
     optimization_finished_at: EpochMillis,
+    target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
 }
 
