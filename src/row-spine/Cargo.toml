@@ -10,6 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
+columnar.workspace = true
 columnation.workspace = true
 differential-dataflow.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["region"] }
