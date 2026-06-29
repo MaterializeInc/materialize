@@ -426,9 +426,9 @@ pub enum Message {
     /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
     SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
 
-    /// One pull/apply call from the cluster controller task, to be answered from
-    /// the catalog and live controller signals on this loop. See
-    /// [`cluster_controller`].
+    /// One pull/apply call from the cluster controller task, answered on the main
+    /// coordinator message loop from the catalog and live controller signals.
+    /// See [`cluster_controller`].
     ClusterControllerRequest(cluster_controller::ClusterControllerRequest),
 }
 

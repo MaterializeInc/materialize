@@ -83,8 +83,7 @@ impl Default for ClusterController {
 
 impl ClusterController {
     /// A controller with only the implicit baseline strategy. This reconciles a
-    /// steady-state managed cluster to no decisions; later PRs add the policy
-    /// strategies.
+    /// steady-state managed cluster to no decisions.
     pub fn new() -> Self {
         Self {
             strategies: vec![Box::new(BaselineStrategy)],
