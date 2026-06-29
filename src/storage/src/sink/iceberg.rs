@@ -208,7 +208,12 @@ trait EnvelopeHandler: Send {
     /// this to disable memory-intensive optimisations like seen-rows deduplication.
     async fn create_writer(&self, is_snapshot: bool) -> anyhow::Result<Box<dyn IcebergWriter>>;
 
-    fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch>;
+    /// Convert a group of diff-pairs into a single Arrow `RecordBatch`.
+    ///
+    /// All diff-pairs in `rows` are destined for the same batch writer. Converting many
+    /// rows at once amortizes the Arrow build and the downstream Parquet/object-store
+    /// write, which is what lets the sink drain its input as fast as it is read.
+    fn rows_to_batch(&self, rows: &[(DiffPair<Row>, Timestamp)]) -> anyhow::Result<RecordBatch>;
 }
 
 struct UpsertEnvelopeHandler {
@@ -351,11 +356,7 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
 
     /// The `__op` column indicates whether each row is an insert (+1) or delete (-1),
     /// which the DeltaWriter uses to generate the appropriate Iceberg data/delete files.
-    fn row_to_batch(
-        &self,
-        diff_pair: DiffPair<Row>,
-        _ts: Timestamp,
-    ) -> anyhow::Result<RecordBatch> {
+    fn rows_to_batch(&self, rows: &[(DiffPair<Row>, Timestamp)]) -> anyhow::Result<RecordBatch> {
         let mut builder = ArrowBuilder::new_with_schema(
             Arc::clone(&self.ctx.arrow_schema),
             DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
@@ -363,19 +364,21 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
         )
         .context("Failed to create builder")?;
 
-        let mut op_values = Vec::new();
+        let mut op_values = Vec::with_capacity(rows.len());
 
-        if let Some(before) = diff_pair.before {
-            builder
-                .add_row(&before)
-                .context("Failed to add delete row to builder")?;
-            op_values.push(-1i32);
-        }
-        if let Some(after) = diff_pair.after {
-            builder
-                .add_row(&after)
-                .context("Failed to add insert row to builder")?;
-            op_values.push(1i32);
+        for (diff_pair, _ts) in rows {
+            if let Some(before) = &diff_pair.before {
+                builder
+                    .add_row(before)
+                    .context("Failed to add delete row to builder")?;
+                op_values.push(-1i32);
+            }
+            if let Some(after) = &diff_pair.after {
+                builder
+                    .add_row(after)
+                    .context("Failed to add insert row to builder")?;
+                op_values.push(1i32);
+            }
         }
 
         let batch = builder
@@ -439,7 +442,7 @@ impl EnvelopeHandler for AppendEnvelopeHandler {
 
     /// Every change is written as a plain data row: the `before` half (if present) gets
     /// `_mz_diff = -1` and the `after` half gets `_mz_diff = +1`. Both carry the same `_mz_timestamp`.
-    fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch> {
+    fn rows_to_batch(&self, rows: &[(DiffPair<Row>, Timestamp)]) -> anyhow::Result<RecordBatch> {
         let mut builder = ArrowBuilder::new_with_schema(
             Arc::clone(&self.user_schema_for_append),
             DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
@@ -447,30 +450,34 @@ impl EnvelopeHandler for AppendEnvelopeHandler {
         )
         .context("Failed to create builder")?;
 
-        let mut diff_values: Vec<i32> = Vec::new();
-        let ts_i64 = i64::try_from(u64::from(ts)).unwrap_or(i64::MAX);
+        let mut diff_values: Vec<i32> = Vec::with_capacity(rows.len());
+        let mut ts_values: Vec<i64> = Vec::with_capacity(rows.len());
 
-        if let Some(before) = diff_pair.before {
-            builder
-                .add_row(&before)
-                .context("Failed to add before row to builder")?;
-            diff_values.push(-1i32);
-        }
-        if let Some(after) = diff_pair.after {
-            builder
-                .add_row(&after)
-                .context("Failed to add after row to builder")?;
-            diff_values.push(1i32);
+        for (diff_pair, ts) in rows {
+            let ts_i64 = i64::try_from(u64::from(*ts)).unwrap_or(i64::MAX);
+            if let Some(before) = &diff_pair.before {
+                builder
+                    .add_row(before)
+                    .context("Failed to add before row to builder")?;
+                diff_values.push(-1i32);
+                ts_values.push(ts_i64);
+            }
+            if let Some(after) = &diff_pair.after {
+                builder
+                    .add_row(after)
+                    .context("Failed to add after row to builder")?;
+                diff_values.push(1i32);
+                ts_values.push(ts_i64);
+            }
         }
 
-        let n = diff_values.len();
         let batch = builder
             .to_record_batch()
             .context("Failed to create record batch")?;
 
         let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
         columns.push(Arc::new(Int32Array::from(diff_values)));
-        columns.push(Arc::new(Int64Array::from(vec![ts_i64; n])));
+        columns.push(Arc::new(Int64Array::from(ts_values)));
 
         RecordBatch::try_new(Arc::clone(&self.ctx.arrow_schema), columns)
             .context("Failed to create append record batch")
@@ -1509,6 +1516,31 @@ struct BoundedDataFileSet {
     pub data_files: Vec<BoundedDataFile>,
 }
 
+/// Maximum number of diff-pairs converted into a single Arrow `RecordBatch` before being
+/// handed to the Iceberg writer. Large enough to amortize per-write overhead, bounded so a
+/// single write doesn't have to materialize an unbounded snapshot in memory at once.
+const WRITE_BATCH_ROWS: usize = 10_000;
+
+/// Convert `rows` to Arrow in chunks of [`WRITE_BATCH_ROWS`] and write each chunk to `writer`.
+///
+/// One write per chunk rather than per row. Per-row writes can't drain the input as fast as
+/// it is read, which lets the upstream arrangement grow without bound.
+async fn write_rows<H: EnvelopeHandler>(
+    handler: &H,
+    writer: &mut Box<dyn IcebergWriter>,
+    rows: &[(DiffPair<Row>, Timestamp)],
+    statistics: &SinkStatistics,
+) -> anyhow::Result<()> {
+    for chunk in rows.chunks(WRITE_BATCH_ROWS) {
+        let record_batch = handler
+            .rows_to_batch(chunk)
+            .context("failed to convert rows to recordbatch")?;
+        writer.write(record_batch).await?;
+        statistics.inc_messages_staged_by(u64::cast_from(chunk.len()));
+    }
+    Ok(())
+}
+
 /// Construct the envelope-specific closures that [`write_data_files`] needs.
 ///
 /// Write rows into Parquet data files bounded by batch descriptions.
@@ -1643,7 +1675,6 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
             let mut min_batch_lower: Option<Antichain<Timestamp>> = None;
 
             while !(batch_description_frontier.is_empty() && input_frontier.is_empty()) {
-                let mut staged_messages_since_flush: u64 = 0;
                 tokio::select! {
                     _ = batch_desc_input.ready() => {},
                     _ = input.ready() => {}
@@ -1703,35 +1734,25 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                                 );
                                 let mut batch_writer =
                                     handler.create_writer(is_snapshot).await?;
-                                // Drain any stashed rows that belong to this batch
+                                // Drain any stashed rows that belong to this batch.
                                 let row_ts_keys: Vec<_> = stashed_rows.keys().cloned().collect();
-                                let mut drained_count = 0;
+                                let mut to_write: Vec<(DiffPair<Row>, Timestamp)> = Vec::new();
                                 for row_ts in row_ts_keys {
                                     let ts = Antichain::from_elem(row_ts.clone());
                                     if PartialOrder::less_equal(lower, &ts)
                                         && PartialOrder::less_than(&ts, upper)
                                     {
                                         if let Some(rows) = stashed_rows.remove(&row_ts) {
-                                            drained_count += rows.len();
                                             for (_row, diff_pair) in rows {
                                                 metrics.stashed_rows.dec();
-                                                let record_batch = handler.row_to_batch(
-                                                    diff_pair.clone(),
-                                                    row_ts.clone(),
-                                                )
-                                                .context("failed to convert row to recordbatch")?;
-                                                batch_writer.write(record_batch).await?;
-                                                staged_messages_since_flush += 1;
-                                                if staged_messages_since_flush >= 10_000 {
-                                                    statistics.inc_messages_staged_by(
-                                                        staged_messages_since_flush,
-                                                    );
-                                                    staged_messages_since_flush = 0;
-                                                }
+                                                to_write.push((diff_pair, row_ts.clone()));
                                             }
                                         }
                                     }
                                 }
+                                let drained_count = to_write.len();
+                                write_rows(&handler, &mut batch_writer, &to_write, &statistics)
+                                    .await?;
                                 if drained_count > 0 {
                                     debug!(
                                         "{}: drained {} stashed rows into batch [{}, {})",
@@ -1763,34 +1784,27 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                         Event::Data(_cap, data) => {
                             let mut dropped_per_time = BTreeMap::new();
                             let mut stashed_per_time = BTreeMap::new();
+                            // Group rows by the in-flight batch they belong to, so each batch's
+                            // rows are written together rather than one Arrow batch per row.
+                            #[allow(clippy::disallowed_types)]
+                            let mut to_write: std::collections::HashMap<
+                                (Antichain<Timestamp>, Antichain<Timestamp>),
+                                Vec<(DiffPair<Row>, Timestamp)>,
+                            > = std::collections::HashMap::new();
                             for ((row, diff_pair), ts, _diff) in data {
                                 let row_ts = ts.clone();
                                 let ts_antichain = Antichain::from_elem(row_ts.clone());
-                                let mut written = false;
-                                // Try writing the row to any in-flight batch it belongs to...
-                                for (batch_desc, batch_writer) in in_flight_batches.iter_mut() {
-                                    let (lower, upper) = batch_desc;
-                                    if PartialOrder::less_equal(lower, &ts_antichain)
+                                // Find the in-flight batch this row belongs to, if any.
+                                let target = in_flight_batches.keys().find(|(lower, upper)| {
+                                    PartialOrder::less_equal(lower, &ts_antichain)
                                         && PartialOrder::less_than(&ts_antichain, upper)
-                                    {
-                                        let record_batch = handler.row_to_batch(
-                                            diff_pair.clone(),
-                                            row_ts.clone(),
-                                        )
-                                        .context("failed to convert row to recordbatch")?;
-                                        batch_writer.write(record_batch).await?;
-                                        staged_messages_since_flush += 1;
-                                        if staged_messages_since_flush >= 10_000 {
-                                            statistics.inc_messages_staged_by(
-                                                staged_messages_since_flush,
-                                            );
-                                            staged_messages_since_flush = 0;
-                                        }
-                                        written = true;
-                                        break;
-                                    }
-                                }
-                                if !written {
+                                });
+                                if let Some(batch_desc) = target {
+                                    to_write
+                                        .entry(batch_desc.clone())
+                                        .or_default()
+                                        .push((diff_pair, row_ts));
+                                } else {
                                     // Drop data that's before the first batch we received (already committed)
                                     if let Some(ref min_lower) = min_batch_lower {
                                         if PartialOrder::less_than(&ts_antichain, min_lower) {
@@ -1807,6 +1821,13 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                                     metrics.stashed_rows.inc();
                                     entry.push((row, diff_pair));
                                 }
+                            }
+
+                            for (batch_desc, rows) in to_write {
+                                let batch_writer = in_flight_batches
+                                    .get_mut(&batch_desc)
+                                    .expect("batch writer present for grouped rows");
+                                write_rows(&handler, batch_writer, &rows, &statistics).await?;
                             }
 
                             for (ts, count) in dropped_per_time {
@@ -1828,10 +1849,6 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                         }
                     }
                 }
-                if staged_messages_since_flush > 0 {
-                    statistics.inc_messages_staged_by(staged_messages_since_flush);
-                }
-
                 // Check if frontiers have advanced, which may unlock batches ready to close
                 if PartialOrder::less_than(
                     &processed_batch_description_frontier,
