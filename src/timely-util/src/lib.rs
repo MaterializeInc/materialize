@@ -23,6 +23,7 @@ pub mod column_pager;
 pub mod columnar;
 pub mod columnation;
 pub mod containers;
+pub mod hash;
 pub mod operator;
 pub mod order;
 pub mod pact;
