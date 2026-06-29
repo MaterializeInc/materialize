@@ -67,9 +67,10 @@ contains:cannot convert negative interval to duration
   )
 contains:TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour
 
-> CREATE SOURCE clamp_topic_metadata_refresh_interval
+! CREATE SOURCE bad_topic_metadata_refresh_interval
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '1ms'
   )
+contains:TOPIC METADATA REFRESH INTERVAL must be at least 1 second
