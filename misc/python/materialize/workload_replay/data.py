@@ -31,8 +31,11 @@ from materialize.workload_replay.config import SEED_RANGE
 from materialize.workload_replay.ingest import (
     delivery_report,
     get_kafka_objects,
+    get_kafka_value_format,
     ingest,
     ingest_webhook,
+    make_kafka_producer,
+    produce_json,
 )
 from materialize.workload_replay.util import (
     get_kafka_topic,
@@ -96,6 +99,7 @@ def _kafka_chunk(
     sr_port: int,
     topic: str,
     debezium: bool,
+    value_format: str,
     column_dicts: list[dict[str, Any]],
     num_rows: int,
     rng_seed: int,
@@ -106,6 +110,10 @@ def _kafka_chunk(
         Column(c["name"], c["type"], c["nullable"], c["default"], c.get("data_shape"))
         for c in column_dicts
     ]
+
+    if value_format == "json":
+        produce_json(make_kafka_producer(kafka_port), topic, columns, rng, num_rows)
+        return num_rows
 
     producer, serializer, key_serializer, sctx, ksctx, col_names = get_kafka_objects(
         topic,
@@ -352,9 +360,11 @@ def create_initial_data_external(
 
                         st = source["type"]
                         if st == "postgres":
-                            ref_db, ref_s, ref_t = (
-                                get_postgres_reference_db_schema_table(child)
-                            )
+                            (
+                                ref_db,
+                                ref_s,
+                                ref_t,
+                            ) = get_postgres_reference_db_schema_table(child)
                             conn = {
                                 "host": "127.0.0.1",
                                 "port": port("postgres"),
@@ -377,6 +387,7 @@ def create_initial_data_external(
                         elif st == "kafka":
                             topic = get_kafka_topic(source)
                             debezium = "ENVELOPE DEBEZIUM" in child["create_sql"]
+                            value_format = get_kafka_value_format(child["create_sql"])
                             _submit_chunks(
                                 pool,
                                 _kafka_chunk,
@@ -385,6 +396,7 @@ def create_initial_data_external(
                                     port("schema-registry"),
                                     topic,
                                     debezium,
+                                    value_format,
                                 ),
                                 child["columns"],
                                 num_rows,

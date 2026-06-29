@@ -28,6 +28,31 @@ from materialize.mzcompose.composition import Composition
 
 PG_PARAM_RE = re.compile(r"\$(\d+)")
 
+# Per-worker-thread connection reuse. Opening a fresh connection for every query
+# (with up to `max_concurrent_queries` threads) floods environmentd with connection
+# establishment and causes `ConnectionTimeout`s; reusing one connection per thread
+# keeps the count bounded to the pool size.
+_thread_local = threading.local()
+
+
+def _get_connection(c: Composition):
+    conn = getattr(_thread_local, "conn", None)
+    if conn is None or conn.closed:
+        conn = c.sql_connection(user="mz_system", port=6877)
+        _thread_local.conn = conn
+    return conn
+
+
+def _reset_connection() -> None:
+    """Drop the thread's connection so the next query reconnects (self-heal)."""
+    conn = getattr(_thread_local, "conn", None)
+    _thread_local.conn = None
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 def pg_params_to_psycopg(sql: str, params: list[Any]) -> tuple[str, list[Any]]:
     """Convert PostgreSQL $N parameters to psycopg %s format."""
@@ -49,75 +74,88 @@ def run_query(
     stop_event: threading.Event,
 ) -> None:
     """Execute a single query against Materialize."""
-    conn = c.sql_connection(user="mz_system", port=6877)
-    with conn.cursor() as cur:
-        cur.execute(
-            SQL("SET transaction_isolation = {}").format(
-                Literal(query["transaction_isolation"])
+    sql = query["sql"]
+    try:
+        conn = _get_connection(c)
+        with conn.cursor() as cur:
+            cur.execute(
+                SQL("SET transaction_isolation = {}").format(
+                    Literal(query["transaction_isolation"])
+                )
             )
-        )
-        cur.execute(SQL("SET cluster = {}").format(Literal(query["cluster"])))
-        cur.execute(SQL("SET database = {}").format(Literal(query["database"])))
-        cur.execute(f"SET search_path = {','.join(query['search_path'])}".encode())
+            cur.execute(SQL("SET cluster = {}").format(Literal(query["cluster"])))
+            cur.execute(SQL("SET database = {}").format(Literal(query["database"])))
+            cur.execute(f"SET search_path = {','.join(query['search_path'])}".encode())
 
-        stats["total"] += 1
+            stats["total"] += 1
 
-        try:
-            sql, params = pg_params_to_psycopg(query["sql"], query["params"])
-            # TODO: Better replacements for <REDACTED>, but requires parsing the SQL, figuring out the column name, object name, looking up the data type, etc.
-            sql = sql.replace("'<REDACTED>'", "NULL")
+            try:
+                sql, params = pg_params_to_psycopg(query["sql"], query["params"])
+                # TODO: Better replacements for <REDACTED>, but requires parsing the SQL, figuring out the column name, object name, looking up the data type, etc.
+                sql = sql.replace("'<REDACTED>'", "NULL")
 
-            start_time = time.time()
+                start_time = time.time()
 
-            if query["statement_type"] == "subscribe":
-                if query.get("duration"):
-                    duration = query["duration"]
-                    cur.execute(
-                        SQL("SET LOCAL statement_timeout = {}").format(
-                            Literal(int(duration * 1000))
+                if query["statement_type"] == "subscribe":
+                    if query.get("duration"):
+                        duration = query["duration"]
+                        cur.execute(
+                            SQL("SET LOCAL statement_timeout = {}").format(
+                                Literal(int(duration * 1000))
+                            )
                         )
-                    )
-                    end_deadline = start_time + duration
-                row_count = 0
-                try:
-                    for row in cur.stream(sql.encode(), params):
-                        row_count += 1
-                        if query.get("duration"):
-                            if time.time() >= end_deadline:
-                                break
-                        if stop_event.is_set():
-                            return
-                except psycopg.errors.QueryCanceled:
-                    pass
+                        end_deadline = start_time + duration
+                    row_count = 0
+                    try:
+                        for row in cur.stream(sql.encode(), params):
+                            row_count += 1
+                            if query.get("duration"):
+                                if time.time() >= end_deadline:
+                                    break
+                            if stop_event.is_set():
+                                return
+                    except psycopg.errors.QueryCanceled:
+                        pass
 
-                end_time = time.time()
-                stats["timings"].append((sql, end_time - start_time))
-                stats.setdefault("subscribe_rows", 0)
+                    end_time = time.time()
+                    stats["timings"].append((sql, end_time - start_time))
+                    stats.setdefault("subscribe_rows", 0)
 
-                if verbose:
-                    print(
-                        f"Success: {sql} ({end_time - start_time:.2f}s), rows: {row_count}"
-                    )
+                    if verbose:
+                        print(
+                            f"Success: {sql} ({end_time - start_time:.2f}s), rows: {row_count}"
+                        )
 
-            else:
-                cur.execute(sql.encode(), params)
-                end_time = time.time()
-                stats["timings"].append((sql, end_time - start_time))
+                else:
+                    cur.execute(sql.encode(), params)
+                    end_time = time.time()
+                    stats["timings"].append((sql, end_time - start_time))
 
-                if verbose:
-                    print(f"Success: {sql} (params: {params})")
+                    if verbose:
+                        print(f"Success: {sql} (params: {params})")
 
-        except psycopg.Error as e:
-            stats["failed"] += 1
-            stats["errors"][f"{e.sqlstate}: {e}"].append(sql)
+            except psycopg.Error as e:
+                stats["failed"] += 1
+                stats["errors"][f"{e.sqlstate}: {e}"].append(sql)
 
-            if query["finished_status"] == "success":
-                if "unknown catalog item" not in str(e):
-                    print(f"Failed: {sql} (params: {params})")
+                if query["finished_status"] == "success":
+                    if "unknown catalog item" not in str(e):
+                        print(f"Failed: {sql} (params: {params})")
+                        print(f"{e.sqlstate}: {e}")
+                elif verbose:
+                    print(f"Failed expectedly: {sql} (params: {params})")
                     print(f"{e.sqlstate}: {e}")
-            elif verbose:
-                print(f"Failed expectedly: {sql} (params: {params})")
-                print(f"{e.sqlstate}: {e}")
+    except Exception as e:
+        # Connection-level failure (e.g. connect timeout, or the server dropped
+        # the connection). Record it, drop the (possibly broken) thread connection
+        # so the next query reconnects, and stay non-fatal: a transient blip must
+        # not abort the whole continuous-query run.
+        stats["failed"] += 1
+        sqlstate = getattr(e, "sqlstate", None)
+        stats["errors"][f"{sqlstate}: {e}"].append("<connection>")
+        _reset_connection()
+        if verbose:
+            print(f"Connection failure ({sqlstate}): {e}")
 
 
 def continuous_queries(

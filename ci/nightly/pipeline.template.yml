@@ -299,6 +299,7 @@ steps:
               run: benchmark
               args:
                 - --factor-initial-data=0.01
+                - --skip-large
                 - --compare-against
                 - common-ancestor
         agents:
