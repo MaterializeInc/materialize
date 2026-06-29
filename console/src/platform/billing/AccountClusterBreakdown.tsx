@@ -7,13 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, Grid, Spinner, Text, useTheme } from "@chakra-ui/react";
+import {
+  Box,
+  Grid,
+  Spinner,
+  Text,
+  useDisclosure,
+  useTheme,
+} from "@chakra-ui/react";
 import React from "react";
 
-import { CostBreakdown } from "~/api/cloudGlobalApi";
+import {
+  CostBreakdown,
+  CostBreakdownAccount,
+  CostBreakdownCluster,
+} from "~/api/cloudGlobalApi";
 import ErrorBox from "~/components/ErrorBox";
+import ChevronRightIcon from "~/svg/ChevronRightIcon";
 import { MaterializeTheme } from "~/theme";
 import { formatCurrency } from "~/utils/format";
+
+import { baseCellStyles, resourceTypePaddingLeft } from "./constants";
+import { SafariSafeCollapse } from "./SpendBreakdown";
 
 type AccountClusterBreakdownProps = {
   breakdown: CostBreakdown | null;
@@ -30,6 +45,101 @@ function clusterTotal(amounts: { [priceId: string]: string }): number {
   );
 }
 
+function accountTotal(account: CostBreakdownAccount): number {
+  return account.clusters.reduce(
+    (sum, cluster) => sum + clusterTotal(cluster.amounts),
+    0,
+  );
+}
+
+/**
+ * Region-qualified label for a cluster row, e.g. "aws/us-east-1 / quickstart.r1"
+ * or "aws/us-east-1 / Storage" — mirroring the daily "Spend between …" table's
+ * `{region} / {resourceType}` format. Compute clusters carry a `cluster.replica`
+ * grouping key; storage/egress rows have an empty key (see interface.rs) and are
+ * surfaced as "Storage".
+ */
+function clusterLabel(cluster: CostBreakdownCluster): string {
+  return `${cluster.region} / ${cluster.cluster_grouping_key || "Storage"}`;
+}
+
+/**
+ * A single account rendered as a collapsible group, mirroring SpendBreakdown's
+ * `ResourceGroup`: the account is the always-visible parent row (caret + total)
+ * and its clusters are indented child rows revealed by the disclosure. Groups
+ * default open so the breakdown is visible without interaction.
+ */
+const AccountGroup = ({ account }: { account: CostBreakdownAccount }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const { isOpen, onToggle } = useDisclosure({ defaultIsOpen: true });
+
+  const groupHeaderStyles = {
+    ...baseCellStyles,
+    height: 16,
+    textStyle: "heading-xs",
+    borderBottom: 0,
+    borderTop: "1px solid",
+    borderColor: colors.border.secondary,
+  };
+
+  return (
+    <>
+      <Box
+        display="contents"
+        role="row"
+        onClick={onToggle}
+        cursor="pointer"
+        data-testid="account-row"
+      >
+        <Box {...groupHeaderStyles} role="cell">
+          <ChevronRightIcon
+            width="4"
+            height="4"
+            transform={`rotate(${isOpen ? 90 : 0}deg)`}
+            transition="all 0.1s"
+            marginRight="2"
+          />
+          {account.external_customer_id}
+        </Box>
+        <Box {...groupHeaderStyles} role="cell" justifyContent="end">
+          {formatCurrency(accountTotal(account))}
+        </Box>
+      </Box>
+      <SafariSafeCollapse
+        isCollapsed={!isOpen}
+        rowCount={account.clusters.length}
+      >
+        {account.clusters.map((cluster, ix) => {
+          const isLastElement = ix === account.clusters.length - 1;
+          const cellStyles = {
+            ...baseCellStyles,
+            borderColor: "transparent",
+            height: isLastElement ? 10 : baseCellStyles.height,
+            paddingBottom: isLastElement ? "8px" : "unset",
+          };
+          return (
+            <React.Fragment
+              key={`${cluster.environment_id}/${cluster.cluster_grouping_key}/${ix}`}
+            >
+              <Box
+                {...cellStyles}
+                paddingLeft={resourceTypePaddingLeft}
+                whiteSpace="nowrap"
+                role="cell"
+              >
+                {clusterLabel(cluster)}
+              </Box>
+              <Box {...cellStyles} role="cell" justifyContent="end">
+                {formatCurrency(clusterTotal(cluster.amounts))}
+              </Box>
+            </React.Fragment>
+          );
+        })}
+      </SafariSafeCollapse>
+    </>
+  );
+};
+
 /**
  * Per-account, per-cluster cost breakdown (Phase 1 / SAS-128). Augments the
  * existing daily chart: a parent org sees itself plus each child account, a
@@ -45,18 +155,12 @@ const AccountClusterBreakdown = ({
 }: AccountClusterBreakdownProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
-  const baseCellStyles = {
-    px: 4,
-    display: "flex",
-    alignItems: "center",
-    height: 10,
-    borderBottom: "1px solid",
-    borderColor: colors.border.secondary,
-  };
   const headerStyles = {
     ...baseCellStyles,
+    height: 10,
     textStyle: "text-ui-med",
     color: colors.foreground.secondary,
+    borderColor: colors.border.secondary,
   };
 
   return (
@@ -82,8 +186,8 @@ const AccountClusterBreakdown = ({
         <Grid
           gridTemplateColumns="minmax(250px, 1fr) minmax(120px, auto)"
           role="table"
-          borderTop="1px solid"
-          borderTopColor={colors.border.secondary}
+          borderBottom="1px solid"
+          borderBottomColor={colors.border.secondary}
         >
           <Box {...headerStyles} role="columnheader">
             Account / cluster
@@ -91,44 +195,12 @@ const AccountClusterBreakdown = ({
           <Box {...headerStyles} role="columnheader" justifyContent="end">
             Total cost
           </Box>
-          {breakdown.accounts.map((account) => {
-            const accountTotal = account.clusters.reduce(
-              (sum, cluster) => sum + clusterTotal(cluster.amounts),
-              0,
-            );
-            return (
-              <React.Fragment key={account.external_customer_id}>
-                <Box
-                  {...baseCellStyles}
-                  textStyle="heading-xs"
-                  role="cell"
-                  data-testid="account-row"
-                >
-                  {account.external_customer_id}
-                </Box>
-                <Box
-                  {...baseCellStyles}
-                  textStyle="heading-xs"
-                  role="cell"
-                  justifyContent="end"
-                >
-                  {formatCurrency(accountTotal)}
-                </Box>
-                {account.clusters.map((cluster, ix) => (
-                  <React.Fragment
-                    key={`${cluster.environment_id}/${cluster.cluster_grouping_key}/${ix}`}
-                  >
-                    <Box {...baseCellStyles} pl={10} role="cell">
-                      {cluster.cluster_grouping_key || cluster.environment_id}
-                    </Box>
-                    <Box {...baseCellStyles} role="cell" justifyContent="end">
-                      {formatCurrency(clusterTotal(cluster.amounts))}
-                    </Box>
-                  </React.Fragment>
-                ))}
-              </React.Fragment>
-            );
-          })}
+          {breakdown.accounts.map((account) => (
+            <AccountGroup
+              key={account.external_customer_id}
+              account={account}
+            />
+          ))}
         </Grid>
       )}
     </Box>

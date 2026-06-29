@@ -22,6 +22,23 @@ export const costUnits = {
   storage: "GB",
 } as { [key in DailyCostKey]: string };
 
+// Left padding for an indented child row in a spend table: the cell's own
+// padding, plus the caret width and the gap between caret and label, so child
+// labels line up just past the parent row's caret.
+export const resourceTypePaddingLeft = 4 + 4 + 2;
+
+// Shared cell layout for the spend tables (SpendBreakdown / AccountCluster
+// breakdown). Callers set `borderColor` for the contexts where the divider
+// should show.
+export const baseCellStyles = {
+  px: 4,
+  my: "auto",
+  display: "flex",
+  alignItems: "center",
+  height: 8,
+  borderBottom: "1px solid",
+};
+
 export const replicaSorts = new Map([
   // These are mapped to their corresponding centicredit value.
   // See: https://github.com/MaterializeInc/cloud/blob/main/doc/design/20231004_cluster_sizings.md
