@@ -7,17 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-const LISTENERS_CONFIG_VERSION_0_147_0: &str = "0.147.0";
-const LISTENERS_CONFIG_VERSION_26_32_0: &str = "26.32.0";
-
-/// The current listener config schema version.
-pub const LISTENERS_CONFIG_VERSION: &str = LISTENERS_CONFIG_VERSION_26_32_0;
 
 #[derive(
     Debug,
@@ -140,13 +133,28 @@ pub struct HttpRoutesEnabled {
     pub console_config: RouteGroup,
 }
 
-/// Configuration for network listeners.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ListenersConfig {
-    /// Schema version of the config.
-    pub version: String,
-    pub sql: BTreeMap<String, SqlListenerConfig>,
-    pub http: BTreeMap<String, HttpListenerConfig>,
+/// A listeners config tagged by its schema version.
+///
+/// `orchestratord` serializes the variant matching each `environmentd`'s
+/// version. serde writes the `version` tag into the JSON from each variant's
+/// `rename`, keeping the version string and the schema type it carries from
+/// drifting apart.
+///
+/// NOTE: `environmentd` does not deserialize this wrapper. It parses the
+/// concrete `v26_32_0::ListenersConfig` and ignores the `version` tag, so a
+/// schema it does not understand surfaces as a structural parse error, not as a
+/// variant mismatch here. The `orchestratord` version gate is what guarantees
+/// each `environmentd` is served a schema its binary can parse.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "version")]
+pub enum VersionedListenersConfig {
+    /// The legacy schema: a single `allowed_roles` per HTTP listener, with route
+    /// groups toggled by bools.
+    #[serde(rename = "0.147.0")]
+    V1(v0_147_0::ListenersConfig),
+    /// The current schema: `allowed_roles` carried per route group.
+    #[serde(rename = "26.32.0")]
+    V2(v26_32_0::ListenersConfig),
 }
 
 /// Base configuration used by both SQL and HTTP listeners.
@@ -215,6 +223,23 @@ impl ListenerConfig for HttpListenerConfig {
     }
 }
 
+/// The current listener config schema (v26.32.0): `allowed_roles` per route
+/// group.
+pub mod v26_32_0 {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Serialize};
+
+    use super::{HttpListenerConfig, SqlListenerConfig};
+
+    /// Configuration for network listeners.
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    pub struct ListenersConfig {
+        pub sql: BTreeMap<String, SqlListenerConfig>,
+        pub http: BTreeMap<String, HttpListenerConfig>,
+    }
+}
+
 /// The HTTP listener config schema introduced in v0.147.0.
 pub mod v0_147_0 {
     use std::collections::BTreeMap;
@@ -255,15 +280,14 @@ pub mod v0_147_0 {
     }
 }
 
-impl From<v0_147_0::ListenersConfig> for ListenersConfig {
+impl From<v0_147_0::ListenersConfig> for v26_32_0::ListenersConfig {
     fn from(legacy: v0_147_0::ListenersConfig) -> Self {
         let http = legacy
             .http
             .into_iter()
             .map(|(name, listener)| (name, listener.into()))
             .collect();
-        ListenersConfig {
-            version: LISTENERS_CONFIG_VERSION_0_147_0.to_string(),
+        v26_32_0::ListenersConfig {
             sql: legacy.sql,
             http,
         }
@@ -302,9 +326,11 @@ impl From<v0_147_0::HttpListenerConfig> for HttpListenerConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
-    fn parse(json: &str) -> ListenersConfig {
+    fn parse(json: &str) -> v26_32_0::ListenersConfig {
         serde_json::from_reader(json.as_bytes()).expect("valid listeners config")
     }
 
@@ -337,8 +363,7 @@ mod tests {
                 },
             )]),
         };
-        let migrated: ListenersConfig = legacy.into();
-        assert_eq!(migrated.version, LISTENERS_CONFIG_VERSION_0_147_0);
+        let migrated: v26_32_0::ListenersConfig = legacy.into();
         let routes = migrated.http["external"].routes;
         assert_eq!(
             routes.base,
@@ -403,7 +428,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn round_trips_through_serialize() {
+    fn v26_32_0_schema_round_trip_serialization() {
         let json = r#"{
             "version": "26.32.0",
             "sql": {},
@@ -426,14 +451,75 @@ mod tests {
             }
         }"#;
         let config = parse(json);
-        // `version` is a field, so a serialize/parse cycle round-trips it along
-        // with the rest of the config.
-        let serialized = serde_json::to_string(&config).expect("serializes");
-        let reparsed = parse(&serialized);
-        assert_eq!(config.version, reparsed.version);
-        assert_eq!(
-            config.http["external"].routes,
-            reparsed.http["external"].routes
+        let serialized =
+            serde_json::to_string(&VersionedListenersConfig::V2(config)).expect("serializes");
+        assert!(
+            serialized.contains(r#""version":"26.32.0""#),
+            "missing version tag: {serialized}"
         );
+
+        let VersionedListenersConfig::V2(reparsed) =
+            serde_json::from_str(&serialized).expect("re-parses")
+        else {
+            panic!("the `version` tag selected the wrong variant");
+        };
+        // base and internal survive the serialization roundtrip
+        assert_eq!(
+            reparsed.http["external"].routes.base,
+            RouteGroup::Enabled(AllowedRoles::Normal)
+        );
+        assert_eq!(
+            reparsed.http["external"].routes.internal,
+            RouteGroup::Enabled(AllowedRoles::Internal)
+        );
+    }
+
+    #[mz_ore::test]
+    fn v0_147_0_schema_round_trip_serialization() {
+        // The legacy variant nests a `#[serde(flatten)]` (the `base` field in
+        // `v0_147_0::HttpListenerConfig`) inside the internally-tagged enum.
+        // Guard that this round-trips and that serializing stamps the legacy tag.
+        let legacy = v0_147_0::ListenersConfig {
+            sql: BTreeMap::new(),
+            http: BTreeMap::from([(
+                "external".to_string(),
+                v0_147_0::HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: "0.0.0.0:6876".parse().expect("addr"),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: v0_147_0::HttpRoutes {
+                        base: true,
+                        webhook: false,
+                        internal: true,
+                        metrics: false,
+                        profiling: false,
+                        mcp_agent: false,
+                        mcp_developer: false,
+                        console_config: false,
+                    },
+                },
+            )]),
+        };
+        let serialized =
+            serde_json::to_string(&VersionedListenersConfig::V1(legacy)).expect("serializes");
+        assert!(
+            serialized.contains(r#""version":"0.147.0""#),
+            "missing legacy version tag: {serialized}"
+        );
+
+        let VersionedListenersConfig::V1(reparsed) =
+            serde_json::from_str(&serialized).expect("re-parses")
+        else {
+            panic!("the `version` tag selected the wrong variant");
+        };
+        // The flattened `base` fields survive the round trip.
+        assert_eq!(
+            reparsed.http["external"].base.allowed_roles,
+            AllowedRoles::NormalAndInternal
+        );
+        assert!(reparsed.http["external"].routes.internal);
     }
 }

@@ -55,9 +55,9 @@ use mz_postgres_util::{
     Sql, batch_execute as pg_batch_execute, execute as pg_execute, query_one as pg_query_one, sql,
 };
 use mz_secrets::SecretsController;
+use mz_server_core::listeners::v26_32_0::ListenersConfig;
 use mz_server_core::listeners::{
-    AllowedRoles, AuthenticatorKind, HttpListenerConfig, HttpRoutesEnabled,
-    LISTENERS_CONFIG_VERSION, ListenersConfig, RouteGroup,
+    AllowedRoles, AuthenticatorKind, HttpListenerConfig, HttpRoutesEnabled, RouteGroup,
 };
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
@@ -142,7 +142,6 @@ impl Default for TestHarness {
             frontegg: None,
             external_login_password_mz_system: None,
             listeners_config: ListenersConfig {
-                version: LISTENERS_CONFIG_VERSION.to_string(),
                 sql: btreemap![
                     "external".to_owned() => SqlListenerConfig {
                         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -316,7 +315,6 @@ impl TestHarness {
         self.frontegg = Some(frontegg.clone());
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
-            version: LISTENERS_CONFIG_VERSION.to_string(),
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -376,7 +374,6 @@ impl TestHarness {
     ) -> Self {
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
-            version: LISTENERS_CONFIG_VERSION.to_string(),
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -457,7 +454,6 @@ impl TestHarness {
         self.external_login_password_mz_system = Some(mz_system_password);
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
-            version: LISTENERS_CONFIG_VERSION.to_string(),
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -506,7 +502,6 @@ impl TestHarness {
         self.external_login_password_mz_system = Some(mz_system_password);
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
-            version: LISTENERS_CONFIG_VERSION.to_string(),
             sql: btreemap! {
                 "external".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

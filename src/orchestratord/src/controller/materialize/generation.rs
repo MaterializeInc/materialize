@@ -29,8 +29,8 @@ use k8s_openapi::{
 use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
 use mz_server_core::listeners::{
-    AllowedRoles, AuthenticatorKind, BaseListenerConfig, LISTENERS_CONFIG_VERSION, ListenersConfig,
-    RouteGroup, SqlListenerConfig, v0_147_0,
+    AllowedRoles, AuthenticatorKind, BaseListenerConfig, RouteGroup, SqlListenerConfig,
+    VersionedListenersConfig, v0_147_0, v26_32_0,
 };
 use reqwest::{Client as HttpClient, StatusCode};
 use semver::{BuildMetadata, Prerelease, Version};
@@ -82,8 +82,8 @@ static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
 });
 
 /// Version at which HTTP listeners moved `allowed_roles` to be per route group
-/// (the `ListenersConfig` schema). Older `environmentd` parses the legacy
-/// `v0_147_0::ListenersConfig` schema, so we serve that to them.
+/// (the `v26_32_0::ListenersConfig` schema). Older `environmentd` parses the
+/// legacy `v0_147_0::ListenersConfig` schema, so we serve that to them.
 static PER_ROUTE_GROUP_ROLES_VERSION: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 32,
@@ -1457,10 +1457,7 @@ fn create_connection_info(
         // The main difference is instead of having a single `allowed_roles` property in the HTTP listener
         // for all route groups, we now have a per-route group `allowed_roles` property. The migration cascades
         // the top level `allowed_roles` into every route group.
-        let mut listeners_config: ListenersConfig = listeners_config.into();
-        // The migration stamps the legacy version; we are serving the current
-        // schema, so re-stamp it.
-        listeners_config.version = LISTENERS_CONFIG_VERSION.to_string();
+        let mut listeners_config: v26_32_0::ListenersConfig = listeners_config.into();
         // The sole reason for the new `ListenersConfig` schema is because for password/oidc/sasl
         // authentication, we were allowing normal roles to access internal and profiling routes
         // since we now have a single listener for both external and internal traffic. However we
@@ -1478,9 +1475,9 @@ fn create_connection_info(
             });
         }
 
-        serde_json::to_string(&listeners_config).expect("known valid")
+        serde_json::to_string(&VersionedListenersConfig::V2(listeners_config)).expect("known valid")
     } else {
-        serde_json::to_string(&listeners_config).expect("known valid")
+        serde_json::to_string(&VersionedListenersConfig::V1(listeners_config)).expect("known valid")
     };
     let listeners_configmap = ConfigMap {
         binary_data: None,

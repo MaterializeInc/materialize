@@ -58,9 +58,8 @@ use mz_pgwire::MetricsConfig;
 use mz_pgwire_common::ConnectionCounter;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
-use mz_server_core::listeners::{
-    HttpListenerConfig, ListenerConfig, ListenersConfig, SqlListenerConfig,
-};
+use mz_server_core::listeners::v26_32_0::ListenersConfig;
+use mz_server_core::listeners::{HttpListenerConfig, ListenerConfig, SqlListenerConfig};
 use mz_server_core::{
     ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext, ServeConfig,
     TlsCertConfig, TlsMode,
