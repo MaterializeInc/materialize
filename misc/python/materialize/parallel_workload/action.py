@@ -1701,6 +1701,7 @@ class FlipFlagsAction(Action):
             "memory_limiter_interval",
             "memory_limiter_usage_bias",
             "memory_limiter_burst_factor",
+            "memory_limiter_enforce",
             "enable_columnation_lgalloc",
             "enable_columnar_lgalloc",
             "catalog_info_metrics_reconcile_interval",
