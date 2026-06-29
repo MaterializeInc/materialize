@@ -379,6 +379,94 @@ mod tests {
             }
         }
     }
+
+    /// A batch built via the builder's `push`/`done` path (as the `reduce` operator
+    /// does) that stays under `STATS_THRESHOLD` never installs a codec at build time.
+    /// `done` now promotes the gathered statistics into the codec slot, so the batch
+    /// carries a codec + heavy-hitter summary and does not poison a later merge.
+    ///
+    /// This drives that container lifecycle directly: gather raw (well under the
+    /// threshold), promote at "done", then merge two such containers the way a spine
+    /// compaction does. With promotion the merge takes the `new_from` path and
+    /// compresses; without it both inputs are codec-less and the merge stays raw.
+    /// Every merged row must still round-trip.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts in row decoding are unsupported under miri
+    fn push_done_promotion_avoids_merge_poison() {
+        use std::sync::atomic::Ordering;
+        use timely::container::PushInto;
+
+        // Gate the dictionary path on. Safe for other tests: the flag only controls
+        // whether `DatumContainer` gathers stats; it never changes decode results.
+        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+
+        // Low-cardinality rows, well under `STATS_THRESHOLD` (64Ki): a repeated
+        // multi-byte string the dictionary compresses, plus an integer column that
+        // exercises raw fall-through.
+        let rows: Vec<Row> = (0..2_000i64)
+            .map(|i| {
+                Row::pack_slice(&[
+                    Datum::Int64(i % 8),
+                    Datum::String("a repeated string value"),
+                ])
+            })
+            .collect();
+
+        // Build a container the way the push/done path does: gather raw without ever
+        // crossing `STATS_THRESHOLD`, optionally promoting at "done".
+        let build = |promote: bool| {
+            let mut c = DatumContainer::with_capacity(rows.len());
+            for row in &rows {
+                c.push_into(row);
+            }
+            if promote {
+                c.promote_stats_to_codec();
+            }
+            c
+        };
+
+        // Merge two containers as a spine compaction does: allocate via
+        // `merge_capacity`, then copy every row through.
+        let merge = |a: &DatumContainer, b: &DatumContainer| {
+            let mut m = DatumContainer::merge_capacity(a, b);
+            for i in 0..a.len() {
+                m.push_into(a.index(i));
+            }
+            for i in 0..b.len() {
+                m.push_into(b.index(i));
+            }
+            m
+        };
+
+        let heap = |c: &DatumContainer| {
+            let mut size = 0;
+            c.heap_size(|_, cap| size += cap);
+            size
+        };
+
+        // Codec-less inputs (no promotion): the merge cannot `new_from` and stays raw.
+        let poisoned = merge(&build(false), &build(false));
+        // Promoted inputs carry a codec + summary: the merge `new_from`s and compresses.
+        let compressed = merge(&build(true), &build(true));
+
+        // Round-trip: every merged row decodes back to the corresponding input row
+        // (the merge here concatenates a's rows then b's rows, no consolidation).
+        assert_eq!(compressed.len(), rows.len() * 2);
+        for i in 0..compressed.len() {
+            let got = compressed.index(i).collect::<Vec<_>>();
+            let want = rows[i % rows.len()].iter().collect::<Vec<_>>();
+            assert_eq!(got, want, "merged row {i} round-trips");
+        }
+
+        // The promoted merge must actually compress relative to the poisoned one,
+        // confirming promotion carried a usable summary into `new_from`.
+        assert!(
+            heap(&compressed) < heap(&poisoned),
+            "promotion should let the merge compress: compressed={} poisoned={}",
+            heap(&compressed),
+            heap(&poisoned),
+        );
+    }
 }
 
 /// A `[u8]`-specialized container.
@@ -838,7 +926,17 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+                // The push/done build path (e.g. the `reduce` operator, which builds
+                // batches with `Builder::new()` + `push` + `done` rather than `seal`)
+                // never runs `seal`'s codec install. Install a codec here from the
+                // statistics gathered during `push`, mirroring `seal` — but without
+                // building a dictionary or re-encoding the rows; see
+                // `DatumContainer::promote_stats_to_codec` for why a codec-less batch
+                // must be avoided even though its rows stay raw.
+                let mut inner = self.inner;
+                inner.result.keys.promote_stats_to_codec();
+                inner.result.vals.vals.promote_stats_to_codec();
+                inner.done(description)
             }
             fn seal(
                 chain: &mut Vec<Self::Input>,
@@ -905,7 +1003,11 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+                // See `RowRowBuilder::done`: install a codec on the `Row`-shaped key
+                // container for the push/done (e.g. `reduce`) path that skips `seal`.
+                let mut inner = self.inner;
+                inner.result.keys.promote_stats_to_codec();
+                inner.done(description)
             }
             fn seal(
                 chain: &mut Vec<Self::Input>,
@@ -959,7 +1061,11 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+                // See `RowRowBuilder::done`: install a codec on the `Row`-shaped key
+                // container for the push/done (e.g. `reduce`) path that skips `seal`.
+                let mut inner = self.inner;
+                inner.result.keys.promote_stats_to_codec();
+                inner.done(description)
             }
             fn seal(
                 chain: &mut Vec<Self::Input>,
@@ -1020,7 +1126,11 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+                // See `RowRowBuilder::done`: install a codec on the `Row`-shaped value
+                // container for the push/done (e.g. `reduce`) path that skips `seal`.
+                let mut inner = self.inner;
+                inner.result.vals.vals.promote_stats_to_codec();
+                inner.done(description)
             }
             fn seal(
                 chain: &mut Vec<Self::Input>,
@@ -1335,6 +1445,35 @@ mod dictionary {
             }
             if let Some(stats) = &self.stats {
                 stats.heap_size(&mut callback);
+            }
+        }
+
+        /// Promote a gathered-but-uninstalled statistics summary into the codec slot.
+        ///
+        /// A container filled via the builder's `push`/`done` path — as the `reduce`
+        /// operator does, building batches with `Builder::new()` + `push` + `done`
+        /// rather than `seal` — gathers statistics on every push but never reaches
+        /// `seal`'s codec install, and only crosses the mid-formation
+        /// `STATS_THRESHOLD` install if it grows past it. A smaller such container
+        /// would otherwise be finalized with no codec at all, even with the flag on.
+        ///
+        /// That is a problem not because this batch needs compressing — its rows are
+        /// already stored raw and we deliberately do *not* re-encode them here — but
+        /// because a codec-less batch poisons future merges: [`Self::merge_capacity`]
+        /// keys off the presence of a codec, so a codec-less input forces the merged
+        /// container onto the uncompressed path. Moving the gathered statistics into
+        /// the codec slot leaves the batch carrying a codec whose retained heavy-hitter
+        /// summary a later merge can rebuild from via `ColumnsCodec::new_from`, while
+        /// installing no dictionary: the empty `decode` map resolves every stored
+        /// (raw) column through the literal-datum fall-through, so reads stay correct.
+        ///
+        /// We move the summary as-is rather than building a dictionary via `new_safe`
+        /// / `new_from` (which reset the summary): unlike `seal` and the mid-formation
+        /// install, `done` has no further rows to re-observe, so a reset summary would
+        /// leave the eventual merge nothing to rebuild from.
+        pub(crate) fn promote_stats_to_codec(&mut self) {
+            if self.codec.is_none() {
+                self.codec = self.stats.take();
             }
         }
     }
