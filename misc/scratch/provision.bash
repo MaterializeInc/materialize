@@ -16,9 +16,12 @@ set -euo pipefail
 
 ARCH=$(uname -m)
 ARCH_GO=$(echo "$ARCH" | sed -e "s/aarch64/arm64/" -e "s/x86_64/amd64/")
-DOCKER_VERSION=29.1.3
-DOCKER_COMPOSE_VERSION=2.37.3
-NODE_VERSION=22.22.1
+# Keep these in sync with ci/builder/Dockerfile so scratch matches CI. Docker
+# itself is unpinned there (it uses the distro docker.io); we stay on the 28
+# line until moby#51845 is fixed (Docker 29 is unstable).
+DOCKER_VERSION=28.5.2
+DOCKER_COMPOSE_VERSION=5.0.1
+NODE_VERSION=24.16.0
 NODE_ARCH=$(echo "$ARCH" | sed -e "s/aarch64/arm64/" -e "s/x86_64/x64/")
 
 # Everything runs in parallel — no serial APT bottleneck.
@@ -64,13 +67,6 @@ apt-get install -y -qq --no-install-recommends \
     screen \
     unzip) &
 
-# Update ec2-instance-connect scripts to a version that works with OpenSSL 3.
-# https://github.com/aws/aws-ec2-instance-connect-config/issues/38
-(curl -fsSL "https://github.com/aws/aws-ec2-instance-connect-config/archive/refs/tags/1.1.17.zip" -o /tmp/ec2-ic.zip
-unzip -q -o /tmp/ec2-ic.zip -d /tmp
-cp /tmp/aws-ec2-instance-connect-config-1.1.17/src/bin/* /usr/share/ec2-instance-connect/
-rm -rf /tmp/ec2-ic.zip /tmp/aws-ec2-instance-connect-config-1.1.17) &
-
 # Rust
 (sudo -u ubuntu sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y" >/dev/null 2>&1) &
 
@@ -83,7 +79,9 @@ rm -rf /tmp/awscli.zip /tmp/aws) &
 # uv
 (curl -fsSL https://astral.sh/uv/install.sh | sudo -u ubuntu sh >/dev/null 2>&1) &
 
-# kubectl + kind + k9s
+# kubectl + kind + k9s. kind and kubectl mirror ci/builder/Dockerfile, which
+# deliberately holds them back: newer versions break Cloudtest (minio fails to
+# come up on the kind cluster).
 (curl -fsSL "https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl" -o /usr/local/bin/kubectl
 chmod +x /usr/local/bin/kubectl) &
 (curl -fsSL "https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-$ARCH_GO" -o /usr/local/bin/kind

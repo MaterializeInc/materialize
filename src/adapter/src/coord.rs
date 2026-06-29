@@ -92,7 +92,8 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterC
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
-    USER_ID_POOL_BATCH_SIZE, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
+    ENABLE_SCOPED_SYSTEM_PARAMETERS, USER_ID_POOL_BATCH_SIZE,
+    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
@@ -117,6 +118,7 @@ use mz_controller::clusters::{
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
+use mz_dyncfg::{ConfigUpdates, ParameterScope};
 use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
@@ -138,7 +140,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlRelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -172,7 +174,7 @@ use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OwnedMutexGuard, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -182,7 +184,10 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
-use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
+use crate::config::{
+    ClusterEvalContext, ReplicaEvalContext, ScopedParameters, ScopedParametersScope,
+    SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig,
+};
 use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit, PendingWriteTxn,
 };
@@ -229,6 +234,7 @@ mod command_handler;
 mod ddl;
 pub(crate) mod group_sync;
 mod indexes;
+mod info_metrics;
 mod introspection;
 mod message_handler;
 mod privatelink_status;
@@ -434,6 +440,12 @@ impl Message {
                 Command::GetWebhook { .. } => "command-get_webhook",
                 Command::GetSystemVars { .. } => "command-get_system_vars",
                 Command::SetSystemVars { .. } => "command-set_system_vars",
+                Command::UpdateScopedSystemParameters { .. } => {
+                    "command-update_scoped_system_parameters"
+                }
+                Command::InstallScopedSystemParameterFrontend { .. } => {
+                    "command-install_scoped_system_parameter_frontend"
+                }
                 Command::Terminate { .. } => "command-terminate",
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
@@ -1700,6 +1712,7 @@ impl ClusterReplicaStatuses {
             .map(|process_id| {
                 let status = ClusterReplicaProcessStatus {
                     status: ClusterStatus::Offline(Some(OfflineReason::Initializing)),
+                    restart_count: 0,
                     time: time.clone(),
                 };
                 (u64::cast_from(process_id), status)
@@ -1852,6 +1865,11 @@ pub struct Coordinator {
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
 
+    /// Signals that pending strict serializable reads should be re-checked
+    /// because the timestamp oracle may have advanced. Awaited below group commit
+    /// in [`Coordinator::serve`]; see that branch for the ordering rationale.
+    linearize_reads_notify: Arc<Notify>,
+
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
     global_timelines: BTreeMap<Timeline, TimelineState>,
@@ -1978,6 +1996,20 @@ pub struct Coordinator {
     /// Only used during 0dt deployment, while in read-only mode.
     caught_up_check: Option<CaughtUpCheckContext>,
 
+    /// The metrics registry, handed to the catalog info-metrics background task
+    /// so it can register and own its `*_info` series.
+    catalog_info_metrics_registry: MetricsRegistry,
+
+    /// The shared system-parameter frontend, installed by the sync loop once it
+    /// initializes (and re-installed on reconnect). `None` until then, for
+    /// example before LaunchDarkly connects, where a newly-created object
+    /// resolves to the environment-wide value (the cold-cache fallback). Used to
+    /// resolve a new cluster's or replica's scoped overrides synchronously at
+    /// create time, so its first plan or first controller configuration is
+    /// correct rather than waiting for the next sync tick. See the scoped
+    /// feature flags design.
+    scoped_frontend: Option<Arc<SystemParameterFrontend>>,
+
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
 
@@ -2008,6 +2040,209 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
+    /// Persists the scoped system-parameter working copy and reconciles it into
+    /// the per-scope resolution boundaries.
+    ///
+    /// The system-parameter sync loop and the create-time fold
+    /// (`scoped_overrides_create_op`, folded into the create transaction) are the
+    /// only writers, both serialized on the coordinator loop. The diff is
+    /// persisted to the
+    /// durable cache (so values survive an `environmentd` restart and an LD
+    /// outage) via `Op::UpdateScopedSystemParameters`, which also updates the
+    /// in-memory working copy in [`CatalogState`] and the
+    /// `mz_cluster_system_parameters` / `mz_replica_system_parameters`
+    /// introspection relations. The `replica`-scoped overrides reach the compute
+    /// controller's per-replica dyncfg layer through the catalog implication for
+    /// the persisted change. The `cluster`-scoped layer is resolved at plan time
+    /// via [`CatalogState::cluster_scoped_optimizer_overrides`].
+    ///
+    /// [`CatalogState`]: crate::catalog::CatalogState
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`]: crate::catalog::CatalogState::cluster_scoped_optimizer_overrides
+    pub(crate) async fn reconcile_scoped_system_parameters(
+        &mut self,
+        scoped: ScopedParameters,
+        prune_scope: Option<ScopedParametersScope>,
+    ) {
+        // Nothing changed: skip the durable write. This is the common case on
+        // most sync ticks.
+        if self.catalog().state().scoped_system_parameters() == &scoped {
+            return;
+        }
+
+        // Persist the diff and update the in-memory working copy + introspection
+        // through the catalog transaction, serialized on the coordinator loop
+        // with the create-time fold. The replica-scoped
+        // controller push is derived from this transaction's diff by the catalog
+        // implication. `prune_scope` bounds removals to the evaluated objects, so
+        // a concurrently-created object's override is not wiped. Best-effort: a
+        // failure here is logged and retried on the next sync tick.
+        if let Err(e) = self
+            .catalog_transact(
+                None,
+                vec![crate::catalog::Op::UpdateScopedSystemParameters {
+                    scoped,
+                    prune_scope,
+                }],
+            )
+            .await
+        {
+            tracing::warn!("failed to persist scoped system parameters: {e}");
+        }
+    }
+
+    /// Evaluates the scoped overrides for freshly-created objects from explicit
+    /// eval contexts and returns an [`Op::UpdateScopedSystemParameters`] to fold
+    /// into the same transaction that creates them.
+    ///
+    /// The objects are not yet in the catalog, so the contexts are built from
+    /// plan data and pre-allocated ids. Folding the op into the create
+    /// transaction makes its committed diff drive the replica-scoped controller
+    /// push, as a catalog implication, before `create_replica`. A new replica's
+    /// first configuration then carries its overrides rather than the env-wide
+    /// values. Render-frozen flags (e.g. the column-paged batcher, chosen at
+    /// arrangement-build time) make a later push too late, which is why this
+    /// happens in the create transaction rather than the next sync tick.
+    ///
+    /// Returns `None` when the feature is gated off, the shared frontend is not
+    /// yet installed (e.g. before LaunchDarkly connects), or no override
+    /// applies. The new objects then resolve to the environment-wide value, and
+    /// the periodic sync loop remains the authoritative full-state reconciler.
+    ///
+    /// [`Op::UpdateScopedSystemParameters`]: crate::catalog::Op::UpdateScopedSystemParameters
+    fn scoped_overrides_create_op(
+        &self,
+        clusters: &[ClusterEvalContext],
+        replicas: &[ReplicaEvalContext],
+    ) -> Option<crate::catalog::Op> {
+        let frontend = self.scoped_frontend.clone()?;
+        let catalog = self.catalog();
+        let system_config = catalog.system_config();
+        if !ENABLE_SCOPED_SYSTEM_PARAMETERS.get(system_config.dyncfgs()) {
+            return None;
+        }
+
+        // Partition the synced parameters by scope class, as the sync loop does,
+        // so we evaluate exactly the flags in use at each scope.
+        let replica_param_names: Vec<&'static str> = system_config
+            .iter_synced()
+            .filter(|var| var.scope() == ParameterScope::Replica)
+            .map(|var| var.name())
+            .collect();
+        let cluster_param_names: Vec<&'static str> = system_config
+            .iter_synced()
+            .filter(|var| var.scope() == ParameterScope::Cluster)
+            .map(|var| var.name())
+            .collect();
+
+        let params = SynchronizedParameters::new(system_config.clone());
+        let mut evaluated = ScopedParameters::default();
+        if !cluster_param_names.is_empty() && !clusters.is_empty() {
+            evaluated.cluster =
+                frontend.pull_cluster_overrides(&params, &cluster_param_names, clusters);
+        }
+        if !replica_param_names.is_empty() && !replicas.is_empty() {
+            evaluated.replica =
+                frontend.pull_replica_overrides(&params, &replica_param_names, replicas);
+        }
+        if evaluated.is_empty() {
+            return None;
+        }
+
+        // Prune only within the objects being created. They have no prior rows,
+        // so nothing is removed, and this op never touches another object whose
+        // override a concurrent reconcile may be writing.
+        let prune_scope = ScopedParametersScope {
+            clusters: clusters.iter().map(|cluster| cluster.cluster_id).collect(),
+            replicas: replicas.iter().map(|replica| replica.replica_id).collect(),
+        };
+        Some(crate::catalog::Op::UpdateScopedSystemParameters {
+            scoped: evaluated,
+            prune_scope: Some(prune_scope),
+        })
+    }
+
+    /// Resolves the replica-local scoped overrides from the catalog working copy
+    /// into the compute controller's per-replica dyncfg layer, then re-pushes
+    /// the environment-wide compute configuration so replicas observe the new
+    /// values. Driven by the catalog implication for replica-scoped
+    /// configuration changes, and called once on bootstrap.
+    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
+        // Clone the (sparse) replica overrides so we don't hold a catalog borrow
+        // across the mutable controller calls below.
+        let replica_overrides = self
+            .catalog()
+            .state()
+            .scoped_system_parameters()
+            .replica
+            .clone();
+
+        let dyncfgs = self.catalog().system_config().dyncfgs();
+        let mut instance_overrides: BTreeMap<
+            ComputeInstanceId,
+            BTreeMap<ReplicaId, ConfigUpdates>,
+        > = BTreeMap::new();
+        for cluster in self.catalog().clusters() {
+            for replica in cluster.replicas() {
+                let Some(values) = replica_overrides.get(&replica.replica_id) else {
+                    continue;
+                };
+                let mut updates = ConfigUpdates::default();
+                for (name, value) in values {
+                    let Some(entry) = dyncfgs.entry(name) else {
+                        // A replica-local parameter that is not a dyncfg has no
+                        // per-replica realization, so skip it.
+                        continue;
+                    };
+                    match entry.parse_val(value) {
+                        Ok(val) => updates.add_dynamic(name, val),
+                        Err(e) => {
+                            tracing::warn!(%name, %value, "cannot parse scoped override: {e}")
+                        }
+                    }
+                }
+                if !updates.updates.is_empty() {
+                    instance_overrides
+                        .entry(cluster.id)
+                        .or_default()
+                        .insert(replica.replica_id, updates);
+                }
+            }
+        }
+
+        // Only the compute controller's per-replica dyncfg layer is pushed, but on
+        // `clusterd` that also reaches storage. Compute and storage share one
+        // process, and the compute worker's `handle_update_configuration` applies
+        // the pushed dyncfg updates both to compute's own worker `ConfigSet` and to
+        // the shared persist client `ConfigSet` (`persist_clients.cfg()`) that the
+        // co-located storage server reads from the same `Arc`. So persist-backed and
+        // process-global replica-local configs such as the persist pager, LZ4,
+        // persist client tuning, and `lgalloc` take effect on storage too. The only
+        // gap would be a future `Replica`-scoped config realized solely in the
+        // storage worker's own `ConfigSet`, of which none exists today.
+        self.controller
+            .compute
+            .update_replica_dyncfg_overrides(instance_overrides);
+        // Re-push the env-wide compute config so existing replicas pick up their
+        // (possibly changed) overrides. This also reverts a removed override: the
+        // per-replica layer no longer carries the key, so the replica falls back
+        // to the env-wide value, which `compute_config` always includes because it
+        // renders the full dyncfg set.
+        let compute_config = crate::flags::compute_config(self.catalog().system_config());
+        self.controller.compute.update_configuration(compute_config);
+    }
+
+    /// Returns the cluster-coherent scoped optimizer-feature overrides for
+    /// `cluster_id`. See
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`](crate::catalog::CatalogState::cluster_scoped_optimizer_overrides).
+    pub(crate) fn cluster_scoped_optimizer_overrides(
+        &self,
+        cluster_id: ClusterId,
+    ) -> OptimizerFeatureOverrides {
+        self.catalog()
+            .state()
+            .cluster_scoped_optimizer_overrides(cluster_id)
+    }
+
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
@@ -2126,6 +2361,19 @@ impl Coordinator {
                 )?;
             }
         }
+
+        // Now that the compute instances and their replicas exist, push the
+        // replica-local scoped overrides into the compute controller so existing
+        // replicas observe them at startup. The scoped (per-cluster and
+        // per-replica) working copy was restored from the durable cache into
+        // `CatalogState` while opening the catalog, so the last-known values are
+        // in effect before the first parameter sync and through a sync outage.
+        // This must run after the creation loop above: the push iterates the
+        // controller's instances, so before they exist it is a no-op. It also
+        // runs before dataflows are rendered later in bootstrap, so render-frozen
+        // replica flags take effect. The cluster-coherent layer is read at plan
+        // time.
+        self.push_replica_dyncfg_overrides();
 
         info!(
             "startup: coordinator init: bootstrap: preamble complete in {:?}",
@@ -3209,7 +3457,15 @@ impl Coordinator {
         let optimizer_config = |catalog: &Catalog, cluster_id| {
             let system_config = catalog.system_config();
             let overrides = catalog.get_cluster(cluster_id).config.features();
-            OptimizerConfig::from(system_config).override_from(&overrides)
+            OptimizerConfig::from(system_config)
+                .override_from(&overrides)
+                // A cluster-scoped LaunchDarkly rule beats a manual `FEATURES`
+                // pin.
+                .override_from(
+                    &catalog
+                        .state()
+                        .cluster_scoped_optimizer_overrides(cluster_id),
+                )
         };
 
         for entry in ordered_catalog_entries {
@@ -3553,6 +3809,7 @@ impl Coordinator {
             self.schedule_arrangement_sizes_collection().await;
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
+            self.spawn_catalog_info_metrics_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -3567,6 +3824,16 @@ impl Coordinator {
             let mut cmd_messages = Vec::with_capacity(MESSAGE_BATCH);
 
             let message_batch = self.metrics.message_batch.clone();
+
+            // A persisted `Notified` future for the linearize re-check signal.
+            // It must outlive a single loop iteration and be re-`set` only after
+            // it completes: a fresh `notified()` per iteration could drop a
+            // wakeup that arrives while a higher-priority branch wins the same
+            // poll, stranding pending reads. Keeping it pinned across iterations
+            // leaves it registered, so no wakeup is lost.
+            let linearize_reads_notify = Arc::clone(&self.linearize_reads_notify);
+            let linearize_reads_notified = linearize_reads_notify.notified();
+            tokio::pin!(linearize_reads_notified);
 
             loop {
                 // Before adding a branch to this select loop, please ensure that the branch is
@@ -3677,6 +3944,20 @@ impl Coordinator {
                             messages.push(Message::GroupCommitInitiate(span, None));
                         }
                     },
+                    // Re-check pending strict serializable reads. Deliberately
+                    // placed below the group commit branches above: a re-check
+                    // only makes a read ready if the timestamp oracle has
+                    // advanced, and the oracle only advances via group commit, so
+                    // this must never win over (and thereby starve) group commit.
+                    // `Notify` coalesces re-arms into a single wakeup, so even
+                    // when a pending read sits just behind the oracle (re-armed
+                    // sub-millisecond), the lower branches (including the idle
+                    // watchdog) stay reachable. See the pin above for why the
+                    // future is persisted rather than recreated per iteration.
+                    () = linearize_reads_notified.as_mut() => {
+                        linearize_reads_notified.set(linearize_reads_notify.notified());
+                        messages.push(Message::LinearizeReads);
+                    }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
@@ -4615,6 +4896,7 @@ pub fn serve(
                 CaughtUpCheckContext {
                     trigger,
                     exclude_collections,
+                    cluster_stability: BTreeMap::new(),
                 }
             });
 
@@ -4702,6 +4984,7 @@ pub fn serve(
                     internal_cmd_tx,
                     group_commit_tx,
                     strict_serializable_reads_tx,
+                    linearize_reads_notify: Arc::new(Notify::new()),
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),
@@ -4726,6 +5009,8 @@ pub fn serve(
                     storage_usage_collection_interval,
                     segment_client,
                     metrics,
+                    catalog_info_metrics_registry: metrics_registry.clone(),
+                    scoped_frontend: None,
                     optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),

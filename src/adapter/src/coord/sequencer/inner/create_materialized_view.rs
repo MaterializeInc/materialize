@@ -249,6 +249,7 @@ impl Coordinator {
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(view.cluster_id))
             .override_from(&config.features);
 
         let cardinality_stats = BTreeMap::new();
@@ -366,7 +367,7 @@ impl Coordinator {
         // stages instead of panicking later when the persisted SQL is
         // re-parsed during catalog application.
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             resolved_ids.items().copied().collect(),
             Some(*cluster_id),
             *target_replica,
@@ -453,6 +454,7 @@ impl Coordinator {
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(*cluster_id))
             .override_from(&explain_ctx);
         let optimizer_features = optimizer_config.features.clone();
 
@@ -964,6 +966,7 @@ impl Coordinator {
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
             .override_from(&config.features);
 
         let rows = optimizer_trace

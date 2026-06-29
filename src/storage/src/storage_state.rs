@@ -1070,7 +1070,12 @@ impl<'w> Worker<'w> {
                     }
                 }
                 StorageCommand::RunOneshotIngestion(ingestion) => {
-                    info!(%worker_id, ?ingestion, "reconcile: received RunOneshotIngestion command");
+                    info!(
+                        %worker_id,
+                        ingestion_id = %ingestion.ingestion_id,
+                        collection_id = %ingestion.collection_id,
+                        "reconcile: received RunOneshotIngestion command",
+                    );
                     create_oneshot_ingestions.insert(ingestion.ingestion_id);
                 }
                 StorageCommand::CancelOneshotIngestion(uuid) => {

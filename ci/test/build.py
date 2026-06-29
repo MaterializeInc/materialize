@@ -12,6 +12,7 @@
 import os
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from materialize import mzbuild, spawn, ui
@@ -27,6 +28,10 @@ from materialize.mzbuild import (
 )
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
+
+
+class ImagesNotPublicError(Exception):
+    """Raised when one or more built images are not public on Docker Hub/GHCR."""
 
 
 def main() -> None:
@@ -46,7 +51,22 @@ def main() -> None:
         # so they are accessible to other build agents.
         print("--- Acquiring mzbuild images")
         deps = repo.resolve_dependencies(image for image in repo if image.publish)
-        deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
+        # An image's registry visibility is the same across every build step, so
+        # only verify it from the primary x86_64 build. That keeps the anonymous
+        # registry-API load to one set of queries per pipeline instead of one per
+        # arch/coverage/sanitizer variant, and the check is independent of this
+        # build, so we run it concurrently with the slow build+push and join it
+        # below before reporting success.
+        check_public = (
+            repo.rd.arch == Arch.X86_64 and not coverage and sanitizer == Sanitizer.none
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            public_check = (
+                executor.submit(check_images_public, deps) if check_public else None
+            )
+            deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
+            if public_check is not None:
+                public_check.result()
         set_build_status("success")
         annotate_buildkite_with_tags(repo.rd.arch, deps)
     except RustIncrementalBuildFailure:
@@ -76,6 +96,65 @@ def set_build_status(status: str) -> None:
                 status,
             ]
         )
+
+
+def check_images_public(deps: mzbuild.DependencySet) -> None:
+    """Fail the build if any image's repository is private on Docker Hub or GHCR.
+
+    Repositories must be made public manually, so a new (or silently-regressed)
+    image would otherwise only surface when an unauthenticated consumer fails to
+    pull it. `is_public()` is tri-state: a registry that we genuinely couldn't
+    reach (None) is reported as a non-fatal warning rather than masquerading as a
+    private repo, so a registry blip doesn't turn into a misleading red build.
+
+    Only ever invoked from this CI build step; running it elsewhere would fire
+    one anonymous registry request per image.
+    """
+    publishable = [dep for dep in deps if dep.publish]
+    if not publishable:
+        return
+
+    # Plain log line, not a `---` Buildkite section marker: this runs in a
+    # background thread concurrently with deps.ensure()'s own sections, and a
+    # competing marker would scramble the log grouping.
+    print("Checking that mzbuild images are public on Docker Hub and GHCR")
+    with ThreadPoolExecutor(max_workers=min(len(publishable), 16)) as executor:
+        results = zip(
+            publishable, executor.map(lambda dep: dep.is_public(), publishable)
+        )
+
+    private = []
+    undetermined = []
+    for dep, (dockerhub, ghcr) in results:
+        registries = [("DockerHub", dockerhub), ("GHCR", ghcr)]
+        if bad := [r for r, ok in registries if ok is False]:
+            private.append(
+                f"Image {dep.name} is not public on {' and '.join(bad)}, "
+                "ask @team-testing to make it public"
+            )
+        if unknown := [r for r, ok in registries if ok is None]:
+            undetermined.append(
+                f"Could not determine whether image {dep.name} is public on "
+                f"{' and '.join(unknown)} (registry error); will recheck next build"
+            )
+
+    for message in undetermined + private:
+        print(message)
+    if ui.env_is_truthy("CI"):
+        if private:
+            _annotate("error", "images-not-public", private)
+        if undetermined:
+            _annotate("warning", "images-public-undetermined", undetermined)
+
+    if private:
+        raise ImagesNotPublicError(f"{len(private)} image(s) are not public")
+
+
+def _annotate(style: str, context: str, messages: list[str]) -> None:
+    spawn.runv(
+        ["buildkite-agent", "annotate", f"--style={style}", f"--context={context}"],
+        stdin="\n".join(f"* {m}" for m in messages).encode(),
+    )
 
 
 def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> None:

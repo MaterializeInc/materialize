@@ -85,10 +85,8 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::PostgresError;
-use mz_postgres_util::{Client, simple_query_opt};
+use mz_postgres_util::{Client, Sql, execute, query_opt, simple_query_opt, sql};
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_sql_parser::ast::Ident;
-use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL;
 use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
 use mz_storage_types::errors::DataflowError;
@@ -252,9 +250,12 @@ pub(crate) fn render<'scope>(
                     "replication slot already in use; will attempt to kill existing connection",
                 );
 
-                match metadata_client
-                    .execute("SELECT pg_terminate_backend($1)", &[&active_pid])
-                    .await
+                match execute(
+                    &**metadata_client,
+                    sql!("SELECT pg_terminate_backend($1)"),
+                    &[&active_pid],
+                )
+                .await
                 {
                     Ok(_) => {
                         tracing::info!(
@@ -322,10 +323,14 @@ pub(crate) fn render<'scope>(
             // Note that we need to fetch the probe LSN _after_ having created the replication
             // slot, to make sure the fetched LSN will be included in the replication stream.
             let probe_ts = (config.now_fn)().into();
-            let max_lsn = super::fetch_max_lsn(&*metadata_client).await?;
+            let max_lsn = mz_postgres_util::fetch_max_lsn(
+                &*metadata_client,
+                connection.publication_details.get_is_physical_replica(),
+            )
+            .await?;
             let probe = Probe {
                 probe_ts,
-                upstream_frontier: Antichain::from_elem(max_lsn),
+                upstream_frontier: Antichain::from_elem(MzOffset::from(max_lsn)),
             };
             probe_output.give(&probe_cap[0], probe);
 
@@ -384,6 +389,7 @@ pub(crate) fn render<'scope>(
                 committed_uppers.as_mut(),
                 &probe_output,
                 &probe_cap[0],
+                connection.publication_details.get_is_physical_replica(),
             )
             .await?;
 
@@ -428,6 +434,7 @@ pub(crate) fn render<'scope>(
                 &config,
                 connection.publication.clone(),
                 table_info.clone(),
+                connection.publication_details.get_is_physical_replica(),
             );
 
             // Instead of downgrading the capability for every transaction we process we only do it
@@ -520,6 +527,38 @@ pub(crate) fn render<'scope>(
                                     return Ok(());
                                 }
                                 Postgres(pg_error) => Err(TransientError::from(pg_error))?,
+                                PhysicalReplicaChanged { expected, actual } => {
+                                    // The upstream is no longer the kind of node the
+                                    // source was created against (e.g. a physical
+                                    // replica was promoted to a primary). Logical
+                                    // decoding cannot safely continue, so stall with a
+                                    // definite, non-retryable error.
+                                    let err =
+                                        DefiniteError::InvalidPhysicalReplica { expected, actual };
+                                    for (oid, outputs) in table_info.iter() {
+                                        for output_index in outputs.keys() {
+                                            let update = (
+                                                (
+                                                    *oid,
+                                                    *output_index,
+                                                    Err(DataflowError::from(err.clone())),
+                                                ),
+                                                // We don't have a clean way to align on when the replica changed so jump straight to u64::MAX to avoid conflicts.
+                                                MzOffset::from(u64::MAX),
+                                                Diff::ONE,
+                                            );
+                                            let size = update.fuel_size();
+                                            data_output
+                                                .give_fueled(&data_cap_set[0], update, size)
+                                                .await;
+                                        }
+                                    }
+                                    definite_error_handle.give(
+                                        &definite_error_cap_set[0],
+                                        ReplicationError::Definite(Rc::new(err)),
+                                    );
+                                    return Ok(());
+                                }
                                 Schema {
                                     oid,
                                     output_index,
@@ -627,6 +666,7 @@ async fn raw_stream<'a>(
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
+    is_physical_replica: bool,
 ) -> Result<
     Result<impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a, DefiniteError>,
     TransientError,
@@ -634,6 +674,17 @@ async fn raw_stream<'a>(
     if let Err(err) = ensure_publication_exists(&*metadata_client, publication).await? {
         // If the publication gets deleted there is nothing else to do. These errors
         // are not retractable.
+        return Ok(Err(err));
+    }
+
+    // Ensure the upstream server's physical replica status hasn't changed since the source was
+    // created. We use the metadata client here for the same reason as "SHOW wal_sender_timeout" below.
+    //
+    // This runs before the timeline ID check on purpose. Promoting a physical replica to a primary
+    // both flips pg_is_in_recovery() and switches the timeline, so either check could fire. Running
+    // this one first means a promotion always surfaces as the specific InvalidPhysicalReplica error
+    // (rather than the more generic timeline mismatch), which is the clearer signal for an operator.
+    if let Err(err) = ensure_physical_replica(&*metadata_client, is_physical_replica).await? {
         return Ok(Err(err));
     }
 
@@ -666,7 +717,7 @@ async fn raw_stream<'a>(
     // Note: We must use the metadata client here which is NOT in replication mode. Some Aurora
     // Postgres versions disallow SHOW commands from within replication connection.
     // See: https://github.com/readysettech/readyset/discussions/28#discussioncomment-4405671
-    let row = simple_query_opt(&*metadata_client, "SHOW wal_sender_timeout;")
+    let row = simple_query_opt(&*metadata_client, sql!("SHOW wal_sender_timeout;"))
         .await?
         .unwrap();
     let wal_sender_timeout = match row.get("wal_sender_timeout") {
@@ -698,13 +749,13 @@ async fn raw_stream<'a>(
     // Postgres will return all transactions that commit *at or after* after the provided LSN,
     // following the timely upper semantics.
     let lsn = PgLsn::from(resume_lsn.offset);
-    let query = format!(
-        r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" {})"#,
-        Ident::new_unchecked(slot).to_ast_string_simple(),
-        lsn,
-        escaped_string_literal(publication),
+    let query = sql!(
+        "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" {})",
+        Sql::ident(slot),
+        Sql::raw_unchecked(lsn.to_string()),
+        Sql::literal(publication)
     );
-    let copy_stream = match replication_client.copy_both_simple(&query).await {
+    let copy_stream = match replication_client.copy_both_simple(query.as_str()).await {
         Ok(copy_stream) => copy_stream,
         Err(err) if err.code() == Some(&SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE) => {
             return Ok(Err(DefiniteError::InvalidReplicationSlot));
@@ -740,12 +791,13 @@ async fn raw_stream<'a>(
 
             while !probe_tx.is_closed() {
                 let probe_ts = probe_ticker.tick().await;
-                let probe_or_err = super::fetch_max_lsn(&*metadata_client)
-                    .await
-                    .map(|lsn| Probe {
-                        probe_ts,
-                        upstream_frontier: Antichain::from_elem(lsn),
-                    });
+                let probe_or_err =
+                    mz_postgres_util::fetch_max_lsn(&*metadata_client, is_physical_replica)
+                        .await
+                        .map(|lsn| Probe {
+                            probe_ts,
+                            upstream_frontier: Antichain::from_elem(MzOffset::from(lsn)),
+                        });
                 let _ = probe_tx.send(Some(probe_or_err));
             }
         })
@@ -1057,12 +1109,12 @@ async fn ensure_publication_exists(
     publication: &str,
 ) -> Result<Result<(), DefiniteError>, TransientError> {
     // Figure out the last written LSN and then add one to convert it into an upper.
-    let result = client
-        .query_opt(
-            "SELECT 1 FROM pg_publication WHERE pubname = $1;",
-            &[&publication],
-        )
-        .await?;
+    let result = query_opt(
+        &**client,
+        sql!("SELECT 1 FROM pg_publication WHERE pubname = $1;"),
+        &[&publication],
+    )
+    .await?;
     match result {
         Some(_) => Ok(Ok(())),
         None => Ok(Err(DefiniteError::PublicationDropped(
@@ -1097,12 +1149,34 @@ async fn ensure_replication_timeline_id(
     }
 }
 
+async fn ensure_physical_replica(
+    metadata_client: &Client,
+    expected_is_physical_replica: bool,
+) -> Result<Result<(), DefiniteError>, TransientError> {
+    let is_physical_replica = mz_postgres_util::get_is_in_recovery(metadata_client).await?;
+    if is_physical_replica == expected_is_physical_replica {
+        Ok(Ok(()))
+    } else {
+        Ok(Err(DefiniteError::InvalidPhysicalReplica {
+            expected: expected_is_physical_replica,
+            actual: is_physical_replica,
+        }))
+    }
+}
+
 enum SchemaValidationError {
     Postgres(PostgresError),
     Schema {
         oid: u32,
         output_index: usize,
         error: DefiniteError,
+    },
+    /// The upstream's physical-replica status changed out from under us (e.g. a
+    /// physical replica was promoted to a primary). `expected` is the status the
+    /// source was created against; `actual` is what the upstream reports now.
+    PhysicalReplicaChanged {
+        expected: bool,
+        actual: bool,
     },
 }
 
@@ -1111,6 +1185,7 @@ fn spawn_schema_validator(
     config: &RawSourceCreationConfig,
     publication: String,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
+    is_physical_replica: bool,
 ) -> mpsc::UnboundedReceiver<SchemaValidationError> {
     let (tx, rx) = mpsc::unbounded_channel();
     let source_id = config.id;
@@ -1121,6 +1196,24 @@ fn spawn_schema_validator(
             trace!(%source_id, "validating schemas");
 
             let validation_start = Instant::now();
+
+            // Detect a physical replica being promoted to a primary (or vice
+            // versa) while the stream is live. The startup check in raw_stream
+            // only catches this across a restart, so we re-check periodically
+            // here to surface a definite error proactively.
+            match mz_postgres_util::get_is_in_recovery(&*client).await {
+                Ok(actual) if actual != is_physical_replica => {
+                    let _ = tx.send(SchemaValidationError::PhysicalReplicaChanged {
+                        expected: is_physical_replica,
+                        actual,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = tx.send(SchemaValidationError::Postgres(error));
+                    continue;
+                }
+            }
 
             let upstream_info = match mz_postgres_util::publication_info(
                 &*client,

@@ -50,11 +50,13 @@ use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
     ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
-    ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
-    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    ClusterReplicaValue, ClusterSystemConfiguration, ClusterSystemConfigurationKey,
+    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
+    ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
+    DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
+    ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
+    ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
@@ -66,7 +68,7 @@ use crate::durable::{
     EXPRESSION_CACHE_SHARD_KEY, MOCK_AUTHENTICATION_NONCE_KEY, NetworkPolicy, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
     SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration, USER_ITEM_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -95,6 +97,10 @@ pub struct Transaction<'a> {
     settings: TableTransaction<SettingKey, SettingValue>,
     system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
+    cluster_system_configurations:
+        TableTransaction<ClusterSystemConfigurationKey, ClusterSystemConfigurationValue>,
+    replica_system_configurations:
+        TableTransaction<ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     source_references: TableTransaction<SourceReferencesKey, SourceReferencesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
@@ -132,6 +138,8 @@ impl<'a> Transaction<'a> {
             source_references,
             system_object_mappings,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -182,6 +190,8 @@ impl<'a> Transaction<'a> {
             source_references: TableTransaction::new(source_references)?,
             system_gid_mapping: TableTransaction::new(system_object_mappings)?,
             system_configurations: TableTransaction::new(system_configurations)?,
+            cluster_system_configurations: TableTransaction::new(cluster_system_configurations)?,
+            replica_system_configurations: TableTransaction::new(replica_system_configurations)?,
             default_privileges: TableTransaction::new(default_privileges)?,
             system_privileges: TableTransaction::new(system_privileges)?,
             storage_collection_metadata: TableTransaction::new(storage_collection_metadata)?,
@@ -554,28 +564,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn insert_cluster_replica(
-        &mut self,
-        cluster_id: ClusterId,
-        replica_name: &str,
-        config: ReplicaConfig,
-        owner_id: RoleId,
-    ) -> Result<ReplicaId, CatalogError> {
-        let replica_id = match cluster_id {
-            ClusterId::System(_) => self.allocate_system_replica_id()?,
-            ClusterId::User(_) => self.allocate_user_replica_id()?,
-        };
-        self.insert_cluster_replica_with_id(
-            cluster_id,
-            replica_id,
-            replica_name,
-            config,
-            owner_id,
-        )?;
-        Ok(replica_id)
-    }
-
-    pub(crate) fn insert_cluster_replica_with_id(
+    pub fn insert_cluster_replica_with_id(
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
@@ -889,11 +878,6 @@ impl<'a> Transaction<'a> {
             .collect())
     }
 
-    pub fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.get_and_increment_id(USER_REPLICA_ID_ALLOC_KEY.to_string())?;
-        Ok(ReplicaId::User(id))
-    }
-
     pub fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
         let id = self.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
         Ok(ReplicaId::System(id))
@@ -1043,6 +1027,8 @@ impl<'a> Transaction<'a> {
             settings: self.settings.current_items_proto(),
             system_object_mappings: self.system_gid_mapping.current_items_proto(),
             system_configurations: self.system_configurations.current_items_proto(),
+            cluster_system_configurations: self.cluster_system_configurations.current_items_proto(),
+            replica_system_configurations: self.replica_system_configurations.current_items_proto(),
             default_privileges: self.default_privileges.current_items_proto(),
             source_references: self.source_references.current_items_proto(),
             system_privileges: self.system_privileges.current_items_proto(),
@@ -2154,6 +2140,86 @@ impl<'a> Transaction<'a> {
         self.system_configurations.delete(|_k, _v| true, self.op_id);
     }
 
+    /// Returns the persisted cluster-coherent scoped system configurations.
+    pub fn get_cluster_system_configurations(
+        &self,
+    ) -> impl Iterator<Item = ClusterSystemConfiguration> + use<'_> {
+        self.cluster_system_configurations
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
+    }
+
+    /// Upserts the persisted cluster-coherent scoped configuration `name` = `value`
+    /// for `cluster_id`.
+    pub fn upsert_cluster_system_config(
+        &mut self,
+        cluster_id: ClusterId,
+        name: &str,
+        value: String,
+    ) -> Result<(), CatalogError> {
+        let key = ClusterSystemConfigurationKey {
+            cluster_id,
+            name: name.to_string(),
+        };
+        let value = ClusterSystemConfigurationValue { value };
+        self.cluster_system_configurations
+            .set(key, Some(value), self.op_id)?;
+        Ok(())
+    }
+
+    /// Removes the persisted cluster-coherent scoped configuration `name` for
+    /// `cluster_id`.
+    pub fn remove_cluster_system_config(&mut self, cluster_id: ClusterId, name: &str) {
+        let key = ClusterSystemConfigurationKey {
+            cluster_id,
+            name: name.to_string(),
+        };
+        self.cluster_system_configurations
+            .set(key, None, self.op_id)
+            .expect("cannot have uniqueness violation");
+    }
+
+    /// Returns the persisted replica-local scoped system configurations.
+    pub fn get_replica_system_configurations(
+        &self,
+    ) -> impl Iterator<Item = ReplicaSystemConfiguration> + use<'_> {
+        self.replica_system_configurations
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
+    }
+
+    /// Upserts the persisted replica-local scoped configuration `name` = `value`
+    /// for `replica_id`.
+    pub fn upsert_replica_system_config(
+        &mut self,
+        replica_id: ReplicaId,
+        name: &str,
+        value: String,
+    ) -> Result<(), CatalogError> {
+        let key = ReplicaSystemConfigurationKey {
+            replica_id,
+            name: name.to_string(),
+        };
+        let value = ReplicaSystemConfigurationValue { value };
+        self.replica_system_configurations
+            .set(key, Some(value), self.op_id)?;
+        Ok(())
+    }
+
+    /// Removes the persisted replica-local scoped configuration `name` for
+    /// `replica_id`.
+    pub fn remove_replica_system_config(&mut self, replica_id: ReplicaId, name: &str) {
+        let key = ReplicaSystemConfigurationKey {
+            replica_id,
+            name: name.to_string(),
+        };
+        self.replica_system_configurations
+            .set(key, None, self.op_id)
+            .expect("cannot have uniqueness violation");
+    }
+
     pub(crate) fn insert_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
         match self.configs.insert(
             ConfigKey { key: key.clone() },
@@ -2335,6 +2401,8 @@ impl<'a> Transaction<'a> {
             introspection_sources,
             system_gid_mapping,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             source_references,
             system_privileges,
@@ -2384,6 +2452,16 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 system_configurations,
                 StateUpdateKind::SystemConfiguration,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                cluster_system_configurations,
+                StateUpdateKind::ClusterSystemConfiguration,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                replica_system_configurations,
+                StateUpdateKind::ReplicaSystemConfiguration,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -2491,6 +2569,8 @@ impl<'a> Transaction<'a> {
             settings: self.settings.pending(),
             system_gid_mapping: self.system_gid_mapping.pending(),
             system_configurations: self.system_configurations.pending(),
+            cluster_system_configurations: self.cluster_system_configurations.pending(),
+            replica_system_configurations: self.replica_system_configurations.pending(),
             default_privileges: self.default_privileges.pending(),
             system_privileges: self.system_privileges.pending(),
             storage_collection_metadata: self.storage_collection_metadata.pending(),
@@ -2536,6 +2616,8 @@ impl<'a> Transaction<'a> {
             settings,
             system_gid_mapping,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -2562,6 +2644,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(source_references);
         differential_dataflow::consolidation::consolidate_updates(system_gid_mapping);
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
+        differential_dataflow::consolidation::consolidate_updates(cluster_system_configurations);
+        differential_dataflow::consolidation::consolidate_updates(replica_system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
         differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
@@ -2750,6 +2834,16 @@ pub struct TransactionBatch {
         proto::ServerConfigurationValue,
         Diff,
     )>,
+    pub(crate) cluster_system_configurations: Vec<(
+        proto::ClusterSystemConfigurationKey,
+        proto::ClusterSystemConfigurationValue,
+        Diff,
+    )>,
+    pub(crate) replica_system_configurations: Vec<(
+        proto::ReplicaSystemConfigurationKey,
+        proto::ReplicaSystemConfigurationValue,
+        Diff,
+    )>,
     pub(crate) default_privileges: Vec<(
         proto::DefaultPrivilegesKey,
         proto::DefaultPrivilegesValue,
@@ -2796,6 +2890,8 @@ impl TransactionBatch {
             source_references,
             system_gid_mapping,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -2820,6 +2916,8 @@ impl TransactionBatch {
             && source_references.is_empty()
             && system_gid_mapping.is_empty()
             && system_configurations.is_empty()
+            && cluster_system_configurations.is_empty()
+            && replica_system_configurations.is_empty()
             && default_privileges.is_empty()
             && system_privileges.is_empty()
             && storage_collection_metadata.is_empty()
@@ -2887,11 +2985,13 @@ mod unique_name {
     impl_no_unique_name!(
         (),
         ClusterIntrospectionSourceIndexValue,
+        ClusterSystemConfigurationValue,
         CommentValue,
         ConfigValue,
         DefaultPrivilegesValue,
         GidMappingValue,
         IdAllocValue,
+        ReplicaSystemConfigurationValue,
         ServerConfigurationValue,
         SettingValue,
         SourceReferencesValue,
@@ -3464,13 +3564,16 @@ where
 mod tests {
     use super::*;
 
+    use mz_controller::clusters::ReplicaLogging;
     use mz_ore::now::SYSTEM_TIME;
     use mz_ore::{assert_none, assert_ok};
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_types::PersistLocation;
     use semver::Version;
 
-    use crate::durable::{TestCatalogStateBuilder, test_bootstrap_args};
+    use crate::durable::{
+        ReplicaConfig, ReplicaLocation, TestCatalogStateBuilder, test_bootstrap_args,
+    };
     use crate::memory;
 
     #[mz_ore::test]
@@ -4056,6 +4159,84 @@ mod tests {
         assert_eq!(db_name, db.name);
         assert_eq!(db_owner, db.owner_id);
         assert_eq!(db_privileges, db.privileges);
+    }
+
+    /// Regression test for DB-147: inserting a replica with an explicit id must not consume the
+    /// `IdAlloc` counter, and the durable allocator must advance independently so a later
+    /// allocation never collides with an explicitly inserted id.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_insert_replica_with_id_does_not_consume_allocator() {
+        const VERSION: Version = Version::new(26, 0, 0);
+        let mut persist_cache = PersistClientCache::new_no_metrics();
+        persist_cache.cfg.build_version = VERSION;
+        let persist_client = persist_cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .unwrap();
+        let state_builder = TestCatalogStateBuilder::new(persist_client)
+            .with_default_deploy_generation()
+            .with_version(VERSION);
+        let mut state = state_builder
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap()
+            .0;
+
+        // The cluster does not need to exist: `insert_cluster_replica_with_id` only writes a
+        // `cluster_replicas` row and does not validate the referenced cluster.
+        let cluster_id = ClusterId::User(1);
+        let owner_id = RoleId::User(1);
+        let config = ReplicaConfig {
+            location: ReplicaLocation::Managed {
+                size: "1".to_string(),
+                availability_zones: Vec::new(),
+                internal: false,
+                billed_as: None,
+                pending: false,
+            },
+            logging: ReplicaLogging {
+                log_logging: false,
+                interval: Some(Duration::from_secs(1)),
+            },
+        };
+
+        // Step 1: allocate one user replica id out-of-band via the durable allocator.
+        let commit_ts = state.current_upper().await;
+        let a = state
+            .allocate_user_replica_ids(1, commit_ts)
+            .await
+            .unwrap()
+            .into_element();
+        assert!(a.is_user());
+
+        // Step 2: insert a replica with that explicit id and commit.
+        let mut txn = state.transaction().await.unwrap();
+        txn.insert_cluster_replica_with_id(cluster_id, a, "explicit", config, owner_id)
+            .unwrap();
+        let commit_ts = txn.upper();
+        txn.commit_internal(commit_ts).await.unwrap();
+
+        // Step 3: allocate one more user replica id.
+        let commit_ts = state.current_upper().await;
+        let b = state
+            .allocate_user_replica_ids(1, commit_ts)
+            .await
+            .unwrap()
+            .into_element();
+
+        // Step 4: the explicit insert consumed zero ids, so the allocator's next value is the
+        // direct successor of the first allocation.
+        assert_eq!(b.inner_id(), a.inner_id() + 1);
+
+        // Step 5: the explicitly inserted replica is present in the committed state.
+        let txn = state.transaction().await.unwrap();
+        let found = txn
+            .get_cluster_replicas()
+            .any(|replica| replica.replica_id == a);
+        assert!(found, "explicitly inserted replica {a} not found");
     }
 
     #[mz_ore::test]

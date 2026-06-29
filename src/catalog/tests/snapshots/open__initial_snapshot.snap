@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/open.rs
-assertion_line: 518
 expression: test_snapshot
 ---
 Snapshot {
@@ -624,6 +623,9 @@ Snapshot {
                         },
                         optimizer_feature_overrides: [],
                         schedule: Manual,
+                        auto_scaling_strategy: None,
+                        reconfiguration: None,
+                        burst: None,
                     },
                 ),
             },
@@ -686,7 +688,7 @@ Snapshot {
                 location: Managed(
                     ManagedLocation {
                         size: "scale=1,workers=1",
-                        availability_zone: None,
+                        availability_zones: [],
                         internal: false,
                         billed_as: None,
                         pending: false,
@@ -783,6 +785,8 @@ Snapshot {
     source_references: {},
     system_object_mappings: {},
     system_configurations: {},
+    cluster_system_configurations: {},
+    replica_system_configurations: {},
     default_privileges: {
         DefaultPrivilegesKey {
             role_id: Public,

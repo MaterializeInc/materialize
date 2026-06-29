@@ -1,6 +1,6 @@
 ---
 source: src/mz-debug/src/k8s_dumper.rs
-revision: 265f7af9cd
+revision: 3b41d4605c
 ---
 
 # mz-debug::k8s_dumper

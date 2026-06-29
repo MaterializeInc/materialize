@@ -52,7 +52,8 @@ use mz_sql::rbac;
 use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
-    EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE, Value, Var,
+    EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
+    TRANSACTION_ISOLATION_VAR_NAME, Value, Var, check_transaction_isolation_feature_flag,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -269,6 +270,24 @@ impl Coordinator {
                         .catalog_transact_with_context(Some(&conn_id), None, ops)
                         .await;
                     let _ = tx.send(result);
+                }
+
+                Command::UpdateScopedSystemParameters {
+                    overrides,
+                    prune_scope,
+                    tx,
+                } => {
+                    // Store the new working copy, persist it durably, and
+                    // reconcile it into the per-scope resolution boundaries.
+                    self.reconcile_scoped_system_parameters(overrides, prune_scope)
+                        .await;
+                    let _ = tx.send(());
+                }
+
+                Command::InstallScopedSystemParameterFrontend { frontend } => {
+                    // Keep the shared frontend so create-cluster / create-replica
+                    // can resolve scoped overrides synchronously at create time.
+                    self.scoped_frontend = Some(frontend);
                 }
 
                 Command::InjectAuditEvents {
@@ -959,6 +978,23 @@ impl Coordinator {
                 .map(|(name, val)| (name.to_string(), val.clone())),
         );
 
+        // If the resolved `transaction_isolation` default names a feature-flagged
+        // isolation level whose flag is now disabled (e.g. a role default set
+        // while `bounded staleness` was enabled, then the flag turned off), drop
+        // it so the session falls back to the built-in default rather than
+        // silently using a gated level.
+        if let Some(value) = session_defaults.get(TRANSACTION_ISOLATION_VAR_NAME) {
+            if check_transaction_isolation_feature_flag(
+                TRANSACTION_ISOLATION_VAR_NAME,
+                value.borrow(),
+                system_config,
+            )
+            .is_err()
+            {
+                session_defaults.remove(TRANSACTION_ISOLATION_VAR_NAME);
+            }
+        }
+
         // Validate network policies for external users. Internal users can only connect on the
         // internal interfaces (internal HTTP/ pgwire). It is up to the person deploying the system
         // to ensure these internal interfaces are well secured.
@@ -1431,14 +1467,13 @@ impl Coordinator {
                 let otel_ctx = OpenTelemetryContext::obtain();
                 let current_storage_configuration = self.controller.storage.config().clone();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
-                    let transient_revision = catalog.transient_revision();
-                    let catalog = catalog.for_session(ctx.session());
+                    let conn_catalog = catalog.for_session(ctx.session());
 
                     // Checks if the session is authorized to purify a statement. Usually
                     // authorization is checked after planning, however purification happens before
                     // planning, which may require the use of some connections and secrets.
                     if let Err(e) = rbac::check_usage(
-                        &catalog,
+                        &conn_catalog,
                         ctx.session(),
                         &resolved_ids,
                         &CREATE_ITEM_USAGE,
@@ -1447,7 +1482,7 @@ impl Coordinator {
                     }
 
                     let (result, cluster_id) = mz_sql::pure::purify_statement(
-                        catalog,
+                        conn_catalog,
                         now,
                         stmt,
                         &current_storage_configuration,
@@ -1456,7 +1491,7 @@ impl Coordinator {
                     let result = result.map_err(|e| e.into());
                     let dependency_ids = resolved_ids.items().copied().collect();
                     let plan_validity = PlanValidity::new(
-                        transient_revision,
+                        &catalog,
                         dependency_ids,
                         cluster_id,
                         None,

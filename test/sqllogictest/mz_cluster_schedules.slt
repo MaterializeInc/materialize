@@ -1,0 +1,185 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural lockdown tests for mz_internal.mz_cluster_schedules.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 3 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_cluster_schedules' AND s.name = 'mz_internal'
+ORDER BY c.position
+----
+cluster_id  text  false
+type  text  false
+refresh_hydration_time_estimate  interval  true
+
+# --- Default quickstart has a manual schedule --------------------------------
+
+query TTB
+SELECT cluster_id, type, refresh_hydration_time_estimate IS NULL
+FROM mz_internal.mz_cluster_schedules
+WHERE cluster_id = 'u1'
+----
+u1  manual  true
+
+# --- Managed clusters appear -------------------------------------------------
+
+statement ok
+CREATE CLUSTER c_managed SIZE = 'scale=1,workers=1'
+
+query TTB
+SELECT s.cluster_id = c.id, s.type, s.refresh_hydration_time_estimate IS NULL
+FROM mz_internal.mz_cluster_schedules s
+JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.name = 'c_managed'
+----
+true  manual  true
+
+statement ok
+DROP CLUSTER c_managed
+
+# --- Unmanaged clusters do NOT appear ----------------------------------------
+
+# Schedules are emitted only for managed clusters; the MV filters on
+# jsonb_typeof(config.variant) = 'object' (i.e. ClusterVariant::Managed).
+statement ok
+CREATE CLUSTER c_unmanaged REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+query I
+SELECT count(*) FROM mz_internal.mz_cluster_schedules s
+JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.name = 'c_unmanaged'
+----
+0
+
+statement ok
+DROP CLUSTER c_unmanaged
+
+# --- ON REFRESH schedule shape -----------------------------------------------
+
+statement ok
+CREATE CLUSTER c_on_refresh SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '5 minutes')
+
+query TT
+SELECT s.type, s.refresh_hydration_time_estimate::text
+FROM mz_internal.mz_cluster_schedules s
+JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.name = 'c_on_refresh'
+----
+on-refresh  00:05:00
+
+# ALTER CLUSTER ... SET SCHEDULE = MANUAL flips the row back.
+statement ok
+ALTER CLUSTER c_on_refresh SET (SCHEDULE = MANUAL)
+
+query TB
+SELECT s.type, s.refresh_hydration_time_estimate IS NULL
+FROM mz_internal.mz_cluster_schedules s
+JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.name = 'c_on_refresh'
+----
+manual  true
+
+statement ok
+DROP CLUSTER c_on_refresh
+
+# --- type column is constrained to {'manual', 'on-refresh'} ------------------
+
+# Across the whole catalog state, only the two known schedule kinds appear.
+query T
+SELECT DISTINCT type FROM mz_internal.mz_cluster_schedules ORDER BY type
+----
+manual
+
+# --- Uniqueness invariants ---------------------------------------------------
+
+# cluster_id is unique (at most one schedule row per managed cluster).
+query I
+SELECT count(*) - count(DISTINCT cluster_id) FROM mz_internal.mz_cluster_schedules
+----
+0
+
+# No row has a NULL cluster_id or type (NOT NULL columns).
+query I
+SELECT count(*) FROM mz_internal.mz_cluster_schedules
+WHERE cluster_id IS NULL OR type IS NULL
+----
+0
+
+# Every schedule's cluster_id resolves to a managed cluster.
+query I
+SELECT count(*) FROM mz_internal.mz_cluster_schedules s
+LEFT JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.id IS NULL OR c.managed = false
+----
+0
+
+# --- CREATE / ALTER / DROP round-trip ----------------------------------------
+
+statement ok
+CREATE CLUSTER c_rt SIZE = 'scale=1,workers=1'
+
+query I
+SELECT count(*) FROM mz_internal.mz_cluster_schedules s
+JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.name = 'c_rt'
+----
+1
+
+statement ok
+ALTER CLUSTER c_rt SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))
+
+query TT
+SELECT s.type, s.refresh_hydration_time_estimate::text
+FROM mz_internal.mz_cluster_schedules s
+JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.name = 'c_rt'
+----
+on-refresh  01:00:00
+
+statement ok
+DROP CLUSTER c_rt
+
+query I
+SELECT count(*) FROM mz_internal.mz_cluster_schedules s
+JOIN mz_clusters c ON s.cluster_id = c.id
+WHERE c.name = 'c_rt'
+----
+0
+
+# --- cluster_check_scheduling_policies_interval rejects zero ------------------
+
+# The interval at which scheduling policies run is passed to
+# tokio::time::interval during coordinator bootstrap, which panics on a zero
+# period. A zero value would therefore crash-loop environmentd on every boot,
+# so it must be rejected at ALTER SYSTEM SET time.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_check_scheduling_policies_interval = '0s';
+----
+db error: ERROR: parameter "cluster_check_scheduling_policies_interval" cannot have value "0ns": only supports non-zero durations
+
+# A non-zero value is still accepted.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_check_scheduling_policies_interval = '1s';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET cluster_check_scheduling_policies_interval;
+----
+COMPLETE 0

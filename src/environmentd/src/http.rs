@@ -80,6 +80,7 @@ use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
 use mz_controller::ReplicaHttpLocator;
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Error as FronteggError;
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
@@ -172,7 +173,9 @@ pub struct HttpConfig {
     /// today, and an attacker reaching the server directly can otherwise
     /// poison the published metadata URLs.
     pub http_host_name: Option<String>,
+    pub frontegg_oauth_issuer_url: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
+    pub dyncfgs: Arc<ConfigSet>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
     pub mcp_metrics: mcp_metrics::McpMetrics,
@@ -205,6 +208,7 @@ pub struct WsState {
 pub struct WebhookState {
     adapter_client_rx: Delayed<mz_adapter::Client>,
     webhook_cache: WebhookAppenderCache,
+    dyncfgs: Arc<ConfigSet>,
 }
 
 #[derive(Clone, Debug)]
@@ -230,7 +234,9 @@ impl HttpServer {
             active_connection_counter,
             helm_chart_version,
             http_host_name,
+            frontegg_oauth_issuer_url,
             concurrent_webhook_req,
+            dyncfgs,
             metrics,
             metrics_registry,
             mcp_metrics,
@@ -244,6 +250,14 @@ impl HttpServer {
         let tls_enabled = tls.is_some();
         let webhook_cache = WebhookAppenderCache::new();
 
+        // Compute OAuth discovery once per listener so the Bearer challenge
+        // and the discovery handler always agree, and the middleware doesn't
+        // re-derive (and re-allocate the Frontegg issuer) on each request.
+        let oauth_discovery = Arc::new(oauth_metadata::McpOAuthDiscovery::for_authenticator(
+            authenticator_kind,
+            frontegg_oauth_issuer_url.as_deref(),
+        ));
+
         // Create secure session store and manager
         let session_store = TowerSessionMemoryStore::default();
         let session_layer = TowerSessionManagerLayer::new(session_store)
@@ -256,12 +270,10 @@ impl HttpServer {
         let frontegg_middleware = frontegg.clone();
         let oidc_middleware_rx = oidc_rx.clone();
         let adapter_client_middleware_rx = adapter_client_rx.clone();
-        let http_host_name_middleware = http_host_name.clone();
         let auth_middleware = middleware::from_fn(move |req, next| {
             let frontegg = frontegg_middleware.clone();
             let oidc_rx = oidc_middleware_rx.clone();
             let adapter_client_rx = adapter_client_middleware_rx.clone();
-            let http_host_name = http_host_name_middleware.clone();
             async move {
                 http_auth(
                     req,
@@ -272,7 +284,6 @@ impl HttpServer {
                     oidc_rx,
                     adapter_client_rx,
                     allowed_roles,
-                    http_host_name,
                 )
                 .await
             }
@@ -339,6 +350,7 @@ impl HttpServer {
                 .with_state(WebhookState {
                     adapter_client_rx: adapter_client_rx.clone(),
                     webhook_cache,
+                    dyncfgs,
                 })
                 .layer(
                     tower_http::decompression::RequestDecompressionLayer::new()
@@ -347,6 +359,11 @@ impl HttpServer {
                         .br(true)
                         .zstd(true),
                 )
+                // The webhook handler enforces WEBHOOK_MAX_REQUEST_SIZE_BYTES
+                // itself via to_bytes on a raw Body. This disable is defense-in-depth:
+                // it only matters if the handler ever returns to a Bytes extractor,
+                // which would otherwise inherit the global 5 MiB limit.
+                .layer(DefaultBodyLimit::disable())
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)
@@ -550,11 +567,9 @@ impl HttpServer {
                     routing::get(oauth_metadata::handle_protected_resource_metadata),
                 )
                 .layer(Extension(adapter_client_rx.clone()))
-                .layer(Extension(oauth_metadata::DiscoveryConfig {
+                .layer(Extension(oauth_metadata::McpOAuthConfig {
                     http_host_name: http_host_name.clone(),
-                    discovery: oauth_metadata::McpOAuthDiscovery::for_authenticator(
-                        authenticator_kind,
-                    ),
+                    discovery: Arc::clone(&oauth_discovery),
                 }))
                 .layer(Extension(oauth_metadata_metrics.clone()));
             router = router.merge(oauth_metadata_router);
@@ -587,8 +602,9 @@ impl HttpServer {
             let mcp_allowed_origins = Arc::new(allowed_origin_list.clone());
             mcp_router = mcp_router
                 .layer(auth_middleware.clone())
-                .layer(Extension(BearerChallengeConfig {
-                    scope: oauth_metadata::MCP_SCOPE,
+                .layer(Extension(oauth_metadata::McpOAuthConfig {
+                    http_host_name: http_host_name.clone(),
+                    discovery: Arc::clone(&oauth_discovery),
                 }))
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()))
@@ -950,25 +966,14 @@ where
     }
 }
 
-/// Route-attached marker that opts a route into OAuth Bearer challenges on a
-/// 401. The auth middleware reads this as a request extension instead of
-/// switching on the URL path, so the middleware stays path-agnostic. Set on
-/// `mcp_router` today; add to other routers if they later want to advertise
-/// OAuth discovery via RFC 9728.
-#[derive(Debug, Clone)]
-pub(crate) struct BearerChallengeConfig {
-    /// OAuth scope advertised in the `Bearer` challenge's `scope=` parameter.
-    pub scope: &'static str,
-}
-
 /// Per-request decision about which `WWW-Authenticate` challenges to emit
 /// on a 401, computed by the auth middleware.
 ///
 /// Carries both the `Basic` toggle (today's behavior, kept for the SQL HTTP
 /// layer and friends) and an optional `Bearer` challenge with a
-/// `resource_metadata` URL per RFC 9728. The Bearer challenge is only set
-/// on routes that attach a [`BearerChallengeConfig`] extension; other routes
-/// emit only `Basic` so their behavior is unchanged.
+/// `resource_metadata` URL per RFC 9728. The Bearer challenge is only set on
+/// routes that attach an [`oauth_metadata::McpOAuthConfig`] extension; other
+/// routes emit only `Basic` so their behavior is unchanged.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WwwAuthenticateChallenges {
     /// Whether to emit `WWW-Authenticate: Basic realm=Materialize`.
@@ -1131,7 +1136,6 @@ async fn http_auth(
     oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     adapter_client_rx: Delayed<Client>,
     allowed_roles: AllowedRoles,
-    http_host_name: Option<String>,
 ) -> Result<impl IntoResponse, AuthError> {
     let creds = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
         Some(Credentials::Password {
@@ -1190,25 +1194,28 @@ async fn http_auth(
     }
 
     let path = req.uri().path();
-    // Routes that advertise OAuth opt in via the `BearerChallengeConfig`
+    // Routes that advertise OAuth opt in by attaching an `McpOAuthConfig`
     // extension; the middleware stays path-agnostic. Routes that opt in also
     // get a `Basic` challenge so existing curl/Bearer-already users still see
     // a usable challenge. See `crate::http::oauth_metadata` for the discovery
-    // document; the challenge and the discovery handler share
-    // `McpOAuthDiscovery` so they never disagree about whether OAuth is
-    // advertised on this listener.
-    let bearer_config = req.extensions().get::<BearerChallengeConfig>().cloned();
+    // document; the challenge and the discovery handler read the same
+    // `McpOAuthConfig`, so they emit the same authorization server and the
+    // same host for a given listener.
+    let oauth_config = req
+        .extensions()
+        .get::<oauth_metadata::McpOAuthConfig>()
+        .cloned();
     let include_basic = path == "/"
         || PROFILING_API_ENDPOINTS
             .iter()
             .any(|prefix| path.starts_with(prefix))
-        || bearer_config.is_some();
-    let (bearer_resource_metadata, bearer_scope) = if let Some(config) = &bearer_config
-        && oauth_metadata::McpOAuthDiscovery::for_authenticator(authenticator_kind).is_enabled()
+        || oauth_config.is_some();
+    let (bearer_resource_metadata, bearer_scope) = if let Some(config) = &oauth_config
+        && config.discovery.is_enabled()
     {
         (
-            oauth_metadata::metadata_url(&req, http_host_name.as_deref()),
-            Some(config.scope),
+            oauth_metadata::metadata_url(&req, config.http_host_name.as_deref()),
+            Some(config.scope()),
         )
     } else {
         (None, None)

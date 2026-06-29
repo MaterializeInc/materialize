@@ -1,0 +1,186 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! CTE scope tracking for SQL AST visitors.
+//!
+//! Common Table Expressions (CTEs) introduce names that shadow database objects.
+//! When traversing a SQL AST to collect dependencies, extract aliases, or
+//! transform names, CTE references must be distinguished from real object
+//! references. This module provides [`CteScope`], a stack-based tracker that
+//! manages CTE name visibility across nested queries.
+//!
+//! ## Scoping Rules
+//!
+//! - **Simple CTEs** (`WITH a AS (...), b AS (...) SELECT ...`): names are
+//!   introduced incrementally, left to right. Each simple CTE's body sees only
+//!   the CTEs declared *before* it; the name of CTE `i` is not in scope while
+//!   visiting CTE `i`'s own body. All names are visible to the main query body.
+//!   This mirrors Materialize's name resolver (`fold_query` in
+//!   `src/sql/src/names.rs`, `plan_ctes` in `src/sql/src/plan/query.rs`), which
+//!   resolves each `CteBlock::Simple` body before inserting that CTE's name. As
+//!   a result a simple CTE whose name shadows a catalog object can still
+//!   reference that object inside its own definition, e.g.
+//!   `WITH products AS (SELECT * FROM products WHERE active) SELECT * FROM products`
+//!   — the inner `products` is the catalog table, the outer is the CTE. Callers
+//!   drive this by pushing an empty scope, then visiting each body and calling
+//!   [`insert_current`](CteScope::insert_current) after each.
+//!
+//! - **Mutually Recursive CTEs** (`WITH MUTUALLY RECURSIVE a AS (...), b AS (...)
+//!   SELECT ...`): All CTE names are visible to all CTE definitions and the main
+//!   query body. Self-references and forward references are valid, so all names
+//!   are pushed up front.
+//!
+//! - **Nested queries**: Each subquery can introduce its own CTEs. The scope
+//!   stack ensures inner CTE names shadow outer ones, and are properly removed
+//!   when the subquery scope ends.
+//!
+//! ## Usage Pattern
+//!
+//! Used with mz-sql-parser's `Visit` / `VisitMut` traits by overriding
+//! `visit_query`:
+//!
+//! ```ignore
+//! fn visit_query(&mut self, node: &'ast Query<Raw>) {
+//!     let names = CteScope::collect_cte_names(&node.ctes);
+//!     self.cte_scope.push(names);
+//!     visit::visit_query(self, node);  // default traversal
+//!     self.cte_scope.pop();
+//! }
+//! ```
+//!
+//! Then in `visit_table_factor`, check `self.cte_scope.is_cte(name)` before
+//! treating a single-ident reference as a database object.
+
+use std::collections::BTreeSet;
+
+use mz_sql_parser::ast::{CteBlock, Raw};
+
+/// Stack-based tracker for CTE names currently in scope.
+///
+/// Each level in the stack corresponds to one `WITH` clause. Names from all
+/// levels are visible (inner scopes shadow outer ones, though in practice
+/// CTE names don't conflict with each other — they conflict with table names).
+pub(crate) struct CteScope {
+    stack: Vec<BTreeSet<String>>,
+}
+
+impl CteScope {
+    /// Create an empty scope with no CTE names.
+    pub(crate) fn new() -> Self {
+        Self { stack: Vec::new() }
+    }
+
+    /// Push a new set of CTE names onto the scope stack.
+    ///
+    /// Call this when entering a `WITH` clause. The names remain visible
+    /// until [`pop`](Self::pop) is called.
+    pub(crate) fn push(&mut self, names: BTreeSet<String>) {
+        self.stack.push(names);
+    }
+
+    /// Pop the most recent CTE scope.
+    ///
+    /// Call this when leaving a `WITH` clause.
+    pub(crate) fn pop(&mut self) {
+        self.stack.pop();
+    }
+
+    /// Add a single CTE name to the most-recently-pushed scope level.
+    ///
+    /// Used to introduce simple-CTE names incrementally: push an empty scope on
+    /// entering the `WITH` clause, visit each CTE body, then call this after each
+    /// so that subsequent siblings (and the main query body) see the name, while
+    /// the CTE's own body resolved against the catalog. Has no effect if the
+    /// stack is empty.
+    pub(crate) fn insert_current(&mut self, name: String) {
+        if let Some(top) = self.stack.last_mut() {
+            top.insert(name);
+        }
+    }
+
+    /// Check whether `name` is a CTE in any active scope level.
+    ///
+    /// Returns `true` if the name matches a CTE at any depth in the stack.
+    /// Only unqualified single-identifier references should be checked —
+    /// multi-part names (e.g., `schema.name`) are always database object
+    /// references.
+    pub(crate) fn is_cte(&self, name: &str) -> bool {
+        self.stack.iter().any(|scope| scope.contains(name))
+    }
+
+    /// Extract all CTE names from a [`CteBlock`] into a single set.
+    ///
+    /// Appropriate for `MutuallyRecursive` blocks, where every name is visible
+    /// to every definition up front. Simple blocks must instead introduce names
+    /// incrementally via [`insert_current`](Self::insert_current); see the module
+    /// docs.
+    pub(crate) fn collect_cte_names(ctes: &CteBlock<Raw>) -> BTreeSet<String> {
+        match ctes {
+            CteBlock::Simple(ctes) => ctes.iter().map(|cte| cte.alias.name.to_string()).collect(),
+            CteBlock::MutuallyRecursive(block) => {
+                block.ctes.iter().map(|cte| cte.name.to_string()).collect()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_empty_scope() {
+        let scope = CteScope::new();
+        assert!(!scope.is_cte("anything"));
+    }
+
+    #[mz_ore::test]
+    fn test_single_scope() {
+        let mut scope = CteScope::new();
+        scope.push(BTreeSet::from(["cte_a".to_string(), "cte_b".to_string()]));
+
+        assert!(scope.is_cte("cte_a"));
+        assert!(scope.is_cte("cte_b"));
+        assert!(!scope.is_cte("not_a_cte"));
+
+        scope.pop();
+        assert!(!scope.is_cte("cte_a"));
+    }
+
+    #[mz_ore::test]
+    fn test_nested_scopes() {
+        let mut scope = CteScope::new();
+
+        // Outer query WITH clause
+        scope.push(BTreeSet::from(["outer_cte".to_string()]));
+        assert!(scope.is_cte("outer_cte"));
+
+        // Inner subquery WITH clause
+        scope.push(BTreeSet::from(["inner_cte".to_string()]));
+        assert!(scope.is_cte("outer_cte")); // still visible
+        assert!(scope.is_cte("inner_cte"));
+
+        // Leave inner scope
+        scope.pop();
+        assert!(scope.is_cte("outer_cte"));
+        assert!(!scope.is_cte("inner_cte")); // no longer visible
+
+        // Leave outer scope
+        scope.pop();
+        assert!(!scope.is_cte("outer_cte"));
+    }
+
+    #[mz_ore::test]
+    fn test_empty_push() {
+        let mut scope = CteScope::new();
+        scope.push(BTreeSet::new());
+        assert!(!scope.is_cte("anything"));
+        scope.pop();
+    }
+}

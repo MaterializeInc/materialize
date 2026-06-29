@@ -22,10 +22,14 @@ use aws_sigv4::http_request::{SignableBody, SignableRequest, SigningSettings, si
 use aws_sigv4::sign::v4;
 // Aliased to avoid colliding with `mz_ccsr::tls::Identity`.
 use aws_smithy_runtime_api::client::identity::Identity as AwsIdentity;
+use base64::Engine;
 use http::{HeaderName, HeaderValue};
 use iceberg::Catalog;
 use iceberg::CatalogBuilder;
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::io::{
+    GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA, GCS_USER_PROJECT,
+    S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY,
+};
 use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator, RestCatalogBuilder,
 };
@@ -70,6 +74,7 @@ use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
     AwsAuth, AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
 };
+use crate::connections::gcp::{GcpConnectionReference, GcpTokenProvider};
 use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
 use crate::dyncfgs::{
@@ -487,6 +492,13 @@ impl Connection<InlinedConnection> {
         }
     }
 
+    pub fn unwrap_gcp(self) -> <InlinedConnection as ConnectionAccess>::Gcp {
+        match self {
+            Self::Gcp(conn) => conn,
+            o => unreachable!("{o:?} is not a GCP connection"),
+        }
+    }
+
     pub fn unwrap_ssh(self) -> <InlinedConnection as ConnectionAccess>::Ssh {
         match self {
             Self::Ssh(conn) => conn,
@@ -584,12 +596,22 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
     }
 }
 
+/// Auth mechanism for Iceberg REST catalogs.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct RestIcebergCatalog {
-    /// For REST catalogs, the oauth2 credential in a `CLIENT_ID:CLIENT_SECRET` format
-    pub credential: StringOrSecret,
-    /// The oauth2 scope for REST catalogs
-    pub scope: Option<String>,
+pub enum IcebergCatalogAuth<C: ConnectionAccess = InlinedConnection> {
+    /// Use Iceberg catalog REST API's standard OAuth flow.
+    OAuth {
+        /// client_id:client_secret
+        credential: StringOrSecret,
+        /// OAuth2 scope
+        scope: Option<String>,
+    },
+    Gcp(GcpConnectionReference<C>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct RestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
+    pub auth: IcebergCatalogAuth<C>,
     /// The warehouse for REST catalogs
     pub warehouse: Option<String>,
 }
@@ -600,6 +622,30 @@ pub struct S3TablesRestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     pub aws_connection: AwsConnectionReference<C>,
     /// The warehouse for s3tables
     pub warehouse: String,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogAuth, R>
+    for IcebergCatalogAuth<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IcebergCatalogAuth {
+        match self {
+            IcebergCatalogAuth::Gcp(x) => IcebergCatalogAuth::Gcp(x.into_inline_connection(&r)),
+            IcebergCatalogAuth::OAuth { credential, scope } => {
+                IcebergCatalogAuth::OAuth { credential, scope }
+            }
+        }
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<RestIcebergCatalog, R>
+    for RestIcebergCatalog<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> RestIcebergCatalog {
+        RestIcebergCatalog {
+            auth: self.auth.into_inline_connection(&r),
+            warehouse: self.warehouse,
+        }
+    }
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
@@ -621,7 +667,7 @@ pub enum IcebergCatalogType {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogImpl<C: ConnectionAccess = InlinedConnection> {
-    Rest(RestIcebergCatalog),
+    Rest(RestIcebergCatalog<C>),
     S3TablesRest(S3TablesRestIcebergCatalog<C>),
 }
 
@@ -630,7 +676,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogImpl, R>
 {
     fn into_inline_connection(self, r: R) -> IcebergCatalogImpl {
         match self {
-            IcebergCatalogImpl::Rest(rest) => IcebergCatalogImpl::Rest(rest),
+            IcebergCatalogImpl::Rest(rest) => {
+                IcebergCatalogImpl::Rest(rest.into_inline_connection(r))
+            }
             IcebergCatalogImpl::S3TablesRest(s3tables) => {
                 IcebergCatalogImpl::S3TablesRest(s3tables.into_inline_connection(r))
             }
@@ -827,29 +875,72 @@ impl IcebergCatalogConnection<InlinedConnection> {
             props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
         }
 
-        let credential = rest
-            .credential
-            .get_string(
-                in_task,
-                &storage_configuration.connection_context.secrets_reader,
-            )
-            .await
-            .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
-        props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
+        // Catalog auth is configured through a combination of `props` and `.with_authenticator(...)`,
+        // which happen at different stages of the [`RestCatalogBuilder`] -> [`RestCatalog`]
+        // construction pipeline.
+        let (storage_factory, custom_authenticator) = match &rest.auth {
+            IcebergCatalogAuth::OAuth { credential, scope } => {
+                let credential = credential
+                    .get_string(
+                        in_task,
+                        &storage_configuration.connection_context.secrets_reader,
+                    )
+                    .await
+                    .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
+                props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
 
-        if let Some(scope) = &rest.scope {
-            props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
+                if let Some(scope) = scope {
+                    props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
+                }
+                (
+                    OpenDalStorageFactory::S3 {
+                        configured_scheme: "s3".to_string(),
+                        // When used with MinIO, Polaris returns a config with:
+                        //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
+                        // `iceberg-rust` forwards these props to `opendal`.
+                        // N.B. This is not confirmed to work with other catalog & storage implementations.
+                        customized_credential_load: None,
+                    },
+                    None,
+                )
+            }
+            IcebergCatalogAuth::Gcp(gcp_connection_reference) => {
+                let (creds_json, service_account) = gcp_connection_reference
+                    .connection
+                    .read_credentials(storage_configuration)
+                    .await
+                    .map_err(|e| anyhow!("failed to parse GCP service account JSON: {e}"))?;
+
+                props.insert(
+                    GCS_CREDENTIALS_JSON.to_owned(),
+                    base64::engine::general_purpose::STANDARD.encode(creds_json),
+                );
+                // We supplied a service account key. Don't look elsewhere for GCP credentials.
+                props.insert(GCS_DISABLE_VM_METADATA.to_owned(), "true".to_owned());
+                props.insert(GCS_DISABLE_CONFIG_LOAD.to_owned(), "true".to_owned());
+                if let Some(project_id) = service_account.project_id() {
+                    props.insert(GCS_USER_PROJECT.to_owned(), project_id.to_owned());
+                    props.insert(
+                        "header.x-goog-user-project".to_owned(),
+                        project_id.to_owned(),
+                    );
+                }
+
+                (
+                    OpenDalStorageFactory::Gcs,
+                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(
+                        Arc::new(GcpTokenProvider { service_account }),
+                    )),
+                )
+            }
+        };
+
+        let mut catalog =
+            RestCatalogBuilder::default().with_storage_factory(Arc::new(storage_factory));
+        if let Some(auth) = custom_authenticator {
+            catalog = catalog.with_authenticator(Arc::new(auth));
         }
-
-        let catalog = RestCatalogBuilder::default()
-            .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
-                configured_scheme: "s3".to_string(),
-                // Polaris returns a config with:
-                //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
-                // `iceberg-rust` forwards these props to `opendal`.
-                // N.B. This is not confirmed to work with other catalog & storage implementations.
-                customized_credential_load: None,
-            }))
+        let catalog = catalog
             .load("IcebergCatalog", props.into_iter().collect())
             .await
             .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
@@ -1748,12 +1839,6 @@ impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
 ///
 /// AWS credentials, region, and endpoint are inherited from the referenced
 /// [`AwsConnection`]; this struct only carries the per-registry settings.
-///
-/// NOTE: Stage 1 of the GSR rollout. The client crate
-/// (`mz-aws-glue-schema-registry`) does not exist yet; `validate` is a
-/// no-op until Stage 3 retrofits a real `GetRegistry` ping. The connection
-/// can be created and inspected, but cannot yet be attached to a source or
-/// sink.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct GlueSchemaRegistryConnection<C: ConnectionAccess = InlinedConnection> {
     /// The referenced AWS connection that supplies credentials, region, and
@@ -1780,11 +1865,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<GlueSchemaRegistryConnection, R
 
 impl<C: ConnectionAccess> GlueSchemaRegistryConnection<C> {
     fn validate_by_default(&self) -> bool {
-        // Stage 1 of the AWS Glue Schema Registry rollout: the client crate
-        // does not exist yet, and the no-op `validate` below succeeds
-        // unconditionally. Default-validating preserves the API contract so
-        // that Stage 3's real `GetRegistry` ping slots in without
-        // behavioral change.
+        // Matches CSR: default-validate so a bad registry name fails at
+        // `CREATE CONNECTION` rather than surfacing later on first use.
+        // Users can still opt out with `WITH (VALIDATE = false)`.
         true
     }
 }
@@ -1793,14 +1876,33 @@ impl GlueSchemaRegistryConnection {
     async fn validate(
         &self,
         _id: CatalogItemId,
-        _storage_configuration: &StorageConfiguration,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
-        // Stage 1: no-op. Real validation arrives in Stage 3 when the
-        // Glue client crate exists. Until then a `CREATE CONNECTION`
-        // succeeds even against a registry that doesn't exist; the
-        // failure will surface on first use (which is itself gated until
-        // source/sink integration lands in Stages 4/5).
-        std::future::ready(Ok(())).await
+        let enforce_external_addresses =
+            crate::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set());
+        let sdk_config = self
+            .aws_connection
+            .connection
+            .load_sdk_config(
+                &storage_configuration.connection_context,
+                self.aws_connection.connection_id,
+                // We are in a normal tokio context during validation.
+                InTask::No,
+                enforce_external_addresses,
+            )
+            .await?;
+        let client = mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
+        match client.get_registry(&self.registry_name).await {
+            Ok(_) => Ok(()),
+            Err(mz_aws_glue_schema_registry::GetRegistryError::NotFound) => Err(anyhow!(
+                "AWS Glue Schema Registry {:?} does not exist in the configured account/region",
+                self.registry_name
+            )),
+            Err(err) => Err(anyhow::Error::new(err).context(format!(
+                "failed to validate AWS Glue Schema Registry connection (registry={:?})",
+                self.registry_name
+            ))),
+        }
     }
 }
 

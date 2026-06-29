@@ -105,6 +105,9 @@ def get_minimal_system_parameters(
         "grpc_client_http2_keep_alive_timeout": "5s",
         "ore_overflowing_behavior": "panic",
         "unsafe_enable_table_keys": "true",
+        # Keep the 0dt stability soak out of the critical path for tests. The
+        # production default is much higher. Dedicated workflows override this.
+        "with_0dt_caught_up_check_stability_period": "0s",
         "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)
     }
@@ -226,6 +229,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_frontend_subscribes",
             "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_scoped_system_parameters",
+            "false",
             ["true", "false"],
         ),
         VariableSystemParameter(
@@ -509,6 +517,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "memory_limiter_interval",
     "memory_limiter_usage_bias",
     "memory_limiter_burst_factor",
+    "catalog_info_metrics_reconcile_interval",
     "compute_server_maintenance_interval",
     "compute_dataflow_max_inflight_bytes_cc",
     "compute_flat_map_fuel",
@@ -549,6 +558,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "crdb_keepalives_idle",
     "crdb_keepalives_interval",
     "crdb_keepalives_retries",
+    "pg_timestamp_oracle_statement_timeout",
     "persist_use_critical_since_txn",
     "use_global_txn_cache_source",
     "persist_batch_builder_max_outstanding_parts",
@@ -638,6 +648,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "with_0dt_caught_up_check_allowed_lag",
     "with_0dt_caught_up_check_cutoff",
     "enable_0dt_caught_up_replica_status_check",
+    "enable_0dt_caught_up_stability_check",
     "plan_insights_notice_fast_path_clusters_optimize_duration",
     "enable_expression_cache",
     "mz_metrics_lgalloc_map_refresh_interval",
@@ -669,8 +680,10 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mcp_agent",
     "enable_mcp_agent_query_tool",
     "enable_mcp_developer",
+    "enable_mcp_developer_query_tool",
     "mcp_max_response_size",
     "user_id_pool_batch_size",
+    "webhook_max_request_size_bytes",
 ]
 
 

@@ -1,0 +1,11 @@
+{
+  "create_table": {
+    "test_describe_fivetran_id": {
+      "columns": {
+        "v1": "DECIMAL",
+        "v2": "JSON"
+      }
+    }
+  },
+  "describe_table": ["test_describe_fivetran_id"]
+}

@@ -21,6 +21,7 @@ use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 use tokio::fs;
+use uuid::Uuid;
 
 use crate::action::{self, ControlFlow, State};
 use crate::format::avro::{self, Schema};
@@ -160,6 +161,10 @@ enum Format {
     Avro {
         schema: String,
         confluent_wire_format: bool,
+        /// If set, override the wire format with AWS Glue Schema Registry framing
+        /// using the given schema-version UUID. Mutually exclusive with
+        /// `confluent_wire_format=true`.
+        glue_schema_version_id: Option<Uuid>,
         /// Schema references (subject names) for Confluent Schema Registry
         references: Vec<String>,
     },
@@ -182,6 +187,10 @@ enum Transcoder {
     ConfluentAvro {
         schema: Schema,
         schema_id: i32,
+    },
+    GlueAvro {
+        schema: Schema,
+        schema_version_id: Uuid,
     },
     Protobuf {
         message: MessageDescriptor,
@@ -224,6 +233,26 @@ impl Transcoder {
                     // https://docs.confluent.io/3.3.0/schema-registry/docs/serializer-formatter.html#wire-format
                     out.write_u8(0).unwrap();
                     out.write_i32::<NetworkEndian>(*schema_id).unwrap();
+                    out.extend(avro::to_avro_datum(schema, val)?);
+                    Ok(Some(out))
+                } else {
+                    Ok(None)
+                }
+            }
+            Transcoder::GlueAvro {
+                schema,
+                schema_version_id,
+            } => {
+                if let Some(val) = Self::decode_json(row)? {
+                    let val = avro::from_json(&val, schema.top_node())?;
+                    let mut out = vec![];
+                    // AWS Glue Schema Registry wire format:
+                    // byte 0   = 0x03 (header version)
+                    // byte 1   = compression byte (0x00 = none)
+                    // bytes 2..18 = 16-byte schema-version UUID
+                    out.write_u8(0x03).unwrap();
+                    out.write_u8(0x00).unwrap();
+                    out.extend_from_slice(schema_version_id.as_bytes());
                     out.extend(avro::to_avro_datum(schema, val)?);
                     Ok(Some(out))
                 } else {
@@ -303,16 +332,30 @@ pub async fn run_ingest(
     let schema_id_var = cmd.args.opt_parse("set-schema-id-var")?;
     let key_schema_id_var = cmd.args.opt_parse("set-key-schema-id-var")?;
     let format = match cmd.args.string("format")?.as_str() {
-        "avro" => Format::Avro {
-            schema: cmd.args.string("schema")?,
-            confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
-            // TODO (maz): update README!
-            references: cmd
+        "avro" => {
+            let glue_schema_version_id = cmd
                 .args
-                .opt_string("references")
-                .map(|s| s.split(',').map(|s| s.to_string()).collect())
-                .unwrap_or_default(),
-        },
+                .opt_string("glue-schema-version-id")
+                .map(|s| Uuid::parse_str(&s).context("parsing glue-schema-version-id as UUID"))
+                .transpose()?;
+            let confluent_wire_format_explicit = cmd.args.opt_bool("confluent-wire-format")?;
+            if glue_schema_version_id.is_some() && confluent_wire_format_explicit == Some(true) {
+                bail!("confluent-wire-format=true is incompatible with glue-schema-version-id");
+            }
+            // Default: confluent unless Glue framing is requested.
+            let confluent_wire_format =
+                confluent_wire_format_explicit.unwrap_or_else(|| glue_schema_version_id.is_none());
+            Format::Avro {
+                schema: cmd.args.string("schema")?,
+                confluent_wire_format,
+                glue_schema_version_id,
+                references: cmd
+                    .args
+                    .opt_string("references")
+                    .map(|s| s.split(',').map(|s| s.to_string()).collect())
+                    .unwrap_or_default(),
+            }
+        }
         "protobuf" => {
             let descriptor_file = cmd.args.string("descriptor-file")?;
             let message = cmd.args.string("message")?;
@@ -331,17 +374,33 @@ pub async fn run_ingest(
     };
     let mut key_schema = cmd.args.opt_string("key-schema");
     let key_format = match cmd.args.opt_string("key-format").as_deref() {
-        Some("avro") => Some(Format::Avro {
-            schema: key_schema.take().ok_or_else(|| {
-                anyhow!("key-schema parameter required when key-format is present")
-            })?,
-            confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
-            references: cmd
+        Some("avro") => {
+            let key_glue_schema_version_id = cmd
                 .args
-                .opt_string("key-references")
-                .map(|s| s.split(',').map(|s| s.to_string()).collect())
-                .unwrap_or_default(),
-        }),
+                .opt_string("key-glue-schema-version-id")
+                .map(|s| Uuid::parse_str(&s).context("parsing key-glue-schema-version-id as UUID"))
+                .transpose()?;
+            let confluent_wire_format_explicit = cmd.args.opt_bool("confluent-wire-format")?;
+            if key_glue_schema_version_id.is_some() && confluent_wire_format_explicit == Some(true)
+            {
+                bail!("confluent-wire-format=true is incompatible with key-glue-schema-version-id");
+            }
+            // Default: confluent unless Glue framing is requested.
+            let confluent_wire_format = confluent_wire_format_explicit
+                .unwrap_or_else(|| key_glue_schema_version_id.is_none());
+            Some(Format::Avro {
+                schema: key_schema.take().ok_or_else(|| {
+                    anyhow!("key-schema parameter required when key-format is present")
+                })?,
+                confluent_wire_format,
+                glue_schema_version_id: key_glue_schema_version_id,
+                references: cmd
+                    .args
+                    .opt_string("key-references")
+                    .map(|s| s.split(',').map(|s| s.to_string()).collect())
+                    .unwrap_or_default(),
+            })
+        }
         Some("protobuf") => {
             let descriptor_file = cmd.args.string("key-descriptor-file")?;
             let message = cmd.args.string("key-message")?;
@@ -425,8 +484,16 @@ pub async fn run_ingest(
             match fmt {
                 Format::Avro {
                     confluent_wire_format,
+                    glue_schema_version_id,
                     ..
-                } => Some(*confluent_wire_format),
+                } => {
+                    // Glue framing is its own wire format — don't compare against CSR.
+                    if glue_schema_version_id.is_some() {
+                        None
+                    } else {
+                        Some(*confluent_wire_format)
+                    }
+                }
                 Format::Protobuf {
                     confluent_wire_format,
                     ..
@@ -550,8 +617,20 @@ async fn make_transcoder(
         Format::Avro {
             schema,
             confluent_wire_format,
+            glue_schema_version_id,
             references,
         } => {
+            if let Some(schema_version_id) = glue_schema_version_id {
+                if !references.is_empty() {
+                    bail!("schema references are not supported with glue-schema-version-id");
+                }
+                let schema = avro::parse_schema(&schema, &[])
+                    .with_context(|| format!("parsing avro schema: {}", schema))?;
+                return Ok(Transcoder::GlueAvro {
+                    schema,
+                    schema_version_id,
+                });
+            }
             if confluent_wire_format {
                 // Build references list by fetching each subject from the registry.
                 // Start with immediate references and automatically resolve transitive ones.

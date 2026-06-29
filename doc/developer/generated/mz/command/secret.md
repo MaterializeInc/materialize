@@ -1,6 +1,6 @@
 ---
 source: src/mz/src/command/secret.rs
-revision: d7d708372c
+revision: 12fbe31d24
 ---
 
 # mz::command::secret

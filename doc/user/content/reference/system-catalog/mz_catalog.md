@@ -126,7 +126,7 @@ Field               | Type      | Meaning
 `name`              | [`text`]  | The name of the cluster replica.
 `cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/reference/system-catalog/mz_catalog/#mz_clusters).
 `size`              | [`text`]  | The cluster replica's size, selected during creation.
-`availability_zone` | [`text`]  | The availability zone in which the cluster is running.
+`availability_zone` | [`text`]  | The availability zones the replica is provisioned in, comma-separated. `NULL` if nothing constrains the replica's placement.
 `owner_id`          | [`text`]  | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/reference/system-catalog/mz_catalog/#mz_roles).
 `disk`              | [`boolean`] | If the replica has a local disk.
 

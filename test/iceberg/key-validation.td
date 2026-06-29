@@ -86,7 +86,6 @@ contains:cannot be used as an Iceberg equality delete key
         NAMESPACE 'default_namespace',
         TABLE 'key_range_table'
     )
-    USING AWS CONNECTION aws_conn
     KEY (k) NOT ENFORCED
     MODE UPSERT
     WITH (COMMIT INTERVAL '1s');

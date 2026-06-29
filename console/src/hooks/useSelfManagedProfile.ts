@@ -25,13 +25,17 @@ export const useSelfManagedProfile = (
   auth: AuthContextProps | undefined,
 ): SelfManagedProfile => {
   const profile = auth?.user?.profile;
+  const isProfileValid =
+    typeof profile?.exp === "number" && profile.exp * 1000 > Date.now();
+  const oidcProfile = isProfileValid ? profile : undefined;
   const { results: sqlRole, isLoading } = useCurrentUser();
 
-  const oidcName = typeof profile?.name === "string" ? profile.name : undefined;
+  const oidcName =
+    typeof oidcProfile?.name === "string" ? oidcProfile.name : undefined;
   const oidcEmail =
-    typeof profile?.email === "string" ? profile.email : undefined;
+    typeof oidcProfile?.email === "string" ? oidcProfile.email : undefined;
   const oidcPicture =
-    typeof profile?.picture === "string" ? profile.picture : undefined;
+    typeof oidcProfile?.picture === "string" ? oidcProfile.picture : undefined;
 
   return {
     name: oidcName ?? sqlRole,

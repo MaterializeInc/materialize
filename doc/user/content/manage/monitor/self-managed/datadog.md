@@ -36,7 +36,7 @@ which has been tried and tested in production environments.
 
    {{< tip >}}
    You can use [this sample
-   `config.yml.example`](https://github.com/MaterializeIncLabs/materialize-monitoring/blob/main/sql_exporter/config.yml)
+   `config.yml.example`](https://github.com/MaterializeInc/materialize-monitoring/blob/main/legacy/sql_exporter/config.yml)
    as guidance to bootstrap your monitoring with some key Materialize metrics
    and indicators.
    {{</ tip >}}

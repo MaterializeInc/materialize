@@ -16,10 +16,32 @@
 use std::sync::Mutex;
 
 use foundationdb::api::NetworkAutoStop;
+use foundationdb::options::DatabaseOption;
 use mz_ore::url::SensitiveUrl;
 
 /// Re-export the `foundationdb` crate for convenience.
 pub use foundationdb::*;
+
+/// Default transaction timeout, in milliseconds, applied to a [`Database`] in
+/// tests via [`set_test_transaction_timeout`].
+///
+/// Chosen well below the test harness's 180s termination so that an unavailable
+/// or stalled server surfaces a `transaction_timed_out` error the test can
+/// report and retry on, rather than hanging until the harness kills the process.
+const TEST_TRANSACTION_TIMEOUT_MS: i32 = 60_000;
+
+/// Sets a default transaction timeout on `db` for use in tests.
+///
+/// Production code intentionally does not bound transactions here; that is a
+/// separate product decision. Tests call this so that a FoundationDB server that
+/// becomes unresponsive (for example under heavy parallel CI load) fails the
+/// affected operation promptly instead of blocking forever.
+pub fn set_test_transaction_timeout(db: &Database) {
+    db.set_option(DatabaseOption::TransactionTimeout(
+        TEST_TRANSACTION_TIMEOUT_MS,
+    ))
+    .expect("setting transaction timeout option");
+}
 
 /// FoundationDB network handle.
 /// The first element is `Some` if the network is initialized.
@@ -31,13 +53,14 @@ static FDB_NETWORK: Mutex<(Option<NetworkAutoStop>, bool)> = Mutex::new((None, f
 /// This function is safe to call multiple times - only the first call will
 /// actually initialize the network, subsequent calls return immediately.
 ///
-/// After calling `shutdown_network()`, any subsequent calls to this function
-/// will panic.
+/// The FoundationDB network can be booted once per process and can never be
+/// restarted: after [`shutdown_network()`], any subsequent call to this function
+/// panics.
 ///
-/// The user is required to call [`shutdown_network()`] before the process exits to
-/// ensure a clean shutdown of the FoundationDB network. Otherwise, strange memory
-/// corruption issues during shutdown may occur. This is a limitation of the
-/// FoundationDB C API.
+/// Before the process exits, drop all `Database` and transaction handles and then
+/// call [`shutdown_network()`]. Skipping the shutdown can segfault the
+/// FoundationDB client during teardown; calling it while a handle is still alive
+/// can instead block on the network thread join.
 pub fn init_network() {
     let mut guard = FDB_NETWORK.lock().expect("mutex poisoned");
     if guard.0.is_none() {
@@ -55,7 +78,12 @@ pub fn init_network() {
 
 /// Shut down the FoundationDB network.
 ///
-/// After calling this function, any subsequent calls to `init_network()` will panic.
+/// Call this once, after dropping all `Database` and transaction handles, before
+/// the process exits. Not stopping the network can segfault the client during
+/// teardown. The network can never be restarted afterwards: any subsequent call
+/// to [`init_network()`] will panic. Stopping the network joins the network
+/// thread, which can block indefinitely if a handle or in-flight transaction is
+/// still alive.
 pub fn shutdown_network() {
     let mut guard = FDB_NETWORK.lock().expect("mutex poisoned");
     if guard.0.is_some() {

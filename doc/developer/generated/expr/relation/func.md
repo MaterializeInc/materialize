@@ -1,12 +1,14 @@
 ---
 source: src/expr/src/relation/func.rs
-revision: 931f79a1d8
+revision: 31a56678e7
 ---
 
 # mz-expr::relation::func
 
-Defines `AggregateFunc`, the enum of all aggregate functions (sum, count, min, max, string_agg, array_agg, jsonb_agg, etc.) and their evaluation logic over `Datum` iterators.
+Defines `AggregateFunc`, the enum of all aggregate functions (sum, count, min, max, string_agg, array_agg, jsonb_agg, etc.) and their evaluation logic over `(Datum, Diff)` iterators.
+`AggregateFunc::eval` takes `Item = (Datum, Diff)` pairs: `count` sums diffs directly; signed integer sums use `sum_signed_int_counted`, which accumulates `value * diff` in i128; aggregates for which `ignores_multiplicity` returns true (min, max, any, all) evaluate over the distinct datums ignoring the diff; and all remaining aggregates use `expand_counts` to materialize one datum per unit of diff before evaluation.
 Also defines `TableFunc`, the enum of set-returning functions (generate_series, jsonb_array_elements, regexp_extract, generate_subscripts, etc.) that produce relation-valued output.
+`TableFunc::GenerateSeriesUnoptimized` is an int64 `generate_series` variant the optimizer promises to leave as an enumeration (no transform may apply cardinality shortcuts to it); it lives in `mz_unsafe` and is intended for tests that rely on enumeration work happening.
 `TableFunc::GenerateSubscriptsArray` generates subscripts for the requested dimension of an array, using the dimension's actual lower bound (not always 1) and upper bound (`lower_bound + length - 1`), correctly handling arrays with custom lower bounds.
 Contains the window function frame types (`WindowFrame`, `WindowFrameBound`, `WindowFrameUnits`) and evaluation for `LagLead` and `FirstLastValue` window functions.
 The `TableFunc::SubqueryScalar` evaluation checks the row count: a count of 1 returns no rows (success), a count greater than 1 returns `EvalError::MultipleRowsFromSubquery`, and a negative count returns `EvalError::NegativeRowsFromSubquery`.

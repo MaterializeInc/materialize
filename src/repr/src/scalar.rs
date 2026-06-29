@@ -1913,10 +1913,10 @@ impl RustType<ProtoScalarType> for SqlScalarType {
                         .map(|x| *x)
                         .into_rust_if_some("ProtoList::element_type")?,
                 ),
-                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust()).transpose()?,
             }),
             Record(x) => Ok(SqlScalarType::Record {
-                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust()).transpose()?,
                 fields: x.fields.into_rust()?,
             }),
             Map(x) => Ok(SqlScalarType::Map {
@@ -1925,7 +1925,7 @@ impl RustType<ProtoScalarType> for SqlScalarType {
                         .map(|x| *x)
                         .into_rust_if_some("ProtoMap::value_type")?,
                 ),
-                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust()).transpose()?,
             }),
             MzTimestamp(()) => Ok(SqlScalarType::MzTimestamp),
             Range(x) => Ok(SqlScalarType::Range {

@@ -1,6 +1,6 @@
 ---
 source: src/cloud-resources/src/crd.rs
-revision: e9d99038f9
+revision: ff4065dc30
 ---
 
 # cloud-resources::crd
@@ -8,4 +8,5 @@ revision: e9d99038f9
 Defines all Kubernetes custom resource definitions used by Materialize's cloud infrastructure, along with the `ManagedResource` trait and utilities for CRD registration with retry logic.
 Key submodules are `materialize` (`Materialize` CRD), `balancer` (`Balancer` CRD), `console` (`Console` CRD), `vpc_endpoint` (`VpcEndpoint` CRD), and `generated` (cert-manager CRD types).
 `register_versioned_crds` applies all CRDs via server-side apply and waits for establishment, using `VersionedCrd` to merge multiple schema versions.
+`VersionedCrd` carries an optional `conversion` field (`Option<CustomResourceConversion>`) that is applied to the merged CRD after `merge_crds` (which drops the conversion field); this is used to register a webhook conversion strategy between CRD versions.
 `MaterializeCertSpec` provides the user-visible subset of cert-manager `Certificate` fields.

@@ -38,6 +38,10 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
+use mz_postgres_util::{
+    Sql, batch_execute as pg_batch_execute, query as pg_query, query_one as pg_query_one,
+    sql as pg_sql,
+};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
 use rdkafka::ClientConfig;
@@ -59,6 +63,8 @@ pub mod consistency;
 
 mod duckdb;
 mod file;
+mod fivetran;
+mod glue;
 mod http;
 mod kafka;
 mod mysql;
@@ -184,6 +190,12 @@ pub struct Config {
     pub aws_config: SdkConfig,
     /// The ID of the AWS account that `aws_config` configures.
     pub aws_account: String,
+
+    // === Fivetran options. ===
+    /// Address of the Fivetran Destination that is currently running.
+    pub fivetran_destination_url: String,
+    /// Directory that is accessible to the Fivetran Destination.
+    pub fivetran_destination_files_path: String,
 }
 
 pub struct MaterializeState {
@@ -254,6 +266,10 @@ pub struct State {
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
+
+    // === Fivetran state. ===
+    fivetran_destination_url: String,
+    fivetran_destination_files_path: String,
 
     // === Rewrite state. ===
     rewrite_results: bool,
@@ -338,6 +354,14 @@ impl State {
         self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
             self.materialize.user.clone(),
+        );
+        self.cmd_vars.insert(
+            "testdrive.fivetran-destination-url".into(),
+            self.fivetran_destination_url.clone(),
+        );
+        self.cmd_vars.insert(
+            "testdrive.fivetran-destination-files-path".into(),
+            self.fivetran_destination_files_path.clone(),
         );
 
         for (key, value) in env::vars() {
@@ -430,22 +454,23 @@ impl State {
         )
         .await?;
 
-        let version = inner_client
-            .query_one("SELECT mz_version_num()", &[])
+        let version = pg_query_one(&inner_client, pg_sql!("SELECT mz_version_num()"), &[])
             .await
             .context("getting version of materialize")
             .map(|row| row.get::<_, i32>(0))?;
 
-        let semver = inner_client
-            .query_one("SELECT right(split_part(mz_version(), ' ', 1), -1)", &[])
-            .await
-            .context("getting semver of materialize")
-            .map(|row| row.get::<_, String>(0))?
-            .parse::<semver::Version>()
-            .context("parsing semver of materialize")?;
+        let semver = pg_query_one(
+            &inner_client,
+            pg_sql!("SELECT right(split_part(mz_version(), ' ', 1), -1)"),
+            &[],
+        )
+        .await
+        .context("getting semver of materialize")
+        .map(|row| row.get::<_, String>(0))?
+        .parse::<semver::Version>()
+        .context("parsing semver of materialize")?;
 
-        inner_client
-            .batch_execute("ALTER SYSTEM RESET ALL")
+        pg_batch_execute(&inner_client, pg_sql!("ALTER SYSTEM RESET ALL"))
             .await
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
 
@@ -457,10 +482,15 @@ impl State {
             } else {
                 "enable_unsafe_functions"
             };
-            let res = inner_client
-                .batch_execute(&format!("ALTER SYSTEM SET {enable_unsafe_functions} = on"))
-                .await
-                .context("enabling dangerous functions");
+            let res = pg_batch_execute(
+                &inner_client,
+                pg_sql!(
+                    "ALTER SYSTEM SET {} = on",
+                    Sql::ident(enable_unsafe_functions)
+                ),
+            )
+            .await
+            .context("enabling dangerous functions");
             if let Err(e) = res {
                 match e.root_cause().downcast_ref::<DbError>() {
                     Some(e) if *e.code() == SqlState::CANT_CHANGE_RUNTIME_PARAM => {
@@ -474,8 +504,7 @@ impl State {
             }
         }
 
-        for row in inner_client
-            .query("SHOW DATABASES", &[])
+        for row in pg_query(&inner_client, pg_sql!("SHOW DATABASES"), &[])
             .await
             .context("resetting materialize state: SHOW DATABASES")?
         {
@@ -483,15 +512,14 @@ impl State {
             if db_name.starts_with("testdrive_no_reset_") {
                 continue;
             }
-            let query = format!(
-                "DROP DATABASE {}",
-                postgres_protocol::escape::escape_identifier(&db_name)
-            );
-            sql::print_query(&query, None);
-            inner_client.batch_execute(&query).await.context(format!(
-                "resetting materialize state: DROP DATABASE {}",
-                db_name,
-            ))?;
+            let drop_database = pg_sql!("DROP DATABASE {}", Sql::ident(&db_name));
+            sql::print_query(drop_database.as_str(), None);
+            pg_batch_execute(&inner_client, drop_database)
+                .await
+                .context(format!(
+                    "resetting materialize state: DROP DATABASE {}",
+                    db_name,
+                ))?;
         }
 
         // Get all user clusters not running any objects owned by users
@@ -523,8 +551,7 @@ impl State {
                 AND
             owner_id LIKE 'u%';";
 
-        let inactive_clusters = inner_client
-            .query(inactive_user_clusters, &[])
+        let inactive_clusters = pg_query(&inner_client, Sql::new(inactive_user_clusters), &[])
             .await
             .context("resetting materialize state: inactive_user_clusters")?;
 
@@ -537,81 +564,91 @@ impl State {
             if cluster_name.starts_with("testdrive_no_reset_") {
                 continue;
             }
-            let query = format!(
-                "DROP CLUSTER {}",
-                postgres_protocol::escape::escape_identifier(&cluster_name)
-            );
-            sql::print_query(&query, None);
-            inner_client.batch_execute(&query).await.context(format!(
-                "resetting materialize state: DROP CLUSTER {}",
-                cluster_name,
-            ))?;
+            let drop_cluster = pg_sql!("DROP CLUSTER {}", Sql::ident(&cluster_name));
+            sql::print_query(drop_cluster.as_str(), None);
+            pg_batch_execute(&inner_client, drop_cluster)
+                .await
+                .context(format!(
+                    "resetting materialize state: DROP CLUSTER {}",
+                    cluster_name,
+                ))?;
         }
 
-        inner_client
-            .batch_execute("CREATE DATABASE materialize")
+        pg_batch_execute(&inner_client, pg_sql!("CREATE DATABASE materialize"))
             .await
             .context("resetting materialize state: CREATE DATABASE materialize")?;
 
         // Attempt to remove all users but the current user. Old versions of
         // Materialize did not support roles, so this degrades gracefully if
         // mz_roles does not exist.
-        if let Ok(rows) = inner_client.query("SELECT name FROM mz_roles", &[]).await {
+        if let Ok(rows) = pg_query(&inner_client, pg_sql!("SELECT name FROM mz_roles"), &[]).await {
             for row in rows {
                 let role_name: String = row.get(0);
                 if role_name == self.materialize.user || role_name.starts_with("mz_") {
                     continue;
                 }
-                let query = format!(
-                    "DROP ROLE {}",
-                    postgres_protocol::escape::escape_identifier(&role_name)
-                );
-                sql::print_query(&query, None);
-                inner_client.batch_execute(&query).await.context(format!(
-                    "resetting materialize state: DROP ROLE {}",
-                    role_name,
-                ))?;
+                let drop_role = pg_sql!("DROP ROLE {}", Sql::ident(&role_name));
+                sql::print_query(drop_role.as_str(), None);
+                pg_batch_execute(&inner_client, drop_role)
+                    .await
+                    .context(format!(
+                        "resetting materialize state: DROP ROLE {}",
+                        role_name,
+                    ))?;
             }
         }
 
         // Alter materialize user with all system privileges.
-        inner_client
-            .batch_execute(&format!(
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!(
                 "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
-                self.materialize.user
-            ))
-            .await?;
+                Sql::ident(&self.materialize.user)
+            ),
+        )
+        .await?;
 
         // Grant initial privileges.
-        inner_client
-            .batch_execute("GRANT USAGE ON DATABASE materialize TO PUBLIC")
-            .await?;
-        inner_client
-            .batch_execute(&format!(
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!("GRANT USAGE ON DATABASE materialize TO PUBLIC"),
+        )
+        .await?;
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!(
                 "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
-                self.materialize.user
-            ))
-            .await?;
-        inner_client
-            .batch_execute(&format!(
+                Sql::ident(&self.materialize.user)
+            ),
+        )
+        .await?;
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!(
                 "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
-                self.materialize.user
-            ))
-            .await?;
+                Sql::ident(&self.materialize.user)
+            ),
+        )
+        .await?;
 
         let cluster = match version {
             ..=8199 => "default",
             8200.. => "quickstart",
         };
-        inner_client
-            .batch_execute(&format!("GRANT USAGE ON CLUSTER {cluster} TO PUBLIC"))
-            .await?;
-        inner_client
-            .batch_execute(&format!(
-                "GRANT ALL PRIVILEGES ON CLUSTER {cluster} TO {}",
-                self.materialize.user
-            ))
-            .await?;
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!("GRANT USAGE ON CLUSTER {} TO PUBLIC", Sql::ident(cluster)),
+        )
+        .await?;
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!(
+                "GRANT ALL PRIVILEGES ON CLUSTER {} TO {}",
+                Sql::ident(cluster),
+                Sql::ident(&self.materialize.user)
+            ),
+        )
+        .await?;
 
         Ok(())
     }
@@ -834,8 +871,12 @@ impl Run for PosCommand {
                     }
                     "duckdb-execute" => duckdb::run_execute(builtin, state).await,
                     "duckdb-query" => duckdb::run_query(builtin, state).await,
+                    "fivetran-destination" => {
+                        fivetran::run_destination_command(builtin, state).await
+                    }
                     "file-append" => file::run_append(builtin, state).await,
                     "file-delete" => file::run_delete(builtin, state).await,
+                    "glue-create-schema" => glue::run_create_schema(builtin, state).await,
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
@@ -1136,6 +1177,10 @@ pub async fn create_state(
         postgres_clients: BTreeMap::new(),
         sql_server_clients: BTreeMap::new(),
 
+        // === Fivetran state. ===
+        fivetran_destination_url: config.fivetran_destination_url.clone(),
+        fivetran_destination_files_path: config.fivetran_destination_files_path.clone(),
+
         rewrites: Vec::new(),
         rewrite_pos_start: 0,
         rewrite_pos_end: 0,
@@ -1154,6 +1199,8 @@ async fn create_materialize_state(
         util::postgres::config_url(&config.materialize_internal_pgconfig)?;
 
     for (key, value) in &config.materialize_params {
+        // Session parameter values are raw SQL fragments from testdrive config.
+        #[allow(clippy::disallowed_methods)]
         pgclient
             .batch_execute(&format!("SET {key} = {value}"))
             .await
@@ -1196,8 +1243,7 @@ async fn create_materialize_state(
         materialize_internal_url.host_str().unwrap(),
         config.materialize_internal_http_port
     );
-    let environment_id = pgclient
-        .query_one("SELECT mz_environment_id()", &[])
+    let environment_id = pg_query_one(&pgclient, pg_sql!("SELECT mz_environment_id()"), &[])
         .await?
         .get::<_, String>(0)
         .parse()

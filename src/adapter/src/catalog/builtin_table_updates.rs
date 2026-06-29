@@ -16,29 +16,24 @@ use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, Versione
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
-    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_DEFAULT_PRIVILEGES,
-    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS,
-    MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
-    MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
-    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SESSIONS,
-    MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES,
-    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_COMMENTS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
+    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES,
+    MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES,
+    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS,
+    MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES,
+    MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterVariant, Connection, DataSourceDesc, Func, Index,
-    MaterializedView, Sink, Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, Index, MaterializedView, Sink,
+    Table, TableDataSource, Type, View,
 };
-use mz_controller::clusters::{
-    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaLocation,
-};
-use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
@@ -48,19 +43,17 @@ use mz_persist_client::batch::ProtoBatch;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
 };
 use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
-use mz_sql::catalog::{CatalogCluster, CatalogType, DefaultPrivilegeObject, TypeCategory};
+use mz_sql::catalog::{CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, SchemaSpecifier};
-use mz_sql::plan::{ClusterSchedule, ConnectionDetails, SshKey};
-use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
-use mz_sql::session::vars::SessionVars;
+use mz_sql::plan::{ConnectionDetails, SshKey};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
 use mz_storage_types::connections::KafkaConnection;
@@ -160,225 +153,6 @@ impl CatalogState {
             ]),
             diff,
         )
-    }
-
-    pub(super) fn pack_role_update(
-        &self,
-        id: RoleId,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        match id {
-            // PUBLIC role should not show up in mz_roles.
-            RoleId::Public => vec![],
-            id => {
-                let role = self.get_role(&id);
-                let builtin_supers = [MZ_SYSTEM_ROLE_ID, MZ_SUPPORT_ROLE_ID];
-
-                let rolcanlogin = if let Some(login) = role.attributes.login {
-                    login
-                } else {
-                    builtin_supers.contains(&role.id)
-                };
-
-                let rolsuper = if let Some(superuser) = role.attributes.superuser {
-                    Datum::from(superuser)
-                } else if builtin_supers.contains(&role.id) {
-                    // System roles (mz_system, mz_support) are superusers
-                    Datum::from(true)
-                } else {
-                    // In cloud environments, superuser status is determined
-                    // at login, so we set `rolsuper` to `null` here because
-                    // it cannot be known beforehand. For self-managed
-                    // auth, roles created without an explicit SUPERUSER
-                    // attribute would typically have `rolsuper` set to false.
-                    // However, since we cannot reliably distinguish between
-                    // cloud and self-managed here, we conservatively use NULL
-                    // for indeterminate cases.
-                    Datum::Null
-                };
-
-                let role_update = BuiltinTableUpdate::row(
-                    &*MZ_ROLES,
-                    Row::pack_slice(&[
-                        Datum::String(&role.id.to_string()),
-                        Datum::UInt32(role.oid),
-                        Datum::String(&role.name),
-                        Datum::from(role.attributes.inherit),
-                        Datum::from(rolcanlogin),
-                        rolsuper,
-                    ]),
-                    diff,
-                );
-                let mut updates = vec![role_update];
-
-                // HACK/TODO(parkmycar): Creating an empty SessionVars like this is pretty hacky,
-                // we should instead have a static list of all session vars.
-                let session_vars_reference = SessionVars::new_unchecked(
-                    &mz_build_info::DUMMY_BUILD_INFO,
-                    SYSTEM_USER.clone(),
-                    None,
-                );
-
-                for (name, val) in role.vars() {
-                    let result = session_vars_reference
-                        .inspect(name)
-                        .and_then(|var| var.check(val.borrow()));
-                    let Ok(formatted_val) = result else {
-                        // Note: all variables should have been validated by this point, so we
-                        // shouldn't ever hit this.
-                        tracing::error!(?name, ?val, ?result, "found invalid role default var");
-                        continue;
-                    };
-
-                    let role_var_update = BuiltinTableUpdate::row(
-                        &*MZ_ROLE_PARAMETERS,
-                        Row::pack_slice(&[
-                            Datum::String(&role.id.to_string()),
-                            Datum::String(name),
-                            Datum::String(&formatted_val),
-                        ]),
-                        diff,
-                    );
-                    updates.push(role_var_update);
-                }
-
-                updates
-            }
-        }
-    }
-
-    pub(super) fn pack_cluster_update(
-        &self,
-        name: &str,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let id = self.clusters_by_name[name];
-        let cluster = &self.clusters_by_id[&id];
-        let row = self.pack_privilege_array_row(cluster.privileges());
-        let privileges = row.unpack_first();
-        let (size, disk, replication_factor, azs, introspection_debugging, introspection_interval) =
-            match &cluster.config.variant {
-                ClusterVariant::Managed(config) => (
-                    Some(config.size.as_str()),
-                    Some(self.cluster_replica_size_has_disk(&config.size)),
-                    Some(config.replication_factor),
-                    if config.availability_zones.is_empty() {
-                        None
-                    } else {
-                        Some(config.availability_zones.clone())
-                    },
-                    Some(config.logging.log_logging),
-                    config.logging.interval.map(|d| {
-                        Interval::from_duration(&d)
-                            .expect("planning ensured this convertible back to interval")
-                    }),
-                ),
-                ClusterVariant::Unmanaged => (None, None, None, None, None, None),
-            };
-
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        packer.extend([
-            Datum::String(&id.to_string()),
-            Datum::String(name),
-            Datum::String(&cluster.owner_id.to_string()),
-            privileges,
-            cluster.is_managed().into(),
-            size.into(),
-            replication_factor.into(),
-            disk.into(),
-        ]);
-        if let Some(azs) = azs {
-            packer.push_list(azs.iter().map(|az| Datum::String(az)));
-        } else {
-            packer.push(Datum::Null);
-        }
-        packer.push(Datum::from(introspection_debugging));
-        packer.push(Datum::from(introspection_interval));
-
-        let mut updates = Vec::new();
-
-        updates.push(BuiltinTableUpdate::row(&*MZ_CLUSTERS, row, diff));
-
-        if let ClusterVariant::Managed(managed_config) = &cluster.config.variant {
-            let row = match managed_config.schedule {
-                ClusterSchedule::Manual => Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String("manual"),
-                    Datum::Null,
-                ]),
-                ClusterSchedule::Refresh {
-                    hydration_time_estimate,
-                } => Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String("on-refresh"),
-                    Datum::Interval(
-                        Interval::from_duration(&hydration_time_estimate)
-                            .expect("planning ensured that this is convertible back to Interval"),
-                    ),
-                ]),
-            };
-            updates.push(BuiltinTableUpdate::row(&*MZ_CLUSTER_SCHEDULES, row, diff));
-        }
-
-        updates
-    }
-
-    pub(super) fn pack_cluster_replica_update(
-        &self,
-        cluster_id: ClusterId,
-        name: &str,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let cluster = &self.clusters_by_id[&cluster_id];
-        let id = cluster.replica_id(name).expect("Must exist");
-        let replica = cluster.replica(id).expect("Must exist");
-
-        let (size, disk, az) = match &replica.config.location {
-            // TODO(guswynn): The column should be `availability_zones`, not
-            // `availability_zone`.
-            ReplicaLocation::Managed(ManagedReplicaLocation {
-                size,
-                availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
-                allocation: _,
-                billed_as: _,
-                internal: _,
-                pending: _,
-            }) => (
-                Some(&**size),
-                Some(self.cluster_replica_size_has_disk(size)),
-                Some(az.as_str()),
-            ),
-            ReplicaLocation::Managed(ManagedReplicaLocation {
-                size,
-                availability_zones: _,
-                allocation: _,
-                billed_as: _,
-                internal: _,
-                pending: _,
-            }) => (
-                Some(&**size),
-                Some(self.cluster_replica_size_has_disk(size)),
-                None,
-            ),
-            ReplicaLocation::Unmanaged(_) => (None, None, None),
-        };
-
-        let cluster_replica_update = BuiltinTableUpdate::row(
-            &*MZ_CLUSTER_REPLICAS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(name),
-                Datum::String(&cluster_id.to_string()),
-                Datum::from(size),
-                Datum::from(az),
-                Datum::String(&replica.owner_id.to_string()),
-                Datum::from(disk),
-            ]),
-            diff,
-        );
-
-        vec![cluster_replica_update]
     }
 
     pub(super) fn pack_item_update(
@@ -1689,17 +1463,37 @@ impl CatalogState {
     pub fn pack_all_replica_size_updates(&self) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut updates = Vec::new();
         for (size, alloc) in &self.cluster_replica_sizes.0 {
+            // Just invent something when the limits are `None`, which only happens in non-prod
+            // environments (tests, process orchestrator, etc.)
+            let DiskLimit(ByteSize(disk_bytes)) =
+                (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
+
+            // The disk column of mz_clusters / mz_cluster_replicas MVs needs
+            // `swap_enabled` and `disk_bytes`; expose them through a parallel
+            // internal table. Unlike the public sizes table below, we write
+            // here unconditionally — `cluster_replica_size_has_disk` previously
+            // indexed the in-memory map without checking `disabled`, so a
+            // managed cluster pinned to a disabled size still resolved its
+            // `disk` column from the real allocation. Writing disabled rows
+            // here preserves that behavior.
+            let internal_row = Row::pack_slice(&[
+                size.as_str().into(),
+                Datum::from(alloc.swap_enabled),
+                disk_bytes.into(),
+            ]);
+            updates.push(BuiltinTableUpdate::row(
+                &*MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
+                internal_row,
+                Diff::ONE,
+            ));
+
             if alloc.disabled {
                 continue;
             }
 
-            // Just invent something when the limits are `None`, which only happens in non-prod
-            // environments (tests, process orchestrator, etc.)
             let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
             let MemoryLimit(ByteSize(memory_bytes)) =
                 (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
-            let DiskLimit(ByteSize(disk_bytes)) =
-                (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
 
             let row = Row::pack_slice(&[
                 size.as_str().into(),
@@ -1761,52 +1555,6 @@ impl CatalogState {
                 Datum::from(conn.client_ip().map(|ip| ip.to_string()).as_deref()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),
-            diff,
-        )
-    }
-
-    pub fn pack_default_privileges_update(
-        &self,
-        default_privilege_object: &DefaultPrivilegeObject,
-        grantee: &RoleId,
-        acl_mode: &AclMode,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        BuiltinTableUpdate::row(
-            &*MZ_DEFAULT_PRIVILEGES,
-            Row::pack_slice(&[
-                default_privilege_object.role_id.to_string().as_str().into(),
-                default_privilege_object
-                    .database_id
-                    .map(|database_id| database_id.to_string())
-                    .as_deref()
-                    .into(),
-                default_privilege_object
-                    .schema_id
-                    .map(|schema_id| schema_id.to_string())
-                    .as_deref()
-                    .into(),
-                default_privilege_object
-                    .object_type
-                    .to_string()
-                    .to_lowercase()
-                    .as_str()
-                    .into(),
-                grantee.to_string().as_str().into(),
-                acl_mode.to_string().as_str().into(),
-            ]),
-            diff,
-        )
-    }
-
-    pub fn pack_system_privileges_update(
-        &self,
-        privileges: MzAclItem,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        BuiltinTableUpdate::row(
-            &*MZ_SYSTEM_PRIVILEGES,
-            Row::pack_slice(&[privileges.into()]),
             diff,
         )
     }

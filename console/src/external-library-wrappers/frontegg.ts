@@ -43,4 +43,4 @@ export {
   type ITenantsResponse,
   UserManagedByEnum,
 } from "@frontegg/rest-api";
-export { SocialLoginProviders } from "@frontegg/rest-api/auth/enums";
+export { SocialLoginProviders } from "@frontegg/rest-api/auth/enums.js";

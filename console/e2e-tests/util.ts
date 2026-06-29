@@ -354,6 +354,16 @@ export class TestContext {
               );
               return;
             }
+            if (
+              e.message.includes("unexpected number of bytes") ||
+              e.message.includes("socket hang up") ||
+              e.message.includes("ECONNRESET")
+            ) {
+              console.log(
+                `Retrying disable region for ${region.id} after transient network error, attempt ${attempts}`,
+              );
+              throw e;
+            }
             // If we get any other error, we should not retry
             throw new AbortError(e.message);
           }

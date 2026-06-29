@@ -1034,13 +1034,21 @@ impl ArrowColumn {
                     )
                 }
                 let dims_builder: &mut ArrowColumn = struct_builder.field_builder(1).unwrap();
-                if let ColBuilder::UInt8Builder(dims_builder) = &mut dims_builder.inner {
-                    dims_builder.append_value(arr.dims().ndims());
-                } else {
-                    anyhow::bail!(
-                        "Expected UInt8Builder for StructBuilder with Array datum: {:?}",
+                match &mut dims_builder.inner {
+                    ColBuilder::UInt8Builder(dims_builder) => {
+                        dims_builder.append_value(arr.dims().ndims());
+                    }
+                    // Iceberg has no narrow integer types, so the synthetic
+                    // `dimensions` field comes back from the Iceberg schema
+                    // widened to Int32. Promote `ndims` (a u8) the same way
+                    // smallint columns widen into an Int32Builder.
+                    ColBuilder::Int32Builder(dims_builder) => {
+                        dims_builder.append_value(i32::from(arr.dims().ndims()));
+                    }
+                    _ => anyhow::bail!(
+                        "Expected UInt8Builder or Int32Builder for StructBuilder with Array datum: {:?}",
                         struct_builder
-                    )
+                    ),
                 }
                 struct_builder.append(true)
             }

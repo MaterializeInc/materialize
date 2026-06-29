@@ -104,6 +104,71 @@ def post_ci_trigger_status() -> None:
         print(f"Failed to post CI trigger link status: {e}")
 
 
+def get_pull_request_labels() -> set[str]:
+    """Return the GitHub label names on the PR being built, or an empty set when
+    this is not a PR build or the lookup fails."""
+    pr = os.getenv("BUILDKITE_PULL_REQUEST")
+    if not pr or pr == "false":
+        return set()
+    try:
+        headers = {"Accept": "application/vnd.github+json"}
+        token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+            "GITHUB_TOKEN"
+        )
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        resp = requests.get(
+            f"https://api.github.com/repos/MaterializeInc/materialize/pulls/{pr}",
+            headers=headers,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return {label["name"] for label in resp.json().get("labels", [])}
+    except Exception as e:
+        print(f"Failed to get PR labels from GitHub, assuming none: {e}")
+        return set()
+
+
+def enable_nightly_for_labeled_pr(
+    pipeline: Any, pipeline_name: str, labels: set[str]
+) -> bool:
+    """Activate the test pipeline's Nightly trigger step on a PR carrying the
+    `ci-nightly` label. Returns whether it was activated."""
+    if pipeline_name != "test" or not ui.env_is_truthy("BUILDKITE_PULL_REQUEST"):
+        return False
+    if "ci-nightly" not in labels:
+        return False
+    for step in steps(pipeline):
+        if step.get("id") == "nightly":
+            step.pop("if", None)
+            env = step.setdefault("build", {}).setdefault("env", {})
+            # Propagating the PR number flips the triggered nightly's `lto`
+            # computation to False, so it builds the OPTIMIZED profile and reuses
+            # the test pipeline's already-built images instead of doing a fresh,
+            # far more expensive RELEASE/LTO build. Not a duplicate of any other
+            # env var. Do not drop it.
+            env["BUILDKITE_PULL_REQUEST"] = "$BUILDKITE_PULL_REQUEST"
+            # Signals the triggered Nightly build to trim to this PR's changes.
+            # The trim gates on this, not BUILDKITE_PULL_REQUEST, because a
+            # manual /trigger run also sets BUILDKITE_PULL_REQUEST but must run
+            # the full pipeline.
+            env["CI_TRIM_PIPELINE"] = "1"
+            return True
+    return False
+
+
+def annotate(style: str, context: str, markdown: str) -> None:
+    """Post a Buildkite annotation. Best-effort: a failure here must not break
+    pipeline generation."""
+    try:
+        spawn.runv(
+            ["buildkite-agent", "annotate", f"--style={style}", f"--context={context}"],
+            stdin=markdown.encode(),
+        )
+    except Exception as e:
+        print(f"Failed to post annotation: {e}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="mkpipeline",
@@ -192,8 +257,63 @@ so it is executed.""",
     elif test_selection := os.getenv("CI_TEST_SELECTION"):
         trim_test_selection_name(pipeline, set(test_selection.split(",")))
 
-    if args.pipeline == "test" and not os.getenv("CI_TEST_IDS"):
-        if args.coverage or args.sanitizer != Sanitizer.none:
+    pr_labels = get_pull_request_labels() if args.pipeline == "test" else set()
+
+    keep_steps = (
+        {"nightly"}
+        if enable_nightly_for_labeled_pr(pipeline, args.pipeline, pr_labels)
+        else set()
+    )
+
+    fail_build_reason = None
+    if "ci-no-build" in pr_labels:
+        skip_all_steps(pipeline)
+        fail_build_reason = "ci-no-build"
+    elif "ci-no-test" in pr_labels:
+        # The build steps are exempt from this trim, so they still run.
+        trim_test_selection_id(pipeline, set())
+        fail_build_reason = "ci-no-test"
+
+    # Surface label-driven changes as a Buildkite annotation, since otherwise
+    # they are only visible buried in this step's log. Skipped under --dry-run
+    # (the check-pipeline lint) so it doesn't annotate the lint's own build.
+    if not args.dry_run:
+        if fail_build_reason == "ci-no-build":
+            annotate(
+                "error",
+                "ci-labels",
+                "**`ci-no-build`** GitHub label: skipping build and all tests",
+            )
+        elif fail_build_reason == "ci-no-test":
+            annotate(
+                "error",
+                "ci-labels",
+                "**`ci-no-test`** GitHub label: skipping all tests",
+            )
+        elif "ci-no-trim" in pr_labels:
+            annotate(
+                "info",
+                "ci-labels",
+                "**`ci-no-trim`** GitHub label: not trimming unchanged steps",
+            )
+        if keep_steps and fail_build_reason is None:
+            annotate(
+                "info",
+                "ci-nightly",
+                "**`ci-nightly`** GitHub label: also triggering Nightly",
+            )
+
+    trim_for_pr_nightly = args.pipeline == "nightly" and ui.env_is_truthy(
+        "CI_TRIM_PIPELINE"
+    )
+    if (
+        (args.pipeline == "test" or trim_for_pr_nightly)
+        and not os.getenv("CI_TEST_IDS")
+        and fail_build_reason is None
+    ):
+        if "ci-no-trim" in pr_labels:
+            print("ci-no-trim label set, not trimming pipeline")
+        elif args.coverage or args.sanitizer != Sanitizer.none:
             print("Coverage/Sanitizer build, not trimming pipeline")
         elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
             print("On main branch or tag, so not trimming pipeline")
@@ -209,6 +329,7 @@ so it is executed.""",
                 args.coverage,
                 args.sanitizer,
                 lto,
+                keep_steps,
             )
             trim_ci_glue_exempt_steps(pipeline)
         else:
@@ -218,6 +339,7 @@ so it is executed.""",
                 args.coverage,
                 args.sanitizer,
                 lto,
+                keep_steps,
             )
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
@@ -251,6 +373,15 @@ so it is executed.""",
     if args.dry_run:
         cmd.append("--dry-run")
     spawn.runv(cmd, stdin=yaml.dump(pipeline).encode())
+
+    if fail_build_reason is not None and not args.dry_run:
+        # We return before the pipeline does its usual long-running work, so the
+        # daemon thread posting the "Additional CI runs" link may not have
+        # finished yet. Wait for it so the link still shows up on the skipped
+        # build. Bounded so an unresponsive GitHub API cannot stall the build.
+        ci_trigger_thread.join(timeout=30)
+        print(f"+++ `{fail_build_reason}` GitHub label set, failing the build")
+        return 1
 
     return 0
 
@@ -708,11 +839,19 @@ def trim_test_selection_name(pipeline: Any, steps_to_run: set[str]) -> None:
             step["skip"] = True
 
 
+def skip_all_steps(pipeline: Any) -> None:
+    for step in steps(pipeline):
+        if "wait" in step or "group" in step or "prompt" in step:
+            continue
+        step["skip"] = True
+
+
 def trim_tests_pipeline(
     pipeline: Any,
     coverage: bool,
     sanitizer: Sanitizer,
     lto: bool,
+    always_keep: Iterable[str] = frozenset(),
 ) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
@@ -726,6 +865,10 @@ def trim_tests_pipeline(
 
     A step is trimmed if a) none of its inputs have changed, and b) there are
     no other untrimmed steps that depend on it.
+
+    `always_keep` lists step ids to retain regardless of input changes, along
+    with their transitive dependencies. Used to keep a step with no inputs of
+    its own (e.g. the Nightly trigger activated for a labeled PR).
     """
     print("--- Resolving dependencies")
     repo = mzbuild.Repository(
@@ -860,6 +1003,10 @@ def trim_tests_pipeline(
     for step_id in changed:
         visit(steps[step_id])
 
+    for step_id in always_keep:
+        if step_id in steps:
+            visit(steps[step_id])
+
     # Print decisions, for debugging.
     for step in steps.values():
         print(f'{"✓" if step.id in needed else "✗"} {step.id}')
@@ -907,7 +1054,7 @@ def add_nightly_deploy_dependency(pipeline: Any, pipeline_name: str) -> None:
             assert previous_step and "wait" in previous_step
             previous_step["skip"] = True
 
-        if step.get("id") == "nightly-if-release":
+        if step.get("id") == "nightly":
             step["depends_on"] = "deploy"
 
         previous_step = step
@@ -1036,7 +1183,9 @@ def have_paths_changed(globs: Iterable[str]) -> bool:
         if not _github_changed_files:
             head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
             headers = {"Accept": "application/vnd.github+json"}
-            if token := os.getenv("GITHUB_TOKEN"):
+            if token := os.getenv(
+                "GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN"
+            ) or os.getenv("GITHUB_TOKEN"):
                 headers["Authorization"] = f"Bearer {token}"
 
             resp = requests.get(

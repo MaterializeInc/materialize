@@ -620,43 +620,79 @@ ON mz_internal.mz_cluster_workload_classes (id)",
     is_retained_metrics_object: false,
 };
 
-pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_cluster_schedules",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_CLUSTER_SCHEDULES_OID,
-    desc: RelationDesc::builder()
-        .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column(
-            "refresh_hydration_time_estimate",
-            SqlScalarType::Interval.nullable(true),
-        )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "cluster_id",
-            "The ID of the cluster. Corresponds to `mz_clusters.id`.",
-        ),
-        ("type", "`on-refresh`, or `manual`. Default: `manual`"),
-        (
-            "refresh_hydration_time_estimate",
-            "The interval given in the `HYDRATION TIME ESTIMATE` option.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "cluster_schedule",
-        description: "Cluster scheduling configuration",
-        links: &const {
-            [OntologyLink {
-                name: "belongs_to_cluster",
-                target: "cluster",
-                properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
-            }]
-        },
-        column_semantic_types: &[("cluster_id", SemanticType::ClusterId)],
-    }),
+pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_cluster_schedules",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_SCHEDULES_OID,
+        desc: RelationDesc::builder()
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column(
+                "refresh_hydration_time_estimate",
+                SqlScalarType::Interval.nullable(true),
+            )
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "cluster_id",
+                "The ID of the cluster. Corresponds to `mz_clusters.id`.",
+            ),
+            ("type", "`on-refresh`, or `manual`. Default: `manual`"),
+            (
+                "refresh_hydration_time_estimate",
+                "The interval given in the `HYDRATION TIME ESTIMATE` option.",
+            ),
+        ]),
+        // Only managed clusters produce a schedule row. The `schedule` field on
+        // `ManagedCluster` is a serde-tagged enum: the `Manual` unit variant
+        // serializes to the bare string "Manual", while `Refresh(opts)`
+        // serializes to `{"Refresh": {"rehydration_time_estimate": {"secs":..,
+        // "nanos":..}}}`. Convert the Duration to an Interval by composing a
+        // string and casting — Materialize has no `make_interval`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL type
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS cluster_id,
+    CASE
+        WHEN data->'value'->'config'->'variant'->'Managed'->'schedule' = '\"Manual\"'::jsonb
+            THEN 'manual'
+        WHEN data->'value'->'config'->'variant'->'Managed'->'schedule' ? 'Refresh'
+            THEN 'on-refresh'
+    END AS type,
+    CASE
+        WHEN data->'value'->'config'->'variant'->'Managed'->'schedule' ? 'Refresh' THEN
+            (
+                (data->'value'->'config'->'variant'->'Managed'->'schedule'->'Refresh'->'rehydration_time_estimate'->>'secs')
+                || ' seconds '
+                || ((data->'value'->'config'->'variant'->'Managed'->'schedule'->'Refresh'->'rehydration_time_estimate'->>'nanos')::bigint / 1000)::text
+                || ' microseconds'
+            )::interval
+    END AS refresh_hydration_time_estimate
+FROM mz_internal.mz_catalog_raw
+WHERE
+    data->>'kind' = 'Cluster' AND
+    jsonb_typeof(data->'value'->'config'->'variant') = 'object'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "cluster_schedule",
+            description: "Cluster scheduling configuration",
+            links: &const {
+                [OntologyLink {
+                    name: "belongs_to_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("cluster_id", SemanticType::ClusterId)],
+        }),
+    }
 });
 
 pub static MZ_INTERNAL_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> =
@@ -714,6 +750,60 @@ WHERE
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });
+
+/// System-only sidecar to `mz_cluster_replica_sizes`, exposing per-size
+/// configuration that the cluster MaterializedViews need to compute the
+/// `disk` column.
+///
+/// `mz_clusters.disk` and `mz_cluster_replicas.disk` are computed as
+/// `NOT swap_enabled AND disk_bytes != 0`. The orchestrator-supplied
+/// `swap_enabled` flag wasn't SQL-visible before the table→MV conversion,
+/// so this table is locked down with `access: vec![]` (same pattern as
+/// `mz_catalog_raw`): builtin MVs read it at bootstrap, but direct user
+/// `SELECT` is denied.
+///
+/// Unlike `mz_cluster_replica_sizes`, this table includes rows for sizes
+/// flagged `disabled` — `CatalogState::cluster_replica_size_has_disk`
+/// indexed the in-memory map without checking `disabled`, so a managed
+/// cluster pinned to a disabled size still resolved its `disk` column from
+/// the size's real `swap_enabled` / `disk_limit`. Including disabled sizes
+/// here preserves that behavior.
+pub static MZ_CLUSTER_REPLICA_SIZE_INTERNAL: LazyLock<BuiltinTable> = LazyLock::new(|| {
+    BuiltinTable {
+        name: "mz_cluster_replica_size_internal",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::TABLE_MZ_CLUSTER_REPLICA_SIZE_INTERNAL_OID,
+        desc: RelationDesc::builder()
+            .with_column("size", SqlScalarType::String.nullable(false))
+            .with_column("swap_enabled", SqlScalarType::Bool.nullable(false))
+            .with_column("disk_bytes", SqlScalarType::UInt64.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("size", "The human-readable replica size."),
+            (
+                "swap_enabled",
+                "Whether the replica size's pods are configured to allow swap. Used internally to compute the public `disk` column.",
+            ),
+            (
+                "disk_bytes",
+                "The replica size's disk limit in bytes (0 if explicitly disabled). Used internally to compute the public `disk` column.",
+            ),
+        ]),
+        is_retained_metrics_object: true,
+        access: vec![],
+        ontology: None,
+    }
+});
+
+pub const MZ_CLUSTER_REPLICA_SIZE_INTERNAL_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_size_internal_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICA_SIZE_INTERNAL_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_replica_size_internal (size)",
+    is_retained_metrics_object: true,
+};
 
 pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| {
     BuiltinSource {
@@ -2776,6 +2866,159 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     }),
 });
 
+pub static MZ_OVERRIDDEN_SYSTEM_PARAMETERS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_overridden_system_parameters",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_OVERRIDDEN_SYSTEM_PARAMETERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("value", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("name", "The name of the system parameter."),
+            (
+                "value",
+                "The environment-wide value of the system parameter.",
+            ),
+        ]),
+        // Projects the durable `system_configurations` collection (the
+        // `ALTER SYSTEM` set) out of `mz_catalog_raw` (the durable catalog as
+        // JSON): the key is `{name}` and the value is `{value}`. This surfaces
+        // only parameters with an explicit environment-wide override, mirroring
+        // the cluster- and replica-scoped views. Parameters left at their
+        // default are absent.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL value
+) AS
+SELECT
+    data->'key'->>'name' AS name,
+    data->'value'->>'value' AS value
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'ServerConfiguration'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "system_parameter",
+            description: "Environment-wide system parameter overrides",
+            links: &const { [] },
+            column_semantic_types: &[],
+        }),
+    });
+
+pub static MZ_CLUSTER_SYSTEM_PARAMETERS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_cluster_system_parameters",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_SYSTEM_PARAMETERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("value", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "cluster_id",
+                "The ID of the cluster. Corresponds to `mz_clusters.id`.",
+            ),
+            ("name", "The name of the cluster-coherent system parameter."),
+            ("value", "The cluster-scoped value of the system parameter."),
+        ]),
+        // Projects the durable `cluster_system_configurations` collection out of
+        // `mz_catalog_raw` (the durable catalog as JSON): the key is
+        // `{cluster_id, name}` and the value is `{value}`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL value
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'cluster_id') AS cluster_id,
+    data->'key'->>'name' AS name,
+    data->'value'->>'value' AS value
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'ClusterSystemConfiguration'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "cluster_system_parameter",
+            description: "Cluster-coherent system parameter overrides",
+            links: &const {
+                [OntologyLink {
+                    name: "scoped_to_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk_typed(
+                        "cluster_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::ClusterId,
+                    ),
+                }]
+            },
+            column_semantic_types: &[("cluster_id", SemanticType::ClusterId)],
+        }),
+    });
+
+pub static MZ_REPLICA_SYSTEM_PARAMETERS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_replica_system_parameters",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_REPLICA_SYSTEM_PARAMETERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("value", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "replica_id",
+                "The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.",
+            ),
+            ("name", "The name of the replica-local system parameter."),
+            ("value", "The replica-scoped value of the system parameter."),
+        ]),
+        // Projects the durable `replica_system_configurations` collection out of
+        // `mz_catalog_raw` (the durable catalog as JSON): the key is
+        // `{replica_id, name}` and the value is `{value}`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL replica_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL value
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'replica_id') AS replica_id,
+    data->'key'->>'name' AS name,
+    data->'value'->>'value' AS value
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'ReplicaSystemConfiguration'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "replica_system_parameter",
+            description: "Replica-local system parameter overrides",
+            links: &const {
+                [OntologyLink {
+                    name: "scoped_to_replica",
+                    target: "replica",
+                    properties: LinkProperties::fk_typed(
+                        "replica_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::ReplicaId,
+                    ),
+                }]
+            },
+            column_semantic_types: &[("replica_id", SemanticType::ReplicaId)],
+        }),
+    });
+
 pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_comments",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3687,21 +3930,35 @@ pub static PG_DESCRIPTION_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|
         column_comments: BTreeMap::new(),
         sql: "
 (
+    -- The classoid of a comment is the oid of the pg_catalog system catalog
+    -- that conceptually stores the commented object: pg_class for relations,
+    -- pg_type for types, pg_namespace for schemas. We scope the lookup to the
+    -- pg_catalog schema; otherwise a user-created object named e.g. `pg_class`
+    -- makes the scalar subqueries below match multiple rows and the whole view
+    -- errors for everyone. PostgreSQL's pg_description is a real catalog table
+    -- and is unaffected by such user objects, and so are we.
+    WITH pg_catalog_class AS (
+        SELECT oid, relname, database_name
+        FROM mz_internal.pg_class_all_databases
+        WHERE relnamespace = (
+            SELECT oid FROM mz_internal.pg_namespace_all_databases WHERE nspname = 'pg_catalog'
+        )
+    ),
     -- Gather all of the class oid's for objects that can have comments.
-    WITH pg_classoids AS (
+    pg_classoids AS (
         SELECT oid, database_name as oid_database_name,
-          (SELECT oid FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_class') AS classoid,
-          (SELECT database_name FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_class') AS class_database_name
+          (SELECT oid FROM pg_catalog_class WHERE relname = 'pg_class') AS classoid,
+          (SELECT database_name FROM pg_catalog_class WHERE relname = 'pg_class') AS class_database_name
         FROM mz_internal.pg_class_all_databases
         UNION ALL
         SELECT oid, database_name as oid_database_name,
-          (SELECT oid FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_type') AS classoid,
-          (SELECT database_name FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_type') AS class_database_name
+          (SELECT oid FROM pg_catalog_class WHERE relname = 'pg_type') AS classoid,
+          (SELECT database_name FROM pg_catalog_class WHERE relname = 'pg_type') AS class_database_name
         FROM mz_internal.pg_type_all_databases
         UNION ALL
         SELECT oid, database_name as oid_database_name,
-          (SELECT oid FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_namespace') AS classoid,
-          (SELECT database_name FROM mz_internal.pg_class_all_databases WHERE relname = 'pg_namespace') AS class_database_name
+          (SELECT oid FROM pg_catalog_class WHERE relname = 'pg_namespace') AS classoid,
+          (SELECT database_name FROM pg_catalog_class WHERE relname = 'pg_namespace') AS class_database_name
         FROM mz_internal.pg_namespace_all_databases
     ),
 
@@ -5599,7 +5856,12 @@ FROM mz_internal.mz_show_system_privileges
 WHERE
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE pg_has_role(grantee, 'USAGE')
+        -- Semantically equivalent to pg_has_role(grantee, 'USAGE'), which checks
+        -- whether the current user holds role `grantee`. For a nonexistent grantee
+        -- name, both return false. We use mz_session_role_memberships() instead
+        -- because pg_has_role internally calls mz_role_oid_memberships(), which
+        -- loads the full system role graph and is blocked in restricted sessions.
+        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -5661,7 +5923,12 @@ FROM mz_internal.mz_show_cluster_privileges
 WHERE
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE pg_has_role(grantee, 'USAGE')
+        -- Semantically equivalent to pg_has_role(grantee, 'USAGE'), which checks
+        -- whether the current user holds role `grantee`. For a nonexistent grantee
+        -- name, both return false. We use mz_session_role_memberships() instead
+        -- because pg_has_role internally calls mz_role_oid_memberships(), which
+        -- loads the full system role graph and is blocked in restricted sessions.
+        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -5723,7 +5990,12 @@ FROM mz_internal.mz_show_database_privileges
 WHERE
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE pg_has_role(grantee, 'USAGE')
+        -- Semantically equivalent to pg_has_role(grantee, 'USAGE'), which checks
+        -- whether the current user holds role `grantee`. For a nonexistent grantee
+        -- name, both return false. We use mz_session_role_memberships() instead
+        -- because pg_has_role internally calls mz_role_oid_memberships(), which
+        -- loads the full system role graph and is blocked in restricted sessions.
+        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -5797,7 +6069,12 @@ FROM mz_internal.mz_show_schema_privileges
 WHERE
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE pg_has_role(grantee, 'USAGE')
+        -- Semantically equivalent to pg_has_role(grantee, 'USAGE'), which checks
+        -- whether the current user holds role `grantee`. For a nonexistent grantee
+        -- name, both return false. We use mz_session_role_memberships() instead
+        -- because pg_has_role internally calls mz_role_oid_memberships(), which
+        -- loads the full system role graph and is blocked in restricted sessions.
+        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -5978,7 +6255,12 @@ FROM mz_internal.mz_show_all_privileges
 WHERE
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE pg_has_role(grantee, 'USAGE')
+        -- Semantically equivalent to pg_has_role(grantee, 'USAGE'), which checks
+        -- whether the current user holds role `grantee`. For a nonexistent grantee
+        -- name, both return false. We use mz_session_role_memberships() instead
+        -- because pg_has_role internally calls mz_role_oid_memberships(), which
+        -- loads the full system role graph and is blocked in restricted sessions.
+        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -6084,7 +6366,12 @@ FROM mz_internal.mz_show_default_privileges
 WHERE
     CASE
         WHEN grantee = 'PUBLIC' THEN true
-        ELSE pg_has_role(grantee, 'USAGE')
+        -- Semantically equivalent to pg_has_role(grantee, 'USAGE'), which checks
+        -- whether the current user holds role `grantee`. For a nonexistent grantee
+        -- name, both return false. We use mz_session_role_memberships() instead
+        -- because pg_has_role internally calls mz_role_oid_memberships(), which
+        -- loads the full system role graph and is blocked in restricted sessions.
+        ELSE grantee = ANY(mz_internal.mz_session_role_memberships())
     END"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,

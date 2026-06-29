@@ -29,7 +29,6 @@ clap = { workspace = true, features = ["env"] }
 columnar.workspace = true
 columnation.workspace = true
 crossbeam-channel.workspace = true
-csv-core.workspace = true
 dec.workspace = true
 differential-dataflow.workspace = true
 fail.workspace = true
@@ -41,6 +40,7 @@ maplit.workspace = true
 mysql_async.workspace = true
 mysql_common.workspace = true
 mz-arrow-util = { path = "../arrow-util" }
+mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
@@ -84,6 +84,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_bytes.workspace = true
 sha2.workspace = true
+sqlparser.workspace = true
 tiberius.workspace = true
 timely.workspace = true
 tokio.workspace = true

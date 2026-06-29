@@ -28,6 +28,9 @@ def test_full_testdrive(mz: MaterializeApplication) -> None:
         glob.glob(f"testdrive/{args.file_pattern}", root_dir=MZ_ROOT / "test")
     )
 
+    # TODO: database-issues#7827 (test requires fivetran running in cloudtest)
+    matching_files.remove("testdrive/fivetran-destination.td")
+
     sharded_files = buildkite.shard_list(matching_files, lambda file: file)
 
     print(f"Files: {sharded_files}")

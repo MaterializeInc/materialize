@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/durable/initialize.rs
-revision: 9d0a7c3c6f
+revision: 80f8711523
 ---
 
 # catalog::durable::initialize

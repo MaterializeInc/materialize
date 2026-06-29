@@ -315,6 +315,27 @@ contains:Expected one of PARTITION or SNAPSHOT or VERSION or COMMIT, found SIZE
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+> CREATE SINK zero_interval_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM src_tbl
+  INTO KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-kafka-sink-zero-interval-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '0s'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+> CREATE SINK clamp_refresh_interval_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM src_tbl
+  INTO KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-kafka-sink-clamp-interval-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '1ms'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+
 # All sinks are unlinked
 > SELECT bool_and(size IS NULL) FROM mz_sinks;
 true
@@ -336,3 +357,5 @@ snk7                  kafka  snk7_cluster                   ""
 snk8                  kafka  snk8_cluster                   ""
 snk9                  kafka  snk9_cluster                   ""
 snk_unsigned          kafka  snk_unsigned_cluster           ""
+zero_interval_sink    kafka ${arg.single-replica-cluster}   ""
+clamp_refresh_interval_sink  kafka ${arg.single-replica-cluster}  ""

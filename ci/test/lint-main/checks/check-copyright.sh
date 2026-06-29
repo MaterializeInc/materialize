@@ -30,6 +30,10 @@ copyright_files=$(grep -vE \
     -e '^\.cargo/config$' \
     -e '^.devcontainer/.*' \
     -e '(^|/)Cargo\.lock$' \
+    -e '(^|/)types\.lock$' \
+    -e '(^|/)\.mzprofile$' \
+    -e '^src/mz-deploy/src/cli/scaffold/gitignore$' \
+    -e '^test/mz-deploy/projects/multi-profile/v1/models/app/core/ambiguous\.sql$' \
     -e '^about\.toml$' \
     -e '^deny\.toml$' \
     -e '(^|/)Gemfile\.lock$' \
@@ -68,6 +72,8 @@ copyright_files=$(grep -vE \
     -e '^src/storage-types/src/snapshots/.*' \
     -e '^src/repr/src/adt/snapshots/.*' \
     -e '^src/environmentd/tests/testdata/timezones/.*\.csv' \
+    -e '^src/fivetran-destination/proto/(common|destination_sdk)\.proto$' \
+    -e '^test/fivetran-destination/.*\/00-README$' \
     -e '^console/CLOUD_REF$' \
     -e '^console/login_examples$' \
     -e '^console/.*__snapshots__/.*' \

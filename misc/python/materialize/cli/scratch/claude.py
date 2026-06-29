@@ -13,10 +13,12 @@ import argparse
 import datetime
 
 from materialize.cli.scratch import check_required_vars, list_all_instances
-from materialize.cli.scratch.create import MAX_AGE_DAYS, multi_json, pick_machine
+from materialize.cli.scratch.create import (
+    MAX_AGE_DAYS,
+    load_machine_descs,
+    pick_machine,
+)
 from materialize.scratch import (
-    MZ_ROOT,
-    MachineDesc,
     launch_cluster,
     mssh,
     print_instances,
@@ -33,6 +35,19 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         help="Machine config name from misc/scratch (e.g. dev-box).",
     )
     parser.add_argument(
+        "--instance-type",
+        type=str,
+        help=(
+            "Override the EC2 instance type. The AMI is derived from its "
+            "architecture. May be used without a machine config."
+        ),
+    )
+    parser.add_argument(
+        "--size-gb",
+        type=int,
+        help="Override the root volume size in GiB.",
+    )
+    parser.add_argument(
         "--max-age-days",
         type=float,
         default=MAX_AGE_DAYS,
@@ -41,10 +56,18 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    machine = args.machine or pick_machine()
+    # Resolve the machine config name eagerly so it can be shown below, unless
+    # the user supplied a bare instance type instead.
+    machine = args.machine
+    if machine is None and args.instance_type is None:
+        machine = pick_machine()
+    label = machine or args.instance_type
 
-    with open(MZ_ROOT / "misc" / "scratch" / f"{machine}.json") as f:
-        descs = [MachineDesc.model_validate(obj) for obj in multi_json(f.read())]
+    descs = load_machine_descs(
+        machine,
+        instance_type=args.instance_type,
+        size_gb=args.size_gb,
+    )
 
     if len(descs) != 1:
         raise RuntimeError(
@@ -61,7 +84,7 @@ def run(args: argparse.Namespace) -> None:
 
     if active:
         print_instances(active, numbered=True)
-        print(f"  {len(active) + 1}) Create new instance ({machine})")
+        print(f"  {len(active) + 1}) Create new instance ({label})")
         while True:
             choice = input("Select an instance or create new [#]: ").strip()
             try:
@@ -79,13 +102,13 @@ def run(args: argparse.Namespace) -> None:
         instance = None
 
     if instance is None:
-        say(f"Creating from {machine}...")
+        say(f"Creating from {label}...")
         max_age = datetime.timedelta(days=args.max_age_days)
         extra_tags = {"LaunchedBy": whoami()}
         instances = launch_cluster(
             descs,
             extra_tags=extra_tags,
-            delete_after=datetime.datetime.utcnow() + max_age,
+            delete_after=datetime.datetime.now(datetime.timezone.utc) + max_age,
         )
 
         print("Launched:")

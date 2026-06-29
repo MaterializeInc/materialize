@@ -22,7 +22,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
 use mz_ore::str::separated;
-use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log, soft_panic_or_log};
+use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
@@ -131,6 +131,48 @@ where
     }
 }
 
+/// Count-aware signed-integer sum. Accumulates `Σ value·diff` in `i128`, which
+/// matches the width of the dataflow's `Accum::SimpleNumber` accumulator (see
+/// `build_accumulable` and `finalize_accum` in `mz_compute::render::reduce`);
+/// `narrow` then reproduces that variant's `finalize_accum` arm. Unlike
+/// `expand_counts`, this consumes the multiplicity directly, so it is linear in
+/// the number of distinct values and correct for negative diffs (retractions),
+/// which `expand_counts` would silently drop.
+///
+/// Returns `Datum::Null` when no non-null value was accumulated, matching
+/// `finalize_accum`'s null handling: its `is_zero` check on `SimpleNumber`
+/// requires both a zero running sum and a zero non-null count.
+fn sum_signed_int_counted<'a, I, N>(datums: I, narrow: N) -> Datum<'a>
+where
+    I: IntoIterator<Item = (Datum<'a>, Diff)>,
+    N: FnOnce(i128) -> Datum<'a>,
+{
+    let mut accum: i128 = 0;
+    let mut non_nulls = Diff::ZERO;
+    for (datum, diff) in datums {
+        if datum.is_null() {
+            continue;
+        }
+        let value = match datum {
+            Datum::Int16(i) => i128::from(i),
+            Datum::Int32(i) => i128::from(i),
+            Datum::Int64(i) => i128::from(i),
+            other => panic!("unexpected non-integer datum in signed sum: {other:?}"),
+        };
+        // The dataflow accumulates `value * diff` in an `Overflowing<i128>`; we
+        // mirror that. Genuine i128 overflow would require summands far beyond
+        // any realistic input, so wrapping matches the dataflow's production
+        // behavior.
+        accum = accum.wrapping_add(value.wrapping_mul(i128::from(diff.into_inner())));
+        non_nulls += diff;
+    }
+    if accum == 0 && non_nulls.is_zero() {
+        Datum::Null
+    } else {
+        narrow(accum)
+    }
+}
+
 fn sum_numeric<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -150,15 +192,22 @@ where
     }
 }
 
-// TODO(benesch): remove potentially dangerous usage of `as`.
-#[allow(clippy::as_conversions)]
 fn count<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum<'a>>,
+    I: IntoIterator<Item = (Datum<'a>, Diff)>,
 {
+    // Count is accumulable: rather than expand each `(datum, diff)` into `diff`
+    // copies and count them, we sum the diffs directly. A net-negative count is
+    // possible (the surface does not define behavior in that case) and surfaces
+    // here as a negative result.
     // TODO(jkosh44) This should error when the count can't fit inside of an `i64` instead of returning a negative result.
-    let x: i64 = datums.into_iter().filter(|d| !d.is_null()).count() as i64;
-    Datum::from(x)
+    let mut count = Diff::ZERO;
+    for (datum, diff) in datums {
+        if !datum.is_null() {
+            count += diff;
+        }
+    }
+    Datum::from(count.into_inner())
 }
 
 fn any<'a, I>(datums: I) -> Datum<'a>
@@ -1354,7 +1403,8 @@ where
         //    (The current peer group will be the whole partition if there is no ORDER BY.)
         // We simply need to compute the aggregate once, on the entire partition, and each input
         // row will get this one aggregate value as result.
-        let result_value = wrapped_aggregate.eval(args, temp_storage);
+        let result_value =
+            wrapped_aggregate.eval(args.into_iter().map(|d| (d, Diff::ONE)), temp_storage);
         // Every row will get the above aggregate as result.
         for _ in 0..length {
             result.push(result_value);
@@ -1446,7 +1496,9 @@ where
                             //    the fixed size of the window, or that we are not retracting
                             //    arbitrary elements but doing queue operations. E.g., see
                             //    http://codercareer.blogspot.com/2012/02/no-33-maximums-in-sliding-windows.html
-                            let frame_values = args[frame_start..=frame_end].iter().cloned();
+                            let frame_values = args[frame_start..=frame_end]
+                                .iter()
+                                .map(|d| (*d, Diff::ONE));
                             let result_value = wrapped_aggregate.eval(frame_values, temp_storage);
                             result.push(result_value);
                         } else {
@@ -1775,11 +1827,16 @@ impl OneByOneAggr for NaiveOneByOneAggr {
     fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
         temp_storage.make_datum(|packer| {
             packer.push(if !self.reverse {
-                self.agg
-                    .eval(self.input.iter().map(|r| r.unpack_first()), temp_storage)
+                self.agg.eval(
+                    self.input.iter().map(|r| (r.unpack_first(), Diff::ONE)),
+                    temp_storage,
+                )
             } else {
                 self.agg.eval(
-                    self.input.iter().rev().map(|r| r.unpack_first()),
+                    self.input
+                        .iter()
+                        .rev()
+                        .map(|r| (r.unpack_first(), Diff::ONE)),
                     temp_storage,
                 )
             });
@@ -1949,8 +2006,110 @@ pub enum AggregateFunc {
     Dummy,
 }
 
+/// Expands an iterator of `(datum, diff)` into one `datum` per unit of `diff`.
+///
+/// A non-positive `diff` contributes no copies. This is used by aggregates that
+/// are sensitive to multiplicity (e.g. `sum`), to recover a flat datum stream
+/// from the count-aware surface.
+fn expand_counts<'a, I>(datums: I) -> impl Iterator<Item = Datum<'a>>
+where
+    I: IntoIterator<Item = (Datum<'a>, Diff)>,
+{
+    datums.into_iter().flat_map(|(datum, diff)| {
+        let copies = usize::try_from(diff.into_inner()).unwrap_or(0);
+        std::iter::repeat(datum).take(copies)
+    })
+}
+
 impl AggregateFunc {
+    /// Whether this aggregate's result is independent of the multiplicity of its
+    /// inputs (e.g. `min`/`max`/`any`/`all`).
+    ///
+    /// Such aggregates can ignore the `diff` of each input, evaluating over the
+    /// distinct datums rather than expanding by count. This keeps idempotent
+    /// reductions linear in the number of distinct inputs.
+    fn ignores_multiplicity(&self) -> bool {
+        use AggregateFunc::*;
+        matches!(
+            self,
+            MaxNumeric
+                | MaxInt16
+                | MaxInt32
+                | MaxInt64
+                | MaxUInt16
+                | MaxUInt32
+                | MaxUInt64
+                | MaxMzTimestamp
+                | MaxFloat32
+                | MaxFloat64
+                | MaxBool
+                | MaxString
+                | MaxDate
+                | MaxTimestamp
+                | MaxTimestampTz
+                | MaxInterval
+                | MaxTime
+                | MinNumeric
+                | MinInt16
+                | MinInt32
+                | MinInt64
+                | MinUInt16
+                | MinUInt32
+                | MinUInt64
+                | MinMzTimestamp
+                | MinFloat32
+                | MinFloat64
+                | MinBool
+                | MinString
+                | MinDate
+                | MinTimestamp
+                | MinTimestampTz
+                | MinInterval
+                | MinTime
+                | Any
+                | All
+        )
+    }
+
+    /// Evaluates the aggregate over an iterator of `(datum, diff)` pairs.
+    ///
+    /// Each aggregate consumes the multiplicity (`diff`) in whatever way is most
+    /// efficient: `count` sums the diffs, multiplicity-insensitive aggregates
+    /// (see `AggregateFunc::ignores_multiplicity`) ignore them, and everything
+    /// else expands each datum into `diff` copies (see `expand_counts`).
     pub fn eval<'a, I>(&self, datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+    where
+        I: IntoIterator<Item = (Datum<'a>, Diff)>,
+    {
+        // Accumulable aggregates consume multiplicity directly rather than
+        // expanding each `(datum, diff)` into `diff` copies. The cases handled
+        // here mirror the dataflow's accumulable reduction (`build_accumulable`
+        // in `mz_compute::render::reduce`) so that constant folding produces the
+        // same result the dataflow would. Signed integer sums are folded here;
+        // unsigned sums are not, because their negative-accumulation case is a
+        // query error in the dataflow that this `Datum`-returning path cannot
+        // signal. Floats and numerics use bespoke fixed-point/wide-decimal
+        // accumulators in the dataflow that `expand_counts` does not reproduce.
+        match self {
+            AggregateFunc::Count => count(datums),
+            AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => {
+                // `finalize_accum` narrows these to `i64` with wrapping.
+                sum_signed_int_counted(datums, |accum| {
+                    #[allow(clippy::as_conversions)]
+                    let narrowed = accum as i64;
+                    Datum::Int64(narrowed)
+                })
+            }
+            AggregateFunc::SumInt64 => sum_signed_int_counted(datums, Datum::from),
+            _ if self.ignores_multiplicity() => {
+                self.eval_datums(datums.into_iter().map(|(datum, _diff)| datum), temp_storage)
+            }
+            _ => self.eval_datums(expand_counts(datums), temp_storage),
+        }
+    }
+
+    /// Evaluates the aggregate over a flat iterator of datums, ignoring multiplicity.
+    fn eval_datums<'a, I>(&self, datums: I, temp_storage: &'a RowArena) -> Datum<'a>
     where
         I: IntoIterator<Item = Datum<'a>>,
     {
@@ -2010,7 +2169,7 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => sum_datum::<'a, I, f32, f32>(datums),
             AggregateFunc::SumFloat64 => sum_datum::<'a, I, f64, f64>(datums),
             AggregateFunc::SumNumeric => sum_numeric(datums),
-            AggregateFunc::Count => count(datums),
+            AggregateFunc::Count => unreachable!("Count is handled in `eval`"),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
             AggregateFunc::JsonbAgg { order_by } => jsonb_agg(datums, temp_storage, order_by),
@@ -2074,7 +2233,7 @@ impl AggregateFunc {
         temp_storage: &'a RowArena,
     ) -> Datum<'a>
     where
-        I: IntoIterator<Item = Datum<'a>>,
+        I: IntoIterator<Item = (Datum<'a>, Diff)>,
         W: OneByOneAggr,
     {
         match self {
@@ -2083,7 +2242,7 @@ impl AggregateFunc {
                 order_by,
                 window_frame,
             } => window_aggr::<_, W>(
-                datums,
+                expand_counts(datums),
                 temp_storage,
                 wrapped_aggregate,
                 order_by,
@@ -2094,7 +2253,7 @@ impl AggregateFunc {
                 order_by,
                 window_frame,
             } => fused_window_aggr::<_, W>(
-                datums,
+                expand_counts(datums),
                 temp_storage,
                 wrapped_aggregates,
                 order_by,
@@ -2110,11 +2269,13 @@ impl AggregateFunc {
         temp_storage: &'a RowArena,
     ) -> impl Iterator<Item = Datum<'a>>
     where
-        I: IntoIterator<Item = Datum<'a>>,
+        I: IntoIterator<Item = (Datum<'a>, Diff)>,
         W: OneByOneAggr,
     {
         // TODO: Use `enum_dispatch` to construct a unified iterator instead of `collect_vec`.
         assert!(self.can_fuse_with_unnest_list());
+        // Window functions are sensitive to multiplicity, so expand counts.
+        let datums = expand_counts(datums);
         match self {
             AggregateFunc::RowNumber { order_by } => {
                 row_number_no_list(datums, temp_storage, order_by).collect_vec()
@@ -3396,6 +3557,18 @@ pub enum TableFunc {
     CsvExtract(usize),
     GenerateSeriesInt32,
     GenerateSeriesInt64,
+    /// An int64 `generate_series` that the optimizer promises to leave as an
+    /// enumeration: no transform may match on this variant to replace its
+    /// evaluation with a cardinality shortcut (compare the collapse of an
+    /// unused `GenerateSeriesInt64` into `RepeatRowNonNegative`). Its
+    /// *argument* expressions are still simplified like any other scalar.
+    ///
+    /// Exposed as `mz_unsafe.generate_series_unoptimized` for tests that rely
+    /// on the work of enumeration actually happening (e.g. stress tests whose
+    /// load would otherwise be optimized away). As with everything in
+    /// `mz_unsafe`, it is not a supported surface: bug reports must not
+    /// depend on it.
+    GenerateSeriesUnoptimized,
     GenerateSeriesTimestamp,
     GenerateSeriesTimestampTz,
     /// Supplied with an input count,
@@ -3502,6 +3675,7 @@ impl TableFunc {
             | TableFunc::CsvExtract(_)
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
+            | TableFunc::GenerateSeriesUnoptimized
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz
             | TableFunc::GuardSubquerySize { .. }
@@ -3559,7 +3733,7 @@ impl TableFunc {
                 )?;
                 Ok(Box::new(res))
             }
-            TableFunc::GenerateSeriesInt64 => {
+            TableFunc::GenerateSeriesInt64 | TableFunc::GenerateSeriesUnoptimized => {
                 let res = generate_series(
                     datums[0].unwrap_int64(),
                     datums[1].unwrap_int64(),
@@ -3595,22 +3769,19 @@ impl TableFunc {
                 generate_subscripts_array(datums[0], datums[1].unwrap_int32())
             }
             TableFunc::GuardSubquerySize { column_type: _ } => {
-                // We error if the count is not one,
-                // and produce no rows if equal to one.
+                // A subquery used as an expression may return at most one row;
+                // for 0 or 1 we emit no rows and let the subquery's own output
+                // flow through. Zero is benign, not "can't happen": constant
+                // folding can prove the body empty and fold its count to a
+                // literal `0`, which decorrelates to NULL via the outer lookup.
                 let count = datums[0].unwrap_int64();
-                if count == 1 {
-                    Ok(Box::new([].into_iter()))
-                } else if count > 1 {
+                if count > 1 {
                     Err(EvalError::MultipleRowsFromSubquery)
                 } else if count < 0 {
+                    // Would require negative multiplicities to reach the guard.
                     Err(EvalError::NegativeRowsFromSubquery)
                 } else {
-                    // This shouldn't happen because this is not an SQL `count` but an MIR `count`,
-                    // which produces no output on 0 input rows.
-                    soft_panic_or_log!("subquery counting unexpectedly produced 0");
-                    Err(EvalError::Internal(
-                        "subquery counting unexpectedly produced 0".into(),
-                    ))
+                    Ok(Box::new([].into_iter()))
                 }
             }
             TableFunc::RepeatRow => Ok(Box::new(repeat_row(datums[0]).into_iter())),
@@ -3703,7 +3874,7 @@ impl TableFunc {
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
-            TableFunc::GenerateSeriesInt64 => {
+            TableFunc::GenerateSeriesInt64 | TableFunc::GenerateSeriesUnoptimized => {
                 let column_types = vec![SqlScalarType::Int64.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
@@ -3807,6 +3978,7 @@ impl TableFunc {
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeriesInt32 => 1,
             TableFunc::GenerateSeriesInt64 => 1,
+            TableFunc::GenerateSeriesUnoptimized => 1,
             TableFunc::GenerateSeriesTimestamp => 1,
             TableFunc::GenerateSeriesTimestampTz => 1,
             TableFunc::GenerateSubscriptsArray => 1,
@@ -3834,6 +4006,7 @@ impl TableFunc {
             | TableFunc::JsonbArrayElementsStringify
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
+            | TableFunc::GenerateSeriesUnoptimized
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz
             | TableFunc::GenerateSubscriptsArray
@@ -3868,6 +4041,7 @@ impl TableFunc {
             TableFunc::CsvExtract(_) => true,
             TableFunc::GenerateSeriesInt32 => true,
             TableFunc::GenerateSeriesInt64 => true,
+            TableFunc::GenerateSeriesUnoptimized => true,
             TableFunc::GenerateSeriesTimestamp => true,
             TableFunc::GenerateSeriesTimestampTz => true,
             TableFunc::GenerateSubscriptsArray => true,
@@ -3899,6 +4073,7 @@ impl fmt::Display for TableFunc {
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
+            TableFunc::GenerateSeriesUnoptimized => f.write_str("generate_series_unoptimized"),
             TableFunc::GenerateSeriesTimestamp => f.write_str("generate_series"),
             TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
             TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),
@@ -3971,3 +4146,40 @@ impl WithOrdinality {
 }
 
 pub const REPEAT_ROW_NAME: &str = "repeat_row";
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, RowArena, SqlScalarType};
+
+    use super::TableFunc;
+    use crate::EvalError;
+
+    /// 0 and 1 are valid (no guard rows), >1 errors with
+    /// `MultipleRowsFromSubquery`, <0 with `NegativeRowsFromSubquery`. Zero is
+    /// legitimate, not "can't happen": constant folding can fold an empty
+    /// subquery's count to `0`, which must not panic (regression for #37049).
+    #[mz_ore::test]
+    fn guard_subquery_size_accepts_zero_and_one() {
+        let func = TableFunc::GuardSubquerySize {
+            column_type: SqlScalarType::Int64,
+        };
+        let temp_storage = RowArena::new();
+
+        for count in [0_i64, 1] {
+            let rows = func
+                .eval(&[Datum::Int64(count)], &temp_storage)
+                .unwrap_or_else(|e| panic!("count {count} should be accepted, got {e:?}"))
+                .count();
+            assert_eq!(rows, 0, "count {count} should emit no guard rows");
+        }
+
+        assert_eq!(
+            func.eval(&[Datum::Int64(2)], &temp_storage).err(),
+            Some(EvalError::MultipleRowsFromSubquery),
+        );
+        assert_eq!(
+            func.eval(&[Datum::Int64(-1)], &temp_storage).err(),
+            Some(EvalError::NegativeRowsFromSubquery),
+        );
+    }
+}

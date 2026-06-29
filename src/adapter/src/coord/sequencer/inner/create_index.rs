@@ -219,6 +219,7 @@ impl Coordinator {
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id))
             .override_from(&config.features);
 
         // TODO(mgree): calculate statistics (need a timestamp)
@@ -290,7 +291,7 @@ impl Coordinator {
         // drops are caught between stages instead of panicking later when the
         // persisted SQL is re-parsed during catalog application.
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             resolved_ids.items().copied().collect(),
             Some(plan.index.cluster_id),
             None,
@@ -331,6 +332,7 @@ impl Coordinator {
 
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(*cluster_id))
             .override_from(&explain_ctx);
         let optimizer_features = optimizer_config.features.clone();
 
@@ -644,6 +646,7 @@ impl Coordinator {
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id))
             .override_from(&config.features);
 
         let rows = optimizer_trace

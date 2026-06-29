@@ -4,7 +4,7 @@ _shtab_scratch_subparsers=('login' 'create' 'list' 'ls' 'ssh' 'sftp' 'destroy' '
 
 _shtab_scratch_option_strings=('-h' '--help')
 _shtab_scratch_login_option_strings=('-h' '--help')
-_shtab_scratch_create_option_strings=('-h' '--help' '--key-name' '--security-group-name' '--extra-tags' '--instance-profile' '--output-format' '--git-rev' '--ssh' '--max-age-days')
+_shtab_scratch_create_option_strings=('-h' '--help' '--key-name' '--security-group-name' '--extra-tags' '--instance-profile' '--output-format' '--git-rev' '--ssh' '--instance-type' '--size-gb' '--max-age-days')
 _shtab_scratch_list_option_strings=('-h' '--help' '--all' '--output-format')
 _shtab_scratch_ls_option_strings=('-h' '--help' '--all' '--output-format')
 _shtab_scratch_ssh_option_strings=('-h' '--help')
@@ -14,8 +14,8 @@ _shtab_scratch_rm_option_strings=('-h' '--help' '--all-mine' '-y' '--yes' '--out
 _shtab_scratch_push_option_strings=('-h' '--help' '--rev')
 _shtab_scratch_completion_option_strings=('-h' '--help')
 _shtab_scratch_forward_option_strings=('-h' '--help')
-_shtab_scratch_go_option_strings=('-h' '--help' '--max-age-days')
-_shtab_scratch_claude_option_strings=('-h' '--help' '--max-age-days')
+_shtab_scratch_go_option_strings=('-h' '--help' '--instance-type' '--size-gb' '--max-age-days')
+_shtab_scratch_claude_option_strings=('-h' '--help' '--instance-type' '--size-gb' '--max-age-days')
 
 
 

@@ -71,10 +71,7 @@ use crate::memory;
 pub(crate) type Timestamp = mz_repr::Timestamp;
 
 /// The minimum value of an epoch.
-///
-/// # Safety
-/// `new_unchecked` is safe to call with a non-zero value.
-const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
+const MIN_EPOCH: Epoch = Epoch::new(1).expect("1 is non-zero");
 
 /// Human readable catalog shard name.
 const CATALOG_SHARD_NAME: &str = "catalog";
@@ -849,6 +846,22 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     }
                     StateUpdateKind::SystemConfiguration(key, value) => {
                         apply(&mut snapshot.system_configurations, key, value, diff);
+                    }
+                    StateUpdateKind::ClusterSystemConfiguration(key, value) => {
+                        apply(
+                            &mut snapshot.cluster_system_configurations,
+                            key,
+                            value,
+                            diff,
+                        );
+                    }
+                    StateUpdateKind::ReplicaSystemConfiguration(key, value) => {
+                        apply(
+                            &mut snapshot.replica_system_configurations,
+                            key,
+                            value,
+                            diff,
+                        );
                     }
                     StateUpdateKind::SystemObjectMapping(key, value) => {
                         apply(&mut snapshot.system_object_mappings, key, value, diff);
@@ -2049,6 +2062,14 @@ impl Trace {
                 StateUpdateKind::SystemConfiguration(k, v) => {
                     trace.system_configurations.values.push(((k, v), ts, diff))
                 }
+                StateUpdateKind::ClusterSystemConfiguration(k, v) => trace
+                    .cluster_system_configurations
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::ReplicaSystemConfiguration(k, v) => trace
+                    .replica_system_configurations
+                    .values
+                    .push(((k, v), ts, diff)),
                 StateUpdateKind::SystemObjectMapping(k, v) => {
                     trace.system_object_mappings.values.push(((k, v), ts, diff))
                 }

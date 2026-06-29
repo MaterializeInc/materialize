@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# gen-metrics-catalog — regenerate the `metric!` catalog consumed by the docs.
+#
+# Walks the Rust source tree for `metric!` definitions and writes them to
+# doc/user/data/metrics.yml, or to the file given as the first argument.
+#
+# To verify the checked-in catalog is up to date, run
+# ci/test/lint-metrics-catalog.sh (pass --rewrite to update it).
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+cargo run --quiet -p mz-metrics-catalog -- src "${1:-doc/user/data/metrics.yml}"

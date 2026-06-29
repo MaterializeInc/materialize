@@ -9,7 +9,14 @@
 
 MZFROM ubuntu-base
 
-RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends postgresql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends ca-certificates postgresql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# testdrive's AWS client uses vendored OpenSSL, which looks for the trust store
+# in its compiled-in default dir (/usr/local/ssl/certs) rather than where
+# `ca-certificates` installs it. Point it at the system bundle so TLS to real
+# AWS (e.g. Glue/STS in the aws-glue-schema-registry `aws` workflow) verifies.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_DIR=/etc/ssl/certs
 
 # Install the Protobuf compiler from protobuf-src.
 COPY protobuf-bin /usr/local/bin/

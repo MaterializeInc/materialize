@@ -17,6 +17,14 @@ The syntax supports the `ALL [PRIVILEGES]` shorthand to refer to all
 [*applicable* privileges](/sql/grant-privilege/#available-privileges) for the
 object type.
 
+For PostgreSQL compatibility, you can reference views, materialized views,
+and sources with the `TABLE` keyword. With `ON TABLE`, the `ALL [PRIVILEGES]`
+shorthand expands to the full table privilege set
+(`SELECT, INSERT, UPDATE, DELETE`), even if some of those privileges aren't
+meaningful for the object type. The non-applicable privileges have no
+runtime effect. They're stored so that a later `REVOKE ALL ON TABLE` can
+clear every privilege previously granted through the same shorthand.
+
 {{</note>}}
 
 {{< tabs >}}
@@ -99,7 +107,19 @@ For specific materialized view(s)/view(s)/source(s):
 
 ```mzsql
 GRANT <SELECT | ALL [PRIVILEGES]>
-ON [TABLE] <name> [, <name> ...] -- For PostgreSQL compatibility, if specifying type, use TABLE
+ON <name> [, <name> ...]
+TO <role_name> [, ... ];
+```
+
+For PostgreSQL compatibility, the `TABLE` keyword is also accepted. With the
+`TABLE` syntax, you can name `INSERT`, `UPDATE`, and `DELETE` explicitly, and
+`ALL [PRIVILEGES]` expands to the full table privilege set
+(`SELECT, INSERT, UPDATE, DELETE`). The non-applicable privileges have no
+runtime effect, but they're stored so a matching `REVOKE ALL` can clear them.
+
+```mzsql
+GRANT <SELECT | INSERT | UPDATE | DELETE | ALL [PRIVILEGES]> [, ...]
+ON TABLE <name> [, <name> ...]
 TO <role_name> [, ... ];
 ```
 

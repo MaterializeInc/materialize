@@ -32,7 +32,8 @@ use axum::Json;
 use axum::response::IntoResponse;
 use http::{HeaderMap, HeaderValue, StatusCode};
 use mz_adapter_types::dyncfgs::{
-    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_DEVELOPER, MCP_MAX_RESPONSE_SIZE,
+    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_DEVELOPER,
+    ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
 };
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
@@ -470,7 +471,14 @@ async fn handle_mcp_request(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
-    let query_tool_enabled = ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs);
+    // Per-endpoint feature flag for the `query` tool. Agent and developer have
+    // independent rollouts; collapsing to one bool keeps the downstream
+    // signatures unchanged since each handler invocation is already bound to a
+    // single endpoint.
+    let query_tool_enabled = match endpoint_type {
+        McpEndpointType::Agent => ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs),
+        McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
+    };
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
 
     // Tag MCP-originated sessions so they're distinguishable in
@@ -627,7 +635,7 @@ async fn handle_mcp_method(
     match &request.method {
         McpMethod::Initialize(_) => {
             debug!(endpoint = %endpoint_type, "Processing initialize");
-            handle_initialize(endpoint_type).await
+            handle_initialize(endpoint_type, query_tool_enabled).await
         }
         McpMethod::ToolsList => {
             debug!(endpoint = %endpoint_type, "Processing tools/list");
@@ -653,43 +661,63 @@ async fn handle_mcp_method(
 
 /// Instructions returned in the `initialize` response for each endpoint type.
 /// These guide the AI agent on how to use the server correctly.
-fn endpoint_instructions(endpoint_type: McpEndpointType) -> Option<String> {
+fn endpoint_instructions(
+    endpoint_type: McpEndpointType,
+    query_tool_enabled: bool,
+) -> Option<String> {
     match endpoint_type {
-        McpEndpointType::Agent => Some(concat!(
-            "You have access to Materialize data products via MCP. ",
-            "Prefer indexed objects (served from memory) over unindexed materialized views ",
-            "(read from persistent storage). `read_data_product` automatically routes the ",
-            "read to the cluster recorded in the data product catalog so indexes are used; ",
-            "you only need to set the `cluster` parameter if you intentionally want the ",
-            "read to run on a different cluster (e.g. one with larger or more replicas). ",
-            "`get_data_product_details` returns a `hydration` object with `hydrated`, ",
-            "`replica_count`, and `hydrated_replica_count` fields. Reads never return ",
-            "partial data: a read against a not-yet-hydrated product blocks until the ",
-            "dataflow catches up, and may hit the request timeout. Check `hydrated` ",
-            "before reading: if it is false and `replica_count` is greater than 0, the ",
-            "dataflow is still warming up, so wait and retry; if `replica_count` is 0 the ",
-            "cluster has no replicas and the read cannot make progress until one is added.",
-        ).to_string()),
-        McpEndpointType::Developer => Some(concat!(
-            "You are connected to the Materialize developer MCP server. ",
-            "You have read-only access to system catalog tables (mz_*, pg_catalog, information_schema) ",
-            "for troubleshooting and observability.\n\n",
-            "IMPORTANT: Before writing queries, discover table schemas using the mz_ontology tables:\n",
-            "- mz_internal.mz_ontology_entity_types: what catalog entities exist and which tables they map to\n",
-            "- mz_internal.mz_ontology_link_types: relationships between entities (foreign keys, metrics, etc.)\n",
-            "- mz_internal.mz_ontology_properties: column names, types, and descriptions for each entity\n",
-            "- mz_internal.mz_ontology_semantic_types: typed ID domains (CatalogItemId, ReplicaId, etc.)\n\n",
-            "Use these to find the correct tables, join paths, and column names instead of guessing.\n\n",
-            "Key rules:\n",
-            "- mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n",
-            "- mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n",
-            "- Do NOT query mz_introspection.mz_dataflow_arrangement_sizes — it is cluster-scoped and has uint8/text type mismatches\n",
-            "- Use SHOW COLUMNS FROM <table> to verify column names if unsure",
-        ).to_string()),
+        McpEndpointType::Agent => Some(
+            concat!(
+                "You have access to Materialize data products via MCP. ",
+                "Prefer indexed objects (served from memory) over unindexed materialized views ",
+                "(read from persistent storage). `read_data_product` automatically routes the ",
+                "read to the cluster recorded in the data product catalog so indexes are used; ",
+                "you only need to set the `cluster` parameter if you intentionally want the ",
+                "read to run on a different cluster (e.g. one with larger or more replicas). ",
+                "`get_data_product_details` returns a `hydration` object with `hydrated`, ",
+                "`replica_count`, and `hydrated_replica_count` fields. Reads never return ",
+                "partial data: a read against a not-yet-hydrated product blocks until the ",
+                "dataflow catches up, and may hit the request timeout. Check `hydrated` ",
+                "before reading: if it is false and `replica_count` is greater than 0, the ",
+                "dataflow is still warming up, so wait and retry; if `replica_count` is 0 the ",
+                "cluster has no replicas and the read cannot make progress until one is added.",
+            )
+            .to_string(),
+        ),
+        McpEndpointType::Developer => {
+            // Only advertise the `query` tool when it is actually exposed:
+            // otherwise the instructions would point agents at a tool that
+            // tools/list does not list.
+            let query_tool_line = if query_tool_enabled {
+                "- query: read-only SELECT/SHOW/EXPLAIN that can also reach user objects on a named cluster. Use this for EXPLAIN ANALYZE and for inspecting user objects directly.\n"
+            } else {
+                ""
+            };
+            Some(format!(
+                "You are connected to the Materialize developer MCP server for troubleshooting and observability.\n\n\
+                 Tools:\n\
+                 - query_system_catalog: read-only SELECT/SHOW/EXPLAIN restricted to system catalog tables (mz_*, pg_catalog, information_schema). No cluster argument; prefer this for most catalog lookups.\n\
+                 {query_tool_line}\n\
+                 IMPORTANT: Before writing queries, discover table schemas using the mz_ontology tables:\n\
+                 - mz_internal.mz_ontology_entity_types: what catalog entities exist and which tables they map to\n\
+                 - mz_internal.mz_ontology_link_types: relationships between entities (foreign keys, metrics, etc.)\n\
+                 - mz_internal.mz_ontology_properties: column names, types, and descriptions for each entity\n\
+                 - mz_internal.mz_ontology_semantic_types: typed ID domains (CatalogItemId, ReplicaId, etc.)\n\n\
+                 Use these to find the correct tables, join paths, and column names instead of guessing.\n\n\
+                 Key rules:\n\
+                 - mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n\
+                 - mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n\
+                 - Do NOT query mz_introspection.mz_dataflow_arrangement_sizes — it is cluster-scoped and has uint8/text type mismatches\n\
+                 - Use SHOW COLUMNS FROM <table> to verify column names if unsure",
+            ))
+        }
     }
 }
 
-async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, McpRequestError> {
+async fn handle_initialize(
+    endpoint_type: McpEndpointType,
+    query_tool_enabled: bool,
+) -> Result<McpResult, McpRequestError> {
     Ok(McpResult::Initialize(InitializeResult {
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         capabilities: Capabilities { tools: json!({}) },
@@ -697,7 +725,7 @@ async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, 
             name: format!("materialize-mcp-{}", endpoint_type),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
-        instructions: endpoint_instructions(endpoint_type),
+        instructions: endpoint_instructions(endpoint_type, query_tool_enabled),
     }))
 }
 
@@ -789,7 +817,7 @@ async fn handle_tools_list(
             tools
         }
         McpEndpointType::Developer => {
-            vec![ToolDefinition {
+            let mut tools = vec![ToolDefinition {
                 name: "query_system_catalog".to_string(),
                 title: Some("Query System Catalog".to_string()),
                 description: concat!(
@@ -808,7 +836,32 @@ async fn handle_tools_list(
                     "required": ["sql_query"]
                 }),
                 annotations: Some(READ_ONLY_ANNOTATIONS),
-            }]
+            }];
+            if query_tool_enabled {
+                tools.push(ToolDefinition {
+                    name: "query".to_string(),
+                    title: Some("Query".to_string()),
+                    description: format!(
+                        "Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including system catalog and user objects. Requires a cluster, which is what enables EXPLAIN ANALYZE and queries against indexed user objects. For pure system catalog lookups that do not need a cluster, prefer `query_system_catalog`. {size_hint}",
+                    ),
+                    input_schema: json!({
+                        "type": "object",
+                        "properties": {
+                            "cluster": {
+                                "type": "string",
+                                "description": "Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."
+                            },
+                            "sql_query": {
+                                "type": "string",
+                                "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Multi-statement queries are rejected."
+                            }
+                        },
+                        "required": ["cluster", "sql_query"]
+                    }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
+                });
+            }
+            tools
         }
     };
 
@@ -854,6 +907,14 @@ async fn handle_tools_call(
         (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
             query_system_catalog(client, &p.sql_query, max_response_size).await
         }
+        (McpEndpointType::Developer, ToolsCallParams::Query(_)) if !query_tool_enabled => {
+            Err(McpRequestError::ToolNotFound(
+                "query tool is not available. Use query_system_catalog instead.".to_string(),
+            ))
+        }
+        (McpEndpointType::Developer, ToolsCallParams::Query(p)) => {
+            execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
+        }
         // Tool called on wrong endpoint
         (endpoint, tool) => Err(McpRequestError::ToolNotFound(format!(
             "{} is not available on {} endpoint",
@@ -879,7 +940,7 @@ async fn execute_sql(
     execute_request(
         client,
         SqlRequest::Simple {
-            query: query.to_string(),
+            query: mz_ore::sql::Sql::trusted_external_request(query.to_string()),
         },
         &mut response,
     )
@@ -1023,18 +1084,21 @@ async fn read_data_product(
     // Existence check + recover the cluster for auto-routing. The view
     // filters by SELECT on the object but not by cluster privileges, so we
     // also fetch USAGE on the cluster and prefer a usable one in ORDER BY
-    // (an MV indexed on multiple clusters can appear more than once).
+    // (an MV indexed on multiple clusters can appear more than once). Uses
+    // `mz_show_my_cluster_privileges` instead of `has_cluster_privilege`
+    // because the latter's body references `mz_roles` and trips
+    // `restrict_to_user_objects`.
     let lookup_query = format!(
         "SELECT \
-             cluster, \
-             cluster IS NULL OR has_cluster_privilege(cluster, 'USAGE') \
-                 AS has_cluster_usage \
-         FROM mz_internal.mz_mcp_data_products \
-         WHERE object_name = {} \
+             dp.cluster, \
+             dp.cluster IS NULL OR cp.name IS NOT NULL AS has_cluster_usage \
+         FROM mz_internal.mz_mcp_data_products dp \
+         LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp \
+             ON cp.name = dp.cluster AND cp.privilege_type = 'USAGE' \
+         WHERE dp.object_name = {} \
          ORDER BY \
-             (cluster IS NOT NULL \
-                 AND has_cluster_privilege(cluster, 'USAGE')) DESC, \
-             cluster NULLS LAST \
+             (dp.cluster IS NOT NULL AND cp.name IS NOT NULL) DESC, \
+             dp.cluster NULLS LAST \
          LIMIT 1",
         escaped_string_literal(name)
     );
@@ -1129,15 +1193,23 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
         )));
     }
 
-    // Allowlist: Only SELECT, SHOW, and EXPLAIN statements permitted
+    // Allowlist: SELECT, SHOW, and every read-only EXPLAIN variant. EXPLAIN
+    // expands to six distinct Statement variants in the parser (ExplainPlan
+    // covers only the most common one). Listing them out exhaustively beats
+    // matching by string prefix so a new write-capable EXPLAIN variant — were
+    // one ever added — would have to be considered here.
     let stmt = &stmts[0];
     use mz_sql_parser::ast::Statement;
 
     match &stmt.ast {
-        Statement::Select(_) | Statement::Show(_) | Statement::ExplainPlan(_) => {
-            // Allowed - read-only operations
-            Ok(())
-        }
+        Statement::Select(_)
+        | Statement::Show(_)
+        | Statement::ExplainPlan(_)
+        | Statement::ExplainPushdown(_)
+        | Statement::ExplainTimestamp(_)
+        | Statement::ExplainSinkSchema(_)
+        | Statement::ExplainAnalyzeObject(_)
+        | Statement::ExplainAnalyzeCluster(_) => Ok(()),
         _ => Err(McpRequestError::QueryValidationFailed(
             "Only SELECT, SHOW, and EXPLAIN statements are allowed".to_string(),
         )),
@@ -1379,7 +1451,18 @@ mod tests {
 
     #[mz_ore::test]
     fn test_validate_readonly_query_explain() {
+        // Every read-only EXPLAIN variant must be accepted. Each line
+        // corresponds to a distinct Statement::Explain* arm of the parser; if
+        // one of them is dropped from the validator the test that lost its
+        // arm will fail, naming the variant.
         assert!(validate_readonly_query("EXPLAIN SELECT 1").is_ok());
+        assert!(
+            validate_readonly_query("EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM mz_tables").is_ok()
+        );
+        assert!(validate_readonly_query("EXPLAIN TIMESTAMP FOR SELECT 1").is_ok());
+        assert!(validate_readonly_query("EXPLAIN ANALYZE MEMORY FOR INDEX foo").is_ok());
+        assert!(validate_readonly_query("EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW mv").is_ok());
+        assert!(validate_readonly_query("EXPLAIN ANALYZE CLUSTER MEMORY").is_ok());
     }
 
     #[mz_ore::test]
@@ -1771,25 +1854,41 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn test_tools_list_developer_unaffected_by_query_flag() {
-        // Developer endpoint should not be affected by the query tool flag
-        for flag in [true, false] {
-            let result = handle_tools_list(McpEndpointType::Developer, flag, 1_000_000)
-                .await
-                .unwrap();
-            let McpResult::ToolsList(list) = result else {
-                panic!("Expected ToolsList result");
-            };
-            let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
-            assert!(
-                tool_names.contains(&"query_system_catalog"),
-                "query_system_catalog should always be present on developer"
-            );
-            assert!(
-                !tool_names.contains(&"query"),
-                "query tool should never appear on developer"
-            );
-        }
+    async fn test_tools_list_developer_query_tool_disabled() {
+        let result = handle_tools_list(McpEndpointType::Developer, false, 1_000_000)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"query_system_catalog"),
+            "query_system_catalog should always be present on developer"
+        );
+        assert!(
+            !tool_names.contains(&"query"),
+            "query tool should be hidden when disabled"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_developer_query_tool_enabled() {
+        let result = handle_tools_list(McpEndpointType::Developer, true, 1_000_000)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"query_system_catalog"),
+            "query_system_catalog should always be present on developer"
+        );
+        assert!(
+            tool_names.contains(&"query"),
+            "query tool should be present on developer when enabled"
+        );
     }
 
     // ── Response size cap tests ────────────────────────────────────────

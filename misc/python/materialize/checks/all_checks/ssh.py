@@ -18,7 +18,7 @@ def schemas() -> str:
 
 
 @externally_idempotent(False)
-@disabled("database-issues#10047")
+@disabled("https://linear.app/materializeinc/issue/SS-284")
 class SshPg(Check):
     """
     Testing Postgres CDC source with SSH tunnel
@@ -117,7 +117,7 @@ class SshPg(Check):
 
 
 @externally_idempotent(False)
-@disabled("database-issues#10047")
+@disabled("https://linear.app/materializeinc/issue/SS-284")
 class SshKafka(Check):
     """
     Testing Kafka source with SSH tunnel

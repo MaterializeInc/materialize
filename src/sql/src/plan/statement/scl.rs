@@ -31,7 +31,7 @@ use crate::plan::{
     ShowVariablePlan, VariableValue, describe, query,
 };
 use crate::session::vars;
-use crate::session::vars::{IsolationLevel, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME};
+use crate::session::vars::{SCHEMA_ALIAS, VarInput};
 
 pub fn describe_set_variable(
     _: &StatementContext,
@@ -51,14 +51,15 @@ pub fn plan_set_variable(
     let value = plan_set_variable_to(to)?;
     let name = variable.into_string();
 
+    // Gate feature-flagged isolation levels at plan time. The same check runs in
+    // `SessionVars::set`, which also covers `ALTER ROLE ... SET` and connection
+    // options; running it here too surfaces the error before sequencing.
     if let VariableValue::Values(values) = &value {
-        if let Some(value) = values.first() {
-            if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
-                && value == IsolationLevel::StrongSessionSerializable.as_variant_str()
-            {
-                scx.require_feature_flag(&vars::ENABLE_SESSION_TIMELINES)?;
-            }
-        }
+        vars::check_transaction_isolation_feature_flag(
+            &name,
+            VarInput::SqlSet(values),
+            scx.catalog.system_vars(),
+        )?;
     }
 
     Ok(Plan::SetVariable(SetVariablePlan { name, value, local }))

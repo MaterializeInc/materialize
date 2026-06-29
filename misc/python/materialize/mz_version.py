@@ -133,3 +133,11 @@ class MzDebugVersion(TypedVersionBase):
     @classmethod
     def get_prefix(cls) -> str:
         return "mz-debug-v"
+
+
+class MzDeployVersion(TypedVersionBase):
+    """Version of the mz-deploy CLI"""
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        return "mz-deploy-v"

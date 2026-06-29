@@ -1,0 +1,32 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Committed TEMPLATE for project.toml.
+#
+# project.toml itself is git-ignored: mzcompose.py renders it from this template
+# with the real connection endpoints (Confluent broker, RDS hosts, GCS bucket)
+# from the environment, and those must not be public. mz-deploy has no env/CLI
+# override for profile variables, so the values have to live in project.toml.
+#
+# For offline `mz-deploy compile` (no mzcompose run), copy this file:
+#     cp project.toml.example project.toml
+# The placeholder values below are syntactically valid so compile works offline.
+#
+# Keep the [prod.variables] keys here in sync with write_project_toml() in
+# mzcompose.py.
+
+mz_version = "cloud"
+dependencies = []
+
+[prod.variables]
+kafka_broker = "kafka.example.invalid:9092"
+csr_url = "https://csr.example.invalid"
+pg_host = "postgres.example.invalid"
+mysql_host = "mysql.example.invalid"
+gcs_warehouse = "gs://qa-canary-environment.invalid"

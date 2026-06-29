@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use itertools::Itertools;
@@ -18,11 +18,11 @@ use mz_catalog::memory::objects::{
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
-    ReplicaLogging,
+    ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
 };
-use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
@@ -41,6 +41,9 @@ use tracing::{Instrument, Span, debug};
 use super::return_if_err;
 use crate::AdapterError::AlterClusterWhilePendingReplicas;
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
+use crate::config::{
+    ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
+};
 use crate::coord::{
     AlterCluster, AlterClusterFinalize, AlterClusterWaitForHydrated, ClusterStage, Coordinator,
     Message, PlanValidity, StageResult, Staged,
@@ -136,7 +139,7 @@ impl Coordinator {
         plan: plan::AlterClusterPlan,
     ) -> Result<ClusterStage, AdapterError> {
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::new(),
             Some(plan.id.clone()),
             None,
@@ -184,6 +187,9 @@ impl Coordinator {
                     replication_factor: 1,
                     optimizer_feature_overrides: Default::default(),
                     schedule: Default::default(),
+                    auto_scaling_strategy: None,
+                    reconfiguration: None,
+                    burst: None,
                 });
             }
         }
@@ -196,6 +202,9 @@ impl Coordinator {
                 replication_factor,
                 optimizer_feature_overrides: _,
                 schedule,
+                auto_scaling_strategy: _,
+                reconfiguration: _,
+                burst: _,
             }) => {
                 match &options.size {
                     Set(s) => size.clone_from(s),
@@ -627,6 +636,9 @@ impl Coordinator {
                     replication_factor: plan.replication_factor,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
+                    auto_scaling_strategy: None,
+                    reconfiguration: None,
+                    burst: None,
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -645,11 +657,11 @@ impl Coordinator {
 
         match variant {
             CreateClusterVariant::Managed(plan) => {
-                self.sequence_create_managed_cluster(session, plan, id, ops)
+                self.sequence_create_managed_cluster(session, plan, id, name, ops)
                     .await
             }
             CreateClusterVariant::Unmanaged(plan) => {
-                self.sequence_create_unmanaged_cluster(session, plan, id, ops)
+                self.sequence_create_unmanaged_cluster(session, plan, id, name, ops)
                     .await
             }
         }
@@ -668,6 +680,7 @@ impl Coordinator {
             schedule: _,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
+        cluster_name: String,
         mut ops: Vec<catalog::Op>,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_managed_cluster");
@@ -680,6 +693,7 @@ impl Coordinator {
                 .catalog()
                 .get_role_allowed_cluster_sizes(&Some(role_id)),
             &size,
+            false,
         )?;
 
         // Eagerly validate the `max_replicas_per_cluster` limit.
@@ -696,10 +710,32 @@ impl Coordinator {
             )?;
         }
 
-        for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
-            self.create_managed_cluster_replica_op(
+        // Pre-allocate replica ids out-of-band via the durable allocator,
+        // picking the id type from the owning cluster, so each replica's scoped
+        // overrides can be folded into the create transaction below (the
+        // overrides are keyed by the replica id). This mirrors how cluster and
+        // item ids are allocated, so nothing allocates a replica id in-apply.
+        let id_ts = self.get_catalog_write_ts().await;
+        let replica_ids = self
+            .catalog()
+            .allocate_replica_ids(cluster_id, u64::from(replication_factor), id_ts)
+            .await?;
+
+        let cluster_ctx = ClusterScopeContext {
+            id: cluster_id.to_string(),
+            name: cluster_name.clone(),
+            is_builtin: cluster_id.is_system(),
+        };
+
+        let mut replica_ctxs = Vec::new();
+        for (replica_id, replica_name) in replica_ids
+            .into_iter()
+            .zip_eq((0..replication_factor).map(managed_cluster_replica_name))
+        {
+            let size_family = self.create_managed_cluster_replica_op(
                 cluster_id,
-                replica_name,
+                replica_id,
+                replica_name.clone(),
                 &compute,
                 &size,
                 &mut ops,
@@ -712,6 +748,34 @@ impl Coordinator {
                 *session.current_role_id(),
                 ReplicaCreateDropReason::Manual,
             )?;
+            replica_ctxs.push(ReplicaEvalContext {
+                cluster_id,
+                replica_id,
+                cluster: cluster_ctx.clone(),
+                replica: ReplicaScopeContext {
+                    id: replica_id.to_string(),
+                    name: replica_name,
+                    is_builtin: cluster_id.is_system(),
+                    size: size.clone(),
+                    size_family,
+                    cluster_id: cluster_id.to_string(),
+                    cluster_name: cluster_name.clone(),
+                },
+            });
+        }
+
+        // Fold the new cluster's cluster-coherent and the replicas' replica-local
+        // scoped overrides into the create transaction. Folding (rather than a
+        // post-transact resolve) makes the committed diff drive the
+        // replica-scoped controller push before create_replica, which
+        // render-frozen flags require, and gives the new cluster its optimizer
+        // overrides for its first plan.
+        let cluster_eval = ClusterEvalContext {
+            cluster_id,
+            cluster: cluster_ctx,
+        };
+        if let Some(scoped_op) = self.scoped_overrides_create_op(&[cluster_eval], &replica_ctxs) {
+            ops.push(scoped_op);
         }
 
         self.catalog_transact(Some(session), ops).await?;
@@ -722,6 +786,7 @@ impl Coordinator {
     fn create_managed_cluster_replica_op(
         &self,
         cluster_id: ClusterId,
+        replica_id: ReplicaId,
         name: String,
         compute: &mz_sql::plan::ComputeReplicaConfig,
         size: &String,
@@ -730,9 +795,11 @@ impl Coordinator {
         pending: bool,
         owner_id: RoleId,
         reason: ReplicaCreateDropReason,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<String, AdapterError> {
         let location = mz_catalog::durable::ReplicaLocation::Managed {
-            availability_zone: None,
+            // Concretized below from the cluster config; this intermediate value
+            // is discarded, so the list is left empty here.
+            availability_zones: Vec::new(),
             billed_as: None,
             internal: false,
             size: size.clone(),
@@ -755,18 +822,33 @@ impl Coordinator {
                     .catalog()
                     .get_role_allowed_cluster_sizes(&Some(owner_id)),
                 azs,
+                false,
             )?,
             compute: ComputeReplicaConfig { logging },
         };
 
+        // The caller pre-allocates `replica_id` out-of-band via the durable
+        // allocator, so nothing allocates a replica id in-apply.
+        //
+        // Extract the size family before `config` moves into the op, for the
+        // replica's scoped eval context.
+        let size_family = match &config.location {
+            ReplicaLocation::Managed(location) => location.allocation.family().to_string(),
+            // A managed replica always concretizes to a managed location.
+            ReplicaLocation::Unmanaged(_) => {
+                unreachable!("managed cluster replica has a managed location")
+            }
+        };
+
         ops.push(catalog::Op::CreateClusterReplica {
             cluster_id,
+            replica_id,
             name,
             config,
             owner_id,
             reason,
         });
-        Ok(())
+        Ok(size_family)
     }
 
     fn ensure_valid_azs<'a, I: IntoIterator<Item = &'a String>>(
@@ -791,6 +873,7 @@ impl Coordinator {
         session: &Session,
         CreateClusterUnmanagedPlan { replicas }: CreateClusterUnmanagedPlan,
         id: ClusterId,
+        cluster_name: String,
         mut ops: Vec<catalog::Op>,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_unmanaged_cluster");
@@ -821,7 +904,26 @@ impl Coordinator {
             )?;
         }
 
-        for (replica_name, replica_config) in replicas {
+        // Pre-allocate replica ids out-of-band via the durable allocator,
+        // picking the id type from the owning cluster, so each replica's scoped
+        // overrides can be folded into the create transaction below. This
+        // mirrors how cluster and item ids are allocated, so nothing allocates
+        // a replica id in-apply.
+        let id_ts = self.get_catalog_write_ts().await;
+        let replica_ids = self
+            .catalog()
+            .allocate_replica_ids(id, u64::cast_from(replicas.len()), id_ts)
+            .await?;
+
+        let cluster_ctx = ClusterScopeContext {
+            id: id.to_string(),
+            name: cluster_name.clone(),
+            is_builtin: id.is_system(),
+        };
+        let mut replica_ctxs = Vec::new();
+
+        for (replica_id, (replica_name, replica_config)) in replica_ids.into_iter().zip_eq(replicas)
+        {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let (compute, location) = match replica_config {
@@ -853,7 +955,9 @@ impl Coordinator {
                     }
 
                     let location = mz_catalog::durable::ReplicaLocation::Managed {
-                        availability_zone,
+                        // The user-pinned `AVAILABILITY ZONE`, if any, as a zero-
+                        // or one-element list.
+                        availability_zones: availability_zone.into_iter().collect(),
                         billed_as,
                         internal,
                         size: size.clone(),
@@ -880,17 +984,48 @@ impl Coordinator {
                         .catalog()
                         .get_role_allowed_cluster_sizes(&Some(role_id)),
                     None,
+                    false,
                 )?,
                 compute: ComputeReplicaConfig { logging },
             };
 
+            // Only orchestrated (managed-location) replicas have a size and size
+            // family, so only they carry replica-local overrides.
+            if let ReplicaLocation::Managed(location) = &config.location {
+                replica_ctxs.push(ReplicaEvalContext {
+                    cluster_id: id,
+                    replica_id,
+                    cluster: cluster_ctx.clone(),
+                    replica: ReplicaScopeContext {
+                        id: replica_id.to_string(),
+                        name: replica_name.clone(),
+                        is_builtin: id.is_system(),
+                        size: location.size.clone(),
+                        size_family: location.allocation.family().to_string(),
+                        cluster_id: id.to_string(),
+                        cluster_name: cluster_name.clone(),
+                    },
+                });
+            }
+
             ops.push(catalog::Op::CreateClusterReplica {
                 cluster_id: id,
+                replica_id,
                 name: replica_name.clone(),
                 config,
                 owner_id: *session.current_role_id(),
                 reason: ReplicaCreateDropReason::Manual,
             });
+        }
+
+        // Fold the new cluster's and replicas' scoped overrides into the create
+        // transaction (see the managed path for rationale).
+        let cluster_eval = ClusterEvalContext {
+            cluster_id: id,
+            cluster: cluster_ctx,
+        };
+        if let Some(scoped_op) = self.scoped_overrides_create_op(&[cluster_eval], &replica_ctxs) {
+            ops.push(scoped_op);
         }
 
         self.catalog_transact(Some(session), ops).await?;
@@ -936,7 +1071,9 @@ impl Coordinator {
                     None => None,
                 };
                 let location = mz_catalog::durable::ReplicaLocation::Managed {
-                    availability_zone,
+                    // The user-pinned `AVAILABILITY ZONE`, if any, as a zero- or
+                    // one-element list.
+                    availability_zones: availability_zone.into_iter().collect(),
                     billed_as,
                     internal,
                     size,
@@ -965,6 +1102,7 @@ impl Coordinator {
                 // Planning ensures all replicas in this codepath
                 // are unmanaged.
                 None,
+                false,
             )?,
             compute: ComputeReplicaConfig { logging },
         };
@@ -991,17 +1129,70 @@ impl Coordinator {
             }
         }
 
-        // Replicas have the same owner as their cluster.
+        // Replicas have the same owner as their cluster. Extract the owned
+        // cluster info we need before the borrow is dropped for the awaits below.
         let owner_id = cluster.owner_id();
-        let op = catalog::Op::CreateClusterReplica {
+
+        let cluster_name = cluster.name.clone();
+        let is_builtin = cluster_id.is_system();
+
+        // Pre-allocate the replica id out-of-band via the durable allocator,
+        // picking the id type from the target cluster, which may be a system
+        // cluster, so the replica's scoped overrides can be folded into the same
+        // transaction. The overrides are keyed by replica id, and the
+        // replica-scoped controller push must run before `create_replica`. This
+        // mirrors how cluster and item ids are allocated, so nothing allocates a
+        // replica id in-apply.
+        let id_ts = self.get_catalog_write_ts().await;
+        let replica_id = self
+            .catalog()
+            .allocate_replica_ids(cluster_id, 1, id_ts)
+            .await?
+            .into_element();
+
+        // Build the replica's eval context from the plan before `config` moves
+        // into the op. Only managed replicas have a size (and size family).
+        let replica_ctx = match &config.location {
+            ReplicaLocation::Managed(location) => Some(ReplicaEvalContext {
+                cluster_id,
+                replica_id,
+                cluster: ClusterScopeContext {
+                    id: cluster_id.to_string(),
+                    name: cluster_name.clone(),
+                    is_builtin,
+                },
+                replica: ReplicaScopeContext {
+                    id: replica_id.to_string(),
+                    name: name.to_string(),
+                    is_builtin,
+                    size: location.size.clone(),
+                    size_family: location.allocation.family().to_string(),
+                    cluster_id: cluster_id.to_string(),
+                    cluster_name,
+                },
+            }),
+            ReplicaLocation::Unmanaged(_) => None,
+        };
+
+        let mut ops = vec![catalog::Op::CreateClusterReplica {
             cluster_id,
+            replica_id,
             name: name.clone(),
             config,
             owner_id,
             reason: ReplicaCreateDropReason::Manual,
-        };
+        }];
 
-        self.catalog_transact(Some(session), vec![op]).await?;
+        // The cluster already exists, so only this replica's local overrides
+        // need resolving. Fold them into the create transaction so the
+        // replica-scoped push runs before `create_replica`.
+        if let Some(replica_ctx) = replica_ctx {
+            if let Some(scoped_op) = self.scoped_overrides_create_op(&[], &[replica_ctx]) {
+                ops.push(scoped_op);
+            }
+        }
+
+        self.catalog_transact(Some(session), ops).await?;
 
         Ok(ExecuteResponse::CreatedClusterReplica)
     }
@@ -1036,10 +1227,20 @@ impl Coordinator {
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
         }) = &cluster.config.variant
         else {
             panic!("expected existing managed cluster config");
         };
+        // Clone the existing managed config out of the cluster so the immutable
+        // catalog borrow can be released before the out-of-band replica id
+        // allocation below, which needs mutable access to self.
+        let size = size.clone();
+        let availability_zones = availability_zones.clone();
+        let logging = logging.clone();
+        let replication_factor = *replication_factor;
         let ClusterVariant::Managed(ClusterVariantManaged {
             size: new_size,
             replication_factor: new_replication_factor,
@@ -1047,6 +1248,9 @@ impl Coordinator {
             logging: new_logging,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
         }) = &new_config.variant
         else {
             panic!("expected new managed cluster config");
@@ -1056,12 +1260,20 @@ impl Coordinator {
         self.catalog.ensure_valid_replica_size(
             &self.catalog().get_role_allowed_cluster_sizes(&role_id),
             new_size,
+            false,
         )?;
 
         // check for active updates
         if cluster.replicas().any(|r| r.config.location.pending()) {
             return Err(AlterClusterWhilePendingReplicas);
         }
+
+        // Resolve existing replica ids by name before releasing the catalog
+        // borrow, so the drop branches below can build their ops without it.
+        let replica_id_by_name: BTreeMap<String, ReplicaId> = cluster
+            .replicas()
+            .map(|r| (r.name.clone(), r.replica_id))
+            .collect();
 
         let compute = mz_sql::plan::ComputeReplicaConfig {
             introspection: new_logging
@@ -1076,11 +1288,11 @@ impl Coordinator {
         // `catalog_transact` will do this validation too, but allocating
         // replica IDs is expensive enough that we need to do this validation
         // before allocating replica IDs. See database-issues#6046.
-        if new_replication_factor > replication_factor {
+        if *new_replication_factor > replication_factor {
             if cluster_id.is_user() {
                 self.validate_resource_limit(
-                    usize::cast_from(*replication_factor),
-                    i64::from(*new_replication_factor) - i64::from(*replication_factor),
+                    usize::cast_from(replication_factor),
+                    i64::from(*new_replication_factor) - i64::from(replication_factor),
                     SystemVars::max_replicas_per_cluster,
                     "cluster replica",
                     MAX_REPLICAS_PER_CLUSTER.name(),
@@ -1088,32 +1300,83 @@ impl Coordinator {
             }
         }
 
-        if new_size != size
-            || new_availability_zones != availability_zones
-            || new_logging != logging
-        {
+        // Count exactly as many replica ids as the branches below consume. The
+        // config-changed branches recreate all replicas; a pure scale-up
+        // creates only the delta; scale-down and no-op create none.
+        let config_changed = new_size != &size
+            || new_availability_zones != &availability_zones
+            || new_logging != &logging;
+        let needed_replica_ids = if config_changed {
+            *new_replication_factor
+        } else if *new_replication_factor > replication_factor {
+            *new_replication_factor - replication_factor
+        } else {
+            0
+        };
+        // Allocate the replica ids out-of-band via the durable allocator, only
+        // after the eager limit validation above so a rejected alter allocates
+        // nothing. Pick the id type from the target cluster, which may be a
+        // system cluster. This mirrors how cluster and item ids are allocated,
+        // so nothing allocates a replica id in-apply. Fetch the catalog write
+        // timestamp lazily here, since it needs mutable access to self (the
+        // cluster borrow above is already released) and scale-down, no-op, and
+        // automated scheduling turn-off alters must not pay an oracle
+        // round-trip just to allocate nothing.
+        let mut new_replica_ids = if needed_replica_ids > 0 {
+            let id_ts = self.get_catalog_write_ts().await;
+            self.catalog()
+                .allocate_replica_ids(cluster_id, u64::from(needed_replica_ids), id_ts)
+                .await?
+                .into_iter()
+        } else {
+            Vec::<ReplicaId>::new().into_iter()
+        };
+
+        // Collect an eval context for each replica recreated below, so the alter
+        // transaction folds the replicas' replica-scoped overrides the same way
+        // the create paths do. ALTER CLUSTER SET (SIZE ...) to a different size
+        // family flips size-family-keyed render-frozen flags, so the override
+        // must reach the controller before the recreated replica renders. Only
+        // the replica scope is folded. The cluster already exists and its
+        // cluster-scoped overrides are unaffected by this alter.
+        let cluster_ctx = ClusterScopeContext {
+            id: cluster_id.to_string(),
+            name: name.clone(),
+            is_builtin: cluster_id.is_system(),
+        };
+        let mut replica_ctxs = Vec::new();
+
+        if config_changed {
             self.ensure_valid_azs(new_availability_zones.iter())?;
             // If we're not doing a zero-downtime reconfig tear down all
             // replicas, create new ones else create the pending replicas and
             // return early asking for finalization
             match strategy {
                 AlterClusterPlanStrategy::None => {
-                    let replica_ids_and_reasons = (0..*replication_factor)
+                    let replica_ids_and_reasons = (0..replication_factor)
                         .map(managed_cluster_replica_name)
-                        .filter_map(|name| cluster.replica_id(&name))
+                        .filter_map(|name| replica_id_by_name.get(&name).copied())
                         .map(|replica_id| {
                             catalog::DropObjectInfo::ClusterReplica((
-                                cluster.id(),
+                                cluster_id,
                                 replica_id,
                                 reason.clone(),
                             ))
                         })
                         .collect();
                     ops.push(catalog::Op::DropObjects(replica_ids_and_reasons));
-                    for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                        self.create_managed_cluster_replica_op(
+                    for replica_name in
+                        (0..*new_replication_factor).map(managed_cluster_replica_name)
+                    {
+                        // The replica id is pre-allocated above like the create
+                        // paths so its scoped overrides can be folded below.
+                        let replica_id = new_replica_ids
+                            .next()
+                            .expect("pre-allocated enough replica ids");
+                        let size_family = self.create_managed_cluster_replica_op(
                             cluster_id,
-                            name.clone(),
+                            replica_id,
+                            replica_name.clone(),
                             &compute,
                             new_size,
                             &mut ops,
@@ -1122,14 +1385,34 @@ impl Coordinator {
                             owner_id,
                             reason.clone(),
                         )?;
+                        replica_ctxs.push(ReplicaEvalContext {
+                            cluster_id,
+                            replica_id,
+                            cluster: cluster_ctx.clone(),
+                            replica: ReplicaScopeContext {
+                                id: replica_id.to_string(),
+                                name: replica_name,
+                                is_builtin: cluster_id.is_system(),
+                                size: new_size.clone(),
+                                size_family,
+                                cluster_id: cluster_id.to_string(),
+                                cluster_name: cluster_ctx.name.clone(),
+                            },
+                        });
                     }
                 }
                 AlterClusterPlanStrategy::For(_) | AlterClusterPlanStrategy::UntilReady { .. } => {
-                    for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                        let name = format!("{name}{PENDING_REPLICA_SUFFIX}");
-                        self.create_managed_cluster_replica_op(
+                    for replica_name in
+                        (0..*new_replication_factor).map(managed_cluster_replica_name)
+                    {
+                        let replica_name = format!("{replica_name}{PENDING_REPLICA_SUFFIX}");
+                        let replica_id = new_replica_ids
+                            .next()
+                            .expect("pre-allocated enough replica ids");
+                        let size_family = self.create_managed_cluster_replica_op(
                             cluster_id,
-                            name.clone(),
+                            replica_id,
+                            replica_name.clone(),
                             &compute,
                             new_size,
                             &mut ops,
@@ -1138,32 +1421,50 @@ impl Coordinator {
                             owner_id,
                             reason.clone(),
                         )?;
+                        replica_ctxs.push(ReplicaEvalContext {
+                            cluster_id,
+                            replica_id,
+                            cluster: cluster_ctx.clone(),
+                            replica: ReplicaScopeContext {
+                                id: replica_id.to_string(),
+                                name: replica_name,
+                                is_builtin: cluster_id.is_system(),
+                                size: new_size.clone(),
+                                size_family,
+                                cluster_id: cluster_id.to_string(),
+                                cluster_name: cluster_ctx.name.clone(),
+                            },
+                        });
                     }
                     finalization_needed = NeedsFinalization::Yes;
                 }
             }
-        } else if new_replication_factor < replication_factor {
+        } else if *new_replication_factor < replication_factor {
             // Adjust replica count down
-            let replica_ids = (*new_replication_factor..*replication_factor)
+            let replica_ids = (*new_replication_factor..replication_factor)
                 .map(managed_cluster_replica_name)
-                .filter_map(|name| cluster.replica_id(&name))
+                .filter_map(|name| replica_id_by_name.get(&name).copied())
                 .map(|replica_id| {
                     catalog::DropObjectInfo::ClusterReplica((
-                        cluster.id(),
+                        cluster_id,
                         replica_id,
                         reason.clone(),
                     ))
                 })
                 .collect();
             ops.push(catalog::Op::DropObjects(replica_ids));
-        } else if new_replication_factor > replication_factor {
+        } else if *new_replication_factor > replication_factor {
             // Adjust replica count up
-            for name in
-                (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
+            for replica_name in
+                (replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
-                self.create_managed_cluster_replica_op(
+                let replica_id = new_replica_ids
+                    .next()
+                    .expect("pre-allocated enough replica ids");
+                let size_family = self.create_managed_cluster_replica_op(
                     cluster_id,
-                    name.clone(),
+                    replica_id,
+                    replica_name.clone(),
                     &compute,
                     new_size,
                     &mut ops,
@@ -1174,6 +1475,20 @@ impl Coordinator {
                     owner_id,
                     reason.clone(),
                 )?;
+                replica_ctxs.push(ReplicaEvalContext {
+                    cluster_id,
+                    replica_id,
+                    cluster: cluster_ctx.clone(),
+                    replica: ReplicaScopeContext {
+                        id: replica_id.to_string(),
+                        name: replica_name,
+                        is_builtin: cluster_id.is_system(),
+                        size: new_size.clone(),
+                        size_family,
+                        cluster_id: cluster_id.to_string(),
+                        cluster_name: cluster_ctx.name.clone(),
+                    },
+                });
             }
         }
 
@@ -1189,6 +1504,17 @@ impl Coordinator {
             }
             NeedsFinalization::Yes => {}
         }
+
+        // Fold the recreated replicas' replica-scoped overrides into the same
+        // transaction, so the committed diff drives the replica-scoped controller
+        // push before create_replica. Render-frozen flags (chosen at
+        // arrangement-build time) require the override to land before the replica
+        // renders. Scale-down and no-op alters recreate no replicas, so this is
+        // empty and folds nothing.
+        if let Some(scoped_op) = self.scoped_overrides_create_op(&[], &replica_ctxs) {
+            ops.push(scoped_op);
+        }
+
         self.catalog_transact(session, ops).await?;
         Ok(finalization_needed)
     }
@@ -1213,6 +1539,9 @@ impl Coordinator {
             logging: _,
             optimizer_feature_overrides: _,
             schedule: _,
+            auto_scaling_strategy: _,
+            reconfiguration: _,
+            burst: _,
         }) = &mut new_config.variant
         else {
             panic!("expected new managed cluster config");
@@ -1253,9 +1582,10 @@ impl Coordinator {
                 ReplicaLocation::Managed(location) => {
                     sizes.insert(location.size.clone());
 
-                    if let ManagedReplicaAvailabilityZones::FromReplica(Some(az)) =
-                        &location.availability_zones
-                    {
+                    // An unmanaged cluster's replica carries its single
+                    // user-pinned AZ (if any) as the sole entry; every pin must
+                    // fall within the managed cluster's `AVAILABILITY ZONES`.
+                    for az in &location.availability_zones {
                         if !new_availability_zones.contains(az) {
                             coord_bail!(
                                 "unmanaged replica has availability zone {az} which is not \

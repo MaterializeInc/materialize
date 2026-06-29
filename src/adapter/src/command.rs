@@ -46,6 +46,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
+use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
@@ -166,6 +167,30 @@ pub enum Command {
         vars: BTreeMap<String, String>,
         conn_id: ConnectionId,
         tx: oneshot::Sender<Result<(), AdapterError>>,
+    },
+
+    /// Replace the scoped feature-flag overrides (the complete desired state).
+    /// Computed by the system-parameter sync loop from continuous LaunchDarkly
+    /// evaluation. The coordinator stores this working copy and reconciles it
+    /// into the per-scope resolution boundaries (the compute controller's
+    /// per-replica dyncfg layer for `replica`-scoped parameters). See the
+    /// scoped feature flags design.
+    UpdateScopedSystemParameters {
+        overrides: ScopedParameters,
+        /// Bounds which objects' durable rows the reconcile may prune. See
+        /// [`crate::catalog::Op::UpdateScopedSystemParameters`].
+        prune_scope: Option<ScopedParametersScope>,
+        tx: oneshot::Sender<()>,
+    },
+
+    /// Install (or replace) the shared system-parameter frontend on the
+    /// coordinator, so the create-cluster / create-replica paths can resolve a
+    /// new object's scoped overrides synchronously, before the controller
+    /// installs it or its first dataflow is planned, rather than waiting for
+    /// the next sync tick. Sent by the sync loop whenever it (re)initializes the
+    /// frontend. See the scoped feature flags design.
+    InstallScopedSystemParameterFrontend {
+        frontend: Arc<SystemParameterFrontend>,
     },
 
     InjectAuditEvents {
@@ -369,6 +394,8 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
+            | Command::UpdateScopedSystemParameters { .. }
+            | Command::InstallScopedSystemParameterFrontend { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
@@ -407,6 +434,8 @@ impl Command {
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
+            | Command::UpdateScopedSystemParameters { .. }
+            | Command::InstallScopedSystemParameterFrontend { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }

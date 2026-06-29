@@ -15,6 +15,7 @@ use std::{
 
 use anyhow::Context as _;
 use http::HeaderValue;
+use k8s_controller::TraceMetadata;
 use k8s_openapi::{
     api::core::v1::{Affinity, ResourceRequirements, Secret, Toleration},
     apimachinery::pkg::apis::meta::v1::{Condition, Time},
@@ -42,7 +43,8 @@ use mz_cloud_resources::crd::{
     ManagedResource,
     balancer::v1alpha1::{Balancer, BalancerSpec},
     console::v1alpha1::{BalancerdRef, Console, ConsoleSpec, HttpConnectionScheme},
-    materialize::v1alpha1::{Materialize, MaterializeRolloutStrategy, MaterializeStatus},
+    materialize::MaterializeRolloutStrategy,
+    materialize::v1alpha1::{Materialize, MaterializeStatus},
 };
 use mz_license_keys::validate;
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
@@ -209,6 +211,7 @@ impl Context {
                 ),
                 resource_id: mz.status().resource_id,
                 resources_hash,
+                last_completed_rollout_hash: None,
                 conditions: vec![Condition {
                     type_: "UpToDate".into(),
                     status: "True".into(),
@@ -273,6 +276,7 @@ impl k8s_controller::Context for Context {
         &self,
         client: Client,
         mz: &Self::Resource,
+        _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
         let balancer_api: Api<Balancer> = Api::namespaced(client.clone(), &mz.namespace());
@@ -450,6 +454,7 @@ impl k8s_controller::Context for Context {
                                         .clone(),
                                     resource_id: status.resource_id.clone(),
                                     resources_hash: status.resources_hash.clone(),
+                                    last_completed_rollout_hash: None,
                                     conditions: vec![Condition {
                                         type_: "UpToDate".into(),
                                         status: "False".into(),
@@ -486,6 +491,7 @@ impl k8s_controller::Context for Context {
                                 last_completed_rollout_environmentd_image_ref.clone(),
                             resource_id: status.resource_id,
                             resources_hash: status.resources_hash,
+                            last_completed_rollout_hash: None,
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
                                 status: "False".into(),
@@ -541,6 +547,7 @@ impl k8s_controller::Context for Context {
                                     .last_completed_rollout_environmentd_image_ref,
                                 resource_id: status.resource_id.clone(),
                                 resources_hash: String::new(),
+                                last_completed_rollout_hash: None,
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
                                     status: "Unknown".into(),
@@ -596,6 +603,7 @@ impl k8s_controller::Context for Context {
                                         .last_completed_rollout_environmentd_image_ref,
                                     resource_id: status.resource_id,
                                     resources_hash,
+                                    last_completed_rollout_hash: None,
                                     conditions: vec![Condition {
                                         type_: "UpToDate".into(),
                                         status: "Unknown".into(),
@@ -642,6 +650,7 @@ impl k8s_controller::Context for Context {
                                     .last_completed_rollout_environmentd_image_ref,
                                 resource_id: status.resource_id,
                                 resources_hash: resources_hash.clone(),
+                                last_completed_rollout_hash: None,
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
                                     status: "Unknown".into(),
@@ -682,6 +691,7 @@ impl k8s_controller::Context for Context {
                                     .last_completed_rollout_environmentd_image_ref,
                                 resource_id: status.resource_id,
                                 resources_hash: status.resources_hash,
+                                last_completed_rollout_hash: None,
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
                                     status: "False".into(),
@@ -721,6 +731,7 @@ impl k8s_controller::Context for Context {
                                 .last_completed_rollout_environmentd_image_ref,
                             resource_id: status.resource_id.clone(),
                             resources_hash: status.resources_hash,
+                            last_completed_rollout_hash: None,
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
                                 status: "False".into(),
@@ -763,6 +774,7 @@ impl k8s_controller::Context for Context {
                                 .last_completed_rollout_environmentd_image_ref,
                             resource_id: status.resource_id.clone(),
                             resources_hash: status.resources_hash,
+                            last_completed_rollout_hash: None,
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
                                 status: "True".into(),
@@ -888,6 +900,7 @@ impl k8s_controller::Context for Context {
         &self,
         _client: Client,
         mz: &Self::Resource,
+        _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         self.set_needs_update(mz, false);
 

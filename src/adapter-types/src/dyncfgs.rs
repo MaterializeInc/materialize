@@ -65,6 +65,21 @@ pub const ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK: Config<bool> = Config::new(
     "Enable checking for crash/OOM-looping replicas during 0dt caught-up checks. Emergency break-glass flag to disable this feature if needed.",
 );
 
+// TODO(aljoscha): Remove this break-glass flag after a couple of releases, once
+// the sustained-health gate has proven itself in production. It only exists as a
+// fleet-wide automatic revert to the prior "caught-up implies ready" behavior.
+pub const ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK: Config<bool> = Config::new(
+    "enable_0dt_caught_up_stability_check",
+    true,
+    "Require clusters to stay caught-up and healthy for a stability period before being considered ready during 0dt deployments. Emergency break-glass flag: disabling reverts to treating a caught-up cluster as ready with no replica-health requirement, which differs from setting the stability period to zero (a zero period still requires all replicas to be healthy).",
+);
+
+pub const WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD: Config<Duration> = Config::new(
+    "with_0dt_caught_up_check_stability_period",
+    Duration::from_secs(10 * 60), // 10 minutes
+    "How long a cluster must continuously be caught-up and have all replicas healthy before it is considered ready to cut over during a 0dt deployment.",
+);
+
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
@@ -196,6 +211,15 @@ pub const ENABLE_MCP_DEVELOPER: Config<bool> = Config::new(
     "Whether the MCP developer HTTP endpoint is enabled. When false, requests to /api/mcp/developer return 503 Service Unavailable.",
 );
 
+/// Whether the MCP developer query tool is enabled.
+/// When false, the `query` tool is hidden from tools/list and calls to it return an error.
+/// Developers can still use `query_system_catalog`.
+pub const ENABLE_MCP_DEVELOPER_QUERY_TOOL: Config<bool> = Config::new(
+    "enable_mcp_developer_query_tool",
+    true,
+    "Whether the MCP developer query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Developers can still use query_system_catalog.",
+);
+
 /// Whether the external metrics endpoint on environmentd is enabled.
 pub const ENABLE_PUBLIC_METRICS_ENDPOINT: Config<bool> = Config::new(
     "enable_public_metrics_endpoint",
@@ -210,6 +234,17 @@ pub const MCP_MAX_RESPONSE_SIZE: Config<usize> = Config::new(
     "mcp_max_response_size",
     1_000_000,
     "Maximum size in bytes of MCP tool response content. Responses exceeding this limit are rejected with an error telling the agent to narrow its query.",
+);
+
+/// Maximum size (in bytes) of a webhook request body, measured after
+/// decompression. Requests whose body exceeds this limit are rejected with
+/// HTTP 413. Applies only to the webhook route; other HTTP routes use a
+/// separate static limit.
+pub const WEBHOOK_MAX_REQUEST_SIZE_BYTES: Config<usize> = Config::new(
+    "webhook_max_request_size_bytes",
+    // Matches `MAX_REQUEST_SIZE`, the static limit the other environmentd HTTP routes use.
+    5 * 1024 * 1024,
+    "The maximum size in bytes of a webhook request body, measured after decompression.",
 );
 
 /// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
@@ -249,6 +284,36 @@ pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::
     "How long to retain rows in mz_internal.mz_object_arrangement_size_history.",
 );
 
+/// How frequently the catalog `*_info` metrics (`mz_object_info`,
+/// `mz_cluster_info`, …) are reconciled with the catalog. A zero duration
+/// disables reconciliation.
+pub const CATALOG_INFO_METRICS_RECONCILE_INTERVAL: Config<Duration> = Config::new(
+    "catalog_info_metrics_reconcile_interval",
+    Duration::from_secs(30),
+    "How frequently to reconcile the catalog `*_info` metrics with the catalog. A zero duration disables reconciliation.",
+);
+
+/// Server-side `statement_timeout` to set on Postgres/CRDB connections used by
+/// the Postgres/CRDB timestamp oracle. A zero value leaves the statement
+/// timeout unset.
+pub const PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT: Config<Duration> = Config::new(
+    "pg_timestamp_oracle_statement_timeout",
+    crate::timestamp_oracle::DEFAULT_PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT,
+    "The server-side statement timeout to set on Postgres/CRDB connections used by the \
+    Postgres/CRDB timestamp oracle. A value of zero leaves the statement timeout unset.",
+);
+
+/// Whether per-cluster and per-replica scoped system parameters are evaluated.
+/// Off by default: the parameter sync loop evaluates no cluster/replica
+/// contexts and resolution falls back to the environment-wide value everywhere
+/// (the pre-scoped behavior). Enabling it (e.g. from LaunchDarkly) turns on
+/// scoped evaluation without a deploy.
+pub const ENABLE_SCOPED_SYSTEM_PARAMETERS: Config<bool> = Config::new(
+    "enable_scoped_system_parameters",
+    false,
+    "Whether per-cluster and per-replica scoped system parameters are evaluated and applied.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -260,6 +325,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)
         .add(&ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK)
+        .add(&ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK)
+        .add(&WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&ENABLE_FRONTEND_SUBSCRIBES)
@@ -277,11 +344,16 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENT)
         .add(&ENABLE_MCP_AGENT_QUERY_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
+        .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
+        .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&CONSOLE_OIDC_CLIENT_ID)
         .add(&CONSOLE_OIDC_SCOPES)
         .add(&ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL)
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
+        .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
+        .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
+        .add(&ENABLE_SCOPED_SYSTEM_PARAMETERS)
 }

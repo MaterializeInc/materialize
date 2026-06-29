@@ -875,9 +875,14 @@ To see the available workflows, run:
             # Testdrive already produced a junit.xml with detailed errors;
             # skip the mzcompose-level junit to avoid duplicate annotations.
             return False
+        if composition.has_sqllogictest_junit:
+            # sqllogictest already produced junit.xml files with detailed
+            # errors; skip the mzcompose-level junit to avoid duplicate
+            # annotations. Workflow failures outside the sqllogictest run
+            # itself don't set the flag and thus still get the mzcompose-level
+            # junit, so ci-annotate-errors can annotate them.
+            return False
         return composition_name not in {
-            # sqllogictest already generates a proper junit.xml file
-            "sqllogictest",
             # testdrive already generates a proper junit.xml file
             "testdrive",
             # not a test, run as post-command, and should not overwrite an existing junit.xml from a previous test

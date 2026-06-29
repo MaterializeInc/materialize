@@ -66,6 +66,12 @@ spec:
         {{- if not .Values.operator.args.enableLicenseKeyChecks }}
         - "--disable-license-key-checks"
         {{- end }}
+        {{- if .Values.operator.args.installV1CRD }}
+        - "--install-v1-crd"
+        {{- if .Values.operator.args.webhookCertReloadInterval }}
+        - "--webhook-cert-reload-interval={{ .Values.operator.args.webhookCertReloadInterval }}"
+        {{- end }}
+        {{- end }}
 
         {{/* AWS Configuration */}}
         {{- if eq .Values.operator.cloudProvider.type "aws" }}
@@ -242,9 +248,19 @@ spec:
         - >
           --additional-crd-columns={{ toJson .Values.operator.additionalMaterializeCRDColumns }}
         {{- end }}
+        {{- if .Values.operator.args.installV1CRD }}
+        - "--webhook-service-name"
+        - {{ include "materialize-operator.fullname" . }}
+        - "--webhook-service-namespace"
+        - {{ .Release.Namespace }}
+        {{- end }}
         ports:
         - containerPort: 3100
           name: metrics
+        {{- if .Values.operator.args.installV1CRD }}
+        - containerPort: 8001
+          name: webhook
+        {{- end }}
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}
         securityContext:
@@ -256,3 +272,29 @@ spec:
           runAsNonRoot: true
           seccompProfile:
             type: RuntimeDefault
+        {{- if .Values.operator.args.installV1CRD }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: webhook
+            scheme: HTTPS
+          failureThreshold: 3
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: webhook
+            scheme: HTTPS
+          failureThreshold: 1
+          periodSeconds: 10
+        volumeMounts:
+          - mountPath: /etc/tls
+            name: certificate
+            readOnly: true
+      volumes:
+        - name: certificate
+          secret:
+            defaultMode: 256
+            optional: false
+            secretName: {{ if eq .Values.operator.certificate.source "cert-manager" }}{{ include "materialize-operator.fullname" . }}-cert{{ else }}{{ .Values.operator.certificate.secretName }}{{ end }}
+        {{- end }}

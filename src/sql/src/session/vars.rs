@@ -77,7 +77,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use imbl::OrdMap;
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
+use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal, ParameterScope};
 use mz_persist_client::cfg::{
     CRDB_CONNECT_TIMEOUT, CRDB_KEEPALIVES_IDLE, CRDB_KEEPALIVES_INTERVAL, CRDB_KEEPALIVES_RETRIES,
     CRDB_TCP_USER_TIMEOUT,
@@ -124,9 +124,18 @@ pub enum EndTransactionAction {
 #[derive(Debug, Clone, Copy)]
 pub enum VarInput<'a> {
     /// The input has been flattened into a single string.
+    ///
+    /// NOTE: when adding a new variant here (or in [`OwnedVarInput`]), extend
+    /// the `mz_catalog.mz_role_parameters` materialized view in
+    /// `src/catalog/src/builtin/mz_catalog.rs`. That MV discriminates on the
+    /// externally-tagged JSON shape of [`OwnedVarInput`] to format
+    /// `parameter_value`.
     Flat(&'a str),
     /// The input comes from a SQL `SET` statement and is jumbled across
     /// multiple components.
+    ///
+    /// NOTE: see the doc-comment on [`VarInput::Flat`] — adding a new variant
+    /// requires extending `mz_catalog.mz_role_parameters`.
     SqlSet(&'a [String]),
 }
 
@@ -144,8 +153,15 @@ impl<'a> VarInput<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum OwnedVarInput {
     /// See [`VarInput::Flat`].
+    ///
+    /// NOTE: adding a new variant requires extending the
+    /// `mz_catalog.mz_role_parameters` materialized view in
+    /// `src/catalog/src/builtin/mz_catalog.rs`, which discriminates on the
+    /// externally-tagged JSON shape of this enum.
     Flat(String),
     /// See [`VarInput::SqlSet`].
+    ///
+    /// NOTE: see the doc-comment on [`OwnedVarInput::Flat`].
     SqlSet(Vec<String>),
 }
 
@@ -187,6 +203,13 @@ pub trait Var: Debug {
     /// Reports whether the variable is only visible in unsafe mode.
     fn is_unsafe(&self) -> bool {
         self.name().starts_with("unsafe_")
+    }
+
+    /// Returns the [`ParameterScope`] at which this variable's value may be
+    /// overridden by the LaunchDarkly sync loop. Defaults to
+    /// [`ParameterScope::Environment`].
+    fn scope(&self) -> ParameterScope {
+        ParameterScope::Environment
     }
 
     /// Upcast `self` to a `dyn Var`, useful when working with multiple different implementors of
@@ -567,6 +590,8 @@ impl SessionVars {
         local: bool,
     ) -> Result<(), VarError> {
         let (name, input) = compat_translate(name, input);
+
+        check_transaction_isolation_feature_flag(name, input, system_vars)?;
 
         let name = UncasedStr::new(name);
         self.check_read_only(name)?;
@@ -969,6 +994,36 @@ fn compat_translate_name(name: &str) -> &str {
     name
 }
 
+/// Enforces feature-flag gating for `transaction_isolation` levels that sit
+/// behind a flag (`bounded staleness <duration>` and
+/// `strong session serializable`).
+///
+/// Returns `Ok(())` for any other variable, and for an unparseable value
+/// (parse errors surface on the actual set). This is shared by every path that
+/// assigns `transaction_isolation` — `SET`, `SET TRANSACTION`,
+/// `ALTER ROLE ... SET`, and connection options — so that the gate cannot be
+/// bypassed by choosing a different syntax or letter case.
+pub fn check_transaction_isolation_feature_flag(
+    name: &str,
+    input: VarInput,
+    system_vars: &SystemVars,
+) -> Result<(), VarError> {
+    if UncasedStr::new(name) != UncasedStr::new(TRANSACTION_ISOLATION_VAR_NAME) {
+        return Ok(());
+    }
+    // Ignore parse failures here; the actual set surfaces them.
+    let Ok(level) = IsolationLevel::parse(input) else {
+        return Ok(());
+    };
+    match level {
+        IsolationLevel::StrongSessionSerializable => ENABLE_SESSION_TIMELINES.require(system_vars),
+        IsolationLevel::BoundedStaleness(_) => {
+            ENABLE_BOUNDED_STALENESS_ISOLATION.require(system_vars)
+        }
+        _ => Ok(()),
+    }
+}
+
 /// A `SystemVar` is persisted on disk value for a configuration parameter. If unset,
 /// the server default is used instead.
 #[derive(Debug)]
@@ -1073,6 +1128,10 @@ impl Var for SystemVar {
 
     fn type_name(&self) -> Cow<'static, str> {
         self.definition.type_name()
+    }
+
+    fn scope(&self) -> ParameterScope {
+        self.definition.scope()
     }
 
     fn visible(&self, user: &User, system_vars: &SystemVars) -> Result<(), VarError> {
@@ -1247,34 +1306,39 @@ impl SystemVars {
         let dyncfgs = mz_dyncfgs::all_dyncfgs();
         let dyncfg_vars: Vec<_> = dyncfgs
             .entries()
-            .map(|cfg| match cfg.default() {
-                ConfigVal::Bool(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::U32(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::Usize(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::OptUsize(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::F64(default) => {
-                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
-                }
-                ConfigVal::String(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
-                }
-                ConfigVal::OptString(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
-                }
-                ConfigVal::Duration(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
-                }
-                ConfigVal::Json(default) => {
-                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
-                }
+            .map(|cfg| {
+                let var = match cfg.default() {
+                    ConfigVal::Bool(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::U32(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::Usize(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::OptUsize(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::F64(default) => {
+                        VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), false)
+                    }
+                    ConfigVal::String(default) => {
+                        VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                    }
+                    ConfigVal::OptString(default) => {
+                        VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                    }
+                    ConfigVal::Duration(default) => {
+                        VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                    }
+                    ConfigVal::Json(default) => {
+                        VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                    }
+                };
+                // Carry the dyncfg's declared scope through to the system var,
+                // so scoped resolution and introspection see it.
+                var.scoped(cfg.scope())
             })
             .collect();
 
@@ -2331,6 +2395,7 @@ pub fn is_timestamp_oracle_config_var(name: &str) -> bool {
         || name == CRDB_KEEPALIVES_IDLE.name()
         || name == CRDB_KEEPALIVES_INTERVAL.name()
         || name == CRDB_KEEPALIVES_RETRIES.name()
+        || name == mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.name()
 }
 
 /// Returns whether the named variable is a cluster scheduling config
@@ -2452,5 +2517,56 @@ impl Var for User {
 
     fn visible(&self, _: &User, _: &SystemVars) -> Result<(), VarError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod isolation_feature_flag_tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn gates_bounded_staleness_value() {
+        let mut system_vars = SystemVars::new();
+
+        // Default-on: the value passes the gate.
+        check_transaction_isolation_feature_flag(
+            TRANSACTION_ISOLATION_VAR_NAME,
+            VarInput::Flat("bounded staleness 5s"),
+            &system_vars,
+        )
+        .expect("flag on by default");
+
+        // Turn the flag off: the value is rejected regardless of the letter case
+        // of the variable name. This covers `SET`, `SET "TRANSACTION_ISOLATION"`,
+        // `ALTER ROLE ... SET`, and connection options, which all route through
+        // `SessionVars::set` and this shared check.
+        system_vars
+            .set("enable_bounded_staleness_isolation", VarInput::Flat("off"))
+            .expect("set flag");
+        for name in ["transaction_isolation", "TRANSACTION_ISOLATION"] {
+            let err = check_transaction_isolation_feature_flag(
+                name,
+                VarInput::Flat("bounded staleness 5s"),
+                &system_vars,
+            )
+            .expect_err("flag off rejects bounded staleness");
+            assert!(matches!(err, VarError::RequiresFeatureFlag { .. }));
+        }
+
+        // Non-gated levels are unaffected.
+        check_transaction_isolation_feature_flag(
+            TRANSACTION_ISOLATION_VAR_NAME,
+            VarInput::Flat("serializable"),
+            &system_vars,
+        )
+        .expect("serializable always allowed");
+
+        // Unrelated variables are ignored, even with a gated-looking value.
+        check_transaction_isolation_feature_flag(
+            CLUSTER.name(),
+            VarInput::Flat("bounded staleness 5s"),
+            &system_vars,
+        )
+        .expect("unrelated var ignored");
     }
 }

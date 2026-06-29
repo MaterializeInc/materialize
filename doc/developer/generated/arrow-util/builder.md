@@ -1,6 +1,6 @@
 ---
 source: src/arrow-util/src/builder.rs
-revision: 40ca87f749
+revision: 7d0e6c8e0c
 ---
 
 # builder
@@ -15,4 +15,4 @@ Helper functions `desc_to_schema` and `desc_to_schema_with_overrides` convert a 
 `ArrowBuilder::validate_desc` checks that all columns in a `RelationDesc` have supported Arrow type mappings without constructing a builder.
 `ArrowBuilder::validate_desc_for_parquet` extends this check to also reject Arrow types that are not supported by arrow-rs's `ArrowWriter` parquet writer; callers pass the same override function used with `desc_to_schema_with_overrides` so remapped types are not rejected. The private `parquet_incompatible_type` helper recurses into composite types and uses a closed allowlist — anything not explicitly permitted is rejected.
 Map column builders use field names from the schema's entries struct rather than arrow-rs defaults; both the key and value inner fields are forwarded via `.with_keys_field` / `.with_values_field` so any metadata (e.g., Iceberg `PARQUET:field_id`) survives onto the `MapArray`'s nested fields.
-The `append_datum` implementation includes a lossless signed-to-signed widening path for `Datum::Int16` into `Int32Builder`, supporting destinations (e.g., Iceberg) that lack a smallint type.
+The `append_datum` implementation includes a lossless signed-to-signed widening path for `Datum::Int16` into `Int32Builder`, supporting destinations (e.g., Iceberg) that lack a smallint type. The array `dimensions` struct field is similarly widened: when the schema carries an `Int32Builder` for the `dimensions` field (as Iceberg does, having no narrow integer types), `ndims` (a `u8`) is promoted to `i32` via `i32::from`; a `UInt8Builder` is also accepted for non-Iceberg paths.

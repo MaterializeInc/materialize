@@ -13,6 +13,9 @@ mode cockroach
 
 reset-server
 
+# Mask churning transient global IDs (`t<N>`) with a stable placeholder.
+replace \bt\d+\b  t<id>
+
 # VIEW + INDEX
 
 statement ok
@@ -34,8 +37,8 @@ SELECT mz_unsafe.mz_sleep(8)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-5  u2
-5  u3
+6  u2
+6  u3
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
@@ -119,17 +122,17 @@ SELECT mz_unsafe.mz_sleep(8)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-10  t52
+11  t<id>
 
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
 ----
-t52  5
-t52  4
-t52  3
-t52  2
-t52  1
+t<id>  5
+t<id>  4
+t<id>  3
+t<id>  2
+t<id>  1
 
 ## attribution queries
 
@@ -142,11 +145,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t52  5  NULL  Differential␠Join␠%0␠»␠%1
-t52  4  5  ␠␠Arrange␠(#0{y})
-t52  3  4  ␠␠␠␠Read␠u4
-t52  2  5  ␠␠Arrange␠(#0{x})
-t52  1  2  ␠␠␠␠Read␠u4
+t<id>  5  NULL  Differential␠Join␠%0␠»␠%1
+t<id>  4  5  ␠␠Arrange␠(#0{y})
+t<id>  3  4  ␠␠␠␠Read␠u4
+t<id>  2  5  ␠␠Arrange␠(#0{x})
+t<id>  1  2  ␠␠␠␠Read␠u4
 
 # omitting pg_size_pretty(sum(size)) as size
 query TIIT
@@ -157,11 +160,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t52  5  NULL  Differential␠Join␠%0␠»␠%1
-t52  4  5  ␠␠Arrange␠(#0{y})
-t52  3  4  ␠␠␠␠Read␠u4
-t52  2  5  ␠␠Arrange␠(#0{x})
-t52  1  2  ␠␠␠␠Read␠u4
+t<id>  5  NULL  Differential␠Join␠%0␠»␠%1
+t<id>  4  5  ␠␠Arrange␠(#0{y})
+t<id>  3  4  ␠␠␠␠Read␠u4
+t<id>  2  5  ␠␠Arrange␠(#0{x})
+t<id>  1  2  ␠␠␠␠Read␠u4
 
 statement ok
 DROP TABLE u CASCADE;
@@ -417,26 +420,26 @@ SELECT global_id, REPEAT(' ', nesting * 2) || operator AS operator
 FROM mz_internal.mz_lir_mapping mlm
 ORDER BY global_id, lir_id DESC;
 ----
-t77  Returning␠Distinct␠GroupAggregate
-t77  ␠␠Union
-t77  ␠␠␠␠Differential␠Join␠%0␠»␠%1
-t77  ␠␠␠␠␠␠Arrange␠(#0{messageid})
-t77  ␠␠␠␠␠␠␠␠Stream␠l0
-t77  ␠␠␠␠␠␠Arranged␠u15
-t77  ␠␠␠␠Arranged␠u13
-t77  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
-t77  ␠␠Distinct␠GroupAggregate
-t77  ␠␠␠␠Union
-t77  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
-t77  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
-t77  ␠␠␠␠␠␠␠␠␠␠Read␠l0
-t77  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
-t77  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
-t77  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
-t77  ␠␠␠␠␠␠␠␠Arranged␠u13
-t77  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
-t77  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
-t77  ␠␠␠␠␠␠Arranged␠u13
+t<id>  Returning␠Distinct␠GroupAggregate
+t<id>  ␠␠Union
+t<id>  ␠␠␠␠Differential␠Join␠%0␠»␠%1
+t<id>  ␠␠␠␠␠␠Arrange␠(#0{messageid})
+t<id>  ␠␠␠␠␠␠␠␠Stream␠l0
+t<id>  ␠␠␠␠␠␠Arranged␠u15
+t<id>  ␠␠␠␠Arranged␠u13
+t<id>  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
+t<id>  ␠␠Distinct␠GroupAggregate
+t<id>  ␠␠␠␠Union
+t<id>  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
+t<id>  ␠␠␠␠␠␠␠␠␠␠Read␠l0
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
+t<id>  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t<id>  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
+t<id>  ␠␠␠␠␠␠␠␠Arranged␠u13
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
+t<id>  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t<id>  ␠␠␠␠␠␠Arranged␠u13
 u10  Arrange␠(#1{person1id})
 u10  ␠␠Stream␠u9
 u11  Arrange␠(#2{person2id})
@@ -458,7 +461,7 @@ u21  ␠␠Read␠l0
 u21  ␠␠Stream␠l0
 u21  With␠l0␠=␠Map/Filter/Project
 u21  ␠␠Accumulable␠GroupAggregate
-u21  ␠␠␠␠Delta␠Join␠[%0␠»␠%1␠»␠%2][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u21  ␠␠␠␠Delta␠Join␠[%0␠»␠%1␠»␠%2]␠[%1␠»␠%0␠»␠%2]␠[%2␠»␠%0␠»␠%1]
 u21  ␠␠␠␠␠␠Arranged␠u9
 u21  ␠␠␠␠␠␠Arranged␠u17
 u21  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{parentmessageid})
@@ -490,7 +493,7 @@ u23  ␠␠␠␠␠␠Arrange␠(#1{dst})
 u23  ␠␠␠␠␠␠␠␠Read␠l3
 u23  l4␠=␠Non-monotonic␠TopK
 u23  ␠␠Union
-u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1]␠[%1␠»␠%0␠»␠%2]␠[%2␠»␠%0␠»␠%1]
 u23  ␠␠␠␠␠␠Arranged␠l1
 u23  ␠␠␠␠␠␠Arranged␠l2
 u23  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{dst})
@@ -501,7 +504,7 @@ u23  ␠␠␠␠␠␠␠␠Constant␠(1␠rows)
 u23  ␠␠␠␠␠␠Arranged␠l0
 u23  l3␠=␠Non-monotonic␠TopK
 u23  ␠␠Union
-u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1][%1␠»␠%0␠»␠%2][%2␠»␠%0␠»␠%1]
+u23  ␠␠␠␠Delta␠Join␠[%0␠»␠%2␠»␠%1]␠[%1␠»␠%0␠»␠%2]␠[%2␠»␠%0␠»␠%1]
 u23  ␠␠␠␠␠␠Arranged␠l1
 u23  ␠␠␠␠␠␠Arranged␠l2
 u23  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{dst})
@@ -592,7 +595,7 @@ materialize.public.v2_idx_x  u26  2
 materialize.public.v2_idx_x  u27  2
 materialize.public.v_idx_x  u28  5
 materialize.public.v_idx_x  u29  2
-materialize.public.w  t90  5
+materialize.public.w  t<id>  5
 
 # explain analyze SQL generation
 
@@ -875,7 +878,14 @@ FROM
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
-WHERE mo.name = 'materialize.public.w' AND pwc.worker_id = pwm.worker_id
+WHERE
+    mo.name = 'materialize.public.w'
+        AND
+    (
+        pwc.worker_id = pwm.worker_id OR pwc.worker_id IS NULL
+            OR
+        pwm.worker_id IS NULL
+    )
 ORDER BY mlm.lir_id DESC, worker_id;
 EOF
 
@@ -1003,7 +1013,14 @@ FROM
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
-WHERE mo.name = 'materialize.public.w' AND pwm.worker_id = pwc.worker_id
+WHERE
+    mo.name = 'materialize.public.w'
+        AND
+    (
+        pwm.worker_id = pwc.worker_id OR pwm.worker_id IS NULL
+            OR
+        pwc.worker_id IS NULL
+    )
 ORDER BY mlm.lir_id DESC, worker_id;
 EOF
 
@@ -1169,7 +1186,14 @@ FROM
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
-WHERE mo.name = 'materialize.public.v2_idx_x' AND pwm.worker_id = pwc.worker_id
+WHERE
+    mo.name = 'materialize.public.v2_idx_x'
+        AND
+    (
+        pwm.worker_id = pwc.worker_id OR pwm.worker_id IS NULL
+            OR
+        pwc.worker_id IS NULL
+    )
 ORDER BY mlm.lir_id DESC, worker_id;
 EOF
 
@@ -1210,7 +1234,7 @@ FROM
     mz_introspection.mz_mappable_objects AS mo
         LEFT JOIN object_memory_totals AS omt USING(global_id)
 ORDER BY
-    total_memory DESC NULLS LAST,
+    omt.total_memory DESC NULLS LAST,
     total_records DESC NULLS LAST,
     mo.name DESC;
 EOF
@@ -1274,7 +1298,7 @@ FROM
         LEFT JOIN object_memory_totals AS omt USING(global_id)
         LEFT JOIN object_cpu_totals AS oct USING(global_id)
 ORDER BY
-    total_memory DESC NULLS LAST,
+    omt.total_memory DESC NULLS LAST,
     total_records DESC NULLS LAST,
     total_elapsed DESC NULLS LAST,
     mo.name DESC;
@@ -1500,14 +1524,19 @@ FROM
         LEFT JOIN object_average_cpu AS oac USING(global_id)
         LEFT JOIN object_memory AS om USING(global_id)
         LEFT JOIN object_average_memory AS oam USING(global_id)
-WHERE om.worker_id = oc.worker_id
+WHERE
+    (
+        om.worker_id = oc.worker_id OR om.worker_id IS NULL
+            OR
+        oc.worker_id IS NULL
+    )
 ORDER BY
     max_operator_cpu_ratio DESC NULLS LAST,
     worker_elapsed DESC NULLS LAST,
     worker_id,
     max_operator_memory_ratio DESC NULLS LAST,
     max_operator_records_ratio DESC NULLS LAST,
-    worker_memory DESC NULLS LAST,
+    om.worker_memory DESC NULLS LAST,
     worker_records DESC NULLS LAST,
     mo.name DESC;
 EOF
@@ -1591,3 +1620,123 @@ EXPLAIN ANALYZE CLUSTER CPU, MEMORY WITH SKEW;
 
 statement ok
 EXPLAIN ANALYZE CLUSTER MEMORY, CPU WITH SKEW;
+
+# Regression test for SQL-356
+# Multi-property WITH SKEW must not drop operators/objects
+# that lack data for one of the requested properties.
+#
+# With the bug present, the all NULL rows do not appear.
+
+statement ok
+CREATE MATERIALIZED VIEW w2 AS SELECT x + 1 AS x FROM u;
+
+# let the introspection sources update
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+# precondition: w2's dataflow owns no arrangements, so there is no per-worker
+# memory data for any of its operators...
+query I
+SELECT COUNT(*)
+FROM mz_introspection.mz_mappable_objects mo
+JOIN mz_introspection.mz_lir_mapping mlm USING (global_id)
+CROSS JOIN generate_series(mlm.operator_id_start::int8, (mlm.operator_id_end - 1)::int8) valid_id
+JOIN mz_introspection.mz_arrangement_sizes_per_worker mas ON (mas.operator_id = valid_id)
+WHERE mo.name = 'materialize.public.w2';
+----
+0
+
+# ...and no attributable per-worker CPU data either (the fused Read's
+# operator-id range is empty), so all metric columns below are NULL
+query B
+SELECT COUNT(*) > 0
+FROM mz_introspection.mz_mappable_objects mo
+JOIN mz_introspection.mz_lir_mapping mlm USING (global_id)
+CROSS JOIN generate_series(mlm.operator_id_start::int8, (mlm.operator_id_end - 1)::int8) valid_id
+JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse ON (mse.id = valid_id)
+WHERE mo.name = 'materialize.public.w2';
+----
+false
+
+# single-property skew shows every operator
+query TIRTTTRIII
+EXPLAIN ANALYZE MEMORY WITH SKEW FOR MATERIALIZED VIEW w2;
+----
+Read␠u30  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# requesting both properties must show the same operators; with the bug the
+# worker-id equality predicate drops the all-NULL rows and returns nothing
+query TIRTTTRIIIRTTT
+EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR MATERIALIZED VIEW w2;
+----
+Read␠u30  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# same in the other property order
+query TIRTTTRTTTRIII
+EXPLAIN ANALYZE CPU, MEMORY WITH SKEW FOR MATERIALIZED VIEW w2;
+----
+Read␠u30  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# The cluster variant has the same flaw one level up: a dataflow with no
+# per-worker data for one property disappears from EXPLAIN ANALYZE CLUSTER
+# (MEMORY, CPU) WITH SKEW while appearing in the single-property variants.
+
+statement ok
+CREATE CLUSTER no_arrangements REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+
+statement ok
+CREATE MATERIALIZED VIEW w3 IN CLUSTER no_arrangements AS SELECT x + 1 AS x FROM u;
+
+statement ok
+SET cluster = no_arrangements;
+
+# let the introspection sources update
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+query T
+SELECT name FROM mz_introspection.mz_mappable_objects ORDER BY name;
+----
+materialize.public.w3
+
+# precondition: no LIR-mapped dataflow on this cluster owns any arrangement
+query I
+SELECT COUNT(*)
+FROM mz_introspection.mz_lir_mapping mlm
+CROSS JOIN generate_series(mlm.operator_id_start::int8, (mlm.operator_id_end - 1)::int8) valid_id
+JOIN mz_introspection.mz_arrangement_sizes_per_worker mas ON (mas.operator_id = valid_id);
+----
+0
+
+# precondition: no attributable per-worker CPU data on this cluster either
+query B
+SELECT COUNT(*) > 0
+FROM mz_introspection.mz_mappable_objects mo
+JOIN mz_introspection.mz_lir_mapping mlm USING (global_id)
+CROSS JOIN generate_series(mlm.operator_id_start::int8, (mlm.operator_id_end - 1)::int8) valid_id
+JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse ON (mse.id = valid_id)
+WHERE mo.name = 'materialize.public.w3';
+----
+false
+
+# single-property skew shows the object
+query TTIRTTTRIII
+EXPLAIN ANALYZE CLUSTER MEMORY WITH SKEW;
+----
+materialize.public.w3  t<id>  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# requesting both properties must show the same object; with the bug the
+# worker-id equality predicate drops it entirely
+query TTIRTTTRIIIRTTT
+EXPLAIN ANALYZE CLUSTER MEMORY, CPU WITH SKEW;
+----
+materialize.public.w3  t<id>  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+# same in the other property order
+query TTIRTTTRTTTRIII
+EXPLAIN ANALYZE CLUSTER CPU, MEMORY WITH SKEW;
+----
+materialize.public.w3  t<id> NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+
+statement ok
+RESET cluster;

@@ -534,14 +534,27 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                         "Sync" => frontend::sync(buf),
                         "Bind" => {
                             let v: Bind = serde_json::from_str(args).unwrap();
-                            let values = v.values.unwrap_or_default();
+                            // Parameter values as raw bytes. `binary_values`
+                            // supplies them verbatim, which (together with
+                            // `param_formats`) is what lets a test exercise the
+                            // binary parameter format; otherwise `values` are
+                            // sent as UTF-8 text, matching historical behavior.
+                            let values: Vec<Vec<u8>> = match v.binary_values {
+                                Some(binary_values) => binary_values,
+                                None => v
+                                    .values
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(String::into_bytes)
+                                    .collect(),
+                            };
                             if frontend::bind(
                                 &v.portal.unwrap_or_else(|| "".into()),
                                 &v.statement.unwrap_or_else(|| "".into()),
-                                vec![], // formats
-                                values, // values
-                                |t, buf| {
-                                    buf.put_slice(t.as_bytes());
+                                v.param_formats.unwrap_or_default(), // formats
+                                values,                              // values
+                                |bytes: Vec<u8>, buf| {
+                                    buf.put_slice(&bytes);
                                     Ok(IsNull::No)
                                 }, // serializer
                                 v.result_formats.unwrap_or_default(),
@@ -641,6 +654,12 @@ pub struct Bind {
     pub portal: Option<String>,
     pub statement: Option<String>,
     pub values: Option<Vec<String>>,
+    /// Parameter format codes (0 = text, 1 = binary). Empty/absent means all
+    /// parameters use the text format, as before.
+    pub param_formats: Option<Vec<i16>>,
+    /// Raw parameter values, sent verbatim. Use this instead of `values` to put
+    /// arbitrary bytes (e.g. a binary-format parameter) on the wire.
+    pub binary_values: Option<Vec<Vec<u8>>>,
     pub result_formats: Option<Vec<i16>>,
 }
 

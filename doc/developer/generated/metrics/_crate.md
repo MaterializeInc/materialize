@@ -1,6 +1,6 @@
 ---
 source: src/metrics/src/lib.rs
-revision: 4267863081
+revision: 83e4f88e27
 ---
 
 # mz-metrics
@@ -17,5 +17,7 @@ Modules:
 * `lgalloc` — lgalloc size-class and NUMA-mapping gauges.
 * `rusage` — POSIX `getrusage` gauges.
 * `dyncfgs` — dynamic configuration constants for refresh intervals; re-exports `all_dyncfgs`.
+
+The public `describe_metrics()` function returns `Vec<(String, String, Vec<String>, &'static str)>` 4-tuples of `(name, help, label_keys, source_file)` for every metric registered through a `metric!`-wrapping macro in `lgalloc` and `rusage`. These metrics are invisible to the `mz-metrics-catalog` source scraper because their names are assembled at macro-expansion time; the catalog imports them by calling `describe_metrics()` and reading back their descriptors from a throwaway registry. Label keys are extracted from Prometheus descriptors via the `desc_labels` helper, which merges variable labels and constant label keys into a sorted, deduplicated `Vec<String>`.
 
 Key dependencies: `lgalloc`, `libc`, `mz-dyncfg`, `mz-ore`, `prometheus`, `tokio`.

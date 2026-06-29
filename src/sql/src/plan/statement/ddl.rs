@@ -28,8 +28,8 @@ use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -68,22 +68,23 @@ use mz_sql_parser::ast::{
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
-    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
+    FormatSpecifier, GlueAvroOption, GlueAvroOptionName, IcebergSinkConfigOption, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
+    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
+    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
+    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
+    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
+    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
-use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
+use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
     IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType,
@@ -166,7 +167,7 @@ use crate::plan::{
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
     ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
-    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
+    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -177,6 +178,9 @@ mod connection;
 // The real max is probably higher than this, but it's easier to relax a constraint than make it
 // more strict.
 const MAX_NUM_COLUMNS: usize = 256;
+
+const MAX_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 static MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
@@ -1201,7 +1205,7 @@ fn plan_kafka_source_connection(
     let KafkaSourceConfigOptionExtracted {
         group_id_prefix,
         topic,
-        topic_metadata_refresh_interval,
+        mut topic_metadata_refresh_interval,
         start_timestamp: _, // purified into `start_offset`
         start_offset,
         seen: _,
@@ -1221,6 +1225,10 @@ fn plan_kafka_source_connection(
         // This is a librdkafka-enforced restriction that, if violated,
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    }
+    if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
+        // We enforce a minimum of 1 second refresh interval to prevent overloading the topic
+        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
     }
     let metadata_columns = include_metadata
         .into_iter()
@@ -2288,6 +2296,8 @@ fn source_sink_cluster_config<'a, 'ctx>(
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
 
+generate_extracted_config!(GlueAvroOption, (SchemaName, String));
+
 #[derive(Debug)]
 pub struct Schema {
     pub key_schema: Option<String>,
@@ -2296,8 +2306,10 @@ pub struct Schema {
     pub key_reference_schemas: Vec<String>,
     /// Reference schemas for the value schema, in dependency order.
     pub value_reference_schemas: Vec<String>,
-    pub csr_connection: Option<<ReferencedConnection as ConnectionAccess>::Csr>,
-    pub confluent_wire_format: bool,
+    /// Wire-format dispatch and the registry connection to fetch writer
+    /// schemas from. Built directly by each `AvroSchema` variant rather
+    /// than reconstructed from a (csr_connection, bool) pair downstream.
+    pub wire_format: WireFormat<ReferencedConnection>,
 }
 
 fn get_encoding_inner(
@@ -2312,8 +2324,7 @@ fn get_encoding_inner(
                 value_schema,
                 key_reference_schemas,
                 value_reference_schemas,
-                csr_connection,
-                confluent_wire_format,
+                wire_format,
             } = match schema {
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
@@ -2325,14 +2336,17 @@ fn get_encoding_inner(
                         confluent_wire_format,
                         ..
                     } = with_options.clone().try_into()?;
-
+                    let wire_format = if confluent_wire_format {
+                        WireFormat::Confluent { registry: None }
+                    } else {
+                        WireFormat::None
+                    };
                     Schema {
                         key_schema: None,
                         value_schema: schema.clone(),
                         key_reference_schemas: vec![],
                         value_reference_schemas: vec![],
-                        csr_connection: None,
-                        confluent_wire_format,
+                        wire_format,
                     }
                 }
                 AvroSchema::Csr {
@@ -2349,7 +2363,7 @@ fn get_encoding_inner(
                         Connection::Csr(_) => item.id(),
                         _ => {
                             sql_bail!(
-                                "{} is not a schema registry connection",
+                                "{} is not a Confluent Schema Registry connection",
                                 scx.catalog
                                     .resolve_full_name(item.name())
                                     .to_string()
@@ -2364,29 +2378,49 @@ fn get_encoding_inner(
                             value_schema: seed.value_schema.clone(),
                             key_reference_schemas: seed.key_reference_schemas.clone(),
                             value_reference_schemas: seed.value_reference_schemas.clone(),
-                            csr_connection: Some(csr_connection),
-                            confluent_wire_format: true,
+                            wire_format: WireFormat::Confluent {
+                                registry: Some(csr_connection),
+                            },
                         }
                     } else {
                         sql_bail!("Avro CSR seed resolution has not been performed")
                     }
                 }
-            };
+                AvroSchema::Glue {
+                    connection,
+                    with_options: _,
+                    seed,
+                } => {
+                    let item = scx.get_item_by_resolved_name(connection)?;
+                    let glue_connection = match item.connection()? {
+                        Connection::GlueSchemaRegistry(_) => item.id(),
+                        _ => {
+                            sql_bail!(
+                                "{} is not an AWS Glue Schema Registry connection",
+                                scx.catalog
+                                    .resolve_full_name(item.name())
+                                    .to_string()
+                                    .quoted()
+                            )
+                        }
+                    };
 
-            // Map the legacy (csr_connection, confluent_wire_format) pair to
-            // the unified `WireFormat`. `(Some, false)` is unreachable in
-            // practice (the planner only sets `confluent_wire_format = false`
-            // on inline schemas, which never carry a CSR connection) but is
-            // rejected explicitly here to keep the invariant local.
-            let wire_format = match (csr_connection.clone(), confluent_wire_format) {
-                (None, false) => WireFormat::None,
-                (None, true) => WireFormat::Confluent { registry: None },
-                (Some(c), true) => WireFormat::Confluent { registry: Some(c) },
-                (Some(_), false) => {
-                    sql_bail!(
-                        "internal error: AVRO source has CSR connection but \
-                         CONFLUENT WIRE FORMAT = false"
-                    )
+                    // `SCHEMA NAME` requiredness is enforced during
+                    // purification, which also populates `seed`. By the time
+                    // planning runs the option is guaranteed present.
+                    let Some(seed) = seed else {
+                        sql_bail!("Avro Glue seed resolution has not been performed");
+                    };
+
+                    Schema {
+                        key_schema: None,
+                        value_schema: seed.value_schema.clone(),
+                        key_reference_schemas: vec![],
+                        value_reference_schemas: vec![],
+                        wire_format: WireFormat::Glue {
+                            registry: Some(glue_connection),
+                        },
+                    }
                 }
             };
 
@@ -2893,7 +2927,13 @@ pub fn plan_create_materialized_view(
                         sql_bail!("REFRESH interval must not involve units larger than days");
                     }
                     let interval = interval.duration()?;
-                    if u64::try_from(interval.as_millis()).is_err() {
+                    // `Interval::from_duration` (needed to unparse the interval, e.g. for
+                    // `mz_materialized_view_refresh_strategies`) requires the micros to fit
+                    // in an i64, which is a tighter bound than `Duration::duration` enforces.
+                    // Reject too-large intervals here to avoid panicking later.
+                    if u64::try_from(interval.as_millis()).is_err()
+                        || Interval::from_duration(&interval).is_err()
+                    {
                         sql_bail!("REFRESH interval too large");
                     }
                     if interval.as_micros() < 1000 {
@@ -3765,7 +3805,7 @@ fn kafka_sink_builder(
         transactional_id_prefix,
         legacy_ids,
         topic_config,
-        topic_metadata_refresh_interval,
+        mut topic_metadata_refresh_interval,
         topic_partition_count,
         topic_replication_factor,
         seen: _,
@@ -3789,10 +3829,14 @@ fn kafka_sink_builder(
 
     let topic_name = topic.ok_or_else(|| sql_err!("KAFKA CONNECTION must specify TOPIC"))?;
 
-    if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
+    if topic_metadata_refresh_interval > MAX_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
         // This is a librdkafka-enforced restriction that, if violated,
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    } else if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
+        // We enforce a minimum of 1 second here to prevent excessive refreshes, and ensure that
+        // tokio::time::interval receives a valid (positive) duration.
+        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
     }
 
     let assert_positive = |val: Option<i32>, name: &str| {
@@ -4446,12 +4490,25 @@ impl PlannedRoleVariable {
     }
 }
 
-fn plan_role_variable(variable: SetRoleVar) -> Result<PlannedRoleVariable, PlanError> {
+fn plan_role_variable(
+    scx: &StatementContext,
+    variable: SetRoleVar,
+) -> Result<PlannedRoleVariable, PlanError> {
     let plan = match variable {
-        SetRoleVar::Set { name, value } => PlannedRoleVariable::Set {
-            name: name.to_string(),
-            value: scl::plan_set_variable_to(value)?,
-        },
+        SetRoleVar::Set { name, value } => {
+            let name = name.to_string();
+            let value = scl::plan_set_variable_to(value)?;
+            // Gate feature-flagged isolation levels, matching the `SET` and
+            // connection-option paths in `SessionVars::set`.
+            if let VariableValue::Values(values) = &value {
+                vars::check_transaction_isolation_feature_flag(
+                    &name,
+                    VarInput::SqlSet(values),
+                    scx.catalog.system_vars(),
+                )?;
+            }
+            PlannedRoleVariable::Set { name, value }
+        }
         SetRoleVar::Reset { name } => PlannedRoleVariable::Reset {
             name: name.to_string(),
         },
@@ -4921,9 +4978,15 @@ pub fn unplan_create_cluster(
             let replication_factor = match &schedule {
                 ClusterScheduleOptionValue::Manual => Some(replication_factor),
                 ClusterScheduleOptionValue::Refresh { .. } => {
-                    assert!(
+                    // A cluster with a refresh schedule is turned On/Off by the cluster scheduling
+                    // policy, so its replication factor should always be 0 or 1, and CREATE/ALTER
+                    // reject setting both a non-MANUAL schedule and a higher replication factor. If
+                    // we nevertheless find one (e.g., a cluster left in an invalid state by an
+                    // older version), log loudly rather than crashing the coordinator: the
+                    // replication factor is omitted from the rendered statement regardless.
+                    soft_assert_or_log!(
                         replication_factor <= 1,
-                        "replication factor, {replication_factor:?}, must be <= 1"
+                        "replication factor, {replication_factor:?}, must be <= 1 with a refresh schedule"
                     );
                     None
                 }
@@ -6163,6 +6226,24 @@ pub fn plan_alter_cluster(
                         && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                     {
                         scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
+
+                        // A cluster with a non-MANUAL schedule is automatically turned On/Off by
+                        // the cluster scheduling policy, which means its replication factor is
+                        // always 0 or 1. If the cluster currently has a higher replication factor
+                        // and the user is not lowering it in the same statement (which would be
+                        // rejected just below), then reject the schedule change: otherwise we'd
+                        // leave the cluster in an invalid state with both a non-MANUAL schedule and
+                        // a replication factor > 1 (which would, e.g., make SHOW CREATE CLUSTER
+                        // panic).
+                        if replication_factor.is_none()
+                            && cluster.replication_factor().is_some_and(|rf| rf > 1)
+                        {
+                            sql_bail!(
+                                "SCHEDULE cannot be set to anything other than MANUAL while the \
+                                cluster's REPLICATION FACTOR is greater than 1; \
+                                set the REPLICATION FACTOR to 1 first"
+                            );
+                        }
                     }
 
                     if replication_factor.is_some() {
@@ -7438,7 +7519,7 @@ pub fn plan_alter_role(
             PlannedAlterRoleOption::Attributes(attrs)
         }
         AlterRoleOption::Variable(variable) => {
-            let var = plan_role_variable(variable)?;
+            let var = plan_role_variable(scx, variable)?;
             PlannedAlterRoleOption::Variable(var)
         }
     };

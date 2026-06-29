@@ -166,6 +166,10 @@ impl FdbConsensus {
         mz_foundationdb::init_network();
 
         let db = Database::new(None)?;
+        // In tests, bound transactions so an unresponsive server fails fast
+        // instead of hanging until the harness terminates the process.
+        #[cfg(test)]
+        mz_foundationdb::set_test_transaction_timeout(&db);
         let directory = DirectoryLayer::default();
         let keys_path: Vec<_> = fdb_config
             .prefix
@@ -455,7 +459,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-    #[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/10076 is fixed
     async fn fdb_consensus() -> Result<(), ExternalError> {
         let config = FdbConsensusConfig::new(
             std::str::FromStr::from_str("foundationdb:?prefix=test/consensus").unwrap(),
@@ -507,6 +510,12 @@ mod tests {
 
         assert_eq!(consensus.head(&key).await, Ok(None));
 
+        // Drop all FoundationDB handles before stopping the network, then shut it
+        // down. The network must be stopped before the process exits, otherwise
+        // the client can segfault during teardown. Stopping it while a `Database`
+        // is still alive can instead block on the network thread join, so drop
+        // `consensus` first.
+        drop(consensus);
         mz_foundationdb::shutdown_network();
         Ok(())
     }

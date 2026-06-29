@@ -26,6 +26,7 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.azurite import Azurite
+from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
@@ -49,6 +50,7 @@ SERVICES = [
     Mz(app_password=""),
     Minio(setup_materialize=False, additional_directories=["copytos3"]),
     Materialized(),
+    FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(default_timeout="60s"),
     SqlServer(),
 ]
@@ -191,6 +193,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.up(
+        "fivetran-destination",
         "materialized",
         "postgres",
         "mysql",

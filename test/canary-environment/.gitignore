@@ -1,4 +1,12 @@
-logs/*
-target/*
-.user.yml
-dbt_packages
+# mz-deploy compiler cache
+target/
+# Connection profiles (host/user/password) written at runtime by mzcompose.py
+profiles.toml
+# project.toml is rendered from project.toml.example by mzcompose.py with the
+# real connection endpoints (broker/RDS/GCS hosts) — kept out of git so those
+# aren't public. The committed template is project.toml.example.
+project.toml
+
+# NOTE: types.lock is intentionally NOT ignored — it's a lock file (like
+# Cargo.lock) and is committed so `compile`/CI type-check deterministically
+# without a live connection. Refresh it with `mz-deploy lock` (or `apply`).

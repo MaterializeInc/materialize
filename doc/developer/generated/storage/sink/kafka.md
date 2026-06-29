@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/sink/kafka.rs
-revision: 9c9b2926db
+revision: b784cb821f
 ---
 
 # mz-storage::sink::kafka
@@ -12,4 +12,4 @@ The encoder resolves `headers_index` and evaluates the optional `partition_by` `
 The producer is configured with `message.max.bytes`, `batch.size`, and `batch.num.messages` drawn from the dyncfg constants `KAFKA_SINK_MESSAGE_MAX_BYTES`, `KAFKA_SINK_BATCH_SIZE`, and `KAFKA_SINK_BATCH_NUM_MESSAGES` respectively, allowing these librdkafka limits to be adjusted at runtime.
 Progress records carry the current frontier antichain and the sink version, enabling fencing of older sink instances on restart.
 A background task (`fetch_partition_count_loop`) keeps the cached partition count up to date across the topic's lifetime.
-A separate background task (`collect_statistics`) forwards librdkafka broker-level statistics to Prometheus metrics via a `watch` channel.
+A separate background task (`collect_statistics`) forwards librdkafka broker-level statistics to Prometheus metrics via a `watch` channel. The per-broker accumulator variables are re-initialized to zero on each statistics interval so that both running totals (counters) and point-in-time values (gauges) are aggregated from scratch across all brokers, avoiding stale accumulation from previous intervals.

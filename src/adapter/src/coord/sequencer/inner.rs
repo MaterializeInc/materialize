@@ -64,7 +64,6 @@ use mz_sql::plan::{
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
-use mz_storage_types::connections::gcp::GcpServiceAccountKeyTokenUri;
 use mz_storage_types::sinks::StorageSinkDesc;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
@@ -625,6 +624,41 @@ impl Coordinator {
         }
     }
 
+    /// Applies `details.secret_content_guards()` by reading each guarded
+    /// secret's current contents. Must be called whenever a connection is
+    /// created or its options altered, before the change takes effect.
+    async fn check_connection_secret_content_guards(
+        &self,
+        details: &ConnectionDetails,
+    ) -> Result<(), AdapterError> {
+        for (secret_id, guard) in details.secret_content_guards() {
+            let contents = self.caching_secrets_reader.read_string(secret_id).await?;
+            guard(&contents)?;
+        }
+        Ok(())
+    }
+
+    /// Applies the secret-content guards of every connection that uses
+    /// `secret_id` against proposed new `contents` for that secret. Must be
+    /// called whenever a secret's contents change, before the new value is
+    /// persisted.
+    pub(super) fn check_secret_content_guards_of_dependents(
+        &self,
+        secret_id: CatalogItemId,
+        contents: &str,
+    ) -> Result<(), AdapterError> {
+        for dependent_id in self.catalog().get_entry(&secret_id).used_by() {
+            if let CatalogItem::Connection(conn) = self.catalog().get_entry(dependent_id).item() {
+                for (guarded_id, guard) in conn.details.secret_content_guards() {
+                    if guarded_id == secret_id {
+                        guard(contents)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[instrument]
     pub(super) async fn sequence_create_connection(
         &mut self,
@@ -664,25 +698,21 @@ impl Coordinator {
                 }
                 self.caching_secrets_reader.invalidate(connection_id);
             }
-            ConnectionDetails::Gcp(gcp) => {
-                // A service account key defines its own OAuth2 token URI.
-                // We only want to send requests to the actual Google OAuth2 token API,
-                // so we inspect the key as early as we can.
-                if let Err(err) = self
-                    .caching_secrets_reader
-                    .read_string(gcp.credentials_json)
-                    .await
-                    .and_then(|json| GcpServiceAccountKeyTokenUri::validate_json(&json))
-                {
-                    return ctx.retire(Err(err.into()));
-                }
-            }
             _ => (),
         };
 
+        // Inspect guarded secrets as early as we can, before the connection is
+        // installed in the catalog.
+        if let Err(err) = self
+            .check_connection_secret_content_guards(&plan.connection.details)
+            .await
+        {
+            return ctx.retire(Err(err));
+        }
+
         if plan.validate {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let transient_revision = self.catalog().transient_revision();
+            let catalog = self.owned_catalog();
             let conn_id = ctx.session().conn_id().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
@@ -719,7 +749,7 @@ impl Coordinator {
                         connection_id,
                         connection_gid,
                         plan_validity: PlanValidity::new(
-                            transient_revision,
+                            &catalog,
                             resolved_ids.items().copied().collect(),
                             None,
                             None,
@@ -1931,6 +1961,20 @@ impl Coordinator {
                         session.add_notice(AdapterNotice::StrongSessionSerializable);
                     }
                 }
+
+                // Reject incompatible combinations of bounded staleness and
+                // `real_time_recency` after the variable has been applied. Either
+                // SET name can introduce the conflict, so check both.
+                if (name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
+                    || name.as_str() == vars::REAL_TIME_RECENCY.name())
+                    && session
+                        .vars()
+                        .transaction_isolation()
+                        .is_bounded_staleness()
+                    && session.vars().real_time_recency()
+                {
+                    return Err(AdapterError::BoundedStalenessRealTimeRecencyConflict);
+                }
             }
             None => vars.reset(self.catalog().system_config(), &name, local)?,
         }
@@ -2538,6 +2582,15 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::ReadOnlyTransaction));
             return;
         }
+        if ctx
+            .session()
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
+            ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
+            return;
+        }
 
         // The structure of this code originates from a time where
         // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
@@ -2634,6 +2687,16 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
+        if ctx
+            .session()
+            .vars()
+            .transaction_isolation()
+            .is_bounded_staleness()
+        {
+            ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
+            return;
+        }
+
         let mut source_ids: BTreeSet<_> = plan
             .selection
             .depends_on()
@@ -2665,13 +2728,16 @@ impl Coordinator {
                         ctx,
                         plan: Plan::ReadThenWrite(plan),
                         validity: PlanValidity::new(
-                            self.catalog.transient_revision(),
+                            &self.catalog,
                             source_ids.clone(),
                             None,
                             None,
                             role_metadata,
                         ),
                         requires_locks: source_ids,
+                        // Writes don't track resolved IDs.
+                        resolved_ids: ResolvedIds::empty(),
+                        sql_impl_resolved_ids: ResolvedIds::empty(),
                     };
                     return self.defer_op(acquire_future, DeferredOp::Plan(plan));
                 }
@@ -3298,7 +3364,7 @@ impl Coordinator {
         let from_item_id = self.catalog().resolve_item_id(&plan.sink.from);
 
         let plan_validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::from_iter([plan.item_id, from_item_id]),
             Some(plan.in_cluster),
             None,
@@ -3613,6 +3679,15 @@ impl Coordinator {
             }
         };
 
+        // Inspect guarded secrets whether or not validation was requested,
+        // before the altered connection is installed in the catalog.
+        if let Err(err) = self
+            .check_connection_secret_content_guards(&conn.details)
+            .await
+        {
+            return ctx.retire(Err(err));
+        }
+
         if validate {
             let connection = conn
                 .details
@@ -3620,7 +3695,7 @@ impl Coordinator {
                 .into_inline_connection(self.catalog().state());
 
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let transient_revision = self.catalog().transient_revision();
+            let catalog = self.owned_catalog();
             let conn_id = ctx.session().conn_id().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
@@ -3655,7 +3730,7 @@ impl Coordinator {
                             connection_id: id,
                             connection_gid,
                             plan_validity: PlanValidity::new(
-                                transient_revision,
+                                &catalog,
                                 dependency_ids.clone(),
                                 None,
                                 None,
@@ -4278,12 +4353,16 @@ impl Coordinator {
             acl_mode,
             target_id,
             grantor,
+            acl_from_all,
         } in update_privileges
         {
             let actual_object_type = catalog.get_system_object_type(&target_id);
             // For all relations we allow all applicable table privileges, but send a warning if the
-            // privilege isn't actually applicable to the object type.
-            if actual_object_type.is_relation() {
+            // privilege isn't actually applicable to the object type. We skip the warning when the
+            // user used the `ALL [PRIVILEGES]` shorthand: the user did not explicitly name a
+            // non-applicable privilege, and via PostgreSQL-compatible `ON TABLE <view>` syntax
+            // `ALL` deliberately expands to the full table set.
+            if actual_object_type.is_relation() && !acl_from_all {
                 let applicable_privileges = rbac::all_object_privileges(actual_object_type);
                 let non_applicable_privileges = acl_mode.difference(applicable_privileges);
                 if !non_applicable_privileges.is_empty() {
@@ -4682,7 +4761,7 @@ impl Coordinator {
         let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan.clone();
 
         let plan_validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::from_iter([id, replacement_id]),
             None,
             None,

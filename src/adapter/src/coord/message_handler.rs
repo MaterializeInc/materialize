@@ -11,6 +11,7 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use std::collections::{BTreeMap, BTreeSet, btree_map};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
@@ -970,47 +971,69 @@ impl Coordinator {
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(replica_statues) = self
+        let Some(replica_statuses) = self
             .cluster_replica_statuses
             .try_get_cluster_replica_statuses(event.cluster_id, event.replica_id)
         else {
             return;
         };
 
-        if event.status != replica_statues[&event.process_id].status {
-            if !self.controller.read_only() {
-                let offline_reason = match event.status {
-                    ClusterStatus::Online => None,
-                    ClusterStatus::Offline(None) => None,
-                    ClusterStatus::Offline(Some(reason)) => Some(reason.to_string()),
-                };
-                let row = Row::pack_slice(&[
-                    Datum::String(&event.replica_id.to_string()),
-                    Datum::UInt64(event.process_id),
-                    Datum::String(event.status.as_kebab_case_str()),
-                    Datum::from(offline_reason.as_deref()),
-                    Datum::TimestampTz(event.time.try_into().expect("must fit")),
-                ]);
-                self.controller.storage.append_introspection_updates(
-                    IntrospectionType::ReplicaStatusHistory,
-                    vec![(row, Diff::ONE)],
-                );
-            }
+        let old_process_status = &replica_statuses[&event.process_id];
+        let status_changed = event.status != old_process_status.status;
+        let restart_count_changed = event.restart_count != old_process_status.restart_count;
 
-            let old_replica_status =
-                ClusterReplicaStatuses::cluster_replica_status(replica_statues);
+        // We mirror the restart count in memory even when only it changes (and the
+        // status stays the same), so the 0dt caught-up check can detect replica
+        // restarts it would otherwise miss by only sampling the status. The status
+        // history and the status-changed notice are keyed on the status itself, so
+        // we only touch those when the status actually changes.
+        //
+        // NOTE: The 0dt stability gate detects flaps by watching a process's
+        // status-change `time` advance between checks. That only works because we
+        // freeze `time` on no-op events, i.e. we return early here instead of
+        // rewriting the record when neither the status nor the restart count
+        // changed.
+        if !status_changed && !restart_count_changed {
+            return;
+        }
 
-            let new_process_status = ClusterReplicaProcessStatus {
-                status: event.status,
-                time: event.time,
+        if status_changed && !self.controller.read_only() {
+            let offline_reason = match event.status {
+                ClusterStatus::Online => None,
+                ClusterStatus::Offline(None) => None,
+                ClusterStatus::Offline(Some(reason)) => Some(reason.to_string()),
             };
-            self.cluster_replica_statuses.ensure_cluster_status(
-                event.cluster_id,
-                event.replica_id,
-                event.process_id,
-                new_process_status,
+            let row = Row::pack_slice(&[
+                Datum::String(&event.replica_id.to_string()),
+                Datum::UInt64(event.process_id),
+                Datum::String(event.status.as_kebab_case_str()),
+                Datum::from(offline_reason.as_deref()),
+                Datum::TimestampTz(event.time.try_into().expect("must fit")),
+            ]);
+            self.controller.storage.append_introspection_updates(
+                IntrospectionType::ReplicaStatusHistory,
+                vec![(row, Diff::ONE)],
             );
+        }
 
+        // Capture the rolled-up replica status before the update so we can tell
+        // whether the user-visible status changed. Only needed for the notice.
+        let old_replica_status = status_changed
+            .then(|| ClusterReplicaStatuses::cluster_replica_status(replica_statuses));
+
+        let new_process_status = ClusterReplicaProcessStatus {
+            status: event.status,
+            restart_count: event.restart_count,
+            time: event.time,
+        };
+        self.cluster_replica_statuses.ensure_cluster_status(
+            event.cluster_id,
+            event.replica_id,
+            event.process_id,
+            new_process_status,
+        );
+
+        if let Some(old_replica_status) = old_replica_status {
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
             let new_replica_status = self
@@ -1126,16 +1149,13 @@ impl Coordinator {
         }
 
         if !self.pending_linearize_read_txns.is_empty() {
-            // Cap wait time to 1s.
+            // Cap wait time to 1s, then signal a re-check. `serve` awaits this
+            // below group commit; see its linearize branch for why.
             let remaining_ms = std::cmp::min(shortest_wait, Duration::from_millis(1_000));
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let linearize_reads_notify = Arc::clone(&self.linearize_reads_notify);
             task::spawn(|| "deferred_read_txns", async move {
                 tokio::time::sleep(remaining_ms).await;
-                // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::LinearizeReads);
-                if let Err(e) = result {
-                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                }
+                linearize_reads_notify.notify_one();
             });
         }
     }

@@ -44,6 +44,7 @@ def check_default_members(workspace: Workspace) -> bool:
         # by default, and only pulled in by feature flags for other crates. This
         # ensures that `--no-default-features` properly disables jemalloc.
         "src/alloc-default",
+        "src/fivetran-destination",
     }
 
     crates = set(str(c.path.relative_to(c.root)) for c in workspace.crates.values())

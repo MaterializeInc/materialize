@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/oneshot_sources.rs
-revision: a375623c5b
+revision: a23b5e40d2
 ---
 
 # storage-types::oneshot_sources

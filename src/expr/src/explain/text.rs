@@ -1197,6 +1197,14 @@ impl HumanizerMode for HumanizedExplain {
     fn humanize_ident(col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if ident.as_str() == UNKNOWN_COLUMN_NAME {
             write!(f, "#{col}")
+        } else if ident.has_only_bare_chars() {
+            // The leading `#c` already disambiguates the column, and EXPLAIN
+            // output is never reparsed, so a keyword-named column (`any`,
+            // `all`, …) needs no quoting here — unlike in SQL display. Print
+            // the name bare for legibility; only fall back to the quoting
+            // `Ident` display for names with awkward characters (whitespace,
+            // braces, quotes) that would otherwise muddle the `{…}` annotation.
+            write!(f, "#{col}{{{}}}", ident.as_str())
         } else {
             write!(f, "#{col}{{{ident}}}")
         }

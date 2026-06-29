@@ -1,7 +1,7 @@
 [
   {
     "name": "objects.rs",
-    "md5": "e80f862e380a58535975f052a9ace35f"
+    "md5": "3a1579511813991605225a60534943f1"
   },
   {
     "name": "objects_v74.rs",
@@ -50,5 +50,17 @@
   {
     "name": "objects_v85.rs",
     "md5": "e80f862e380a58535975f052a9ace35f"
+  },
+  {
+    "name": "objects_v86.rs",
+    "md5": "0a6d43b9ddebef398dcd4f6484d3c4d6"
+  },
+  {
+    "name": "objects_v87.rs",
+    "md5": "509db4848f5b31a31199497369592027"
+  },
+  {
+    "name": "objects_v88.rs",
+    "md5": "3a1579511813991605225a60534943f1"
   }
 ]

@@ -7,6 +7,18 @@ slow-timeout = { period = "1200s", terminate-after = 2 }
 # For a given configuration parameter, the first override to match wins. Keep
 # these sorted in order from most specific to least specific.
 
+# The FoundationDB unit tests talk to an external FDB server; retry them so a
+# transient server stall reruns rather than failing the build (DB-103).
+[[profile.default.overrides]]
+filter = "package(mz-persist) and test(foundationdb::tests::fdb_consensus)"
+retries = 2
+priority = 100
+
+[[profile.default.overrides]]
+filter = "package(mz-timestamp-oracle) and test(foundationdb_oracle::tests::test_fdb_timestamp_oracle)"
+retries = 2
+priority = 100
+
 [[profile.default.overrides]]
 filter = "package(mz-environmentd) and test(test_concurrent_id_reuse)"
 priority = 100

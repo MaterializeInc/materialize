@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/pure.rs
-revision: 8d94c2a06c
+revision: 460108c80d
 ---
 
 # mz-sql::pure
@@ -8,3 +8,6 @@ revision: 8d94c2a06c
 Main entry point for SQL purification: `purify_statement` is the async function that takes a raw `Statement<Raw>` and inlines all external state, returning a purified `Statement<Raw>` ready for planning.
 Handles CREATE/ALTER SOURCE for Kafka (topic metadata, start-offset resolution, Avro/Protobuf schema registry), Postgres, MySQL, SQL Server, load generators, and Iceberg sinks.
 Source-specific logic lives in the `mysql`, `postgres`, and `sql_server` submodules; `references` abstracts upstream catalog retrieval; `error` defines per-source error types.
+For Postgres sources, purification retrieves the timeline ID via `get_timeline_id` and records whether the upstream server is a physical replica via `get_is_in_recovery`; both values are stored in `PostgresSourcePublicationDetails` so that the replication layer can use the appropriate LSN-loading method depending on whether the connection is to a primary or a standby.
+For Iceberg sinks, `purify_create_sink` validates the catalog connection by calling `connect`, and validates the optional AWS storage connection (via `USING AWS CONNECTION`) if present by loading its SDK config; the AWS validation is skipped when no storage connection is specified.
+`AvroSchema::Glue` in a source format is handled by `purify_glue_connection_avro`: it validates that the connection is a `Connection::GlueSchemaRegistry` item, requires the `SCHEMA NAME` option, and — if no seed is already present — loads an AWS SDK config, builds a Glue client, fetches the latest schema version by name, validates the data format is Avro, and writes the resolved schema definition into `GlueAvroSeed`. A pre-populated seed (from re-parsed `create_sql`) skips the Glue lookup. `purify_glue_connection_avro` is only supported for Kafka sources and errors otherwise.

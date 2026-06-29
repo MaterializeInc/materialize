@@ -88,7 +88,7 @@ impl FromStr for GlobalId {
             return Ok(GlobalId::Explain);
         }
         let tag = s.chars().next().unwrap();
-        s = &s[1..];
+        s = &s[tag.len_utf8()..];
         let variant = match tag {
             's' => {
                 if Some('i') == s.chars().next() {
@@ -133,5 +133,37 @@ impl TransientIdGen {
     pub fn allocate_id(&self) -> (CatalogItemId, GlobalId) {
         let inner = self.0.allocate_id();
         (CatalogItemId::Transient(inner), GlobalId::Transient(inner))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn proptest_global_id_roundtrips() {
+        fn testcase(og: GlobalId) {
+            let s = og.to_string();
+            let rnd: GlobalId = s.parse().unwrap();
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(id in any::<GlobalId>())| {
+            testcase(id);
+        })
+    }
+
+    #[mz_ore::test]
+    fn test_global_id_from_str_non_ascii() {
+        // Regression test for a panic on multi-byte leading characters, where
+        // slicing off a single byte landed inside a UTF-8 char boundary (SQL-195).
+        for invalid in ["ü1", "ü", "é42", "🦀7", ""] {
+            assert!(
+                invalid.parse::<GlobalId>().is_err(),
+                "expected {invalid:?} to fail to parse"
+            );
+        }
     }
 }

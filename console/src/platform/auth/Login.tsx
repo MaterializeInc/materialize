@@ -21,7 +21,7 @@ import {
   VStack,
 } from "@chakra-ui/react";
 import { useMutation } from "@tanstack/react-query";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -197,10 +197,21 @@ const SsoLoginLink = () => {
 };
 
 export const Login = () => {
-  const [searchParams] = useSearchParams();
   const { data: auth, error: oidcInitializationError } = useOidcManagerQuery();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const oidcError = searchParams.get(LOGIN_ERROR_PARAM);
+  // Surface the one-shot auth error from the redirect, then strip it from the
+  // URL so it doesn't reappear on refresh or back navigation.
+  const [oidcError, setOidcError] = useState<string | null>(() =>
+    searchParams.get(LOGIN_ERROR_PARAM),
+  );
+
+  useEffect(() => {
+    if (!searchParams.has(LOGIN_ERROR_PARAM)) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete(LOGIN_ERROR_PARAM);
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   return (
     <AuthLayout>
@@ -210,7 +221,13 @@ export const Login = () => {
             <MaterializeLogo height="12" />
           </HStack>
           {oidcError && (
-            <Alert variant="error" minWidth="100%" message={oidcError} mb="4" />
+            <Alert
+              variant="error"
+              minWidth="100%"
+              message={oidcError}
+              mb="4"
+              onClose={() => setOidcError(null)}
+            />
           )}
           {oidcInitializationError && (
             <Alert

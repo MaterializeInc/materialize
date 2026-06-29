@@ -209,47 +209,61 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(".*");
             }
             Expr::FieldAccess { expr, field } => {
-                f.write_node(expr);
+                write_dot_receiver(f, expr);
                 f.write_str(".");
                 f.write_node(field);
             }
             Expr::WildcardAccess(expr) => {
-                f.write_node(expr);
+                write_dot_receiver(f, expr);
                 f.write_str(".*");
             }
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
             Expr::Not { expr } => {
                 f.write_str("NOT ");
-                f.write_node(expr);
+                // `NOT` binds tighter than `AND`/`OR`, so an operand exposing a
+                // looser operator on its left spine (`NOT (a OR b)`) must keep its
+                // parens once `Nested` is stripped. We use `left_edge`, since the
+                // `NOT` sits to the operand's left.
+                write_binary_operand(f, expr, left_edge(expr) < prec::NOT);
             }
             Expr::And { left, right } => {
-                f.write_node(left);
+                write_binary_operand(f, left, right_edge(left) < prec::AND);
                 f.write_str(" AND ");
-                f.write_node(right);
+                write_binary_operand(f, right, left_edge(right) <= prec::AND);
             }
             Expr::Or { left, right } => {
-                f.write_node(left);
+                write_binary_operand(f, left, right_edge(left) < prec::OR);
                 f.write_str(" OR ");
-                f.write_node(right);
+                write_binary_operand(f, right, left_edge(right) <= prec::OR);
             }
             Expr::IsExpr {
                 expr,
                 negated,
                 construct,
             } => {
-                f.write_node(&expr);
+                write_binary_operand(f, expr, right_edge(expr) < prec::IS);
                 f.write_str(" IS ");
                 if *negated {
                     f.write_str("NOT ");
                 }
-                f.write_node(construct);
+                // `IS DISTINCT FROM <rhs>` parses the RHS at the `IS` precedence
+                // (see `Parser::parse_is`), so a RHS whose left spine binds at or
+                // below `IS` re-associates out of the `IS` unless parenthesized
+                // (`a IS DISTINCT FROM b OR c` is `(a IS DISTINCT FROM b) OR c`).
+                // The other constructs (`NULL`/`TRUE`/…) are bare keywords.
+                if let IsExprConstruct::DistinctFrom(rhs) = construct {
+                    f.write_str("DISTINCT FROM ");
+                    write_binary_operand(f, rhs, left_edge(rhs) <= prec::IS);
+                } else {
+                    f.write_node(construct);
+                }
             }
             Expr::InList {
                 expr,
                 list,
                 negated,
             } => {
-                f.write_node(&expr);
+                write_binary_operand(f, expr, right_edge(expr) < prec::LIKE);
                 f.write_str(" ");
                 if *negated {
                     f.write_str("NOT ");
@@ -263,7 +277,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 subquery,
                 negated,
             } => {
-                f.write_node(&expr);
+                write_binary_operand(f, expr, right_edge(expr) < prec::LIKE);
                 f.write_str(" ");
                 if *negated {
                     f.write_str("NOT ");
@@ -279,7 +293,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 case_insensitive,
                 negated,
             } => {
-                f.write_node(&expr);
+                write_binary_operand(f, expr, right_edge(expr) < prec::LIKE);
                 f.write_str(" ");
                 if *negated {
                     f.write_str("NOT ");
@@ -288,10 +302,21 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     f.write_str("I");
                 }
                 f.write_str("LIKE ");
-                f.write_node(&pattern);
+                // The pattern and escape parse at `Like` precedence and sit to the
+                // right of the keyword, so an operand exposing a precedence at or
+                // below `Like` on its left spine (e.g. an `IN`/`LIKE`/`BETWEEN` at
+                // equal precedence) re-associates unless parenthesized.
+                // `a LIKE b IN (q)` parses as `(a LIKE b) IN (q)`. When an `ESCAPE`
+                // follows, the pattern is *also* immediately left of `ESCAPE`: a
+                // `[I]LIKE` exposed on the pattern's right spine would steal the
+                // `ESCAPE` as its own (`a LIKE NOT b LIKE c ESCAPE d` parses the
+                // escape onto the inner `b LIKE c`), so guard the right edge too.
+                let pattern_parens = left_edge(pattern) <= prec::LIKE
+                    || (escape.is_some() && right_edge(pattern) <= prec::LIKE);
+                write_binary_operand(f, pattern, pattern_parens);
                 if let Some(escape) = escape {
                     f.write_str(" ESCAPE ");
-                    f.write_node(escape);
+                    write_binary_operand(f, escape, left_edge(escape) <= prec::LIKE);
                 }
             }
             Expr::Between {
@@ -300,35 +325,82 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 low,
                 high,
             } => {
-                f.write_node(&expr);
+                // The subject is the LHS of the `BETWEEN` infix (parsed at
+                // `Like`). A spine exposed at or below `Like` on its right would
+                // pull `BETWEEN` inside it (`a OR b BETWEEN …` is `a OR (b BETWEEN
+                // …)`), so parenthesize via `right_edge`. Parser ASTs wrap such a
+                // subject in `Nested` (`ATOM`), so they're unaffected.
+                write_binary_operand(f, expr, right_edge(expr) < prec::LIKE);
                 if *negated {
                     f.write_str(" NOT");
                 }
                 f.write_str(" BETWEEN ");
-                f.write_node(&low);
+                write_between_bound(f, low);
                 f.write_str(" AND ");
-                f.write_node(&high);
+                write_between_bound(f, high);
             }
             Expr::Op { op, expr1, expr2 } => {
                 if let Some(expr2) = expr2 {
-                    f.write_node(&expr1);
+                    // Binary operators are left-associative: parenthesize an
+                    // operand that would re-associate once `Nested` is stripped.
+                    // The left by its `right_edge` (strictly looser than `op`), the
+                    // right by its `left_edge` (equal-or-looser, as equal
+                    // re-associates left). See those helpers for the spine
+                    // reasoning.
+                    let p = binary_op_precedence(op);
+                    write_binary_operand(f, expr1, right_edge(expr1) < p);
                     f.write_str(" ");
                     f.write_str(op);
                     f.write_str(" ");
-                    f.write_node(&expr2);
+                    write_binary_operand(f, expr2, left_edge(expr2) <= p);
                 } else {
                     f.write_str(op);
                     f.write_str(" ");
-                    f.write_node(&expr1);
+                    // A prefix operator binds tighter than `COLLATE` and the
+                    // binary operators but looser than the postfix `::`/`[…]`
+                    // forms, and `- <number>` lexes as a negative literal, so a
+                    // low-precedence or numeric-leftmost operand must be
+                    // parenthesized to keep the prefix operator's scope.
+                    if prefix_operand_needs_parens(expr1.as_ref()) {
+                        f.write_str("(");
+                        f.write_node(&expr1);
+                        f.write_str(")");
+                    } else {
+                        f.write_node(&expr1);
+                    }
                 }
             }
             Expr::Cast { expr, data_type } => {
-                f.write_node(&expr);
+                // `::` binds very tightly, so a non-self-delimiting operand must
+                // be parenthesized or the cast re-associates into its spine.
+                // `CAST(-0 AS int4)` (i.e. `Cast(- 0)`) would otherwise print as
+                // `- 0::int4` and reparse as `- (0::int4)`. The parser wraps such
+                // operands in `Expr::Nested`, but `normalize` strips those, so the
+                // printer must re-add them (mirroring the `Collate` arm). `Nested`
+                // is itself self-delimiting, so parser-produced ASTs don't double up.
+                if prints_self_delimiting(expr) {
+                    f.write_node(&expr);
+                } else {
+                    f.write_str("(");
+                    f.write_node(&expr);
+                    f.write_str(")");
+                }
                 f.write_str("::");
                 f.write_node(data_type);
             }
             Expr::Collate { expr, collation } => {
-                f.write_node(&expr);
+                // `COLLATE` binds very tightly (`PostfixCollateAt`), so a
+                // low-precedence operand must be parenthesized or the collation
+                // re-associates onto its rightmost sub-operand — `a + b COLLATE c`
+                // would reparse as `a + (b COLLATE c)`. (Round-trip parens are
+                // stripped by `normalize`, so the printer must re-add them.)
+                if prints_self_delimiting(expr) {
+                    f.write_node(&expr);
+                } else {
+                    f.write_str("(");
+                    f.write_node(&expr);
+                    f.write_str(")");
+                }
                 f.write_str(" COLLATE ");
                 f.write_node(&collation);
             }
@@ -394,7 +466,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AnySubquery { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left, op);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ANY (");
@@ -402,7 +474,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AnyExpr { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left, op);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ANY (");
@@ -410,7 +482,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AllSubquery { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left, op);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ALL (");
@@ -418,7 +490,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::AllExpr { left, op, right } => {
-                f.write_node(&left);
+                write_quantified_left(f, left, op);
                 f.write_str(" ");
                 f.write_str(op);
                 f.write_str(" ALL (");
@@ -456,7 +528,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(")");
             }
             Expr::Subscript { expr, positions } => {
-                f.write_node(&expr);
+                write_subscript_receiver(f, expr);
                 f.write_str("[");
 
                 let mut first = true;
@@ -476,6 +548,412 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
     }
 }
 impl_display_t!(Expr);
+
+/// Write `expr` as the receiver of a `.` operator (used by `FieldAccess` and
+/// `WildcardAccess`), parenthesizing when the receiver could re-bind the
+/// trailing dot on reparse. The `.` token has very high precedence and both
+/// the lexer and parser greedily extend adjacent tokens: `1.x` tokenizes the
+/// number `1.` and leaves `x` as an alias, and `'a'::T.x` consumes `T.x` as a
+/// qualified type name. The whitelist below covers receivers that print as
+/// self-terminating syntax (parenthesized exprs, function calls, bracketed
+/// collections, etc.). Anything else gets explicit parens.
+///
+/// A bare `Identifier`/`QualifiedWildcard` receiver is *not* safe: `a` then
+/// `.b`/`.*` prints as `a.b`/`a.*`, which reparses as the qualified identifier
+/// `Identifier([a, b])` / `QualifiedWildcard([a])` rather than a field/wildcard
+/// access. The parser only ever builds those accesses over a parenthesized
+/// receiver (`(a).b`), so it wraps the name in `Expr::Nested`. A bare name here
+/// is a `Nested`-stripped AST and must be re-parenthesized. A `FieldAccess` /
+/// `WildcardAccess` receiver *is* safe, because its own printing already
+/// parenthesizes a bare-name base (`(a).b.c`), so the chain stays self-delimiting.
+///
+/// The quantified-subquery forms (`AnySubquery`/`AllSubquery`, printed
+/// `<expr> <op> ANY (<query>)`) are likewise *not* safe: they end in a `(query)`
+/// that is only a sub-part, so a trailing `.x`/`.*` binds to that inner subquery
+/// rather than the whole expression. (Contrast `Subquery`/`ArraySubquery`/… which
+/// are a single `(…)`/`ARRAY(…)` primary, so a trailing dot attaches to the whole
+/// thing.)
+fn write_dot_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
+    let safe = matches!(
+        expr,
+        Expr::FieldAccess { .. }
+            | Expr::WildcardAccess(_)
+            | Expr::Parameter(_)
+            | Expr::Nested(_)
+            | Expr::Row { .. }
+            | Expr::Function(_)
+            | Expr::Case { .. }
+            | Expr::Exists(_)
+            | Expr::Subquery(_)
+            | Expr::Array(_)
+            | Expr::ArraySubquery(_)
+            | Expr::List(_)
+            | Expr::ListSubquery(_)
+            | Expr::Map(_)
+            | Expr::MapSubquery(_)
+            | Expr::Subscript { .. }
+            | Expr::HomogenizingFunction { .. }
+            | Expr::NullIf { .. }
+            | Expr::Value(
+                Value::String(_)
+                    | Value::Boolean(_)
+                    | Value::Null
+                    | Value::HexString(_)
+                    | Value::Interval(_)
+            )
+    );
+    if safe {
+        f.write_node(expr);
+    } else {
+        f.write_str("(");
+        f.write_node(expr);
+        f.write_str(")");
+    }
+}
+
+/// Write `left` as the LHS of `<left> <op> ANY/ALL (...)`. The printed `<op>` is an
+/// ordinary binary infix. It can be any operator the parser accepts here, from
+/// `=`/`<` (`Cmp`) all the way down to `*`/`/`/`%` (`MultiplyDivide`), and on
+/// reparse it binds into any operator exposed on `left`'s right spine that is
+/// *strictly looser* than `<op>` itself, stealing that suffix into the quantified
+/// expression's left rather than wrapping the whole `left`. So parenthesize
+/// exactly when `left`'s [`right_edge`] binds looser than `<op>`'s own precedence
+/// ([`binary_op_precedence`]), mirroring the binary-`Op` arm. Using the operator's
+/// real precedence (not a fixed `Like` threshold) both parenthesizes a
+/// tighter-binding `<op>` over a looser left and leaves an equal-or-tighter left
+/// bare (`a = b = ANY (…)`, `a LIKE b = ANY (…)`), which the old fixed threshold
+/// over-parenthesized. The tighter-binding case, `(a + b) * ANY (…)`, would
+/// otherwise print `a + b * ANY (…)` and reparse as the different
+/// `a + (b * ANY (…))`. [`right_edge`] also sees a looser spine hidden under
+/// right-transparent prefixes, e.g. the `NOT`'s `IN` in `- NOT a IN (b) = ANY (…)`.
+fn write_quantified_left<W: fmt::Write, T: AstInfo>(
+    f: &mut AstFormatter<W>,
+    expr: &Expr<T>,
+    op: &Op,
+) {
+    let needs_parens = right_edge(expr) < binary_op_precedence(op);
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(expr);
+        f.write_str(")");
+    } else {
+        f.write_node(expr);
+    }
+}
+
+/// Write `bound` as a `BETWEEN … AND …` bound. The parser parses both bounds with
+/// `parse_subexpr(Precedence::Like)` (see `Parser::parse_between`), starting fresh
+/// with nothing to the bound's left, so it walks the bound's *left spine* and
+/// stops at the first operator binding at or below `Like`, leaving that operator
+/// outside the bound (`x BETWEEN 1 IS NULL AND y` parses `1` as the bound, then
+/// expects `AND` but finds `IS`). A bound is therefore safe bare only when its
+/// left edge binds strictly above `Like`. Use [`left_edge`] (not [`right_edge`],
+/// which closes at `ATOM` for the right-closing `IS NULL`/`= ANY (…)`/`IN (…)`
+/// forms whose looseness is on the left). The parser wraps these bounds in
+/// `Expr::Nested` (which is `ATOM`, so it prints bare). This re-adds the parens
+/// for ASTs where that wrapper is absent.
+fn write_between_bound<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, bound: &Expr<T>) {
+    let needs_parens = left_edge(bound) <= prec::LIKE;
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(bound);
+        f.write_str(")");
+    } else {
+        f.write_node(bound);
+    }
+}
+
+/// Output-precedence ranks, derived directly from the parser's [`Precedence`]
+/// ladder (higher binds tighter) so it stays the single source of truth:
+/// reordering or inserting a parser level reranks these automatically, and only
+/// the variant each rank maps to is maintained by hand. They classify the *top*
+/// operator an expr prints with, so the binary-operator printer can parenthesize
+/// an operand that would otherwise re-associate on reparse. `ATOM`, the one rank
+/// with no parser counterpart, is layered one above the tightest parser level to
+/// mark the self-delimiting primaries. They never need parens.
+///
+/// [`Precedence`]: crate::parser::Precedence
+// `Precedence` is a fieldless enum with a handful of variants, so reading each
+// discriminant with `as u8` is exact and lossless.
+#[allow(clippy::as_conversions)]
+mod prec {
+    use crate::parser::Precedence;
+
+    pub const OR: u8 = Precedence::Or as u8;
+    pub const AND: u8 = Precedence::And as u8;
+    pub const NOT: u8 = Precedence::PrefixNot as u8;
+    pub const IS: u8 = Precedence::Is as u8;
+    pub const CMP: u8 = Precedence::Cmp as u8;
+    pub const LIKE: u8 = Precedence::Like as u8;
+    pub const OTHER: u8 = Precedence::Other as u8;
+    pub const PLUS_MINUS: u8 = Precedence::PlusMinus as u8;
+    pub const MULTIPLY_DIVIDE: u8 = Precedence::MultiplyDivide as u8;
+    // The `COLLATE` and postfix (`::`/`[…]`) parser levels live between
+    // `MULTIPLY_DIVIDE` and `ATOM`, but neither edge function ever *returns* them:
+    // those forms are self-delimiting (their own operand is parenthesized when it
+    // isn't), so both their edges rank `ATOM`. Kept for parity with the ladder.
+    #[allow(dead_code)]
+    pub const COLLATE: u8 = Precedence::PostfixCollateAt as u8;
+    pub const PREFIX: u8 = Precedence::PrefixPlusMinus as u8;
+    #[allow(dead_code)]
+    pub const POSTFIX: u8 = Precedence::PostfixSubscriptCast as u8;
+    pub const ATOM: u8 = Precedence::PostfixSubscriptCast as u8 + 1;
+}
+
+/// The precedence of a binary operator, mirroring `Parser::get_next_precedence`.
+/// A namespaced `OPERATOR(...)` binds at `OTHER`, like the parser.
+fn binary_op_precedence(op: &Op) -> u8 {
+    if op.namespace.is_some() {
+        return prec::OTHER;
+    }
+    match op.op.as_str() {
+        "=" | "<" | "<=" | "<>" | "!=" | ">" | ">=" => prec::CMP,
+        "+" | "-" => prec::PLUS_MINUS,
+        "*" | "/" | "%" => prec::MULTIPLY_DIVIDE,
+        _ => prec::OTHER,
+    }
+}
+
+/// The precedence at which a prefix operator (`Op` with no second operand)
+/// parses its operand, mirroring `Parser::parse_prefix`: `-`/`+` at
+/// `PrefixPlusMinus`, but `~` (and namespaced prefixes) at `Other`, so `~ a + b`
+/// parses as `~ (a + b)`. `~` binds looser than `+`/`-`/`*`.
+fn unary_prec(op: &Op) -> u8 {
+    if op.namespace.is_none() && (op.op == "-" || op.op == "+") {
+        prec::PREFIX
+    } else {
+        prec::OTHER
+    }
+}
+
+/// The loosest precedence exposed on `expr`'s *right spine*, the precedence at
+/// which an operator printed immediately to its right would bind *into* it
+/// rather than wrap it. For a left operand / subject of a construct that prints
+/// to its right, this is what decides parenthesization (its mirror, [`left_edge`],
+/// decides right operands), because a prefix operator and the right operand of a
+/// binary/`BETWEEN`/`LIKE`/`IS DISTINCT FROM` are right-transparent:
+/// `- NOT a IN (b)` exposes the `NOT`'s `IN` on the right even though its top node
+/// is unary `-`. Forms that close with a bracket on the right (`(…)`, `[…]`,
+/// `::type`, `IS NULL`) are `ATOM`.
+fn right_edge<T: AstInfo>(expr: &Expr<T>) -> u8 {
+    match expr {
+        // Right-transparent binary infixes: an operator tighter than this one
+        // binds into the right operand, which itself may expose a looser spine.
+        Expr::Or { right, .. } => prec::OR.min(right_edge(right)),
+        Expr::And { right, .. } => prec::AND.min(right_edge(right)),
+        Expr::Op {
+            op, expr2: Some(r), ..
+        } => binary_op_precedence(op).min(right_edge(r)),
+        // Prefix operators expose their operand's right spine.
+        Expr::Op {
+            op,
+            expr1,
+            expr2: None,
+        } => unary_prec(op).min(right_edge(expr1)),
+        Expr::Not { expr } => prec::NOT.min(right_edge(expr)),
+        // `IS DISTINCT FROM x` exposes `x`, while `IS NULL`/`TRUE`/… close.
+        Expr::IsExpr {
+            construct: IsExprConstruct::DistinctFrom(x),
+            ..
+        } => prec::IS.min(right_edge(x)),
+        // `… BETWEEN low AND high` exposes `high`. `… [I]LIKE pat [ESCAPE esc]`
+        // exposes the rightmost of `esc`/`pat`.
+        Expr::Between { high, .. } => prec::LIKE.min(right_edge(high)),
+        Expr::Like {
+            pattern, escape, ..
+        } => {
+            let rightmost = escape.as_deref().unwrap_or_else(|| pattern.as_ref());
+            prec::LIKE.min(right_edge(rightmost))
+        }
+        // Everything else closes on the right (a bracket, a keyword, a literal,
+        // or `IS NULL`-style), so nothing binds into it.
+        _ => prec::ATOM,
+    }
+}
+
+/// The loosest precedence exposed on `expr`'s *left spine*, the mirror of
+/// [`right_edge`]. For a *right* operand (an operator on its left), this is what
+/// decides parenthesization: a left-associative operator printed to its left
+/// reaches into the left spine and re-associates if that spine exposes a
+/// precedence at or below the operator's. The top operator alone is not enough,
+/// because a left-nested chain can bury a looser operator down its left edge:
+/// `387 = ANY (...) LIKE a IN (...)` has a top `IN` (`Like`) but exposes the
+/// `= ANY` (`Cmp`) on its left, so a tighter `<>` to its left
+/// (`48 <> 387 = ANY (...) ...`) would steal the `<>` into the `= ANY`'s left
+/// rather than leave it as the `<>`'s right operand. Forms that open with their
+/// own token on the left (a prefix operator, a keyword, `(…)`, a literal) are
+/// `ATOM`.
+fn left_edge<T: AstInfo>(expr: &Expr<T>) -> u8 {
+    match expr {
+        // Left-transparent infixes / postfix-keyword constructs: the subject (or
+        // left operand) sits on the left spine, so descend into it.
+        Expr::Or { left, .. } => prec::OR.min(left_edge(left)),
+        Expr::And { left, .. } => prec::AND.min(left_edge(left)),
+        Expr::Op {
+            op,
+            expr1,
+            expr2: Some(_),
+        } => binary_op_precedence(op).min(left_edge(expr1)),
+        Expr::IsExpr { expr, .. } => prec::IS.min(left_edge(expr)),
+        Expr::AnyExpr { left, .. }
+        | Expr::AllExpr { left, .. }
+        | Expr::AnySubquery { left, .. }
+        | Expr::AllSubquery { left, .. } => prec::CMP.min(left_edge(left)),
+        Expr::Like { expr, .. }
+        | Expr::Between { expr, .. }
+        | Expr::InList { expr, .. }
+        | Expr::InSubquery { expr, .. } => prec::LIKE.min(left_edge(expr)),
+        // Everything else leads with its own token on the left: a prefix
+        // operator (`-`/`+`/`~`/`NOT`), a keyword, `(…)`, `ARRAY[…]`, a literal,
+        // or a `COLLATE`/`::`/`[…]` whose own operand the printer parenthesizes
+        // when it isn't self-delimiting. Nothing to the left binds into it.
+        _ => prec::ATOM,
+    }
+}
+
+/// Write `operand` for a binary operator, parenthesizing it iff `needs_parens`.
+fn write_binary_operand<W: fmt::Write, T: AstInfo>(
+    f: &mut AstFormatter<W>,
+    operand: &Expr<T>,
+    needs_parens: bool,
+) {
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(operand);
+        f.write_str(")");
+    } else {
+        f.write_node(operand);
+    }
+}
+
+/// Whether `expr` prints in a *self-delimiting* form — atomic, or wrapped in its
+/// own brackets/parens (`name(...)`, `(…)`, `ARRAY[…]`, `CASE … END`, …) — so it
+/// is safe to print immediately to the left of a tight postfix operator (`::`,
+/// `COLLATE`, or the `IN` delimiter of the `position(<needle> IN …)` special
+/// form) without the operator re-associating into the expression's spine.
+///
+/// Anything with an exposed operator spine is *not* self-delimiting: a tight
+/// postfix would bind to its rightmost sub-operand (`a + b COLLATE c` parses as
+/// `a + (b COLLATE c)`), and the `position` `IN` delimiter would split on an
+/// inner `IN`/comparison (`a IN (q) ->> b`). Callers must parenthesize / fall
+/// back for those. Postfix forms (`::`/`COLLATE`/`[…]`) are self-delimiting only
+/// when their own inner operand is.
+fn prints_self_delimiting<T: AstInfo>(expr: &Expr<T>) -> bool {
+    match expr {
+        Expr::Value(_)
+        | Expr::Identifier(_)
+        | Expr::QualifiedWildcard(_)
+        | Expr::Parameter(_)
+        | Expr::Function(_)
+        | Expr::HomogenizingFunction { .. }
+        | Expr::NullIf { .. }
+        | Expr::Subquery(_)
+        | Expr::Exists(_)
+        | Expr::Nested(_)
+        | Expr::Array(_)
+        | Expr::ArraySubquery(_)
+        | Expr::List(_)
+        | Expr::ListSubquery(_)
+        | Expr::Map(_)
+        | Expr::MapSubquery(_)
+        | Expr::Case { .. }
+        | Expr::Row { .. } => true,
+        // The postfix `::` / `COLLATE` / `[…]` forms print as `<inner><suffix>`,
+        // so they are safe only when their inner operand is.
+        Expr::Cast { expr, .. } | Expr::Collate { expr, .. } | Expr::Subscript { expr, .. } => {
+            prints_self_delimiting(expr)
+        }
+        _ => false,
+    }
+}
+
+/// Whether the operand of a prefix operator (`-`/`+`/`~`) must be parenthesized
+/// to round-trip. A prefix op binds *tighter* than `COLLATE`/`AT TIME ZONE` and
+/// the binary/comparison operators, but *looser* than the postfix `::`/`[…]`
+/// forms — and `- <number>` additionally lexes as a negative literal. So peel
+/// the tight postfixes (`::`/`[…]`); if the chain bottoms out at a numeric
+/// literal the sign would fold into it, and if it bottoms out at anything other
+/// than a self-delimiting non-`COLLATE` primary (a `COLLATE`, a binary op, …) the
+/// prefix op would re-associate — both need parens. (`a + b COLLATE c` reparses
+/// as `a + (b COLLATE c)`; `- x COLLATE c` as `(- x) COLLATE c`.)
+fn prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
+    let mut e = operand;
+    let mut saw_postfix = false;
+    loop {
+        match e {
+            Expr::Cast { expr, .. } | Expr::Subscript { expr, .. } => {
+                saw_postfix = true;
+                e = expr.as_ref();
+            }
+            Expr::Value(Value::Number(_)) => return saw_postfix,
+            // Another prefix operator (`+ + x`, `- ~ x`, `NOT NOT x`) stacks
+            // directly: prefix operators don't re-associate, and the inner
+            // operator symbol sits between the outer one and any digit so there
+            // is no `- <number>` fold. Always safe — and crucially, NOT adding
+            // parens here keeps deep unary chains from exploding the nesting
+            // depth (and overflowing the stack) on reparse.
+            Expr::Op { expr2: None, .. } | Expr::Not { .. } => return false,
+            // Self-delimiting, but a top-level `COLLATE` binds looser than the
+            // prefix op, so it (unlike `::`/`[…]`) is not safe here.
+            _ => return !(prints_self_delimiting(e) && !matches!(e, Expr::Collate { .. })),
+        }
+    }
+}
+
+/// Write `expr` as the receiver of a `[…]` subscript. An unparenthesized
+/// `Identifier(["map"])` reparses as `Token::Keyword(MAP)` followed by `[`,
+/// which dispatches to `parse_map` (the map-literal grammar) instead of a
+/// regular subscript. Parenthesize identifiers whose last component is a
+/// context-sensitive keyword so the round trip stays an identifier subscript.
+fn write_subscript_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, expr: &Expr<T>) {
+    let needs_parens = match expr {
+        // A bare keyword identifier (`map`, `list`, …) dispatches to the
+        // map/list-literal grammar before `[`, so it needs parens even though
+        // identifiers are otherwise safe receivers.
+        Expr::Identifier(idents) => idents
+            .last()
+            .and_then(|id| id.as_keyword())
+            .map(|kw| kw.is_context_sensitive_keyword())
+            .unwrap_or(false),
+        // Self-delimiting primaries, the bracketed collections, and the postfix
+        // forms that end in an identifier or `)` are safe: a following `[…]`
+        // attaches to the whole receiver as a fresh subscript.
+        Expr::QualifiedWildcard(_)
+        | Expr::Parameter(_)
+        | Expr::Value(_)
+        | Expr::Function(_)
+        | Expr::HomogenizingFunction { .. }
+        | Expr::NullIf { .. }
+        | Expr::Nested(_)
+        | Expr::Subquery(_)
+        | Expr::Exists(_)
+        | Expr::Case { .. }
+        | Expr::Row { .. }
+        | Expr::Array(_)
+        | Expr::ArraySubquery(_)
+        | Expr::List(_)
+        | Expr::ListSubquery(_)
+        | Expr::Map(_)
+        | Expr::MapSubquery(_)
+        | Expr::FieldAccess { .. }
+        | Expr::WildcardAccess(_)
+        | Expr::Collate { .. } => false,
+        // `Cast`: the type parser swallows a following `[…]` as an array suffix
+        // (`a::int4[1]` is `a` cast to `int4[]`, not a subscript of `a::int4`).
+        // `Subscript`: consecutive `[…]` flatten into one node (`a[1][2]` is a
+        // single subscript), so a nested subscript receiver must be parenthesized
+        // to stay nested. Everything else (operators, `IS`/`LIKE`/… constructs)
+        // binds looser than `[` and would re-associate, so parenthesize by default.
+        _ => true,
+    };
+    if needs_parens {
+        f.write_str("(");
+        f.write_node(expr);
+        f.write_str(")");
+    } else {
+        f.write_node(expr);
+    }
+}
 
 impl<T: AstInfo> Expr<T> {
     pub fn null() -> Expr<T> {
@@ -814,16 +1292,59 @@ pub struct Function<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for Function<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        self.fmt_call(f, true);
+    }
+}
+
+impl<T: AstInfo> Function<T> {
+    /// Render this call in table-function position (`FROM f(...)`, `ROWS FROM
+    /// (f(...))`), where the `extract(a FROM b)` / `position(a IN b)` special
+    /// forms are *not* valid syntax — only the scalar-expression parser
+    /// dispatches to them. Forces the plain comma form (with the name quoted
+    /// to dodge the special grammar) so the round trip stays stable.
+    pub(crate) fn fmt_table_call<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        self.fmt_call(f, false);
+    }
+
+    fn fmt_call<W: fmt::Write>(&self, f: &mut AstFormatter<W>, allow_special_form: bool) {
         // This block handles printing function calls that have special parsing. In stable mode, the
         // name is quoted and so won't get the special parsing. We only need to print the special
         // formats in non-stable mode.
-        if !f.stable() {
+        //
+        // The special forms (`position(a IN b)`, `extract(field FROM source)`)
+        // have no syntax for `DISTINCT`, a within-group `ORDER BY`, a `FILTER`,
+        // or an `OVER` window. A call literally named `"position"`/`"extract"`
+        // that carries any of those modifiers (only reachable via the quoted
+        // name — the real special grammar doesn't accept them) must therefore
+        // fall through to the plain quoted-call form, or the special form
+        // silently drops them on display.
+        let has_call_modifiers = self.distinct
+            || self.filter.is_some()
+            || self.over.is_some()
+            || matches!(&self.args, FunctionArgs::Args { order_by, .. } if !order_by.is_empty());
+        if allow_special_form && !f.stable() && !has_call_modifiers {
             let special: Option<(&str, &[Option<Keyword>])> =
                 match self.name.to_ast_string_stable().as_str() {
-                    r#""extract""# if self.args.len() == Some(2) => {
+                    // `extract(field FROM source)` parses `field` into a string
+                    // literal, so the special form only round-trips when arg0 is
+                    // a string. A generic `"extract"(a, b)` with a non-string
+                    // first arg must use the plain (quoted) call form.
+                    r#""extract""#
+                        if self.args.len() == Some(2)
+                            && matches!(self.args.first(), Some(Expr::Value(Value::String(_)))) =>
+                    {
                         Some(("extract", &[None, Some(FROM)]))
                     }
-                    r#""position""# if self.args.len() == Some(2) => {
+                    // `position(<needle> IN <haystack>)` parses the needle at
+                    // `Precedence::Like`, so a low-precedence needle (`NOT`, a
+                    // comparison, `IS`, a boolean connective, a quantified
+                    // comparison, ...) printed bare before the `IN` would swallow
+                    // or stop short of the delimiter. Only use the special form
+                    // with a needle that's safe to sit left of `IN`.
+                    r#""position""#
+                        if self.args.len() == Some(2)
+                            && self.args.first().is_some_and(prints_self_delimiting) =>
+                    {
                         Some(("position", &[None, Some(IN)]))
                     }
 
@@ -841,7 +1362,38 @@ impl<T: AstInfo> AstDisplay for Function<T> {
             }
         }
 
-        f.write_node(&self.name);
+        // If the function name clashes with a keyword that has its own special
+        // parser form, an unquoted name on reparse would trigger the
+        // special-grammar parser instead of a regular function call. Emit the
+        // always-quoted stable form so the regular function-call path is
+        // preserved. The list tracks the `(Token::Keyword(KW), Some(Token::LParen))`
+        // dispatch in `parse_prefix` (array, coalesce, ...); add a new entry
+        // whenever a keyword grows special-grammar parens. (The `ANY`/`ALL`/`SOME`
+        // quantifier keywords are handled more generally by `can_be_printed_bare`,
+        // since they're also unsafe as bare identifiers, e.g. `0 # some`.)
+        let name_stable = self.name.to_ast_string_stable();
+        let needs_quote_to_disambiguate = matches!(
+            name_stable.as_str(),
+            r#""array""#
+                | r#""coalesce""#
+                | r#""exists""#
+                | r#""extract""#
+                | r#""greatest""#
+                | r#""least""#
+                | r#""list""#
+                | r#""map""#
+                | r#""normalize""#
+                | r#""nullif""#
+                | r#""position""#
+                | r#""row""#
+                | r#""substring""#
+                | r#""trim""#
+        );
+        if needs_quote_to_disambiguate {
+            f.write_str(&name_stable);
+        } else {
+            f.write_node(&self.name);
+        }
         f.write_str("(");
         if self.distinct {
             f.write_str("DISTINCT ")
@@ -877,6 +1429,14 @@ impl<T: AstInfo> FunctionArgs<T> {
         Self::Args {
             args,
             order_by: vec![],
+        }
+    }
+
+    /// The first positional argument, if any (the `*` form has none).
+    pub fn first(&self) -> Option<&Expr<T>> {
+        match self {
+            FunctionArgs::Star => None,
+            FunctionArgs::Args { args, .. } => args.first(),
         }
     }
 

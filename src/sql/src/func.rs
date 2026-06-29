@@ -2026,7 +2026,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                         SqlScalarType::Char { length } => {
                             expr.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
                         }
-                        _ => typeconv::to_string(ecx, expr)
+                        _ => typeconv::to_string(ecx, expr)?
                     });
                 }
                 Ok(HirScalarExpr::call_variadic(variadic::Concat, exprs))
@@ -2052,7 +2052,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                         SqlScalarType::Char { length } => {
                             expr.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
                         }
-                        _ => typeconv::to_string(ecx, expr)
+                        _ => typeconv::to_string(ecx, expr)?
                     });
                 }
                 Ok(HirScalarExpr::call_variadic(variadic::ConcatWs, exprs))
@@ -2395,7 +2395,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Any...) => Operation::variadic(|ecx, exprs| {
                 Ok(HirScalarExpr::call_variadic(
                     variadic::JsonbBuildArray,
-                    exprs.into_iter().map(|e| typeconv::to_jsonb(ecx, e)).collect(),
+                    exprs
+                        .into_iter()
+                        .map(|e| typeconv::to_jsonb(ecx, e))
+                        .collect::<Result<Vec<_>, _>>()?,
                 ))
             }) => Jsonb, 3271;
         },
@@ -2405,13 +2408,12 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 if exprs.len() % 2 != 0 {
                     sql_bail!("argument list must have even number of elements")
                 }
-                Ok(HirScalarExpr::call_variadic(
-                    variadic::JsonbBuildObject,
-                    exprs.into_iter().tuples().map(|(key, val)| {
-                        let key = typeconv::to_string(ecx, key);
-                        let val = typeconv::to_jsonb(ecx, val);
-                        vec![key, val]
-                    }).flatten().collect()))
+                let mut elems = Vec::with_capacity(exprs.len());
+                for (key, val) in exprs.into_iter().tuples() {
+                    elems.push(typeconv::to_string(ecx, key)?);
+                    elems.push(typeconv::to_jsonb(ecx, val)?);
+                }
+                Ok(HirScalarExpr::call_variadic(variadic::JsonbBuildObject, elems))
             }) => Jsonb, 3273;
         },
         "jsonb_pretty" => Scalar {
@@ -3111,7 +3113,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     }
                     _ => e,
                 };
-                Ok(typeconv::to_jsonb(ecx, e))
+                typeconv::to_jsonb(ecx, e)
             }) => Jsonb, 3787;
         },
         "to_timestamp" => Scalar {
@@ -3753,7 +3755,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let json_null = HirScalarExpr::literal(Datum::JsonNull, SqlScalarType::Jsonb);
                 let e = HirScalarExpr::call_variadic(
                     variadic::Coalesce,
-                    vec![typeconv::to_jsonb(ecx, e), json_null],
+                    vec![typeconv::to_jsonb(ecx, e)?, json_null],
                 );
                 Ok((e, AggregateFunc::JsonbAgg { order_by }))
             }) => Jsonb, 3267;
@@ -3775,7 +3777,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 };
 
                 let json_null = HirScalarExpr::literal(Datum::JsonNull, SqlScalarType::Jsonb);
-                let key = typeconv::to_string(ecx, key);
+                let key = typeconv::to_string(ecx, key)?;
                 // `AggregateFunc::JsonbObjectAgg` uses the same underlying
                 // implementation as `AggregateFunc::MapAgg`, so it's our
                 // responsibility to apply the JSON-specific behavior of casting
@@ -3784,7 +3786,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // `SqlScalarType::Jsonb` type.
                 let val = HirScalarExpr::call_variadic(
                     variadic::Coalesce,
-                    vec![typeconv::to_jsonb(ecx, val), json_null],
+                    vec![typeconv::to_jsonb(ecx, val)?, json_null],
                 );
                 let e = HirScalarExpr::call_variadic(
                     variadic::RecordCreate {
@@ -5252,6 +5254,10 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 func::MzValidateRolePrivilege,
             ) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID;
         },
+        "parse_catalog_acl_mode" => Scalar {
+            params!(Jsonb) => UnaryFunc::ParseCatalogAclMode(func::ParseCatalogAclMode)
+                => String, oid::FUNC_PARSE_CATALOG_ACL_MODE_OID;
+        },
         "parse_catalog_create_sql" => Scalar {
             params!(String) => UnaryFunc::ParseCatalogCreateSql(func::ParseCatalogCreateSql)
                 => Jsonb, oid::FUNC_PARSE_CATALOG_CREATE_SQL_OID;
@@ -5364,6 +5370,33 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
             // message is the second argument.
             params!(Any, String) => VariadicFunc::from(variadic::ErrorIfNull)
                 => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
+        },
+        "generate_series_unoptimized" => Table {
+            // An int64 `generate_series` the optimizer promises to leave as an
+            // enumeration (see `TableFunc::GenerateSeriesUnoptimized`). For
+            // tests that rely on the enumeration work actually happening; not
+            // a supported surface.
+            params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
+                Ok(TableFuncPlan {
+                    imp: TableFuncImpl::CallTable {
+                        func: TableFunc::GenerateSeriesUnoptimized,
+                        exprs: vec![
+                            start, stop,
+                            HirScalarExpr::literal(Datum::Int64(1), SqlScalarType::Int64),
+                        ],
+                    },
+                    column_names: vec!["generate_series_unoptimized".into()],
+                })
+            }) => ReturnType::set_of(Int64.into()), oid::FUNC_MZ_GEN_SERIES_UNOPT_OID;
+            params!(Int64, Int64, Int64) => Operation::variadic(move |_ecx, exprs| {
+                Ok(TableFuncPlan {
+                    imp: TableFuncImpl::CallTable {
+                        func: TableFunc::GenerateSeriesUnoptimized,
+                        exprs,
+                    },
+                    column_names: vec!["generate_series_unoptimized".into()],
+                })
+            }) => ReturnType::set_of(Int64.into()), oid::FUNC_MZ_GEN_SERIES_UNOPT_STEP_OID;
         },
         "mz_sleep" => Scalar {
             params!(Float64) => UnaryFunc::Sleep(func::Sleep)

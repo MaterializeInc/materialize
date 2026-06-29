@@ -49,7 +49,7 @@ use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
     DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
     OfflineReason, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
-    ServiceProcessMetrics, ServiceStatus, scheduling_config::*,
+    ServiceProcessMetrics, ServiceStatus, recommended_k8s_labels, scheduling_config::*,
 };
 use mz_ore::cast::CastInto;
 use mz_ore::retry::Retry;
@@ -556,6 +556,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         &self,
         id: &str,
         ServiceConfig {
+            app_name,
             image,
             init_container_image,
             args,
@@ -599,6 +600,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         for (key, value) in labels_in {
             labels.insert(self.make_label_key(&key), value);
         }
+
+        let standard_labels = recommended_k8s_labels(app_name);
+
+        // Standard Kubernetes labels
+        labels.extend(standard_labels.clone());
 
         labels.insert(self.make_label_key("scale"), scale.to_string());
 
@@ -645,6 +651,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let service = K8sService {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
+                labels: Some(standard_labels.clone()),
                 ..Default::default()
             },
             spec: Some(ServiceSpec {
@@ -1236,6 +1243,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let stateful_set = StatefulSet {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
+                labels: Some(standard_labels.clone()),
                 ..Default::default()
             },
             spec: Some(StatefulSetSpec {
@@ -1334,6 +1342,22 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 })
                 .unwrap_or(false);
 
+            // Sum the per-container restart counts to get a per-process (per-pod)
+            // restart count. This is cumulative and survives gaps in the watch
+            // stream, so it lets consumers detect restarts they'd otherwise miss
+            // by only sampling the ready/not-ready status.
+            let restart_count = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_ref())
+                .map(|container_statuses| {
+                    container_statuses
+                        .iter()
+                        .map(|cs| u64::try_from(cs.restart_count).unwrap_or(0))
+                        .sum()
+                })
+                .unwrap_or(0);
+
             let (pod_ready, last_probe_time) = pod
                 .status
                 .and_then(|status| status.conditions)
@@ -1356,6 +1380,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 service_id,
                 process_id,
                 status,
+                restart_count,
                 time: DateTime::from_timestamp_nanos(
                     time.as_nanosecond().try_into().expect("must fit"),
                 ),

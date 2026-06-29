@@ -43,6 +43,7 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::future::OreFutureExt;
@@ -107,6 +108,8 @@ pub struct Config {
     pub external_login_password_mz_system: Option<Password>,
     /// Frontegg JWT authenticator.
     pub frontegg: Option<FronteggAuthenticator>,
+    /// Frontegg workspace URL advertised in MCP OAuth discovery.
+    pub frontegg_oauth_issuer_url: Option<String>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
@@ -135,6 +138,8 @@ pub struct Config {
     pub secrets_controller: Arc<dyn SecretsController>,
     /// VpcEndpoint controller configuration.
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
+    /// The process-wide live system dyncfg set.
+    pub system_dyncfgs: Arc<ConfigSet>,
 
     // === Storage options. ===
     /// The interval at which to collect storage usage information.
@@ -401,6 +406,7 @@ impl Listeners {
                 active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
                 http_host_name: config.http_host_name.clone(),
+                frontegg_oauth_issuer_url: config.frontegg_oauth_issuer_url.clone(),
                 source,
                 tls,
                 authenticator_kind,
@@ -409,6 +415,7 @@ impl Listeners {
                 allowed_origin: config.cors_allowed_origin.clone(),
                 allowed_origin_list: config.cors_allowed_origin_list.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
+                dyncfgs: Arc::clone(&config.system_dyncfgs),
                 metrics: metrics.clone(),
                 metrics_registry: metrics_registry.clone(),
                 mcp_metrics: mcp_metrics.clone(),

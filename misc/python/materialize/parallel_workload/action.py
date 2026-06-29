@@ -150,6 +150,27 @@ class Action:
     def run(self, exe: Executor) -> bool:
         raise NotImplementedError
 
+    def create_system_connection(
+        self, exe: Executor, num_attempts: int = 10
+    ) -> Connection:
+        try:
+            conn = psycopg.connect(
+                host=exe.db.host,
+                port=exe.db.ports[
+                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
+                ],
+                user="mz_system",
+                dbname="materialize",
+            )
+            conn.autocommit = True
+            return conn
+        except:
+            if num_attempts == 0:
+                raise
+            else:
+                time.sleep(1)
+                return self.create_system_connection(exe, num_attempts - 1)
+
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = [
             "permission denied for",
@@ -181,6 +202,7 @@ class Action:
                     "another session modified the catalog while this DDL transaction was open",
                     "was dropped while executing a statement",
                     "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
+                    "was concurrently modified",  # ConcurrentDependencyMutation (SQL-272)
                     "non-temporary items cannot depend on temporary item",  # TODO(def-): Fix?
                     "is not readable at any timestamp",  # Expected, due to object drops
                 ]
@@ -919,7 +941,7 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         if (
             not temp
@@ -1171,15 +1193,25 @@ class AlterIcebergSinkFromAction(Action):
             else:
                 # Avro schema migration checking can be quite strict, and we need to be not only
                 # compatible with the latest object's schema but all previous schemas.
-                # Only allow a conservative case for now: where all types and names match.
+                # Only allow a conservative case for now: where all names, types,
+                # and nullabilities match. Nullability matters because it flips an
+                # Avro field between a `["null", T]` union and a bare `T`, which the
+                # schema registry rejects as an incompatible change for an existing
+                # subject (the topic, hence subject, is unchanged by SET FROM).
+                # TODO: Switch back when SS-324 is fixed to make sure it errors
+                # instead of causing a stall
                 objs = []
-                old_cols = {c.name(True): c.data_type for c in old_object.columns}
+                old_cols = {
+                    c.name(True): (c.data_type, c.nullable) for c in old_object.columns
+                }
                 for o in exe.db.db_objects_without_views():
                     if isinstance(old_object, WebhookSource):
                         continue
                     if isinstance(o, WebhookSource):
                         continue
-                    new_cols = {c.name(True): c.data_type for c in o.columns}
+                    new_cols = {
+                        c.name(True): (c.data_type, c.nullable) for c in o.columns
+                    }
                     if old_cols == new_cols:
                         objs.append(o)
             if not objs:
@@ -1236,15 +1268,23 @@ class AlterKafkaSinkFromAction(Action):
             else:
                 # Avro schema migration checking can be quite strict, and we need to be not only
                 # compatible with the latest object's schema but all previous schemas.
-                # Only allow a conservative case for now: where all types and names match.
+                # Only allow a conservative case for now: where all names, types,
+                # and nullabilities match. Nullability matters because it flips an
+                # Avro field between a `["null", T]` union and a bare `T`, which the
+                # schema registry rejects as an incompatible change for an existing
+                # subject (the topic, hence subject, is unchanged by SET FROM).
                 objs = []
-                old_cols = {c.name(True): c.data_type for c in old_object.columns}
+                old_cols = {
+                    c.name(True): (c.data_type, c.nullable) for c in old_object.columns
+                }
                 for o in exe.db.db_objects_without_views():
                     if isinstance(old_object, WebhookSource):
                         continue
                     if isinstance(o, WebhookSource):
                         continue
-                    new_cols = {c.name(True): c.data_type for c in o.columns}
+                    new_cols = {
+                        c.name(True): (c.data_type, c.nullable) for c in o.columns
+                    }
                     if old_cols == new_cols:
                         objs.append(o)
             if not objs:
@@ -1497,6 +1537,7 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_scoped_system_parameters"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -1555,6 +1596,13 @@ class FlipFlagsAction(Action):
             "'1min'",
             "'1h'",
             "'7d'",
+        ]
+        # Keep these generous: a tight timeout would abort the oracle's own
+        # queries (they are retried, but it adds noise). "0s" leaves it unset.
+        self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
+            "'0s'",
+            "'30s'",
+            "'60s'",
         ]
         # Note: it's not safe to re-enable this flag after writing with `persist_validate_part_bounds_on_write`,
         # since those new-style parts may fail our old-style validation.
@@ -1625,6 +1673,12 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["webhook_max_request_size_bytes"] = [
+            # 1 MiB, 5 MiB (default), 10 MiB
+            "1048576",
+            "5242880",
+            "10485760",
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
@@ -1649,6 +1703,7 @@ class FlipFlagsAction(Action):
             "memory_limiter_burst_factor",
             "enable_columnation_lgalloc",
             "enable_columnar_lgalloc",
+            "catalog_info_metrics_reconcile_interval",
             "compute_server_maintenance_interval",
             "compute_dataflow_max_inflight_bytes",
             "compute_dataflow_max_inflight_bytes_cc",
@@ -1803,6 +1858,8 @@ class FlipFlagsAction(Action):
             "enable_0dt_caught_up_check",
             "with_0dt_caught_up_check_allowed_lag",
             "with_0dt_caught_up_check_cutoff",
+            "with_0dt_caught_up_check_stability_period",
+            "enable_0dt_caught_up_stability_check",
             "enable_statement_lifecycle_logging",
             "enable_introspection_subscribes",
             "plan_insights_notice_fast_path_clusters_optimize_duration",
@@ -1812,6 +1869,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_agent",
             "enable_mcp_agent_query_tool",
             "enable_mcp_developer",
+            "enable_mcp_developer_query_tool",
             "mcp_max_response_size",
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
@@ -1846,7 +1904,7 @@ class FlipFlagsAction(Action):
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
 
-        # TODO: Remove when database-issues#8352 is fixed
+        # TODO: Remove when https://linear.app/materializeinc/issue/DB-138 is fixed
         if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
             "persist_use_critical_since_"
         ):
@@ -1870,27 +1928,6 @@ class FlipFlagsAction(Action):
         except Exception as e:
             raise QueryError(str(e), "FlipFlags")
 
-    def create_system_connection(
-        self, exe: Executor, num_attempts: int = 10
-    ) -> Connection:
-        try:
-            conn = psycopg.connect(
-                host=exe.db.host,
-                port=exe.db.ports[
-                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
-                ],
-                user="mz_system",
-                dbname="materialize",
-            )
-            conn.autocommit = True
-            return conn
-        except:
-            if num_attempts == 0:
-                raise
-            else:
-                time.sleep(1)
-                return self.create_system_connection(exe, num_attempts - 1)
-
     def flip_flag(self, conn: Connection, flag_name: str, flag_value: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
@@ -1912,7 +1949,7 @@ class CreateViewAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
@@ -3002,6 +3039,35 @@ class CreateIcebergSinkAction(Action):
         return True
 
 
+class CheckSinkAction(Action):
+    def run(self, exe: Executor) -> bool:
+        try:
+            conn = self.create_system_connection(exe)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT name, type, last_status_change_at, status, error, details FROM mz_internal.mz_sink_statuses WHERE status not in ('running', 'starting', NULL)"
+                    )
+                    results = cur.fetchall()
+                if results:
+                    results_str = "\n".join(
+                        [
+                            f"{name} ({sink_type}) changed status at {last_status_change_at} to {status}: {error} (details: {details})"
+                            for name, sink_type, last_status_change_at, status, error, details in results
+                        ]
+                    )
+                    raise ValueError(f"Sinks are in a bad state:\n{results_str}")
+            finally:
+                conn.close()
+        except:
+            if exe.db.scenario not in (
+                Scenario.Kill,
+                Scenario.ZeroDowntimeDeploy,
+            ):
+                raise
+        return True
+
+
 class DropIcebergSinkAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -3167,6 +3233,34 @@ class HttpPostAction(Action):
         return True
 
 
+class SourceSinkStallCheckAction(Action):
+    def run(self, exe: Executor) -> bool:
+        if exe.db.scenario in (
+            Scenario.Kill,
+            Scenario.ZeroDowntimeDeploy,
+            Scenario.BackupRestore,
+        ):
+            return False
+
+        exe.execute(
+            "SELECT name, error FROM mz_internal.mz_sink_statuses WHERE status = 'stalled'"
+        )
+        stalled_sinks = exe.cur.fetchall()
+        if stalled_sinks:
+            details = "; ".join(f"{name}: {error}" for name, error in stalled_sinks)
+            raise ValueError(f"Sinks in stalled state: {details}")
+
+        exe.execute(
+            "SELECT name, error FROM mz_internal.mz_source_statuses WHERE status = 'stalled'"
+        )
+        stalled_sources = exe.cur.fetchall()
+        if stalled_sources:
+            details = "; ".join(f"{name}: {error}" for name, error in stalled_sources)
+            raise ValueError(f"Sources in stalled state: {details}")
+
+        return True
+
+
 class StatisticsAction(Action):
     def run(self, exe: Executor) -> bool:
         for typ, objs in [
@@ -3252,6 +3346,7 @@ dml_nontrans_action_list = ActionList(
         (SetClusterAction, 1),
         (ReconnectAction, 1),
         (FlipFlagsAction, 2),
+        (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,  # deletes can't be inside of transactions
@@ -3281,12 +3376,13 @@ ddl_action_list = ActionList(
         (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
-        # TODO: Reenable when database-issues#8237 is fixed
+        (CheckSinkAction, 1),
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-307 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 4),
-        # TODO: Reenable when database-issues#9620 is fixed
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-290 is fixed
         # (CreateSqlServerSourceAction, 4),
         # (DropSqlServerSourceAction, 4),
         (GrantPrivilegesAction, 4),
@@ -3304,7 +3400,7 @@ ddl_action_list = ActionList(
         (SwapSchemaAction, 10),
         (ReplaceMaterializedViewAction, 20),
         (FlipFlagsAction, 2),
-        # TODO: Reenable when database-issues#8813 is fixed.
+        # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-405 is fixed.
         # (AlterTableAddColumnAction, 10),
         (AlterIcebergSinkFromAction, 8),
         (AlterKafkaSinkFromAction, 8),

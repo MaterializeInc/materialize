@@ -1,0 +1,171 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural lockdown tests for mz_catalog.mz_system_privileges.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 1 column named `privileges` of type mz_aclitem, NOT NULL.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_system_privileges' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+privileges  mz_aclitem  false
+
+# --- Baseline / pre-populated rows --------------------------------------------
+
+# On a fresh server, the mz_system bootstrap grant is present along with the
+# same grant to the default `materialize` user. CREATEROLE + CREATEDB +
+# CREATECLUSTER + CREATENETWORKPOLICY = RBNP.
+query T rowsort
+SELECT privileges::text FROM mz_system_privileges
+----
+materialize=RBNP/mz_system
+mz_system=RBNP/mz_system
+
+# --- OID stability ------------------------------------------------------------
+
+query I
+SELECT count(*) FROM mz_objects
+WHERE name = 'mz_system_privileges'
+  AND schema_id IN (SELECT id FROM mz_schemas WHERE name = 'mz_catalog')
+----
+1
+
+# --- GRANT round-trip ---------------------------------------------------------
+
+statement ok
+CREATE ROLE r_sys
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO r_sys
+----
+COMPLETE 0
+
+# A new system-privileges row appears, grantee=r_sys, grantor=mz_system,
+# AclMode = CREATEROLE → 'R'.
+query T
+SELECT privileges::text FROM mz_system_privileges ORDER BY 1
+----
+materialize=RBNP/mz_system
+mz_system=RBNP/mz_system
+r_sys=R/mz_system
+
+# --- AclItem round-trip via mz_aclitem_* helpers -----------------------------
+
+# Grantee / grantor / privileges decomposition for the new row.
+query TTT
+SELECT
+    (SELECT name FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantee(privileges)),
+    (SELECT name FROM mz_roles WHERE id = mz_internal.mz_aclitem_grantor(privileges)),
+    mz_internal.mz_aclitem_privileges(privileges)
+FROM mz_system_privileges
+WHERE mz_internal.mz_aclitem_grantee(privileges) = (SELECT id FROM mz_roles WHERE name = 'r_sys')
+----
+r_sys  mz_system  R
+
+# --- Multiple-bit AclMode -----------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO r_sys
+----
+COMPLETE 0
+
+# AclMode accumulates: R (CREATEROLE) + B (CREATEDB) + N (CREATECLUSTER) = RBN
+# in PostgreSQL Display order (locks down the char-code ordering produced by
+# the existing populator).
+query T
+SELECT mz_internal.mz_aclitem_privileges(privileges)
+FROM mz_system_privileges
+WHERE mz_internal.mz_aclitem_grantee(privileges) = (SELECT id FROM mz_roles WHERE name = 'r_sys')
+----
+RBN
+
+# Text form encodes all three bits with one ACL char per privilege.
+query T
+SELECT privileges::text
+FROM mz_system_privileges
+WHERE mz_internal.mz_aclitem_grantee(privileges) = (SELECT id FROM mz_roles WHERE name = 'r_sys')
+----
+r_sys=RBN/mz_system
+
+# --- PUBLIC grantee -----------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO PUBLIC
+----
+COMPLETE 0
+
+# PUBLIC grants surface as a row with an empty grantee in the ACL text format
+# (=N/mz_system).
+query T
+SELECT privileges::text
+FROM mz_system_privileges
+WHERE privileges::text LIKE '=%'
+----
+=N/mz_system
+
+# --- REVOKE round-trip --------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE, CREATEDB, CREATECLUSTER ON SYSTEM FROM r_sys
+----
+COMPLETE 0
+
+# Revoking all privileges from a grantee removes the row entirely.
+query I
+SELECT count(*) FROM mz_system_privileges
+WHERE mz_internal.mz_aclitem_grantee(privileges) = (SELECT id FROM mz_roles WHERE name = 'r_sys')
+----
+0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM PUBLIC
+----
+COMPLETE 0
+
+# Back to the bootstrap state after all extra grants are revoked.
+query T rowsort
+SELECT privileges::text FROM mz_system_privileges
+----
+materialize=RBNP/mz_system
+mz_system=RBNP/mz_system
+
+# --- NOT NULL invariant -------------------------------------------------------
+
+query I
+SELECT count(*) FROM mz_system_privileges WHERE privileges IS NULL
+----
+0
+
+# --- PUBLIC SELECT permission preserved ---------------------------------------
+
+# A non-superuser role can SELECT from mz_system_privileges. PUBLIC_SELECT
+# access must survive the conversion to MV.
+statement ok
+CREATE ROLE r_reader LOGIN
+
+simple conn=mz_system,user=mz_system
+GRANT r_reader TO materialize
+----
+COMPLETE 0
+
+simple conn=reader,user=r_reader
+SELECT count(*) >= 0 FROM mz_system_privileges
+----
+t
+COMPLETE 1

@@ -1455,6 +1455,45 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         c.run_testdrive_files("resources/bootstrapped-system-vars.td")
 
 
+def workflow_test_replica_availability_zone_catalog(c: Composition) -> None:
+    """Regression test for the public mz_cluster_replicas.availability_zone
+    catalog column.
+
+    That column is a BuiltinMaterializedView that reaches into the durable
+    ClusterReplica JSON. The durable Managed location stores an
+    `availability_zones` list, and the column surfaces it as a comma-separated
+    string: the provisioned AVAILABILITY ZONES pool for a managed cluster, the
+    single AVAILABILITY ZONE pin for an unmanaged one. A wrong JSON key silently
+    NULLs the column for every replica.
+    test/sqllogictest/singlereplica_mz_cluster_replicas.slt cannot catch this:
+    its environment has no availability zones configured, so any user-specified
+    AVAILABILITY ZONE is rejected and the column never goes non-NULL there. Boot
+    environmentd with a configured availability-zone pool so the pin is
+    accepted."""
+
+    materialized = Materialized(
+        options=[
+            "--availability-zone=us-east-1a",
+            "--availability-zone=us-east-1b",
+            "--availability-zone=us-east-1c",
+        ],
+        additional_system_parameter_defaults={
+            "enable_managed_cluster_availability_zones": "true",
+        },
+    )
+
+    with c.override(materialized, Testdrive()):
+        c.up("materialized")
+        c.run_testdrive_files("resources/replica-availability-zone.td")
+        c.kill("materialized")
+
+    # Restart and re-assert: the column is recomputed from durable state on
+    # boot, exercising the rebuild-from-durable concretization path too.
+    with c.override(materialized, Testdrive(no_reset=True)):
+        c.up("materialized")
+        c.run_testdrive_files("resources/replica-availability-zone-after-restart.td")
+
+
 def workflow_test_system_table_indexes(c: Composition) -> None:
     """Test system table indexes."""
 
@@ -3704,6 +3743,15 @@ def workflow_test_profile_fetch(c: Composition) -> None:
         make_ok_check(
             "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
         ),
+    )
+
+    # Regression test for CLU-109: a sampling frequency of zero used to reach
+    # pprof's `Timer::new`, which computes `1_000_000 / hz` and panicked with a
+    # division by zero, crashing the whole process. It must now be rejected with
+    # a clean error response instead.
+    test_post(
+        {"action": "time_fg", "time_secs": "1", "hz": "0"},
+        make_check(500, "Sampling frequency must be greater than zero."),
     )
 
     # Deactivate memory profiling.
@@ -6209,45 +6257,47 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
 def workflow_test_sql_cluster_disk(c: Composition) -> None:
     """
     Test that `mz_clusters.disk` and `mz_cluster_replicas.disk` have expected
-    values.
+    values, including when a referenced size is later marked `disabled`.
     """
+
+    sizes = {
+        "swap,zero": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": "1G",
+            "disk_limit": "0",
+            "swap_enabled": True,
+        },
+        "swap,nonzero": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": "1G",
+            "disk_limit": "1G",
+            "swap_enabled": True,
+        },
+        "noswap,zero": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": "1G",
+            "disk_limit": "0",
+            "swap_enabled": False,
+        },
+        "noswap,nonzero": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": "1G",
+            "disk_limit": "1G",
+            "swap_enabled": False,
+        },
+    }
 
     with c.override(
         Materialized(
-            cluster_replica_size={
-                "swap,zero": {
-                    "workers": 1,
-                    "scale": 1,
-                    "credits_per_hour": "1",
-                    "memory_limit": "1G",
-                    "disk_limit": "0",
-                    "swap_enabled": True,
-                },
-                "swap,nonzero": {
-                    "workers": 1,
-                    "scale": 1,
-                    "credits_per_hour": "1",
-                    "memory_limit": "1G",
-                    "disk_limit": "1G",
-                    "swap_enabled": True,
-                },
-                "noswap,zero": {
-                    "workers": 1,
-                    "scale": 1,
-                    "credits_per_hour": "1",
-                    "memory_limit": "1G",
-                    "disk_limit": "0",
-                    "swap_enabled": False,
-                },
-                "noswap,nonzero": {
-                    "workers": 1,
-                    "scale": 1,
-                    "credits_per_hour": "1",
-                    "memory_limit": "1G",
-                    "disk_limit": "1G",
-                    "swap_enabled": False,
-                },
-            },
+            cluster_replica_size=sizes,
             bootstrap_replica_size="swap,zero",
         ),
         Testdrive(no_reset=True),
@@ -6276,6 +6326,47 @@ def workflow_test_sql_cluster_disk(c: Composition) -> None:
                 swap_nonzero   false
                 noswap_zero    false
                 noswap_nonzero true
+                """))
+
+    # Restart with `noswap,nonzero` flipped to `disabled: True`. The catalog
+    # writes every size to `mz_cluster_replica_size_internal`, including
+    # disabled ones, so `disk` for the existing `noswap_nonzero` cluster and
+    # its replica should still resolve to `true`. The public
+    # `mz_cluster_replica_sizes` table drops the disabled row, which the
+    # final assertion checks.
+    c.kill("materialized")
+    sizes_with_disabled = dict(sizes)
+    sizes_with_disabled["noswap,nonzero"] = {
+        **sizes["noswap,nonzero"],
+        "disabled": True,
+    }
+    with c.override(
+        Materialized(
+            cluster_replica_size=sizes_with_disabled,
+            bootstrap_replica_size="swap,zero",
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+
+        c.testdrive(input=dedent("""
+                > SELECT name, disk FROM mz_clusters WHERE name LIKE '%swap%'
+                swap_zero      false
+                swap_nonzero   false
+                noswap_zero    false
+                noswap_nonzero true
+
+                > SELECT c.name, r.disk
+                  FROM mz_cluster_replicas r
+                  JOIN mz_clusters c ON c.id = r.cluster_id
+                  WHERE c.name LIKE '%swap%'
+                swap_zero      false
+                swap_nonzero   false
+                noswap_zero    false
+                noswap_nonzero true
+
+                > SELECT 'noswap,nonzero' IN (SELECT size FROM mz_cluster_replica_sizes)
+                false
                 """))
 
 

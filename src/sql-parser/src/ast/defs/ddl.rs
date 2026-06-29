@@ -113,6 +113,47 @@ impl WithOptionName for AvroSchemaOptionName {
     }
 }
 
+/// Options accepted on the `USING AWS GLUE SCHEMA REGISTRY CONNECTION <name> (…)`
+/// form. Today there is only `SCHEMA NAME`, which is required (the Glue
+/// purification step needs it to fetch the writer schema's latest
+/// version at `CREATE SOURCE` time).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum GlueAvroOptionName {
+    /// The `SCHEMA NAME [=] '<name>'` option. Names the schema within a
+    /// Glue registry whose latest version is fetched during purification.
+    SchemaName,
+}
+
+impl AstDisplay for GlueAvroOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            GlueAvroOptionName::SchemaName => f.write_str("SCHEMA NAME"),
+        }
+    }
+}
+
+impl WithOptionName for GlueAvroOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            // A schema *name* is a user-chosen identifier, no more
+            // sensitive than a table name.
+            Self::SchemaName => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GlueAvroOption<T: AstInfo> {
+    pub name: GlueAvroOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(GlueAvroOption);
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AvroSchemaOption<T: AstInfo> {
     pub name: AvroSchemaOptionName,
@@ -128,6 +169,18 @@ pub enum AvroSchema<T: AstInfo> {
     InlineSchema {
         schema: Schema,
         with_options: Vec<AvroSchemaOption<T>>,
+    },
+    /// `USING AWS GLUE SCHEMA REGISTRY CONNECTION <name> (SCHEMA NAME = '<n>')`.
+    ///
+    /// Parallel to the `Csr` variant.
+    Glue {
+        connection: T::ItemName,
+        with_options: Vec<GlueAvroOption<T>>,
+        /// Normally populated during purification by fetching the named
+        /// schema's latest version from AWS Glue. The grammar also accepts a
+        /// user-written `SEED VALUE SCHEMA`, so this may be set on input; it is
+        /// not the intended authoring path, but it is not rejected.
+        seed: Option<GlueAvroSeed>,
     },
 }
 
@@ -147,6 +200,23 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                     f.write_str(" (");
                     f.write_node(&display::comma_separated(with_options));
                     f.write_str(")");
+                }
+            }
+            Self::Glue {
+                connection,
+                with_options,
+                seed,
+            } => {
+                f.write_str("USING AWS GLUE SCHEMA REGISTRY CONNECTION ");
+                f.write_node(connection);
+                if !with_options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(with_options));
+                    f.write_str(")");
+                }
+                if let Some(seed) = seed {
+                    f.write_str(" ");
+                    f.write_node(seed);
                 }
             }
         }
@@ -399,6 +469,35 @@ impl AstDisplay for CsrSeedAvro {
 }
 impl_display!(CsrSeedAvro);
 
+/// Resolved reader schema for a single `AvroSchema::Glue` FORMAT clause.
+///
+/// Glue resolves exactly one named schema per FORMAT clause, so this holds a
+/// single schema rather than a key/value pair. This differs from
+/// [`CsrSeedAvro`], where one `FORMAT AVRO USING CONFLUENT ...` clause can seed
+/// both key and value. Under Glue, the key and value are expressed as separate
+/// `KEY FORMAT ... VALUE FORMAT ...` clauses, each carrying its own
+/// `GlueAvroSeed`; the field is named `value_schema` because, for a single
+/// clause, it is decoded as that clause's value (a bare `FORMAT` clause, or the
+/// value side of a `KEY FORMAT/VALUE FORMAT` pair) — and a `KEY FORMAT` clause
+/// reuses the same schema as its key.
+///
+/// Glue schemas also have no references (each schema-version is a single
+/// self-contained definition), so unlike [`CsrSeedAvro`] there is no references
+/// vector.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GlueAvroSeed {
+    pub value_schema: String,
+}
+
+impl AstDisplay for GlueAvroSeed {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SEED VALUE SCHEMA '");
+        f.write_node(&display::escape_single_quote_string(&self.value_schema));
+        f.write_str("'");
+    }
+}
+impl_display!(GlueAvroSeed);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeedProtobuf {
     pub key: Option<CsrSeedProtobufSchema>,
@@ -429,7 +528,7 @@ impl AstDisplay for CsrSeedProtobufSchema {
         f.write_str("SCHEMA '");
         f.write_str(&display::escape_single_quote_string(&self.schema));
         f.write_str("' MESSAGE '");
-        f.write_str(&self.message_name);
+        f.write_str(&display::escape_single_quote_string(&self.message_name));
         f.write_str("'");
     }
 }
@@ -777,6 +876,7 @@ pub enum ConnectionOptionName {
     Credential,
     Database,
     Endpoint,
+    GcpConnection,
     Host,
     Password,
     Port,
@@ -818,6 +918,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::Credential => "CREDENTIAL",
             ConnectionOptionName::Database => "DATABASE",
             ConnectionOptionName::Endpoint => "ENDPOINT",
+            ConnectionOptionName::GcpConnection => "GCP CONNECTION",
             ConnectionOptionName::Host => "HOST",
             ConnectionOptionName::Password => "PASSWORD",
             ConnectionOptionName::Port => "PORT",
@@ -871,6 +972,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::Credential
             | ConnectionOptionName::Database
             | ConnectionOptionName::Endpoint
+            | ConnectionOptionName::GcpConnection
             | ConnectionOptionName::Host
             | ConnectionOptionName::Password
             | ConnectionOptionName::Port

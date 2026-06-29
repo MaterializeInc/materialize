@@ -161,6 +161,7 @@ fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String)>> {
     }))
 }
 
+#[allow(clippy::disallowed_methods)]
 async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[TestCase<'a>]) {
     println!("==> {}", header);
     for test in tests {
@@ -464,6 +465,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
     // is done by starting a web server that awaits the refresh request, which the
@@ -1770,6 +1772,7 @@ async fn test_auth_oidc_audience_optional() {
 /// configuration.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_oidc_password_fallback() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -1878,6 +1881,7 @@ async fn test_auth_oidc_password_fallback() {
 /// runtime changes to the oidc_issuer and oidc_audience system parameters.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_oidc_issuer_and_audience_switch() {
     let ca1 = Ca::new_root("test ca 1").unwrap();
     let (server_cert, server_key) = ca1
@@ -2030,6 +2034,7 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
 /// creating a distinct new user.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_oidc_authentication_claim_switch() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2297,21 +2302,40 @@ async fn test_auth_oidc_fetch_error() {
     .unwrap();
 
     let oidc_user = "user@example.com";
-    let issuer = oidc_server.issuer.clone();
-    // Generate a JWT while the server is still up (correct issuer, valid signature).
+    // Point the issuer at a loopback port that is guaranteed to refuse
+    // connections instead of at the mock server's just-freed ephemeral port.
+    // Under high test parallelism (`--test-threads=48`) the OS could reassign
+    // that freed port to another OIDC test's mock server before environmentd
+    // performed the discovery fetch. environmentd would then fetch a valid JWKS
+    // for the shared `kid` ("test-key-1") from the wrong server and fail JWT
+    // signature validation, so this assertion intermittently saw "failed to
+    // validate JWT" instead of the expected fetch error. Port 1 is privileged
+    // and is never bound by the ephemeral-port mock servers, so it cannot be
+    // hijacked.
+    let unreachable_issuer = "http://127.0.0.1:1";
+
+    // Mint a validly-signed JWT whose issuer matches the (unreachable)
+    // configured issuer. The mock server is only needed to sign the token; the
+    // discovery fetch fails before the signature or issuer is ever checked.
     let jwt_token = oidc_server.generate_jwt(
         oidc_user,
         GenerateJwtOptions {
+            issuer: Some(unreachable_issuer),
             ..Default::default()
         },
     );
 
-    // Stop the OIDC server so the JWKS endpoint becomes unreachable.
+    // The mock server has served its purpose; shut it down.
     oidc_server.handle.abort_and_wait().await;
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(Some(issuer), Some("sub".to_string()), None, None)
+        .with_oidc_auth(
+            Some(unreachable_issuer.to_string()),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
         .start()
         .await;
 
@@ -2966,6 +2990,7 @@ async fn test_auth_admin_superuser() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_admin_superuser_revoked() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3126,6 +3151,7 @@ async fn test_auth_admin_superuser_revoked() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_deduplication() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3298,6 +3324,7 @@ async fn test_auth_deduplication() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_refresh_task_metrics() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3434,6 +3461,7 @@ async fn test_refresh_task_metrics() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_superuser_can_alter_cluster() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3585,6 +3613,7 @@ async fn test_superuser_can_alter_cluster() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_refresh_dropped_session() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3752,6 +3781,7 @@ async fn test_refresh_dropped_session() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_refresh_dropped_session_lru() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3953,6 +3983,7 @@ async fn test_refresh_dropped_session_lru() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_transient_auth_failures() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -4077,6 +4108,7 @@ async fn test_transient_auth_failures() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_transient_auth_failure_on_refresh() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -4212,6 +4244,7 @@ async fn test_transient_auth_failure_on_refresh() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_password_auth() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4302,6 +4335,7 @@ async fn test_password_auth() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_sasl_auth() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4357,6 +4391,7 @@ async fn test_sasl_auth() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_sasl_auth_failure() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4403,6 +4438,7 @@ async fn test_sasl_auth_failure() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_password_auth_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4458,6 +4494,7 @@ async fn test_password_auth_superuser() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_password_auth_alter_role() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4743,6 +4780,7 @@ async fn test_password_auth_http() {
 /// because internal_user_metadata was hardcoded to None.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_password_auth_http_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4950,6 +4988,7 @@ async fn test_password_auth_http_superuser() {
 /// `current_user` should equal `oidc_user`.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_session_auth_does_not_override_credentials() {
     let ca = Ca::new_root("test ca").unwrap();
     let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
@@ -5099,6 +5138,7 @@ async fn test_session_auth_does_not_override_credentials() {
 /// `auto_provision_source = 'frontegg'` in `mz_audit_events`.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_autoprovision_frontegg_audit_log() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -5243,6 +5283,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
 /// `auto_provision_source = 'oidc'` in `mz_audit_events`.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_autoprovision_oidc_audit_log() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -5345,6 +5386,7 @@ async fn test_auth_autoprovision_oidc_audit_log() {
 /// attribute, and succeeds after granting LOGIN.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_oidc_non_login_role() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -5452,6 +5494,7 @@ async fn test_auth_oidc_non_login_role() {
 }
 
 /// Fetches the role names a user is a member of, sorted alphabetically.
+#[allow(clippy::disallowed_methods)]
 async fn fetch_user_role_memberships(
     client: &tokio_postgres::Client,
     user_name: &str,
@@ -5472,6 +5515,7 @@ async fn fetch_user_role_memberships(
 
 /// Sets up a test harness with OIDC auth, creates roles, and enables group sync.
 /// Returns the server, admin client, OIDC mock server, and a TLS factory closure.
+#[allow(clippy::disallowed_methods)]
 async fn setup_group_sync_test() -> (
     test_util::TestServer,
     tokio_postgres::Client,
@@ -5565,6 +5609,7 @@ fn jwt_with_groups(oidc_server: &OidcMockServer, groups: serde_json::Value) -> S
 /// First login grants roles from JWT groups, with correct grantor and audit log entries.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
 async fn test_oidc_group_sync_first_login() {
     let (server, admin_client, oidc_server) = setup_group_sync_test().await;
 
@@ -5607,6 +5652,7 @@ async fn test_oidc_group_sync_first_login() {
 /// The self-referential group should be silently skipped; other valid groups apply.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
 async fn test_oidc_group_sync_self_named_group() {
     let (server, admin_client, oidc_server) = setup_group_sync_test().await;
     admin_client
@@ -5734,6 +5780,7 @@ async fn test_oidc_group_sync_ws() {
 /// Setup: grant alice's own role to r_cycle, so r_cycle is a member of alice.
 /// Then a JWT with group "r_cycle" makes sync try to grant r_cycle to alice,
 /// which would create a cycle (alice → r_cycle → alice).
+#[allow(clippy::disallowed_methods)]
 async fn setup_circular_group(
     admin_client: &tokio_postgres::Client,
     oidc_server: &OidcMockServer,
@@ -5759,6 +5806,7 @@ async fn setup_circular_group(
 /// In strict mode, a sync error rejects the login entirely.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
 async fn test_oidc_group_sync_strict_rejects_on_error() {
     let (server, admin_client, oidc_server) = setup_group_sync_test().await;
     setup_circular_group(&admin_client, &oidc_server, &server).await;
@@ -5824,6 +5872,7 @@ async fn test_oidc_group_sync_fail_open_sends_notice() {
 /// not grant the privileges of the distinct "admin" role (SQL-276).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
 async fn test_oidc_group_sync_case_sensitive() {
     let (server, admin_client, oidc_server) = setup_group_sync_test().await;
 
