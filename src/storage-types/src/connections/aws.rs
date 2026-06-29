@@ -9,7 +9,7 @@
 
 //! AWS configuration for sources and sinks.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, anyhow, bail};
 use aws_config::sts::AssumeRoleProvider;
@@ -45,6 +45,75 @@ use crate::{
 /// overloaded cluster, where the connect can't complete promptly, does not fail
 /// credential resolution and stall the dependent operation.
 const CREDENTIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long before a cached credential's expiry we re-resolve it.
+///
+/// Matches the AWS SDK's default lazy-cache buffer. Refreshing this far ahead of
+/// expiry keeps us from handing out a credential so close to its deadline that an
+/// in-flight request outlives it.
+const CREDENTIAL_REFRESH_BUFFER: Duration = Duration::from_secs(5 * 60);
+
+/// A [`ProvideCredentials`] wrapper that caches the resolved credentials and only
+/// re-resolves once they near expiry.
+///
+/// `AssumeRoleProvider` makes a fresh STS call on every `provide_credentials`. It
+/// installs `IdentityCache::no_cache`, and the SDK's identity cache only applies
+/// to SDK service clients, not to the consumers here: the Iceberg REST SigV4
+/// authenticator and the OpenDAL credential loader, which call
+/// `provide_credentials` per request. Those consumers are polled inline on a
+/// timely worker, so under load the worker is rescheduled slowly and a per-request
+/// STS connect can blow past its deadline and fail the operation.
+///
+/// Caching collapses those per-request STS calls to one round-trip per credential
+/// lifetime. It also lets us resolve that first round-trip eagerly off the timely
+/// thread, before the inline request path needs it (see
+/// [`AwsConnection::load_sdk_config`]).
+#[derive(Debug)]
+struct CachingCredentialsProvider {
+    inner: SharedCredentialsProvider,
+    /// `None` until the first successful resolution.
+    cached: tokio::sync::Mutex<Option<Credentials>>,
+}
+
+impl CachingCredentialsProvider {
+    fn new(inner: SharedCredentialsProvider) -> Self {
+        CachingCredentialsProvider {
+            inner,
+            cached: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    async fn cached_credentials(&self) -> aws_credential_types::provider::Result {
+        // Holding the lock across the refresh serializes concurrent callers, so a
+        // burst of requests triggers at most one STS round-trip rather than a
+        // stampede. The losers wait, then observe the freshly cached value.
+        let mut cached = self.cached.lock().await;
+        if let Some(creds) = &*cached {
+            let fresh = match creds.expiry() {
+                // No expiry means the credentials never go stale.
+                None => true,
+                Some(expiry) => SystemTime::now() + CREDENTIAL_REFRESH_BUFFER < expiry,
+            };
+            if fresh {
+                return Ok(creds.clone());
+            }
+        }
+        let creds = self.inner.provide_credentials().await?;
+        *cached = Some(creds.clone());
+        Ok(creds)
+    }
+}
+
+impl ProvideCredentials for CachingCredentialsProvider {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(self.cached_credentials())
+    }
+}
 
 /// AWS connection configuration.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -315,18 +384,35 @@ impl AwsConnection {
                             )
                         })?,
                 ),
-                AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
-                    assume_role
-                        .load_credentials_provider(&connection_context, connection_id)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to initialize AssumeRole credential provider for \
-                                 connection {} (role arn {})",
-                                connection_id, assume_role.arn
-                            )
-                        })?,
-                ),
+                AwsAuth::AssumeRole(assume_role) => {
+                    let provider = SharedCredentialsProvider::new(
+                        assume_role
+                            .load_credentials_provider(&connection_context, connection_id)
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "failed to initialize AssumeRole credential provider for \
+                                     connection {} (role arn {})",
+                                    connection_id, assume_role.arn
+                                )
+                            })?,
+                    );
+                    let provider =
+                        SharedCredentialsProvider::new(CachingCredentialsProvider::new(provider));
+                    // Resolve once now. This whole block runs in a spawned task
+                    // (`run_in_task_if` below), so the STS round-trip happens off the
+                    // timely worker thread that polls the dependent operator. That
+                    // warms the cache, so the first inline catalog request reuses it
+                    // instead of making an STS call that could starve under load.
+                    provider.provide_credentials().await.with_context(|| {
+                        format!(
+                            "failed to resolve AssumeRole credentials for connection {} \
+                             (role arn {})",
+                            connection_id, assume_role.arn
+                        )
+                    })?;
+                    provider
+                }
             };
             this.load_sdk_config_from_credentials(credentials, enforce_external_addresses)
                 .await
