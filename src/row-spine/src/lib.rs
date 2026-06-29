@@ -892,12 +892,13 @@ mod dictionary {
                 return None;
             }
             let mut stats = ColumnsCodec::default();
-            let mut buf = Vec::default();
             for row in rows {
                 let row = row.borrow();
                 if !row.is_empty() {
-                    stats.encode(DatumSeq::borrow_as(row).bytes_iter(), &mut buf);
-                    buf.clear();
+                    // Gather stats only; the encoded output would be thrown away here, so
+                    // `observe` skips the per-value lookup and the throwaway-buffer memcpy
+                    // that `encode` would do (see `ColumnsCodec::observe`).
+                    stats.observe(DatumSeq::borrow_as(row).bytes_iter());
                 }
             }
             Some(ColumnsCodec::new_from([&stats]))
@@ -1752,6 +1753,12 @@ mod row_codec {
     #[cfg(test)]
     pub use dictionary::SAFE_TAG_BASE;
 
+    // Deterministic hasher state for the codecs' hash maps: a fixed-seed
+    // `ahash::RandomState` shared with `mz_timely_util`'s consolidation hasher, so
+    // the heavy-hitter summaries — and therefore which values each codec compresses
+    // — are identical across runs and replicas, as the old `BTreeMap` backing was.
+    use mz_timely_util::hash::fixed_state;
+
     // The codecs encode and decode `[u8]` data specific to the `[Row]` encoding. They
     // soundly decode data they themselves encoded from valid `[Row]` data, but may be
     // unsound if asked to decode data that was not row-encoded, or was encoded with a
@@ -1936,9 +1943,15 @@ mod row_codec {
     /// It goes without saying that if either of these approaches are incorrect,
     /// there are calamitous unsoundness implications.
     mod dictionary {
+        // The `encode` map is a pure value->tag lookup table (never iterated for logic),
+        // so `mz_ore::collections::HashMap`'s order-hiding would suffice — but it offers
+        // no fixed-seed constructor, and we want the same deterministic hasher as the
+        // summary above. `heap_size`'s `keys()` walk is an order-insensitive sum.
+        #![allow(clippy::disallowed_types)]
 
-        use std::collections::BTreeMap;
+        use std::collections::HashMap;
 
+        use super::fixed_state;
         pub use super::{BytesMap, MisraGries};
 
         /// First byte value that is structurally unused by the datum encoding.
@@ -1959,7 +1972,13 @@ mod row_codec {
         /// `decode` map directly.
         #[derive(Default, Debug)]
         pub struct DictionaryCodec {
-            encode: BTreeMap<Vec<u8>, u8>,
+            // Looked up once per value on the encode path; mostly misses (only popular
+            // values compress), so a hash map beats a `BTreeMap`'s byte-slice walk. The
+            // map is only ever read via `get` — never iterated — so its hasher seed has
+            // no observable effect; the populated maps are built with `fixed_state` in
+            // `new_from`/`new_safe` for consistency, while the derived-`Default` (stats
+            // accumulator) variant stays empty and is never consulted.
+            encode: HashMap<Vec<u8>, u8, ahash::RandomState>,
             pub decode: BytesMap,
             stats: (MisraGries<Vec<u8>>, [u64; 4]),
         }
@@ -2024,7 +2043,7 @@ mod row_codec {
                     .into_iter()
                     .filter(|(next_bytes, count)| next_bytes.len() > 1 && count > &1);
                 // Establish encoding and decoding rules.
-                let mut encode = BTreeMap::new();
+                let mut encode = HashMap::with_hasher(fixed_state());
                 let mut decode = BytesMap::default();
                 for tag in 0..=255 {
                     let tag_idx: usize = (tag % 4).into();
@@ -2055,12 +2074,13 @@ mod row_codec {
         impl DictionaryCodec {
             /// Visit contained allocations to determine their size and capacity.
             ///
-            /// `BTreeMap` exposes no capacity, so its node storage is approximated as
-            /// one logical entry's worth of bytes per element; the dominant terms (the
-            /// owned key bytes and the `decode` map's byte arena) are accounted exactly.
+            /// The `encode` table is approximated as one logical entry's worth of bytes
+            /// per element for size and its reserved `capacity()` for capacity; the
+            /// dominant terms (the owned key bytes and the `decode` map's byte arena)
+            /// are accounted exactly.
             pub fn heap_size(&self, callback: &mut impl FnMut(usize, usize)) {
                 let entry = std::mem::size_of::<(Vec<u8>, u8)>();
-                callback(self.encode.len() * entry, self.encode.len() * entry);
+                callback(self.encode.len() * entry, self.encode.capacity() * entry);
                 for key in self.encode.keys() {
                     callback(key.len(), key.capacity());
                 }
@@ -2120,7 +2140,7 @@ mod row_codec {
                     .done()
                     .into_iter()
                     .filter(|(next_bytes, count)| next_bytes.len() > 1 && count > &1);
-                let mut encode = BTreeMap::new();
+                let mut encode = HashMap::with_hasher(fixed_state());
                 let mut decode = BytesMap::default();
                 // Fill slots 0..SAFE_TAG_BASE with None (reserved for datum tags).
                 for _ in 0..SAFE_TAG_BASE {
@@ -2191,32 +2211,46 @@ mod row_codec {
     }
 
     mod misra_gries {
+        // The summary must iterate its entries (to extract heavy hitters in `done`, to
+        // `tidy`, and to size itself), which `mz_ore::collections::HashMap` deliberately
+        // forbids. We instead get determinism from the fixed-seed hasher (`fixed_state`)
+        // plus the total-order sort in `done`; `tidy`/`heap_size` are order-insensitive.
+        #![allow(clippy::disallowed_types)]
 
-        use std::collections::BTreeMap;
+        use std::collections::HashMap;
+        use std::hash::Hash;
+
+        use super::fixed_state;
 
         /// Maintains a summary of "heavy hitters" in a presented collection of items.
         ///
-        /// Uses a `BTreeMap` internally so that repeated observations of the same
-        /// element only allocate once (on first sighting). Tidy is performed when
-        /// the number of *distinct* elements exceeds `2 * k`, reducing to at most
-        /// `k` entries.
+        /// Uses a hash map internally so that repeated observations of the same
+        /// element only allocate once (on first sighting), and so the per-element
+        /// `insert_ref` is an O(1) hash rather than an O(log n) walk of byte-slice
+        /// comparisons. This is the hot path: one lookup per column per row, fed both
+        /// while gathering stats and on the steady-state encode path. The hasher is
+        /// fixed-seed (see [`fixed_state`]) so the summary — and thus which values a
+        /// codec compresses — stays deterministic across runs and replicas.
+        ///
+        /// Tidy is performed when the number of *distinct* elements exceeds `2 * k`,
+        /// reducing to at most `k` entries.
         #[derive(Clone, Debug)]
-        pub struct MisraGries<T: Ord> {
-            inner: BTreeMap<T, usize>,
+        pub struct MisraGries<T: Ord + Hash> {
+            inner: HashMap<T, usize, ahash::RandomState>,
             k: usize,
         }
 
-        impl<T: Ord> Default for MisraGries<T> {
+        impl<T: Ord + Hash> Default for MisraGries<T> {
             #[inline(always)]
             fn default() -> Self {
                 Self {
-                    inner: BTreeMap::new(),
+                    inner: HashMap::with_hasher(fixed_state()),
                     k: 512,
                 }
             }
         }
 
-        impl<T: Ord> MisraGries<T> {
+        impl<T: Ord + Hash> MisraGries<T> {
             /// Inserts an additional element to the summary.
             #[inline(always)]
             pub fn insert(&mut self, element: T) {
@@ -2234,7 +2268,9 @@ mod row_codec {
             /// Completes the summary, and extracts the items and their counts.
             pub fn done(self) -> Vec<(T, usize)> {
                 let mut result: Vec<_> = self.inner.into_iter().collect();
-                result.sort_by(|x, y| y.1.cmp(&x.1));
+                // Descending count, ties broken by key, so the values a codec selects
+                // are deterministic regardless of hash-map iteration order.
+                result.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
                 result
             }
 
@@ -2258,11 +2294,12 @@ mod row_codec {
         impl MisraGries<Vec<u8>> {
             /// Visit contained allocations to determine their size and capacity.
             ///
-            /// `BTreeMap` exposes no capacity, so node storage is approximated as one
-            /// logical entry per element; the owned key bytes are accounted exactly.
+            /// The hash table is approximated as one logical entry per element for
+            /// size and its reserved `capacity()` for capacity; the owned key bytes
+            /// are accounted exactly.
             pub fn heap_size(&self, callback: &mut impl FnMut(usize, usize)) {
                 let entry = std::mem::size_of::<(Vec<u8>, usize)>();
-                callback(self.inner.len() * entry, self.inner.len() * entry);
+                callback(self.inner.len() * entry, self.inner.capacity() * entry);
                 for key in self.inner.keys() {
                     callback(key.len(), key.capacity());
                 }
@@ -2279,7 +2316,7 @@ mod row_codec {
             }
         }
 
-        impl<T: Ord> std::ops::AddAssign for MisraGries<T> {
+        impl<T: Ord + Hash> std::ops::AddAssign for MisraGries<T> {
             fn add_assign(&mut self, rhs: Self) {
                 for (element, count) in rhs.done() {
                     self.update(element, count);
