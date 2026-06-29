@@ -23,6 +23,9 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_clusters = 15
+# The controller reconciles a replica-set change asynchronously; drive the tick
+# down so the replica-drop waits below converge quickly.
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
 
 > CREATE CLUSTER source SIZE 'scale=1,workers=1'
 > CREATE CLUSTER compute SIZE 'scale=1,workers=1'
@@ -149,6 +152,15 @@ snk
 # the lag of dependant collections shows up as NULL instead.
 
 > ALTER CLUSTER compute SET (REPLICATION FACTOR 0)
+
+# The controller drops the replica asynchronously. Wait for it to be gone before
+# creating the MVs: a still-running replica would compute mv_behind_empty straight
+# to the (permanent) empty frontier, making its lag read 00:00:00 instead of NULL.
+> SELECT count(*)
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON r.cluster_id = c.id
+  WHERE c.name = 'compute'
+0
 
 > CREATE MATERIALIZED VIEW mv_empty
   IN CLUSTER source

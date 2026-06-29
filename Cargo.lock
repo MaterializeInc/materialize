@@ -5858,6 +5858,7 @@ dependencies = [
  "mz-cloud-provider",
  "mz-cloud-resources",
  "mz-cluster-client",
+ "mz-cluster-controller",
  "mz-compute-client",
  "mz-compute-types",
  "mz-controller",
@@ -5924,6 +5925,7 @@ dependencies = [
 name = "mz-adapter-types"
 version = "0.0.0"
 dependencies = [
+ "mz-compute-types",
  "mz-dyncfg",
  "mz-ore",
  "mz-repr",
@@ -6386,6 +6388,21 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "mz-cluster-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "mz-adapter-types",
+ "mz-compute-types",
+ "mz-controller-types",
+ "mz-ore",
+ "mz-repr",
+ "timely",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

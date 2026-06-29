@@ -30,7 +30,6 @@ from psycopg import Cursor
 from psycopg.errors import (
     DatabaseError,
     InternalError_,
-    OperationalError,
     QueryCanceled,
 )
 
@@ -5441,6 +5440,14 @@ def workflow_test_zero_downtime_reconfigure(
               ENVELOPE UPSERT
             """),
         )
+        # Drive the controller tick down so the reconfiguration converges quickly.
+        c.sql(
+            "ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'",
+            port=6877,
+            user="mz_system",
+        )
+
+        # No reconfiguration in flight yet: exactly the one managed replica.
         replicas = c.sql_query("""
             SELECT mz_cluster_replicas.name
             FROM mz_cluster_replicas, mz_clusters WHERE
@@ -5450,7 +5457,36 @@ def workflow_test_zero_downtime_reconfigure(
             ("r1",)
         ], f"Cluster should only have one replica prior to alter, found {replicas}"
 
-        replicas = c.sql_query("""
+        # Kick off a graceful reconfiguration. With the controller owning the
+        # replica set and background ALTER on, this writes a durable
+        # reconfiguration record and returns immediately; the controller brings up
+        # a fresh target replica alongside r1, re-hydrates it, then cuts the
+        # realized size over and drops r1. `WAIT FOR` resolves to ON TIMEOUT
+        # COMMIT, so the reconfiguration commits even if its deadline passes during
+        # the restart below.
+        c.sql(
+            """
+            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH (WAIT FOR '10s')
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        # Wait until the reconfiguration is in flight (the controller has brought
+        # up the target replica alongside r1) so the restart interrupts it.
+        for _ in range(60):
+            replicas = c.sql_query("""
+                SELECT mz_cluster_replicas.name
+                FROM mz_cluster_replicas, mz_clusters
+                WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
+                AND mz_clusters.name='cluster1';
+                """)
+            if len(replicas) >= 2:
+                break
+            time.sleep(0.5)
+
+        # The controller never creates a legacy "-pending" replica.
+        pending = c.sql_query("""
             SELECT cr.name
             FROM mz_internal.mz_pending_cluster_replicas ur
             INNER join mz_cluster_replicas cr ON cr.id=ur.id
@@ -5458,64 +5494,41 @@ def workflow_test_zero_downtime_reconfigure(
             WHERE c.name = 'cluster1';
             """)
         assert (
-            len(replicas) == 0
-        ), f"Cluster should only have no pending replica prior to alter, found {replicas}"
+            len(pending) == 0
+        ), f"controller reconfiguration must not use pending replicas, found {pending}"
 
-        def zero_downtime_alter():
-            try:
-                c.sql(
-                    """
-                    ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '10s')
-                    """,
-                    port=6877,
-                    user="mz_system",
-                )
-            except OperationalError:
-                # We expect the network to drop during this
-                pass
-
-        # Run a reconfigure
-        thread = Thread(target=zero_downtime_alter)
-        thread.start()
-        time.sleep(3)
-
-        # Validate that there is a pending replica
-        replicas = c.sql_query("""
-            SELECT mz_cluster_replicas.name
-            FROM mz_cluster_replicas, mz_clusters WHERE
-            mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
-            """)
-        assert replicas == [("r1",), ("r1-pending",)], replicas
-        replicas = c.sql_query("""
-            SELECT cr.name
-            FROM mz_internal.mz_pending_cluster_replicas ur
-            INNER join mz_cluster_replicas cr ON cr.id=ur.id
-            INNER join mz_clusters c ON c.id=cr.cluster_id
-            WHERE c.name = 'cluster1';
-            """)
-        assert (
-            len(replicas) == 1
-        ), "pending replica should be in mz_pending_cluster_replicas"
-
-        # Restart environmentd
+        # Restart environmentd while the reconfiguration may still be in flight.
         c.kill("materialized")
         c.up("materialized")
 
-        # Ensure there is no pending replica
+        # The reconfiguration record is durable, so the controller resumes and
+        # completes it across the restart: the realized size cuts over and the
+        # cluster settles back to a single managed replica at the new size.
+        size = None
+        for _ in range(120):
+            size = c.sql_query("SELECT size FROM mz_clusters WHERE name='cluster1';")
+            if size == [("scale=1,workers=2",)]:
+                break
+            time.sleep(1)
+        assert size == [
+            ("scale=1,workers=2",)
+        ], f"reconfiguration did not complete across the restart, size is {size}"
+
         replicas = c.sql_query("""
-            SELECT mz_cluster_replicas.name
+            SELECT mz_cluster_replicas.size
             FROM mz_cluster_replicas, mz_clusters
             WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
             AND mz_clusters.name='cluster1';
             """)
         assert replicas == [
-            ("r1",)
-        ], f"Expected one non pending replica, found {replicas}"
+            ("scale=1,workers=2",)
+        ], f"Expected one replica at the new size, found {replicas}"
 
-        # Ensure the cluster config did not change
-        assert c.sql_query("""
-            SELECT size FROM mz_clusters WHERE name='cluster1';
-            """) == [("scale=1,workers=1",)]
+        # The source's data survived the zero-downtime reconfiguration.
+        c.testdrive(dedent("""
+            > SELECT count(*) FROM kafka_tbl
+            1000
+            """))
         c.sql(
             """
             ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
@@ -5529,17 +5542,21 @@ def workflow_test_pending_replica_audit_events(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Regression test: when envd is killed while an ALTER CLUSTER ... WAIT FOR
-    is in progress, pending replicas are cleaned up on restart.  The drop
-    must be recorded in mz_audit_events so that every "create" for a
-    cluster-replica has a matching "drop" (unless the replica still exists).
+    Regression test: a cluster reconfiguration interrupted by an environmentd
+    restart must not orphan a replica in mz_audit_events. The controller's
+    reconfiguration record is durable, so on restart the controller resumes and
+    completes the reconfiguration; every cluster-replica "create" must still end
+    up matched by a "drop" (unless the replica still exists), with no leftover
+    legacy "-pending" replica.
     """
     c.up("materialized")
 
-    # Enable the feature flag and create a managed cluster.
+    # Enable the WAIT surface and drive the controller tick down so the (empty)
+    # cluster's reconfiguration converges quickly.
     c.sql(
         """
         ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
+        ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
         CREATE CLUSTER test_audit (SIZE = 'scale=1,workers=1');
         GRANT ALL ON CLUSTER test_audit TO materialize;
         """,
@@ -5547,57 +5564,63 @@ def workflow_test_pending_replica_audit_events(
         user="mz_system",
     )
 
-    # Kick off an ALTER that creates a pending replica, but will
-    # block waiting for it to hydrate (with a long timeout so it
-    # doesn't finish before we kill envd).
-    def zero_downtime_alter():
-        try:
-            c.sql(
-                """
-                ALTER CLUSTER test_audit SET (SIZE = 'scale=1,workers=2')
-                WITH (WAIT FOR '300s')
-                """,
-                port=6877,
-                user="mz_system",
-            )
-        except (OperationalError, DatabaseError):
-            pass
+    # Kick off a background graceful reconfiguration. With the controller owning
+    # the replica set and background ALTER on, this writes a durable
+    # reconfiguration record and returns immediately; the controller brings up a
+    # fresh target replica, cuts the size over, and drops the old one. `WAIT FOR`
+    # resolves to ON TIMEOUT COMMIT with a long deadline, so the in-flight
+    # reconfiguration commits once the (empty) target hydrates.
+    c.sql(
+        """
+        ALTER CLUSTER test_audit SET (SIZE = 'scale=1,workers=2') WITH (WAIT FOR '300s')
+        """,
+        port=6877,
+        user="mz_system",
+    )
 
-    thread = Thread(target=zero_downtime_alter)
-    thread.start()
-
-    # Wait until the pending replica appears.
-    for _ in range(60):
-        pending = c.sql_query("""
-            SELECT cr.name
-            FROM mz_internal.mz_pending_cluster_replicas pr
-            JOIN mz_cluster_replicas cr ON cr.id = pr.id
-            JOIN mz_clusters c ON c.id = cr.cluster_id
-            WHERE c.name = 'test_audit';
-            """)
-        if len(pending) > 0:
-            break
-        time.sleep(0.5)
-    else:
-        raise RuntimeError("Pending replica never appeared")
-
-    # Kill envd while the ALTER is still in progress.
-    c.kill("materialized")
-    thread.join(timeout=10)
-
-    # Restart envd — the pending replica should be cleaned up and
-    # an audit log drop event should be emitted.
-    c.up("materialized")
-
-    # Verify that the pending replica was removed.
-    replicas = c.sql_query("""
-        SELECT cr.name FROM mz_cluster_replicas cr
+    # The controller never creates a legacy "-pending" replica.
+    pending = c.sql_query("""
+        SELECT cr.name
+        FROM mz_internal.mz_pending_cluster_replicas pr
+        JOIN mz_cluster_replicas cr ON cr.id = pr.id
         JOIN mz_clusters c ON c.id = cr.cluster_id
         WHERE c.name = 'test_audit';
         """)
+    assert (
+        len(pending) == 0
+    ), f"controller reconfiguration must not use pending replicas, found {pending}"
+
+    # Kill envd while the reconfiguration may still be in flight, then restart.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # The controller resumes the durable reconfiguration and completes it: the
+    # cluster settles on a single managed replica at the new size.
+    replicas = None
+    for _ in range(120):
+        replicas = c.sql_query("""
+            SELECT cr.size FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON c.id = cr.cluster_id
+            WHERE c.name = 'test_audit';
+            """)
+        if replicas == [("scale=1,workers=2",)]:
+            break
+        time.sleep(1)
     assert replicas == [
-        ("r1",)
-    ], f"Expected only the original replica, found {replicas}"
+        ("scale=1,workers=2",)
+    ], f"reconfiguration did not complete across the restart, found {replicas}"
+
+    # No leftover pending replica.
+    pending = c.sql_query("""
+        SELECT cr.name
+        FROM mz_internal.mz_pending_cluster_replicas pr
+        JOIN mz_cluster_replicas cr ON cr.id = pr.id
+        JOIN mz_clusters c ON c.id = cr.cluster_id
+        WHERE c.name = 'test_audit';
+        """)
+    assert (
+        len(pending) == 0
+    ), f"Expected no pending replica after restart, found {pending}"
 
     # Verify that every 'create' of a cluster-replica in
     # mz_audit_events has a matching 'drop' (or the replica still
@@ -6085,6 +6108,30 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
 
     c.up("materialized")
 
+    # The controller reconciles the replica set asynchronously; drive the tick
+    # down so pause/unpause converge quickly.
+    c.sql(
+        "ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'",
+        port=6877,
+        user="mz_system",
+    )
+
+    def wait_for_replica_count(expected: int) -> None:
+        for _ in range(120):
+            count = int(
+                c.sql_query(
+                    "SELECT count(*) FROM mz_cluster_replicas cr "
+                    "JOIN mz_clusters c ON c.id = cr.cluster_id "
+                    "WHERE c.name = 'test'"
+                )[0][0]
+            )
+            if count == expected:
+                return
+            time.sleep(0.5)
+        raise AssertionError(
+            f"cluster 'test' did not converge to {expected} replica(s)"
+        )
+
     # Create a pause-able cluster, with indexes with different kinds of inputs.
     c.sql("""
         CREATE CLUSTER test SIZE 'scale=1,workers=1';
@@ -6109,13 +6156,18 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
     # Sanity check.
     check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
 
-    # Pause the cluster; read frontiers should still advance.
+    # Pause the cluster; read frontiers should still advance. The controller drops
+    # the replica asynchronously, so wait for the pause to take effect first.
     c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
+    wait_for_replica_count(0)
     check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
 
-    # Unpause the cluster; indexes should still be queryable.
+    # Unpause the cluster; indexes should still be queryable. The controller
+    # recreates the replica asynchronously, so wait for it before issuing index
+    # peeks, which require a replica.
+    c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 1)")
+    wait_for_replica_count(1)
     c.sql("""
-        ALTER CLUSTER test SET (REPLICATION FACTOR 1);
         SET cluster = test;
 
         SELECT a FROM t;

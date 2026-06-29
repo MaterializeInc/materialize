@@ -295,6 +295,9 @@ impl<'a> CatalogCluster<'a> for StubCluster {
         None
     }
 
+    fn auto_scaling_strategy(&self) -> Option<&mz_sql::plan::AutoScalingStrategy> {
+        None
+    }
     fn try_to_plan(&self) -> Result<mz_sql::plan::CreateClusterPlan, PlanError> {
         Err(PlanError::Unsupported {
             feature: "clusters are not supported by the catalog typecheck backend".into(),

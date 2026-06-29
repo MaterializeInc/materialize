@@ -106,6 +106,7 @@ pub(crate) mod consistency;
 mod migrate;
 
 mod apply;
+pub(crate) mod cluster_state;
 mod open;
 mod state;
 mod timeline;

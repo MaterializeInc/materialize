@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use itertools::Itertools;
+use mz_adapter_types::cluster_state::ExpectedClusterState;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
@@ -22,8 +23,10 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_audit_log::{
-    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
-    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent,
+    AlterClusterReconfigurationV1, ClusterHydrationBurstV1, ClusterReplicaLoggingV1,
+    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, HydrationBurstLifecycleV1,
+    IdFullNameV1, IdNameV1, ObjectType, ReconfigurationLifecycleV1, RefreshDecisionWithReasonV2,
+    SchedulingDecisionV1, SchedulingDecisionsWithReasonsV2, VersionedEvent,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
@@ -31,14 +34,17 @@ use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, SourceReferences,
-    StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
+    BurstState, CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc,
+    DefaultPrivileges, ReconfigurationState, ReconfigurationTarget, SourceReferences, StateDiff,
+    StateUpdate, StateUpdateKind, TemporaryItem,
 };
+use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_persist_types::ShardId;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
@@ -269,6 +275,16 @@ pub enum Op {
     InjectAuditEvents {
         events: Vec<InjectedAuditEvent>,
     },
+    /// Precondition, not a mutation. Aborts the whole transaction unless
+    /// `cluster_id`'s current managed config still equals `expected`. Running
+    /// the check inside the transaction makes it inseparable from the commit it
+    /// guards, giving a compare-and-append over the cluster's config. A purely
+    /// internal op for conditional cluster-config writes, never emitted by SQL
+    /// DDL.
+    CheckClusterState {
+        cluster_id: ClusterId,
+        expected: ExpectedClusterState,
+    },
 }
 
 /// Almost the same as `ObjectId`, but the `ClusterReplica` case has an extra
@@ -334,6 +350,24 @@ pub enum ReplicaCreateDropReason {
     /// The automated cluster scheduling initiated the replica create or drop, e.g., a
     /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
     ClusterScheduling(Vec<SchedulingDecision>),
+    /// The cluster controller's graceful-reconfiguration strategy created the replica while
+    /// converging a cluster onto an in-flight `reconfiguration` target (a background
+    /// `ALTER CLUSTER`).
+    GracefulReconfiguration,
+    /// The cluster controller's hydration-burst strategy created the transient burst replica
+    /// it runs while a cluster's objects are not yet hydrated.
+    HydrationBurst,
+    /// The cluster controller's on-refresh strategy created the replica for a refresh window on
+    /// a `SCHEDULE = ON REFRESH` cluster. Audited as the `schedule` reason, carrying the tick's
+    /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
+    /// estimate) as the `scheduling_policies` detail, the same detail the legacy scheduler's
+    /// [`ReplicaCreateDropReason::ClusterScheduling`] records. The controller always supplies
+    /// the decision; a `None` still audits `schedule`, just without the blob.
+    OnRefresh(Option<RefreshWindowDecision>),
+    /// The cluster controller dropped the replica because the cluster's configuration no longer
+    /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
+    /// replication-factor decrease).
+    Retired,
 }
 
 impl ReplicaCreateDropReason {
@@ -343,19 +377,59 @@ impl ReplicaCreateDropReason {
         CreateOrDropClusterReplicaReasonV1,
         Option<SchedulingDecisionsWithReasonsV2>,
     ) {
-        let (reason, scheduling_policies) = match self {
+        match self {
             ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
             ReplicaCreateDropReason::ClusterScheduling(scheduling_decisions) => (
                 CreateOrDropClusterReplicaReasonV1::Schedule,
-                Some(scheduling_decisions),
+                Some(SchedulingDecision::reasons_to_audit_log_reasons(
+                    &scheduling_decisions,
+                )),
             ),
-        };
-        (
-            reason,
-            scheduling_policies
-                .as_ref()
-                .map(SchedulingDecision::reasons_to_audit_log_reasons),
-        )
+            ReplicaCreateDropReason::GracefulReconfiguration => {
+                (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
+            }
+            ReplicaCreateDropReason::HydrationBurst => {
+                (CreateOrDropClusterReplicaReasonV1::HydrationBurst, None)
+            }
+            ReplicaCreateDropReason::OnRefresh(decision) => (
+                CreateOrDropClusterReplicaReasonV1::Schedule,
+                decision.map(refresh_window_decision_to_audit_log),
+            ),
+            ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
+        }
+    }
+}
+
+/// Convert the controller's on-refresh window decision into the audit log's
+/// `scheduling_policies` detail, the same shape the legacy scheduler records:
+/// ids as strings and the hydration-time estimate as an interval string.
+fn refresh_window_decision_to_audit_log(
+    decision: RefreshWindowDecision,
+) -> SchedulingDecisionsWithReasonsV2 {
+    let mut hydration_time_estimate_str = String::new();
+    strconv::format_interval(
+        &mut hydration_time_estimate_str,
+        Interval::from_duration(&decision.hydration_time_estimate)
+            .expect("the estimate originated as a planned Interval"),
+    );
+    SchedulingDecisionsWithReasonsV2 {
+        on_refresh: RefreshDecisionWithReasonV2 {
+            // The controller produces a create (and so this detail) only for
+            // an open window; there is no "off" decision to record (a
+            // window-close is a `retired` drop with no detail).
+            decision: SchedulingDecisionV1::On,
+            objects_needing_refresh: decision
+                .objects_needing_refresh
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            objects_needing_compaction: decision
+                .objects_needing_compaction
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            hydration_time_estimate: hydration_time_estimate_str,
+        },
     }
 }
 
@@ -384,6 +458,153 @@ enum TransactInnerMode {
 impl Catalog {
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
+    }
+
+    /// Classify the background-reconfiguration lifecycle transition an
+    /// [`Op::UpdateClusterConfig`] represents, comparing the cluster's
+    /// `reconfiguration` record before (`old`) and after (`new`) the change.
+    /// Returns `None` when the record is unchanged (no lifecycle transition).
+    ///
+    /// Only the controller clears a record (an `ALTER` always writes one, never
+    /// clears one), and it does so in exactly two ways: a cut-over, which
+    /// advances the realized config to the target in the same write
+    /// (`finalized`, a hydrated success, or a forced `COMMIT` past the
+    /// deadline; the event carries the cleared record's deadline so a reader
+    /// can tell the two apart against the event's occurrence time), and a
+    /// `ROLLBACK` timeout, which clears the record with the realized config
+    /// untouched (`timed-out`). Whether the realized config advanced to the
+    /// cleared record's target is therefore what classifies a clear; both
+    /// clears are durable, so neither event can re-fire.
+    fn classify_reconfiguration_transition(
+        old: &ClusterConfig,
+        new: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+    ) -> Option<AlterClusterReconfigurationV1> {
+        let reconfiguration = |config: &ClusterConfig| -> Option<ReconfigurationState> {
+            match &config.variant {
+                ClusterVariant::Managed(managed) => managed.reconfiguration.clone(),
+                ClusterVariant::Unmanaged => None,
+            }
+        };
+        // The new config's realized shape, used to recognize an ALTER-back
+        // cancel (a re-target whose target equals the still-realized shape)
+        // and to classify a clear (did the realized config advance to the
+        // cleared record's target?).
+        let new_realized = match &new.variant {
+            ClusterVariant::Managed(managed) => Some(managed.clone()),
+            ClusterVariant::Unmanaged => None,
+        };
+        let realized_matches_target = |target: &ReconfigurationTarget| {
+            new_realized.as_ref().is_some_and(|realized| {
+                realized.size == target.size
+                    && realized.replication_factor == target.replication_factor
+                    && realized.availability_zones == target.availability_zones
+                    && realized.logging == target.logging
+            })
+        };
+        let old = reconfiguration(old);
+        let new = reconfiguration(new);
+
+        let event =
+            |transition, record: &ReconfigurationState, deadline| AlterClusterReconfigurationV1 {
+                cluster_id: cluster_id.to_string(),
+                cluster_name: cluster_name.to_string(),
+                transition,
+                target_size: record.target.size.clone(),
+                target_replication_factor: record.target.replication_factor,
+                target_availability_zones: record.target.availability_zones.clone(),
+                target_logging: ClusterReplicaLoggingV1 {
+                    log_logging: record.target.logging.log_logging,
+                    interval: record.target.logging.interval,
+                },
+                deadline,
+            };
+
+        match (old, new) {
+            (None, Some(record)) => Some(event(
+                ReconfigurationLifecycleV1::Started,
+                &record,
+                Some(record.deadline.into()),
+            )),
+            (Some(old), Some(new)) if old != new => {
+                // A re-target back to the still-realized shape is a cancel (the
+                // controller will just drop the in-flight target replicas); any
+                // other re-target starts converging onto a new target. Compare the
+                // whole target, not just size, so an AZ- or logging-only re-target
+                // back to the realized shape is recognized as a cancel.
+                let is_cancel = realized_matches_target(&new.target);
+                let transition = if is_cancel {
+                    ReconfigurationLifecycleV1::Cancelled
+                } else {
+                    ReconfigurationLifecycleV1::Started
+                };
+                Some(event(transition, &new, Some(new.deadline.into())))
+            }
+            // A clear: a cut-over (the same write advanced the realized config
+            // to the target) finalizes; a clear that left the realized config
+            // short of the target is the `ROLLBACK` timeout firing. The one
+            // shape this cannot tell apart is a rollback whose target equals
+            // the realized config: it would read as a finalize. That needs the
+            // already-running realized set to sit un-hydrated past the whole
+            // deadline (the controller otherwise cuts such a target over as
+            // trivially satisfied), so we accept the marginal mislabel.
+            (Some(old), None) => {
+                let transition = if realized_matches_target(&old.target) {
+                    ReconfigurationLifecycleV1::Finalized
+                } else {
+                    ReconfigurationLifecycleV1::TimedOut
+                };
+                Some(event(transition, &old, Some(old.deadline.into())))
+            }
+            (None, None) | (Some(_), Some(_)) => None,
+        }
+    }
+
+    /// Classify the hydration-burst lifecycle transition an [`Op::UpdateClusterConfig`]
+    /// represents, comparing the cluster's `burst` record before and after.
+    ///
+    /// A burst is controller-initiated, so its record is written and cleared by the
+    /// controller's `update_state` rather than by an `ALTER`. A record written →
+    /// `started`; cleared → `finished`. A record whose `burst_size` changes (a
+    /// re-armed burst at a new size, after a `HYDRATION SIZE` change) is reported as
+    /// a fresh `started`. Returns `None` when the record is unchanged.
+    ///
+    /// Dark by construction: a `burst` record only ever moves when the cluster
+    /// controller is enabled.
+    fn classify_burst_transition(
+        old: &ClusterConfig,
+        new: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+    ) -> Option<ClusterHydrationBurstV1> {
+        let burst = |config: &ClusterConfig| -> Option<BurstState> {
+            match &config.variant {
+                ClusterVariant::Managed(managed) => managed.burst.clone(),
+                ClusterVariant::Unmanaged => None,
+            }
+        };
+        let old = burst(old);
+        let new = burst(new);
+
+        let event = |transition, record: &BurstState| ClusterHydrationBurstV1 {
+            cluster_id: cluster_id.to_string(),
+            cluster_name: cluster_name.to_string(),
+            transition,
+            burst_size: record.burst_size.clone(),
+        };
+
+        match (old, new) {
+            (None, Some(record)) => Some(event(HydrationBurstLifecycleV1::Started, &record)),
+            (Some(old), None) => Some(event(HydrationBurstLifecycleV1::Finished, &old)),
+            // A re-arm at a new size (a `HYDRATION SIZE` change) restarts the burst.
+            // A same-size record change (e.g. the `steady_hydrated_at` stamp) is not
+            // a lifecycle transition.
+            (Some(old), Some(new)) if old.burst_size != new.burst_size => {
+                Some(event(HydrationBurstLifecycleV1::Started, &new))
+            }
+            (None, None) | (Some(_), Some(_)) => None,
+        }
     }
 
     /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
@@ -818,6 +1039,19 @@ impl Catalog {
         let mut temporary_item_updates = Vec::new();
 
         match op {
+            Op::CheckClusterState {
+                cluster_id,
+                expected,
+            } => {
+                // Precondition only. Returning `Err` here aborts `transact_inner`
+                // before `tx.commit`, so the compare-and-append holds atomically
+                // with the write it guards.
+                if !crate::catalog::cluster_state::cluster_matches_expected(
+                    state, cluster_id, &expected,
+                ) {
+                    return Err(AdapterError::ClusterStateChanged { cluster_id });
+                }
+            }
             Op::AlterRetainHistory { id, value, window } => {
                 let entry = state.get_entry(&id);
                 if id.is_system() {
@@ -2571,6 +2805,16 @@ impl Catalog {
             }
             Op::UpdateClusterConfig { id, name, config } => {
                 let mut cluster = state.get_cluster(id).clone();
+                // Classify any background-reconfiguration lifecycle transition
+                // this config change represents (record written/re-targeted, or
+                // cut over) before we overwrite the old config. Emitted in
+                // addition to the generic `IdNameV1` alter event. This is dark by
+                // construction: a `reconfiguration` record only ever moves when
+                // the cluster controller is enabled.
+                let reconfiguration_event =
+                    Self::classify_reconfiguration_transition(&cluster.config, &config, id, &name);
+                let burst_event =
+                    Self::classify_burst_transition(&cluster.config, &config, id, &name);
                 cluster.config = config;
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
@@ -2588,6 +2832,32 @@ impl Catalog {
                         name,
                     }),
                 )?;
+
+                if let Some(details) = reconfiguration_event {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::AlterClusterReconfigurationV1(details),
+                    )?;
+                }
+
+                if let Some(details) = burst_event {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::ClusterHydrationBurstV1(details),
+                    )?;
+                }
             }
             Op::UpdateClusterReplicaConfig {
                 replica_id,
@@ -3195,6 +3465,340 @@ mod tests {
 
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
+
+    #[mz_ore::test]
+    fn test_classify_reconfiguration_transition() {
+        use std::time::Duration;
+
+        use mz_audit_log::ReconfigurationLifecycleV1;
+        use mz_catalog::memory::objects::{
+            ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+            ReconfigurationTarget,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::ClusterId;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let logging = ReplicaLogging {
+            log_logging: false,
+            interval: None,
+        };
+        // The realized shape of the modeled cluster before any cut-over; an
+        // ALTER-back cancel re-targets a record at this same size.
+        let realized_size = "small";
+        // A config with the realized shape at (`size`, `rf`) and the given
+        // record: a clear that advanced the realized shape to the cleared
+        // record's target is a cut-over, one that left it behind is a rollback.
+        let managed_at =
+            |size: &str, rf: u32, reconfiguration: Option<ReconfigurationState>| ClusterConfig {
+                variant: ClusterVariant::Managed(ClusterVariantManaged {
+                    size: size.into(),
+                    availability_zones: Vec::new(),
+                    logging: logging.clone(),
+                    replication_factor: rf,
+                    optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                    schedule: Default::default(),
+                    auto_scaling_strategy: None,
+                    reconfiguration,
+                    burst: None,
+                }),
+                workload_class: None,
+            };
+        let managed = |reconfiguration: Option<ReconfigurationState>| {
+            managed_at(realized_size, 1, reconfiguration)
+        };
+        let record = |size: &str, deadline: u64, on_timeout: mz_sql::plan::OnTimeoutAction| {
+            ReconfigurationState {
+                target: ReconfigurationTarget {
+                    size: size.into(),
+                    replication_factor: 2,
+                    availability_zones: Vec::new(),
+                    logging: logging.clone(),
+                },
+                deadline: Timestamp::from(deadline),
+                on_timeout,
+            }
+        };
+        use mz_sql::plan::OnTimeoutAction::{Commit, Rollback};
+        let classify = |old: &ClusterConfig, new: &ClusterConfig| {
+            Catalog::classify_reconfiguration_transition(old, new, cluster_id, "c")
+        };
+
+        // none -> some: started, carrying the record's deadline.
+        let started = classify(
+            &managed(None),
+            &managed(Some(record("large", 200, Rollback))),
+        )
+        .expect("a written record is a started transition");
+        assert_eq!(started.transition, ReconfigurationLifecycleV1::Started);
+        assert_eq!(started.deadline, Some(200));
+        assert_eq!(started.target_size, "large");
+        assert_eq!(started.target_replication_factor, 2);
+
+        // The event records the full target shape, including availability zones
+        // and introspection logging, so an AZ- or logging-only reconfiguration
+        // (which leaves size and rf unchanged) stays legible in the audit log.
+        let full_shape = ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: realized_size.into(),
+                replication_factor: 1,
+                availability_zones: vec!["az1".into(), "az2".into()],
+                logging: ReplicaLogging {
+                    log_logging: true,
+                    interval: Some(Duration::from_secs(5)),
+                },
+            },
+            deadline: Timestamp::from(400u64),
+            on_timeout: Rollback,
+        };
+        let shaped = classify(&managed(None), &managed(Some(full_shape)))
+            .expect("a written record is a started transition");
+        assert_eq!(
+            shaped.target_availability_zones,
+            vec!["az1".to_string(), "az2".to_string()]
+        );
+        assert_eq!(shaped.target_logging.log_logging, true);
+        assert_eq!(shaped.target_logging.interval, Some(Duration::from_secs(5)));
+
+        // A cut-over clear: the same write advanced the realized shape to the
+        // cleared record's target. Finalized, carrying the cleared record's
+        // deadline (a reader tells an in-time from a late cut-over by comparing
+        // the carried deadline to the event's occurrence time).
+        let finalized = classify(
+            &managed(Some(record("large", 200, Rollback))),
+            &managed_at("large", 2, None),
+        )
+        .expect("a cut-over clear is a finalize");
+        assert_eq!(finalized.transition, ReconfigurationLifecycleV1::Finalized);
+        assert_eq!(finalized.deadline, Some(200));
+
+        // A cut-over clear under COMMIT (a forced cut-over past the deadline
+        // ends up here too): still finalized, deadline kept.
+        let commit_finalized = classify(
+            &managed(Some(record("large", 50, Commit))),
+            &managed_at("large", 2, None),
+        )
+        .expect("clearing a commit record is a finalize");
+        assert_eq!(
+            commit_finalized.transition,
+            ReconfigurationLifecycleV1::Finalized
+        );
+        assert_eq!(commit_finalized.deadline, Some(50));
+
+        // A rollback clear: the record is gone but the realized shape stayed
+        // behind. The rollback timeout fired. Carries the cleared record's
+        // deadline and target so the abandoned shape survives in the history.
+        let timed_out = classify(
+            &managed(Some(record("large", 50, Rollback))),
+            &managed(None),
+        )
+        .expect("a clear short of the target is a timed-out transition");
+        assert_eq!(timed_out.transition, ReconfigurationLifecycleV1::TimedOut);
+        assert_eq!(timed_out.deadline, Some(50));
+        assert_eq!(timed_out.target_size, "large");
+        assert_eq!(timed_out.target_replication_factor, 2);
+
+        // The cancel-converge clear: a cancel record (target == realized shape,
+        // rf included) confirms the current state, so its clear leaves the
+        // realized config in place *and* matching the target, a finalize.
+        let cancel_record = ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: realized_size.into(),
+                replication_factor: 1,
+                availability_zones: Vec::new(),
+                logging: logging.clone(),
+            },
+            deadline: Timestamp::from(300u64),
+            on_timeout: Rollback,
+        };
+        let cancel_clear = classify(&managed(Some(cancel_record)), &managed(None))
+            .expect("clearing a cancel record is a finalize");
+        assert_eq!(
+            cancel_clear.transition,
+            ReconfigurationLifecycleV1::Finalized
+        );
+        assert_eq!(cancel_clear.deadline, Some(300));
+
+        // some -> some re-targeting to a *new* shape: started, carrying the new
+        // deadline.
+        let retarget = classify(
+            &managed(Some(record("large", 200, Rollback))),
+            &managed(Some(record("xlarge", 300, Rollback))),
+        )
+        .expect("a re-target is a started transition");
+        assert_eq!(retarget.transition, ReconfigurationLifecycleV1::Started);
+        assert_eq!(retarget.deadline, Some(300));
+        assert_eq!(retarget.target_size, "xlarge");
+
+        // some -> some re-targeting *back* to the realized shape in every
+        // dimension (rf included): a cancel, carrying the cancel record's
+        // deadline.
+        let back_to_realized = ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: realized_size.into(),
+                replication_factor: 1,
+                availability_zones: Vec::new(),
+                logging: logging.clone(),
+            },
+            deadline: Timestamp::from(300u64),
+            on_timeout: Rollback,
+        };
+        let cancelled = classify(
+            &managed(Some(record("large", 200, Rollback))),
+            &managed(Some(back_to_realized)),
+        )
+        .expect("an ALTER-back to the realized shape is a cancel transition");
+        assert_eq!(cancelled.transition, ReconfigurationLifecycleV1::Cancelled);
+        assert_eq!(cancelled.deadline, Some(300));
+        assert_eq!(cancelled.target_size, realized_size);
+
+        // some -> some re-targeting size back to realized but with an rf that
+        // still diverges from the realized shape: still converging, so a
+        // started, not a cancel. (`record` targets rf 2 while the realized rf is
+        // 1; a size-only cancel check would mislabel this as cancelled.)
+        let rf_diverges = classify(
+            &managed(Some(record("large", 200, Rollback))),
+            &managed(Some(record(realized_size, 300, Rollback))),
+        )
+        .expect("a re-target whose rf still diverges is a started transition");
+        assert_eq!(rf_diverges.transition, ReconfigurationLifecycleV1::Started);
+
+        // No transition: identical record, or no record on either side.
+        assert!(
+            classify(
+                &managed(Some(record("large", 200, Rollback))),
+                &managed(Some(record("large", 200, Rollback))),
+            )
+            .is_none()
+        );
+        assert!(classify(&managed(None), &managed(None)).is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_classify_burst_transition() {
+        use mz_audit_log::HydrationBurstLifecycleV1;
+        use mz_catalog::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::ClusterId;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+        use std::time::Duration;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let logging = ReplicaLogging {
+            log_logging: false,
+            interval: None,
+        };
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: logging.clone(),
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        // A burst record at the given size, before the steady set has hydrated.
+        let record = |size: &str| BurstState {
+            burst_size: size.into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+        let classify = |old: &ClusterConfig, new: &ClusterConfig| {
+            Catalog::classify_burst_transition(old, new, cluster_id, "c")
+        };
+
+        // none -> some: the burst started, carrying the record's size.
+        let started = classify(&managed(None), &managed(Some(record("large"))))
+            .expect("a written burst record is a started transition");
+        assert_eq!(started.transition, HydrationBurstLifecycleV1::Started);
+        assert_eq!(started.burst_size, "large");
+
+        // some -> none: the burst finished (the linger elapsed, record cleared).
+        let finished = classify(&managed(Some(record("large"))), &managed(None))
+            .expect("clearing a burst record is a finished transition");
+        assert_eq!(finished.transition, HydrationBurstLifecycleV1::Finished);
+        assert_eq!(finished.burst_size, "large");
+
+        // some -> some at a *new* size (a re-arm after a HYDRATION SIZE change):
+        // reported as a fresh started, carrying the new size.
+        let rearmed = classify(
+            &managed(Some(record("large"))),
+            &managed(Some(record("xlarge"))),
+        )
+        .expect("a burst re-arm at a new size is a started transition");
+        assert_eq!(rearmed.transition, HydrationBurstLifecycleV1::Started);
+        assert_eq!(rearmed.burst_size, "xlarge");
+
+        // some -> some at the *same* size: not a lifecycle transition. This is the
+        // load-bearing case: the controller stamps `steady_hydrated_at` (the linger
+        // clock) on an existing record without changing its size, and that in-place
+        // update must not emit a spurious burst event.
+        let stamped = BurstState {
+            steady_hydrated_at: Some(Timestamp::from(42u64)),
+            ..record("large")
+        };
+        assert!(
+            classify(&managed(Some(record("large"))), &managed(Some(stamped))).is_none(),
+            "stamping steady_hydrated_at on a same-size record is not a transition"
+        );
+
+        // No record on either side is not a transition.
+        assert!(classify(&managed(None), &managed(None)).is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_replica_create_drop_reason_into_audit_log() {
+        use std::time::Duration;
+
+        use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, SchedulingDecisionV1};
+        use mz_cluster_controller::ctx::RefreshWindowDecision;
+        use mz_repr::GlobalId;
+
+        use crate::catalog::ReplicaCreateDropReason;
+
+        // `OnRefresh` shares the `schedule` audit word with the legacy
+        // `ClusterScheduling` variant and converts the controller's window
+        // decision into the same `scheduling_policies` detail blob: ids as
+        // strings, the hydration-time estimate as an interval string, and the
+        // decision hardcoded `on` (the controller produces a create, and so
+        // this detail, only for an open window).
+        let (reason, scheduling_policies) =
+            ReplicaCreateDropReason::OnRefresh(Some(RefreshWindowDecision {
+                objects_needing_refresh: vec![GlobalId::User(1)],
+                objects_needing_compaction: vec![GlobalId::User(2), GlobalId::User(3)],
+                hydration_time_estimate: Duration::from_secs(995),
+            }))
+            .into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Schedule);
+        let blob = scheduling_policies.expect("on-refresh create carries the detail");
+        assert_eq!(blob.on_refresh.decision, SchedulingDecisionV1::On);
+        assert_eq!(blob.on_refresh.objects_needing_refresh, vec!["u1"]);
+        assert_eq!(blob.on_refresh.objects_needing_compaction, vec!["u2", "u3"]);
+        assert_eq!(blob.on_refresh.hydration_time_estimate, "00:16:35");
+
+        // A detail-less on-refresh create still reads `schedule`, just without
+        // the blob.
+        let (reason, scheduling_policies) =
+            ReplicaCreateDropReason::OnRefresh(None).into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Schedule);
+        assert!(scheduling_policies.is_none());
+
+        // `Retired` is the uniform word for every controller drop, with no
+        // blob.
+        let (reason, scheduling_policies) = ReplicaCreateDropReason::Retired.into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Retired);
+        assert!(scheduling_policies.is_none());
+    }
 
     #[mz_ore::test]
     fn test_update_privilege_owners() {

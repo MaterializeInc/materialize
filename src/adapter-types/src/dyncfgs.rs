@@ -314,10 +314,79 @@ pub const ENABLE_SCOPED_SYSTEM_PARAMETERS: Config<bool> = Config::new(
     "Whether per-cluster and per-replica scoped system parameters are evaluated and applied.",
 );
 
+/// Top-level gate for the cluster controller. When on, the controller owns the
+/// managed-cluster replica set and the legacy paths (the graceful 3-stage
+/// machine and `cluster_scheduling.rs`) are bypassed. The replica set cannot
+/// have two writers, so this is a clean switch, not a per-strategy toggle.
+pub const ENABLE_CLUSTER_CONTROLLER: Config<bool> = Config::new(
+    "enable_cluster_controller",
+    false,
+    "Whether the cluster controller owns the managed-cluster replica set. When false, the legacy scheduling and graceful-reconfiguration paths run instead.",
+);
+
+/// Cadence of the cluster controller's reconcile tick.
+///
+/// Replaces `cluster_check_scheduling_policies_interval` once the controller is
+/// the sole owner; while the controller is dark both intervals exist.
+pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
+    "cluster_controller_tick_interval",
+    Duration::from_secs(5),
+    "How often the cluster controller runs a reconcile tick.",
+);
+
+/// Whether a config-shape `ALTER CLUSTER` returns immediately, with the
+/// controller converging in the background, or blocks the session on a
+/// wait-shim until the reconfiguration completes or its deadline passes.
+///
+/// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on, when the
+/// controller owns the reconfiguration.
+pub const ENABLE_BACKGROUND_ALTER_CLUSTER: Config<bool> = Config::new(
+    "enable_background_alter_cluster",
+    false,
+    "Whether a config-shape ALTER CLUSTER returns immediately (true) or the session blocks on a wait-shim over the durable reconfiguration record (false).",
+);
+
+/// The reconfiguration deadline written when a config-shape `ALTER CLUSTER`
+/// omits `WITH (TIMEOUT = ...)`. What happens when the deadline passes
+/// un-hydrated is the record's `on_timeout` action.
+pub const DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT: Config<Duration> = Config::new(
+    "default_cluster_reconfiguration_timeout",
+    Duration::from_secs(60 * 60 * 24),
+    "The reconfiguration deadline written when a config-shape ALTER CLUSTER omits WITH (TIMEOUT = ...).",
+);
+
+/// Break-glass for the hydration-burst strategy: when off the controller never
+/// runs a burst replica; graceful reconfiguration and `ON REFRESH` scheduling
+/// are unaffected.
+///
+/// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on. A cluster can only
+/// carry an `AUTO SCALING STRATEGY` while its SQL acceptance feature flag is
+/// on, so this is the second of the two gates burst sits behind.
+pub const ENABLE_HYDRATION_BURST: Config<bool> = Config::new(
+    "enable_hydration_burst",
+    true,
+    "Whether the cluster controller's hydration-burst strategy may run a burst replica (break-glass; leaves graceful reconfiguration and ON REFRESH untouched).",
+);
+
+/// The burst-replica linger duration written into a new `burst` record when the
+/// cluster's `AUTO SCALING STRATEGY` omits `LINGER DURATION`. The burst replica
+/// stays up this long after the steady-state replicas first hydrate.
+pub const DEFAULT_HYDRATION_BURST_LINGER: Config<Duration> = Config::new(
+    "default_hydration_burst_linger",
+    Duration::from_secs(0),
+    "The burst-replica linger duration written when an AUTO SCALING STRATEGY omits LINGER DURATION.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
+        .add(&ENABLE_CLUSTER_CONTROLLER)
+        .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
+        .add(&ENABLE_BACKGROUND_ALTER_CLUSTER)
+        .add(&DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT)
+        .add(&ENABLE_HYDRATION_BURST)
+        .add(&DEFAULT_HYDRATION_BURST_LINGER)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)

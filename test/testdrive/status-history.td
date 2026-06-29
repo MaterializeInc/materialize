@@ -114,6 +114,11 @@ mysql_tbl      paused
 
 > ALTER CLUSTER sources SET (REPLICATION FACTOR 1)
 
+# The controller creates the replica asynchronously; set-from-sql does not retry,
+# so wait for the replica to exist before capturing its id.
+> SELECT count(*) FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id WHERE c.name = 'sources'
+1
+
 $ set-from-sql var=replica_id_1
 SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'sources'
 
@@ -240,6 +245,11 @@ mysql          paused
 mysql_tbl      paused
 
 > ALTER CLUSTER sources SET (REPLICATION FACTOR 1)
+
+# The controller creates the replica asynchronously; set-from-sql does not retry,
+# so wait for the replica to exist before capturing its id.
+> SELECT count(*) FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id WHERE c.name = 'sources'
+1
 
 $ set-from-sql var=replica_id_2
 SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'sources'
@@ -383,6 +393,11 @@ kafka2  paused
 
 > ALTER CLUSTER sinks SET (REPLICATION FACTOR 1)
 
+# The controller creates the replica asynchronously; set-from-sql does not retry,
+# so wait for the replica to exist before capturing its id.
+> SELECT count(*) FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id WHERE c.name = 'sinks'
+1
+
 $ set-from-sql var=replica_id_1
 SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'sinks'
 
@@ -431,6 +446,11 @@ kafka1  paused
 kafka2  paused
 
 > ALTER CLUSTER sinks SET (REPLICATION FACTOR 1)
+
+# The controller creates the replica asynchronously; set-from-sql does not retry,
+# so wait for the replica to exist before capturing its id.
+> SELECT count(*) FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id WHERE c.name = 'sinks'
+1
 
 $ set-from-sql var=replica_id_2
 SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'sinks'
