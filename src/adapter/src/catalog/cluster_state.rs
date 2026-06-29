@@ -71,21 +71,44 @@ pub(crate) fn cluster_matches_expected(
 }
 
 fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecord {
+    // Exhaustive destructure (no `..`), like `project_expected`: a field added
+    // to either catalog type is a compile error here until we decide whether the
+    // witness must carry it. `on_timeout` is deliberately not part of the
+    // witness.
+    let ReconfigurationState {
+        target,
+        deadline,
+        on_timeout: _,
+    } = record;
+    let mz_catalog::memory::objects::ReconfigurationTarget {
+        size,
+        replication_factor,
+        availability_zones,
+        logging,
+    } = target;
     ReconfigurationRecord {
         target: ReconfigurationTarget {
-            size: record.target.size.clone(),
-            replication_factor: record.target.replication_factor,
-            availability_zones: AvailabilityZones(record.target.availability_zones.clone()),
-            logging: record.target.logging.clone(),
+            size: size.clone(),
+            replication_factor: *replication_factor,
+            availability_zones: AvailabilityZones(availability_zones.clone()),
+            logging: logging.clone(),
         },
-        deadline: record.deadline,
+        deadline: *deadline,
     }
 }
 
 fn burst_record(record: &BurstState) -> BurstRecord {
+    // Exhaustive destructure (no `..`), like `project_expected`: a field added
+    // to the catalog type is a compile error here until the witness accounts for
+    // it.
+    let BurstState {
+        burst_size,
+        linger_duration,
+        steady_hydrated_at,
+    } = record;
     BurstRecord {
-        burst_size: record.burst_size.clone(),
-        linger_duration: record.linger_duration,
-        steady_hydrated_at: record.steady_hydrated_at,
+        burst_size: burst_size.clone(),
+        linger_duration: *linger_duration,
+        steady_hydrated_at: *steady_hydrated_at,
     }
 }

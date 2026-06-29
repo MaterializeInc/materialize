@@ -314,7 +314,7 @@ pub const ENABLE_SCOPED_SYSTEM_PARAMETERS: Config<bool> = Config::new(
     "Whether per-cluster and per-replica scoped system parameters are evaluated and applied.",
 );
 
-/// Master gate for the cluster controller. When on, the controller owns the
+/// Top-level gate for the cluster controller. When on, the controller owns the
 /// managed-cluster replica set and the legacy paths (the graceful 3-stage
 /// machine and `cluster_scheduling.rs`) are bypassed. The replica set cannot
 /// have two writers, so this is a clean switch, not a per-strategy toggle.
