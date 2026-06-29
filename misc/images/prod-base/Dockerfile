@@ -10,6 +10,9 @@
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
 
+# Statically-linked `ssh` client, used by the SSH tunnel feature.
+MZFROM openssh-static AS openssh-static
+
 MZFROM ubuntu-base
 
 RUN groupadd --system --gid=999 materialize \
@@ -22,7 +25,6 @@ RUN apt-get update \
         ca-certificates \
         curl \
         tini \
-        openssh-client \
     && if [ "$CI_SANITIZER" != "none" ]; then \
         TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
        fi \
@@ -31,3 +33,5 @@ RUN apt-get update \
     && chown materialize /scratch \
     && mkdir /mzdata \
     && chown materialize /mzdata
+
+COPY --from=openssh-static /output/ssh /usr/bin/ssh
