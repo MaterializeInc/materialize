@@ -232,12 +232,11 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 ----
 Explained Query:
   Project (#2{f1}, #1{f2}) // { arity: 2 }
-    Join on=(#0{f1} = #2{f1}) type=delta // { arity: 3 }
+    Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
       implementation
-        %0:t1 » %1[#0]K
-        %1 » %0:t1[#0]KA
+        %1[#0{f1}]K » %0:t1[#0]KA
       ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
-        ReadIndex on=t1 i1=[delta join 1st input (full scan)] // { arity: 2 }
+        ReadIndex on=t1 i1=[differential join] // { arity: 2 }
       ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
         Union // { arity: 1 }
           Project (#0{f1}) // { arity: 1 }
@@ -250,7 +249,7 @@ Explained Query:
                   ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1 (*** full scan ***, delta join 1st input (full scan))
+  - materialize.public.i1 (*** full scan ***, differential join)
 
 Target cluster: quickstart
 
@@ -690,14 +689,13 @@ Explained Query:
   With
     cte l0 =
       ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
-        ReadIndex on=t1 i1=[delta join lookup, delta join 1st input (full scan)] // { arity: 2 }
+        ReadIndex on=t1 i1=[differential join] // { arity: 2 }
     cte l1 =
       Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
         Filter (#0{f1}) IS NOT NULL // { arity: 4 }
-          Join on=(#0{f1} = #2{f1}) type=delta // { arity: 4 }
+          Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
             implementation
-              %0:l0 » %1:l0[#0]KA
-              %1:l0 » %0:l0[#0]KA
+              %1:l0[#0{f1}]KA » %0:l0[#0]KA
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
     cte l2 =
@@ -705,10 +703,9 @@ Explained Query:
         Union // { arity: 2 }
           Negate // { arity: 2 }
             Project (#0{f1}, #1{f2}) // { arity: 2 }
-              Join on=(#0{f1} = #2{f1}) type=delta // { arity: 3 }
+              Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                 implementation
-                  %0:l0 » %1[#0]UKA
-                  %1 » %0:l0[#0]KA
+                  %1[#0{f1}]UKA » %0:l0[#0]KA
                 Get l0 // { arity: 2 }
                 ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                   Distinct project=[#0{f1}] // { arity: 1 }
@@ -723,7 +720,7 @@ Explained Query:
       Get l1 // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.i1 (*** full scan ***, delta join lookup, delta join 1st input (full scan))
+  - materialize.public.i1 (*** full scan ***, differential join)
 
 Target cluster: quickstart
 
@@ -950,16 +947,15 @@ Explained Query:
   With
     cte l0 =
       ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
-        ReadIndex on=t1 i1=[delta join 1st input (full scan), lookup] // { arity: 2 }
+        ReadIndex on=t1 i1=[differential join, lookup] // { arity: 2 }
     cte l1 =
       Project (#0{f1}) // { arity: 1 }
         ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l2 =
       Project (#0{f1}, #1{f2}) // { arity: 2 }
-        Join on=(#0{f1} = #2{f1}) type=delta // { arity: 3 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0 » %1[#0]K
-            %1 » %0:l0[#0]KA
+            %1[#0{f1}]K » %0:l0[#0]KA
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Union // { arity: 1 }
@@ -975,7 +971,7 @@ Explained Query:
       Get l2 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.i1 (delta join 1st input (full scan), lookup)
+  - materialize.public.i1 (differential join, lookup)
 
 Target cluster: quickstart
 

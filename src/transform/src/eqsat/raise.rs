@@ -240,29 +240,42 @@ fn raise_inner(
                 return join;
             }
             let per_input = per_input_available(&raised_inputs, available);
-            // Try a delta commit first: it is preferred when it needs no new
-            // arrangements (strict) or no more than differential (eager).
-            // Viability is delta_join_order returning Some (every step keyed); a
-            // disconnected join has no delta plan and stays differential.
-            if let Some(paths) = model.delta_join_order(inputs, &canon_escalars) {
-                let delta_new =
-                    crate::eqsat::join_commit::delta_new_arrangements(&paths, &per_input);
-                let commit_delta = if flags.eager_delta {
-                    delta_new <= differential_new_arrangements(&order, &per_input)
-                } else {
-                    delta_new == 0
-                };
-                if commit_delta {
-                    let canon_join =
-                        MirRelationExpr::join_scalars(raised_inputs.clone(), canon_equivs.clone());
-                    if let Some(j) = crate::eqsat::join_commit::commit_delta_query(
-                        canon_join,
-                        paths,
-                        &per_input,
-                        &raised_inputs,
-                        flags.prioritize_arranged,
-                    ) {
-                        return j;
+            // Delta only helps for 3+ inputs: it avoids the intermediate
+            // arrangements a differential chain builds (k-2 of them). A 1-input
+            // "join" is a filter whose delta plan is unrenderable (empty
+            // per-driver path panics source_keys derivation in
+            // delta_join.rs:98-110); a 2-input join has no intermediate
+            // arrangement to save and delta would add a second path for nothing.
+            // Match JoinImplementation, which forces differential for
+            // num_inputs <= 2 (join_implementation.rs:408-429).
+            if inputs.len() > 2 {
+                // Try a delta commit first: it is preferred when it needs no new
+                // arrangements (strict) or no more than differential (eager).
+                // Viability is delta_join_order returning Some (every step
+                // keyed); a disconnected join has no delta plan and stays
+                // differential.
+                if let Some(paths) = model.delta_join_order(inputs, &canon_escalars) {
+                    let delta_new =
+                        crate::eqsat::join_commit::delta_new_arrangements(&paths, &per_input);
+                    let commit_delta = if flags.eager_delta {
+                        delta_new <= differential_new_arrangements(&order, &per_input)
+                    } else {
+                        delta_new == 0
+                    };
+                    if commit_delta {
+                        let canon_join = MirRelationExpr::join_scalars(
+                            raised_inputs.clone(),
+                            canon_equivs.clone(),
+                        );
+                        if let Some(j) = crate::eqsat::join_commit::commit_delta_query(
+                            canon_join,
+                            paths,
+                            &per_input,
+                            &raised_inputs,
+                            flags.prioritize_arranged,
+                        ) {
+                            return j;
+                        }
                     }
                 }
             }
