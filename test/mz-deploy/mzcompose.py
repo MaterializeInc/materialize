@@ -2296,3 +2296,31 @@ def workflow_concurrent_deploys(c: Composition, parser: WorkflowArgumentParser) 
             "SELECT name FROM mz_clusters WHERE name LIKE '%\\_ca' OR name LIKE '%\\_cb'"
         )
         assert len(rows) == 0, f"Expected no staging clusters, got {rows}"
+
+
+def workflow_apply_all_role_ordering(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """`apply` (apply-all) must create project roles before clusters, because a
+    cluster file may grant a privilege to a project-defined role.
+
+    Before the ordering fix the clusters phase ran first and its
+    `GRANT USAGE ON CLUSTER reporting TO reader` failed with "unknown role
+    'reader'", and the failure was sticky across re-runs.
+    """
+    setup_base(c)
+
+    # The roles phase creates `reader`; grant the deploy role permission to do
+    # so. This isolates the phase-ordering bug from privilege setup.
+    c.sql("GRANT CREATEROLE ON SYSTEM TO deploy_user", user="mz_system", port=6877)
+
+    result = run_mz_deploy(c, "cluster-grant-role/v1", "apply", "--profile", "default")
+    assert result.returncode == 0, (
+        "apply-all must create roles before clusters so a cluster grant can "
+        f"reference a project role:\n{result.stdout}\n{result.stderr}"
+    )
+
+    rows = c.sql_query("SELECT name FROM mz_roles WHERE name = 'reader'")
+    assert len(rows) == 1, f"expected role 'reader' to exist, got {rows}"
+    rows = c.sql_query("SELECT name FROM mz_clusters WHERE name = 'reporting'")
+    assert len(rows) == 1, f"expected cluster 'reporting' to exist, got {rows}"
