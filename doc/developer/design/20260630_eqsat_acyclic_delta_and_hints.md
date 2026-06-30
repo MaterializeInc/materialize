@@ -61,15 +61,35 @@ through to the SP-B1 `Differential`) iff **both** hold:
                         (or delta_new ≤ diff_new when enable_eager_delta_joins)
 ```
 
-- **(a) keeps the VOJ correct, automatically.** The flagship variable-outer-join
-  is acyclic and its delta path cross-products `t1`; `delta_join_terms` reports
-  `crosses > 0` for it (the cross needs an empty-key broadcast arrangement), so
-  it stays `Differential` with no special-casing. This is the same keyed-ness
-  signal SP-B1 already relies on.
-- **(b) recovers exactly the plans SP-B1 regressed** — indexed multi-way joins
-  (see `test/sqllogictest/transform/join_index.slt`) where every probe
-  arrangement already exists, so delta is free. This is JI's rule replicated
-  structurally.
+- **(b) is the load-bearing condition.** It recovers exactly the plans SP-B1
+  regressed: indexed multi-way joins (see
+  `test/sqllogictest/transform/join_index.slt`) where every probe arrangement
+  already exists, so delta is free. This is JI's `delta_new_arrangements == 0`
+  rule replicated structurally.
+- **(a) is a cheap structural guard, not independently load-bearing.** A forced
+  cross is counted only when *neither* side is constant (cost.rs:795-796), so a
+  non-constant cross needs an empty-key broadcast arrangement that is never in
+  `available` — meaning (b) `delta_new == 0` already rejects it. We keep (a)
+  anyway as a near-free early-out (it falls out of `delta_join_terms`, which we
+  walk regardless) and because it is the keyed-ness signal SP-B1 already trusts.
+  Do not justify (a) as "what keeps the VOJ correct": (b) does that. The VOJ
+  flagship is acyclic and its delta path cross-products `t1`; the cross needs a
+  broadcast arrangement absent from `available`, so (b) rejects delta and it
+  stays `Differential`. (a) merely rejects it one step earlier.
+
+#### Interaction with the spelling selector
+
+`crosses` and `delta_new` are computed over the **canonicalized** equivalences,
+the same ones SP-B1's `commit_differential` orders over (raise.rs canonicalizes
+before both ordering and, here, delta detection). The earlier delta-join-cost
+spelling selector (`enable_eqsat_delta_join_cost`, `select_join_spelling`) does
+**not** feed this decision: under native commit it is moot, because canonicalize
+overrides its local spelling (#2 → #0) before the delta test runs. So the two
+sub-projects do not disagree about the VOJ. The selector never reaches the delta
+decision, and the VOJ's cross is a property of its canonical equivalence
+structure, independent of which spelling flag is set. State this in the spec so
+the next implementer does not try to reconcile the selector's #2 output with the
+delta test's #0 input.
 
 ### Mechanics
 
@@ -103,6 +123,26 @@ through to the SP-B1 `Differential`) iff **both** hold:
 - Corpus: expect ~13 indexed joins to flip differential → delta (recovering the
   SP-B1 regression); confirm 0 result-row changes vs base via the result-row
   gate.
+
+### Architectural seam: commit-time vs cost-time
+
+The delta decision is **decoupled** from cost-time selection: extraction picks
+the relational plan and the arrangement set under `ArrangementCount` (a
+differential-shaped cost), and only then does commit pick delta over
+differential. The arrangement set extraction minimized is not necessarily the
+one the delta paths want, so the committed plan is not provably jointly
+co-optimal. This is the same "moved it out of `Cost`, now it is decoupled"
+tension that runs through the project (the AGM cost cannot see keyed-ness, so
+the structural decision lives downstream).
+
+We accept it because we bound delta commit to the **acyclic** case (star and
+chain), where the input set a left-deep order touches is the same regardless of
+delta-vs-differential — only the per-driver path direction differs, and delta
+reuses arrangements differential already required. So for acyclic joins the
+decoupling is benign: delta does not need arrangements differential did not
+already select. A cyclic (WcoJoin) plan would not have this property, which is a
+further reason to keep delta commit gated to acyclic joins. Name this bound in
+the spec.
 
 ---
 
@@ -138,6 +178,22 @@ ones); the cardinality/filter-derived suffixes fill in when SP-B2/B3 land.
   emitter. `arranged` must be computed from the **original** `available`
   (pre-`implement_arrangements`), matching JI.
 - Pure EXPLAIN/readability change; regenerate the affected transform goldens.
+
+### Why this is display-only (and what to verify)
+
+In JI, `JoinInputCharacteristics` drive **order selection** (the greedy max-min
+scorer). Here the cost model has already chosen the order; we set the
+characteristics post-hoc, after the decision. They are display-only iff nothing
+downstream re-reads them for a decision. That holds because eqsat commits a
+concrete `JoinImplementation` and JI no-ops on an already-implemented join, so
+rendering/LIR consume the committed order, not the characteristics. The spec
+must still confirm this: a partial characteristic (`cardinality = None`,
+`filters = none()`) is a silent correctness bug, not a cosmetic one, if any
+consumer reads it as "zero rows" or "no filter". Grep the consumers of
+`JoinInputCharacteristics` after the renderer boundary and confirm none make a
+plan decision from a committed (eqsat-emitted) join's characteristics. If one
+does, the partial fields must be deferred until SP-B2/B3 fill them, not emitted
+as `None`/`none()`.
 
 ---
 
