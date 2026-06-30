@@ -701,7 +701,7 @@ fn parse_mod_statements(
             &mut statements,
             original_db_name,
             suffix,
-        );
+        )?;
     }
     Ok(Some(statements))
 }
