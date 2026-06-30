@@ -303,6 +303,30 @@ mod plan_tests {
             "error should explain the length overflow; got: {err}",
         );
     }
+
+    /// A supporting statement that references an object with too many
+    /// qualification levels is reported as a validation error, not a panic.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_overqualified_reference_errors() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+        let schema_dir = root.path().join("models/mydb/public");
+        std::fs::create_dir_all(&schema_dir).unwrap();
+        std::fs::write(
+            schema_dir.join("t.sql"),
+            "CREATE TABLE mydb.public.t (id INT);\n\
+             COMMENT ON COLUMN mydb.public.t.extra.id IS 'bad';\n",
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        let result = plan_sync(&fs, root.path(), None, None, &Default::default());
+        assert!(
+            result.is_err(),
+            "over-qualified column reference must be a validation error, not a panic",
+        );
+    }
 }
 
 /// Compile a project root into a planned deployment representation.
