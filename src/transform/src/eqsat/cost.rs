@@ -924,6 +924,11 @@ impl CostModel {
         if n == 1 {
             return Some(vec![vec![]]);
         }
+        // u32 input masks below; a delta join this wide is not a commit target.
+        // Bail to the differential fallback (no delta plan). Mirrors delta_join_terms.
+        if n >= 32 {
+            return None;
+        }
         let arities: Vec<usize> = inputs.iter().map(|r| r.arity()).collect();
         let mut offsets = Vec::with_capacity(n);
         let mut acc = 0;

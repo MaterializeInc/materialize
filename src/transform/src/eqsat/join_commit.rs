@@ -18,7 +18,7 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr,
 };
 
-use crate::eqsat::cost::JoinOrder;
+use crate::eqsat::cost::{JoinOrder, JoinStep};
 
 /// Build the `JoinInputCharacteristics` for one order step (start or lookup)
 /// from the structurally-known fields. `available` must be the ORIGINAL per-input
@@ -173,6 +173,98 @@ pub(crate) fn commit_differential(
     Some(join)
 }
 
+/// Count the distinct lookup arrangements a delta plan needs that are not already
+/// in `available`, deduplicated across all paths. Matches
+/// `delta_queries::plan` (join_implementation.rs:727-739).
+pub(crate) fn delta_new_arrangements(
+    paths: &[Vec<JoinStep>],
+    available: &[Vec<Vec<MirScalarExpr>>],
+) -> usize {
+    let mut missing: std::collections::BTreeSet<(usize, Vec<MirScalarExpr>)> =
+        std::collections::BTreeSet::new();
+    for path in paths {
+        for step in path {
+            let key: Vec<MirScalarExpr> = step
+                .key_cols
+                .iter()
+                .map(|&c| MirScalarExpr::column(c))
+                .collect();
+            let arranged = available[step.input]
+                .iter()
+                .any(|k| k.as_slice() == key.as_slice());
+            if !arranged {
+                missing.insert((step.input, key));
+            }
+        }
+    }
+    missing.len()
+}
+
+/// Commit `join` (a bare `Unimplemented` `Join`) to a `DeltaQuery` following
+/// `paths` (one lookup sequence per driver, driver excluded). `available` gives
+/// each input's existing arrangement keys. Returns `None` if `join` is not a
+/// `Join`. Reuses `JoinImplementation`'s mechanical lowering helpers.
+///
+/// NOTE: No start key or start element is stored for delta — the renderer
+/// derives the driver's source key and each stream key. This avoids the
+/// C1-style start-key alignment issue that differential requires.
+pub(crate) fn commit_delta_query(
+    mut join: MirRelationExpr,
+    paths: Vec<Vec<JoinStep>>,
+    available: &[Vec<Vec<MirScalarExpr>>],
+    inputs: &[MirRelationExpr],
+    prioritize_arranged: bool,
+) -> Option<MirRelationExpr> {
+    // Build the (input, key, characteristics) lookup tuples per path (lookups only,
+    // no start element; the driver is excluded from each path by the cost model).
+    let mut orders: Vec<Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>> = paths
+        .iter()
+        .map(|path| {
+            path.iter()
+                .map(|step| {
+                    let key: Vec<MirScalarExpr> = step
+                        .key_cols
+                        .iter()
+                        .map(|&c| MirScalarExpr::column(c))
+                        .collect();
+                    let chars = step_characteristics(
+                        step.input,
+                        &key,
+                        available,
+                        inputs,
+                        prioritize_arranged,
+                    );
+                    (step.input, key, Some(chars))
+                })
+                .collect()
+        })
+        .collect();
+
+    let MirRelationExpr::Join {
+        inputs: join_inputs,
+        implementation,
+        ..
+    } = &mut join
+    else {
+        return None;
+    };
+
+    // Mechanical lowering: wrap inputs in ArrangeBy / lift MFPs for reuse.
+    let (lifted_mfp, lifted_projections) = crate::join_implementation::implement_arrangements(
+        join_inputs,
+        available,
+        orders.iter().flatten(),
+    );
+    // Compensate keys for any projections lifted by implement_arrangements.
+    orders
+        .iter_mut()
+        .for_each(|order| crate::join_implementation::permute_order(order, &lifted_projections));
+
+    *implementation = JoinImplementation::DeltaQuery(orders);
+    crate::join_implementation::install_lifted_mfp(&mut join, lifted_mfp);
+    Some(join)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +307,58 @@ mod tests {
     }
 
     use crate::eqsat::cost::{JoinOrder, JoinStep};
+
+    #[mz_ore::test]
+    fn delta_new_arrangements_counts_distinct_missing() {
+        // 3 inputs. Paths reference lookups on inputs 1 ([#0]) and 2 ([#0]); input 1
+        // is already arranged by [#0], input 2 is not. Distinct missing = {(2,[#0])} = 1.
+        let available = vec![
+            Vec::new(),
+            vec![vec![MirScalarExpr::column(0)]], // input 1 arranged by [#0]
+            Vec::new(),
+        ];
+        let paths = vec![
+            vec![step(1, &[0]), step(2, &[0])], // driver 0
+            vec![step(0, &[0]), step(2, &[0])], // driver 1 (input 0 lookup on [#0], not avail)
+            vec![step(1, &[0]), step(0, &[0])], // driver 2
+        ];
+        // Missing distinct (input,key): (2,[#0]) and (0,[#0]) => 2.
+        assert_eq!(delta_new_arrangements(&paths, &available), 2);
+    }
+
+    #[mz_ore::test]
+    fn commit_delta_query_builds_deltaquery_shape() {
+        let inputs = vec![get(0, 2), get(1, 2), get(2, 2)];
+        let join = MirRelationExpr::join_scalars(
+            inputs.clone(),
+            vec![
+                vec![MirScalarExpr::column(0), MirScalarExpr::column(2)],
+                vec![MirScalarExpr::column(3), MirScalarExpr::column(4)],
+            ],
+        );
+        // One path per driver, lookups only.
+        let paths = vec![
+            vec![step(1, &[0]), step(2, &[0])],
+            vec![step(0, &[0]), step(2, &[0])],
+            vec![step(1, &[0]), step(0, &[1])],
+        ];
+        let available = vec![Vec::new(); 3];
+        let out = commit_delta_query(join, paths, &available, &inputs, false)
+            .expect("commit must succeed");
+        let MirRelationExpr::Join { implementation, .. } = &out else {
+            panic!("expected a Join");
+        };
+        match implementation {
+            JoinImplementation::DeltaQuery(orders) => {
+                assert_eq!(orders.len(), 3, "one path per driver");
+                for o in orders {
+                    assert_eq!(o.len(), 2, "two lookups per path");
+                    assert!(o.iter().all(|(_, _, c)| c.is_some()), "chars populated");
+                }
+            }
+            other => panic!("expected DeltaQuery, got {other:?}"),
+        }
+    }
 
     fn get(local: u64, arity: usize) -> MirRelationExpr {
         let typ = ReprRelationType::new(

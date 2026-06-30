@@ -105,3 +105,60 @@ change. `run_tests` and `test_runner` both passed without regeneration.
 ## Concerns
 
 None.
+
+---
+
+# Task 4 (delta join): `commit_delta_query` + `delta_new_arrangements`
+
+**Status:** DONE
+
+## Functions Added
+
+### `src/transform/src/eqsat/join_commit.rs`
+
+**`pub(crate) fn delta_new_arrangements`**: counts distinct `(input, key)` lookup
+arrangements across all paths not already in `available`. Uses a `BTreeSet` to
+deduplicate. Mirrors `delta_queries::plan` (join_implementation.rs:727-739).
+
+**`pub(crate) fn commit_delta_query`**: lowers a bare `Unimplemented` `Join` to
+`JoinImplementation::DeltaQuery(orders)`. Each inner `Vec` is a lookup sequence
+for one driver (driver excluded from path — lookups only, no start key stored).
+Characteristics computed via `step_characteristics`. Reuses
+`implement_arrangements` / `permute_order` / `install_lifted_mfp`.
+
+### `src/transform/src/eqsat/cost.rs` (guard)
+
+Added `n >= 32` early return in `delta_join_order` immediately after the `n == 1`
+return. Prevents a `1u32 << driver` overflow panic on wide joins. Mirrors
+`delta_join_terms`.
+
+## `permute_order` Signature Confirmed
+
+```rust
+pub(crate) fn permute_order(
+    order: &mut Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>,
+    lifted_projections: &Vec<Option<Vec<usize>>>,
+)
+```
+
+DeltaQuery tuple shape matches exactly.
+
+## Test Command and Output
+
+```
+cargo nextest run -p mz-transform "eqsat::join_commit" "eqsat::cost::tests::delta_join_order"
+```
+
+7 tests run: 7 passed (2 new: `delta_new_arrangements_counts_distinct_missing`,
+`commit_delta_query_builds_deltaquery_shape`), 383 skipped.
+
+## Cargo Check
+
+`cargo check -p mz-transform` clean, only expected `dead_code` warnings on the 3
+new/existing functions (`delta_join_order`, `delta_new_arrangements`,
+`commit_delta_query`) — all wired in Task 5.
+
+## Concerns
+
+None. `commit_delta_query` and `delta_new_arrangements` have no production caller
+yet (Task 5 wires them); change is additive and behavior-neutral.
