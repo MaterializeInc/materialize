@@ -96,7 +96,7 @@ use cache::build_artifact::{CompiledObjectArtifact, CompiledObjectArtifactData, 
 use cache_io::hex_digest;
 use mz_sql_parser::ast::{
     CommentStatement, CreateIndexStatement, ExecuteUnitTestStatement, GrantPrivilegesStatement,
-    Raw, Statement,
+    Ident, Raw, Statement,
 };
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
@@ -431,7 +431,7 @@ fn compile_sync_with_stats<P: AsRef<Path>>(
         compiled_project.rewrite_database_references(&discovery.db_name_map);
     }
     if let Some(ps) = profile_suffix {
-        let cluster_name_map = build_cluster_name_map(&compiled_project, ps);
+        let cluster_name_map = build_cluster_name_map(&compiled_project, ps)?;
         if !cluster_name_map.is_empty() {
             compiled_project.rewrite_cluster_references(&cluster_name_map);
         }
@@ -455,10 +455,14 @@ fn compile_sync_with_stats<P: AsRef<Path>>(
 
 /// Build a map from original cluster name to the suffixed cluster name for all
 /// clusters referenced by the compiled project.
+///
+/// Returns [`LoadError::SuffixedIdentifierTooLong`] if any suffixed name
+/// exceeds the identifier length limit, so the overflow surfaces as a normal
+/// compile error rather than a panic in the rewrite pass.
 fn build_cluster_name_map(
     project: &compiled::Project,
     cluster_suffix: &str,
-) -> BTreeMap<String, String> {
+) -> Result<BTreeMap<String, Ident>, LoadError> {
     let mut names = BTreeSet::new();
     for db in &project.databases {
         for schema in &db.schemas {
@@ -471,7 +475,12 @@ fn build_cluster_name_map(
         .into_iter()
         .map(|name| {
             let suffixed = format!("{}{}", name, cluster_suffix);
-            (name, suffixed)
+            let ident =
+                Ident::new(&suffixed).map_err(|_| LoadError::SuffixedIdentifierTooLong {
+                    name: suffixed,
+                    limit: Ident::MAX_LENGTH,
+                })?;
+            Ok((name, ident))
         })
         .collect()
 }

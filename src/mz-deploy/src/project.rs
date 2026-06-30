@@ -270,6 +270,39 @@ mod plan_tests {
             "statement's own name should be suffixed; got: {serialized}",
         );
     }
+
+    /// A cluster name that overflows the identifier length limit once the
+    /// profile suffix is appended surfaces as a compile error, not a panic.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_cluster_name_too_long_after_suffix_errors() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+        let schema_dir = root.path().join("models/mydb/public");
+        std::fs::create_dir_all(&schema_dir).unwrap();
+        let long_cluster = "c".repeat(250);
+        std::fs::write(
+            schema_dir.join("v.sql"),
+            format!(
+                "CREATE MATERIALIZED VIEW mydb.public.v IN CLUSTER {long_cluster} AS SELECT 1 AS x;\n"
+            ),
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        let err = plan_sync(
+            &fs,
+            root.path(),
+            None,
+            Some("__staging"),
+            &Default::default(),
+        )
+        .expect_err("over-length suffixed cluster name must error, not panic");
+        assert!(
+            err.to_string().contains("too long"),
+            "error should explain the length overflow; got: {err}",
+        );
+    }
 }
 
 /// Compile a project root into a planned deployment representation.
