@@ -76,6 +76,9 @@ pub struct StatementBeganExecutionRecord {
     pub transaction_id: TransactionId,
     pub transient_index_id: Option<GlobalId>,
     pub mz_version: String,
+    /// The kind of statement being executed, if known. Used to redact
+    /// `error_message` for kinds that can carry secret material.
+    pub kind: Option<StatementKind>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -280,7 +283,10 @@ pub enum PreparedStatementLoggingInfo {
     /// The statement has already been logged; we don't need to log it
     /// again if a future execution hits the sampling rate; we merely
     /// need to reference the corresponding UUID.
-    AlreadyLogged { uuid: Uuid },
+    AlreadyLogged {
+        uuid: Uuid,
+        kind: Option<StatementKind>,
+    },
     /// The statement has not yet been logged; if a future execution
     /// hits the sampling rate, we need to log it at that point.
     StillToLog {
@@ -307,6 +313,15 @@ pub enum PreparedStatementLoggingInfo {
 }
 
 impl PreparedStatementLoggingInfo {
+    /// The kind of the prepared statement, if known. Available regardless of
+    /// whether the statement has already been logged.
+    pub fn kind(&self) -> Option<StatementKind> {
+        match self {
+            PreparedStatementLoggingInfo::StillToLog { kind, .. } => *kind,
+            PreparedStatementLoggingInfo::AlreadyLogged { kind, .. } => *kind,
+        }
+    }
+
     /// Constructor for the [`PreparedStatementLoggingInfo::StillToLog`] variant that ensures SQL
     /// statements are properly redacted.
     pub fn still_to_log<A: AstInfo>(
@@ -490,7 +505,7 @@ impl StatementLoggingFrontend {
         let logging_ref = session.qcell_ro(&*logging);
 
         match logging_ref {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => (None, *uuid),
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid, .. } => (None, *uuid),
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
                 redacted_sql,
@@ -563,8 +578,9 @@ impl StatementLoggingFrontend {
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) {
         let logging = session.qcell_rw(&*logging);
-        if let PreparedStatementLoggingInfo::StillToLog { .. } = logging {
-            *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
+        if let PreparedStatementLoggingInfo::StillToLog { kind, .. } = logging {
+            let kind = *kind;
+            *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid, kind };
         }
     }
 
@@ -656,6 +672,11 @@ impl StatementLoggingFrontend {
             return None;
         }
 
+        // Capture the statement kind for the began-execution record, before
+        // `record_prepared_statement_as_logged` transitions the logging info to
+        // `AlreadyLogged`.
+        let kind = session.qcell_ro(logging).kind();
+
         // Get prepared statement info.
         let (prepared_statement_event, ps_uuid) =
             self.get_prepared_statement_info(session, logging);
@@ -678,6 +699,7 @@ impl StatementLoggingFrontend {
             session,
             began_at,
             self.build_info_human_version.clone(),
+            kind,
         );
 
         // Build rows to calculate cost for throttling
@@ -793,6 +815,7 @@ pub(crate) fn create_began_execution_record(
     session: &Session,
     began_at: EpochMillis,
     build_info_version: String,
+    kind: Option<StatementKind>,
 ) -> StatementBeganExecutionRecord {
     let params = serialize_params(params);
     StatementBeganExecutionRecord {
@@ -816,6 +839,7 @@ pub(crate) fn create_began_execution_record(
                 9999999
             }),
         mz_version: build_info_version,
+        kind,
         // These are not known yet; we'll fill them in later.
         cluster_id: None,
         cluster_name: None,
@@ -889,6 +913,8 @@ pub(crate) fn pack_statement_execution_inner(
         transaction_id,
         transient_index_id,
         mz_version,
+        // Not packed into a column; only used to redact `error_message`.
+        kind: _,
     } = record;
 
     let cluster = cluster_id.map(|id| id.to_string());

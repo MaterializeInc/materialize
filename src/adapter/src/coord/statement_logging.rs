@@ -21,6 +21,7 @@ use mz_repr::adt::timestamp::TimestampLike;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Params;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql_parser::ast::StatementKind;
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
@@ -300,8 +301,9 @@ impl Coordinator {
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) {
         let logging = session.qcell_rw(&*logging);
-        if let PreparedStatementLoggingInfo::StillToLog { .. } = logging {
-            *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
+        if let PreparedStatementLoggingInfo::StillToLog { kind, .. } = logging {
+            let kind = *kind;
+            *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid, kind };
         }
     }
 
@@ -327,7 +329,7 @@ impl Coordinator {
         let logging = session.qcell_ro(&*logging);
 
         match logging {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => (None, *uuid),
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid, .. } => (None, *uuid),
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
                 redacted_sql,
@@ -485,7 +487,19 @@ impl Coordinator {
                 ),
                 StatementEndedExecutionReason::Canceled => ("canceled", None, None, None, None),
                 StatementEndedExecutionReason::Errored { error } => {
-                    ("error", Some(error.as_str()), None, None, None)
+                    // Backstop for SQL-435: `CREATE SECRET`/`ALTER SECRET` errors
+                    // can embed secret material (the rejected statement text, or a
+                    // value-bearing eval error). The per-site fixes redact the known
+                    // cases, but we never persist an unredacted error for these
+                    // kinds, regardless of which error variant fired. The client
+                    // still receives the real error over pgwire.
+                    let error = match began_record.kind {
+                        Some(StatementKind::CreateSecret | StatementKind::AlterSecret) => {
+                            "<error redacted for secret statement>"
+                        }
+                        _ => error.as_str(),
+                    };
+                    ("error", Some(error), None, None, None)
                 }
                 StatementEndedExecutionReason::Aborted => ("aborted", None, None, None, None),
             };
@@ -660,6 +674,7 @@ impl Coordinator {
             .config()
             .build_info
             .human_version(None);
+        let kind = session.qcell_ro(logging).kind();
         let record = create_began_execution_record(
             execution_uuid,
             ps_uuid,
@@ -668,6 +683,7 @@ impl Coordinator {
             session,
             began_at,
             build_info_version,
+            kind,
         );
 
         // `mz_statement_execution_history`
