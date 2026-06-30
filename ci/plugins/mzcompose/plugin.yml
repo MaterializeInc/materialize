@@ -21,5 +21,7 @@ configuration:
       type: string
     composition:
       type: string
+    ci_builder:
+      type: string
   required: ["composition"]
   additionalProperties: false
