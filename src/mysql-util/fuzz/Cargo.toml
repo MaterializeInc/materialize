@@ -1,0 +1,32 @@
+# Fuzz crate for mz-mysql-util desc proto round-trip. `MySqlTableDesc`
+# describes external-database schemas, so a decoder bug here is reachable
+# from a compromised upstream MySQL or from on-disk catalog bytes.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-mysql-util-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-mysql-util = { path = "..", features = ["proptest"] }
+mz-proto = { path = "../../proto" }
+prost = "0.14.3"
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }
+
+[[bin]]
+name = "mysql_table_desc_proto_roundtrip"
+path = "fuzz_targets/mysql_table_desc_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+# The fuzz crate has its own `[workspace]` so it must duplicate the root's
+# `[patch.crates-io]`. Keep in sync with the root `Cargo.toml`.

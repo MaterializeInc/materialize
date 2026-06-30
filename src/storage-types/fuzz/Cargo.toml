@@ -1,0 +1,73 @@
+# Fuzz crate for mz-storage-types proto round-trip properties. Covers the
+# top-level wire types that travel between storage controller and clusterd
+# (source descriptors and dataflow errors). A decoder bug here is a crash
+# or corruption risk for the storage path.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+# Run via the repo-wide runner: `bin/ci-builder run nightly ci/test/cargo-fuzz.sh`,
+# or locally:
+#     cd src/storage-types/fuzz
+#     cargo +nightly fuzz run source_data_proto_roundtrip -- -max_total_time=60
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-storage-types-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-storage-types = { path = "..", features = ["proptest"] }
+mz-proto = { path = "../../proto" }
+mz-repr = { path = "../../repr", features = ["proptest"] }
+# The `proptest` feature on these source-descriptor crates activates the
+# `Arbitrary` derives used by the structured arm of
+# source_export_statement_details_proto_roundtrip. (postgres-util gates them
+# behind its `schemas` feature, which is on by default.)
+mz-mysql-util = { path = "../../mysql-util", features = ["proptest"] }
+mz-postgres-util = { path = "../../postgres-util" }
+mz-sql-server-util = { path = "../../sql-server-util", features = ["proptest"] }
+prost = "0.14.3"
+proptest = "1"
+
+[[bin]]
+name = "csv_decode"
+path = "fuzz_targets/csv_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "source_data_proto_roundtrip"
+path = "fuzz_targets/source_data_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dataflow_error_proto_roundtrip"
+path = "fuzz_targets/dataflow_error_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "postgres_publication_details_proto_roundtrip"
+path = "fuzz_targets/postgres_publication_details_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "source_export_statement_details_proto_roundtrip"
+path = "fuzz_targets/source_export_statement_details_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+# The fuzz crate has its own `[workspace]` so it must duplicate the root's
+# `[patch.crates-io]`. Keep in sync with the root `Cargo.toml`.
