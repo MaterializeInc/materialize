@@ -100,6 +100,9 @@ ERROR_RE = re.compile(
     # \s\S is any character including newlines, so this matches multiline strings
     # non-greedy using ? so that we don't match all the result comparison issues into one block
     | ----------\ RESULT\ COMPARISON\ ISSUE\ START\ ----------[\s\S]*?----------\ RESULT\ COMPARISON\ ISSUE\ END\ ------------
+    # cargo-fuzz crash, emitted by the cargo-fuzz mzcompose runner (one block
+    # per failing target, with the crash input and a reproduce command)
+    | ----------\ CARGO-FUZZ\ FAILURE\ START\ ----------[\s\S]*?----------\ CARGO-FUZZ\ FAILURE\ END\ ----------
     # output consistency tests
     # | possibly\ invalid\ operation\ specification # disabled
     # for miri test summary

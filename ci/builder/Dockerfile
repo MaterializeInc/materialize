@@ -257,6 +257,14 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.1.61" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
+    && if [ "$RUST_VERSION" = "nightly" ]; then \
+           # NOTE: no --locked, unlike the installs above. cargo-fuzz 0.13.1's \
+           # bundled Cargo.lock pins deps that fail on the pinned nightly \
+           # (yanked futures-util/zip, plus a crate using the perma-unstable \
+           # `rustc_layout_scalar_valid_range_*` attribute). Let cargo resolve \
+           # compatible versions instead. \
+           cargo install --root /usr/local --version "=0.13.1" cargo-fuzz; \
+       fi \
     && rm -rf /cargo/registry /cargo/git
 
 # Shims for sanitizers

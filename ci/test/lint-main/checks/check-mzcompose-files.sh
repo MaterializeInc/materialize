@@ -24,7 +24,6 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./misc/monitoring/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
-        -not -wholename "./test/cargo-fuzz/mzcompose.py" `# Enabled in release qualification later in the cargo-fuzz stack` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
         -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
