@@ -71,7 +71,7 @@ pub(crate) fn transform_cluster_names_for_staging(
     for index in indexes {
         if let Some(ref mut cluster_name) = index.in_cluster {
             if let RawClusterName::Unresolved(ident) = cluster_name {
-                let new_name = format!("{}{}", ident, staging_suffix);
+                let new_name = format!("{}{}", ident.as_str(), staging_suffix);
                 *cluster_name =
                     RawClusterName::Unresolved(Ident::new(&new_name).expect("valid cluster name"));
             }
