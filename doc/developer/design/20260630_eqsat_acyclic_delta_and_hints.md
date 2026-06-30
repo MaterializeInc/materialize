@@ -39,6 +39,15 @@ JI from the eqsat path (`doc/developer/design/20260630_joinimplementation_intern
 
 ## Design 1 — detecting acyclic delta joins (in the commit path)
 
+> **Superseded by the implementation spec**
+> `docs/superpowers/specs/2026-06-30-eqsat-acyclic-delta-hints-design.md`.
+> In particular, this section's framing of condition `(a)` as "a cheap guard,
+> not load-bearing" is wrong for the delta commit: there `crosses == 0` is a
+> *representability/viability* precondition (a cross step has no arrangement key
+> for its lookup tuple, so a disconnected join has no delta plan), expressed as
+> `delta_join_order(..).is_some()`. The spec's "viability invariant" section is
+> authoritative. Read this section only for the original motivation.
+
 ### Key idea
 
 JI's delta decision was never an AGM-cost comparison; it is a **structural
