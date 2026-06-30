@@ -1,0 +1,48 @@
+# Fuzz crate for mz-sql-parser and mz-sql-pretty round-trip properties.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+# Run via the repo-wide runner: `bin/ci-builder run nightly ci/test/cargo-fuzz.sh`,
+# or locally:
+#     cd src/sql-parser/fuzz
+#     cargo +nightly fuzz run sql_roundtrip -- -max_total_time=60
+#
+# A single round-trip oracle (`parse -> AstDisplay/pretty -> reparse` must
+# preserve the AST). `sql_roundtrip` generates its input from the libFuzzer byte
+# stream as grammar choices: mostly a structured statement (deep, valid, the
+# round-trip the printer must preserve), with a minority of full-vocabulary
+# "soup" (every keyword/operator/literal form + random characters, to reach
+# query shapes the structured productions don't enumerate and the parser/lexer
+# error paths). It interprets bytes as choices, so it needs no seed corpus or
+# dictionary.
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-sql-parser-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-sql-parser = { path = ".." }
+mz-sql-pretty = { path = "../../sql-pretty" }
+
+[[bin]]
+name = "sql_roundtrip"
+path = "fuzz_targets/sql_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+# Same round-trip oracle as `sql_roundtrip`, but the input language is generated
+# from the declarative grammar in `grammar/sql.g`, compiled to a rule table by
+# `build.rs`. Extend the SQL surface by editing the grammar file.
+[[bin]]
+name = "grammar"
+path = "fuzz_targets/grammar.rs"
+test = false
+doc = false
+bench = false
