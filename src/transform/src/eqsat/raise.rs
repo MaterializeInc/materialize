@@ -39,7 +39,7 @@ use crate::{Transform, TransformCtx};
 
 /// Flags controlling the physical join-commit path. Replaces the former lone
 /// `native_join_commit` bool so Part A (`prioritize_arranged`) and Part B
-/// (`eager_delta`, added later) thread without growing the positional arg list.
+/// (`eager_delta`) thread without growing the positional arg list.
 #[derive(Clone, Copy, Debug)]
 pub struct NativeJoinFlags {
     /// Commit acyclic joins to a cost-model Differential/DeltaQuery so
@@ -47,6 +47,9 @@ pub struct NativeJoinFlags {
     pub commit: bool,
     /// Select the V2 `JoinInputCharacteristics` layout (`enable_join_prioritize_arranged`).
     pub prioritize_arranged: bool,
+    /// Allow delta when `delta_new <= diff_new` (not just `== 0`); reads
+    /// `enable_eager_delta_joins`.
+    pub eager_delta: bool,
 }
 
 impl NativeJoinFlags {
@@ -55,6 +58,7 @@ impl NativeJoinFlags {
         NativeJoinFlags {
             commit: false,
             prioritize_arranged: false,
+            eager_delta: false,
         }
     }
 }
@@ -235,10 +239,37 @@ fn raise_inner(
             if order.steps[1..].iter().any(|s| s.key_cols.is_empty()) {
                 return join;
             }
-            // The committed join carries the canonical equivalences, matching the
-            // order computed above.
-            let canon_join = MirRelationExpr::join_scalars(raised_inputs.clone(), canon_equivs);
             let per_input = per_input_available(&raised_inputs, available);
+            // Try a delta commit first: it is preferred when it needs no new
+            // arrangements (strict) or no more than differential (eager).
+            // Viability is delta_join_order returning Some (every step keyed); a
+            // disconnected join has no delta plan and stays differential.
+            if let Some(paths) = model.delta_join_order(inputs, &canon_escalars) {
+                let delta_new =
+                    crate::eqsat::join_commit::delta_new_arrangements(&paths, &per_input);
+                let commit_delta = if flags.eager_delta {
+                    delta_new <= differential_new_arrangements(&order, &per_input)
+                } else {
+                    delta_new == 0
+                };
+                if commit_delta {
+                    let canon_join =
+                        MirRelationExpr::join_scalars(raised_inputs.clone(), canon_equivs.clone());
+                    if let Some(j) = crate::eqsat::join_commit::commit_delta_query(
+                        canon_join,
+                        paths,
+                        &per_input,
+                        &raised_inputs,
+                        flags.prioritize_arranged,
+                    ) {
+                        return j;
+                    }
+                }
+            }
+            // Fall through to the SP-B1 differential commit. The committed join
+            // carries the canonical equivalences, matching the order computed
+            // above.
+            let canon_join = MirRelationExpr::join_scalars(raised_inputs.clone(), canon_equivs);
             crate::eqsat::join_commit::commit_differential(
                 canon_join,
                 order,
@@ -431,6 +462,36 @@ fn raise_inner(
             }
         }
     }
+}
+
+/// New arrangements a differential plan needs, mirroring `differential::plan`
+/// (join_implementation.rs:898): `inputs.len().saturating_sub(2) + (start
+/// arrangement is new ? 1 : 0)`.
+///
+/// `available` is the per-input arrangement availability. The start's new
+/// arrangement counts iff its aligned start key is not already available, but at
+/// decision time we approximate with the start key the cost model produced (the
+/// eager comparison is heuristic in JI too).
+fn differential_new_arrangements(
+    order: &crate::eqsat::cost::JoinOrder,
+    available: &[Vec<Vec<MirScalarExpr>>],
+) -> usize {
+    let n = order.steps.len();
+    let start = &order.steps[0];
+    let start_key: Vec<MirScalarExpr> = start
+        .key_cols
+        .iter()
+        .map(|&c| MirScalarExpr::column(c))
+        .collect();
+    let start_new = if available[start.input]
+        .iter()
+        .any(|k| k.as_slice() == start_key.as_slice())
+    {
+        0
+    } else {
+        1
+    };
+    n.saturating_sub(2) + start_new
 }
 
 /// Build per-input arrangement availability for a join's raised inputs.

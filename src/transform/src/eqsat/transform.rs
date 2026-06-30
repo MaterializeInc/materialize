@@ -175,6 +175,7 @@ impl Transform for PhysicalEqSatTransform {
             crate::eqsat::raise::NativeJoinFlags {
                 commit: ctx.features.enable_eqsat_native_join_commit,
                 prioritize_arranged: ctx.features.enable_join_prioritize_arranged,
+                eager_delta: ctx.features.enable_eager_delta_joins,
             },
         );
         adopt_if_type_preserving(relation, optimized, input_arity, "eqsat physical optimize");

@@ -12,6 +12,11 @@
 //! not call JI's `optimize_orders` planner, `differential::plan`, or
 //! `canonicalize_equivalences`: the order and keys come entirely from the cost
 //! model, and the equivalences are left as extraction spelled them.
+//!
+//! The module also commits a `DeltaQuery` (via [`commit_delta_query`]) when the
+//! cost model yields a fully-keyed delta plan that needs no new arrangements
+//! beyond what differential would (delta is free), the same reuse-aware rule as
+//! production's eager delta path.
 
 use mz_expr::{
     Columns, FilterCharacteristics, JoinImplementation, JoinInputCharacteristics, JoinInputMapper,
@@ -310,8 +315,9 @@ mod tests {
 
     #[mz_ore::test]
     fn delta_new_arrangements_counts_distinct_missing() {
-        // 3 inputs. Paths reference lookups on inputs 1 ([#0]) and 2 ([#0]); input 1
-        // is already arranged by [#0], input 2 is not. Distinct missing = {(2,[#0])} = 1.
+        // 3 inputs. Lookups land on inputs 0, 1, and 2 (all keyed on [#0]); input 1
+        // is already arranged by [#0], inputs 0 and 2 are not. Distinct missing =
+        // {(0,[#0]), (2,[#0])} = 2.
         let available = vec![
             Vec::new(),
             vec![vec![MirScalarExpr::column(0)]], // input 1 arranged by [#0]

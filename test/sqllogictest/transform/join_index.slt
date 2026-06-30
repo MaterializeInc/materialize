@@ -207,23 +207,25 @@ where foo.a = bar.a
 ----
 Explained Query:
   Project (#0{a}, #4{b}) // { arity: 2 }
-    Filter (#2{b}) IS NOT NULL // { arity: 5 }
-      Join on=(#0{a} = #1{a} AND #2{b} = #3{a}) type=differential // { arity: 5 }
-        implementation
-          %1:bar[#0{a}]KA » %0:foo[#0]K » %2:baz[#0]KA
-        ArrangeBy keys=[[#0{a}]] // { arity: 1 }
-          Project (#0{a}) // { arity: 1 }
-            Filter (#0{a}) IS NOT NULL // { arity: 2 }
-              ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
-        ArrangeBy keys=[[#0{a}]] // { arity: 2 }
-          ReadIndex on=bar bar_idx=[differential join] // { arity: 2 }
-        ArrangeBy keys=[[#0{a}]] // { arity: 2 }
-          ReadIndex on=baz baz_idx=[differential join] // { arity: 2 }
+    Join on=(#0{a} = #1{a} AND #2{b} = #3{a}) type=delta // { arity: 5 }
+      implementation
+        %0:foo » %1:bar[#0]KA » %2:baz[#0]KA
+        %1:bar » %0:foo[#0]K » %2:baz[#0]KA
+        %2:baz » %1:bar[#1]K » %0:foo[#0]K
+      ArrangeBy keys=[[#0{a}]] // { arity: 1 }
+        Project (#0{a}) // { arity: 1 }
+          Filter (#0{a}) IS NOT NULL // { arity: 2 }
+            ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
+      ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
+        Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL // { arity: 2 }
+          ReadIndex on=bar bar_idx=[*** full scan ***] // { arity: 2 }
+      ArrangeBy keys=[[#0{a}]] // { arity: 2 }
+        ReadIndex on=baz baz_idx=[delta join lookup] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo_idx (*** full scan ***)
-  - materialize.public.bar_idx (differential join)
-  - materialize.public.baz_idx (differential join)
+  - materialize.public.bar_idx (*** full scan ***)
+  - materialize.public.baz_idx (delta join lookup)
 
 Target cluster: quickstart
 
@@ -630,44 +632,54 @@ t3.x != t3.y AND
 Explained Query:
   Project (#0{a}..=#14{a}, #0{a}, #16{c}..=#29{b}, #0{a}, #31{d}..=#44{c}, #0{a}, #46{e}..=#59{d}, #0{a}, #61{f}..=#74{e}, #0{a}, #76{g}..=#89{f}, #0{a}, #91{h}..=#104{g}, #0{a}, #106{i}..=#119{h}, #0{a}, #121{j}..=#134{i}, #0{a}, #136{k}..=#149{j}, #0{a}, #151{x}..=#153{s}) // { arity: 154 }
     Filter (#109{x}) IS NULL AND like["a%"](#125{s}) AND (#137{x} = 71) AND (#95{x} <= 8) AND (#81{x} > 5) AND (#95{x} >= 3) AND NOT(like["b%"](#69{s})) AND (#39{x} != #40{y}) AND (#53{x} != #54{y}) // { arity: 154 }
-      Join on=(#0{a} = #15{b} = #30{c} = #45{d} = #60{e} = #75{f} = #90{g} = #105{h} = #120{i} = #135{j} = #150{k}) type=differential // { arity: 154 }
+      Join on=(#0{a} = #15{b} = #30{c} = #45{d} = #60{e} = #75{f} = #90{g} = #105{h} = #120{i} = #135{j} = #150{k}) type=delta // { arity: 154 }
         implementation
-          %0:big[#0{a}]KA » %1:big[#1]KA » %2:big[#2]KA » %3:big[#3]KA » %4:big[#4]KA » %5:big[#5]KA » %6:big[#6]KA » %7:big[#7]KA » %8:big[#8]KA » %9:big[#9]KA » %10:big[#10]KA
+          %0:big » %1:big[#1]KA » %2:big[#2]KA » %3:big[#3]KA » %4:big[#4]KA » %5:big[#5]KA » %6:big[#6]KA » %7:big[#7]KA » %8:big[#8]KA » %9:big[#9]KA » %10:big[#10]KA
+          %1:big » %0:big[#0]KA » %2:big[#2]KA » %3:big[#3]KA » %4:big[#4]KA » %5:big[#5]KA » %6:big[#6]KA » %7:big[#7]KA » %8:big[#8]KA » %9:big[#9]KA » %10:big[#10]KA
+          %2:big » %0:big[#0]KA » %1:big[#1]KA » %3:big[#3]KA » %4:big[#4]KA » %5:big[#5]KA » %6:big[#6]KA » %7:big[#7]KA » %8:big[#8]KA » %9:big[#9]KA » %10:big[#10]KA
+          %3:big » %0:big[#0]KA » %1:big[#1]KA » %2:big[#2]KA » %4:big[#4]KA » %5:big[#5]KA » %6:big[#6]KA » %7:big[#7]KA » %8:big[#8]KA » %9:big[#9]KA » %10:big[#10]KA
+          %4:big » %0:big[#0]KA » %1:big[#1]KA » %2:big[#2]KA » %3:big[#3]KA » %5:big[#5]KA » %6:big[#6]KA » %7:big[#7]KA » %8:big[#8]KA » %9:big[#9]KA » %10:big[#10]KA
+          %5:big » %0:big[#0]KA » %1:big[#1]KA » %2:big[#2]KA » %3:big[#3]KA » %4:big[#4]KA » %6:big[#6]KA » %7:big[#7]KA » %8:big[#8]KA » %9:big[#9]KA » %10:big[#10]KA
+          %6:big » %0:big[#0]KA » %1:big[#1]KA » %2:big[#2]KA » %3:big[#3]KA » %4:big[#4]KA » %5:big[#5]KA » %7:big[#7]KA » %8:big[#8]KA » %9:big[#9]KA » %10:big[#10]KA
+          %7:big » %0:big[#0]KA » %1:big[#1]KA » %2:big[#2]KA » %3:big[#3]KA » %4:big[#4]KA » %5:big[#5]KA » %6:big[#6]KA » %8:big[#8]KA » %9:big[#9]KA » %10:big[#10]KA
+          %8:big » %0:big[#0]KA » %1:big[#1]KA » %2:big[#2]KA » %3:big[#3]KA » %4:big[#4]KA » %5:big[#5]KA » %6:big[#6]KA » %7:big[#7]KA » %9:big[#9]KA » %10:big[#10]KA
+          %9:big » %0:big[#0]KA » %1:big[#1]KA » %2:big[#2]KA » %3:big[#3]KA » %4:big[#4]KA » %5:big[#5]KA » %6:big[#6]KA » %7:big[#7]KA » %8:big[#8]KA » %10:big[#10]KA
+          %10:big » %0:big[#0]KA » %1:big[#1]KA » %2:big[#2]KA » %3:big[#3]KA » %4:big[#4]KA » %5:big[#5]KA » %6:big[#6]KA » %7:big[#7]KA » %8:big[#8]KA » %9:big[#9]KA
         ArrangeBy keys=[[#0{a}]] // { arity: 14 }
-          ReadIndex on=big big_idx_a=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
         ArrangeBy keys=[[#1{b}]] // { arity: 14 }
-          ReadIndex on=big big_idx_b=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_b=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#2{c}]] // { arity: 14 }
-          ReadIndex on=big big_idx_c=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_c=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#3{d}]] // { arity: 14 }
-          ReadIndex on=big big_idx_d=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_d=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#4{e}]] // { arity: 14 }
-          ReadIndex on=big big_idx_e=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_e=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#5{f}]] // { arity: 14 }
-          ReadIndex on=big big_idx_f=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_f=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#6{g}]] // { arity: 14 }
-          ReadIndex on=big big_idx_g=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_g=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#7{h}]] // { arity: 14 }
-          ReadIndex on=big big_idx_h=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_h=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#8{i}]] // { arity: 14 }
-          ReadIndex on=big big_idx_i=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_i=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#9{j}]] // { arity: 14 }
-          ReadIndex on=big big_idx_j=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_j=[delta join lookup] // { arity: 14 }
         ArrangeBy keys=[[#10{k}]] // { arity: 14 }
-          ReadIndex on=big big_idx_k=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_k=[delta join lookup] // { arity: 14 }
 
 Used Indexes:
-  - materialize.public.big_idx_a (differential join)
-  - materialize.public.big_idx_b (differential join)
-  - materialize.public.big_idx_c (differential join)
-  - materialize.public.big_idx_d (differential join)
-  - materialize.public.big_idx_e (differential join)
-  - materialize.public.big_idx_f (differential join)
-  - materialize.public.big_idx_g (differential join)
-  - materialize.public.big_idx_h (differential join)
-  - materialize.public.big_idx_i (differential join)
-  - materialize.public.big_idx_j (differential join)
-  - materialize.public.big_idx_k (differential join)
+  - materialize.public.big_idx_a (delta join 1st input (full scan))
+  - materialize.public.big_idx_b (delta join lookup)
+  - materialize.public.big_idx_c (delta join lookup)
+  - materialize.public.big_idx_d (delta join lookup)
+  - materialize.public.big_idx_e (delta join lookup)
+  - materialize.public.big_idx_f (delta join lookup)
+  - materialize.public.big_idx_g (delta join lookup)
+  - materialize.public.big_idx_h (delta join lookup)
+  - materialize.public.big_idx_i (delta join lookup)
+  - materialize.public.big_idx_j (delta join lookup)
+  - materialize.public.big_idx_k (delta join lookup)
 
 Target cluster: quickstart
 
@@ -688,20 +700,22 @@ t0.s LIKE 'a%'
 Explained Query:
   Project (#0{a}..=#14{a}, #0{a}, #16{c}..=#29{b}, #0{a}, #31{d}..=#41{s}) // { arity: 42 }
     Filter like["a%"](#13{s}) // { arity: 42 }
-      Join on=(#0{a} = #15{b} = #30{c}) type=differential // { arity: 42 }
+      Join on=(#0{a} = #15{b} = #30{c}) type=delta // { arity: 42 }
         implementation
-          %2:big[#2{c}]KA » %1:big[#1]K » %0:big[#0]KA
+          %0:big » %1:big[#1]K » %2:big[#2]KA
+          %1:big » %0:big[#0]KA » %2:big[#2]KA
+          %2:big » %1:big[#1]K » %0:big[#0]KA
         ArrangeBy keys=[[#0{a}]] // { arity: 14 }
-          ReadIndex on=big big_idx_a=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
         ArrangeBy keys=[[#1{b}]] // { arity: 14 }
           Project (#0{a}..=#13{s}) // { arity: 14 }
             ReadIndex on=materialize.public.big big_idx_y=[lookup value=(42)] // { arity: 15 }
         ArrangeBy keys=[[#2{c}]] // { arity: 14 }
-          ReadIndex on=big big_idx_c=[differential join] // { arity: 14 }
+          ReadIndex on=big big_idx_c=[delta join lookup] // { arity: 14 }
 
 Used Indexes:
-  - materialize.public.big_idx_a (differential join)
-  - materialize.public.big_idx_c (differential join)
+  - materialize.public.big_idx_a (delta join 1st input (full scan))
+  - materialize.public.big_idx_c (delta join lookup)
   - materialize.public.big_idx_y (lookup)
 
 Target cluster: quickstart
