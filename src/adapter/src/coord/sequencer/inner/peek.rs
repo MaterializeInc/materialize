@@ -36,9 +36,7 @@ use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices, eval_copy_to_uri};
 use crate::coord::timeline::{TimelineContext, timedomain_for};
-use crate::coord::timestamp_selection::{
-    TimestampContext, TimestampDetermination, TimestampProvider,
-};
+use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::{
     Coordinator, CopyToContext, ExecuteContext, ExplainContext, ExplainPlanContext, Message,
     PeekStage, PeekStageCopyTo, PeekStageExplainPlan, PeekStageExplainPushdown, PeekStageFinish,
@@ -389,10 +387,7 @@ impl Coordinator {
             explain_ctx,
         }: PeekStageLinearizeTimestamp,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
-        let isolation_level = session.vars().transaction_isolation().clone();
-        let timeline = Coordinator::get_timeline(&timeline_context);
-        let needs_linearized_read_ts =
-            Coordinator::needs_linearized_read_ts(&isolation_level, &plan.when);
+        let oracle = self.linearized_read_ts_oracle(session, &timeline_context, &plan.when);
 
         let build_stage = move |oracle_read_ts: Option<Timestamp>| PeekStageRealTimeRecency {
             validity,
@@ -406,10 +401,8 @@ impl Coordinator {
             explain_ctx,
         };
 
-        match timeline {
-            Some(timeline) if needs_linearized_read_ts => {
-                let oracle = self.get_timestamp_oracle(&timeline);
-
+        match oracle {
+            Some(oracle) => {
                 // We ship the timestamp oracle off to an async task, so that we
                 // don't block the main task while we wait.
 
@@ -425,7 +418,7 @@ impl Coordinator {
                     .instrument(span),
                 )))
             }
-            Some(_) | None => {
+            None => {
                 let stage = build_stage(None);
                 let stage = PeekStage::RealTimeRecency(stage);
                 Ok(StageResult::Immediate(Box::new(stage)))
