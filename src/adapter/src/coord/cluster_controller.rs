@@ -315,34 +315,47 @@ impl Coordinator {
         })
     }
 
-    /// Apply one batch of decisions.
+    /// Apply one batch of decisions under their compare-and-append guards.
     ///
     /// The kernel calls this once per tick phase: a phase-1 batch is all
     /// `UpdateClusterState`, a phase-2 batch is all create/drop. Either batch may
-    /// in principle be mixed; this handles both.
-    ///
-    /// Every decision carries the durable state it was derived from. We prepend
-    /// one `Op::CheckClusterState` per cluster, which the catalog transaction
-    /// evaluates before any mutation and which aborts the whole batch if that
-    /// cluster's state has since diverged (e.g. a user `ALTER` landed mid-tick).
-    /// Because the check runs inside the transaction it cannot be separated from
-    /// the commit it guards, so a stale create or drop can never reshape the
-    /// replica set against the config the `ALTER` has since established (in
-    /// particular, a stale drop cannot retire a replica the `ALTER` has just made
-    /// desired). On rejection nothing is applied and the controller recomputes
-    /// next tick.
+    /// in principle be mixed; this handles both. The work is staged across four
+    /// steps: collect the per-cluster guards, pre-allocate the ids the creates
+    /// need, build the mutation ops, then commit ops and guards in one
+    /// transaction (see [`Self::commit_with_checks`] for why the guard holds).
+    /// Any step that finds the batch incoherent rejects it, and the controller
+    /// recomputes next tick.
     async fn apply_cluster_decisions(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
-        // Build the mutation ops, and collect one compare-and-append check per
-        // cluster to prepend. All decisions for a cluster in one tick are derived
-        // from a single snapshot, so they share one witness, and one check per
-        // cluster guards them all.
+        let checks = Self::partition_checks(&decisions);
+
+        // Pre-allocate replica ids before the apply transaction (each allocation
+        // is its own durable commit, so it cannot happen inside the transaction).
+        let Some(replica_ids) = self.allocate_replica_ids_for_creates(&decisions).await else {
+            return ApplyOutcome::Rejected;
+        };
+
+        let Some(mutations) = self.build_mutation_ops(decisions, replica_ids) else {
+            return ApplyOutcome::Rejected;
+        };
+        if mutations.is_empty() {
+            // Nothing to apply, so the checks guard nothing. Skip the transaction
+            // rather than commit a check-only batch, which would still cost a
+            // durable round-trip.
+            return ApplyOutcome::Applied;
+        }
+
+        self.commit_with_checks(checks, mutations).await
+    }
+
+    /// The compare-and-append guards for a decision batch: one
+    /// `(cluster_id, expected)` per distinct cluster, in first-seen order. All
+    /// of a cluster's decisions in a tick come from one snapshot, so they share
+    /// one `expected` witness and one guard covers them all.
+    fn partition_checks(decisions: &[Decision]) -> Vec<(ClusterId, ExpectedClusterState)> {
         let mut checks: Vec<(ClusterId, ExpectedClusterState)> = Vec::new();
         let mut seen_clusters = BTreeSet::new();
-        let mut mutations = Vec::new();
-        let mut drops = Vec::new();
-
         for decision in decisions {
-            let (cluster_id, expected) = match &decision {
+            let (cluster_id, expected) = match decision {
                 Decision::CreateReplica {
                     cluster_id,
                     expected,
@@ -369,16 +382,65 @@ impl Coordinator {
                     "decisions for a cluster in one tick must share one expected witness",
                 );
             }
+        }
+        checks
+    }
 
+    /// Pre-allocate one replica id per `CreateReplica` decision, in the order the
+    /// creates appear (which is the order [`Self::build_mutation_ops`] consumes
+    /// them). Returns `None` if any allocation fails, which rejects the batch.
+    ///
+    /// `Op::CreateClusterReplica` carries a pre-allocated id, so we allocate
+    /// out-of-band here, before the apply transaction. Each allocation commits
+    /// durably, so we take a fresh write ts per allocation: two commits must not
+    /// share a timestamp.
+    async fn allocate_replica_ids_for_creates(
+        &mut self,
+        decisions: &[Decision],
+    ) -> Option<Vec<ReplicaId>> {
+        let mut replica_ids = Vec::new();
+        for decision in decisions {
+            let Decision::CreateReplica { cluster_id, .. } = decision else {
+                continue;
+            };
+            let id_ts = self.get_catalog_write_ts().await;
+            match self
+                .catalog()
+                .allocate_replica_ids(*cluster_id, 1, id_ts)
+                .await
+            {
+                Ok(ids) => {
+                    replica_ids.push(ids.into_iter().next().expect("allocated one replica id"))
+                }
+                Err(err) => {
+                    warn!(%cluster_id, "cluster controller could not allocate replica id: {err}");
+                    return None;
+                }
+            }
+        }
+        Some(replica_ids)
+    }
+
+    /// Turn a decision batch into the catalog mutation ops to transact, consuming
+    /// the `replica_ids` pre-allocated for the creates (one per `CreateReplica`,
+    /// in order). Returns `None` if a target cluster has vanished or gone
+    /// unmanaged, which makes the batch incoherent and rejects it.
+    fn build_mutation_ops(
+        &self,
+        decisions: Vec<Decision>,
+        replica_ids: Vec<ReplicaId>,
+    ) -> Option<Vec<Op>> {
+        let mut replica_ids = replica_ids.into_iter();
+        let mut mutations = Vec::new();
+        let mut drops = Vec::new();
+        for decision in decisions {
             match decision {
                 Decision::UpdateClusterState {
                     cluster_id, write, ..
                 } => match self.build_update_cluster_config_op(cluster_id, &write) {
                     Some(op) => mutations.push(op),
-                    None => {
-                        // The cluster vanished. The batch is no longer coherent.
-                        return ApplyOutcome::Rejected;
-                    }
+                    // The cluster vanished. The batch is no longer coherent.
+                    None => return None,
                 },
                 Decision::CreateReplica {
                     cluster_id,
@@ -386,29 +448,13 @@ impl Coordinator {
                     shape,
                     ..
                 } => {
-                    // `Op::CreateClusterReplica` carries a pre-allocated replica
-                    // id, so we allocate out-of-band here, before the apply
-                    // transaction. Each allocation commits durably, so we take a
-                    // fresh write ts per allocation: two commits must not share a
-                    // timestamp.
-                    let id_ts = self.get_catalog_write_ts().await;
-                    let replica_id = match self
-                        .catalog()
-                        .allocate_replica_ids(cluster_id, 1, id_ts)
-                        .await
-                    {
-                        Ok(ids) => ids.into_iter().next().expect("allocated one replica id"),
-                        Err(err) => {
-                            warn!(%cluster_id, "cluster controller could not allocate replica id: {err}");
-                            return ApplyOutcome::Rejected;
-                        }
-                    };
+                    let replica_id = replica_ids.next().expect("one pre-allocated id per create");
                     match self.build_create_replica_op(cluster_id, replica_id, name, &shape) {
                         Ok(Some(op)) => mutations.push(op),
-                        Ok(None) => return ApplyOutcome::Rejected,
+                        Ok(None) => return None,
                         Err(err) => {
                             warn!(%cluster_id, "cluster controller could not build replica create: {err}");
-                            return ApplyOutcome::Rejected;
+                            return None;
                         }
                     }
                 }
@@ -428,17 +474,24 @@ impl Coordinator {
         if !drops.is_empty() {
             mutations.push(Op::DropObjects(drops));
         }
+        Some(mutations)
+    }
 
-        if mutations.is_empty() {
-            // Nothing to apply, so the checks guard nothing. Skip the transaction
-            // rather than commit a check-only batch, which would still cost a
-            // durable round-trip.
-            return ApplyOutcome::Applied;
-        }
-
-        // Prepend the checks so the transaction aborts before any mutation if a
-        // cluster's durable state has diverged from what the decisions were
-        // derived from.
+    /// Prepend the per-cluster compare-and-append `checks` to `mutations` and
+    /// transact them together.
+    ///
+    /// The checks run inside the transaction, before any mutation, so they cannot
+    /// be separated from the commit they guard. A cluster whose durable state has
+    /// diverged from what the decisions were derived from (e.g. a user `ALTER`
+    /// landed mid-tick) aborts the whole batch, so a stale create or drop can
+    /// never reshape the replica set against the config the `ALTER` has since
+    /// established (in particular, a stale drop cannot retire a replica the
+    /// `ALTER` has just made desired). On rejection nothing is applied.
+    async fn commit_with_checks(
+        &mut self,
+        checks: Vec<(ClusterId, ExpectedClusterState)>,
+        mutations: Vec<Op>,
+    ) -> ApplyOutcome {
         let mut ops: Vec<Op> = checks
             .into_iter()
             .map(|(cluster_id, expected)| Op::CheckClusterState {
