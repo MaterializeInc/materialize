@@ -699,7 +699,7 @@ impl Coordinator {
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
                 match self.drop_compute_sink(sink_id).await {
-                    Some(ActiveComputeSink::CopyTo(active_copy_to)) => {
+                    Some((ActiveComputeSink::CopyTo(active_copy_to), _write_notify)) => {
                         active_copy_to.retire_with_response(response);
                     }
                     _ => {

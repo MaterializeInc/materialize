@@ -1446,10 +1446,7 @@ impl crate::coord::Coordinator {
         };
 
         // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
-        drop(
-            self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
-                .await,
-        );
+        drop(self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to)));
 
         // Try to ship the dataflow. We handle errors gracefully because dependencies might have
         // disappeared during sequencing.
