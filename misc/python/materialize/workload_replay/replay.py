@@ -35,7 +35,11 @@ def pg_params_to_psycopg(sql: str, params: list[Any]) -> tuple[str, list[Any]]:
 
     def replace(m):
         i = int(m.group(1)) - 1
-        out_params.append(params[i])
+        # Anonymized parameters carry the '<REDACTED>' placeholder; bind them as
+        # NULL (we no longer know the value or its type), mirroring how redacted
+        # '<REDACTED>' SQL literals are mapped to NULL below.
+        param = params[i]
+        out_params.append(None if param == "<REDACTED>" else param)
         return "%s"
 
     return PG_PARAM_RE.sub(replace, sql.replace("%", "%%")), out_params
