@@ -166,6 +166,9 @@ pub struct Config {
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
     /// with LaunchDarkly.
     pub launchdarkly_sdk_key: Option<String>,
+    /// Overrides the LaunchDarkly service endpoints with a single base URL, as
+    /// for a relay proxy or a mock server in tests.
+    pub launchdarkly_base_uri: Option<String>,
     /// An invertible map from system parameter names to LaunchDarkly feature
     /// keys to use when propagating values from the latter to the former.
     pub launchdarkly_key_map: BTreeMap<String, String>,
@@ -480,6 +483,7 @@ impl Listeners {
                     config.launchdarkly_key_map,
                     SystemParameterSyncClientConfig::LaunchDarkly {
                         sdk_key: key,
+                        base_uri: config.launchdarkly_base_uri,
                         now_fn: config.now.clone(),
                     },
                 )),
