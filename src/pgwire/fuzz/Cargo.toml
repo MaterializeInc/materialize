@@ -1,0 +1,27 @@
+# Fuzz crate for mz-pgwire: drive the frontend-message decoder over random
+# bytes. The decoder sits at the trust boundary between an untrusted SQL
+# client and environmentd, so any panic/SEGV reachable from the wire format
+# is a real availability bug.
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-pgwire-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-pgwire = { path = "..", features = ["fuzzing"] }
+bytes = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
+
+[[bin]]
+name = "codec_decode"
+path = "fuzz_targets/codec_decode.rs"
+test = false
+doc = false
+bench = false
