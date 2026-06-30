@@ -82,9 +82,14 @@ impl SystemParameterFrontend {
                 build_info: sync_config.build_info,
                 metrics: sync_config.metrics.clone(),
             }),
-            SystemParameterSyncClientConfig::LaunchDarkly { sdk_key, now_fn } => Ok(Self {
+            SystemParameterSyncClientConfig::LaunchDarkly {
+                sdk_key,
+                base_uri,
+                now_fn,
+            } => Ok(Self {
                 client: SystemParameterFrontendClient::LaunchDarkly {
-                    client: ld_client(sdk_key, &sync_config.metrics, now_fn).await?,
+                    client: ld_client(sdk_key, base_uri.as_deref(), &sync_config.metrics, now_fn)
+                        .await?,
                     // The environment-wide context carries no cluster/replica
                     // scope. Scoped evaluation passes a `cluster` or `replica`
                     // context per pass via [`ld_ctx`].
@@ -347,8 +352,8 @@ pub struct ClusterEvalContext {
     pub cluster: ClusterScopeContext,
 }
 
-fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
-    ld::ConfigBuilder::new(api_key)
+fn ld_config(api_key: &str, base_uri: Option<&str>, metrics: &Metrics) -> ld::Config {
+    let mut config = ld::ConfigBuilder::new(api_key)
         .event_processor(
             ld::EventProcessorBuilder::new()
                 .https_connector(HttpsConnector::new())
@@ -365,17 +370,22 @@ fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
                     })
                 }),
         )
-        .data_source(ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()))
-        .build()
-        .expect("valid config")
+        .data_source(ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()));
+    if let Some(base_uri) = base_uri {
+        let mut endpoints = ld::ServiceEndpointsBuilder::new();
+        endpoints.relay_proxy(base_uri);
+        config = config.service_endpoints(&endpoints);
+    }
+    config.build().expect("valid config")
 }
 
 async fn ld_client(
     api_key: &str,
+    base_uri: Option<&str>,
     metrics: &Metrics,
     now_fn: &NowFn,
 ) -> Result<ld::Client, anyhow::Error> {
-    let ld_client = ld::Client::build(ld_config(api_key, metrics))?;
+    let ld_client = ld::Client::build(ld_config(api_key, base_uri, metrics))?;
     tracing::info!("waiting for SystemParameterFrontend to initialize");
     // Start and initialize LD client for the frontend. The callback passed
     // will export the last time when an SSE event from the LD server was
