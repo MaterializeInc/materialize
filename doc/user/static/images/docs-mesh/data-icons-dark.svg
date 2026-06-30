@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220">
   <defs>
     <pattern id="data-icons" width="220" height="220" patternUnits="userSpaceOnUse">
-      <g fill="none" stroke="#334155" stroke-width="0.85" stroke-linecap="round" stroke-linejoin="round" opacity="0.40">
+      <g fill="none" stroke="#334155" stroke-width="0.85" stroke-linecap="round" stroke-linejoin="round" opacity="0.20">
         <!-- database -->
         <g transform="translate(16 18) scale(1.08)">
           <ellipse cx="8" cy="4.5" rx="5.5" ry="2"/>
