@@ -6264,7 +6264,7 @@ pub fn plan_alter_cluster(
                     }
                 }
                 false => {
-                    if !alter_strategy.is_none() {
+                    if !with_options.is_empty() {
                         sql_bail!("ALTER... WITH not supported for unmanaged clusters");
                     }
                     if availability_zones.is_some() {
