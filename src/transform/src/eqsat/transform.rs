@@ -172,7 +172,10 @@ impl Transform for PhysicalEqSatTransform {
             seeds,
             use_ilp,
             use_delta,
-            ctx.features.enable_eqsat_native_join_commit,
+            crate::eqsat::raise::NativeJoinFlags {
+                commit: ctx.features.enable_eqsat_native_join_commit,
+                prioritize_arranged: ctx.features.enable_join_prioritize_arranged,
+            },
         );
         adopt_if_type_preserving(relation, optimized, input_arity, "eqsat physical optimize");
         Ok(())
@@ -517,7 +520,14 @@ mod tests {
             predicates: vec![lit_pred()],
             input: Box::new(src(R_ID, 2)),
         };
-        let out = optimize_with_availability(input, avail(), vec![marker_seed()], false, false, false);
+        let out = optimize_with_availability(
+            input,
+            avail(),
+            vec![marker_seed()],
+            false,
+            false,
+            crate::eqsat::raise::NativeJoinFlags::none(),
+        );
         assert!(
             contains_marker(&out),
             "seed must attach to bare Filter(Get): {out:?}"
@@ -540,7 +550,14 @@ mod tests {
                 input: Box::new(src(R_ID, 2)),
             }),
         };
-        let out = optimize_with_availability(input, avail(), vec![marker_seed()], false, false, false);
+        let out = optimize_with_availability(
+            input,
+            avail(),
+            vec![marker_seed()],
+            false,
+            false,
+            crate::eqsat::raise::NativeJoinFlags::none(),
+        );
         assert!(
             contains_marker(&out),
             "seed must attach through Project(Get): {out:?}"
@@ -568,7 +585,7 @@ mod tests {
             vec![marker_seed_for(lit_pred(), 3)],
             false,
             false,
-            false,
+            crate::eqsat::raise::NativeJoinFlags::none(),
         );
         assert!(
             contains_marker(&out),
@@ -604,7 +621,14 @@ mod tests {
                 input: Box::new(local_get),
             }),
         };
-        let out = optimize_with_availability(input, avail(), vec![marker_seed()], false, false, false);
+        let out = optimize_with_availability(
+            input,
+            avail(),
+            vec![marker_seed()],
+            false,
+            false,
+            crate::eqsat::raise::NativeJoinFlags::none(),
+        );
         assert!(
             contains_marker(&out),
             "seed must attach through a Let-bound shared Project(Get): {out:?}"
@@ -637,8 +661,14 @@ mod tests {
         let seeds = vec![marker_seed_val(1, 999), marker_seed_val(2, 998)];
 
         for use_ilp in [false, true] {
-            let out =
-                optimize_with_availability(plan.clone(), avail(), seeds.clone(), use_ilp, false, false);
+            let out = optimize_with_availability(
+                plan.clone(),
+                avail(),
+                seeds.clone(),
+                use_ilp,
+                false,
+                crate::eqsat::raise::NativeJoinFlags::none(),
+            );
             assert!(
                 contains_marker_id(&out, 999),
                 "value=1 lookup must be extracted (use_ilp={use_ilp}): {out:?}"

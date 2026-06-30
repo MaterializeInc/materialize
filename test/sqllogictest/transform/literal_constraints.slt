@@ -768,7 +768,7 @@ Explained Query:
     Project (#0{a}, #1{b}, #3{c}) // { arity: 3 }
       Join on=(#0{a} = #2{a} = #4{a}) type=differential // { arity: 5 }
         implementation
-          %2:l0[#0{a}] » %0:t1[#0] » %1:l0[#0]
+          %2:l0[#0{a}]K » %0:t1[#0]K » %1:l0[#0]K
         ArrangeBy keys=[[#0{a}]] // { arity: 2 }
           Project (#0{a}, #1{b}) // { arity: 2 }
             Filter (#0{a}) IS NOT NULL // { arity: 3 }
@@ -809,7 +809,7 @@ Explained Query:
   Project (#3{a}, #4{b}, #2{c}) // { arity: 3 }
     Join on=(#0{a} = #3{a}) type=differential // { arity: 5 }
       implementation
-        %1:t1[#0{a}] » %0:t2[#0]
+        %1:t1[#0{a}]K » %0:t2[#0]KA
       ArrangeBy keys=[[#0{a}]] // { arity: 3 }
         ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
       ArrangeBy keys=[[#0{a}]] // { arity: 2 }

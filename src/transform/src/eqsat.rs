@@ -84,7 +84,7 @@ pub fn optimize(expr: MirRelationExpr) -> MirRelationExpr {
         false,
         false,
         false,
-        false,
+        raise::NativeJoinFlags::none(),
     )
 }
 
@@ -104,7 +104,7 @@ pub fn optimize_without_let_union(expr: MirRelationExpr) -> MirRelationExpr {
         false,
         false,
         false,
-        false,
+        raise::NativeJoinFlags::none(),
     )
 }
 
@@ -132,13 +132,13 @@ pub fn optimize_with_availability(
     seeds: Vec<egraph::IndexedFilterSeed>,
     use_ilp: bool,
     use_delta: bool,
-    native_join_commit: bool,
+    flags: crate::eqsat::raise::NativeJoinFlags,
 ) -> MirRelationExpr {
     // Live physical pass: the cost model sees arrangement / index availability,
     // so arrangement-sensitive rules (`phase physical`) may fire here.
     let rules = default_ruleset().for_phase(dsl::Phase::Physical);
     optimize_inner(
-        expr, true, available, rules, true, seeds, use_ilp, false, use_delta, native_join_commit,
+        expr, true, available, rules, true, seeds, use_ilp, false, use_delta, flags,
     )
 }
 
@@ -160,7 +160,7 @@ pub fn optimize_logical(expr: MirRelationExpr, enable_wmr_lift: bool) -> MirRela
         false,
         enable_wmr_lift,
         false,
-        false,
+        raise::NativeJoinFlags::none(),
     )
 }
 
@@ -182,7 +182,7 @@ pub fn optimize_with_wmr_lift(expr: MirRelationExpr) -> MirRelationExpr {
         false,
         true,
         false,
-        false,
+        raise::NativeJoinFlags::none(),
     )
 }
 
@@ -196,7 +196,7 @@ fn optimize_inner(
     use_ilp: bool,
     enable_wmr_lift: bool,
     use_delta: bool,
-    native_join_commit: bool,
+    flags: crate::eqsat::raise::NativeJoinFlags,
 ) -> MirRelationExpr {
     let rel = lower::lower_with(&expr, enable_wmr_lift);
     // The raise step also consults `available` to make the delta-vs-differential
@@ -231,7 +231,7 @@ fn optimize_inner(
     // The equivalence-preserving arity guard lives at the live transform
     // boundary (`EqSatTransform`), which adopts this output only if its arity
     // matches the input. Direct test callers assert arity themselves.
-    let mut raised = raise::raise(&best, commit_wcoj, &available_for_raise, native_join_commit);
+    let mut raised = raise::raise(&best, commit_wcoj, &available_for_raise, flags);
     // Coalesce each maximal Map/Filter/Project run into canonical form. The
     // e-graph fusion rules subsume Map-Map and Filter-Filter fusion (via
     // fuse_maps and merge_filters), but two gaps remain unsubsumed: scalar

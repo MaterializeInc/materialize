@@ -180,7 +180,7 @@ Explained Query:
   Project (#0{a}..=#2{c}, #4{d}, #5{e}) // { arity: 5 }
     Join on=(#0{a} = #3{a}) type=differential // { arity: 6 }
       implementation
-        %1:bar[#0{a}] » %0:foo[#0]
+        %1:bar[#0{a}]KA » %0:foo[#0]K
       ArrangeBy keys=[[#0{a}]] // { arity: 3 }
         Project (#0{a}..=#2{c}) // { arity: 3 }
           ReadIndex on=materialize.public.foo foo_idx3=[lookup value=("this")] // { arity: 4 }

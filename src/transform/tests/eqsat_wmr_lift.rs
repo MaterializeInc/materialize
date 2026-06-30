@@ -337,7 +337,12 @@ fn loop_invariant_subterm_hoisted_out() {
     let features = OptimizerFeatures::default();
     let mut df = DataflowMetainfo::default();
     let mut transform_ctx = TransformCtx::local(&features, &ctx, &mut df, None, None);
-    let mut checked = raise::raise(&result, false, &BTreeMap::new(), false);
+    let mut checked = raise::raise(
+        &result,
+        false,
+        &BTreeMap::new(),
+        raise::NativeJoinFlags::none(),
+    );
     Typecheck::new(std::sync::Arc::clone(&ctx))
         .transform(&mut checked, &mut transform_ctx)
         .expect("raised plan must pass strict Typecheck");

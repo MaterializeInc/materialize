@@ -71,7 +71,7 @@ Explained Query:
       Map ((#4) IS NULL, case when #8 then null else #0 end, case when #8 then null else #3 end, (#7) IS NULL, case when #11 then null else #5 end, case when #11 then null else #6 end)
         Join on=(#0 = #2 AND #5 = case when (#4) IS NULL then null else #0 end) type=differential
           implementation
-            %1[#0] » %0:t1[#0] » %2[#0]
+            %1[#0]K » %0:t1[#0]K » %2[#0]K
           ArrangeBy keys=[[#0]]
             ReadStorage materialize.public.t1
           ArrangeBy keys=[[#0]]

@@ -37,6 +37,28 @@ use crate::reduce_reduction::ReduceReduction;
 use crate::typecheck::empty_typechecking_context;
 use crate::{Transform, TransformCtx};
 
+/// Flags controlling the physical join-commit path. Replaces the former lone
+/// `native_join_commit` bool so Part A (`prioritize_arranged`) and Part B
+/// (`eager_delta`, added later) thread without growing the positional arg list.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeJoinFlags {
+    /// Commit acyclic joins to a cost-model Differential/DeltaQuery so
+    /// `JoinImplementation` no-ops on them.
+    pub commit: bool,
+    /// Select the V2 `JoinInputCharacteristics` layout (`enable_join_prioritize_arranged`).
+    pub prioritize_arranged: bool,
+}
+
+impl NativeJoinFlags {
+    /// All-off: no native commit. Used by logical/offline entry points and tests.
+    pub fn none() -> Self {
+        NativeJoinFlags {
+            commit: false,
+            prioritize_arranged: false,
+        }
+    }
+}
+
 /// Raise `rel` to a `MirRelationExpr`. Inverse of [`crate::eqsat::lower::lower`].
 ///
 /// Scalars are read directly off their `MirScalarExpr` payloads. `Rel::Opaque`
@@ -67,10 +89,10 @@ pub fn raise(
     rel: &Rel,
     commit_wcoj: bool,
     available: &BTreeMap<GlobalId, Vec<Vec<MirScalarExpr>>>,
-    native_join_commit: bool,
+    flags: NativeJoinFlags,
 ) -> MirRelationExpr {
     let mut scope = BTreeMap::new();
-    let mut raised = raise_inner(rel, commit_wcoj, available, native_join_commit, &mut scope);
+    let mut raised = raise_inner(rel, commit_wcoj, available, flags, &mut scope);
     // Make the raised plan independently safe to lower. `ReducePlan::create_from`
     // panics on a single `Reduce` mixing reduction types, and only this split
     // breaks it apart. It is logical-safe in any phase and a no-op when there is
@@ -87,11 +109,11 @@ fn raise_inner(
     rel: &Rel,
     commit_wcoj: bool,
     available: &BTreeMap<GlobalId, Vec<Vec<MirScalarExpr>>>,
-    native_join_commit: bool,
+    flags: NativeJoinFlags,
     scope: &mut BTreeMap<usize, ReprRelationType>,
 ) -> MirRelationExpr {
     let raise = |r: &Rel, scope: &mut BTreeMap<usize, ReprRelationType>| {
-        raise_inner(r, commit_wcoj, available, native_join_commit, scope)
+        raise_inner(r, commit_wcoj, available, flags, scope)
     };
     match rel {
         Rel::Opaque(m) => (**m).clone(),
@@ -154,7 +176,7 @@ fn raise_inner(
             // Differential so JoinImplementation no-ops on them. On any failure,
             // fall back to the bare Unimplemented join and let JoinImplementation
             // handle it.
-            if !commit_wcoj || !native_join_commit {
+            if !commit_wcoj || !flags.commit {
                 return join;
             }
             // Don't commit if any raised input is a constant singleton:
@@ -215,11 +237,16 @@ fn raise_inner(
             }
             // The committed join carries the canonical equivalences, matching the
             // order computed above.
-            let canon_join =
-                MirRelationExpr::join_scalars(raised_inputs.clone(), canon_equivs);
+            let canon_join = MirRelationExpr::join_scalars(raised_inputs.clone(), canon_equivs);
             let per_input = per_input_available(&raised_inputs, available);
-            crate::eqsat::join_commit::commit_differential(canon_join, order, &per_input)
-                .unwrap_or(join)
+            crate::eqsat::join_commit::commit_differential(
+                canon_join,
+                order,
+                &per_input,
+                &raised_inputs,
+                flags.prioritize_arranged,
+            )
+            .unwrap_or(join)
         }
         Rel::Negate { input } => raise(input, scope).negate(),
         Rel::Threshold { input } => raise(input, scope).threshold(),
@@ -701,7 +728,7 @@ mod tests {
         let rel = lower(&r);
         // These round-trips never involve a WcoJoin (lowering never emits one),
         // so `commit_wcoj` is irrelevant here.
-        let back = raise(&rel, true, &BTreeMap::new(), false);
+        let back = raise(&rel, true, &BTreeMap::new(), super::NativeJoinFlags::none());
         assert_eq!(back, r, "round-trip changed the plan");
     }
 
@@ -801,13 +828,23 @@ mod tests {
 
         // Physical phase: emit the committed realization verbatim.
         assert_eq!(
-            raise(&node, true, &BTreeMap::new(), false),
+            raise(
+                &node,
+                true,
+                &BTreeMap::new(),
+                super::NativeJoinFlags::none()
+            ),
             committed,
             "physical raise must emit the committed realization"
         );
         // Logical phase: emit the equivalent plain filter over the raised input.
         assert_eq!(
-            raise(&node, false, &BTreeMap::new(), false),
+            raise(
+                &node,
+                false,
+                &BTreeMap::new(),
+                super::NativeJoinFlags::none()
+            ),
             base(2).filter(vec![pred]),
             "logical raise must emit the equivalent Filter(input)"
         );
@@ -889,7 +926,12 @@ mod tests {
             }),
         };
         // Must not panic; raise threads the bound value's type into scope.
-        let raised = raise(&cse_let, false, &BTreeMap::new(), false);
+        let raised = raise(
+            &cse_let,
+            false,
+            &BTreeMap::new(),
+            super::NativeJoinFlags::none(),
+        );
         match &raised {
             MirRelationExpr::Let { id, value, body } => {
                 assert_eq!(u64::from(id), 1);
@@ -944,7 +986,12 @@ mod tests {
         };
 
         // Raise the non-canonical tree then coalesce it.
-        let mut result = raise(&rel, false, &BTreeMap::new(), false);
+        let mut result = raise(
+            &rel,
+            false,
+            &BTreeMap::new(),
+            super::NativeJoinFlags::none(),
+        );
         coalesce_mfp(&mut result);
 
         // Walk the result tree and count contiguous M/F/P layers.
@@ -1113,7 +1160,12 @@ mod tests {
             body: Box::new(get_rec),
         };
         let lowered = lower_with(&r, true);
-        let raised = raise(&lowered, false, &BTreeMap::new(), false);
+        let raised = raise(
+            &lowered,
+            false,
+            &BTreeMap::new(),
+            super::NativeJoinFlags::none(),
+        );
         assert_eq!(raised, r, "versioned round trip must be identity");
     }
 
@@ -1184,7 +1236,12 @@ mod tests {
         // (`commit_wcoj = true`) is the gap that `logical_fixpoint_02` leaves,
         // so this is the load-bearing case for the fix.
         for commit_wcoj in [false, true] {
-            let raised = raise(&rel, commit_wcoj, &BTreeMap::new(), false);
+            let raised = raise(
+                &rel,
+                commit_wcoj,
+                &BTreeMap::new(),
+                super::NativeJoinFlags::none(),
+            );
             assert!(
                 !has_mixed_reduction_reduce(&raised),
                 "raise (commit_wcoj={commit_wcoj}) must split the mixed-reduction Reduce; got {raised:?}"

@@ -54,13 +54,17 @@ fn step_characteristics(
 }
 
 /// Commit `join` (a bare, `Unimplemented` `Join`) to a `Differential` plan that
-/// follows `order`. `available` gives each input's existing arrangement keys.
-/// Returns `None` (caller keeps the bare join) if `join` is not a `Join`, the
-/// order is empty, or a valid start arrangement key cannot be formed.
+/// follows `order`. `available` gives each input's existing arrangement keys
+/// (before `implement_arrangements` wraps them). `inputs` are the raised join
+/// inputs, used to compute `JoinInputCharacteristics` for EXPLAIN. Returns `None`
+/// (caller keeps the bare join) if `join` is not a `Join`, the order is empty,
+/// or a valid start arrangement key cannot be formed.
 pub(crate) fn commit_differential(
     mut join: MirRelationExpr,
     order: JoinOrder,
     available: &[Vec<Vec<MirScalarExpr>>],
+    inputs: &[MirRelationExpr],
+    prioritize_arranged: bool,
 ) -> Option<MirRelationExpr> {
     if order.steps.is_empty() {
         return None;
@@ -77,18 +81,22 @@ pub(crate) fn commit_differential(
     };
 
     // Build the (input, local_key, characteristics) order; element 0 is the
-    // start. Characteristics are EXPLAIN-only and not produced cost-model-side.
+    // start. Characteristics are populated here against the original `available`
+    // (before implement_arrangements), and the start element is recomputed after
+    // key alignment to reflect the aligned key.
     let mut order_tuples: Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)> =
         order
             .steps
             .iter()
             .map(|s| {
-                let key = s
+                let key: Vec<MirScalarExpr> = s
                     .key_cols
                     .iter()
                     .map(|&c| MirScalarExpr::column(c))
                     .collect();
-                (s.input, key, None)
+                let chars =
+                    step_characteristics(s.input, &key, available, inputs, prioritize_arranged);
+                (s.input, key, Some(chars))
             })
             .collect();
 
@@ -120,7 +128,16 @@ pub(crate) fn commit_differential(
             // Unimplemented join rather than emit a wrong plan.
             return None;
         }
-        order_tuples[0].1 = aligned;
+        order_tuples[0].1 = aligned.clone();
+        // Recompute the start's characteristics on the aligned key so the
+        // EXPLAIN markers reflect the actual arrangement key used.
+        order_tuples[0].2 = Some(step_characteristics(
+            start,
+            &aligned,
+            available,
+            inputs,
+            prioritize_arranged,
+        ));
     }
 
     let MirRelationExpr::Join {
@@ -188,6 +205,10 @@ mod tests {
             "expected key_length 1, got {c0:?}"
         );
         assert!(c0.arranged(), "input 0 is arranged by [#0]");
+        assert!(
+            format!("{c0:?}").contains("unique_key: true"),
+            "input 0 key [#0] covers the unique key {{0}}, got {c0:?}"
+        );
         // Lookup on input 1, key [#0]: not arranged, not unique.
         let c1 = step_characteristics(1, &[MirScalarExpr::column(0)], &available, &inputs, false);
         assert!(!c1.arranged(), "input 1 has no arrangement");
@@ -220,7 +241,7 @@ mod tests {
         // 3-input join, no available arrangements.
         let inputs = vec![get(0, 2), get(1, 2), get(2, 2)];
         let join = MirRelationExpr::join_scalars(
-            inputs,
+            inputs.clone(),
             vec![
                 vec![
                     mz_expr::MirScalarExpr::column(0),
@@ -239,7 +260,7 @@ mod tests {
         };
         let available = vec![Vec::new(); 3];
 
-        let out = commit_differential(join, order, &available)
+        let out = commit_differential(join, order, &available, &inputs, false)
             .expect("commit must succeed on a 3-input join");
 
         let MirRelationExpr::Join { implementation, .. } = &out else {
@@ -270,7 +291,7 @@ mod tests {
         // key and assert commit_differential narrows it to match the first lookup.
         let inputs = vec![get(0, 2), get(1, 2), get(2, 2)];
         let join = MirRelationExpr::join_scalars(
-            inputs,
+            inputs.clone(),
             vec![
                 // #0 (hub col 0) = #2 (input 1 col 0)
                 vec![MirScalarExpr::column(0), MirScalarExpr::column(2)],
@@ -285,7 +306,7 @@ mod tests {
         };
         let available = vec![Vec::new(); 3];
 
-        let out = commit_differential(join, order, &available)
+        let out = commit_differential(join, order, &available, &inputs, false)
             .expect("commit must succeed on a 3-input star join");
 
         let MirRelationExpr::Join { implementation, .. } = &out else {

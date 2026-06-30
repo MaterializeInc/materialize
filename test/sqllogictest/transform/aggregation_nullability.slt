@@ -31,7 +31,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#0]
+            %1:t2[#0{f1}]K » %0:t1[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -50,7 +50,7 @@ Explained Query:
                 Project (#0{f1}) // { arity: 1 }
                   Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                     implementation
-                      %1[#0] » %0:l0[#0]
+                      %1[#0]UKA » %0:l0[#0]K
                     ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                       Filter (#0{f1}) IS NOT NULL // { arity: 1 }
                         Get l0 // { arity: 1 }
@@ -85,7 +85,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#0]
+            %1:t2[#0{f1}]K » %0:t1[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -122,7 +122,7 @@ Explained Query:
       Project (#1{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1:l0[#0{f1}] » %0:t2[#0]
+            %1:l0[#0{f1}]K » %0:t2[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -136,7 +136,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0{f1}] » %0:l0[#0]
+                    %1[#0{f1}]UKA » %0:l0[#0]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -149,7 +149,7 @@ Explained Query:
     Project (#0{f1}, #6{count_f1}, #7{sum_f1}, #1{max_f1}, #2{min_f1}, #8{count_f2}, #9{sum_f2}, #3{min_f2}, #4{max_f2}) // { arity: 9 }
       Join on=(#0{f1} = #5{f1}) type=differential // { arity: 10 }
         implementation
-          %1[#0{f1}] » %0[#0]
+          %1[#0{f1}]UKA » %0[#0]UKA
         ArrangeBy keys=[[#0{f1}]] // { arity: 5 }
           Reduce group_by=[#0{f1}] aggregates=[max(#2{f1}), min(#2{f1}), min(#1{f2}), max(#1{f2})] // { arity: 5 }
             Get l2 // { arity: 3 }
@@ -178,7 +178,7 @@ Explained Query:
       Project (#1{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1:l0[#0{f1}] » %0:t2[#0]
+            %1:l0[#0{f1}]K » %0:t2[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -192,7 +192,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0{f1}] » %0:l0[#0]
+                    %1[#0{f1}]UKA » %0:l0[#0]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -206,7 +206,7 @@ Explained Query:
       Filter (#4{sum_f2} >= 0) // { arity: 10 }
         Join on=(#0{f1} = #5{f1}) type=differential // { arity: 10 }
           implementation
-            %1[#0{f1}] » %0[#0]
+            %1[#0{f1}]UKA » %0[#0]UKA
           ArrangeBy keys=[[#0{f1}]] // { arity: 5 }
             Reduce group_by=[#0{f1}] aggregates=[count(#2{f1}), sum(#2{f1}), count(#1{f2}), sum(#1{f2})] // { arity: 5 }
               Get l2 // { arity: 3 }
@@ -235,7 +235,7 @@ Explained Query:
       Project (#1{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1:l0[#0{f1}] » %0:t2[#0]
+            %1:l0[#0{f1}]K » %0:t2[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -249,7 +249,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0{f1}] » %0:l0[#0]
+                    %1[#0{f1}]UKA » %0:l0[#0]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -263,7 +263,7 @@ Explained Query:
       Filter (#2{sum_f1} >= 0) // { arity: 10 }
         Join on=(#0{f1} = #5{f1}) type=differential // { arity: 10 }
           implementation
-            %1[#0{f1}] » %0[#0]
+            %1[#0{f1}]UKA » %0[#0]UKA
           ArrangeBy keys=[[#0{f1}]] // { arity: 5 }
             Reduce group_by=[#0{f1}] aggregates=[count(#2{f1}), sum(#2{f1}), count(#1{f2}), sum(#1{f2})] // { arity: 5 }
               Get l2 // { arity: 3 }
@@ -317,7 +317,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#0]
+            %1:t2[#0{f1}]K » %0:t1[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1} >= 0) // { arity: 2 }
@@ -330,7 +330,7 @@ Explained Query:
     Project (#0{f1}, #3{sum_f1}, #1{max_f1}) // { arity: 3 }
       Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
-          %1[#0{f1}] » %0[#0]
+          %1[#0{f1}]UKA » %0[#0]UKA
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Reduce group_by=[#0{f1}] aggregates=[max(#0{f1})] // { arity: 2 }
             Get l0 // { arity: 1 }
@@ -357,7 +357,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#0]
+            %1:t2[#0{f1}]K » %0:t1[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1} >= 0) // { arity: 2 }
@@ -371,7 +371,7 @@ Explained Query:
       Filter (#1{sum_f1} >= 0) // { arity: 4 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1[#0{f1}] » %0[#0]
+            %1[#0{f1}]UKA » %0[#0]UKA
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Reduce group_by=[#0{f1}] aggregates=[sum(#0{f1})] // { arity: 2 }
               Get l0 // { arity: 1 }
@@ -403,7 +403,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1:t2[#0{f1}] » %0:l0[#0]
+            %1:t2[#0{f1}]K » %0:l0[#0]K
           Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -416,7 +416,7 @@ Explained Query:
               Project (#0{f1}) // { arity: 1 }
                 Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0{f1}] » %0:l0[#0]
+                    %1[#0{f1}]UKA » %0:l0[#0]K
                   Get l0 // { arity: 1 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -431,7 +431,7 @@ Explained Query:
       Filter (#1{max_f1} >= 0) // { arity: 4 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1[#0{f1}] » %0[#0]
+            %1[#0{f1}]UKA » %0[#0]UKA
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Reduce group_by=[#0{f1}] aggregates=[max(#1{f1})] // { arity: 2 }
               Project (#0{f1}, #1{f1}) // { arity: 2 }
@@ -459,7 +459,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#0]
+            %1:t2[#0{f1}]K » %0:t1[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1} >= 0) // { arity: 2 }
@@ -471,7 +471,7 @@ Explained Query:
     Project (#0{f1}, #3{sum}, #1{max_f1}) // { arity: 3 }
       Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
-          %1[#0{f1}] » %0[#0]
+          %1[#0{f1}]UKA » %0[#0]UKA
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Reduce group_by=[#0{f1}] aggregates=[max(#0{f1})] // { arity: 2 }
             Project (#0{f1}) // { arity: 1 }
@@ -499,7 +499,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#0]
+            %1:t2[#0{f1}]K » %0:t1[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1} >= 0) // { arity: 2 }
@@ -512,7 +512,7 @@ Explained Query:
     Project (#0{f1}, #3{sum}, #1{max_f1}) // { arity: 3 }
       Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
-          %1[#0{f1}] » %0[#0]
+          %1[#0{f1}]UKA » %0[#0]UKA
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Reduce group_by=[#0{f1}] aggregates=[max(#0{f1})] // { arity: 2 }
             Get l0 // { arity: 1 }
@@ -544,7 +544,7 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:t2[#0{f1}] » %0:l0[#0]
+            %1:t2[#0{f1}]K » %0:l0[#0]K
           Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
@@ -558,7 +558,7 @@ Explained Query:
               Project (#0{f1}) // { arity: 1 }
                 Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0{f1}] » %0:l0[#0]
+                    %1[#0{f1}]UKA » %0:l0[#0]K
                   Get l0 // { arity: 1 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -572,7 +572,7 @@ Explained Query:
       Filter (#1{max_f1} >= 0) // { arity: 4 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1[#0{f1}] » %0[#0]
+            %1[#0{f1}]UKA » %0[#0]UKA
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Reduce group_by=[#0{f1}] aggregates=[max(#1{f1})] // { arity: 2 }
               Get l2 // { arity: 2 }
@@ -602,7 +602,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#0]
+            %1:t2[#0{f1}]K » %0:t1[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -619,7 +619,7 @@ Explained Query:
               Project (#0{f1}) // { arity: 1 }
                 Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0] » %0:l0[#0]
+                    %1[#0]UKA » %0:l0[#0]K
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Filter (#0{f1}) IS NOT NULL // { arity: 1 }
                       Get l0 // { arity: 1 }
@@ -653,7 +653,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1:t2[#0{f1}] » %0:l0[#0]
+            %1:t2[#0{f1}]K » %0:l0[#0]K
           Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -666,7 +666,7 @@ Explained Query:
               Project (#0{f1}) // { arity: 1 }
                 Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0{f1}] » %0:l0[#0]
+                    %1[#0{f1}]UKA » %0:l0[#0]K
                   Get l0 // { arity: 1 }
                   ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                     Distinct project=[#0{f1}] // { arity: 1 }
@@ -679,7 +679,7 @@ Explained Query:
     Project (#0{f1}, #3{count_f2}, #1{max_f2}) // { arity: 3 }
       Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
-          %1[#0{f1}] » %0[#0]
+          %1[#0{f1}]UKA » %0[#0]UKA
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Reduce group_by=[#0{f1}] aggregates=[max(#1{f2})] // { arity: 2 }
             Get l2 // { arity: 2 }
@@ -705,7 +705,7 @@ Explained Query:
       Project (#0{f1}, #2{f2}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#0]
+            %1:t2[#0{f1}]K » %0:t1[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Project (#0{f1}) // { arity: 1 }
               Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -718,7 +718,7 @@ Explained Query:
       Filter (#1{max_f2} > 0) // { arity: 4 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1[#0{f1}] » %0[#0]
+            %1[#0{f1}]UKA » %0[#0]UKA
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Reduce group_by=[#0{f1}] aggregates=[max(#1{f2})] // { arity: 2 }
               Get l0 // { arity: 2 }
@@ -745,7 +745,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#0]
+            %1:t2[#0{f1}]K » %0:t1[#0]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
@@ -757,7 +757,7 @@ Explained Query:
       Filter (#1{max} > 0) // { arity: 4 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1[#0{f1}] » %0[#0]
+            %1[#0{f1}]UKA » %0[#0]UKA
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Reduce group_by=[#0{f1}] aggregates=[max((#0{f1} + #1{f2}))] // { arity: 2 }
               Project (#0{f1}, #2{f2}) // { arity: 2 }
@@ -817,7 +817,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
         Join on=(#1{f2} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1:t2[#0{f1}] » %0:l0[#1]
+            %1:t2[#0{f1}]K » %0:l0[#1]K
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -830,7 +830,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#1{f2} = #2{f2}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0{f2}] » %0:l0[#1]
+                    %1[#0{f2}]UKA » %0:l0[#1]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
                     Distinct project=[#0{f2}] // { arity: 1 }
@@ -842,7 +842,7 @@ Explained Query:
     Project (#2{f1}, #1{count_f2}, #3{max_f2}) // { arity: 3 }
       Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
-          %1[#0{f2}] » %0[#0]
+          %1[#0{f2}]UKA » %0[#0]UKA
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Reduce group_by=[#0{f1}] aggregates=[count(#1{f2})] // { arity: 2 }
             Project (#0{f1}, #1{f2}) // { arity: 2 }
@@ -873,7 +873,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
         Join on=(#1{f2} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1:t2[#0{f1}] » %0:l0[#1]
+            %1:t2[#0{f1}]K » %0:l0[#1]K
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1}) IS NOT NULL // { arity: 2 }
@@ -886,7 +886,7 @@ Explained Query:
               Project (#0{f1}, #1{f2}) // { arity: 2 }
                 Join on=(#1{f2} = #2{f2}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0{f2}] » %0:l0[#1]
+                    %1[#0{f2}]UKA » %0:l0[#1]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
                     Distinct project=[#0{f2}] // { arity: 1 }
@@ -899,7 +899,7 @@ Explained Query:
       Filter (#1{max_f2} > 0) // { arity: 4 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1[#0{f2}] » %0[#0]
+            %1[#0{f2}]UKA » %0[#0]UKA
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Reduce group_by=[#0{f1}] aggregates=[max(#1{f2})] // { arity: 2 }
               Project (#0{f1}, #2{f2}) // { arity: 2 }
@@ -927,7 +927,7 @@ Explained Query:
       Project (#0{f1}, #3{f2}) // { arity: 2 }
         Join on=(#1{f2} = #2{f1}) type=differential // { arity: 4 }
           implementation
-            %1:t2[#0{f1}] » %0:t1[#1]
+            %1:t2[#0{f1}]K » %0:t1[#1]K
           ArrangeBy keys=[[#1{f2}]] // { arity: 2 }
             Filter (#1{f2}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
@@ -1044,7 +1044,7 @@ Explained Query:
           Map (null) // { arity: 5 }
             Join on=(#0{f1} = #2{f1} AND #1{f2} = #3{f2}) type=differential // { arity: 4 }
               implementation
-                %1[#0, #1] » %0:t3[#0, #1]
+                %1[#0, #1]KK » %0:t3[#0, #1]KK
               ArrangeBy keys=[[#0{f1}, #1{f2}]] // { arity: 2 }
                 ReadStorage materialize.public.t3 // { arity: 2 }
               ArrangeBy keys=[[#0{f1}, #1{f2}]] // { arity: 2 }
@@ -1132,7 +1132,7 @@ Explained Query:
             Map (null) // { arity: 3 }
               Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
                 implementation
-                  %1:t2[#0] » %0[#0]
+                  %1:t2[#0]K » %0[#0]K
                 ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }

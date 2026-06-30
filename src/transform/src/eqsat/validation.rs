@@ -108,7 +108,7 @@ use crate::eqsat::default_ruleset;
 use crate::eqsat::engine::Optimizer;
 use crate::eqsat::lower::lower;
 use crate::eqsat::objective::{ArrangementCount, PeakDegree};
-use crate::eqsat::raise::raise;
+use crate::eqsat::raise::{NativeJoinFlags, raise};
 
 /// Build a source relation with `arity` Int64 non-nullable columns and a
 /// unique transient global id `id`.
@@ -410,7 +410,12 @@ fn e2e_optimize(mir: MirRelationExpr) -> MirRelationExpr {
     let outcome = Optimizer::new(default_ruleset(), model)
         .with_objective(Arc::new(ArrangementCount))
         .optimize(input_rel);
-    raise(&outcome.plan, false, &BTreeMap::new(), false)
+    raise(
+        &outcome.plan,
+        false,
+        &BTreeMap::new(),
+        NativeJoinFlags::none(),
+    )
 }
 
 /// End-to-end test: eqsat optimizes a fragment inside a LetRec body.
