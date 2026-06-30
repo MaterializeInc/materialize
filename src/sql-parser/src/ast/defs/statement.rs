@@ -4628,6 +4628,7 @@ impl AstDisplay for TransactionMode {
 }
 impl_display!(TransactionMode);
 
+/// The access mode of a transaction, as specified by the `BEGIN ...` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TransactionAccessMode {
     ReadOnly,

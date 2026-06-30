@@ -482,6 +482,32 @@ INSERT INTO t (a) VALUES (1)
 statement ok
 ROLLBACK
 
+## A constant peek must not let a write sneak into a read-only transaction.
+## Regression test for SQL-373 and SQL-374: the constant SELECT used to switch
+## the transaction into a write transaction, so the INSERT was wrongly accepted.
+## A following second write then panicked (SQL-373), and a single write even
+## committed and persisted data (SQL-374). The write must be rejected, and
+## committing the transaction must not persist anything.
+
+statement ok
+BEGIN TRANSACTION READ ONLY
+
+query I
+SELECT 1
+----
+1
+
+statement error transaction in read-only mode
+INSERT INTO t (a) VALUES (42424242)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM t WHERE a = 42424242
+----
+0
+
 ## BEGIN does not lose READ ONLY bit
 
 statement ok
