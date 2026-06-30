@@ -29,7 +29,7 @@
 //! ## Operator loop (each iteration)
 //!
 //! 1. **Ingest source data.** Read upsert commands from the source input,
-//!    wrap each in an [`UpsertDiff`] (carrying a columnar order key projected
+//!    wrap each in an `UpsertDiff` (carrying a columnar order key projected
 //!    from `FromTime` via [`UpsertSourceTime`] for dedup), and push into the
 //!    source-stash batcher. The batcher is a paged columnar merge batcher: it
 //!    consolidates entries for the same `(key, time)` via the `UpsertDiff`
@@ -52,7 +52,7 @@
 //!      caught up yet. Push back into the batcher for the next iteration.
 //!    - **Already persisted** (below the persist frontier): some writer has
 //!      already advanced the shard past this time, so it is dropped. See
-//!      [`drain_sealed_input`] for why re-stashing it would strand the data
+//!      `drain_sealed_input` for why re-stashing it would strand the data
 //!      and pin the output frontier below the shard upper.
 //!
 //! 4. **Capability management.** Downgrade the output capability to the
@@ -82,6 +82,9 @@ use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
+// Only the fuzzing-gated `datum_seq_to_upsert_value` takes a `DatumSeq`.
+#[cfg(feature = "fuzzing")]
+use mz_row_spine::DatumSeq;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -273,7 +276,13 @@ type UpsertOutputHandle<T> =
 
 /// Encode an [`UpsertValue`] as a `Row` with a leading tag column so both `Ok`
 /// and `Err` payloads round-trip through `Row` byte storage.
-fn upsert_value_to_row(value: &UpsertValue) -> Row {
+///
+/// Used on the render path. `pub` only so [`crate::fuzz_exports`] can re-export
+/// it under the `fuzzing` feature for the storage fuzz crate. The enclosing
+/// module is crate-private, so it is not otherwise reachable. Not a stable
+/// public API.
+#[doc(hidden)]
+pub fn upsert_value_to_row(value: &UpsertValue) -> Row {
     let mut row = Row::default();
     let mut packer = row.packer();
     match value {
@@ -298,6 +307,17 @@ fn upsert_value_byte_len(value: &UpsertValue) -> usize {
         Ok(row) => row.byte_len(),
         Err(err) => std::mem::size_of_val(err.as_ref()),
     }
+}
+
+/// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] back from the
+/// `DatumSeq` view returned by a `ValRowSpine` cursor.
+///
+/// Exists only for the storage fuzz crate, so it is gated behind the `fuzzing`
+/// feature. Not a stable public API.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub fn datum_seq_to_upsert_value(seq: DatumSeq<'_>) -> UpsertValue {
+    decode_upsert_value(seq)
 }
 
 /// Decode an [`UpsertValue`] produced by [`upsert_value_to_row`] from any datum
