@@ -328,7 +328,20 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     ///
     /// This implicitly confirms leadership, as attempting to advance the catalog frontier will
     /// fail if the writer has been fenced out.
+    ///
+    /// Soft-panics if `new_upper` is not ahead of the current upper. Callers that advance the upper
+    /// opportunistically with a timestamp that may have been superseded should use
+    /// [`Self::try_advance_upper`] instead.
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
+
+    /// Advances the upper of the catalog shard to at least `new_upper`, doing nothing if the upper
+    /// is already at or past it.
+    ///
+    /// Unlike [`Self::advance_upper`], a `new_upper` that is not ahead of the current upper is not
+    /// an error. This is for callers that advance the upper opportunistically with a timestamp that
+    /// may have been superseded since it was chosen, e.g. the periodic group commit, whose timestamp
+    /// is allocated off the coordinator loop and can be overtaken by a catalog transaction.
+    async fn try_advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     ///

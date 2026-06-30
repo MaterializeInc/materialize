@@ -20,23 +20,26 @@ use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS};
 use mz_expr::CollectionPlan;
-use mz_ore::metrics::MetricsFutureExt;
+use mz_ore::assert_none;
+use mz_ore::now::NowFn;
 use mz_ore::task;
-use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument};
-use mz_repr::{CatalogItemId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
-use mz_timestamp_oracle::WriteTimestamp;
+use mz_storage_client::controller::TableAppender;
+use mz_storage_types::controller::StorageError;
+use mz_timestamp_oracle::{TimestampOracle, WriteTimestamp};
 use smallvec::SmallVec;
-use tokio::sync::{Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, oneshot};
-use tracing::{Instrument, Span, debug_span, info, warn};
+use tokio::sync::{Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{BuiltinTableUpdate, Catalog};
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
+use crate::metrics::Metrics;
 use crate::session::{GroupCommitWriteLocks, Session, WriteLocks};
+use crate::statement_logging::StatementLoggingId;
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
 
@@ -57,7 +60,7 @@ pub enum DeferredOp {
 impl DeferredOp {
     /// Certain operations, e.g. "blind writes"/`INSERT` statements, can be optimistically retried
     /// because we can share a write lock between multiple operations. In this case we wait to
-    /// acquire the locks until [`group_commit`], where writes are groupped by collection and
+    /// acquire the locks until [`stage_group_commit`], where writes are groupped by collection and
     /// comitted at a single timestamp.
     ///
     /// Other operations, e.g. read-then-write plans/`UPDATE` statements, must uniquely hold their
@@ -65,7 +68,7 @@ impl DeferredOp {
     /// queued plans attempting to get retried at the same time, when we know only one can proceed.
     ///
     /// [`try_deferred`]: crate::coord::Coordinator::try_deferred
-    /// [`group_commit`]: crate::coord::Coordinator::group_commit
+    /// [`stage_group_commit`]: crate::coord::Coordinator::stage_group_commit
     pub(crate) fn can_be_optimistically_retried(&self) -> bool {
         match self {
             DeferredOp::Plan(_) => false,
@@ -176,6 +179,219 @@ impl PendingWriteTxn {
     }
 }
 
+/// A batch of writes staged on the coordinator loop, to be committed by the [`GroupCommitter`].
+///
+/// The loop does the cheap, state-touching work (draining pending writes, acquiring write locks,
+/// building the append batch) and hands the rest to the committer. Timestamp allocation, the table
+/// append, advancing the catalog upper, and applying the write to the oracle all happen off the
+/// loop.
+pub(crate) struct GroupCommitRequest {
+    /// Table appends, resolved to their latest [`GlobalId`] and consolidated. Empty for a keepalive.
+    appends: Vec<(GlobalId, Vec<TableData>)>,
+    /// Client transmitters for user writes, retired once the commit is durable.
+    responses: Vec<CompletedClientTransmitter>,
+    /// Statement-logging ids for user writes, paired with the commit timestamp once we know it.
+    statement_logging_ids: Vec<StatementLoggingId>,
+    /// Notifiers for system-table writes (DDL, background heartbeats).
+    notifies: Vec<oneshot::Sender<()>>,
+    /// Write locks held for the duration of the commit.
+    write_locks: GroupCommitWriteLocks,
+    /// In-progress permit, released once the commit is applied.
+    permit: Option<GroupCommitPermit>,
+    /// Whether the batch has an internal system write (e.g. `mz_sessions`), which bypasses the
+    /// throttle so that tests with a mocked wall clock can still make progress.
+    contains_internal_system_write: bool,
+    span: Span,
+}
+
+/// A single, long-lived task that applies group commits off the coordinator loop.
+///
+/// The coordinator loop stages each commit (draining pending writes, acquiring write locks, and
+/// building the append batch, all cheap) and hands a [`GroupCommitRequest`] here. This task does the
+/// timestamp-oracle round trips, appends to tables, and applies the write. Processing one request at
+/// a time makes this task the serialization point for group commits, so appends reach the table
+/// worker in timestamp order.
+///
+/// It holds only shareable handles, captured once at startup. The oracle is never replaced
+/// in-process, and the table appender stays valid for the controller's lifetime.
+///
+/// NOTE: The catalog upper is advanced on the loop in the [`Message::GroupCommitApplied`] handler,
+/// not here, because it must be serialized with on-loop catalog transactions (whose commit
+/// timestamp is fixed when the transaction begins).
+pub(crate) struct GroupCommitter {
+    rx: mpsc::UnboundedReceiver<GroupCommitRequest>,
+    oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync>,
+    table_appender: Arc<dyn TableAppender>,
+    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    now: NowFn,
+    metrics: Metrics,
+    /// See [`Coordinator::shard_advance_lock`]. Held around allocating the write timestamp and
+    /// issuing the catalog and txns-shard advances, so they interleave with on-loop DDL in timestamp
+    /// order.
+    shard_advance_lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl GroupCommitter {
+    async fn run(mut self) {
+        while let Some(request) = self.rx.recv().await {
+            let span = request.span.clone();
+            self.commit(request).instrument(span).await;
+        }
+    }
+
+    /// Applies one staged group commit: allocate a timestamp, append, and apply the write.
+    async fn commit(&self, request: GroupCommitRequest) {
+        let GroupCommitRequest {
+            appends,
+            responses,
+            statement_logging_ids,
+            notifies,
+            write_locks,
+            permit,
+            contains_internal_system_write,
+            span: _,
+        } = request;
+
+        // Throttle: keep the global write timeline from running ahead of the wall clock. We peek and
+        // sleep off the loop, so a slow oracle backend does not stall the coordinator. The internal
+        // system-write case bypasses this so tests with a mocked wall clock still make progress.
+        loop {
+            let ts = self.oracle.peek_write_ts().await;
+            let now: Timestamp = (self.now)().into();
+            if ts > now && !contains_internal_system_write {
+                // Cap the wait at 1s so a wall clock that jumped far ahead and then back does not
+                // stall us for a long time.
+                let remaining_ms = std::cmp::min(ts.saturating_sub(now), Timestamp::from(1_000u64));
+                tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
+            } else {
+                break;
+            }
+        }
+
+        // Allocate a write timestamp and append. Under `shard_advance_lock` the timestamp allocation
+        // and the txns-shard write are serialized with on-loop DDL, so they reach the txns shard in
+        // timestamp order and neither side ever sees a stale upper. We hold the lock only through
+        // issuing the append, not through awaiting it.
+        //
+        // The `InvalidUppers` retry is a defensive backstop: with the lock held it should not
+        // happen, but if it ever did we retry at a fresh timestamp rather than terminate. A wasted
+        // timestamp is harmless: `apply_write` is a high-water mark, so the eventual, higher
+        // timestamp subsumes it.
+        let (timestamp, advance_to) = loop {
+            let (timestamp, advance_to, append_recv) = {
+                let _guard = Arc::clone(&self.shard_advance_lock).lock_owned().await;
+
+                let WriteTimestamp {
+                    timestamp,
+                    advance_to,
+                } = self.oracle.write_ts().await;
+
+                let append_recv =
+                    self.table_appender
+                        .append(timestamp, advance_to, appends.clone());
+                (timestamp, advance_to, append_recv)
+            };
+
+            let append_start = Instant::now();
+            let append_res = append_recv.await;
+            self.metrics
+                .append_table_duration_seconds
+                .observe(append_start.elapsed().as_secs_f64());
+
+            match append_res {
+                Ok(Ok(())) => break (timestamp, advance_to),
+                Ok(Err(StorageError::InvalidUppers(_))) => {
+                    // Should not happen while holding the lock; retry at a fresh timestamp.
+                    continue;
+                }
+                Ok(Err(other)) => {
+                    // Any other error is fatal, matching the previous on-loop behavior.
+                    Err::<(), _>(other).unwrap_or_terminate("cannot fail to apply appends");
+                    unreachable!("unwrap_or_terminate does not return on Err");
+                }
+                Err(_recv) => {
+                    warn!("table write worker terminated with writes in indefinite state");
+                    return;
+                }
+            }
+        };
+
+        // Mark the write complete on the oracle so reads can advance to it.
+        self.oracle.apply_write(timestamp).await;
+
+        // Log non-empty user appends.
+        let modified_tables: Vec<_> = appends
+            .iter()
+            .filter_map(|(id, updates)| {
+                (id.is_user() && !updates.iter().all(|u| u.is_empty())).then_some(id)
+            })
+            .collect();
+        if !modified_tables.is_empty() {
+            info!(
+                "Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}"
+            );
+        }
+
+        // The read ts resulting from this commit is the write ts we just applied: after
+        // `apply_write(timestamp)` the oracle read ts is at least `timestamp`, and reads at
+        // `timestamp` observe this commit. We hand it to the loop so it can downgrade the
+        // EpochMilliseconds read holds without an oracle round trip. Using `timestamp` here (rather
+        // than fetching `read_ts()`) also keeps the committer off the batching oracle's command
+        // channel, whose worker task may be torn down before this detached task during shutdown.
+        let local_read_ts = timestamp;
+
+        // IMPORTANT: Release the in-progress permit and write locks now, after the write is applied
+        // at the oracle, so no other write goes through at a timestamp we have not yet applied.
+        // Retiring the client responses does not need these locks, so we hand that back to the loop.
+        drop(permit);
+        drop(write_locks);
+
+        // Notify system-table write waiters (DDL, background heartbeats).
+        for notify in notifies {
+            // We don't care if the listeners have gone away.
+            let _ = notify.send(());
+        }
+
+        // Hand the parts that need coordinator state back to the loop: recording statement
+        // execution timestamps, retiring client responses, and downgrading read holds. Retiring
+        // must happen on the loop after the timestamps are recorded, because it ends the statement
+        // execution.
+        if let Err(e) = self.internal_cmd_tx.send(Message::GroupCommitApplied {
+            responses,
+            statement_logging_ids,
+            write_ts: timestamp,
+            advance_to,
+            local_read_ts,
+        }) {
+            warn!("coordinator shut down before a group commit could be finalized: {e}");
+        }
+    }
+}
+
+/// Spawns the [`GroupCommitter`] task, consuming `rx` for staged commits.
+///
+/// Called once at coordinator startup with handles that stay valid for the process lifetime.
+pub(crate) fn spawn_group_committer(
+    rx: mpsc::UnboundedReceiver<GroupCommitRequest>,
+    oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync>,
+    table_appender: Arc<dyn TableAppender>,
+    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    now: NowFn,
+    metrics: Metrics,
+    shard_advance_lock: Arc<tokio::sync::Mutex<()>>,
+) {
+    let committer = GroupCommitter {
+        rx,
+        oracle,
+        table_appender,
+        internal_cmd_tx,
+        now,
+        metrics,
+        shard_advance_lock,
+    };
+    task::spawn(|| "group_committer", committer.run());
+}
+
 impl Coordinator {
     /// Send a message to the Coordinate to start a group commit.
     pub(crate) fn trigger_group_commit(&mut self) {
@@ -279,67 +495,18 @@ impl Coordinator {
         }
     }
 
-    /// Attempts to commit all pending write transactions in a group commit. If the timestamp
-    /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
-    /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
-    /// writes.
-    #[instrument(level = "debug")]
-    pub(crate) async fn try_group_commit(&mut self, permit: Option<GroupCommitPermit>) {
-        let timestamp = self.peek_local_write_ts().await;
-        let now = Timestamp::from((self.catalog().config().now)());
-
-        // HACK: This is a special case to allow writes to the mz_sessions table to proceed even
-        // if the timestamp oracle is ahead of the current walltime. We do this because there are
-        // some tests that mock the walltime, so it doesn't automatically advance, and updating
-        // those tests to advance the walltime while creating a connection is too much.
-        //
-        // TODO(parkmycar): Get rid of the check below when refactoring group commits.
-        let contains_internal_system_write = self
-            .pending_writes
-            .iter()
-            .any(|write| write.is_internal_system());
-
-        if timestamp > now && !contains_internal_system_write {
-            // Cap retry time to 1s. In cases where the system clock has retreated by
-            // some large amount of time, this prevents against then waiting for that
-            // large amount of time in case the system clock then advances back to near
-            // what it was.
-            let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000.into());
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(
-                || "group_commit_initiate",
-                async move {
-                    tokio::time::sleep(Duration::from_millis(remaining_ms.into())).await;
-                    // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                    let result =
-                        internal_cmd_tx.send(Message::GroupCommitInitiate(Span::current(), permit));
-                    if let Err(e) = result {
-                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                    }
-                }
-                .instrument(Span::current()),
-            );
-        } else {
-            self.group_commit(permit).await;
-        }
-    }
-
-    /// Tries to commit all pending writes transactions at the same timestamp.
+    /// Stages all pending write transactions into a [`GroupCommitRequest`] and hands it to the
+    /// group committer, which allocates the write timestamp and applies the commit off the loop.
     ///
-    /// If the caller of this function has the `write_lock` acquired, then they can optionally pass
-    /// it in to this method. If the caller does not have the `write_lock` acquired and the
-    /// `write_lock` is currently locked by another operation, then only writes to system tables
-    /// and table advancements will be applied. If the caller does not have the `write_lock`
-    /// acquired and the `write_lock` is not currently locked by another operation, then group
-    /// commit will acquire it and all writes will be applied.
+    /// If the caller holds the write lock they can pass it in. Writes whose locks are held by
+    /// another operation are deferred (only system writes and table advancement proceed). Writes
+    /// whose locks are free are acquired here and included.
     ///
-    /// All applicable pending writes will be combined into a single Append command and sent to
-    /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
-    /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
-    ///
-    /// Returns the timestamp of the write.
-    #[instrument(name = "coord::group_commit")]
-    pub(crate) async fn group_commit(&mut self, permit: Option<GroupCommitPermit>) -> Timestamp {
+    /// All included pending writes are combined into a single append committed at one timestamp,
+    /// and all involved tables advance to a timestamp larger than the write's. This does no
+    /// timestamp-oracle round trips itself: the committer does the throttle, allocation, and apply
+    /// off the loop.
+    pub(crate) fn stage_group_commit(&mut self, permit: Option<GroupCommitPermit>) {
         let mut validated_writes = Vec::new();
         let mut deferred_writes = Vec::new();
         let mut group_write_locks = GroupCommitWriteLocks::default();
@@ -447,32 +614,13 @@ impl Coordinator {
             self.defer_op(acquire_future, DeferredOp::Write(write));
         }
 
-        // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
-        // any point during this method or if this was triggered from DDL. We will still commit the
-        // write without waiting for `now()` to advance. This is ok because the next batch of writes
-        // will trigger the wait loop in `try_group_commit()` if `now()` hasn't advanced past the
-        // global timeline, preventing an unbounded advancing of the global timeline ahead of
-        // `now()`. Additionally DDL is infrequent enough and takes long enough that we don't think
-        // it's practical for continuous DDL to advance the global timestamp in an unbounded manner.
-        let WriteTimestamp {
-            timestamp,
-            advance_to,
-        } = self.get_local_write_ts().await;
-
-        // Advance the catalog shard's upper to keep it in sync with the oracle
-        // timestamp. This ensures that reads of mz_catalog_raw at the oracle's
-        // read_ts do not block waiting for the catalog shard's upper to advance.
-        let catalog_upper_start = Instant::now();
-        self.catalog
-            .advance_upper(advance_to)
-            .await
-            .unwrap_or_terminate("unable to advance catalog upper");
-        self.metrics
-            .group_commit_catalog_upper_seconds
-            .observe(catalog_upper_start.elapsed().as_secs_f64());
+        let contains_internal_system_write = validated_writes
+            .iter()
+            .any(|write| write.is_internal_system());
 
         let mut appends: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(validated_writes.len());
+        let mut statement_logging_ids = Vec::new();
         let mut notifies = Vec::new();
 
         for validated_write_txn in validated_writes {
@@ -499,8 +647,10 @@ impl Coordinator {
                             appends.entry(id).or_default().extend(table_data);
                         }
                     }
+                    // The commit timestamp is allocated off the loop, so we record it for statement
+                    // logging once the committer reports it back.
                     if let Some(id) = ctx.extra().contents() {
-                        self.set_statement_execution_timestamp(id, timestamp);
+                        statement_logging_ids.push(id);
                     }
 
                     responses.push(CompletedClientTransmitter::new(ctx, response, action));
@@ -545,91 +695,24 @@ impl Coordinator {
             })
             .collect();
 
-        // Log non-empty user appends.
-        let modified_tables: Vec<_> = appends
-            .iter()
-            .filter_map(|(id, updates)| {
-                if id.is_user() && !updates.iter().all(|u| u.is_empty()) {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if !modified_tables.is_empty() {
-            info!(
-                "Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}"
-            );
+        // Hand the staged commit to the committer, which allocates the timestamp and applies it off
+        // the loop.
+        //
+        // NOTE: We always send, even with no appends, so the committer periodically bumps the upper
+        // of all tables, which is required to keep them readable at the latest oracle read ts.
+        let request = GroupCommitRequest {
+            appends,
+            responses,
+            statement_logging_ids,
+            notifies,
+            write_locks: group_write_locks,
+            permit,
+            contains_internal_system_write,
+            span: Span::current(),
+        };
+        if let Err(e) = self.group_committer_tx.send(request) {
+            warn!("group committer task gone, dropping group commit: {e}");
         }
-
-        // Instrument our table writes since they can block the coordinator.
-        let histogram = self.metrics.append_table_duration_seconds.clone();
-
-        // NOTE: It is important that we append, even when there are no actual
-        // appends. This makes sure we periodically bump the upper of all
-        // tables, which is required to make them readable at the latest oracle
-        // read ts.
-
-        let append_fut = self
-            .controller
-            .storage
-            .append_table(timestamp, advance_to, appends)
-            .expect("invalid updates")
-            .wall_time()
-            .observe(histogram);
-
-        // Spawn a task to do the table writes.
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let apply_write_fut = self.apply_local_write(timestamp);
-
-        let span = debug_span!(parent: None, "group_commit_apply");
-        OpenTelemetryContext::obtain().attach_as_parent_to(&span);
-        task::spawn(
-            || "group_commit_apply",
-            async move {
-                // Wait for the writes to complete.
-                match append_fut
-                    .instrument(debug_span!("group_commit_apply::append_fut"))
-                    .await
-                {
-                    Ok(append_result) => {
-                        append_result.unwrap_or_terminate("cannot fail to apply appends")
-                    }
-                    Err(_) => warn!("Writer terminated with writes in indefinite state"),
-                };
-
-                // Apply the write by marking the timestamp as complete on the timeline.
-                apply_write_fut
-                    .instrument(debug_span!("group_commit_apply::append_write_fut"))
-                    .await;
-
-                // Notify the external clients of the result.
-                for response in responses {
-                    let (mut ctx, result) = response.finalize();
-                    ctx.session_mut().apply_write(timestamp);
-                    ctx.retire(result);
-                }
-
-                // IMPORTANT: Make sure we hold the permit and write locks
-                // until here, to prevent other writes from going through while
-                // we haven't yet applied the write at the timestamp oracle.
-                drop(permit);
-                drop(group_write_locks);
-
-                // Advance other timelines.
-                if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines) {
-                    warn!("Server closed with non-advanced timelines, {e}");
-                }
-
-                for notify in notifies {
-                    // We don't care if the listeners have gone away.
-                    let _ = notify.send(());
-                }
-            }
-            .instrument(span),
-        );
-
-        timestamp
     }
 
     /// Submit a write to be executed during the next group commit and trigger a group commit.
@@ -792,19 +875,15 @@ impl<'a> BuiltinTableAppend<'a> {
         Box::pin(rx.map(|_| ()))
     }
 
-    /// Submit a write to a system table.
+    /// Submit a write to a system table and trigger a group commit.
     ///
-    /// This method will block the Coordinator on acquiring a write timestamp from the timestamp
-    /// oracle, and then returns a `Future` that will complete once the write has been applied and
-    /// the write timestamp.
+    /// Returns a `Future` that completes once the write has been applied. Does not block the
+    /// coordinator on the timestamp oracle: the write timestamp is allocated by the group committer
+    /// off the loop.
     ///
-    /// Note: When in read-only mode, this will buffer the update, the
-    /// returned future will resolve immediately, without the update actually
-    /// having been written, and no timestamp is returned.
-    pub async fn execute(
-        self,
-        mut updates: Vec<BuiltinTableUpdate>,
-    ) -> (BuiltinTableAppendNotify, Option<Timestamp>) {
+    /// Note: When in read-only mode, this buffers the update and the returned future resolves
+    /// immediately, without the update actually having been written.
+    pub fn execute(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         if self.coord.controller.read_only() {
             self.coord
                 .buffered_builtin_table_updates
@@ -812,28 +891,27 @@ impl<'a> BuiltinTableAppend<'a> {
                 .expect("in read-only mode")
                 .append(&mut updates);
 
-            return (Box::pin(futures::future::ready(())), None);
+            return Box::pin(futures::future::ready(()));
         }
 
         let (tx, rx) = oneshot::channel();
 
-        // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
-        // table writes do not wait for a group commit, they explicitly trigger one. There is a
-        // possibility that if a user is executing DDL at a rate faster than 1 query per
-        // millisecond, then the global timeline will unboundedly advance past the system clock.
-        // This can cause future queries to block, but will not affect correctness. Since this
-        // rate of DDL is unlikely, we allow DDL to explicitly trigger group commit.
+        // Most DDL queries write to system tables. Unlike user-table writes, system table writes
+        // explicitly trigger a group commit rather than waiting for the next one. If DDL runs faster
+        // than one query per millisecond the global timeline can advance past the system clock,
+        // which can make future queries block but does not affect correctness. That rate of DDL is
+        // unlikely, so we let DDL trigger a commit directly.
         self.coord.pending_writes.push(PendingWriteTxn::System {
             updates,
             source: BuiltinTableUpdateSource::Internal(tx),
         });
-        let write_ts = self.coord.group_commit(None).await;
+        self.coord.stage_group_commit(None);
 
         // Avoid excessive group commits by resetting the periodic table advancement timer. The
-        // group commit triggered by above will already advance all tables.
+        // commit staged above already advances all tables.
         self.coord.advance_timelines_interval.reset();
 
-        (Box::pin(rx.map(|_| ())), Some(write_ts))
+        Box::pin(rx.map(|_| ()))
     }
 }
 

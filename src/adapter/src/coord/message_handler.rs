@@ -46,6 +46,7 @@ use crate::coord::{
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
+use crate::util::ResultExt;
 use crate::{AdapterNotice, TimestampContext};
 
 impl Coordinator {
@@ -100,13 +101,44 @@ impl Coordinator {
             Message::GroupCommitInitiate(span, permit) => {
                 // Add an OpenTelemetry link to our current span.
                 tracing::Span::current().add_link(span.context().span().span_context().clone());
-                self.try_group_commit(permit)
-                    .instrument(span)
-                    .boxed_local()
+                span.in_scope(|| self.stage_group_commit(permit));
+            }
+            Message::GroupCommitApplied {
+                responses,
+                statement_logging_ids,
+                write_ts,
+                advance_to,
+                local_read_ts,
+            } => {
+                // Advance the catalog shard upper to keep it in step with the oracle read ts, so
+                // reads of `mz_catalog_raw` at the read ts do not block. We do this on the loop
+                // (not in the committer) so it is serialized with catalog transactions. Tolerant,
+                // since a concurrent on-loop DDL transaction may already have advanced the upper
+                // past this commit's timestamp.
+                let catalog_upper_start = Instant::now();
+                self.catalog
+                    .try_advance_upper(advance_to)
                     .await
+                    .unwrap_or_terminate("unable to advance catalog upper");
+                self.metrics
+                    .group_commit_catalog_upper_seconds
+                    .observe(catalog_upper_start.elapsed().as_secs_f64());
+                // Record statement timestamps before retiring, since retiring ends the statement
+                // execution and drops its logging record.
+                for id in statement_logging_ids {
+                    self.set_statement_execution_timestamp(id, write_ts);
+                }
+                for response in responses {
+                    let (mut ctx, result) = response.finalize();
+                    ctx.session_mut().apply_write(write_ts);
+                    ctx.retire(result);
+                }
+                self.advance_timelines(Some(local_read_ts))
+                    .boxed_local()
+                    .await;
             }
             Message::AdvanceTimelines => {
-                self.advance_timelines().boxed_local().await;
+                self.advance_timelines(None).boxed_local().await;
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
@@ -308,7 +340,7 @@ impl Coordinator {
             })
             .collect();
 
-        let (table_updates, _) = self.builtin_table_update().execute(updates).await;
+        let table_updates = self.builtin_table_update().execute(updates);
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let task_span = info_span!(parent: None, "coord::storage_usage_update::table_updates");
@@ -324,7 +356,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn storage_usage_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        let (fut, _) = self.builtin_table_update().execute(expired).await;
+        let fut = self.builtin_table_update().execute(expired);
         task::spawn(|| "storage_usage_pruning_apply", async move {
             fut.await;
         });
@@ -632,7 +664,7 @@ impl Coordinator {
             // in https://github.com/MaterializeInc/materialize/pull/35436 lands,
             // append directly on `mz_catalog_server` instead of going through
             // the environmentd builtin-table-update path.
-            let (fut, _) = self.builtin_table_update().execute(updates).await;
+            let fut = self.builtin_table_update().execute(updates);
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let task_span =
                 info_span!(parent: None, "coord::arrangement_sizes_snapshot::table_updates");
@@ -654,7 +686,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn arrangement_sizes_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        let (fut, _) = self.builtin_table_update().execute(expired).await;
+        let fut = self.builtin_table_update().execute(expired);
         task::spawn(|| "arrangement_sizes_pruning_apply", async move {
             fut.await;
         });

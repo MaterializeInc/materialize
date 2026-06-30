@@ -299,6 +299,33 @@ impl StorageWriteOp {
     }
 }
 
+/// A cloneable, `Send + Sync` handle for appending to tables from off the main
+/// storage-controller loop.
+///
+/// Appends issued through this handle go through the same single serializing
+/// worker as [`StorageController::append_table`], so they are applied in the
+/// order `append` is called, not the order the returned futures are polled. An
+/// [`StorageError::InvalidUppers`] result means `write_ts` was below the current
+/// table upper. The caller must re-issue the append at a higher timestamp.
+///
+/// The handle stays valid for the lifetime of the controller (and thus the
+/// process). It does not track catalog rebuilds because the underlying worker
+/// is independent of them.
+pub trait TableAppender: Debug + Send + Sync {
+    /// Appends `commands` at `write_ts`, advancing the upper of all registered
+    /// tables to `advance_to`.
+    ///
+    /// The returned receiver resolves once the append is durable, or with an
+    /// error if the write could not be applied. A dropped sender (receiver
+    /// error) means the worker has shut down.
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     /// Marks the end of any initialization commands.
@@ -613,6 +640,12 @@ pub trait StorageController: Debug {
         advance_to: Timestamp,
         commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
+
+    /// Returns a cloneable handle for appending to tables off the main loop.
+    ///
+    /// See [`TableAppender`]. The returned handle stays valid for the lifetime
+    /// of the controller.
+    fn table_appender(&self) -> Arc<dyn TableAppender>;
 
     /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
     /// append to the specified [`GlobalId`].

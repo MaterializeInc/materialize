@@ -2110,6 +2110,12 @@ impl StorageController for Controller {
             .append(write_ts, advance_to, commands))
     }
 
+    fn table_appender(&self) -> Arc<dyn mz_storage_client::controller::TableAppender> {
+        Arc::new(persist_handles::TableAppenderHandle(
+            self.persist_table_worker.clone(),
+        ))
+    }
+
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
         self.collection_manager.monotonic_appender(id)
     }

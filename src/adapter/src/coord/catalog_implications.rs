@@ -946,6 +946,10 @@ impl Coordinator {
             // logging around to indicate when an actual dependency error might
             // occur.
             if !tables_to_drop.is_empty() {
+                // Serialize the timestamp allocation and the txns-shard forget with the off-loop
+                // committer, so they reach the txns shard in timestamp order. See
+                // `Coordinator::shard_advance_lock`.
+                let _guard = Arc::clone(&self.shard_advance_lock).lock_owned().await;
                 let ts = self.get_local_write_ts().await;
                 self.drop_tables(tables_to_drop.into_iter().collect_vec(), ts.timestamp);
             }
@@ -1096,40 +1100,49 @@ impl Coordinator {
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
         // If we have tables, determine the initial validity for the table.
-        let write_ts = self.get_local_write_ts().await;
-        let register_ts = write_ts.timestamp;
-
-        // After acquiring `register_ts` but before using it, we need to
-        // be sure we're still the leader. Otherwise a new generation
-        // may also be trying to use `register_ts` for a different
-        // purpose. See materialize#28216.
         //
-        // We also should advance the upper of the catalog shard, to ensure it
-        // is readable at the oracle read ts after we bump it to the
-        // `register_ts` below. Both of these needs are served by calling
-        // `advance_upper`.
-        self.catalog
-            .advance_upper(write_ts.advance_to)
-            .await
-            .unwrap_or_terminate("unable to advance catalog upper");
+        // We hold `shard_advance_lock` across the timestamp allocation, the catalog upper advance,
+        // and the txns-shard register, so they interleave with the off-loop committer in timestamp
+        // order and the register is never behind the txns upper. See `Coordinator::shard_advance_lock`.
+        let write_ts = {
+            let _guard = Arc::clone(&self.shard_advance_lock).lock_owned().await;
+            let write_ts = self.get_local_write_ts().await;
+            let register_ts = write_ts.timestamp;
+
+            // After acquiring `register_ts` but before using it, we need to
+            // be sure we're still the leader. Otherwise a new generation
+            // may also be trying to use `register_ts` for a different
+            // purpose. See materialize#28216.
+            //
+            // We also should advance the upper of the catalog shard, to ensure it
+            // is readable at the oracle read ts after we bump it to the
+            // `register_ts` below. Both of these needs are served by calling
+            // `advance_upper`.
+            self.catalog
+                .advance_upper(write_ts.advance_to)
+                .await
+                .unwrap_or_terminate("unable to advance catalog upper");
+
+            let storage_metadata = self.catalog.state().storage_metadata();
+
+            self.controller
+                .storage
+                .create_collections(
+                    storage_metadata,
+                    Some(register_ts),
+                    table_collections_to_create.into_iter().collect_vec(),
+                )
+                .await
+                .unwrap_or_terminate("cannot fail to create collections");
+
+            write_ts
+        };
 
         for id in execution_timestamps_to_set {
-            self.set_statement_execution_timestamp(id, register_ts);
+            self.set_statement_execution_timestamp(id, write_ts.timestamp);
         }
 
-        let storage_metadata = self.catalog.state().storage_metadata();
-
-        self.controller
-            .storage
-            .create_collections(
-                storage_metadata,
-                Some(register_ts),
-                table_collections_to_create.into_iter().collect_vec(),
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
-
-        self.apply_local_write(register_ts).await;
+        self.apply_local_write(write_ts.timestamp).await;
 
         Ok(())
     }
@@ -1357,28 +1370,36 @@ impl Coordinator {
             .desc
             .at_version(RelationVersionSelector::Specific(new_version));
 
-        let write_ts = self.get_local_write_ts().await;
-        let register_ts = write_ts.timestamp;
+        // We hold `shard_advance_lock` across the timestamp allocation, the catalog upper advance,
+        // and the txns-shard register of the new collection, so they interleave with the off-loop
+        // committer in timestamp order. See `Coordinator::shard_advance_lock`.
+        let register_ts = {
+            let _guard = Arc::clone(&self.shard_advance_lock).lock_owned().await;
+            let write_ts = self.get_local_write_ts().await;
+            let register_ts = write_ts.timestamp;
 
-        // Ensure the catalog will be immediately readable at the read ts we're
-        // about to bump.
-        self.catalog
-            .advance_upper(write_ts.advance_to)
-            .await
-            .unwrap_or_terminate("unable to advance catalog upper");
+            // Ensure the catalog will be immediately readable at the read ts we're
+            // about to bump.
+            self.catalog
+                .advance_upper(write_ts.advance_to)
+                .await
+                .unwrap_or_terminate("unable to advance catalog upper");
 
-        // Alter the table description, creating a "new" collection.
-        self.controller
-            .storage
-            .alter_table_desc(
-                existing_gid,
-                new_gid,
-                new_desc,
-                expected_version,
-                register_ts,
-            )
-            .await
-            .expect("failed to alter desc of table");
+            // Alter the table description, creating a "new" collection.
+            self.controller
+                .storage
+                .alter_table_desc(
+                    existing_gid,
+                    new_gid,
+                    new_desc,
+                    expected_version,
+                    register_ts,
+                )
+                .await
+                .expect("failed to alter desc of table");
+
+            register_ts
+        };
 
         // Initialize the ReadPolicy which ensures we have the correct read holds.
         let compaction_window = new_table

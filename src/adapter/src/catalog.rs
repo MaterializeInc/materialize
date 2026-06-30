@@ -1127,6 +1127,20 @@ impl Catalog {
         Ok(self.storage().await.advance_upper(new_upper).await?)
     }
 
+    /// Advances the catalog upper to at least `new_upper`, tolerating an upper that is already past
+    /// it.
+    ///
+    /// Unlike [`Self::advance_upper`], this is a no-op (rather than a linearizability soft-panic)
+    /// when the catalog upper already reached `new_upper`. The group committer allocates its write
+    /// timestamp off the loop, so by the time the loop advances the catalog upper to match, an
+    /// on-loop catalog transaction may already have advanced it past that timestamp.
+    pub async fn try_advance_upper(
+        &self,
+        new_upper: mz_repr::Timestamp,
+    ) -> Result<(), AdapterError> {
+        Ok(self.storage().await.try_advance_upper(new_upper).await?)
+    }
+
     /// Return the ids of all log sources the given object depends on.
     pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         self.state.introspection_dependencies(id)

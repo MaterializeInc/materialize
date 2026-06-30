@@ -513,10 +513,7 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let (builtin_update_notify, _) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
+        let builtin_update_notify = self.builtin_table_update().execute(builtin_table_updates);
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.

@@ -277,6 +277,24 @@ impl PersistTableWriteWorker {
     }
 }
 
+/// A cloneable [`TableAppender`](mz_storage_client::controller::TableAppender)
+/// backed by the [`PersistTableWriteWorker`].
+///
+/// A newtype so the trait `append` does not clash with the inherent `append`.
+#[derive(Debug, Clone)]
+pub(crate) struct TableAppenderHandle(pub(crate) PersistTableWriteWorker);
+
+impl mz_storage_client::controller::TableAppender for TableAppenderHandle {
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> oneshot::Receiver<Result<(), StorageError>> {
+        self.0.append(write_ts, advance_to, commands)
+    }
+}
+
 struct TxnsTableWorker {
     txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,

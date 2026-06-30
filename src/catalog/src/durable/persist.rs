@@ -1896,6 +1896,18 @@ impl DurableCatalogState for PersistCatalogState {
             return Ok(());
         }
 
+        self.try_advance_upper(new_upper).await
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn try_advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError> {
+        if self.upper >= new_upper {
+            // The upper was already advanced to or past `new_upper`, e.g. by a catalog transaction
+            // that overtook an opportunistically chosen timestamp. Nothing to do. Unlike
+            // `advance_upper`, this is expected and not a linearizability concern.
+            return Ok(());
+        }
+
         match self.mode {
             Mode::Writable => self
                 .compare_and_append_inner([], new_upper)
