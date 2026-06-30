@@ -642,81 +642,243 @@ p+p {
     }
 
     .multilinkbox {
-        display: flex;
-        gap: 12px;
-        margin: var(--small) 0;
+        align-items: stretch;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin: var(--xx-small) 0;
 
         @media(max-width: 860px) {
-            flex-direction: column;
+            grid-template-columns: 1fr;
         }
     }
 
     .linkbox {
-        background: var(--table-surface);
-        border: 1px solid var(--table-border);
-        border-radius: var(--table-radius);
-        box-shadow: var(--table-shadow);
-        flex: 1;
+        --linkbox-accent: var(--sg-gray-2);
+        --linkbox-accent-border: color-mix(in srgb, var(--linkbox-accent) 22%, transparent);
+        --linkbox-accent-soft: color-mix(in srgb, var(--linkbox-accent) 10%, transparent);
+        --linkbox-divider: var(--docs-card-divider-strong);
+        --linkbox-icon-bg: color-mix(in srgb, var(--linkbox-accent-soft) 70%, var(--docs-card-inset));
+        --linkbox-label: white;
+        --linkbox-link: var(--sg-lavender-2);
+        --linkbox-surface: var(--docs-card-surface);
+
+        background: var(--linkbox-surface);
+        border: 1px solid var(--linkbox-divider);
+        border-radius: 10px;
+        color: var(--body);
+        display: grid;
         font-family: var(--font-body);
+        grid-template-rows: auto 1fr;
+        height: 100%;
         min-width: 0;
         overflow: hidden;
         position: relative;
 
-        &::before {
+        &--databases {
+            --linkbox-accent: var(--sg-teal-3);
+            --linkbox-label: white;
+        }
+
+        &--brokers {
+            --linkbox-accent: var(--sg-violet);
+            --linkbox-label: white;
+        }
+
+        &--webhooks {
+            --linkbox-accent: var(--orchid);
+            --linkbox-label: white;
+        }
+
+        &--databases,
+        &--brokers,
+        &--webhooks {
+            @include docs-feature-card;
+
+            --docs-card-glow: color-mix(in srgb, var(--linkbox-accent) 8%, transparent);
+
+            background-color: var(--linkbox-surface);
+            box-shadow: var(--docs-card-shadow);
+            min-height: 100%;
+            transition:
+                background-color 0.18s ease,
+                border-color 0.18s ease;
+
+            &:hover,
+            &:focus-within {
+                background-color: color-mix(in srgb, var(--linkbox-accent-soft) 20%, var(--linkbox-surface));
+                border-color: var(--linkbox-accent-border);
+
+                .linkbox__category-icon {
+                    background-color: color-mix(in srgb, var(--linkbox-accent-soft) 55%, var(--linkbox-surface));
+                    border-color: var(--linkbox-accent-border);
+                    color: var(--heading);
+                }
+            }
+        }
+
+        &.materialize::before,
+        &.book::before,
+        &.bulb::before,
+        &.doc::before,
+        &.touch::before {
             content: "";
             width: 32px;
             height: 32px;
             position: absolute;
             top: rem(2);
+            left: 0;
             background-size: contain;
         }
 
-        &.materialize::before {
-            background-image: url("../images/materialize_favicon_32.png");
-            margin-left: -10px;
-        }
-
+        &.materialize::before { background-image: url("../images/materialize_favicon_32.png"); }
         &.book::before { background-image: url("../images/icon_book.png"); }
         &.bulb::before { background-image: url("../images/icon_bulb.png"); }
         &.doc::before  { background-image: url("../images/icon_doc.png"); }
         &.touch::before { background-image: url("../images/icon_touch.png"); }
 
+        &.book .title,
+        &.bulb .title,
+        &.doc .title,
+        &.touch .title,
+        &.materialize .title {
+            padding-left: 28px;
+        }
+
+        &__header {
+            align-items: center;
+            border-bottom: 1px solid var(--linkbox-divider);
+            display: flex;
+            flex-shrink: 0;
+            gap: 12px;
+            padding: 16px;
+        }
+
+        &__category-icon {
+            align-items: center;
+            background: var(--linkbox-icon-bg);
+            border: 1px solid var(--linkbox-accent-border);
+            border-radius: 7px;
+            color: color-mix(in srgb, var(--linkbox-accent) 72%, var(--heading));
+            display: flex;
+            flex-shrink: 0;
+            height: 32px;
+            justify-content: center;
+            transition:
+                background-color 0.18s ease,
+                border-color 0.18s ease,
+                color 0.18s ease;
+            width: 32px;
+
+            &::before {
+                background: currentColor;
+                content: "";
+                display: block;
+                height: 16px;
+                mask-position: center;
+                mask-repeat: no-repeat;
+                mask-size: contain;
+                -webkit-mask-position: center;
+                -webkit-mask-repeat: no-repeat;
+                -webkit-mask-size: contain;
+                width: 16px;
+            }
+
+            &--databases::before {
+                mask-image: url("../images/connectors/category-databases.svg");
+                -webkit-mask-image: url("../images/connectors/category-databases.svg");
+            }
+
+            &--brokers::before {
+                mask-image: url("../images/connectors/category-brokers.svg");
+                -webkit-mask-image: url("../images/connectors/category-brokers.svg");
+            }
+
+            &--webhooks::before {
+                mask-image: url("../images/connectors/category-webhooks.svg");
+                -webkit-mask-image: url("../images/connectors/category-webhooks.svg");
+            }
+        }
+
         .title {
-            background: var(--table-surface-header);
-            border-bottom: 1px solid var(--table-grid);
-            color: var(--table-text);
-            font-family: var(--font-heading);
-            font-size: 11px;
-            font-weight: 500;
+            background: transparent;
+            border-bottom: none;
+            color: var(--linkbox-label);
+            flex: 1;
+            font-family: var(--font-body);
+            font-size: var(--xsm);
+            font-weight: var(--weight-heading);
             letter-spacing: var(--tracking-eyebrow);
-            padding: 12px 20px;
+            line-height: 1.3;
+            margin: 0;
+            padding: 0;
             text-transform: uppercase;
         }
 
-        ul {
+        > ul {
+            align-self: start;
+            display: block;
             list-style: none;
             margin: 0;
-            padding: 6px 0;
+            padding: 14px 16px 18px;
         }
 
         li {
             margin: 0;
         }
 
-        a {
-            color: var(--link);
+        a,
+        a strong {
+            color: var(--linkbox-link);
             display: block;
             font-size: var(--sm);
             font-weight: var(--weight-body);
-            padding: 7px 20px;
+            line-height: 1.55;
+            padding: 4px 0;
             text-decoration: none;
-            transition: color 0.15s, background-color 0.15s;
+            transition: color 0.15s ease;
 
             &:hover,
-            &:focus {
-                background: rgba(255, 255, 255, 0.03);
+            &:focus-visible {
                 border-bottom: none;
-                color: var(--important);
+                color: var(--heading);
+                text-decoration: none;
+            }
+        }
+
+        &:not([class*="linkbox--"]) {
+            background: var(--table-surface);
+            border-color: var(--table-border);
+            box-shadow: var(--table-shadow);
+            border-radius: var(--table-radius);
+            height: auto;
+
+            .linkbox__header {
+                border-bottom: none;
+                display: block;
+                padding: 0;
+            }
+
+            .title {
+                background: var(--table-surface-header);
+                border-bottom: 1px solid var(--table-grid);
+                color: var(--table-text);
+                font-family: var(--font-heading);
+                font-size: 11px;
+                font-weight: 500;
+                padding: 12px 20px;
+            }
+
+            a {
+                color: var(--link);
+                display: block;
+                padding: 7px 20px;
+
+                &:hover,
+                &:focus-visible {
+                    background: rgba(255, 255, 255, 0.03);
+                    color: var(--important);
+                }
             }
         }
     }
@@ -1385,6 +1547,51 @@ p+p {
                 --offering-action-bg: color-mix(in srgb, #FFF4EB 88%, var(--white));
                 --offering-action-border: color-mix(in srgb, var(--table-orange) 24%, transparent);
                 --offering-action-hover: color-mix(in srgb, #FFE8D6 92%, var(--white));
+            }
+        }
+
+        .linkbox--databases,
+        .linkbox--brokers,
+        .linkbox--webhooks {
+            --linkbox-divider: color-mix(in srgb, var(--sg-gray-1) 80%, transparent);
+            --linkbox-icon-bg: color-mix(in srgb, var(--linkbox-accent) 14%, var(--white));
+            --linkbox-link: var(--sg-violet);
+            --docs-card-surface: var(--white);
+
+            border-color: color-mix(in srgb, var(--sg-gray-1) 85%, transparent);
+
+            .linkbox__header {
+                border-bottom-color: var(--linkbox-divider);
+            }
+
+            a,
+            a strong {
+                color: var(--linkbox-link);
+
+                &:hover,
+                &:focus-visible {
+                    color: var(--sg-midnight);
+                }
+            }
+        }
+
+        .linkbox--databases {
+            --linkbox-label: color-mix(in srgb, var(--sg-teal-5) 55%, var(--sg-gray-3));
+        }
+
+        .linkbox--brokers {
+            --linkbox-label: color-mix(in srgb, var(--sg-violet) 45%, var(--sg-gray-3));
+        }
+
+        .linkbox--webhooks {
+            --linkbox-label: color-mix(in srgb, var(--orchid) 45%, var(--sg-gray-3));
+        }
+
+        .linkbox--databases,
+        .linkbox--brokers,
+        .linkbox--webhooks {
+            .linkbox__category-icon::before {
+                background: var(--linkbox-accent);
             }
         }
     }
