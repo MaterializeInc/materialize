@@ -375,6 +375,51 @@ mod plan_tests {
             derived.dependencies,
         );
     }
+
+    /// A supporting statement on an unqualified object must still be rejected
+    /// when it targets a different schema than the file's object.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_rejects_wrong_schema_grant_on_unqualified_object() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+        let dir = root.path().join("models/app/ingest");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("users.sql"),
+            "CREATE TABLE users (id INT);\n\
+             GRANT SELECT ON TABLE other_schema.users TO some_role;\n",
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        let result = plan_sync(&fs, root.path(), None, None, &Default::default());
+        assert!(
+            result.is_err(),
+            "grant targeting a different schema than the file's object must be rejected",
+        );
+    }
+
+    /// The same-schema control still validates: an unqualified object with a
+    /// grant on its own (unqualified) name compiles cleanly.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_accepts_same_schema_grant_on_unqualified_object() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+        let dir = root.path().join("models/app/ingest");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("users.sql"),
+            "CREATE TABLE users (id INT);\n\
+             GRANT SELECT ON TABLE users TO some_role;\n",
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        plan_sync(&fs, root.path(), None, None, &Default::default())
+            .expect("grant on the file's own object should validate");
+    }
 }
 
 /// Compile a project root into a planned deployment representation.
