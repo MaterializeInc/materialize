@@ -343,12 +343,35 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
     "How often the cluster controller runs a reconcile tick.",
 );
 
+/// Whether a config-shape `ALTER CLUSTER` returns immediately, with the
+/// controller converging in the background, or blocks the session on a
+/// wait-shim until the reconfiguration completes or its deadline passes.
+///
+/// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on, when the
+/// controller owns the reconfiguration.
+pub const ENABLE_BACKGROUND_ALTER_CLUSTER: Config<bool> = Config::new(
+    "enable_background_alter_cluster",
+    false,
+    "Whether a config-shape ALTER CLUSTER returns immediately (true) or the session blocks on a wait-shim over the durable reconfiguration record (false).",
+);
+
+/// The reconfiguration deadline written when a config-shape `ALTER CLUSTER`
+/// omits `WITH (WAIT ...)`. What happens when the deadline passes un-hydrated is
+/// the record's `on_timeout` action.
+pub const DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT: Config<Duration> = Config::new(
+    "default_cluster_reconfiguration_timeout",
+    Duration::from_secs(60 * 60 * 24),
+    "The reconfiguration deadline written when a config-shape ALTER CLUSTER omits WITH (WAIT ...).",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
         .add(&ENABLE_CLUSTER_CONTROLLER)
         .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
+        .add(&ENABLE_BACKGROUND_ALTER_CLUSTER)
+        .add(&DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)

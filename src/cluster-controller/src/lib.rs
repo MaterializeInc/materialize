@@ -41,10 +41,13 @@ use std::collections::BTreeSet;
 use mz_ore::soft_panic_or_log;
 
 use crate::ctx::{
-    ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica, ReplicaShape,
-    StateWrite,
+    ApplyOutcome, ClusterControllerCtx, ClusterState, Decision, ObservedReplica,
+    ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus, ReconfigurationWrite,
+    ReplicaShape, StateWrite,
 };
-use crate::strategy::{BaselineStrategy, DesiredReplica, Strategy};
+use crate::strategy::{
+    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, Strategy,
+};
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
 /// reconcile tick against a [`ClusterControllerCtx`].
@@ -59,11 +62,15 @@ impl Default for ClusterController {
 }
 
 impl ClusterController {
-    /// A controller with only the implicit baseline strategy. This reconciles a
-    /// steady-state managed cluster to no decisions.
+    /// A controller with the implicit baseline and the graceful-reconfiguration
+    /// strategy. The baseline holds the steady set. Graceful engages only while a
+    /// `reconfiguration` record is in flight.
     pub fn new() -> Self {
         Self {
-            strategies: vec![Box::new(BaselineStrategy)],
+            strategies: vec![
+                Box::new(BaselineStrategy),
+                Box::new(GracefulReconfigurationStrategy),
+            ],
         }
     }
 
@@ -97,7 +104,8 @@ impl ClusterController {
         // still rely on the compare-and-append, not the merge, for `ALTER`
         // safety, which is why the merged write carries the cluster's `expected`.
         // See `merge_state_writes` for the join and its conflict handling.
-        let states = ctx.cluster_states(&cluster_ids).await;
+        let mut states = ctx.cluster_states(&cluster_ids).await;
+        self.enrich_hydration(ctx, &mut states).await;
         let now = ctx.now();
         // Set when we issue any phase-1 apply, applied or rejected. Either way
         // the durable state may have moved (our write, or the concurrent `ALTER`
@@ -120,19 +128,23 @@ impl ClusterController {
                 expected: state.expected(),
                 write,
             };
-            if ctx.apply(vec![decision]).await == ApplyOutcome::Rejected {
+            // A phase-1 batch carries no creates, so it cannot exhaust the
+            // resource budget. Treat any non-applied outcome as a rejection.
+            if ctx.apply(vec![decision]).await != ApplyOutcome::Applied {
                 rejected.insert(state.cluster_id);
             }
         }
 
         // Phase 2: desired_replicas. The barrier exists so that a cut-over a
         // phase-1 write performed is visible before we diff the replica set
-        // against the realized config. We re-read only if phase 1 wrote. The
-        // first read is otherwise still current. A stale diff is harmless: every
-        // create/drop carries its `expected` and is guard-rejected if the durable
-        // state has since diverged.
+        // against the realized config. We re-read (and re-enrich) only if phase 1
+        // wrote. The first read is otherwise still current. A stale diff is
+        // harmless: every create/drop carries its `expected` and is guard-rejected
+        // if the durable state has since diverged.
         let states = if phase_1_wrote {
-            ctx.cluster_states(&cluster_ids).await
+            let mut states = ctx.cluster_states(&cluster_ids).await;
+            self.enrich_hydration(ctx, &mut states).await;
+            states
         } else {
             states
         };
@@ -148,8 +160,61 @@ impl ClusterController {
             // Per-cluster apply: a guard failure here is isolated to this cluster,
             // and benign anyway since every command names an explicit replica and
             // is reconciled away next tick. We do not retry within the tick.
-            let _ = ctx.apply(decisions).await;
+            match ctx.apply(decisions).await {
+                ApplyOutcome::Applied | ApplyOutcome::Rejected => {}
+                ApplyOutcome::ResourceExhausted => {
+                    // The batch exceeded the resource budget. Retrying cannot make
+                    // the transient peak smaller, so shed the cluster's most
+                    // expendable transient strategy and recompute next tick.
+                    //
+                    // The failed apply rolled back without changing durable state,
+                    // so this tick's `expected` witness is still current, unless a
+                    // concurrent user `ALTER` re-targeted the record, in which case
+                    // the guard rejects the shed and that new reconfiguration is
+                    // left to converge instead of being clobbered.
+                    if let Some(shed) = Self::shed_decision(state) {
+                        let _ = ctx.apply(vec![shed]).await;
+                    }
+                }
+            }
         }
+    }
+
+    /// The decision that sheds this cluster's most expendable transient strategy
+    /// after a resource-exhausted apply, or `None` if nothing sheddable is
+    /// active.
+    ///
+    /// The strategy to shed is chosen by presence, ranked by expendability, not
+    /// by which create failed: validation is aggregate, and the strategy worth
+    /// giving up may be one whose replicas already materialized rather than one
+    /// in the failed batch. The graceful reconfiguration is the most expendable:
+    /// a discretionary user change that fails cleanly (audited, and the wait-shim
+    /// reports a timeout) and can be retried, while aborting it leaves the
+    /// cluster running at its realized shape. The baseline is never shed, it is
+    /// the committed floor. A further transient strategy ranks between the two:
+    /// its shed arm slots in below the reconfiguration's.
+    ///
+    /// We shed one strategy per exhausted apply. If that was not enough, the
+    /// next tick recomputes and sheds the next one.
+    fn shed_decision(state: &ClusterState) -> Option<Decision> {
+        let record = state.reconfiguration.as_ref()?;
+        if !record.is_in_progress() {
+            return None;
+        }
+        Some(Decision::UpdateClusterState {
+            cluster_id: state.cluster_id,
+            expected: state.expected(),
+            write: StateWrite {
+                reconfiguration: Some(ReconfigurationWrite {
+                    record: Some(ReconfigurationRecord {
+                        status: ReconfigurationStatus::ResourceExhausted,
+                        ..record.clone()
+                    }),
+                    audit: Some(ReconfigurationAudit::ResourceExhausted),
+                }),
+                ..Default::default()
+            },
+        })
     }
 
     /// Merge every strategy's [`Strategy::update_state`] for one cluster into the
@@ -225,6 +290,35 @@ impl ClusterController {
         }
 
         merged
+    }
+
+    /// Populate each cluster's [`ClusterState::hydrated_replicas`] live signal,
+    /// pulling it through the ctx only where a strategy needs it.
+    ///
+    /// Hydration is only consulted by the graceful strategy, and only while a
+    /// `reconfiguration` is in flight, so we probe a cluster's replicas exactly
+    /// then. A steady cluster is never probed, keeping the seam pay-for-what-you-
+    /// use. The pull is per-cluster (the controller asks only about that cluster's
+    /// replicas).
+    async fn enrich_hydration(
+        &self,
+        ctx: &mut dyn ClusterControllerCtx,
+        states: &mut [ClusterState],
+    ) {
+        for state in states.iter_mut() {
+            if !state
+                .reconfiguration
+                .as_ref()
+                .is_some_and(|record| record.is_in_progress())
+            {
+                continue;
+            }
+            let replica_ids: Vec<_> = state.replicas.iter().map(|r| r.replica_id).collect();
+            if replica_ids.is_empty() {
+                continue;
+            }
+            state.hydrated_replicas = ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+        }
     }
 
     /// Diff the unioned desired set against the actual replicas of one cluster

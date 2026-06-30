@@ -103,7 +103,7 @@ use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, Table, TableDataSource,
+    DataSourceDesc, ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -858,6 +858,11 @@ pub enum ClusterStage {
     Alter(AlterCluster),
     WaitForHydrated(AlterClusterWaitForHydrated),
     Finalize(AlterClusterFinalize),
+    /// The foreground wait-shim over a controller-driven background
+    /// reconfiguration: poll the durable `reconfiguration` record until it
+    /// clears, then report success or timeout depending on whether the realized
+    /// config reached the target.
+    AwaitReconfiguration(AlterClusterAwaitReconfiguration),
 }
 
 #[derive(Debug)]
@@ -882,6 +887,16 @@ pub struct AlterClusterFinalize {
     plan: plan::AlterClusterPlan,
     new_config: ClusterVariantManaged,
     workload_class: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterAwaitReconfiguration {
+    validity: PlanValidity,
+    cluster_id: ClusterId,
+    /// The target shape the awaited `ALTER` wrote. Once the record becomes
+    /// terminal, the realized config matching this is what distinguishes a
+    /// cut-over from a failure. See `await_reconfiguration_stage`.
+    target: ReconfigurationTarget,
 }
 
 #[derive(Debug)]
@@ -2411,7 +2426,7 @@ impl Coordinator {
         if enforce_credit_limit_at_bootstrap {
             self.validate_resource_limit_numeric(
                 Numeric::zero(),
-                self.current_credit_consumption_rate(),
+                self.current_credit_consumption_rate(None),
                 |system_vars| {
                     self.license_key
                         .max_credit_consumption_rate()
@@ -4485,9 +4500,12 @@ impl Coordinator {
         });
     }
 
-    fn current_credit_consumption_rate(&self) -> Numeric {
+    /// The environment's current credit consumption rate, summed over all user
+    /// cluster replicas except those of `exclude_cluster`.
+    fn current_credit_consumption_rate(&self, exclude_cluster: Option<ClusterId>) -> Numeric {
         self.catalog()
             .user_cluster_replicas()
+            .filter(|replica| Some(replica.cluster_id) != exclude_cluster)
             .filter_map(|replica| match &replica.config.location {
                 ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
                 ReplicaLocation::Unmanaged(_) => None,

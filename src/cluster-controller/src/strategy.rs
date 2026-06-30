@@ -26,7 +26,10 @@
 
 use mz_repr::Timestamp;
 
-use crate::ctx::{ClusterState, ReplicaShape, StateWrite};
+use crate::ctx::{
+    ClusterState, OnTimeout, ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus,
+    ReconfigurationWrite, ReplicaShape, StateWrite,
+};
 
 /// A replica slot a strategy desires this tick. The reconcile kernel unions
 /// slots across strategies and matches them by [`ReplicaShape`] against the
@@ -79,6 +82,158 @@ impl Strategy for BaselineStrategy {
     fn desired_replicas(&self, state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
         let shape = state.realized_shape();
         (0..state.replication_factor)
+            .map(|_| DesiredReplica {
+                shape: shape.clone(),
+            })
+            .collect()
+    }
+}
+
+/// The graceful (zero-downtime) reconfiguration strategy.
+///
+/// Engaged whenever the durable `reconfiguration` record is in progress. It
+/// desires `target.replication_factor` replicas at the target shape in addition
+/// to the baseline's realized-shape replicas, so both sets serve while the new
+/// one hydrates. Once rf-many target replicas are present and hydrated,
+/// `update_state` cuts over: the realized config advances to the target, the
+/// record is marked finalized, and the old replicas fall out of the union and
+/// are dropped. Success takes precedence over the deadline. On a timeout,
+/// `Commit` cuts over to the un-hydrated target anyway while `Rollback` (the
+/// default) marks the record timed out without touching the realized config and
+/// stops desiring the target replicas, reverting to the pre-reconfiguration set.
+///
+/// Both functions are pure over the observed [`ClusterState`]; hydration is read
+/// from [`ClusterState::hydrated_replicas`], which the controller populates while
+/// an in-progress reconfiguration is present.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GracefulReconfigurationStrategy;
+
+/// The audit-attribution name of the graceful reconfiguration strategy.
+pub const GRACEFUL_RECONFIGURATION_STRATEGY_NAME: &str = "graceful-reconfiguration";
+
+impl GracefulReconfigurationStrategy {
+    /// Whether the cut-over precondition holds: at least
+    /// `target.replication_factor` replicas of the target shape report
+    /// hydrated.
+    ///
+    /// Requiring rf-many hydrated replicas (not just one) preserves the
+    /// high-availability guarantee of `replication_factor > 1` across the
+    /// cut-over. Extra target-shape replicas beyond the rf do not block: the
+    /// post-cut-over reconcile retires them anyway, so waiting for them to
+    /// hydrate would only delay the cut-over.
+    fn target_hydrated(&self, state: &ClusterState, record: &ReconfigurationRecord) -> bool {
+        let target_shape = record.target.shape();
+        let hydrated_target_replicas = state
+            .replicas
+            .iter()
+            .filter(|r| r.shape.matches(&target_shape))
+            .filter(|r| state.hydrated_replicas.contains(&r.replica_id))
+            .count();
+        let target_rf = usize::try_from(record.target.replication_factor).unwrap_or(usize::MAX);
+        hydrated_target_replicas >= target_rf
+    }
+}
+
+impl Strategy for GracefulReconfigurationStrategy {
+    fn name(&self) -> &'static str {
+        GRACEFUL_RECONFIGURATION_STRATEGY_NAME
+    }
+
+    fn update_state(&self, state: &ClusterState, now: Timestamp) -> StateWrite {
+        let Some(record) = &state.reconfiguration else {
+            return StateWrite::default();
+        };
+        if !record.is_in_progress() {
+            return StateWrite::default();
+        }
+
+        // Cut over by advancing the realized config to the target and marking
+        // the record finalized on either of two conditions:
+        //   1. rf-many target replicas are present and hydrated (success, which
+        //      takes precedence over the deadline regardless of `on_timeout`), or
+        //   2. the deadline has been reached un-hydrated and `on_timeout` is
+        //      `Commit` (cut over to the not-yet-hydrated target anyway).
+        //
+        // NOTE: the deadline is reached at `now >= deadline`, not `now > deadline`.
+        // A `WAIT FOR '0s'` writes `deadline = now` to request an immediate
+        // cut-over. With a strict `>`, a first tick landing at exactly that
+        // timestamp would miss the deadline, so phase 2 would provision the overlap
+        // target replicas and only a later tick would cut over. `>=` fires the
+        // deadline the instant it is reached, so the zero-timeout cut-over happens
+        // on the first tick, before any overlap replica is desired.
+        let hydrated = self.target_hydrated(state, record);
+        let deadline_reached = now >= record.deadline;
+        let commit_on_timeout = deadline_reached && matches!(record.on_timeout, OnTimeout::Commit);
+        if hydrated || commit_on_timeout {
+            return StateWrite {
+                new_size: Some(record.target.size.clone()),
+                new_replication_factor: Some(record.target.replication_factor),
+                new_availability_zones: Some(record.target.availability_zones.0.clone()),
+                new_logging: Some(record.target.logging.clone()),
+                reconfiguration: Some(ReconfigurationWrite {
+                    record: Some(ReconfigurationRecord {
+                        status: ReconfigurationStatus::Finalized,
+                        ..record.clone()
+                    }),
+                    // A cut-over that only happens because the deadline passed
+                    // under `Commit` is forced: the target has not hydrated.
+                    // Declared here because only this decision point knows.
+                    // The durable status reads `Finalized` either way.
+                    audit: Some(ReconfigurationAudit::Finalized { forced: !hydrated }),
+                }),
+                ..Default::default()
+            };
+        }
+
+        // Past the deadline un-hydrated under `Rollback`: abandon the
+        // reconfiguration while leaving the realized config untouched. The
+        // terminal status is the durable transition the audit event records. With
+        // the record no longer in progress the strategy stops contributing the
+        // target set, so the baseline alone shapes the cluster.
+        if deadline_reached && matches!(record.on_timeout, OnTimeout::Rollback) {
+            return StateWrite {
+                reconfiguration: Some(ReconfigurationWrite {
+                    record: Some(ReconfigurationRecord {
+                        status: ReconfigurationStatus::TimedOut,
+                        ..record.clone()
+                    }),
+                    audit: Some(ReconfigurationAudit::TimedOut),
+                }),
+                ..Default::default()
+            };
+        }
+
+        // Before the deadline: keep waiting.
+        StateWrite::default()
+    }
+
+    fn desired_replicas(&self, state: &ClusterState, now: Timestamp) -> Vec<DesiredReplica> {
+        let Some(record) = &state.reconfiguration else {
+            return Vec::new();
+        };
+        if !record.is_in_progress() {
+            return Vec::new();
+        }
+
+        // Past the deadline with the target not hydrated under `Rollback`: stop
+        // contributing the target replicas. `update_state` marks the record
+        // timed out in this same tick's first phase, so this usually never fires
+        // against a re-read state. It matters when that write could not land (e.g.
+        // the compare-and-append witness was stale), keeping the rollback's
+        // replica drops prompt rather than waiting for the status update to retry. Everything
+        // else (before the deadline, awaiting a success cut-over past it, or a
+        // `Commit` cut-over `update_state` performs this tick) keeps desiring
+        // the target set.
+        // `now >= deadline` matches `update_state`'s boundary, so a zero-timeout
+        // rollback stops desiring the target on the same tick it marks the
+        // record timed out.
+        let timed_out = now >= record.deadline && !self.target_hydrated(state, record);
+        if timed_out && matches!(record.on_timeout, OnTimeout::Rollback) {
+            return Vec::new();
+        }
+
+        let shape = record.target.shape();
+        (0..record.target.replication_factor)
             .map(|_| DesiredReplica {
                 shape: shape.clone(),
             })

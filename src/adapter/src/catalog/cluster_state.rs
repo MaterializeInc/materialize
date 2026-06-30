@@ -16,13 +16,14 @@
 //! and wherever it is checked keeps the compared fields from drifting apart.
 
 use mz_adapter_types::cluster_state::{
-    AvailabilityZones, BurstRecord, ExpectedClusterState, ReconfigurationRecord,
-    ReconfigurationTarget,
+    AvailabilityZones, BurstRecord, ExpectedClusterState, OnTimeout, ReconfigurationRecord,
+    ReconfigurationStatus, ReconfigurationTarget,
 };
 use mz_catalog::memory::objects::{
     BurstState, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
 };
 use mz_controller_types::ClusterId;
+use mz_sql::plan::OnTimeoutAction;
 
 use crate::catalog::CatalogState;
 
@@ -73,13 +74,12 @@ pub(crate) fn cluster_matches_expected(
 fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecord {
     // Exhaustive destructure (no `..`), like `project_expected`: a field added
     // to either catalog type is a compile error here until we decide whether the
-    // witness must carry it. `on_timeout` is deliberately not part of the
-    // witness.
+    // witness must carry it.
     let ReconfigurationState {
         target,
         deadline,
-        on_timeout: _,
-        status: _,
+        on_timeout: on_timeout_action,
+        status,
     } = record;
     let mz_catalog::memory::objects::ReconfigurationTarget {
         size,
@@ -95,6 +95,37 @@ fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecor
             logging: logging.clone(),
         },
         deadline: *deadline,
+        on_timeout: on_timeout(*on_timeout_action),
+        status: reconfiguration_status(*status),
+    }
+}
+
+fn reconfiguration_status(
+    status: mz_catalog::memory::objects::ReconfigurationStatus,
+) -> ReconfigurationStatus {
+    match status {
+        mz_catalog::memory::objects::ReconfigurationStatus::InProgress => {
+            ReconfigurationStatus::InProgress
+        }
+        mz_catalog::memory::objects::ReconfigurationStatus::Finalized => {
+            ReconfigurationStatus::Finalized
+        }
+        mz_catalog::memory::objects::ReconfigurationStatus::TimedOut => {
+            ReconfigurationStatus::TimedOut
+        }
+        mz_catalog::memory::objects::ReconfigurationStatus::Cancelled => {
+            ReconfigurationStatus::Cancelled
+        }
+        mz_catalog::memory::objects::ReconfigurationStatus::ResourceExhausted => {
+            ReconfigurationStatus::ResourceExhausted
+        }
+    }
+}
+
+fn on_timeout(action: OnTimeoutAction) -> OnTimeout {
+    match action {
+        OnTimeoutAction::Commit => OnTimeout::Commit,
+        OnTimeoutAction::Rollback => OnTimeout::Rollback,
     }
 }
 

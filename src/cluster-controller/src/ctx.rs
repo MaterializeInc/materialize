@@ -22,6 +22,8 @@
 //! controller drives what is fetched. Read methods are batched so a separate-task
 //! deployment can bound its round-trips to the Coordinator.
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -32,8 +34,9 @@ use mz_repr::Timestamp;
 // decision can share them without depending on this crate. They are part of the
 // ctx vocabulary, so re-export them here.
 pub use mz_adapter_types::cluster_state::{
-    AvailabilityZones, BurstRecord, ExpectedClusterState, ReconfigurationRecord,
-    ReconfigurationTarget, ReplicaShape,
+    AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord, ExpectedClusterState, OnTimeout,
+    ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus, ReconfigurationTarget,
+    ReplicaShape,
 };
 
 /// A replica that actually exists on a cluster, as observed through the ctx.
@@ -60,12 +63,19 @@ pub struct ClusterState {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ComputeReplicaLogging,
-    /// In-flight graceful reconfiguration, if any.
+    /// Latest graceful reconfiguration record, if one has been written.
     pub reconfiguration: Option<ReconfigurationRecord>,
     /// In-flight hydration burst, if any.
     pub burst: Option<BurstRecord>,
     /// The replicas that actually exist on the cluster.
     pub replicas: Vec<ObservedReplica>,
+    /// The replicas observed this tick to have *all* current collections on the
+    /// cluster hydrated. A **live signal**, not durable state, so it is excluded
+    /// from [`ClusterState::expected`] (the compare-and-append witness).
+    ///
+    /// Populated only for clusters where a strategy needs it (pulled on demand);
+    /// empty for steady clusters the controller never probes.
+    pub hydrated_replicas: BTreeSet<ReplicaId>,
 }
 
 impl ClusterState {
@@ -103,11 +113,38 @@ pub struct StateWrite {
     pub new_replication_factor: Option<u32>,
     pub new_availability_zones: Option<Vec<String>>,
     pub new_logging: Option<ComputeReplicaLogging>,
-    /// Write (`Some(Some(_))`), clear (`Some(None)`), or leave unchanged
-    /// (`None`) the reconfiguration record.
-    pub reconfiguration: Option<Option<ReconfigurationRecord>>,
-    /// Write, clear, or leave unchanged the burst record, as above.
-    pub burst: Option<Option<BurstRecord>>,
+    /// Write or clear the reconfiguration record, together with its audit
+    /// intent. `None` leaves the record unchanged.
+    pub reconfiguration: Option<ReconfigurationWrite>,
+    /// Write or clear the burst record, together with its audit intent.
+    /// `None` leaves the record unchanged.
+    pub burst: Option<BurstWrite>,
+}
+
+/// A write to the `reconfiguration` record, bundled with the audit intent
+/// declaring which lifecycle transition the write represents.
+///
+/// Bundling means a writer cannot move the record without deciding, at the same
+/// decision point, what the papertrail should say. The two travel together
+/// through the apply path and are transacted atomically with the state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReconfigurationWrite {
+    /// The record to write, or `None` to clear it.
+    pub record: Option<ReconfigurationRecord>,
+    /// The lifecycle transition to audit. `None` declares that this write is
+    /// not a lifecycle transition and must not emit an event.
+    pub audit: Option<ReconfigurationAudit>,
+}
+
+/// A write to the `burst` record, bundled with its audit intent. See
+/// [`ReconfigurationWrite`]. A bookkeeping rewrite of an existing record (the
+/// linger stamp and its reset) declares `audit: None`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BurstWrite {
+    /// The record to write, or `None` to clear it.
+    pub record: Option<BurstRecord>,
+    /// The lifecycle transition to audit, or `None` for a bookkeeping rewrite.
+    pub audit: Option<BurstAudit>,
 }
 
 impl StateWrite {
@@ -178,6 +215,11 @@ pub enum ApplyOutcome {
     /// At least one decision failed its compare-and-append guard. The whole
     /// batch is rejected; the controller recomputes next tick.
     Rejected,
+    /// The batch was rejected because it exceeded the environment's resource
+    /// budget. Nothing was transacted. Unlike a guard rejection, retrying the
+    /// same batch cannot succeed on its own: the controller decides what to
+    /// shed to make room.
+    ResourceExhausted,
 }
 
 /// The strategy-agnostic pull/apply interface between the controller and its
@@ -200,6 +242,18 @@ pub trait ClusterControllerCtx: Send {
 
     /// The ids of all managed clusters the controller owns this tick.
     async fn managed_cluster_ids(&mut self) -> Vec<ClusterId>;
+
+    /// Of `replicas` on `cluster`, which have *all* current (non-transient)
+    /// collections on the cluster hydrated. The returned set is a subset of
+    /// `replicas`.
+    ///
+    /// Callers should request only replicas their strategy currently needs. This
+    /// keeps live-signal dependencies local to the strategies that consume them.
+    async fn hydrated_replicas(
+        &mut self,
+        cluster_id: ClusterId,
+        replicas: &[ReplicaId],
+    ) -> BTreeSet<ReplicaId>;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     /// Each decision carries the [`ExpectedClusterState`] it was derived from;
