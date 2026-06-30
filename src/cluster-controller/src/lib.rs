@@ -18,43 +18,20 @@
 //! truth is always the catalog plus live signals, pulled fresh each tick.
 //!
 //! The crate is **pure**. It depends only on primitive id/shape types and the
-//! [`ClusterControllerCtx`] trait, never on the adapter or catalog. That boundary is
-//! what makes the controller testable against a fake implementation and
-//! extractable later without touching controller code.
+//! [`ClusterControllerCtx`] trait, never on the adapter or catalog. That
+//! boundary is what makes the controller testable against a fake
+//! implementation and extractable later without touching controller code.
 //!
-//! # The reconcile tick
-//!
-//! Each tick reconciles every managed cluster in two phases separated by a
-//! barrier:
-//!
-//! 1. **`update_state`.** Run every strategy's [`Strategy::update_state`], merge
-//!    their writes for a cluster into one [`Decision::UpdateClusterState`] (a
-//!    cut-over, a record write or clear), and apply it per cluster under a
-//!    compare-and-append guard, awaiting confirmation. The merge is a per-field
-//!    join (see `ClusterController::merge_state_writes`): strategies own
-//!    disjoint fields, so it is a disjoint union, and two strategies setting one
-//!    field to different values trips a soft-panic rather than being silently
-//!    resolved.
-//! 2. **`desired_replicas`.** With those writes applied, re-read state, run
-//!    every strategy's [`Strategy::desired_replicas`], union the contributions
-//!    (the implicit baseline included), match by [`ReplicaShape`] against the
-//!    actual replicas, and emit the creates and drops that close the gap.
-//!
-//! Every [`Decision`], the phase-1 writes and the phase-2 creates/drops alike,
-//! carries the durable state it was derived from, and the apply path transacts
-//! it only if that state still holds (compare-and-append). This is what keeps a
-//! create or drop derived from a pre-`ALTER` snapshot from reshaping the replica
-//! set against the config the `ALTER` has since established. Applies are scoped
-//! to a single cluster, so one cluster's rejection isolates to that cluster and
-//! the rest still make progress. On a rejection the controller recomputes from
-//! the new state next tick.
-//!
-//! Commands name explicit replicas, so re-emission across a lagging view or a
-//! restart is harmless: a create of a name that already exists and a drop of one
-//! already gone are both no-ops.
+//! A tick runs two phases per cluster, `update_state` then `desired_replicas`
+//! (see [`ClusterController::reconcile`]). Every [`Decision`] carries the
+//! durable state it was derived from, and the apply path transacts it only if
+//! that state still holds (compare-and-append). So a create or drop derived
+//! from a pre-`ALTER` snapshot can never reshape the replica set against the
+//! config the `ALTER` has since established. Applies are per cluster, so one
+//! cluster's rejection does not block the others, and commands name explicit
+//! replicas, so re-emitting one across a lagging view or a restart is a no-op.
 //!
 //! [`ClusterControllerCtx`]: crate::ctx::ClusterControllerCtx
-//! [`ReplicaShape`]: crate::ctx::ReplicaShape
 
 pub mod ctx;
 pub mod strategy;
