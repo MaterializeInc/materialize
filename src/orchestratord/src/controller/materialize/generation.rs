@@ -95,9 +95,9 @@ static PER_ROUTE_GROUP_ROLES_VERSION: LazyLock<Version> = LazyLock::new(|| Versi
 /// Minimum version for distroless environmentd/clusterd images (nonroot
 /// uid/gid 65534). Balancerd transitioned earlier at V26_18_0 (see
 /// balancer.rs).
-static V26_28_0: LazyLock<Version> = LazyLock::new(|| Version {
+static V26_32_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
-    minor: 28,
+    minor: 32,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -906,7 +906,7 @@ fn create_environmentd_statefulset_object(
     // Note: Kubernetes fsGroup re-chowns volume contents on mount, so
     // existing PVCs with UID 999 files will be migrated automatically
     // (may add startup latency for large volumes).
-    let service_fs_group: i64 = if mz.meets_minimum_version(&V26_28_0) {
+    let service_fs_group: i64 = if mz.meets_minimum_version(&V26_32_0) {
         65534
     } else {
         999
