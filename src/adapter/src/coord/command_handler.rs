@@ -1382,8 +1382,11 @@ impl Coordinator {
                             }
                         }
 
+                        // Redact literals (e.g. `CREATE SECRET` values) so that
+                        // secret material does not leak into the error message,
+                        // which is persisted in `mz_statement_execution_history`.
                         return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(
-                            stmt.to_string(),
+                            stmt.to_ast_string_redacted(),
                         )));
                     }
                 }

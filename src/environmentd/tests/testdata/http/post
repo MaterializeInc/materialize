@@ -54,7 +54,7 @@ http
 {"query":"create view v1 as select 1; create view v2 as select 1"}
 ----
 200 OK
-{"results":[{"error":{"message":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block","code":"25001"},"notices":[]}]}
+{"results":[{"error":{"message":"CREATE VIEW v1 AS SELECT '<REDACTED>' cannot be run inside a transaction block","code":"25001"},"notices":[]}]}
 
 # Syntax errors fail the request.
 http
