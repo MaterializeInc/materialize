@@ -236,6 +236,7 @@ table.inline-headings {
         text-decoration: none;
         word-wrap: break-word;
         white-space: initial;
+        transition: color 0.2s ease, background-color 0.2s ease;
 
         &.active {
             color: var(--highlight);
@@ -683,7 +684,6 @@ body.light {
 
         li.level-1 > a {
             color: var(--heading);
-            font-weight: var(--weight-heading);
         }
 
         a:hover,
