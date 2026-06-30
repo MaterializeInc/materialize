@@ -14,11 +14,44 @@
 //! model, and the equivalences are left as extraction spelled them.
 
 use mz_expr::{
-    Columns, JoinImplementation, JoinInputCharacteristics, JoinInputMapper, MirRelationExpr,
-    MirScalarExpr,
+    Columns, FilterCharacteristics, JoinImplementation, JoinInputCharacteristics, JoinInputMapper,
+    MirRelationExpr, MirScalarExpr,
 };
 
 use crate::eqsat::cost::JoinOrder;
+
+/// Build the `JoinInputCharacteristics` for one order step (start or lookup)
+/// from the structurally-known fields. `available` must be the ORIGINAL per-input
+/// arrangement keys (before `implement_arrangements` wraps inputs in ArrangeBy),
+/// matching `JoinImplementation`'s `arranged` computation. `cardinality` and
+/// `filters` are left at their neutral values; the cardinality and selectivity
+/// axes are future work.
+fn step_characteristics(
+    input: usize,
+    key: &[MirScalarExpr],
+    available: &[Vec<Vec<MirScalarExpr>>],
+    inputs: &[MirRelationExpr],
+    enable_join_prioritize_arranged: bool,
+) -> JoinInputCharacteristics {
+    let arranged = available[input].iter().any(|k| k.as_slice() == key);
+    // A unique key qualifies iff every one of its columns appears in `key`
+    // (mirrors join_implementation.rs:1184). Non-column key members never match a
+    // unique-key column, so they simply do not contribute.
+    let keys = inputs[input].typ().keys;
+    let unique_key = keys.iter().any(|cols| {
+        cols.iter()
+            .all(|c| key.contains(&MirScalarExpr::column(*c)))
+    });
+    JoinInputCharacteristics::new(
+        unique_key,
+        key.len(),
+        arranged,
+        None,
+        FilterCharacteristics::none(),
+        input,
+        enable_join_prioritize_arranged,
+    )
+}
 
 /// Commit `join` (a bare, `Unimplemented` `Join`) to a `Differential` plan that
 /// follows `order`. `available` gives each input's existing arrangement keys.
@@ -45,14 +78,19 @@ pub(crate) fn commit_differential(
 
     // Build the (input, local_key, characteristics) order; element 0 is the
     // start. Characteristics are EXPLAIN-only and not produced cost-model-side.
-    let mut order_tuples: Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)> = order
-        .steps
-        .iter()
-        .map(|s| {
-            let key = s.key_cols.iter().map(|&c| MirScalarExpr::column(c)).collect();
-            (s.input, key, None)
-        })
-        .collect();
+    let mut order_tuples: Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)> =
+        order
+            .steps
+            .iter()
+            .map(|s| {
+                let key = s
+                    .key_cols
+                    .iter()
+                    .map(|&c| MirScalarExpr::column(c))
+                    .collect();
+                (s.input, key, None)
+            })
+            .collect();
 
     // Fix the START arrangement key. The cost model's per-step keys are correct
     // for the LOOKUP inputs (the renderer re-keys the stream side to match them),
@@ -124,6 +162,37 @@ mod tests {
     use mz_expr::{Id, JoinImplementation, LocalId, MirRelationExpr};
     use mz_repr::{ReprRelationType, ReprScalarType};
 
+    #[mz_ore::test]
+    fn step_characteristics_reports_arranged_unique_and_len() {
+        use mz_repr::{ReprRelationType, ReprScalarType};
+        // input 0: arity 2, unique key {0}; input 1: arity 2, no key.
+        let typ0 = ReprRelationType::new(vec![
+            ReprScalarType::Int32.nullable(true),
+            ReprScalarType::Int32.nullable(true),
+        ])
+        .with_keys(vec![vec![0]]);
+        let in0 = MirRelationExpr::Get {
+            id: mz_expr::Id::Local(mz_expr::LocalId::new(0)),
+            typ: typ0,
+            access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
+        };
+        let in1 = get(1, 2);
+        let inputs = vec![in0, in1];
+        // input 0 is arranged by [#0]; input 1 has no arrangements.
+        let available = vec![vec![vec![MirScalarExpr::column(0)]], Vec::new()];
+
+        // Lookup on input 0, key [#0]: arranged + unique + len 1.
+        let c0 = step_characteristics(0, &[MirScalarExpr::column(0)], &available, &inputs, false);
+        assert!(
+            format!("{c0:?}").contains("key_length: 1"),
+            "expected key_length 1, got {c0:?}"
+        );
+        assert!(c0.arranged(), "input 0 is arranged by [#0]");
+        // Lookup on input 1, key [#0]: not arranged, not unique.
+        let c1 = step_characteristics(1, &[MirScalarExpr::column(0)], &available, &inputs, false);
+        assert!(!c1.arranged(), "input 1 has no arrangement");
+    }
+
     use crate::eqsat::cost::{JoinOrder, JoinStep};
 
     fn get(local: u64, arity: usize) -> MirRelationExpr {
@@ -153,8 +222,14 @@ mod tests {
         let join = MirRelationExpr::join_scalars(
             inputs,
             vec![
-                vec![mz_expr::MirScalarExpr::column(0), mz_expr::MirScalarExpr::column(2)],
-                vec![mz_expr::MirScalarExpr::column(2), mz_expr::MirScalarExpr::column(4)],
+                vec![
+                    mz_expr::MirScalarExpr::column(0),
+                    mz_expr::MirScalarExpr::column(2),
+                ],
+                vec![
+                    mz_expr::MirScalarExpr::column(2),
+                    mz_expr::MirScalarExpr::column(4),
+                ],
             ],
         );
         // Order: start at input 1 (key on local col 0), then input 0 (key local
@@ -173,7 +248,11 @@ mod tests {
         match implementation {
             JoinImplementation::Differential((start, start_key, _), rest) => {
                 assert_eq!(*start, 1, "start input");
-                assert_eq!(start_key.as_ref().map(|k| k.len()), Some(1), "start key len");
+                assert_eq!(
+                    start_key.as_ref().map(|k| k.len()),
+                    Some(1),
+                    "start key len"
+                );
                 assert_eq!(rest.len(), 2, "two remaining inputs");
                 assert_eq!(rest[0].0, 0);
                 assert_eq!(rest[1].0, 2);
@@ -225,7 +304,11 @@ mod tests {
                     "start key must align 1:1 with the first lookup, not be over-wide"
                 );
                 assert_eq!(rest[0].0, 1, "first lookup is input 1");
-                assert_eq!(rest[0].1.len(), start_key.len(), "start/lookup key lengths match");
+                assert_eq!(
+                    rest[0].1.len(),
+                    start_key.len(),
+                    "start/lookup key lengths match"
+                );
             }
             other => panic!("expected Differential, got {other:?}"),
         }
