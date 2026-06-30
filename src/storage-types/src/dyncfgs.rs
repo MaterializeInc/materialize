@@ -244,6 +244,22 @@ pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::ne
     "Whether to treat a restore history change as a definite error",
 );
 
+// AWS
+
+/// The AWS SDK's connect timeout on the AssumeRole prefetcher's STS calls.
+/// Raise it if credential fetches time out on slow connections.
+///
+/// The default matches the SDK's own 3.1 second default, so behavior only
+/// changes when an operator raises it.
+///
+/// Read once when a connection is set up. Running sinks are unaffected by
+/// changes until their dataflow restarts.
+pub const AWS_STS_CONNECT_TIMEOUT: Config<Duration> = Config::new(
+    "aws_sts_connect_timeout",
+    Duration::from_millis(3100),
+    "Connect timeout for the AWS AssumeRole credentials prefetcher's STS calls.",
+);
+
 // Networking
 
 /// Whether or not to enforce that external connection addresses are global
@@ -383,6 +399,7 @@ pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
+        .add(&AWS_STS_CONNECT_TIMEOUT)
         .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)

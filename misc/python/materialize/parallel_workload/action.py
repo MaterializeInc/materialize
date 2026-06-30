@@ -1704,6 +1704,11 @@ class FlipFlagsAction(Action):
             "5242880",
             "10485760",
         ]
+        self.flags_with_values["aws_sts_connect_timeout"] = [
+            "'3100ms'",
+            "'30s'",
+            "'60s'",
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the

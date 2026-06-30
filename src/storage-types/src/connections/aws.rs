@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, anyhow, bail};
 use aws_config::sts::AssumeRoleProvider;
+use aws_config::timeout::TimeoutConfig;
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::error::CredentialsError;
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
@@ -20,6 +21,7 @@ use aws_sdk_sts::error::SdkError;
 use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
 use aws_types::SdkConfig;
 use aws_types::region::Region;
+use mz_dyncfg::ConfigSet;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::task::AbortOnDropHandle;
@@ -37,6 +39,7 @@ use crate::connections::inline::{
     ReferencedConnection,
 };
 use crate::controller::AlterError;
+use crate::dyncfgs;
 use crate::{
     configuration::StorageConfiguration,
     connections::{ConnectionContext, StringOrSecret},
@@ -135,10 +138,13 @@ pub struct AwsAssumeRole {
 impl AwsAssumeRole {
     /// Loads a credentials provider that will assume the specified role
     /// with the appropriate external ID.
+    ///
+    /// `sts_connect_timeout`, if set, replaces the AWS SDK's default connect timeout.
     async fn load_credentials_provider(
         &self,
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
+        sts_connect_timeout: Option<Duration>,
     ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
         let external_id = self
             .external_id(connection_context, connection_id)
@@ -155,6 +161,7 @@ impl AwsAssumeRole {
             connection_context,
             connection_id,
             Some(external_id),
+            sts_connect_timeout,
         )
         .await
     }
@@ -171,10 +178,25 @@ impl AwsAssumeRole {
         &self,
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
+        configs: &ConfigSet,
         diagnostic_label: String,
     ) -> Result<SharedCredentialsProvider, anyhow::Error> {
+        let mut sts_connect_timeout = dyncfgs::AWS_STS_CONNECT_TIMEOUT.get(configs);
+        if sts_connect_timeout < Duration::from_secs(1) {
+            // Treat sub-second values as misconfiguration and use the default instead.
+            // A timeout of zero would fail every connect outright,
+            // and this knob exists to raise the timeout, not to lower it.
+            let default = *dyncfgs::AWS_STS_CONNECT_TIMEOUT.default();
+            warn!(
+                %diagnostic_label,
+                configured = ?sts_connect_timeout,
+                ?default,
+                "ignoring aws_sts_connect_timeout below 1s"
+            );
+            sts_connect_timeout = default;
+        }
         let provider = self
-            .load_credentials_provider(connection_context, connection_id)
+            .load_credentials_provider(connection_context, connection_id, Some(sts_connect_timeout))
             .await
             .with_context(|| {
                 format!(
@@ -185,6 +207,7 @@ impl AwsAssumeRole {
             })?;
         Ok(SharedCredentialsProvider::new(CredentialPrefetcher::new(
             SharedCredentialsProvider::new(provider),
+            sts_connect_timeout,
             diagnostic_label,
         )))
     }
@@ -200,6 +223,7 @@ impl AwsAssumeRole {
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
         external_id: Option<String>,
+        sts_connect_timeout: Option<Duration>,
     ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
         let Some(aws_connection_role_arn) = &connection_context.aws_connection_role_arn else {
             bail!(
@@ -212,7 +236,15 @@ impl AwsAssumeRole {
 
         // Load the default SDK configuration to use for the assume role
         // operations themselves.
-        let assume_role_sdk_config = mz_aws_util::defaults().load().await;
+        let mut loader = mz_aws_util::defaults();
+        if let Some(timeout) = sts_connect_timeout {
+            // Replaces the SDK's 3.1 second connect-timeout default. The SDK
+            // classifies timed-out connections as transient and retries them
+            // itself.
+            loader =
+                loader.timeout_config(TimeoutConfig::builder().connect_timeout(timeout).build());
+        }
+        let assume_role_sdk_config = loader.load().await;
 
         // The default session name identifies the environment and the
         // connection.
@@ -346,7 +378,7 @@ impl AwsConnection {
                 ),
                 AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
                     assume_role
-                        .load_credentials_provider(&connection_context, connection_id)
+                        .load_credentials_provider(&connection_context, connection_id, None)
                         .await
                         .with_context(|| {
                             format!(
@@ -423,6 +455,7 @@ impl AwsConnection {
                     &storage_configuration.connection_context,
                     id,
                     external_id,
+                    None,
                 )
                 .await?;
             let aws_config = self
@@ -517,11 +550,7 @@ const CREDENTIAL_MAX_REFRESH_INTERVAL: Duration = Duration::from_mins(15);
 /// Lower bound on the wait between refreshes.
 const CREDENTIAL_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
-/// The AWS SDK's default connect timeout, which applies to the prefetcher's
-/// STS calls.
-const STS_CONNECT_TIMEOUT: Duration = Duration::from_millis(3100);
-
-/// (MULTIPLE * [`STS_CONNECT_TIMEOUT`]) is how long we wait for the AWS client
+/// (MULTIPLE * sts_connect_timeout) is how long we wait for the AWS client
 /// to try (and retry) fetching STS credentials.
 const CREDENTIAL_FETCH_BACKSTOP_MULTIPLE: u32 = 10;
 
@@ -563,11 +592,15 @@ impl std::fmt::Debug for CredentialPrefetcher {
 
 impl CredentialPrefetcher {
     /// Spawns the background task and returns immediately.
-    fn new(inner: SharedCredentialsProvider, diagnostic_label: String) -> CredentialPrefetcher {
+    fn new(
+        inner: SharedCredentialsProvider,
+        sts_connect_timeout: Duration,
+        diagnostic_label: String,
+    ) -> CredentialPrefetcher {
         let (tx, cache) = watch::channel(CredentialState::default());
         let task_name = format!("credential-prefetch:{diagnostic_label}");
         let refresh_task = mz_ore::task::spawn(|| task_name, async move {
-            Self::refresh_loop(inner, tx, diagnostic_label).await;
+            Self::refresh_loop(inner, tx, sts_connect_timeout, diagnostic_label).await;
         })
         .abort_on_drop();
         CredentialPrefetcher {
@@ -578,14 +611,18 @@ impl CredentialPrefetcher {
 
     /// Fetches a single credential through `inner`.
     ///
-    /// Connect timeout and retry policy live in the SDK: connects time out
-    /// after [`STS_CONNECT_TIMEOUT`], and the SDK retries timed-out connects
-    /// and other transient failures itself. The timeout here is a backstop
-    /// against the one case the SDK leaves unbounded, a connection that
-    /// establishes and then stalls. A fetch that trips it is left to the
-    /// refresh loop's schedule like any other failure.
-    async fn fetch(inner: &SharedCredentialsProvider) -> Result<Credentials, anyhow::Error> {
-        let backstop = STS_CONNECT_TIMEOUT.saturating_mul(CREDENTIAL_FETCH_BACKSTOP_MULTIPLE);
+    /// Connect timeout and retry policy live in the SDK: the prefetcher's
+    /// provider carries `sts_connect_timeout` as its connect timeout, and the SDK
+    /// retries timed-out connects and other transient failures itself. The
+    /// timeout here is a backstop against the one case the SDK leaves
+    /// unbounded, a connection that establishes and then stalls. A fetch that
+    /// trips it is left to the refresh loop's schedule like any other
+    /// failure.
+    async fn fetch(
+        inner: &SharedCredentialsProvider,
+        sts_connect_timeout: Duration,
+    ) -> Result<Credentials, anyhow::Error> {
+        let backstop = sts_connect_timeout.saturating_mul(CREDENTIAL_FETCH_BACKSTOP_MULTIPLE);
         match tokio::time::timeout(backstop, inner.provide_credentials()).await {
             Ok(Ok(creds)) => Ok(creds),
             Ok(Err(e)) => Err(anyhow::Error::new(e)),
@@ -596,10 +633,11 @@ impl CredentialPrefetcher {
     async fn refresh_loop(
         inner: SharedCredentialsProvider,
         tx: watch::Sender<CredentialState>,
+        sts_connect_timeout: Duration,
         diagnostic_label: String,
     ) {
         loop {
-            match Self::fetch(&inner).await {
+            match Self::fetch(&inner, sts_connect_timeout).await {
                 Ok(creds) => {
                     let expiry = creds.expiry();
                     let wait = next_refresh_wait(Some(&creds));
@@ -789,7 +827,7 @@ mod tests {
     }
 
     fn prefetcher(provider: SharedCredentialsProvider) -> CredentialPrefetcher {
-        CredentialPrefetcher::new(provider, "test".to_string())
+        CredentialPrefetcher::new(provider, Duration::from_secs(30), "test".to_string())
     }
 
     /// One paused-clock sleep that outlasts a scheduled refresh. Credentials
