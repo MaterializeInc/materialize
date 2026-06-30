@@ -165,7 +165,7 @@ impl Context {
         // Distroless images (v26.18+) run as the `nonroot` user (uid/gid 65534).
         // Older Ubuntu-based images use the `materialize` user (uid/gid 999).
         // Note: balancerd transitioned to distroless earlier than
-        // environmentd/clusterd (which use V26_28_0 in generation.rs).
+        // environmentd/clusterd (which use V26_32_0 in generation.rs).
         // Verified against release history: balancerd's ci/Dockerfile switched
         // to distroless-prod-base in v26.18.0 (prod-base in v26.17.x).
         static V26_18_0: std::sync::LazyLock<semver::Version> =
