@@ -470,7 +470,8 @@ impl StatementLoggingFrontend {
     ///
     /// This function processes prepared statement logging info and builds the event rows.
     /// It does NOT do throttling - that is handled externally by the caller in `begin_statement_execution`.
-    /// It DOES mutate the logging info to mark the statement as already logged.
+    /// This is a read-only operation that does not mutate
+    /// the `PreparedStatementLoggingInfo` metadata.
     ///
     /// # Arguments
     /// * `session` - The session executing the statement
@@ -483,14 +484,13 @@ impl StatementLoggingFrontend {
     /// - `Uuid`: The UUID of the prepared statement.
     fn get_prepared_statement_info(
         &self,
-        session: &mut Session,
+        session: &Session,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) -> (Option<PreparedStatementEvent>, Uuid) {
-        let logging_ref = session.qcell_rw(&*logging);
-        let mut prepared_statement_event = None;
+        let logging_ref = session.qcell_ro(&*logging);
 
-        let ps_uuid = match logging_ref {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
+        match logging_ref {
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => (None, *uuid),
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
                 redacted_sql,
@@ -506,18 +506,13 @@ impl StatementLoggingFrontend {
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
                 let uuid = epoch_to_uuid_v7(prepared_at);
-                let sql = std::mem::take(sql);
-                let redacted_sql = std::mem::take(redacted_sql);
                 let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
-
-                // Copy session_id before mutating logging_ref
-                let sid = *session_id;
 
                 let record = StatementPreparedRecord {
                     id: uuid,
                     sql_hash,
-                    name: std::mem::take(name),
-                    session_id: sid,
+                    name: name.clone(),
+                    session_id: *session_id,
                     prepared_at: *prepared_at,
                     kind: *kind,
                 };
@@ -526,6 +521,10 @@ impl StatementLoggingFrontend {
                 let mut mpsh_row = Row::default();
                 let mut mpsh_packer = mpsh_row.packer();
                 pack_statement_prepared_update(&record, &mut mpsh_packer);
+
+                // Read throttled_count from shared state
+                let throttled_count = self.throttling_state.get_throttled_count();
+                mpsh_packer.push(Datum::UInt64(CastFrom::cast_from(throttled_count)));
 
                 let sql_row = Row::pack([
                     Datum::TimestampTz(
@@ -539,23 +538,34 @@ impl StatementLoggingFrontend {
                     Datum::String(redacted_sql.as_str()),
                 ]);
 
-                // Read throttled_count from shared state
-                let throttled_count = self.throttling_state.get_throttled_count();
-
-                mpsh_packer.push(Datum::UInt64(CastFrom::cast_from(throttled_count)));
-
-                prepared_statement_event = Some(PreparedStatementEvent {
+                let prepared_statement_event = PreparedStatementEvent {
                     prepared_statement: mpsh_row,
                     sql_text: sql_row,
-                    session_id: sid,
-                });
+                    session_id: *session_id,
+                };
 
-                *logging_ref = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
-                uuid
+                (Some(prepared_statement_event), uuid)
             }
-        };
+        }
+    }
 
-        (prepared_statement_event, ps_uuid)
+    /// Marks a prepared statement as "already logged", so future executions only reference its
+    /// UUID rather than logging it again.
+    ///
+    /// This must only be called once we are committed to logging the prepared statement, i.e.
+    /// after the sampling and throttling checks in [`Self::begin_statement_execution`] have
+    /// passed. Mirrors `Coordinator::record_prepared_statement_as_logged` used by the old peek
+    /// sequencing.
+    fn record_prepared_statement_as_logged(
+        &self,
+        uuid: Uuid,
+        session: &mut Session,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+    ) {
+        let logging = session.qcell_rw(&*logging);
+        if let PreparedStatementLoggingInfo::StillToLog { .. } = logging {
+            *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
+        }
     }
 
     /// Begin statement execution logging from the frontend. (Corresponds to
@@ -646,7 +656,7 @@ impl StatementLoggingFrontend {
             return None;
         }
 
-        // Get prepared statement info (this also marks it as logged)
+        // Get prepared statement info.
         let (prepared_statement_event, ps_uuid) =
             self.get_prepared_statement_info(session, logging);
 
@@ -704,6 +714,10 @@ impl StatementLoggingFrontend {
             self.throttling_state.increment_throttled_count();
             return None;
         }
+
+        // Throttling passed, so we are now committed to mark the
+        // prepared statement as logged.
+        self.record_prepared_statement_as_logged(ps_uuid, session, logging);
 
         // When we successfully log the first instance of a prepared statement
         // (i.e., it is not throttled), reset the throttled count for future tracking.
