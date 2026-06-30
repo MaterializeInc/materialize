@@ -327,6 +327,54 @@ mod plan_tests {
             "over-qualified column reference must be a validation error, not a panic",
         );
     }
+
+    /// A cross-database reference to a database whose name is not bare (needs
+    /// SQL quoting, e.g. `café`) still gets its profile suffix. The name-map
+    /// lookup must key off the raw identifier, not its quoted `Display` form.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn plan_sync_profile_suffix_suffixes_non_bare_database_name() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("project.toml"), "").unwrap();
+
+        let a_dir = root.path().join("models/café/public");
+        std::fs::create_dir_all(&a_dir).unwrap();
+        std::fs::write(
+            a_dir.join("base.sql"),
+            "CREATE TABLE \"café\".public.base (id INT);\n",
+        )
+        .unwrap();
+
+        let b_dir = root.path().join("models/app/public");
+        std::fs::create_dir_all(&b_dir).unwrap();
+        std::fs::write(
+            b_dir.join("derived.sql"),
+            "CREATE VIEW app.public.derived AS SELECT id FROM \"café\".public.base;\n",
+        )
+        .unwrap();
+
+        let fs = crate::fs::FileSystem::new();
+        let project = plan_sync(&fs, root.path(), None, Some("_dev"), &Default::default())
+            .expect("non-bare cross-database reference should compile under a profile suffix");
+
+        let derived = project
+            .find_object(&ir::object_id::ObjectId::new(
+                "app_dev".to_string(),
+                "public".to_string(),
+                "derived".to_string(),
+            ))
+            .expect("derived view should appear under the suffixed database");
+
+        assert!(
+            derived.dependencies.contains(&ir::object_id::ObjectId::new(
+                "café_dev".to_string(),
+                "public".to_string(),
+                "base".to_string(),
+            )),
+            "non-bare database reference should be suffixed; got {:?}",
+            derived.dependencies,
+        );
+    }
 }
 
 /// Compile a project root into a planned deployment representation.
