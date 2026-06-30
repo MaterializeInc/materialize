@@ -656,6 +656,7 @@ fn memory_reconfiguration(
         // The baseline controller writes no reconfiguration records, so this
         // mapper is never exercised; default to the conservative ROLLBACK.
         on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
+        status: mz_catalog::memory::objects::ReconfigurationStatus::InProgress,
     }
 }
 

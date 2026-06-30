@@ -368,36 +368,38 @@ pub enum ReconfigurationLifecycleV1 {
     /// A reconfiguration record was written or re-targeted: the cluster is now
     /// converging onto a new target shape.
     Started,
-    /// The realized config cut over to the target and the record was cleared:
-    /// a hydrated success under either `ON TIMEOUT` action (including one that
-    /// hydrated after the deadline, since success takes precedence) or a
-    /// forced `ON TIMEOUT COMMIT` cut-over of a not-yet-hydrated target past
-    /// the deadline. The event carries the record's deadline; comparing it to
-    /// the event's occurrence time tells an in-time cut-over from a late or
-    /// forced one.
+    /// The realized config cut over to the target and the record was marked
+    /// finalized: a hydrated success under either `ON TIMEOUT` action
+    /// (including one that hydrated after the deadline, since success takes
+    /// precedence) or a forced `ON TIMEOUT COMMIT` cut-over of a
+    /// not-yet-hydrated target past the deadline. Which of the two it was is
+    /// recorded in [`AlterClusterReconfigurationV1::forced`].
     Finalized,
     /// The deadline fired with the target not hydrated under `ON TIMEOUT
-    /// ROLLBACK`: the record was cleared with the realized config untouched and
-    /// the target replicas dropped, reverting to the pre-reconfiguration set.
-    /// Emitted exactly once per timeout. The clear is durable, so the
-    /// transition cannot re-fire. This event is the timeout's papertrail; the
-    /// record (and with it the abandoned target) is gone from the catalog.
+    /// ROLLBACK`: the record was marked timed out with the realized config
+    /// untouched and the target replicas dropped, reverting to the
+    /// pre-reconfiguration set. Emitted exactly once per timeout. The status
+    /// transition is durable, so it cannot re-fire. This event is the timeout's
+    /// papertrail, alongside the retained record.
     TimedOut,
     /// An in-flight reconfiguration was cancelled by re-targeting the record
     /// back to the cluster's still-realized shape (the ALTER-back cancel path);
-    /// the controller drops the in-flight target replicas and clears the record.
+    /// the controller drops the in-flight target replicas.
     Cancelled,
+    /// The controller could not create the target replicas within the resource
+    /// budget and aborted the reconfiguration: the record was marked resource
+    /// exhausted with the realized config untouched, reverting to the
+    /// pre-reconfiguration set (like a rollback, but triggered by the budget
+    /// rather than the deadline). The status transition is durable, so it
+    /// cannot re-fire.
+    ResourceExhausted,
 }
 
 /// A cluster-level transition in a background reconfiguration's lifecycle.
 ///
 /// `deadline` is the reconfiguration's active deadline as a millisecond
 /// `mz_timestamp`, recorded on every transition so an operator can correlate
-/// the transition with the originating `ALTER`: on `started` and `cancelled`
-/// the written/re-targeted record's deadline, on `timed-out` and `finalized`
-/// the just-cleared record's. On `finalized`, comparing it to the event's
-/// occurrence time distinguishes an in-time cut-over from a late or forced
-/// (`ON TIMEOUT COMMIT`) one.
+/// the transition with the originating `ALTER`.
 #[derive(
     Clone,
     Debug,
@@ -414,6 +416,11 @@ pub struct AlterClusterReconfigurationV1 {
     pub cluster_id: String,
     pub cluster_name: String,
     pub transition: ReconfigurationLifecycleV1,
+    /// On a `finalized` transition: whether the cut-over was forced by `ON
+    /// TIMEOUT COMMIT` at the deadline rather than reached by hydration.
+    /// `None` on every other transition.
+    #[serde(default)]
+    pub forced: Option<bool>,
     pub target_size: String,
     pub target_replication_factor: u32,
     pub target_availability_zones: Vec<String>,
@@ -486,9 +493,33 @@ pub enum HydrationBurstLifecycleV1 {
     /// A `burst` record was written: the controller is now running a burst
     /// replica to accelerate hydration.
     Started,
-    /// The `burst` record was cleared: the burst replica is torn down (its linger
-    /// elapsed after the steady set hydrated, or the burst is no longer warranted).
+    /// The `burst` record was cleared: the burst replica is torn down. Why is
+    /// recorded in [`ClusterHydrationBurstV1::finish_cause`].
     Finished,
+}
+
+/// Why a hydration burst finished, recorded on a `finished` transition.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum BurstFinishCauseV1 {
+    /// The steady replica set hydrated and the linger duration elapsed.
+    LingerElapsed,
+    /// The burst is no longer warranted by current config: the auto-scaling
+    /// policy was removed or its hydration size changed, the cluster was
+    /// turned off, or burst was disabled environment-wide.
+    NoLongerWarranted,
 }
 
 /// A cluster-level transition in a hydration burst's lifecycle.
@@ -508,6 +539,9 @@ pub struct ClusterHydrationBurstV1 {
     pub cluster_id: String,
     pub cluster_name: String,
     pub transition: HydrationBurstLifecycleV1,
+    /// On a `finished` transition: why the burst tore down. `None` on `started`.
+    #[serde(default)]
+    pub finish_cause: Option<BurstFinishCauseV1>,
     /// The size of the burst replica the record runs.
     pub burst_size: String,
 }

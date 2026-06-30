@@ -79,6 +79,7 @@ fn reconfiguration_record(record: &ReconfigurationState) -> ReconfigurationRecor
         target,
         deadline,
         on_timeout: _,
+        status: _,
     } = record;
     let mz_catalog::memory::objects::ReconfigurationTarget {
         size,

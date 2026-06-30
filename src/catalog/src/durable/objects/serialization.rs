@@ -29,7 +29,7 @@ use crate::durable::objects::{
 };
 use crate::durable::{
     BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
-    ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
+    ReconfigurationStatus, ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
 };
 
 use super::{RoleAuthKey, RoleAuthValue};
@@ -120,6 +120,7 @@ impl RustType<proto::ReconfigurationState> for ReconfigurationState {
             target: self.target.into_proto(),
             deadline: self.deadline.into(),
             on_timeout: self.on_timeout.into_proto(),
+            status: self.status.into_proto(),
         }
     }
 
@@ -128,6 +129,33 @@ impl RustType<proto::ReconfigurationState> for ReconfigurationState {
             target: proto.target.into_rust()?,
             deadline: mz_repr::Timestamp::new(proto.deadline),
             on_timeout: proto.on_timeout.into_rust()?,
+            status: proto.status.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ReconfigurationStatus> for ReconfigurationStatus {
+    fn into_proto(&self) -> proto::ReconfigurationStatus {
+        match self {
+            ReconfigurationStatus::InProgress => proto::ReconfigurationStatus::InProgress,
+            ReconfigurationStatus::Finalized => proto::ReconfigurationStatus::Finalized,
+            ReconfigurationStatus::TimedOut => proto::ReconfigurationStatus::TimedOut,
+            ReconfigurationStatus::Cancelled => proto::ReconfigurationStatus::Cancelled,
+            ReconfigurationStatus::ResourceExhausted => {
+                proto::ReconfigurationStatus::ResourceExhausted
+            }
+        }
+    }
+
+    fn from_proto(proto: proto::ReconfigurationStatus) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            proto::ReconfigurationStatus::InProgress => ReconfigurationStatus::InProgress,
+            proto::ReconfigurationStatus::Finalized => ReconfigurationStatus::Finalized,
+            proto::ReconfigurationStatus::TimedOut => ReconfigurationStatus::TimedOut,
+            proto::ReconfigurationStatus::Cancelled => ReconfigurationStatus::Cancelled,
+            proto::ReconfigurationStatus::ResourceExhausted => {
+                ReconfigurationStatus::ResourceExhausted
+            }
         })
     }
 }
