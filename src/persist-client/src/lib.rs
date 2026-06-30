@@ -9,7 +9,13 @@
 
 //! An abstraction presenting as a durable time-varying collection (aka shard)
 
-#![warn(missing_docs, missing_debug_implementations)]
+// The `fuzzing` feature re-exports internal types (see `fuzz_exports`) that are
+// intentionally undocumented. Don't require docs/Debug for them in that
+// test-only build. The normal public API is still linted.
+#![cfg_attr(
+    not(feature = "fuzzing"),
+    warn(missing_docs, missing_debug_implementations)
+)]
 // #[track_caller] is currently a no-op on async functions, but that hopefully won't be the case
 // forever. So we already annotate those functions now and ignore the compiler warning until
 // https://github.com/rust-lang/rust/issues/87417 pans out.
@@ -97,6 +103,17 @@ pub mod schema;
 pub mod stats;
 pub mod usage;
 pub mod write;
+
+/// Internal durable-state types re-exported under `cfg(feature = "fuzzing")` so
+/// the fuzz crate can drive their proto round-trips (`ProtoRollup`/`ProtoStateDiff`
+/// are decoded from blob/consensus on every state load). Not part of the public
+/// API.
+#[cfg(feature = "fuzzing")]
+pub mod fuzz_exports {
+    pub use crate::internal::encoding::Rollup;
+    pub use crate::internal::state::{ProtoRollup, ProtoStateDiff};
+    pub use crate::internal::state_diff::StateDiff;
+}
 
 /// An implementation of the public crate interface.
 mod internal {
