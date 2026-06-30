@@ -92,6 +92,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use anyhow::{Context, anyhow};
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use aws_credential_types::provider::SharedCredentialsProvider;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
@@ -134,6 +135,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::aws::{AwsAuth, CredentialPrefetchConfig};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{
@@ -1097,6 +1099,7 @@ fn mint_batch_descriptions<'scope, D>(
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     initial_schema: SchemaRef,
+    prefetched_credentials: Option<SharedCredentialsProvider>,
 ) -> (
     VecCollection<'scope, Timestamp, D, Diff>,
     StreamVec<'scope, Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
@@ -1151,7 +1154,7 @@ where
 
             let catalog = connection
                 .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
+                .connect(&storage_configuration, InTask::Yes, prefetched_credentials)
                 .await
                 .with_context(|| {
                     format!(
@@ -1525,6 +1528,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
     materialize_arrow_schema: Arc<ArrowSchema>,
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
+    prefetched_credentials: Option<SharedCredentialsProvider>,
 ) -> (
     StreamVec<'scope, Timestamp, BoundedDataFile>,
     StreamVec<'scope, Timestamp, HealthStatusMessage>,
@@ -1546,7 +1550,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
             let [capset]: &mut [_; 1] = caps.try_into().unwrap();
             let catalog = connection
                 .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
+                .connect(&storage_configuration, InTask::Yes, prefetched_credentials)
                 .await
                 .with_context(|| {
                     format!(
@@ -2154,6 +2158,7 @@ fn commit_to_iceberg<'scope>(
     > + 'static,
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
+    prefetched_credentials: Option<SharedCredentialsProvider>,
 ) -> (
     StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
@@ -2179,7 +2184,7 @@ fn commit_to_iceberg<'scope>(
 
             let catalog = connection
                 .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
+                .connect(&storage_configuration, InTask::Yes, prefetched_credentials)
                 .await
                 .with_context(|| {
                     format!(
@@ -2520,6 +2525,60 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             .expect("statistics initialized")
             .clone();
 
+        // For S3 Tables catalogs authenticated via AssumeRole, prefetch and
+        // cache the AWS credentials so the catalog operators below never resolve
+        // credentials on their request path. The prefetcher refreshes ahead of
+        // expiry on a background task that is torn down with the dataflow (its
+        // `SharedCredentialsProvider` is held only by the operators). The first
+        // fetch happens here, synchronously, before the operators are built.
+        //
+        // `render_sink` runs on every worker, and `write_data_files` connects on
+        // every worker (not just the active one), so each worker builds its own
+        // prefetcher.
+        let prefetched_credentials = match self.catalog_connection.s3tables_catalog() {
+            Some(s3tables)
+                if matches!(
+                    s3tables.aws_connection.connection.auth,
+                    AwsAuth::AssumeRole(_)
+                ) =>
+            {
+                let aws_connection = s3tables.aws_connection.connection.clone();
+                let connection_id = s3tables.aws_connection.connection_id;
+                let connection_context = storage_state
+                    .storage_configuration
+                    .connection_context
+                    .clone();
+                // `render_sink` is synchronous and runs on a timely worker thread
+                // that has the tokio runtime entered, so `block_on` alone would
+                // panic. `block_in_place` hands the thread to the runtime for the
+                // duration of the blocking fetch.
+                let handle = tokio::runtime::Handle::current();
+                let result = tokio::task::block_in_place(|| {
+                    handle.block_on(aws_connection.prefetch_credentials(
+                        &connection_context,
+                        connection_id,
+                        CredentialPrefetchConfig::default(),
+                    ))
+                });
+                match result {
+                    Ok(provider) => Some(provider),
+                    Err(err) => {
+                        let error_stream = std::iter::once(HealthStatusMessage {
+                            id: None,
+                            update: HealthStatusUpdate::halting(
+                                format!("{}", err.display_with_causes()),
+                                None,
+                            ),
+                            namespace: StatusNamespace::Iceberg,
+                        })
+                        .to_stream(scope);
+                        return (error_stream, vec![]);
+                    }
+                }
+            }
+            _ => None,
+        };
+
         let connection_for_minter = self.clone();
         let (minted_input, batch_descriptions, table_ready, mint_status, mint_button) =
             mint_batch_descriptions(
@@ -2530,6 +2589,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                 connection_for_minter,
                 storage_state.storage_configuration.clone(),
                 Arc::clone(&iceberg_schema),
+                prefetched_credentials.clone(),
             );
 
         let connection_for_writer = self.clone();
@@ -2545,6 +2605,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                 Arc::new(arrow_schema_with_ids.clone()),
                 Arc::clone(&metrics),
                 statistics.clone(),
+                prefetched_credentials.clone(),
             ),
             SinkEnvelope::Append => write_data_files::<AppendEnvelopeHandler>(
                 format!("{sink_id}-write-data-files"),
@@ -2557,6 +2618,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                 Arc::new(arrow_schema_with_ids.clone()),
                 Arc::clone(&metrics),
                 statistics.clone(),
+                prefetched_credentials.clone(),
             ),
             SinkEnvelope::Debezium => {
                 unreachable!("Iceberg sink only supports Upsert and Append envelopes")
@@ -2577,6 +2639,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             write_handle,
             Arc::clone(&metrics),
             statistics,
+            prefetched_credentials,
         );
 
         let running_status = Some(HealthStatusMessage {
