@@ -29,8 +29,13 @@ pub(super) fn create_stub_table_sql(
     object_id: &ObjectId,
     columns: &BTreeMap<String, ColumnType>,
 ) -> String {
+    // `columns` is keyed by name, so iterating it directly yields alphabetical
+    // order. The schema's real column order lives in `ColumnType::position`.
+    let mut ordered: Vec<_> = columns.iter().collect();
+    ordered.sort_by_key(|(_, ct)| ct.position);
+
     let mut col_defs = Vec::new();
-    for (col_name, col_type) in columns {
+    for (col_name, col_type) in ordered {
         let nullable = if col_type.nullable { "" } else { " NOT NULL" };
         col_defs.push(format!(
             "{} {}{}",
@@ -213,5 +218,44 @@ fn sql_scalar_type_to_sql(scalar_type: &SqlScalarType) -> String {
         SqlScalarType::MzAclItem => "mz_aclitem".into(),
         SqlScalarType::AclItem => "aclitem".into(),
         SqlScalarType::Record { .. } => "record".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn create_stub_table_sql_preserves_column_order() {
+        let mut columns = BTreeMap::new();
+        // Deliberately non-alphabetical by position so the wrong (BTreeMap)
+        // order would emit `apple` before `zebra`.
+        columns.insert(
+            "zebra".to_string(),
+            ColumnType {
+                r#type: "integer".to_string(),
+                nullable: false,
+                position: 0,
+                comment: None,
+            },
+        );
+        columns.insert(
+            "apple".to_string(),
+            ColumnType {
+                r#type: "text".to_string(),
+                nullable: true,
+                position: 1,
+                comment: None,
+            },
+        );
+
+        let id = ObjectId::new("db".to_string(), "public".to_string(), "dep".to_string());
+        let sql = create_stub_table_sql(&id, &columns);
+        let zebra = sql.find("zebra").expect("zebra column present");
+        let apple = sql.find("apple").expect("apple column present");
+        assert!(
+            zebra < apple,
+            "stub columns must follow schema position order; got: {sql}"
+        );
     }
 }
