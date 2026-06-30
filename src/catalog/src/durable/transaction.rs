@@ -148,40 +148,67 @@ impl<'a> Transaction<'a> {
         }: Snapshot,
         upper: mz_repr::Timestamp,
     ) -> Result<Transaction<'a>, CatalogError> {
+        // For these collections uniqueness is plain equality of the name fields, so the same
+        // predicate answers both "do these two conflict?" and "did this update keep the same key?".
+        let database_unique_fn: fn(&DatabaseValue, &DatabaseValue) -> bool =
+            |a, b| a.name == b.name;
+        let schema_unique_fn: fn(&SchemaValue, &SchemaValue) -> bool =
+            |a, b| a.database_id == b.database_id && a.name == b.name;
+        let role_key: fn(&RoleValue, &RoleValue) -> bool = |a, b| a.name == b.name;
+        let cluster_unique_fn: fn(&ClusterValue, &ClusterValue) -> bool = |a, b| a.name == b.name;
+        let network_policy_unique_fn: fn(&NetworkPolicyValue, &NetworkPolicyValue) -> bool =
+            |a, b| a.name == b.name;
+        let cluster_replica_unique_fn: fn(&ClusterReplicaValue, &ClusterReplicaValue) -> bool =
+            |a, b| a.cluster_id == b.cluster_id && a.name == b.name;
+
         Ok(Transaction {
             durable_catalog,
             databases: TableTransaction::new_with_uniqueness_fn(
                 databases,
-                |a: &DatabaseValue, b| a.name == b.name,
+                database_unique_fn,
+                database_unique_fn,
             )?,
-            schemas: TableTransaction::new_with_uniqueness_fn(schemas, |a: &SchemaValue, b| {
-                a.database_id == b.database_id && a.name == b.name
-            })?,
-            items: TableTransaction::new_with_uniqueness_fn(items, |a: &ItemValue, b| {
-                a.schema_id == b.schema_id && a.name == b.name && {
-                    // `item_type` is slow, only compute if needed.
-                    let a_type = a.item_type();
-                    let b_type = b.item_type();
-                    (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
-                        || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
-                        || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
-                }
-            })?,
+            schemas: TableTransaction::new_with_uniqueness_fn(
+                schemas,
+                schema_unique_fn,
+                schema_unique_fn,
+            )?,
+            items: TableTransaction::new_with_uniqueness_fn(
+                items,
+                |a: &ItemValue, b| {
+                    a.schema_id == b.schema_id && a.name == b.name && {
+                        // `item_type` is slow, only compute if needed.
+                        let a_type = a.item_type();
+                        let b_type = b.item_type();
+                        (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
+                            || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
+                            || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
+                    }
+                },
+                |prev: &ItemValue, next| {
+                    prev.schema_id == next.schema_id
+                        && prev.name == next.name
+                        // `item_type` is slow, only compute it once name and schema match.
+                        && prev.item_type() == next.item_type()
+                },
+            )?,
             comments: TableTransaction::new(comments)?,
-            roles: TableTransaction::new_with_uniqueness_fn(roles, |a: &RoleValue, b| {
-                a.name == b.name
-            })?,
+            roles: TableTransaction::new_with_uniqueness_fn(roles, role_key, role_key)?,
             role_auth: TableTransaction::new(role_auth)?,
-            clusters: TableTransaction::new_with_uniqueness_fn(clusters, |a: &ClusterValue, b| {
-                a.name == b.name
-            })?,
+            clusters: TableTransaction::new_with_uniqueness_fn(
+                clusters,
+                cluster_unique_fn,
+                cluster_unique_fn,
+            )?,
             network_policies: TableTransaction::new_with_uniqueness_fn(
                 network_policies,
-                |a: &NetworkPolicyValue, b| a.name == b.name,
+                network_policy_unique_fn,
+                network_policy_unique_fn,
             )?,
             cluster_replicas: TableTransaction::new_with_uniqueness_fn(
                 cluster_replicas,
-                |a: &ClusterReplicaValue, b| a.cluster_id == b.cluster_id && a.name == b.name,
+                cluster_replica_unique_fn,
+                cluster_replica_unique_fn,
             )?,
             introspection_sources: TableTransaction::new(introspection_sources)?,
             id_allocator: TableTransaction::new(id_allocator)?,
@@ -3007,6 +3034,19 @@ mod unique_name {
     }
 }
 
+/// A collection's uniqueness constraint.
+///
+/// `violation` reports whether two values conflict, i.e. cannot both exist.
+///
+/// `is_unique_key_unchanged_after_update` reports whether an update left
+/// unchanged every field `violation` reads. It is used as an optimization
+/// since `violation` is an expensive operation to run.
+#[derive(Debug)]
+struct UniquenessCheck<V> {
+    violation: fn(a: &V, b: &V) -> bool,
+    is_unique_key_unchanged_after_update: fn(prev: &V, next: &V) -> bool,
+}
+
 /// TableTransaction emulates some features of a typical SQL transaction over
 /// table for a Collection.
 ///
@@ -3022,7 +3062,8 @@ struct TableTransaction<K, V> {
     // The desired updates to keys after commit.
     // Invariant: Value is sorted by `ts`.
     pending: BTreeMap<K, Vec<TransactionUpdate<V>>>,
-    uniqueness_violation: Option<fn(a: &V, b: &V) -> bool>,
+    // `None` for collections with no uniqueness constraint.
+    uniqueness_check: Option<UniquenessCheck<V>>,
 }
 
 impl<K, V> TableTransaction<K, V>
@@ -3049,15 +3090,16 @@ where
         Ok(Self {
             initial,
             pending: BTreeMap::new(),
-            uniqueness_violation: None,
+            uniqueness_check: None,
         })
     }
 
-    /// Like [`Self::new`], but you can also provide `uniqueness_violation`, which is a function
-    /// that determines whether there is a uniqueness violation among two values.
+    /// Like [`Self::new`], but with the collection's uniqueness constraint.
+    /// See [`UniquenessCheck`] for more details on the uniqueness constraint.
     fn new_with_uniqueness_fn<KP, VP>(
         initial: BTreeMap<KP, VP>,
         uniqueness_violation: fn(a: &V, b: &V) -> bool,
+        is_unique_key_unchanged_after_update: fn(prev: &V, next: &V) -> bool,
     ) -> Result<Self, TryFromProtoError>
     where
         K: RustType<KP>,
@@ -3071,7 +3113,10 @@ where
         Ok(Self {
             initial,
             pending: BTreeMap::new(),
-            uniqueness_violation: Some(uniqueness_violation),
+            uniqueness_check: Some(UniquenessCheck {
+                violation: uniqueness_violation,
+                is_unique_key_unchanged_after_update,
+            }),
         })
     }
 
@@ -3099,12 +3144,12 @@ where
             .collect()
     }
 
-    /// Verifies that no items in `self` violate `self.uniqueness_violation`.
+    /// Verifies that no items in `self` violate `self.uniqueness_check`.
     ///
     /// Runtime is O(n^2), where n is the number of items in `self`, if
     /// [`UniqueName::HAS_UNIQUE_NAME`] is false for `V`. Prefer using [`Self::verify_keys`].
     fn verify(&self) -> Result<(), DurableCatalogError> {
-        if let Some(uniqueness_violation) = self.uniqueness_violation {
+        if let Some(check) = &self.uniqueness_check {
             // Compare each value to each other value and ensure they are unique.
             let items = self.values();
             if V::HAS_UNIQUE_NAME {
@@ -3115,7 +3160,7 @@ where
                     .collect();
                 for (i, vi) in items.iter().enumerate() {
                     if let Some((j, vj)) = by_name.get(vi.unique_name()) {
-                        if i != *j && uniqueness_violation(vi, *vj) {
+                        if i != *j && (check.violation)(vi, *vj) {
                             return Err(DurableCatalogError::UniquenessViolation);
                         }
                     }
@@ -3123,7 +3168,7 @@ where
             } else {
                 for (i, vi) in items.iter().enumerate() {
                     for (j, vj) in items.iter().enumerate() {
-                        if i != j && uniqueness_violation(vi, vj) {
+                        if i != j && (check.violation)(vi, vj) {
                             return Err(DurableCatalogError::UniquenessViolation);
                         }
                     }
@@ -3140,7 +3185,7 @@ where
         Ok(())
     }
 
-    /// Verifies that no items in `self` violate `self.uniqueness_violation` with `keys`.
+    /// Verifies that no items in `self` violate `self.uniqueness_check` with `keys`.
     ///
     /// Runtime is O(n * k), where n is the number of items in `self` and k is the number of
     /// items in `keys`.
@@ -3151,7 +3196,7 @@ where
     where
         K: 'a,
     {
-        if let Some(uniqueness_violation) = self.uniqueness_violation {
+        if let Some(check) = &self.uniqueness_check {
             let entries: Vec<_> = keys
                 .into_iter()
                 .filter_map(|key| self.get(key).map(|value| (key, value)))
@@ -3159,7 +3204,7 @@ where
             // Compare each value in `entries` to each value in `self` and ensure they are unique.
             for (ki, vi) in self.items() {
                 for (kj, vj) in &entries {
-                    if ki != *kj && uniqueness_violation(vi, vj) {
+                    if ki != *kj && (check.violation)(vi, vj) {
                         return Err(DurableCatalogError::UniquenessViolation);
                     }
                 }
@@ -3284,11 +3329,12 @@ where
     /// Returns an error if the uniqueness check failed or the key already exists.
     fn insert(&mut self, k: K, v: V, ts: Timestamp) -> Result<(), DurableCatalogError> {
         let mut violation = None;
+        let uniqueness_violation = self.uniqueness_check.as_ref().map(|check| check.violation);
         self.for_values(|for_k, for_v| {
             if &k == for_k {
                 violation = Some(DurableCatalogError::DuplicateKey);
             }
-            if let Some(uniqueness_violation) = self.uniqueness_violation {
+            if let Some(uniqueness_violation) = uniqueness_violation {
                 if uniqueness_violation(for_v, &v) {
                     violation = Some(DurableCatalogError::UniquenessViolation);
                 }
@@ -3394,6 +3440,20 @@ where
         Ok(changed)
     }
 
+    /// Whether changing a key's value from `prev` to `next` can introduce a uniqueness violation
+    fn update_needs_uniqueness_check(&self, prev: Option<&V>, next: Option<&V>) -> bool {
+        match (&self.uniqueness_check, prev, next) {
+            // No uniqueness constraint, or a delete: nothing to check.
+            (None, _, _) | (_, _, None) => false,
+            // An update: a scan is only needed if it changed the unique key.
+            (Some(check), Some(prev), Some(next)) => {
+                !(check.is_unique_key_unchanged_after_update)(prev, next)
+            }
+            // An insert: must check.
+            (Some(_), None, Some(_)) => true,
+        }
+    }
+
     /// Set the value for a key. Returns the previous entry if the key existed,
     /// otherwise None.
     ///
@@ -3402,6 +3462,7 @@ where
     /// DO NOT call this function in a loop, use [`Self::set_many`] instead.
     fn set(&mut self, k: K, v: Option<V>, ts: Timestamp) -> Result<Option<V>, DurableCatalogError> {
         let prev = self.get(&k).cloned();
+        let needs_uniqueness_check = self.update_needs_uniqueness_check(prev.as_ref(), v.as_ref());
         let entry = self.pending.entry(k.clone()).or_default();
         let restore_len = entry.len();
 
@@ -3435,16 +3496,17 @@ where
             (None, None) => {}
         }
 
-        // Check for uniqueness violation.
-        if let Err(err) = self.verify_keys([&k]) {
-            // Revert self.pending to the state it was in before calling this
-            // function.
-            let pending = self.pending.get_mut(&k).expect("inserted above");
-            pending.truncate(restore_len);
-            Err(err)
-        } else {
-            Ok(prev)
+        // Check for uniqueness violation
+        if needs_uniqueness_check {
+            if let Err(err) = self.verify_keys([&k]) {
+                // Revert self.pending to the state it was in before calling this
+                // function.
+                let pending = self.pending.get_mut(&k).expect("inserted above");
+                pending.truncate(restore_len);
+                return Err(err);
+            }
         }
+        Ok(prev)
     }
 
     /// Set the values for many keys. Returns the previous entry for each key if the key existed,
@@ -3462,9 +3524,14 @@ where
 
         let mut prevs = BTreeMap::new();
         let mut restores = BTreeMap::new();
+        // Only the keys whose update can introduce a uniqueness violation need scanning.
+        let mut keys_to_verify_uniqueness = Vec::new();
 
         for (k, v) in kvs {
             let prev = self.get(&k).cloned();
+            if self.update_needs_uniqueness_check(prev.as_ref(), v.as_ref()) {
+                keys_to_verify_uniqueness.push(k.clone());
+            }
             let entry = self.pending.entry(k.clone()).or_default();
             restores.insert(k.clone(), entry.len());
 
@@ -3502,7 +3569,7 @@ where
         }
 
         // Check for uniqueness violation.
-        if let Err(err) = self.verify_keys(prevs.keys()) {
+        if let Err(err) = self.verify_keys(keys_to_verify_uniqueness.iter()) {
             for (k, restore_len) in restores {
                 // Revert self.pending to the state it was in before calling this
                 // function.
@@ -3584,6 +3651,7 @@ mod tests {
         let mut table = TableTransaction::new_with_uniqueness_fn(
             BTreeMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
             uniqueness_violation,
+            uniqueness_violation,
         )
         .unwrap();
 
@@ -3599,6 +3667,56 @@ mod tests {
         assert!(
             table
                 .insert(4i64.to_le_bytes().to_vec(), "c".to_string(), 0)
+                .is_err()
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_skip_scan_when_unique_key_unchanged() {
+        fn first_char_same(prev: &String, next: &String) -> bool {
+            prev.chars().next() == next.chars().next()
+        }
+
+        // Panics if the uniqueness scan ever runs
+        fn panic_uniqueness_violation(_: &String, _: &String) -> bool {
+            panic!("uniqueness scan ran for an update that kept the same unique key");
+        }
+        let mut table = TableTransaction::new_with_uniqueness_fn(
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), "a1".to_string()),
+                (2i64.to_le_bytes().to_vec(), "b1".to_string()),
+            ]),
+            panic_uniqueness_violation,
+            // We treat the first character as the unique key.
+            first_char_same,
+        )
+        .unwrap();
+        // Same first char, so the unique key didn't change and the update must not scan
+        // for uniqueness.
+        assert!(
+            table
+                .update_by_key(1i64.to_le_bytes().to_vec(), "a2".to_string(), 0)
+                .unwrap()
+        );
+
+        // An update that changes the unique key must still run the scan and detect a collision.
+        fn real_uniqueness_violation(a: &String, b: &String) -> bool {
+            a.chars().next() == b.chars().next()
+        }
+        let mut table = TableTransaction::new_with_uniqueness_fn(
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), "a1".to_string()),
+                (2i64.to_le_bytes().to_vec(), "b1".to_string()),
+            ]),
+            real_uniqueness_violation,
+            first_char_same,
+        )
+        .unwrap();
+        // Changing key 1's first char from 'a' to 'b' changes its unique key and collides
+        // with key 2.
+        assert!(
+            table
+                .update_by_key(1i64.to_le_bytes().to_vec(), "b2".to_string(), 0)
                 .is_err()
         );
     }
@@ -3631,8 +3749,12 @@ mod tests {
 
         table.insert(1i64.to_le_bytes().to_vec(), "v1".to_string());
         table.insert(2i64.to_le_bytes().to_vec(), "v2".to_string());
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         assert_eq!(table_txn.items_cloned(), table);
         assert_eq!(table_txn.delete(|_k, _v| false, 0).len(), 0);
         assert_eq!(table_txn.delete(|_k, v| v == "v2", 1).len(), 1);
@@ -3696,8 +3818,12 @@ mod tests {
             ])
         );
 
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         // Deleting then creating an item that has a uniqueness violation should work.
         assert_eq!(
             table_txn.delete(|k, _v| k == &1i64.to_le_bytes(), 0).len(),
@@ -3748,8 +3874,12 @@ mod tests {
             ])
         );
 
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 3);
         table_txn
             .insert(1i64.to_le_bytes().to_vec(), "v1".to_string(), 0)
@@ -3761,8 +3891,12 @@ mod tests {
             BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
         );
 
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
         table_txn
             .insert(1i64.to_le_bytes().to_vec(), "v2".to_string(), 0)
@@ -3774,8 +3908,12 @@ mod tests {
         );
 
         // Verify we don't try to delete v3 or v4 during commit.
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
         table_txn
             .insert(1i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
@@ -3794,8 +3932,12 @@ mod tests {
         );
 
         // Test `set`.
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         // Uniqueness violation.
         table_txn
             .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()), 0)
@@ -3824,8 +3966,12 @@ mod tests {
         );
 
         // Duplicate `set`.
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         table_txn
             .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()), 0)
             .unwrap();
@@ -3833,8 +3979,12 @@ mod tests {
         assert!(pending.is_empty());
 
         // Test `set_many`.
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         // Uniqueness violation.
         table_txn
             .set_many(
@@ -3886,8 +4036,12 @@ mod tests {
         );
 
         // Duplicate `set_many`.
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         table_txn
             .set_many(
                 BTreeMap::from([
@@ -3909,8 +4063,12 @@ mod tests {
         );
 
         // Test `update_by_key`
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         // Uniqueness violation.
         table_txn
             .update_by_key(1i64.to_le_bytes().to_vec(), "v7".to_string(), 0)
@@ -3947,8 +4105,12 @@ mod tests {
         );
 
         // Duplicate `update_by_key`.
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         assert!(
             table_txn
                 .update_by_key(1i64.to_le_bytes().to_vec(), "v8".to_string(), 0)
@@ -3966,8 +4128,12 @@ mod tests {
         );
 
         // Test `update_by_keys`
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         // Uniqueness violation.
         table_txn
             .update_by_keys(
@@ -4020,8 +4186,12 @@ mod tests {
         );
 
         // Duplicate `update_by_keys`.
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         let n = table_txn
             .update_by_keys(
                 [
@@ -4044,8 +4214,12 @@ mod tests {
         );
 
         // Test `delete_by_key`
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         let prev = table_txn.delete_by_key(1i64.to_le_bytes().to_vec(), 0);
         assert_eq!(prev, Some("v9".to_string()));
         let prev = table_txn.delete_by_key(5i64.to_le_bytes().to_vec(), 1);
@@ -4068,8 +4242,12 @@ mod tests {
         );
 
         // Test `delete_by_keys`
-        let mut table_txn =
-            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn = TableTransaction::new_with_uniqueness_fn(
+            table.clone(),
+            uniqueness_violation,
+            uniqueness_violation,
+        )
+        .unwrap();
         let prevs = table_txn.delete_by_keys(
             [42i64.to_le_bytes().to_vec(), 55i64.to_le_bytes().to_vec()],
             0,
