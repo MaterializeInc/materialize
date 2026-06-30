@@ -207,7 +207,10 @@ pub enum Op {
     },
     UpdatePrivilege {
         target_id: SystemObjectId,
-        privilege: MzAclItem,
+        /// The ACL changes to apply to `target_id`, applied as a single durable write. A bulk
+        /// `GRANT`/`REVOKE` touching one object for many grantees lands here as one op rather
+        /// than one op per grantee.
+        privileges: Vec<MzAclItem>,
         variant: UpdatePrivilegeVariant,
     },
     UpdateDefaultPrivilege {
@@ -2049,15 +2052,19 @@ impl Catalog {
             }
             Op::UpdatePrivilege {
                 target_id,
-                privilege,
+                privileges,
                 variant,
             } => {
-                let update_privilege_fn = |privileges: &mut PrivilegeMap| match variant {
-                    UpdatePrivilegeVariant::Grant => {
-                        privileges.grant(privilege);
-                    }
-                    UpdatePrivilegeVariant::Revoke => {
-                        privileges.revoke(&privilege);
+                let update_privilege_fn = |target_privileges: &mut PrivilegeMap| {
+                    for privilege in &privileges {
+                        match variant {
+                            UpdatePrivilegeVariant::Grant => {
+                                target_privileges.grant(privilege.clone());
+                            }
+                            UpdatePrivilegeVariant::Revoke => {
+                                target_privileges.revoke(privilege);
+                            }
+                        }
                     }
                 };
                 match &target_id {
@@ -2109,13 +2116,15 @@ impl Catalog {
                     SystemObjectId::System => {
                         let mut system_privileges = PrivilegeMap::clone(&state.system_privileges);
                         update_privilege_fn(&mut system_privileges);
-                        let new_privilege =
-                            system_privileges.get_acl_item(&privilege.grantee, &privilege.grantor);
-                        tx.set_system_privilege(
-                            privilege.grantee,
-                            privilege.grantor,
-                            new_privilege.map(|new_privilege| new_privilege.acl_mode),
-                        )?;
+                        for privilege in &privileges {
+                            let new_privilege = system_privileges
+                                .get_acl_item(&privilege.grantee, &privilege.grantor);
+                            tx.set_system_privilege(
+                                privilege.grantee,
+                                privilege.grantor,
+                                new_privilege.map(|new_privilege| new_privilege.acl_mode),
+                            )?;
+                        }
                     }
                 }
                 let object_type = state.get_system_object_type(&target_id);
@@ -2123,21 +2132,24 @@ impl Catalog {
                     SystemObjectId::System => "SYSTEM".to_string(),
                     SystemObjectId::Object(id) => id.to_string(),
                 };
-                CatalogState::add_to_audit_log(
-                    &state.system_configuration,
-                    oracle_write_ts,
-                    session,
-                    tx,
-                    audit_events,
-                    variant.into(),
-                    system_object_type_to_audit_object_type(&object_type),
-                    EventDetails::UpdatePrivilegeV1(mz_audit_log::UpdatePrivilegeV1 {
-                        object_id: object_id_str,
-                        grantee_id: privilege.grantee.to_string(),
-                        grantor_id: privilege.grantor.to_string(),
-                        privileges: privilege.acl_mode.to_string(),
-                    }),
-                )?;
+                // One audit event per grantee, even though the batch is a single durable write.
+                for privilege in &privileges {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        variant.into(),
+                        system_object_type_to_audit_object_type(&object_type),
+                        EventDetails::UpdatePrivilegeV1(mz_audit_log::UpdatePrivilegeV1 {
+                            object_id: object_id_str.clone(),
+                            grantee_id: privilege.grantee.to_string(),
+                            grantor_id: privilege.grantor.to_string(),
+                            privileges: privilege.acl_mode.to_string(),
+                        }),
+                    )?;
+                }
             }
             Op::UpdateDefaultPrivilege {
                 privilege_object,
