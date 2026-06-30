@@ -217,6 +217,28 @@ pub fn canonicalize_predicates(
     predicates: &mut Vec<MirScalarExpr>,
     repr_column_types: &[ReprColumnType],
 ) {
+    canonicalize_predicates_with(predicates, repr_column_types, None)
+}
+
+/// Canonicalize predicates of a filter, with an optional injected scalar
+/// canonicalizer for step 1.
+///
+/// Behaves exactly like [canonicalize_predicates], except that the per-predicate
+/// reduction in step 1 is delegated to `scalar_canon` when it is `Some`. Passing
+/// `None` reduces each predicate with [MirScalarExpr::reduce], which is the path
+/// [canonicalize_predicates] takes. The injected canonicalizer must, like
+/// `reduce`, flatten nested ANDs so that step 2's split into one predicate per
+/// conjunct still holds.
+///
+/// This callback form exists because the equality-saturation scalar
+/// canonicalizer lives in `mz-transform`, which `mz-expr` cannot depend on. The
+/// `mz-transform` callers inject it here when the corresponding feature flag is
+/// set.
+pub fn canonicalize_predicates_with(
+    predicates: &mut Vec<MirScalarExpr>,
+    repr_column_types: &[ReprColumnType],
+    scalar_canon: Option<&dyn Fn(&mut MirScalarExpr, &[ReprColumnType])>,
+) {
     soft_assert_or_log!(
         predicates
             .iter()
@@ -225,9 +247,14 @@ pub fn canonicalize_predicates(
     );
 
     // 1) Reduce each individual predicate.
-    predicates
-        .iter_mut()
-        .for_each(|p| p.reduce(repr_column_types));
+    match scalar_canon {
+        Some(canon) => predicates
+            .iter_mut()
+            .for_each(|p| canon(p, repr_column_types)),
+        None => predicates
+            .iter_mut()
+            .for_each(|p| p.reduce(repr_column_types)),
+    }
 
     // 2) Split "A and B" into two predicates: "A" and "B"
     // Relies on the `reduce` above having flattened nested ANDs.
@@ -557,5 +584,45 @@ impl<T: Clone + Ord> UnionFind<T> for BTreeMap<T, T> {
                 self.insert(y.clone(), x.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use mz_repr::{ReprColumnType, ReprScalarType};
+
+    use super::{canonicalize_predicates, canonicalize_predicates_with};
+    use crate::MirScalarExpr;
+
+    /// `Some(canon)` routes step 1 through the injected canonicalizer.
+    #[mz_ore::test]
+    fn canonicalize_predicates_with_invokes_injected_canonicalizer() {
+        let col_types = vec![ReprScalarType::Bool.nullable(true)];
+        let mut predicates = vec![MirScalarExpr::column(0)];
+        let calls = Cell::new(0_usize);
+        let canon = |e: &mut MirScalarExpr, ct: &[ReprColumnType]| {
+            calls.set(calls.get() + 1);
+            // Keep the term well-formed so later steps behave as usual.
+            e.reduce(ct);
+        };
+        canonicalize_predicates_with(&mut predicates, &col_types, Some(&canon));
+        assert!(
+            calls.get() >= 1,
+            "the injected canonicalizer must run for step 1"
+        );
+    }
+
+    /// The `canonicalize_predicates` wrapper and the explicit `None` form are
+    /// the same path and must produce identical output.
+    #[mz_ore::test]
+    fn canonicalize_predicates_none_matches_wrapper() {
+        let col_types = vec![ReprScalarType::Bool.nullable(true)];
+        let mut via_wrapper = vec![MirScalarExpr::column(0)];
+        let mut via_none = vec![MirScalarExpr::column(0)];
+        canonicalize_predicates(&mut via_wrapper, &col_types);
+        canonicalize_predicates_with(&mut via_none, &col_types, None);
+        assert_eq!(via_wrapper, via_none);
     }
 }

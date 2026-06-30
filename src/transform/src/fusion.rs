@@ -39,10 +39,11 @@ impl crate::Transform for Fusion {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         use mz_expr::visit::Visit;
-        relation.visit_mut_post(&mut Self::action);
+        let enable_eqsat_scalar = ctx.features.enable_eqsat_scalar_canonicalize;
+        relation.visit_mut_post(&mut |e| Self::action(e, enable_eqsat_scalar));
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
@@ -50,9 +51,12 @@ impl crate::Transform for Fusion {
 
 impl Fusion {
     /// Apply fusion action for variants we know how to fuse.
-    pub(crate) fn action(expr: &mut MirRelationExpr) {
+    ///
+    /// `enable_eqsat_scalar` is forwarded to the `Filter` fusion's predicate
+    /// canonicalization.
+    pub(crate) fn action(expr: &mut MirRelationExpr, enable_eqsat_scalar: bool) {
         match expr {
-            MirRelationExpr::Filter { .. } => filter::Filter::action(expr),
+            MirRelationExpr::Filter { .. } => filter::Filter::action(expr, enable_eqsat_scalar),
             MirRelationExpr::Map { .. } => map::Map::action(expr),
             MirRelationExpr::Project { .. } => project::Project::action(expr),
             MirRelationExpr::Negate { .. } => negate::Negate::action(expr),

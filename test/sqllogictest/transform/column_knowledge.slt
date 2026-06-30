@@ -79,7 +79,7 @@ Explained Query:
     cte l1 =
       CrossJoin type=differential // { arity: 4 }
         implementation
-          %0:l0[×]Uef » %1:t2[×]Uef
+          %1:t2[×]Uef » %0:l0[×]Uef
         ArrangeBy keys=[[]] // { arity: 2 }
           Get l0 // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 2 }
@@ -115,7 +115,7 @@ Explained Query:
     cte l1 =
       CrossJoin type=differential // { arity: 3 }
         implementation
-          %0:l0[×]Uef » %1:t2[×]Uef
+          %1:t2[×]Uef » %0:l0[×]Uef
         ArrangeBy keys=[[]] // { arity: 2 }
           Get l0 // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 1 }
@@ -243,16 +243,16 @@ Explained Query:
     cte l2 =
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %0:l1[×]Uef » %1:t1[×]Uef
-        Get l1 // { arity: 0 }
+          %0:t1[×]Uef » %1:l1[×]Uef
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#0{f1}) // { arity: 1 }
             Filter (#0{f1} = 123) // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
+        Get l1 // { arity: 0 }
   Return // { arity: 1 }
     CrossJoin type=differential // { arity: 1 }
       implementation
-        %0:l1[×]Uef » %1[×]Uef
+        %0:l1[×]U » %1[×]U
       Get l1 // { arity: 0 }
       ArrangeBy keys=[[]] // { arity: 1 }
         Union // { arity: 1 }
@@ -324,14 +324,14 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   CrossJoin type=differential // { arity: 2 }
     implementation
-      %0:t1[×]Uef » %1:t2[×]Uef
-    ArrangeBy keys=[[]] // { arity: 2 }
-      Filter (#0{f1} = 123) // { arity: 2 }
-        ReadStorage materialize.public.t1 // { arity: 2 }
+      %0:t2[×]Uef » %1:t1[×]Uef
     ArrangeBy keys=[[]] // { arity: 0 }
       Project () // { arity: 0 }
         Filter (#0{f1} = 123) // { arity: 2 }
           ReadStorage materialize.public.t2 // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#0{f1} = 123) // { arity: 2 }
+        ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0{f1} = 123))
@@ -442,7 +442,7 @@ Explained Query:
           Filter (#0{f1} = 123) // { arity: 2 }
             ReadStorage materialize.public.t2 // { arity: 2 }
         Project () // { arity: 0 }
-          Filter (#1 = 123) // { arity: 2 }
+          Filter (#1{f1} = 123) // { arity: 2 }
             FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
               Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
@@ -569,7 +569,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   Join on=(#1{double_col} = integer_to_double(#0{int_col})) type=differential // { arity: 2 }
     implementation
-      %0:int_table[integer_to_double(#0{int_col})]K » %1:double_table[#0{double_col}]K
+      %0:int_table[integer_to_double(#0{int_col})] » %1:double_table[#0]
     ArrangeBy keys=[[integer_to_double(#0{int_col})]] // { arity: 1 }
       ReadStorage materialize.public.int_table // { arity: 1 }
     ArrangeBy keys=[[#0{double_col}]] // { arity: 1 }

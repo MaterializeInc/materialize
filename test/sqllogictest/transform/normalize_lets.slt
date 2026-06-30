@@ -196,40 +196,43 @@ SELECT round, COUNT(*) FROM (
 GROUP BY round;
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
-      Reduce group_by=[#0{dst}] aggregates=[min(#1{dst})]
-        Union
-          Project (#1{dst}, #1{dst})
-            ReadStorage materialize.public.edges
-          Project (#1{dst}, #3)
-            Join on=(#0{src} = #2{node}) type=differential
-              ArrangeBy keys=[[#0{src}]]
-                Filter (#0{src}) IS NOT NULL
-                  ReadStorage materialize.public.edges
-              ArrangeBy keys=[[#0{node}]]
-                Filter (#0{dst}) IS NOT NULL
-                  Get l0
+      Filter (#0{src}) IS NOT NULL
+        ReadStorage materialize.public.edges
   Return
     With Mutually Recursive
       cte l1 =
-        TopK group_by=[#0{dst}] order_by=[#1{min_dst} asc nulls_last] limit=1
+        Reduce group_by=[#0{dst}] aggregates=[min(#1{dst})]
           Union
-            Map (0)
-              Get l0
-            Project (#1{dst}, #3, #5)
-              Map ((#4{round} + 1))
-                Join on=(#0{src} = #2{node}) type=differential
-                  ArrangeBy keys=[[#0{src}]]
-                    Filter (#0{src}) IS NOT NULL
-                      ReadStorage materialize.public.edges
-                  ArrangeBy keys=[[#0{node}]]
-                    Filter (#0{dst}) IS NOT NULL
-                      Get l1
+            Project (#1{dst}, #1{dst})
+              ReadStorage materialize.public.edges
+            Project (#1{dst}, #3)
+              Join on=(#0{src} = #2{node}) type=differential
+                ArrangeBy keys=[[#0{src}]]
+                  Get l0
+                ArrangeBy keys=[[#0{node}]]
+                  Filter (#0{dst}) IS NOT NULL
+                    Get l1
     Return
-      Reduce group_by=[#0] aggregates=[count(*)]
-        Project (#2)
-          Get l1
+      With Mutually Recursive
+        cte l2 =
+          TopK group_by=[#0{dst}] order_by=[#1{min_dst} asc nulls_last] limit=1
+            Union
+              Map (0)
+                Get l1
+              Project (#1{dst}, #3, #5)
+                Map ((#4{round} + 1))
+                  Join on=(#0{src} = #2{node}) type=differential
+                    ArrangeBy keys=[[#0{src}]]
+                      Get l0
+                    ArrangeBy keys=[[#0{node}]]
+                      Filter (#0{dst}) IS NOT NULL
+                        Get l2
+      Return
+        Reduce group_by=[#0] aggregates=[count(*)]
+          Project (#2)
+            Get l2
 
 Source materialize.public.edges
 
@@ -441,40 +444,43 @@ SELECT round, COUNT(*) FROM (
 GROUP BY round;
 ----
 Explained Query:
-  With Mutually Recursive [recursion_limit=21]
+  With
     cte l0 =
-      Reduce group_by=[#0{dst}] aggregates=[min(#1{dst})]
-        Union
-          Project (#1{dst}, #1{dst})
-            ReadStorage materialize.public.edges
-          Project (#1{dst}, #3)
-            Join on=(#0{src} = #2{node}) type=differential
-              ArrangeBy keys=[[#0{src}]]
-                Filter (#0{src}) IS NOT NULL
-                  ReadStorage materialize.public.edges
-              ArrangeBy keys=[[#0{node}]]
-                Filter (#0{dst}) IS NOT NULL
-                  Get l0
+      Filter (#0{src}) IS NOT NULL
+        ReadStorage materialize.public.edges
   Return
-    With Mutually Recursive [recursion_limit=23]
+    With Mutually Recursive [recursion_limit=21]
       cte l1 =
-        TopK group_by=[#0{dst}] order_by=[#1{min_dst} asc nulls_last] limit=1
+        Reduce group_by=[#0{dst}] aggregates=[min(#1{dst})]
           Union
-            Map (0)
-              Get l0
-            Project (#1{dst}, #3, #5)
-              Map ((#4{round} + 1))
-                Join on=(#0{src} = #2{node}) type=differential
-                  ArrangeBy keys=[[#0{src}]]
-                    Filter (#0{src}) IS NOT NULL
-                      ReadStorage materialize.public.edges
-                  ArrangeBy keys=[[#0{node}]]
-                    Filter (#0{dst}) IS NOT NULL
-                      Get l1
+            Project (#1{dst}, #1{dst})
+              ReadStorage materialize.public.edges
+            Project (#1{dst}, #3)
+              Join on=(#0{src} = #2{node}) type=differential
+                ArrangeBy keys=[[#0{src}]]
+                  Get l0
+                ArrangeBy keys=[[#0{node}]]
+                  Filter (#0{dst}) IS NOT NULL
+                    Get l1
     Return
-      Reduce group_by=[#0] aggregates=[count(*)]
-        Project (#2)
-          Get l1
+      With Mutually Recursive [recursion_limit=23]
+        cte l2 =
+          TopK group_by=[#0{dst}] order_by=[#1{min_dst} asc nulls_last] limit=1
+            Union
+              Map (0)
+                Get l1
+              Project (#1{dst}, #3, #5)
+                Map ((#4{round} + 1))
+                  Join on=(#0{src} = #2{node}) type=differential
+                    ArrangeBy keys=[[#0{src}]]
+                      Get l0
+                    ArrangeBy keys=[[#0{node}]]
+                      Filter (#0{dst}) IS NOT NULL
+                        Get l2
+      Return
+        Reduce group_by=[#0] aggregates=[count(*)]
+          Project (#2)
+            Get l2
 
 Source materialize.public.edges
 
@@ -605,19 +611,19 @@ Explained Query:
                     - ("russet")
               Join::Linear
                 linear_stage[0]
-                  lookup={ relation=1, key=[#0{b}] }
+                  lookup={ relation=0, key=[#0] }
                   stream={ key=[#0{a}], thinning=(#1) }
-                source={ relation=0, key=[#0{a}] }
+                source={ relation=1, key=[#0{a}] }
+                ArrangeBy
+                  raw=true
+                  arrangements[0]={ key=[#0], permutation=id, thinning=() }
+                  Get::Collection l1
+                    project=(#1)
+                    filter=((#1{a}) IS NOT NULL)
+                    raw=true
                 Get::PassArrangements l0
                   raw=false
                   arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
-                ArrangeBy
-                  raw=true
-                  arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
-                  Get::Collection l1
-                    project=(#1)
-                    filter=((#1{b}) IS NOT NULL)
-                    raw=true
     Return
       Get::PassArrangements l1
         raw=true

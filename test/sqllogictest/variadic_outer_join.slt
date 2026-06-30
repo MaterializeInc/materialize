@@ -53,9 +53,11 @@ Explained Query:
     cte l1 =
       Union
         Get l0
-        Project (#0, #2..=#4)
+        Project (#1..=#4)
           Map (null, null, null)
             Join on=(#0 = #1) type=differential
+              ArrangeBy keys=[[#0]]
+                ReadStorage materialize.public.a
               ArrangeBy keys=[[#0]]
                 Union
                   Negate
@@ -64,29 +66,27 @@ Explained Query:
                         Get l0
                   Distinct project=[#0]
                     ReadStorage materialize.public.a
-              ArrangeBy keys=[[#0]]
-                ReadStorage materialize.public.a
     cte l2 =
       ArrangeBy keys=[[#3{k}]]
         Filter (#3{k}) IS NOT NULL
           Get l1
     cte l3 =
-      Project (#0..=#3)
-        Join on=(#3{k} = #4{k}) type=differential
-          Get l2
+      Project (#1..=#4)
+        Join on=(#0{k} = #4{k}) type=differential
           ArrangeBy keys=[[#0{k}]]
             Filter (#0{k}) IS NOT NULL
               ReadStorage materialize.public.c
+          Get l2
   Return
     Union
       Map (null)
         Union
           Negate
             Project (#0..=#3)
-              Join on=(#3{k} = #4) type=differential
+              Join on=(#3{k} = #4{k}) type=differential
                 Get l2
-                ArrangeBy keys=[[#0]]
-                  Distinct project=[#0]
+                ArrangeBy keys=[[#0{k}]]
+                  Distinct project=[#0{k}]
                     Project (#3)
                       Get l3
           Get l1
@@ -135,9 +135,11 @@ Explained Query:
     cte l1 =
       Union
         Get l0
-        Project (#0, #2..=#4)
+        Project (#1..=#4)
           Map (null, null, null)
             Join on=(#0 = #1) type=differential
+              ArrangeBy keys=[[#0]]
+                ReadStorage materialize.public.a
               ArrangeBy keys=[[#0]]
                 Union
                   Negate
@@ -146,29 +148,27 @@ Explained Query:
                         Get l0
                   Distinct project=[#0]
                     ReadStorage materialize.public.a
-              ArrangeBy keys=[[#0]]
-                ReadStorage materialize.public.a
     cte l2 =
       ArrangeBy keys=[[#3{k}]]
         Filter (#3{k}) IS NOT NULL
           Get l1
     cte l3 =
-      Project (#0..=#3)
-        Join on=(#3{k} = #4{k}) type=differential
-          Get l2
+      Project (#1..=#4)
+        Join on=(#0{k} = #4{k}) type=differential
           ArrangeBy keys=[[#0{k}]]
             Filter (#0{k}) IS NOT NULL
               ReadStorage materialize.public.c
+          Get l2
   Return
     Union
       Map (null)
         Union
           Negate
             Project (#0..=#3)
-              Join on=(#3{k} = #4) type=differential
+              Join on=(#3{k} = #4{k}) type=differential
                 Get l2
-                ArrangeBy keys=[[#0]]
-                  Distinct project=[#0]
+                ArrangeBy keys=[[#0{k}]]
+                  Distinct project=[#0{k}]
                     Project (#3)
                       Get l3
           Get l1
@@ -257,10 +257,10 @@ Explained Query:
           Filter: (#0{k}) IS NOT NULL
             →Read l2
     cte l4 =
-      →Differential Join %0:l3[#0{k}] » %1:c[#0{k}]
-        →Arranged l3
+      →Differential Join %0:c[#0{k}] » %1:l3[#0{k}]
         →Arrange (#0{k})
           →Read materialize.public.c
+        →Arranged l3
   →Return
     →Union
       →Map/Filter/Project

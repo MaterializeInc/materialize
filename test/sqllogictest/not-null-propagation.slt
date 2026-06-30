@@ -969,9 +969,11 @@ Explained Query:
     Union // { types: "(r_int32, r_int32?)" }
       Project (#1{col_not_null}, #2{col_not_null}) // { types: "(r_int32, r_int32)" }
         Get l0 // { types: "(r_int32?, r_int32, r_int32)" }
-      Project (#1{col_not_null}, #4) // { types: "(r_int32, r_int32?)" }
+      Project (#3{col_not_null}, #4) // { types: "(r_int32, r_int32?)" }
         Map (null) // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_int32?)" }
           Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(r_int32?, r_int32, r_int32?, r_int32)" }
+            ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
+              ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
             ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
               Union // { types: "(r_int32?, r_int32)" }
                 Negate // { types: "(r_int32?, r_int32)" }
@@ -980,8 +982,6 @@ Explained Query:
                       Get l0 // { types: "(r_int32?, r_int32, r_int32)" }
                 Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(r_int32?, r_int32)" }
                   ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
-            ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
-              ReadStorage materialize.public.int_table // { types: "(r_int32?, r_int32)" }
 
 Source materialize.public.int_table
 
@@ -1011,9 +1011,10 @@ Explained Query:
     Union // { types: "(r_int32?, r_int32?)" }
       Project (#1{col_not_null}, #3{col_not_null}) // { types: "(r_int32, r_int32)" }
         Get l1 // { types: "(r_int32?, r_int32, r_int32?, r_int32)" }
-      Project (#1{col_not_null}, #4) // { types: "(r_int32, r_int32?)" }
+      Project (#3{col_not_null}, #4) // { types: "(r_int32, r_int32?)" }
         Map (null) // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_int32?)" }
           Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(r_int32?, r_int32, r_int32?, r_int32)" }
+            Get l3 // { types: "(r_int32?, r_int32)" }
             ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
               Union // { types: "(r_int32?, r_int32)" }
                 Negate // { types: "(r_int32?, r_int32)" }
@@ -1021,10 +1022,10 @@ Explained Query:
                     Project (#0{col_null}, #1{col_not_null}) // { types: "(r_int32?, r_int32)" }
                       Get l1 // { types: "(r_int32?, r_int32, r_int32?, r_int32)" }
                 Get l2 // { types: "(r_int32?, r_int32)" }
-            Get l3 // { types: "(r_int32?, r_int32)" }
-      Project (#4, #1{col_not_null}) // { types: "(r_int32?, r_int32)" }
+      Project (#4, #3{col_not_null}) // { types: "(r_int32?, r_int32)" }
         Map (null) // { types: "(r_int32?, r_int32, r_int32?, r_int32, r_int32?)" }
           Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(r_int32?, r_int32, r_int32?, r_int32)" }
+            Get l3 // { types: "(r_int32?, r_int32)" }
             ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(r_int32?, r_int32)" }
               Union // { types: "(r_int32?, r_int32)" }
                 Negate // { types: "(r_int32?, r_int32)" }
@@ -1032,7 +1033,6 @@ Explained Query:
                     Project (#2{col_null}, #3{col_not_null}) // { types: "(r_int32?, r_int32)" }
                       Get l1 // { types: "(r_int32?, r_int32, r_int32?, r_int32)" }
                 Get l2 // { types: "(r_int32?, r_int32)" }
-            Get l3 // { types: "(r_int32?, r_int32)" }
 
 Source materialize.public.int_table
 

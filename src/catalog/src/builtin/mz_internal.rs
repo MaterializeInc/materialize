@@ -6485,9 +6485,9 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_CLUSTER_REPLICA_HISTORY_OID,
     desc: RelationDesc::builder()
-        .with_column("replica_id", SqlScalarType::String.nullable(true))
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
         .with_column("size", SqlScalarType::String.nullable(true))
-        .with_column("cluster_id", SqlScalarType::String.nullable(true))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
         .with_column("cluster_name", SqlScalarType::String.nullable(true))
         .with_column("replica_name", SqlScalarType::String.nullable(true))
         .with_column(
@@ -6586,7 +6586,7 @@ pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::ne
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(true),
         )
-        .with_column("id", SqlScalarType::String.nullable(true))
+        .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("previous_name", SqlScalarType::String.nullable(true))
         .with_column("new_name", SqlScalarType::String.nullable(true))
         .finish(),
@@ -7048,7 +7048,7 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> = Lazy
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
             )
             .with_column("name", SqlScalarType::String.nullable(true))
-            .with_column("cluster_id", SqlScalarType::String.nullable(true))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
             .with_column("size", SqlScalarType::String.nullable(true))
             .finish(),
         column_comments: BTreeMap::new(),

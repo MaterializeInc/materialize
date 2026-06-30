@@ -31,15 +31,15 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 ----
 Explained Query:
   Project () // { arity: 0 }
-    Join on=(#0{f1} = (#1{f2} + #2{f1})) type=differential // { arity: 3 }
+    Join on=(#1{f1} = (#2{f2} + #0{f1})) type=differential // { arity: 3 }
       implementation
-        %0:t1[×] » %1:t2[×]
-      ArrangeBy keys=[[]] // { arity: 2 }
-        Filter (#0{f1}) IS NOT NULL // { arity: 2 }
-          ReadStorage materialize.public.t1 // { arity: 2 }
+        %0:t2[×] » %1:t1[×]
       ArrangeBy keys=[[]] // { arity: 1 }
         Project (#0{f1}) // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 2 }
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Filter (#0{f1}) IS NOT NULL // { arity: 2 }
+          ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0{f1}) IS NOT NULL)
@@ -84,7 +84,7 @@ Explained Query:
     Project () // { arity: 0 }
       Join on=(#0{f2} = #1{f2}) type=differential // { arity: 2 }
         implementation
-          %1[#0]UKA » %0:l0[#0]K
+          %1[#0] » %0:l0[#0]
         ArrangeBy keys=[[#0{f2}]] // { arity: 1 }
           Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0{f2}]] // { arity: 1 }

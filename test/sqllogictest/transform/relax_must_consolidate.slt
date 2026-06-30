@@ -405,10 +405,6 @@ FROM (
 Explained Query:
   With
     cte l0 =
-      Get::PassArrangements materialize.public.t
-        raw=false
-        arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
-    cte l1 =
       Reduce::Hierarchical
         aggr_funcs=[max]
         monotonic
@@ -420,19 +416,25 @@ Explained Query:
           linear_stage[0]
             closure
               project=(#0)
-              filter=((#0{b}) IS NOT NULL AND (#1{a} = 5) AND (1 = (#1{a} % 2)) AND (#2{a} = 5))
-            lookup={ relation=1, key=[#1{b}] }
+              filter=((#1{a} = 5) AND (1 = (#1{a} % 2)))
+            lookup={ relation=0, key=[#0] }
             stream={ key=[#1{b}], thinning=(#0) }
-          source={ relation=0, key=[#1{b}] }
-          Get::PassArrangements l0
-            raw=false
-            arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
-          Get::PassArrangements l0
+          source={ relation=1, key=[#1{b}] }
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#0], permutation=id, thinning=() }
+            Get::Arrangement materialize.public.t
+              project=(#0)
+              filter=((#0{b}) IS NOT NULL AND (#1{a} = 5))
+              key=#1{b}
+              raw=false
+              arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
+          Get::PassArrangements materialize.public.t
             raw=false
             arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
   Return
     Union
-      Get::Arrangement l1
+      Get::Arrangement l0
         project=(#1, #0)
         map=(5)
         key=
@@ -443,7 +445,7 @@ Explained Query:
         map=(null, null)
         Union consolidate_output=true
           Negate
-            Get::Arrangement l1
+            Get::Arrangement l0
               project=()
               key=
               raw=false
@@ -452,7 +454,7 @@ Explained Query:
             - ()
 
 Used Indexes:
-  - materialize.public.t_idx (differential join)
+  - materialize.public.t_idx (*** full scan ***, differential join)
 
 Target cluster: quickstart
 
@@ -515,21 +517,21 @@ Explained Query:
         val_plan=id
         Join::Linear
           linear_stage[0]
-            lookup={ relation=1, key=[#0{b}] }
+            lookup={ relation=0, key=[#0] }
             stream={ key=[#0{b}], thinning=() }
-          source={ relation=0, key=[#0{b}] }
+          source={ relation=1, key=[#0{b}] }
           ArrangeBy
             raw=true
-            arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
+            arrangements[0]={ key=[#0], permutation=id, thinning=() }
             Get::Collection materialize.public.t
               project=(#1)
-              filter=((1 = (#0{a} % 2)))
               raw=true
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
             Get::Collection materialize.public.t
               project=(#1)
+              filter=((1 = (#0{a} % 2)))
               raw=true
   Return
     Union

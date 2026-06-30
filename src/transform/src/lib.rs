@@ -74,6 +74,7 @@ pub mod compound;
 pub mod cse;
 pub mod dataflow;
 pub mod demand;
+pub mod eqsat;
 pub mod equivalence_propagation;
 pub mod fold_constants;
 pub mod fusion;
@@ -687,6 +688,37 @@ pub fn fuse_and_collapse_fixpoint() -> Fixpoint {
     }
 }
 
+/// Run the `fixpoint_logical_02` transforms (Reduce/Join simplifications) in a
+/// fixpoint.
+///
+/// Runs in `logical_optimizer` before the eqsat pass. The eqsat pass does not
+/// re-run it: the e-graph treats Reduce/Join nodes as opaque, so this fixpoint's
+/// output survives saturation unchanged (see `eqsat::optimize_inner`). Kept as a
+/// standalone function so a future cutover can move eqsat ahead of this fixpoint.
+pub fn fixpoint_logical_02() -> Fixpoint {
+    Fixpoint {
+        name: "fixpoint_logical_02",
+        limit: 100,
+        transforms: vec![
+            Box::new(SemijoinIdempotence::default()),
+            // Pushes aggregations down
+            Box::new(ReductionPushdown),
+            // Replaces reduces with maps when the group keys are
+            // unique with maps
+            Box::new(ReduceElision),
+            // Rips complex reduces apart.
+            Box::new(ReduceReduction),
+            // Converts `Cross Join {Constant(Literal) + Input}` to
+            // `Map {Cross Join (Input, Constant()), Literal}`.
+            // Join fusion will clean this up to `Map{Input, Literal}`
+            Box::new(LiteralLifting::default()),
+            // Identifies common relation subexpressions.
+            Box::new(cse::relation_cse::RelationCSE::new(false)),
+            Box::new(FuseAndCollapse::default()),
+        ],
+    }
+}
+
 /// Does constant folding to a fixpoint: An expression all of whose leaves are constants, of size
 /// small enough to be inlined and folded should reach a single `MirRelationExpr::Constant`.
 ///
@@ -750,7 +782,7 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     #[deprecated = "Create an Optimize instance and call `optimize` instead."]
     pub fn logical_optimizer(ctx: &mut TransformCtx) -> Self {
-        let transforms: Vec<Box<dyn Transform>> = transforms![
+        let mut transforms: Vec<Box<dyn Transform>> = transforms![
             // 0. `Transform`s that don't actually change the plan.
             Box::new(Typecheck::new(ctx.typechecking_context()).strict_join_equivalences()),
             Box::new(CollectNotices),
@@ -780,33 +812,22 @@ impl Optimizer {
                 ],
             }),
             // 5. Reduce/Join simplifications.
-            Box::new(Fixpoint {
-                name: "fixpoint_logical_02",
-                limit: 100,
-                transforms: vec![
-                    Box::new(SemijoinIdempotence::default()),
-                    // Pushes aggregations down
-                    Box::new(ReductionPushdown),
-                    // Replaces reduces with maps when the group keys are
-                    // unique with maps
-                    Box::new(ReduceElision),
-                    // Rips complex reduces apart.
-                    Box::new(ReduceReduction),
-                    // Converts `Cross Join {Constant(Literal) + Input}` to
-                    // `Map {Cross Join (Input, Constant()), Literal}`.
-                    // Join fusion will clean this up to `Map{Input, Literal}`
-                    Box::new(LiteralLifting::default()),
-                    // Identifies common relation subexpressions.
-                    Box::new(cse::relation_cse::RelationCSE::new(false)),
-                    Box::new(FuseAndCollapse::default()),
-                ],
-            }),
-            Box::new(
-                Typecheck::new(ctx.typechecking_context())
-                    .disallow_new_globals()
-                    .strict_join_equivalences()
-            ),
+            Box::new(fixpoint_logical_02()),
         ];
+        // 6. Equality-saturation pass (experimental, default off). Run it after
+        //    the logical fixpoints so they do not clobber the structural rewrites
+        //    it produces, and before the final Typecheck so its output is
+        //    validated. This is the logical phase, so the pass must leave all
+        //    joins `Unimplemented`: physical join planning (and the
+        //    ProjectionPushdown that runs right after this optimizer) require it.
+        if ctx.features.enable_eqsat_optimizer {
+            transforms.push(Box::new(eqsat::EqSatTransform));
+        }
+        transforms.push(Box::new(
+            Typecheck::new(ctx.typechecking_context())
+                .disallow_new_globals()
+                .strict_join_equivalences(),
+        ));
         Self {
             name: "logical",
             transforms,
@@ -868,6 +889,13 @@ impl Optimizer {
                     Box::new(LiteralLifting::default()),
                 ],
             }),
+            // Physical eqsat placement: joins are still Unimplemented here (the
+            // ProjectionPushdown inside fixpoint_physical_01 that panics on
+            // filled-in implementations has already run). `optimize` commits the
+            // WcoJoin choice to a DeltaQuery; JoinImplementation downstream
+            // skips DeltaQuery, so the decision is preserved.
+            Box::new(eqsat::PhysicalEqSatTransform);
+                if ctx.features.enable_eqsat_physical_optimizer,
             Box::new(LiteralConstraints),
             Box::new(Fixpoint {
                 name: "fixpoint_join_impl",
@@ -930,7 +958,17 @@ impl Optimizer {
             Box::new(Fixpoint {
                 name: "fixpoint_logical_cleanup_pass_01",
                 limit: 100,
-                transforms: vec![
+                transforms: transforms![
+                    // Runs unconditionally. A prior cutover skipped this when eqsat
+                    // was on, assuming eqsat's raise-time MFP canonicalization
+                    // subsumed it. That assumption is unsound: eqsat does not run on
+                    // every plan (size cap, or plans optimized on a path without the
+                    // pass), and its raise canonicalizes only the MFP runs it produces,
+                    // not a decorrelated join that logical cleanup must collapse. With
+                    // it skipped, such plans kept an un-canonicalized form (e.g. a
+                    // scalar subquery left as a Distinct + self-join instead of a
+                    // per-row Map). Canonicalization is idempotent, so running it after
+                    // eqsat's raise is harmless.
                     Box::new(CanonicalizeMfp),
                     // Remove threshold operators which have no effect.
                     Box::new(ThresholdElision),

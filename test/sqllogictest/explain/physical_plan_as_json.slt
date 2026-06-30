@@ -10117,7 +10117,7 @@ WHERE a = c AND d = e AND b + d > 42
                             {
                               "Column": [
                                 0,
-                                "c"
+                                "a"
                               ]
                             }
                           ],
@@ -10134,7 +10134,7 @@ WHERE a = c AND d = e AND b + d > 42
                             {
                               "Column": [
                                 1,
-                                "d"
+                                "a"
                               ]
                             }
                           ],
@@ -10199,7 +10199,7 @@ WHERE a = c AND d = e AND b + d > 42
                             {
                               "Column": [
                                 0,
-                                "e"
+                                "a"
                               ]
                             }
                           ],
@@ -10260,7 +10260,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              "c"
+                              "a"
                             ]
                           }
                         ],
@@ -10358,7 +10358,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              "d"
+                              "a"
                             ]
                           }
                         ],
@@ -10370,7 +10370,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              "e"
+                              "a"
                             ]
                           }
                         ],
@@ -10412,7 +10412,7 @@ WHERE a = c AND d = e AND b + d > 42
                       {
                         "Column": [
                           0,
-                          "c"
+                          "a"
                         ]
                       }
                     ],
@@ -10437,7 +10437,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              "c"
+                              "a"
                             ]
                           }
                         ],
@@ -10546,7 +10546,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              "d"
+                              "a"
                             ]
                           }
                         ],
@@ -10558,7 +10558,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              "e"
+                              "a"
                             ]
                           }
                         ],
@@ -10600,7 +10600,7 @@ WHERE a = c AND d = e AND b + d > 42
                       {
                         "Column": [
                           0,
-                          "e"
+                          "a"
                         ]
                       }
                     ],
@@ -10624,7 +10624,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              "e"
+                              "a"
                             ]
                           }
                         ],
@@ -10633,7 +10633,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               1,
-                              "d"
+                              "a"
                             ]
                           }
                         ],
@@ -10658,7 +10658,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              "c"
+                              "a"
                             ]
                           }
                         ],
@@ -10808,7 +10808,7 @@ WHERE a = c AND d = e AND b + d > 42
                     "expr": {
                       "Column": [
                         0,
-                        "c"
+                        "a"
                       ]
                     }
                   }
@@ -10869,7 +10869,7 @@ WHERE a = c AND d = e AND b + d > 42
                     "expr": {
                       "Column": [
                         0,
-                        "e"
+                        "a"
                       ]
                     }
                   }
@@ -11015,7 +11015,7 @@ WHERE a = c AND d = e AND f = a
                                             "expr": {
                                               "Column": [
                                                 0,
-                                                "c"
+                                                "a"
                                               ]
                                             }
                                           }
@@ -11179,7 +11179,7 @@ WHERE a = c AND d = e AND f = a
                                             "expr": {
                                               "Column": [
                                                 0,
-                                                "e"
+                                                "a"
                                               ]
                                             }
                                           }
@@ -11202,7 +11202,7 @@ WHERE a = c AND d = e AND f = a
                                             "expr": {
                                               "Column": [
                                                 1,
-                                                "f"
+                                                "d"
                                               ]
                                             }
                                           }

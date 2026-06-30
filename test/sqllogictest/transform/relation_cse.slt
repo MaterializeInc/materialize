@@ -89,7 +89,7 @@ Explained Query:
   Return // { arity: 4 }
     CrossJoin type=differential // { arity: 4 }
       implementation
-        %0:l0[×]e » %1:l0[×]e
+        %0:l0[×] » %1:l0[×]
       Get l0 // { arity: 2 }
       Get l0 // { arity: 2 }
 
@@ -112,9 +112,9 @@ Explained Query:
   Return // { arity: 6 }
     CrossJoin type=delta // { arity: 6 }
       implementation
-        %0:l0 » %1:l0[×]e » %2:l0[×]e
-        %1:l0 » %0:l0[×]e » %2:l0[×]e
-        %2:l0 » %0:l0[×]e » %1:l0[×]e
+        %0:l0 » %1:l0[×] » %2:l0[×]
+        %1:l0 » %0:l0[×] » %2:l0[×]
+        %2:l0 » %0:l0[×] » %1:l0[×]
       Get l0 // { arity: 2 }
       Get l0 // { arity: 2 }
       Get l0 // { arity: 2 }
@@ -136,17 +136,16 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   With
     cte l0 =
-      Project (#0{f1}, #1{f2}) // { arity: 2 }
-        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
-  Return // { arity: 3 }
-    CrossJoin type=differential // { arity: 3 }
-      implementation
-        %0:l0[×]e » %1:l0[×]e
       ArrangeBy keys=[[]] // { arity: 2 }
+        Project (#0{f1}, #1{f2}) // { arity: 2 }
+          ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+  Return // { arity: 3 }
+    Project (#0{f1}, #1{f2}, #3{f2}) // { arity: 3 }
+      CrossJoin type=differential // { arity: 4 }
+        implementation
+          %0:l0[×] » %1:l0[×]
         Get l0 // { arity: 2 }
-      ArrangeBy keys=[[]] // { arity: 1 }
-        Project (#1{f2}) // { arity: 1 }
-          Get l0 // { arity: 2 }
+        Get l0 // { arity: 2 }
 
 Used Indexes:
   - materialize.public.i1 (lookup)
@@ -177,12 +176,10 @@ Explained Query:
                   ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
   Return // { arity: 2 }
     Project (#0{f1}, #1{f2}) // { arity: 2 }
-      Join on=(#0{f1} = #2{f1} AND #1{f2} = #3{f1}) type=delta // { arity: 4 }
+      Join on=(#0{f1} = #2{f1} AND #1{f2} = #3{f1}) type=differential // { arity: 4 }
         implementation
-          %0:t1 » %1:l0[#0]K » %2:l0[#0]K
-          %1:l0 » %0:t1[#0{f1}]KA » %2:l0[#0]K
-          %2:l0 » %0:t1[#1{f2}]K » %1:l0[#0]K
-        ArrangeBy keys=[[#0{f1}], [#1{f2}]] // { arity: 2 }
+          %2:l0[#0{f1}] » %0:t1[#1] » %1:l0[#0]
+        ArrangeBy keys=[[#1{f2}]] // { arity: 2 }
           Filter (#0{f1}) IS NOT NULL AND (#1{f2}) IS NOT NULL // { arity: 2 }
             ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
         Get l0 // { arity: 1 }
@@ -214,12 +211,10 @@ Explained Query:
                   Get l0 // { arity: 1 }
   Return // { arity: 2 }
     Project (#0{f1}, #1{f2}) // { arity: 2 }
-      Join on=(#0{f1} = #2{f1} AND #1{f2} = #3{f1}) type=delta // { arity: 4 }
+      Join on=(#0{f1} = #2{f1} AND #1{f2} = #3{f1}) type=differential // { arity: 4 }
         implementation
-          %0:t1 » %1:l1[#0]K » %2:l1[#0]K
-          %1:l1 » %0:t1[#0{f1}]KA » %2:l1[#0]K
-          %2:l1 » %0:t1[#1{f2}]K » %1:l1[#0]K
-        ArrangeBy keys=[[#0{f1}], [#1{f2}]] // { arity: 2 }
+          %2:l1[#0{f1}] » %0:t1[#1] » %1:l1[#0]
+        ArrangeBy keys=[[#1{f2}]] // { arity: 2 }
           Filter (#0{f1}) IS NOT NULL AND (#1{f2}) IS NOT NULL // { arity: 2 }
             ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
         Get l1 // { arity: 1 }
@@ -236,10 +231,10 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FROM t1);
 ----
 Explained Query:
-  Project (#0{f1}, #1{f2}) // { arity: 2 }
+  Project (#2{f1}, #1{f2}) // { arity: 2 }
     Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
       implementation
-        %0:t1[#0{f1}]KA » %1[#0]K
+        %1[#0{f1}] » %0:t1[#0]
       ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
         ReadIndex on=t1 i1=[differential join] // { arity: 2 }
       ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
@@ -325,7 +320,7 @@ Explained Query:
   Return // { arity: 4 }
     CrossJoin type=differential // { arity: 4 }
       implementation
-        %0:l0[×]e » %1:l0[×]e
+        %0:l0[×] » %1:l0[×]
       Get l0 // { arity: 2 }
       Get l0 // { arity: 2 }
 
@@ -353,7 +348,7 @@ Explained Query:
   Return // { arity: 4 }
     CrossJoin type=differential // { arity: 4 }
       implementation
-        %0:l0[×]ef » %1:l0[×]ef
+        %0:l0[×] » %1:l0[×]
       Get l0 // { arity: 2 }
       Get l0 // { arity: 2 }
 
@@ -465,13 +460,12 @@ Explained Query:
               Project () // { arity: 0 }
                 Get l0 // { arity: 1 }
   Return // { arity: 2 }
-    Project (#0{f1}, #0{f1}) // { arity: 2 }
-      CrossJoin type=differential // { arity: 1 }
+    Project (#2{f1}, #2{f1}) // { arity: 2 }
+      CrossJoin type=differential // { arity: 3 }
         implementation
           %0:t1[×] » %1[×]
-        ArrangeBy keys=[[]] // { arity: 0 }
-          Project () // { arity: 0 }
-            ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 1 }
           Union // { arity: 1 }
             Get l1 // { arity: 1 }
@@ -622,23 +616,23 @@ Explained Query:
                 Get l0 // { arity: 1 }
   Return // { arity: 1 }
     Union // { arity: 1 }
-      CrossJoin type=differential // { arity: 1 }
-        implementation
-          %0:t1[×] » %1[×]
-        ArrangeBy keys=[[]] // { arity: 0 }
-          Project () // { arity: 0 }
+      Project (#2{f1}) // { arity: 1 }
+        CrossJoin type=differential // { arity: 3 }
+          implementation
+            %0:t1[×] » %1[×]
+          ArrangeBy keys=[[]] // { arity: 2 }
             ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
-        ArrangeBy keys=[[]] // { arity: 1 }
-          Union // { arity: 1 }
-            Get l1 // { arity: 1 }
-            Map (null) // { arity: 1 }
-              Union // { arity: 0 }
-                Negate // { arity: 0 }
-                  Distinct project=[] // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l1 // { arity: 1 }
-                Constant // { arity: 0 }
-                  - ()
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Union // { arity: 1 }
+              Get l1 // { arity: 1 }
+              Map (null) // { arity: 1 }
+                Union // { arity: 0 }
+                  Negate // { arity: 0 }
+                    Distinct project=[] // { arity: 0 }
+                      Project () // { arity: 0 }
+                        Get l1 // { arity: 1 }
+                  Constant // { arity: 0 }
+                    - ()
       Get l0 // { arity: 1 }
 
 Used Indexes:
@@ -701,7 +695,7 @@ Explained Query:
         Filter (#0{f1}) IS NOT NULL // { arity: 4 }
           Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
             implementation
-              %0:l0[#0{f1}]KA » %1:l0[#0{f1}]KA
+              %1:l0[#0{f1}] » %0:l0[#0]
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
     cte l2 =
@@ -711,7 +705,7 @@ Explained Query:
             Project (#0{f1}, #1{f2}) // { arity: 2 }
               Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
                 implementation
-                  %1[#0]UKA » %0:l0[#0{f1}]KA
+                  %1[#0{f1}] » %0:l0[#0]
                 Get l0 // { arity: 2 }
                 ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
                   Distinct project=[#0{f1}] // { arity: 1 }
@@ -744,29 +738,27 @@ Explained Query:
       ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
         ReadIndex on=t1 i1=[lookup] // { arity: 2 }
     cte l1 =
-      Project (#0{f1}) // { arity: 1 }
-        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Project (#0{f1}, #1{f2}) // { arity: 2 }
+          ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l2 =
-      Project (#0{f1}) // { arity: 1 }
-        ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Project (#0{f1}, #1{f2}) // { arity: 2 }
+          ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
   Return // { arity: 1 }
     Union // { arity: 1 }
-      CrossJoin type=differential // { arity: 1 }
-        implementation
-          %0:l1[×]e » %1:l1[×]e
-        ArrangeBy keys=[[]] // { arity: 0 }
-          Project () // { arity: 0 }
-            Get l1 // { arity: 1 }
-        ArrangeBy keys=[[]] // { arity: 1 }
-          Get l1 // { arity: 1 }
-      CrossJoin type=differential // { arity: 1 }
-        implementation
-          %0:l2[×]e » %1:l2[×]e
-        ArrangeBy keys=[[]] // { arity: 0 }
-          Project () // { arity: 0 }
-            Get l2 // { arity: 1 }
-        ArrangeBy keys=[[]] // { arity: 1 }
-          Get l2 // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
+        CrossJoin type=differential // { arity: 4 }
+          implementation
+            %0:l1[×] » %1:l1[×]
+          Get l1 // { arity: 2 }
+          Get l1 // { arity: 2 }
+      Project (#0{f1}) // { arity: 1 }
+        CrossJoin type=differential // { arity: 4 }
+          implementation
+            %0:l2[×] » %1:l2[×]
+          Get l2 // { arity: 2 }
+          Get l2 // { arity: 2 }
 
 Used Indexes:
   - materialize.public.i1 (lookup)
@@ -797,10 +789,10 @@ Explained Query:
   Return // { arity: 2 }
     CrossJoin type=delta // { arity: 2 }
       implementation
-        %0:l1 » %1:l2[×]e » %2:l1[×]e » %3:l2[×]e
-        %1:l2 » %0:l1[×]e » %2:l1[×]e » %3:l2[×]e
-        %2:l1 » %0:l1[×]e » %1:l2[×]e » %3:l2[×]e
-        %3:l2 » %0:l1[×]e » %1:l2[×]e » %2:l1[×]e
+        %0:l1 » %1:l2[×] » %2:l1[×] » %3:l2[×]
+        %1:l2 » %0:l1[×] » %2:l1[×] » %3:l2[×]
+        %2:l1 » %0:l1[×] » %1:l2[×] » %3:l2[×]
+        %3:l2 » %0:l1[×] » %1:l2[×] » %2:l1[×]
       Get l1 // { arity: 0 }
       Get l2 // { arity: 1 }
       Get l1 // { arity: 0 }
@@ -834,10 +826,10 @@ Explained Query:
   Return // { arity: 2 }
     CrossJoin type=delta // { arity: 2 }
       implementation
-        %0:l1 » %1:l1[×]e » %2:l2[×]e » %3:l2[×]e
-        %1:l1 » %0:l1[×]e » %2:l2[×]e » %3:l2[×]e
-        %2:l2 » %0:l1[×]e » %1:l1[×]e » %3:l2[×]e
-        %3:l2 » %0:l1[×]e » %1:l1[×]e » %2:l2[×]e
+        %0:l1 » %1:l1[×] » %2:l2[×] » %3:l2[×]
+        %1:l1 » %0:l1[×] » %2:l2[×] » %3:l2[×]
+        %2:l2 » %0:l1[×] » %1:l1[×] » %3:l2[×]
+        %3:l2 » %0:l1[×] » %1:l1[×] » %2:l2[×]
       ArrangeBy keys=[[]] // { arity: 0 }
         Project () // { arity: 0 }
           Get l1 // { arity: 1 }
@@ -926,13 +918,13 @@ Explained Query:
     cte l0 =
       CrossJoin type=differential // { arity: 2 }
         implementation
-          %1[×]UA » %0:t1[×]
-        ArrangeBy keys=[[]] // { arity: 2 }
-          ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
+          %0[×]UA » %1:t1[×]
         ArrangeBy keys=[[]] // { arity: 0 }
           Distinct project=[] // { arity: 0 }
             Project () // { arity: 0 }
               ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
   Return // { arity: 2 }
     Union // { arity: 2 }
       Get l0 // { arity: 2 }
@@ -963,7 +955,7 @@ Explained Query:
       Project (#0{f1}, #1{f2}) // { arity: 2 }
         Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
           implementation
-            %0:l0[#0{f1}]KA » %1[#0]K
+            %1[#0{f1}] » %0:l0[#0]
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Union // { arity: 1 }
@@ -1190,13 +1182,13 @@ Explained Query:
     cte l0 =
       CrossJoin type=differential // { arity: 2 }
         implementation
-          %1[×]UA » %0:t1[×]
-        ArrangeBy keys=[[]] // { arity: 2 }
-          ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
+          %0[×]UA » %1:t1[×]
         ArrangeBy keys=[[]] // { arity: 0 }
           Distinct project=[] // { arity: 0 }
             Project () // { arity: 0 }
               ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
   Return // { arity: 2 }
     Union // { arity: 2 }
       Get l0 // { arity: 2 }
@@ -1224,13 +1216,13 @@ Explained Query:
     cte l0 =
       CrossJoin type=differential // { arity: 2 }
         implementation
-          %1[×]UA » %0:t1[×]
-        ArrangeBy keys=[[]] // { arity: 2 }
-          ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
+          %0[×]UA » %1:t1[×]
         ArrangeBy keys=[[]] // { arity: 0 }
           Distinct project=[] // { arity: 0 }
             Project () // { arity: 0 }
               ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Project (#0{f1}) // { arity: 1 }
@@ -1385,29 +1377,27 @@ Explained Query:
       ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
         ReadIndex on=t1 i1=[lookup] // { arity: 2 }
     cte l1 =
-      Project (#0{f1}) // { arity: 1 }
-        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Project (#0{f1}, #1{f2}) // { arity: 2 }
+          ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l2 =
-      Project (#0{f1}) // { arity: 1 }
-        ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
+      ArrangeBy keys=[[]] // { arity: 2 }
+        Project (#0{f1}, #1{f2}) // { arity: 2 }
+          ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
   Return // { arity: 1 }
     Union // { arity: 1 }
-      CrossJoin type=differential // { arity: 1 }
-        implementation
-          %0:l1[×]e » %1:l1[×]e
-        ArrangeBy keys=[[]] // { arity: 0 }
-          Project () // { arity: 0 }
-            Get l1 // { arity: 1 }
-        ArrangeBy keys=[[]] // { arity: 1 }
-          Get l1 // { arity: 1 }
-      CrossJoin type=differential // { arity: 1 }
-        implementation
-          %0:l2[×]e » %1:l2[×]e
-        ArrangeBy keys=[[]] // { arity: 0 }
-          Project () // { arity: 0 }
-            Get l2 // { arity: 1 }
-        ArrangeBy keys=[[]] // { arity: 1 }
-          Get l2 // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
+        CrossJoin type=differential // { arity: 4 }
+          implementation
+            %0:l1[×] » %1:l1[×]
+          Get l1 // { arity: 2 }
+          Get l1 // { arity: 2 }
+      Project (#0{f1}) // { arity: 1 }
+        CrossJoin type=differential // { arity: 4 }
+          implementation
+            %0:l2[×] » %1:l2[×]
+          Get l2 // { arity: 2 }
+          Get l2 // { arity: 2 }
 
 Used Indexes:
   - materialize.public.i1 (lookup)
@@ -1642,7 +1632,7 @@ Explained Query:
           Project (#0, #1, #3) // { arity: 3 }
             Join on=(#0 = #2) type=differential // { arity: 4 }
               implementation
-                %0:l0[#0]Kf » %1:l0[#0]Kf
+                %1:l0[#0] » %0:l0[#0]
               Get l0 // { arity: 2 }
               Get l0 // { arity: 2 }
         Constant // { arity: 2 }
@@ -1678,11 +1668,12 @@ Explained Query:
       cte l4 =
         Union // { arity: 2 }
           Get l2 // { arity: 2 }
-          Project (#0, #2) // { arity: 2 }
+          Project (#1, #2) // { arity: 2 }
             Map (0) // { arity: 3 }
               Join on=(#0 = #1) type=differential // { arity: 2 }
                 implementation
-                  %1:l3[#0]UK » %0[#0]K
+                  %1[#0] » %0:l3[#0]
+                Get l3 // { arity: 1 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }
@@ -1699,7 +1690,6 @@ Explained Query:
                       - (8)
                       - (9)
                       - (10)
-                Get l3 // { arity: 1 }
       cte l5 =
         Union // { arity: 2 }
           Get l4 // { arity: 2 }
@@ -1710,11 +1700,9 @@ Explained Query:
                   Get l4 // { arity: 2 }
     Return // { arity: 2 }
       Project (#0, #3{count}) // { arity: 2 }
-        Join on=(#0 = #1 = #2) type=delta // { arity: 4 }
+        Join on=(#0 = #1 = #2) type=differential // { arity: 4 }
           implementation
-            %0 » %1:l3[#0]UK » %2[#0]K
-            %1:l3 » %0[#0]UK » %2[#0]K
-            %2 » %0[#0]UK » %1:l3[#0]UK
+            %2[#0] » %1:l3[#0] » %0[#0]
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Constant // { arity: 1 }
               - (1)
@@ -1731,11 +1719,12 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Union // { arity: 2 }
               Get l5 // { arity: 2 }
-              Project (#0, #2) // { arity: 2 }
+              Project (#1, #2) // { arity: 2 }
                 Map (null) // { arity: 3 }
                   Join on=(#0 = #1) type=differential // { arity: 2 }
                     implementation
-                      %1:l3[#0]UK » %0[#0]K
+                      %1[#0] » %0:l3[#0]
+                    Get l3 // { arity: 1 }
                     ArrangeBy keys=[[#0]] // { arity: 1 }
                       Union // { arity: 1 }
                         Negate // { arity: 1 }
@@ -1753,7 +1742,6 @@ Explained Query:
                           - (8)
                           - (9)
                           - (10)
-                    Get l3 // { arity: 1 }
 
 Target cluster: quickstart
 

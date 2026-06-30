@@ -160,3 +160,22 @@ SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else 
 ----
 1
 5
+
+# Regression: `mz_panic` in a predicate must NOT be evaluated during
+# optimization. Predicate canonicalization (here via the equality-saturation
+# scalar canonicalizer when enabled) folds calls with all-literal operands by
+# evaluating them. `mz_panic` is excluded from that fold, so the call is planned
+# into the filter and the panic surfaces at runtime, never aborting the optimizer.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE mz_unsafe.mz_panic('boom') = 'x'
+----
+Explained Query:
+  Filter ("x" = mz_panic("boom")) // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
+
+Source materialize.public.t1
+  filter=(("x" = mz_panic("boom")))
+
+Target cluster: quickstart
+
+EOF

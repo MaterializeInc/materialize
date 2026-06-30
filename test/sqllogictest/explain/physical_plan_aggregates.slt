@@ -154,11 +154,19 @@ Explained Query:
   Return
     Join::Linear
       linear_stage[0]
-        closure
-          project=(#0, #2, #1)
         lookup={ relation=1, key=[#0] }
         stream={ key=[#0], thinning=(#1) }
       source={ relation=0, key=[#0] }
+      Reduce::Basic
+        aggr=(array_agg[order_by=[]](row(array[#1{b}])))
+        key_plan
+          project=(#0)
+        val_plan
+          project=(#2)
+          map=(row(array[#1{b}]))
+        Get::Collection l0
+          project=(#0, #1)
+          raw=true
       Reduce::Hierarchical
         aggr_funcs=[max]
         monotonic
@@ -169,16 +177,6 @@ Explained Query:
           project=(#1)
         Get::Collection l0
           project=(#0, #2)
-          raw=true
-      Reduce::Basic
-        aggr=(array_agg[order_by=[]](row(array[#1{b}])))
-        key_plan
-          project=(#0)
-        val_plan
-          project=(#2)
-          map=(row(array[#1{b}]))
-        Get::Collection l0
-          project=(#0, #1)
           raw=true
 
 Source materialize.public.t

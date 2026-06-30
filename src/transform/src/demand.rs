@@ -99,7 +99,9 @@ impl crate::Transform for Demand {
 
 impl Demand {
     /// Columns to be produced.
-    fn action(
+    // Exposed to the eqsat post-extraction pass, which reuses this logic to
+    // demand-narrow the raised plan (see `eqsat::raise::demand_pushdown`).
+    pub(crate) fn action(
         &self,
         relation: &mut MirRelationExpr,
         mut columns: BTreeSet<usize>,

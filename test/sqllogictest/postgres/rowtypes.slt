@@ -438,19 +438,19 @@ create type testtype3 as (a int, b text);
 
 # note: error message here differs from postgres, which is
 # more specific about whether column type or count mismatched
-query error no overload
+query error operator does not exist: testtype1 < testtype3
 select row(1, 2)::testtype1 < row(1, 'abc')::testtype3;
 
-query error no overload
+query error operator does not exist: testtype1 <> testtype3
 select row(1, 2)::testtype1 <> row(1, 'abc')::testtype3;
 
 statement ok
 create type testtype5 as (a int);
 
-query error no overload
+query error operator does not exist: testtype1 < testtype5
 select row(1, 2)::testtype1 < row(1)::testtype5;
 
-query error no overload
+query error operator does not exist: testtype1 <> testtype5
 select row(1, 2)::testtype1 <> row(1)::testtype5;
 
 # just for fun, let's try everything at once. let's combine some

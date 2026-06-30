@@ -120,8 +120,8 @@ SELECT x, y, ox, oy, COUNT(*) FROM coincidence_xz GROUP BY x, y, ox, oy HAVING C
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#5{oy}]] // { arity: 6 }
-        Project (#0..=#2, #6, #8, #7) // { arity: 6 }
+      ArrangeBy keys=[[#4{oy}]] // { arity: 6 }
+        Project (#0..=#2, #6..=#8) // { arity: 6 }
           Map ((#3{dx} - -117), integer_to_numeric(#5{oz}), (#4{dz} - #7)) // { arity: 9 }
             CrossJoin type=differential // { arity: 6 }
               implementation
@@ -157,15 +157,15 @@ Explained Query:
                     - (17)
                     - (18)
   Return // { arity: 5 }
-    Project (#0, #1, #4, #2, #3{count}) // { arity: 5 }
+    Project (#0, #1, #4, #2{oy}, #3{count}) // { arity: 5 }
       Filter (#3{count} > 1) // { arity: 5 }
         Map (-117) // { arity: 5 }
-          Reduce group_by=[(#0{x} + ((#2{dx} * (((#5{x} - #0{x}) * #8{dy}) - ((#6{y} - #1{y}) * #7{dx}))) / ((#2{dx} * #8{dy}) - (#3{dy} * #7{dx})))), (#1{y} + ((#3{dy} * (((#5{x} - #0{x}) * #8{dy}) - ((#6{y} - #1{y}) * #7{dx}))) / ((#2{dx} * #8{dy}) - (#3{dy} * #7{dx})))), #4] aggregates=[count(*)] // { arity: 4 }
-            Project (#1..=#5, #7..=#10) // { arity: 9 }
-              Filter (#0{r} < #6{r}) AND ((#3{dx} * #10{dy}) != (#4{dy} * #9{dx})) // { arity: 12 }
-                Join on=(#5{oy} = #11{oy}) type=differential // { arity: 12 }
+          Reduce group_by=[(#0{x} + ((#2{dx} * (((#5{x} - #0{x}) * #8{dy}) - ((#6{y} - #1{y}) * #7{dx}))) / ((#2{dx} * #8{dy}) - (#4{dy} * #7{dx})))), (#1{y} + ((#4{dy} * (((#5{x} - #0{x}) * #8{dy}) - ((#6{y} - #1{y}) * #7{dx}))) / ((#2{dx} * #8{dy}) - (#4{dy} * #7{dx})))), #3{oy}] aggregates=[count(*)] // { arity: 4 }
+            Project (#1..=#5, #7..=#9, #11) // { arity: 9 }
+              Filter (#0{r} < #6{r}) AND ((#3{dx} * #11{dy}) != (#5{dy} * #9{dx})) // { arity: 12 }
+                Join on=(#4{oy} = #10{oy}) type=differential // { arity: 12 }
                   implementation
-                    %0:l0[#5{oy}]K » %1:l0[#5{oy}]K
+                    %0:l0[#4{oy}]K » %1:l0[#4{oy}]K
                   Get l0 // { arity: 6 }
                   Get l0 // { arity: 6 }
 
