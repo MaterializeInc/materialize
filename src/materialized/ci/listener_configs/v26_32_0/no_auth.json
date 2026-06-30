@@ -3,8 +3,8 @@
   "sql": {
     "external": {
       "addr": "0.0.0.0:6875",
-      "authenticator_kind": "Password",
-      "allowed_roles": "NormalAndInternal",
+      "authenticator_kind": "None",
+      "allowed_roles": "Normal",
       "enable_tls": false
     },
     "internal": {
@@ -17,15 +17,16 @@
   "http": {
     "external": {
       "addr": "0.0.0.0:6876",
-      "authenticator_kind": "Password",
+      "authenticator_kind": "None",
       "enable_tls": false,
       "routes": {
         "base": {
           "enabled": true,
-          "allowed_roles": "Normal"
+          "allowed_roles": "NormalAndInternal"
         },
         "webhook": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         },
         "internal": {
           "enabled": false
@@ -37,42 +38,51 @@
           "enabled": false
         },
         "mcp_agent": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         },
         "mcp_developer": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         },
         "console_config": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         }
       }
     },
-    "metrics": {
+    "internal": {
       "addr": "0.0.0.0:6878",
       "authenticator_kind": "None",
       "enable_tls": false,
       "routes": {
         "base": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         },
         "webhook": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         },
         "internal": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         },
         "metrics": {
           "enabled": true,
           "allowed_roles": "NormalAndInternal"
         },
         "profiling": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         },
         "mcp_agent": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         },
         "mcp_developer": {
-          "enabled": false
+          "enabled": true,
+          "allowed_roles": "NormalAndInternal"
         },
         "console_config": {
           "enabled": false

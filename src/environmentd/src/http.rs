@@ -13,12 +13,12 @@
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
 //!
-//! ## Authentication flow
+//! ## Authentication/Authorization flow
 //!
 //! The server supports several authentication modes, controlled by the
 //! configured [`listeners::AuthenticatorKind`]. The general flow is:
 //!
-//! 1. **Identity resolution.** An authentication middleware runs on every
+//! 1. **Authentication.** An authentication middleware runs on every
 //!    protected request and resolves the caller's identity via one of:
 //!    - **Credentials in headers.** The caller supplies a username/password or
 //!      token in the request headers. Supported by all [`listeners::AuthenticatorKind`]s.
@@ -30,11 +30,15 @@
 //!      may inject the caller's identity into the request headers. Only available
 //!      for [`listeners::AuthenticatorKind::None`].
 //!
-//! 2. **Session initialization.** Once the caller's identity is known, an
+//! 2. **Authorization.** The authentication middleware is followed by an authorization
+//!    middleware that checks if the caller's identity is allowed to access the route based on
+//!    its [`listeners::AllowedRoles`].
+//!
+//! 3. **Session initialization.** Once the caller's identity is known, an
 //!    adapter session is opened on their behalf. This happens as part of
 //!    request processing, after all middleware has run.
 //!
-//! 3. **Request handling.** The handler executes the request (e.g. runs SQL)
+//! 4. **Request handling.** The handler executes the request (e.g. runs SQL)
 //!    using the initialized adapter session.
 //!
 //! ### WebSocket
@@ -43,8 +47,8 @@
 //!
 //! - Credentials are not read from request headers. Instead, the first
 //!   message sent by the client is treated as the authentication message.
-//! - Session initialization (step 2) happens inside the WebSocket handler
-//!   itself, rather than as a separate middleware step.
+//! - Authorization and session initialization (step 2 and 3) happen inside
+//!   the WebSocket handler itself, rather than as separate middleware steps.
 
 // Axum handlers must use async, but often don't actually use `await`.
 #![allow(clippy::unused_async)]
@@ -89,7 +93,7 @@ use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
 use mz_repr::user::ExternalUserMetadata;
-use mz_server_core::listeners::{self, AllowedRoles, HttpRoutesEnabled};
+use mz_server_core::listeners::{self, AllowedRoles, HttpRoutesEnabled, RouteGroup};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
@@ -180,7 +184,6 @@ pub struct HttpConfig {
     pub metrics_registry: MetricsRegistry,
     pub mcp_metrics: mcp_metrics::McpMetrics,
     pub oauth_metadata_metrics: oauth_metadata::OauthMetadataMetrics,
-    pub allowed_roles: AllowedRoles,
     pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,
     /// Locator for cluster replica HTTP addresses, used for proxying requests.
@@ -241,7 +244,6 @@ impl HttpServer {
             metrics_registry,
             mcp_metrics,
             oauth_metadata_metrics,
-            allowed_roles,
             internal_route_config,
             routes_enabled,
             replica_http_locator,
@@ -283,19 +285,17 @@ impl HttpServer {
                     frontegg,
                     oidc_rx,
                     adapter_client_rx,
-                    allowed_roles,
                 )
                 .await
             }
         });
-
         let mut router = Router::new();
         let mut base_router = Router::new();
         let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(Arc::clone(
             &replica_http_locator,
         )));
-        if routes_enabled.base {
-            base_router = base_router
+        if let RouteGroup::Enabled(base_roles) = routes_enabled.base {
+            let base_group = Router::new()
                 .route(
                     "/",
                     routing::get(move || async move { root::handle_home(routes_enabled).await }),
@@ -316,7 +316,9 @@ impl HttpServer {
                     routing::get(metrics_public::handle_public_metrics),
                 )
                 .layer(Extension(metrics_registry.clone()))
-                .layer(Extension(Arc::clone(&cluster_proxy_config)));
+                .layer(Extension(Arc::clone(&cluster_proxy_config)))
+                .authorize(base_roles);
+            base_router = base_router.merge(base_group);
 
             let mut ws_router = Router::new()
                 .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
@@ -327,21 +329,23 @@ impl HttpServer {
                     adapter_client_rx: adapter_client_rx.clone(),
                     active_connection_counter: active_connection_counter.clone(),
                     helm_chart_version: helm_chart_version.clone(),
-                    allowed_roles,
+                    // WS is gated by the base route group, so it enforces the
+                    // base group's roles
+                    allowed_roles: base_roles,
                 });
             if let listeners::AuthenticatorKind::None = authenticator_kind {
-                ws_router = ws_router.layer(middleware::from_fn_with_state(
-                    allowed_roles,
-                    x_materialize_user_header_auth,
-                ));
+                ws_router = ws_router.layer(middleware::from_fn(x_materialize_user_header_auth));
             }
             router = router.merge(ws_router);
         }
-        if routes_enabled.profiling {
-            base_router = base_router.nest("/prof/", mz_prof_http::router(&BUILD_INFO));
+        if let RouteGroup::Enabled(profiling_roles) = routes_enabled.profiling {
+            let profiling_group = Router::new()
+                .nest("/prof/", mz_prof_http::router(&BUILD_INFO))
+                .authorize(profiling_roles);
+            base_router = base_router.merge(profiling_group);
         }
 
-        if routes_enabled.webhook {
+        if routes_enabled.webhook.is_enabled() {
             let webhook_router = Router::new()
                 .route(
                     "/api/webhook/{:database}/{:schema}/{:id}",
@@ -381,12 +385,12 @@ impl HttpServer {
             router = router.merge(webhook_router);
         }
 
-        if routes_enabled.internal {
+        if let RouteGroup::Enabled(internal_roles) = routes_enabled.internal {
             let console_config = Arc::new(console::ConsoleProxyConfig::new(
                 internal_route_config.internal_console_redirect_url.clone(),
                 "/internal-console".to_string(),
             ));
-            base_router = base_router
+            let internal_group = Router::new()
                 .route(
                     "/api/opentelemetry/config",
                     routing::put({
@@ -446,10 +450,7 @@ impl HttpServer {
                     "/internal-console/",
                     routing::get(console::handle_internal_console),
                 )
-                .layer(Extension(console_config));
-
-            // Cluster HTTP proxy routes.
-            base_router = base_router
+                // Cluster HTTP proxy routes.
                 .route("/clusters", routing::get(cluster::handle_clusters))
                 .route(
                     "/api/cluster/{:cluster_id}/replica/{:replica_id}/process/{:process}/",
@@ -459,7 +460,10 @@ impl HttpServer {
                     "/api/cluster/{:cluster_id}/replica/{:replica_id}/process/{:process}/{*path}",
                     routing::any(cluster::handle_cluster_proxy),
                 )
-                .layer(Extension(Arc::clone(&cluster_proxy_config)));
+                .layer(Extension(console_config))
+                .layer(Extension(Arc::clone(&cluster_proxy_config)))
+                .authorize(internal_roles);
+            base_router = base_router.merge(internal_group);
 
             let leader_router = Router::new()
                 .route("/api/leader/status", routing::get(handle_leader_status))
@@ -468,12 +472,13 @@ impl HttpServer {
                     "/api/leader/skip-catchup",
                     routing::post(handle_leader_skip_catchup),
                 )
+                .authorize(internal_roles)
                 .layer(auth_middleware.clone())
                 .with_state(internal_route_config.deployment_state_handle.clone());
             router = router.merge(leader_router);
         }
 
-        if routes_enabled.metrics {
+        if let RouteGroup::Enabled(metrics_roles) = routes_enabled.metrics {
             // Clone into the closure so the outer `metrics_registry` binding
             // stays available for other route blocks below (e.g. MCP metric
             // registration).
@@ -519,6 +524,7 @@ impl HttpServer {
                     routing::get(mz_http_util::handle_liveness_check),
                 )
                 .route("/api/readyz", routing::get(probe::handle_ready))
+                .authorize(metrics_roles)
                 .layer(auth_middleware.clone())
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()))
@@ -526,7 +532,7 @@ impl HttpServer {
             router = router.merge(metrics_router);
         }
 
-        if routes_enabled.console_config {
+        if routes_enabled.console_config.is_enabled() {
             let console_config_router = Router::new()
                 .route(
                     "/api/console/config",
@@ -539,7 +545,7 @@ impl HttpServer {
 
         // MCP (Model Context Protocol) endpoints
         // Enabled via runtime `routes_enabled.mcp_agent` and `routes_enabled.mcp_developer` configuration
-        if routes_enabled.mcp_agent || routes_enabled.mcp_developer {
+        if routes_enabled.mcp_agent.is_enabled() || routes_enabled.mcp_developer.is_enabled() {
             use tracing::info;
 
             // RFC 9728 Protected Resource Metadata. Public route: MCP
@@ -576,21 +582,28 @@ impl HttpServer {
 
             let mut mcp_router = Router::new();
 
-            if routes_enabled.mcp_agent {
+            if let RouteGroup::Enabled(mcp_agent_roles) = routes_enabled.mcp_agent {
                 info!("Enabling MCP agent endpoint: /api/mcp/agent");
-                mcp_router = mcp_router.route(
-                    "/api/mcp/agent",
-                    routing::post(mcp::handle_mcp_agent).get(mcp::handle_mcp_method_not_allowed),
-                );
+                let agent_router = Router::new()
+                    .route(
+                        "/api/mcp/agent",
+                        routing::post(mcp::handle_mcp_agent)
+                            .get(mcp::handle_mcp_method_not_allowed),
+                    )
+                    .authorize(mcp_agent_roles);
+                mcp_router = mcp_router.merge(agent_router);
             }
 
-            if routes_enabled.mcp_developer {
+            if let RouteGroup::Enabled(mcp_developer_roles) = routes_enabled.mcp_developer {
                 info!("Enabling MCP developer endpoint: /api/mcp/developer");
-                mcp_router = mcp_router.route(
-                    "/api/mcp/developer",
-                    routing::post(mcp::handle_mcp_developer)
-                        .get(mcp::handle_mcp_method_not_allowed),
-                );
+                let developer_router = Router::new()
+                    .route(
+                        "/api/mcp/developer",
+                        routing::post(mcp::handle_mcp_developer)
+                            .get(mcp::handle_mcp_method_not_allowed),
+                    )
+                    .authorize(mcp_developer_roles);
+                mcp_router = mcp_router.merge(developer_router);
             }
 
             // The MCP handlers perform a server-side Origin check against this
@@ -646,15 +659,12 @@ impl HttpServer {
                 let login_router = Router::new()
                     .route("/api/login", routing::post(handle_login))
                     .route("/api/logout", routing::post(handle_logout))
-                    .layer(Extension(adapter_client_rx))
-                    .layer(Extension(allowed_roles));
+                    .layer(Extension(adapter_client_rx));
                 router = router.merge(login_router).layer(session_layer);
             }
             listeners::AuthenticatorKind::None => {
-                base_router = base_router.layer(middleware::from_fn_with_state(
-                    allowed_roles,
-                    x_materialize_user_header_auth,
-                ));
+                base_router =
+                    base_router.layer(middleware::from_fn(x_materialize_user_header_auth));
             }
             _ => {}
         }
@@ -760,11 +770,7 @@ pub async fn handle_leader_skip_catchup(
     }
 }
 
-async fn x_materialize_user_header_auth(
-    State(allowed_roles): State<AllowedRoles>,
-    mut req: Request,
-    next: Next,
-) -> impl IntoResponse {
+async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl IntoResponse {
     // TODO migrate teleport to basic auth and remove this.
     if let Some(username) = req.headers().get("x-materialize-user").map(|h| h.to_str()) {
         let username = match username {
@@ -775,11 +781,9 @@ async fn x_materialize_user_header_auth(
                 )));
             }
         };
-        // Enforce the listener's `allowed_roles` policy here. Without this,
-        // a listener with `authenticator_kind=None` and `allowed_roles=Normal`
-        // would let any caller assert `x-materialize-user: mz_system` and
-        // bypass the role restriction.
-        check_role_allowed(&username, allowed_roles)?;
+        // Authorization runs later: for HTTP routes
+        // in the `http_authz` middleware, and for WebSocket connections inside
+        // `init_ws`. This middleware only resolves the injected identity.
         req.extensions_mut().insert(AuthedUser {
             name: username,
             external_metadata_rx: None,
@@ -808,6 +812,28 @@ async fn group_claim_for(adapter_client_rx: &Delayed<Client>) -> String {
 enum ConnProtocol {
     Http,
     Https,
+}
+
+/// The `allowed_roles` policy for a route group, attached as a request
+/// extension on each authenticated route group and read by [`http_authz`].
+#[derive(Clone, Copy)]
+struct RouteAllowedRoles(AllowedRoles);
+
+/// Router extension for attaching the authorization middleware.
+trait AuthzRouterExt {
+    fn authorize(self, roles: AllowedRoles) -> Self;
+}
+
+impl<S> AuthzRouterExt for Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    fn authorize(self, roles: AllowedRoles) -> Router<S> {
+        // Adds the `RouteAllowedRoles` extension to the request such that
+        // `http_authz` knows which roles to check for a RouteGroup.
+        self.layer(middleware::from_fn(http_authz))
+            .layer(Extension(RouteAllowedRoles(roles)))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1071,20 +1097,12 @@ impl IntoResponse for AuthError {
 pub async fn handle_login(
     session: Option<Extension<TowerSession>>,
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
-    Extension(allowed_roles): Extension<AllowedRoles>,
     Json(LoginCredentials { username, password }): Json<LoginCredentials>,
 ) -> impl IntoResponse {
-    // Enforce the listener's allowed_roles policy before doing any
-    // authentication work, mirroring the check performed in `auth` for
-    // header-based credentials. Without this, a session-based caller could
-    // log in as a role that header-based callers are forbidden to use.
-    if let Err(err) = check_role_allowed(&username, allowed_roles) {
-        warn!(
-            ?err,
-            "HTTP login rejected: role not allowed on this listener"
-        );
-        return StatusCode::UNAUTHORIZED;
-    }
+    // The listener's `allowed_roles` policy is not enforced here. Login only
+    // mints a session. Authorization runs per request in the `http_authz`
+    // middleware (and in `init_ws` for WebSocket), so a session for a
+    // disallowed role cannot actually reach any route.
     let Ok(adapter_client) = adapter_client_rx.clone().await else {
         return StatusCode::INTERNAL_SERVER_ERROR;
     };
@@ -1127,6 +1145,7 @@ pub async fn handle_logout(session: Option<Extension<TowerSession>>) -> impl Int
     }
 }
 
+/// Authentication middleware.
 async fn http_auth(
     mut req: Request,
     next: Next,
@@ -1135,7 +1154,6 @@ async fn http_auth(
     frontegg: Option<mz_frontegg_auth::Authenticator>,
     oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     adapter_client_rx: Delayed<Client>,
-    allowed_roles: AllowedRoles,
 ) -> Result<impl IntoResponse, AuthError> {
     let creds = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
         Some(Credentials::Password {
@@ -1158,13 +1176,8 @@ async fn http_auth(
             maybe_get_authenticated_session(req.extensions().get::<TowerSession>()).await
     {
         let user = ensure_session_unexpired(session, session_data).await?;
-        // Defense-in-depth: re-check the listener's `allowed_roles` policy on
-        // every session-authenticated request. The same check runs at
-        // `/api/login`, but enforcing it here too prevents a session minted
-        // under a more permissive configuration (or a future bug in the login
-        // path) from bypassing role restrictions.
-        check_role_allowed(&user.name, allowed_roles)?;
-        // Need this to set the user of the Adapter client.
+        // Authorization runs next in the `http_authz` middleware, which reads
+        // this `AuthedUser` and the route's `RouteAllowedRoles`.
         req.extensions_mut().insert(user);
         return Ok(next.run(req).await);
     }
@@ -1244,14 +1257,7 @@ async fn http_auth(
     } else {
         None
     };
-    let user = auth(
-        &authenticator,
-        creds,
-        allowed_roles,
-        &challenges,
-        group_claim.as_deref(),
-    )
-    .await?;
+    let user = auth(&authenticator, creds, &challenges, group_claim.as_deref()).await?;
 
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
@@ -1259,6 +1265,30 @@ async fn http_auth(
 
     // Run the request.
     Ok(next.run(req).await)
+}
+
+/// Authorization middleware. Enforces the route group's `allowed_roles` policy
+/// against the authenticated user.
+///
+/// Layered immediately inside [`http_auth`] on every authenticated route group,
+/// always paired with a [`RouteAllowedRoles`] extension. By that wiring both the
+/// `AuthedUser` (from `http_auth`) and the `RouteAllowedRoles` extension are
+/// present whenever this runs. A missing extension is a wiring bug, so we fail
+/// closed rather than skip the check.
+async fn http_authz(req: Request, next: Next) -> Result<impl IntoResponse, AuthError> {
+    match (
+        req.extensions().get::<AuthedUser>(),
+        req.extensions().get::<RouteAllowedRoles>().copied(),
+    ) {
+        (Some(user), Some(RouteAllowedRoles(allowed_roles))) => {
+            check_role_allowed(&user.name, allowed_roles)?;
+            Ok(next.run(req).await)
+        }
+        _ => {
+            warn!("http_authz missing AuthedUser or RouteAllowedRoles extension; denying request");
+            Err(AuthError::RoleDisallowed("<unknown>".to_string()))
+        }
+    }
 }
 
 async fn init_ws(
@@ -1321,15 +1351,7 @@ async fn init_ws(
             warn!("Unexpected bearer or basic auth provided when using user header");
             anyhow::bail!("unexpected")
         }
-        (Some(ExistingUser::Session(user)), None) => {
-            // Defense-in-depth: re-enforce the listener's `allowed_roles`
-            // policy on session-authenticated WebSocket connections. The same
-            // check runs at `/api/login`, but enforcing it here too prevents a
-            // session minted under a more permissive configuration (or a
-            // future bug in the login path) from bypassing role restrictions.
-            check_role_allowed(&user.name, allowed_roles)?;
-            user
-        }
+        (Some(ExistingUser::Session(user)), None) => user,
         (Some(ExistingUser::XMaterializeUserHeader(user)), None) => user,
         (_, Some(creds)) => {
             let authenticator = get_authenticator(
@@ -1354,7 +1376,6 @@ async fn init_ws(
             let user = auth(
                 &authenticator,
                 Some(creds),
-                allowed_roles,
                 &no_challenges,
                 group_claim.as_deref(),
             )
@@ -1363,6 +1384,12 @@ async fn init_ws(
         }
         (None, None) => anyhow::bail!("expected auth information"),
     };
+
+    // Authorization. WebSocket connections authenticate after the HTTP upgrade
+    // (by reading the first frame), so the `http_authz` middleware cannot cover
+    // them. Enforce the authorization here instead, once, for every way
+    // the user was resolved above (session, injected header, or credentials).
+    check_role_allowed(&user.name, allowed_roles)?;
 
     let client = AuthedClient::new(
         &adapter_client_rx.clone().await?,
@@ -1464,7 +1491,6 @@ pub(crate) async fn ensure_session_unexpired(
 async fn auth(
     authenticator: &Authenticator,
     creds: Option<Credentials>,
-    allowed_roles: AllowedRoles,
     challenges: &WwwAuthenticateChallenges,
     group_claim: Option<&str>,
 ) -> Result<AuthedUser, AuthError> {
@@ -1548,8 +1574,6 @@ async fn auth(
             (name, None, Authenticated, None)
         }
     };
-
-    check_role_allowed(&name, allowed_roles)?;
 
     Ok(AuthedUser {
         name,

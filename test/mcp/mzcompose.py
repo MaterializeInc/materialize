@@ -22,7 +22,7 @@ from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
     Materialized(
-        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
     ),
 ]
 

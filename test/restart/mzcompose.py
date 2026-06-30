@@ -445,7 +445,7 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
 
     with c.override(
         Materialized(
-            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
         )
     ):
         c.up("materialized")

@@ -196,7 +196,7 @@ SERVICES = [
         volumes_extra=[
             "secrets:/secrets",
         ],
-        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth_https.json",
         networks={"balancerd": {"ipv4_address": STATIC_IPS["materialized"]}},
     ),
 ]
@@ -905,7 +905,7 @@ def workflow_frontegg_group_sync_stale_groups(c: Composition) -> None:
             sanity_restart=False,
             depends_on=["test-certs"],
             volumes_extra=["secrets:/secrets"],
-            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/frontegg_https.json",
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/frontegg_https.json",
             networks={"balancerd": {"ipv4_address": STATIC_IPS["materialized"]}},
         ),
     ):
