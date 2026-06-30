@@ -148,6 +148,14 @@ impl Determinate {
     pub fn new(inner: anyhow::Error) -> Self {
         Determinate { inner }
     }
+
+    /// Adds context to the wrapped error. Mirrors [`anyhow::Error::context`].
+    pub fn context<C>(self, context: C) -> Self
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        Determinate::new(self.inner.context(context))
+    }
 }
 
 /// An error coming from an underlying durability system (e.g. s3) indicating
@@ -163,6 +171,14 @@ impl Indeterminate {
     /// Exposed for testing.
     pub fn new(inner: anyhow::Error) -> Self {
         Indeterminate { inner }
+    }
+
+    /// Adds context to the wrapped error. Mirrors [`anyhow::Error::context`].
+    pub fn context<C>(self, context: C) -> Self
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        Indeterminate::new(self.inner.context(context))
     }
 }
 
@@ -216,6 +232,22 @@ impl ExternalError {
     pub fn is_timeout(&self) -> bool {
         // Gross...
         self.to_string().contains("timeout")
+    }
+
+    /// Adds context to the underlying error, preserving the determinate vs
+    /// indeterminate classification. Mirrors [`anyhow::Error::context`].
+    ///
+    /// Callers use this to record which resource an operation was acting on
+    /// (e.g. the blob key being fetched) so the error names it everywhere it is
+    /// displayed.
+    pub fn context<C>(self, context: C) -> Self
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        match self {
+            ExternalError::Determinate(e) => ExternalError::Determinate(e.context(context)),
+            ExternalError::Indeterminate(e) => ExternalError::Indeterminate(e.context(context)),
+        }
     }
 }
 

@@ -444,7 +444,12 @@ pub(crate) async fn fetch_batch_part_blob<T>(
     let blob_key = part.key.complete(shard_id);
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         shard_metrics.blob_gets.inc();
-        blob.get(&blob_key).await
+        // Name the blob in the error. A GET stuck retrying forever surfaces only in the retry log
+        // (see `retry_external`), which prints the error, so without this the log cannot say which
+        // blob, and thus which shard, is wedged.
+        blob.get(&blob_key)
+            .await
+            .map_err(|err| err.context(format!("blob {blob_key}")))
     })
     .instrument(get_span.clone())
     .await
