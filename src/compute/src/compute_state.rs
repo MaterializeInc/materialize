@@ -773,6 +773,7 @@ impl<'a> ActiveComputeState<'a> {
             self.timely_worker,
             &config,
             self.compute_state.metrics_registry.clone(),
+            self.compute_state.metrics.clone(),
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
             storage_log_reader,

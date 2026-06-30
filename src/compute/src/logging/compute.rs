@@ -301,12 +301,15 @@ pub(super) struct Return {
 /// * `event_queue`: The source to read compute log events from.
 /// * `compute_event_streams`: Additional compute event streams to absorb.
 /// * `shared_state`: Shared state between logging dataflow fragments.
+/// * `worker_metrics`: Per-worker projected Prometheus handles, including the
+///   arrangement-size adds/removes counters this dataflow updates.
 pub(super) fn construct<'scope>(
     scope: Scope<'scope, Timestamp>,
     activations: Rc<RefCell<Activations>>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    worker_metrics: crate::metrics::WorkerMetrics,
 ) -> Return {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -399,6 +402,7 @@ pub(super) fn construct<'scope>(
                             state: &mut demux_state,
                             shared_state,
                             output: &mut output_sessions,
+                            worker_metrics: &worker_metrics,
                             logging_interval_ms,
                             time,
                         }
@@ -783,6 +787,8 @@ struct DemuxHandler<'a, 'b, 'c> {
     shared_state: &'a mut SharedLoggingState,
     /// Demux output sessions.
     output: &'a mut DemuxOutput<'b, 'c>,
+    /// Per-worker Prometheus handles updated alongside the introspection rows.
+    worker_metrics: &'a crate::metrics::WorkerMetrics,
     /// The logging interval specifying the time granularity for the updates.
     logging_interval_ms: u128,
     /// The current event time.
@@ -1130,6 +1136,22 @@ impl DemuxHandler<'_, '_, '_> {
         let datum = self.state.pack_arrangement_heap_size_update(operator_id);
         let diff = Diff::cast_from(delta_size);
         self.output.arrangement_heap_size.give((datum, ts, diff));
+
+        // Mirror the delta as two monotone counters: positive deltas grow
+        // `_added_total`, negative deltas grow `_removed_total`. Resident size
+        // at any point in time is `added - removed` across all workers in the
+        // replica. Two counters preserve activity that a single gauge would
+        // mask when adds and removes cancel within a single scrape interval.
+        let delta_i64 = diff.into_inner();
+        if delta_i64 > 0 {
+            self.worker_metrics
+                .arrangement_size_bytes_added_total
+                .inc_by(delta_i64.unsigned_abs());
+        } else if delta_i64 < 0 {
+            self.worker_metrics
+                .arrangement_size_bytes_removed_total
+                .inc_by(delta_i64.unsigned_abs());
+        }
     }
 
     /// Update the allocation capacity for an arrangement.
@@ -1235,6 +1257,19 @@ impl DemuxHandler<'_, '_, '_> {
             let size = self.state.pack_arrangement_heap_size_update(operator_id);
             let diff = -Diff::cast_from(state.size);
             self.output.arrangement_heap_size.give((size, ts, diff));
+
+            // Mirror the full-size retraction into the `_removed_total`
+            // counter. Without this, `added - removed` drifts upward by the
+            // size of every dropped arrangement instead of returning to the
+            // resident total. `state.size` is non-negative by construction
+            // (every prior delta passed through `handle_arrangement_heap_size`
+            // which keeps the running sum positive).
+            let size_at_drop = Diff::cast_from(state.size).into_inner().unsigned_abs();
+            if size_at_drop > 0 {
+                self.worker_metrics
+                    .arrangement_size_bytes_removed_total
+                    .inc_by(size_at_drop);
+            }
         }
         self.shared_state
             .arrangement_size_activators

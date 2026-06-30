@@ -34,6 +34,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::metrics::WorkerMetrics;
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
@@ -45,6 +46,7 @@ pub fn initialize(
     worker: &mut timely::worker::Worker,
     config: &LoggingConfig,
     metrics_registry: MetricsRegistry,
+    worker_metrics: WorkerMetrics,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
     storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
@@ -71,6 +73,7 @@ pub fn initialize(
         c_event_queue: EventQueue::new("c"),
         shared_state: Default::default(),
         metrics_registry,
+        worker_metrics,
         worker_config,
         workers_per_process,
         storage_log_reader,
@@ -110,6 +113,7 @@ struct LoggingContext<'a> {
     c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
     metrics_registry: MetricsRegistry,
+    worker_metrics: WorkerMetrics,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
     /// Optional reader for storage timely logging events.
@@ -166,6 +170,7 @@ impl LoggingContext<'_> {
                 self.config,
                 self.c_event_queue.clone(),
                 Rc::clone(&self.shared_state),
+                self.worker_metrics.clone(),
             );
             collections.extend(compute_collections);
 

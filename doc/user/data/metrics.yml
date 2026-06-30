@@ -164,6 +164,18 @@ metrics:
   visibility: public
   tags:
   - compute
+- name: mz_arrangement_size_bytes_added_total
+  help: Cumulative bytes added to arrangement heaps. Resident bytes is (added - removed). Undercounts allocator-internal fragmentation; do not treat as an authoritative memory total.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_arrangement_size_bytes_removed_total
+  help: Cumulative bytes removed from arrangement heaps. Resident bytes is (added - removed). Includes the final retraction when an arrangement drops.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_arrangement_sizes_collection_time_seconds_bucket
   help: Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.
   labels:

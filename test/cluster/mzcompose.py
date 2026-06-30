@@ -421,6 +421,117 @@ def workflow_test_github_4443(c: Composition) -> None:
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 
+def workflow_test_arrangement_size_metric(c: Composition) -> None:
+    """
+    Assert that `mz_arrangement_size_bytes_added_total` and
+    `_removed_total` move together across a CREATE INDEX / DROP INDEX cycle.
+    Whatever bytes flow into `added_total` when the index is built must
+    flow into `removed_total` when it is dropped.
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(Clusterd(name="clusterd1", workers=1)):
+        c.up("materialized", "clusterd1")
+
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true",
+            port=6877,
+            user="mz_system",
+        )
+        # Pin the index to clusterd1 so the counters scraped from clusterd1
+        # cover exactly the arrangements this test builds.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            GRANT ALL ON CLUSTER cluster1 TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        cursor = c.sql_cursor(startup_params={"cluster": "cluster1"})
+        cursor.execute("CREATE TABLE t (a bigint)")
+        cursor.execute("INSERT INTO t SELECT generate_series(1, 1000000)")
+
+        # Floor on the index's resident size, well above background
+        # logging-dataflow churn.
+        INDEX_SIZE_FLOOR_BYTES = 1_000_000
+        WAIT_DEADLINE_SECONDS = 120
+        POLL_SECONDS = 0.2
+
+        def counter_totals() -> tuple[int, int]:
+            """Return (added_total, removed_total) summed across workers."""
+            out = c.exec(
+                "clusterd1", "curl", "localhost:6878/metrics", capture=True
+            ).stdout
+            added = sum(
+                int(float(l.split()[1]))
+                for l in out.splitlines()
+                if l.startswith("mz_arrangement_size_bytes_added_total")
+            )
+            removed = sum(
+                int(float(l.split()[1]))
+                for l in out.splitlines()
+                if l.startswith("mz_arrangement_size_bytes_removed_total")
+            )
+            return added, removed
+
+        def wait_until(predicate: Callable[[], bool], description: str) -> None:
+            deadline = time.time() + WAIT_DEADLINE_SECONDS
+            while time.time() < deadline:
+                if predicate():
+                    return
+                time.sleep(POLL_SECONDS)
+            raise AssertionError(
+                f"condition never observed within {WAIT_DEADLINE_SECONDS}s: "
+                f"{description}"
+            )
+
+        def index_hydrated() -> bool:
+            cursor.execute(
+                "SELECT bool_and(hydrated) "
+                "FROM mz_internal.mz_compute_hydration_statuses h "
+                "JOIN mz_objects o ON (h.object_id = o.id) "
+                "WHERE name = 'idx'"
+            )
+            row = cursor.fetchone()
+            return bool(row[0]) if row and row[0] is not None else False
+
+        cycles = 4
+        for cycle in range(cycles):
+            added_before, _ = counter_totals()
+
+            cursor.execute("CREATE INDEX idx ON t (a)")
+            wait_until(index_hydrated, f"cycle {cycle}: index hydrated")
+
+            added_after_build, removed_after_build = counter_totals()
+            assert added_after_build - added_before >= INDEX_SIZE_FLOOR_BYTES, (
+                f"cycle {cycle}: added_total grew by only "
+                f"{added_after_build - added_before} bytes during CREATE, "
+                f"below the {INDEX_SIZE_FLOOR_BYTES}-byte floor"
+            )
+
+            cursor.execute("DROP INDEX idx")
+            # The wait timing out IS the bug signal: removed_total only
+            # grows from background churn (kilobytes), never crosses the
+            # floor.
+            target_removed = removed_after_build + INDEX_SIZE_FLOOR_BYTES
+            wait_until(
+                lambda: counter_totals()[1] >= target_removed,
+                f"cycle {cycle}: removed_total reaches "
+                f"{target_removed} bytes after DROP. "
+                f"handle_arrangement_heap_size_operator_dropped is not "
+                f"advancing the removed counter on arrangement drop.",
+            )
+
+
 def workflow_test_github_4444(c: Composition) -> None:
     """
     Test that compute reconciliation does not produce empty frontiers.
