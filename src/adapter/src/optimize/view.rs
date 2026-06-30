@@ -128,7 +128,7 @@ impl<S: ExprPrep> Optimize<HirRelationExpr> for Optimizer<S> {
         }
 
         // TODO: Handle the `optimizer_notices` in `df_meta`.
-        // https://github.com/MaterializeInc/database-issues/issues/10012
+        // https://linear.app/materializeinc/issue/SQL-444
 
         // Return the resulting OptimizedMirRelationExpr.
         Ok(expr)

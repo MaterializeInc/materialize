@@ -1517,7 +1517,7 @@ class FilterSubqueries(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
 
-        # TODO: Slow optimization, possibly due to https://github.com/MaterializeInc/database-issues/issues/8777
+        # TODO: Slow optimization, possibly due to https://linear.app/materializeinc/issue/STG-42/use-equivalences-more-broadly
         print("$ set-sql-timeout duration=3600s")
         print("> SET statement_timeout = '3600s'")
 
