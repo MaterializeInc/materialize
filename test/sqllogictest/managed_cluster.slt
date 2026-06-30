@@ -424,6 +424,35 @@ ALTER CLUSTER foo set (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT
 statement ok
 DROP CLUSTER foo
 
+# Regression: SQL-217. `WITH (WAIT ...)` must be rejected on unmanaged
+# clusters, both when the cluster is already unmanaged and when the same
+# statement transitions it from managed to unmanaged. Previously the WAIT
+# options were silently ignored.
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+statement error ALTER\.\.\. WITH not supported for unmanaged clusters
+ALTER CLUSTER foo SET (REPLICAS ()) WITH (WAIT FOR '0s')
+
+statement error ALTER\.\.\. WITH not supported for unmanaged clusters
+ALTER CLUSTER foo SET (REPLICAS ()) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+statement ok
+DROP CLUSTER foo
+
+statement ok
+CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
+
+statement error ALTER\.\.\. WITH not supported for unmanaged clusters
+ALTER CLUSTER foo SET (MANAGED = false) WITH (WAIT FOR '0s')
+
+statement error ALTER\.\.\. WITH not supported for unmanaged clusters
+ALTER CLUSTER foo SET (MANAGED = false) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+statement ok
+DROP CLUSTER foo
+
 # Regression: zero-downtime finalization (PR #28836) reads workload_class from
 # the catalog instead of the planned config, silently dropping the change.
 
