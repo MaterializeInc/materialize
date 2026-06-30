@@ -656,6 +656,63 @@ table.inline-headings {
     }
 }
 
+body.light {
+    .nav {
+        a:not([class*="btn"]) {
+            color: var(--body);
+
+            &:hover,
+            &:focus {
+                color: var(--heading);
+            }
+
+            &.active {
+                color: var(--highlight);
+            }
+        }
+
+        &-logo {
+            color: var(--heading);
+        }
+    }
+
+    .sidebar {
+        a {
+            color: var(--body);
+        }
+
+        li.level-1 > a {
+            color: var(--heading);
+            font-weight: var(--weight-heading);
+        }
+
+        a:hover,
+        a:focus {
+            color: var(--heading);
+        }
+
+        a.active {
+            color: var(--highlight);
+        }
+    }
+
+    .toc {
+        h2 {
+            color: var(--heading);
+        }
+
+        a {
+            color: var(--body);
+
+            &:hover,
+            &:focus,
+            &.active {
+                color: var(--heading);
+            }
+        }
+    }
+}
+
 body.dark {
 
     .theme-switcher {

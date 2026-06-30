@@ -324,8 +324,34 @@ p+p {
 
     .whats-new-callout {
         --callout-item-surface: var(--docs-card-inset);
+        --callout-item-border: var(--docs-card-divider-strong);
 
-        @include docs-feature-card($top-accent: true);
+        a:not(.whats-new-callout__item) {
+            border-bottom: 0;
+            text-decoration: none;
+        }
+
+        &::before {
+            background: linear-gradient(
+                90deg,
+                transparent 0%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 35%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-center-mix, 90%), var(--sg-lavender-2)) 50%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 65%,
+                transparent 100%
+            );
+            border-radius: var(--table-radius) var(--table-radius) 0 0;
+            content: "";
+            height: 2px;
+            left: 0;
+            pointer-events: none;
+            position: absolute;
+            right: 0;
+            top: 0;
+            z-index: 1;
+        }
+
+        @include docs-feature-card;
         color: var(--body);
         font-family: var(--font-body);
         margin: var(--x-small) 0 var(--large);
@@ -336,11 +362,6 @@ p+p {
         &,
         * {
             box-sizing: border-box;
-        }
-
-        a {
-            border-bottom: 0;
-            text-decoration: none;
         }
 
         svg {
@@ -446,12 +467,14 @@ p+p {
             @include callout-item-accent("--sg-violet");
 
             align-items: center;
-            background: var(--callout-item-surface);
-            border: 1px solid var(--docs-card-divider-strong);
+            background-color: var(--callout-item-surface);
+            border: 1px solid var(--callout-item-border);
             border-radius: 10px;
+            color: inherit;
             display: flex;
             gap: 12px;
             padding: 14px 16px;
+            text-decoration: none;
             transition:
                 background-color 0.18s ease,
                 border-color 0.18s ease,
@@ -467,26 +490,18 @@ p+p {
 
             &:hover,
             &:focus {
-                background: linear-gradient(
-                    90deg,
-                    var(--callout-accent-soft),
-                    color-mix(in srgb, var(--callout-item-surface) 88%, transparent)
-                );
+                background-color: color-mix(in srgb, var(--callout-accent-soft) 20%, var(--callout-item-surface));
                 border-color: var(--callout-accent-border);
-                box-shadow: 0 0 0 1px color-mix(in srgb, var(--callout-accent) 8%, transparent);
+                box-shadow: none;
 
                 .whats-new-callout__item-heading {
                     color: var(--heading);
                 }
 
                 .whats-new-callout__item-icon {
-                    background: linear-gradient(
-                        145deg,
-                        color-mix(in srgb, var(--callout-accent) 24%, transparent),
-                        color-mix(in srgb, var(--callout-accent) 8%, transparent)
-                    );
+                    background-color: color-mix(in srgb, var(--callout-accent-soft) 55%, var(--callout-item-surface));
                     border-color: var(--callout-accent-border);
-                    box-shadow: 0 0 20px color-mix(in srgb, var(--callout-accent) 14%, transparent);
+                    box-shadow: none;
                     color: var(--heading);
                 }
             }
@@ -494,7 +509,7 @@ p+p {
 
         &__item-icon {
             align-items: center;
-            background: color-mix(in srgb, var(--callout-accent-soft) 85%, transparent);
+            background-color: color-mix(in srgb, var(--callout-accent-soft) 70%, var(--callout-item-surface));
             border: 1px solid var(--callout-accent-border);
             border-radius: 8px;
             color: color-mix(in srgb, var(--callout-accent) 72%, var(--heading));
@@ -565,7 +580,7 @@ p+p {
         }
 
         &__footer {
-            border-top: 1px solid var(--docs-card-divider);
+            border-top: 1px solid var(--callout-item-border);
             color: var(--body);
             font-size: var(--sm);
             font-weight: var(--weight-body);
@@ -1308,6 +1323,68 @@ p+p {
                 align-items: flex-start;
                 flex-direction: column;
                 gap: 8px;
+            }
+        }
+    }
+
+    body.light & {
+        .whats-new-callout {
+            --callout-item-surface: var(--white);
+            --callout-item-border: var(--sg-gray-1);
+
+            &__sparkle {
+                background: linear-gradient(
+                    145deg,
+                    color-mix(in srgb, var(--sg-lavender-1) 92%, var(--sg-violet)),
+                    color-mix(in srgb, var(--white) 88%, var(--sg-lavender-1))
+                );
+                border-color: color-mix(in srgb, var(--sg-lavender-2) 38%, transparent);
+                box-shadow: 0 2px 10px color-mix(in srgb, var(--sg-violet) 7%, transparent);
+                color: var(--sg-lavender-4);
+            }
+
+            &__version {
+                background: color-mix(in srgb, var(--sg-lavender-1) 72%, var(--white));
+                border-color: color-mix(in srgb, var(--sg-lavender-2) 42%, transparent);
+                color: var(--sg-lavender-4);
+            }
+
+            &__badge--new {
+                background: color-mix(in srgb, var(--color-teal-100) 88%, var(--white));
+                border-color: color-mix(in srgb, var(--sg-teal-3) 28%, transparent);
+                color: var(--sg-teal-5);
+            }
+
+            &__badge--preview {
+                background: color-mix(in srgb, #FFF4EB 92%, var(--white));
+                border-color: color-mix(in srgb, var(--table-orange) 24%, transparent);
+                color: color-mix(in srgb, var(--table-orange) 82%, var(--sg-midnight));
+            }
+        }
+
+        .mz-offerings {
+            &__headers {
+                background: linear-gradient(
+                    180deg,
+                    color-mix(in srgb, var(--sg-lavender-1) 55%, var(--white)) 0%,
+                    color-mix(in srgb, var(--white) 92%, var(--sg-lavender-1)) 100%
+                );
+            }
+
+            &__footer {
+                background: color-mix(in srgb, var(--sg-lavender-1) 28%, var(--white));
+            }
+
+            &__row--cloud {
+                --offering-action-bg: color-mix(in srgb, var(--color-teal-100) 75%, var(--white));
+                --offering-action-border: color-mix(in srgb, var(--table-green) 22%, transparent);
+                --offering-action-hover: color-mix(in srgb, var(--color-teal-100) 92%, var(--white));
+            }
+
+            &__row--emulator {
+                --offering-action-bg: color-mix(in srgb, #FFF4EB 88%, var(--white));
+                --offering-action-border: color-mix(in srgb, var(--table-orange) 24%, transparent);
+                --offering-action-hover: color-mix(in srgb, #FFE8D6 92%, var(--white));
             }
         }
     }

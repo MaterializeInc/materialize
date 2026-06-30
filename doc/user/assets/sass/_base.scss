@@ -198,13 +198,16 @@ body.dark {
     --docs-card-divider-strong: color-mix(in srgb, var(--divider-light) 72%, transparent);
     --docs-card-glow: color-mix(in srgb, var(--sg-lavender-6) 14%, transparent);
     --docs-card-inset: color-mix(in srgb, var(--bg) 55%, transparent);
+    --docs-card-shadow:
+        0 1px 0 color-mix(in srgb, var(--heading) 4%, transparent) inset,
+        0 16px 40px color-mix(in srgb, var(--bg) 35%, transparent);
 
     // Style guide background mesh (dark): grid + data icons + purple accent on the right
     --docs-mesh-icons: url("/images/docs-mesh/data-icons-dark.svg");
-    --docs-mesh-dot: color-mix(in srgb, #1e293b 50%, transparent);
-    --docs-mesh-grid-minor: rgba(255, 255, 255, 0.030);
-    --docs-mesh-grid-major: rgba(255, 255, 255, 0.055);
-    --docs-mesh-accent: color-mix(in srgb, var(--sg-lavender-6) 16%, transparent);
+    --docs-mesh-dot: color-mix(in srgb, #1e293b 40%, transparent);
+    --docs-mesh-grid-minor: rgba(255, 255, 255, 0.038);
+    --docs-mesh-grid-major: rgba(255, 255, 255, 0.068);
+    --docs-mesh-accent: color-mix(in srgb, var(--sg-lavender-6) 13%, transparent);
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} 0 rgba(0, 0, 0, 0.4);
     --note: #fffad411;
@@ -246,17 +249,17 @@ body.dark {
 }
 
 body.light {
-    --bg: var(--white-light);
-    --bg-nav: var(--nav-light);
-    --bg-sub: var(--gray-lighter);
-    --card: var(--gray-lightest);
+    --bg: #F7F6FA;
+    --bg-nav: color-mix(in srgb, var(--bg) 88%, transparent);
+    --bg-sub: color-mix(in srgb, var(--sg-lavender-1) 45%, var(--white));
+    --card: color-mix(in srgb, var(--sg-lavender-1) 30%, var(--white));
     --card-light: var(--white);
     --color-scheme: light;
-    --divider: var(--gray);
-    --divider-light: var(--gray-lighter);
+    --divider: color-mix(in srgb, var(--sg-gray-1) 75%, var(--gray));
+    --divider-light: color-mix(in srgb, var(--sg-lavender-1) 55%, var(--gray-lighter));
 
     --link: var(--sg-violet);
-    --link-hover: var(--color-purple-700);
+    --link-hover: var(--sg-lavender-4);
 
     --code-block: var(--code-block-light);
     --code-simple: #505050;
@@ -269,26 +272,44 @@ body.light {
 
     --heading: var(--sg-midnight);
     --body: var(--sg-gray-4);
-    --inline-lifted: var(--sg-midnight);
+    --inline-lifted: var(--sg-gray-5);
     --sub: var(--sg-gray-3);
-    --caption: var(--sg-gray-3);
+    --caption: var(--sg-gray-2);
     --important: var(--heading);
     --code-highlight: var(--heading);
-    --highlight: var(--sg-violet);
+    --highlight: var(--sg-teal-5);
     --font-h4: var(--heading);
 
-    --docs-card-surface: color-mix(in srgb, var(--card-light) 72%, var(--bg));
-    --docs-card-border: color-mix(in srgb, var(--divider-light) 88%, transparent);
-    --docs-card-divider: color-mix(in srgb, var(--divider-light) 55%, transparent);
-    --docs-card-divider-strong: color-mix(in srgb, var(--divider-light) 72%, transparent);
-    --docs-card-glow: color-mix(in srgb, var(--brand) 9%, transparent);
-    --docs-card-inset: color-mix(in srgb, var(--bg) 55%, transparent);
+    --table-green: var(--color-teal-700);
+    --table-orange: #C65D17;
+
+    --docs-card-surface: linear-gradient(
+        165deg,
+        color-mix(in srgb, var(--white) 88%, var(--sg-lavender-1)) 0%,
+        var(--white) 42%,
+        color-mix(in srgb, var(--white) 94%, var(--sg-lavender-1)) 100%
+    );
+    --docs-card-border: color-mix(in srgb, var(--sg-lavender-2) 28%, var(--gray-light));
+    --docs-card-divider: color-mix(in srgb, var(--sg-lavender-2) 24%, var(--gray-lighter));
+    --docs-card-divider-strong: color-mix(in srgb, var(--sg-lavender-2) 38%, var(--gray-light));
+    --docs-card-glow: color-mix(in srgb, var(--sg-violet) 7%, transparent);
+    --docs-card-glow-foot: color-mix(in srgb, var(--sg-lavender-1) 55%, transparent);
+    --docs-card-inset: color-mix(in srgb, var(--sg-lavender-1) 38%, var(--white));
+    --docs-card-shadow:
+        0 1px 2px rgba(16, 12, 33, 0.04),
+        0 10px 32px rgba(16, 12, 33, 0.06);
+
+    --callout-accent-soft-mix: 7%;
+    --callout-accent-border-mix: 28%;
+    --docs-card-top-accent-mix: 30%;
+    --docs-card-top-accent-center-mix: 65%;
 
     // Style guide background mesh (light): grid + data icons
     --docs-mesh-icons: url("/images/docs-mesh/data-icons-light.svg");
-    --docs-mesh-dot: rgba(64, 61, 77, 0.095);
-    --docs-mesh-grid-minor: rgba(0, 0, 0, 0.024);
-    --docs-mesh-grid-major: rgba(0, 0, 0, 0.042);
+    --docs-mesh-icons-opacity: 0.25;
+    --docs-mesh-dot: rgba(64, 61, 77, 0.085);
+    --docs-mesh-grid-minor: rgba(64, 61, 77, 0.020);
+    --docs-mesh-grid-major: rgba(64, 61, 77, 0.035);
 
     --note: #fffad411;
     --note-border: #b9a61545;
@@ -322,9 +343,9 @@ body.light {
     --border-subtle:  rgba(0, 0, 0, 0.10);
     --border-faint:   rgba(0, 0, 0, 0.06);
 
-    --offering-nested-border: rgba(0, 0, 0, 0.09);
-    --offering-nested-header-bg: color-mix(in srgb, var(--sg-gray-1) 70%, var(--white-light));
-    --offering-nested-surface: color-mix(in srgb, var(--sg-gray-1) 22%, var(--white-light));
+    --offering-nested-border: color-mix(in srgb, var(--sg-lavender-2) 20%, var(--gray-lighter));
+    --offering-nested-header-bg: color-mix(in srgb, var(--sg-lavender-1) 75%, var(--white));
+    --offering-nested-surface: color-mix(in srgb, var(--sg-lavender-1) 32%, var(--white));
 
     --offering-edition-label: var(--sg-violet);
     --offering-edition-heading: var(--sg-gray-3);
@@ -352,7 +373,8 @@ body {
     overflow-x: hidden;
     position: relative;
 
-    &::before {
+    &::before,
+    &::after {
         content: "";
         inset: 0;
         pointer-events: none;
@@ -384,16 +406,25 @@ body {
 
     &.light::before {
         background-color: var(--bg);
-        @include docs-page-mesh-grid-layers;
+        @include docs-page-mesh-grid-layers-no-icons;
         background-position: center;
         background-repeat: repeat;
-        @include docs-page-mesh-size(
-            var(--docs-mesh-icons-step),
+        @include docs-page-mesh-grid-size(
             var(--docs-mesh-grid-major-step),
             var(--docs-mesh-grid-minor-step),
             var(--docs-mesh-dot-step)
         );
-        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.66) 45%, rgba(0, 0, 0, 0.46) 100%);
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.72) 45%, rgba(0, 0, 0, 0.58) 100%);
+    }
+
+    &.light::after {
+        background-color: transparent;
+        background-image: var(--docs-mesh-icons);
+        background-position: center;
+        background-repeat: repeat;
+        background-size: var(--docs-mesh-icons-step) var(--docs-mesh-icons-step);
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.72) 45%, rgba(0, 0, 0, 0.58) 100%);
+        opacity: var(--docs-mesh-icons-opacity);
     }
 
     @media (max-width: 850px) {
@@ -408,17 +439,21 @@ body {
         }
 
         &.light::before {
-            @include docs-page-mesh-size(
-                var(--docs-mesh-icons-step-sm),
+            @include docs-page-mesh-grid-size(
                 var(--docs-mesh-grid-major-step-sm),
                 var(--docs-mesh-grid-minor-step-sm),
                 var(--docs-mesh-dot-step-sm)
             );
         }
+
+        &.light::after {
+            background-size: var(--docs-mesh-icons-step-sm) var(--docs-mesh-icons-step-sm);
+        }
     }
 
     @media (prefers-reduced-motion: reduce) {
-        &::before {
+        &::before,
+        &::after {
             background-attachment: scroll;
         }
     }

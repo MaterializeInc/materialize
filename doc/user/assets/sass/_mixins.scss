@@ -8,9 +8,10 @@
 
 // Homepage promo blocks: What's new callout + offerings table
 @mixin docs-feature-card($top-accent: false) {
+    $glow-foot: var(--docs-card-glow-foot, color-mix(in srgb, var(--docs-card-glow) 45%, transparent));
     $surface:
-        radial-gradient(120% 85% at 50% -35%, var(--docs-card-glow), transparent 58%),
-        linear-gradient(180deg, transparent 55%, color-mix(in srgb, var(--docs-card-glow) 45%, transparent) 100%),
+        radial-gradient(120% 90% at 50% -22%, var(--docs-card-glow), transparent 62%),
+        linear-gradient(180deg, transparent 48%, #{$glow-foot} 100%),
         var(--docs-card-surface, var(--table-surface));
 
     @if $top-accent {
@@ -18,11 +19,11 @@
             linear-gradient(
                 90deg,
                 transparent 0%,
-                color-mix(in srgb, var(--brand) 45%, transparent) 35%,
-                color-mix(in srgb, var(--brand) 90%, var(--sg-lavender-2)) 50%,
-                color-mix(in srgb, var(--brand) 45%, transparent) 65%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 35%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-center-mix, 90%), var(--sg-lavender-2)) 50%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 65%,
                 transparent 100%
-            ) 0 0 / 100% 2px no-repeat border-box,
+            ) 0 0 / 100% 2px no-repeat,
             $surface;
     } @else {
         background: $surface;
@@ -30,19 +31,13 @@
 
     border: 1px solid var(--docs-card-border, var(--table-border));
     border-radius: var(--table-radius);
-    box-shadow:
-        0 1px 0 color-mix(in srgb, var(--heading) 4%, transparent) inset,
-        0 16px 40px color-mix(in srgb, var(--bg) 35%, transparent);
-
-    @if $top-accent {
-        border-top: 2px solid transparent;
-    }
+    box-shadow: var(--docs-card-shadow);
 }
 
 @mixin callout-item-accent($token) {
     --callout-accent: var(#{$token});
-    --callout-accent-soft: color-mix(in srgb, var(#{$token}) 10%, transparent);
-    --callout-accent-border: color-mix(in srgb, var(#{$token}) 22%, transparent);
+    --callout-accent-soft: color-mix(in srgb, var(#{$token}) var(--callout-accent-soft-mix, 10%), transparent);
+    --callout-accent-border: color-mix(in srgb, var(#{$token}) var(--callout-accent-border-mix, 22%), transparent);
 }
 
 @mixin offering-row-theme($accent, $cta: null) {
@@ -61,6 +56,15 @@
 @mixin docs-page-mesh-grid-layers() {
     background-image:
         var(--docs-mesh-icons),
+        linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
+}
+
+@mixin docs-page-mesh-grid-layers-no-icons() {
+    background-image:
         linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
         linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
         linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
@@ -87,4 +91,13 @@
             $minor-step $minor-step,
             $dot-step $dot-step;
     }
+}
+
+@mixin docs-page-mesh-grid-size($major-step, $minor-step, $dot-step) {
+    background-size:
+        $major-step $major-step,
+        $major-step $major-step,
+        $minor-step $minor-step,
+        $minor-step $minor-step,
+        $dot-step $dot-step;
 }
