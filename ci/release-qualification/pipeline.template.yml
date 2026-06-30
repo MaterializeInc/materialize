@@ -254,6 +254,29 @@ steps:
             composition: sqlsmith
             args: [--max-joins=15, --explain-only, --runtime=6000]
 
+  - id: cargo-fuzz
+    label: ":rust: cargo-fuzz"
+    depends_on: []
+    timeout_in_minutes: 1440
+    agents:
+      queue: hetzner-x86-64-dedi-48cpu-192gb
+    sanitizer: skip
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cargo-fuzz
+          ci_builder: nightly
+          args:
+            - --profile=fruitful
+            - --max-seconds=86400
+            - --wall-budget=84600
+            # Step hard-times out at 1440min (86400s). --wall-budget ends fuzzing
+            # at 84600s, leaving 1800s; cap minimize at 1200s so the corpus
+            # upload has ~600s of headroom before the kill.
+            - --minimize-timeout=1200
+            - --corpus-sync
+    artifact_paths:
+      - src/*/fuzz/artifacts/**/*
+
   - id: test-preflight-check-rollback
     label: Test with preflight check and rollback
     depends_on: []
