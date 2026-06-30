@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
+use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
@@ -512,7 +513,7 @@ impl Coordinator {
             .txn_read_holds
             .remove(&conn_id)
             .expect("must have previously installed read holds");
-        let resp = self
+        let (resp, write_notify) = self
             .implement_subscribe(
                 ctx.extra_mut(),
                 df_desc,
@@ -525,7 +526,18 @@ impl Coordinator {
                 plan,
             )
             .await?;
-        Ok(StageResult::Response(resp))
+        // Wait for the `mz_subscriptions` bookkeeping write to be durable off the
+        // coordinator loop, then respond. This keeps the introspection table
+        // synchronously consistent without blocking the loop on a group commit.
+        let span = Span::current();
+        Ok(StageResult::HandleRetire(mz_ore::task::spawn(
+            || "subscribe_finish::await_bookkeeping",
+            async move {
+                write_notify.await;
+                Ok(resp)
+            }
+            .instrument(span),
+        )))
     }
 
     #[instrument]
@@ -540,7 +552,7 @@ impl Coordinator {
         session_uuid: Uuid,
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
         let sink_id = df_desc.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -569,16 +581,15 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        // Add metadata for the new SUBSCRIBE.
-        let write_notify_fut = self
-            .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
-            .await;
-        // Ship dataflow.
-        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id, replica_id);
-
-        // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
-        // requests to external services, which can take time, so we run them concurrently.
-        let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
+        // Register bookkeeping for the new SUBSCRIBE and ship its dataflow. The
+        // `mz_subscriptions` write is deferred to a group commit (see
+        // `add_active_compute_sink`) rather than committed inline, so it does not block
+        // the coordinator loop on a timestamp-oracle round trip. We hand the notify back
+        // so the caller can wait for the write to be durable off the loop before
+        // responding, keeping `mz_subscriptions` synchronously consistent.
+        let write_notify =
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
+        self.ship_dataflow(df_desc, cluster_id, replica_id).await;
 
         // Explicitly drop read holds, just to make it obvious what's happening.
         drop(read_holds);
@@ -595,7 +606,7 @@ impl Coordinator {
                 resp: Box::new(resp),
             },
         };
-        Ok(resp)
+        Ok((resp, write_notify))
     }
 
     #[instrument]

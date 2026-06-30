@@ -953,10 +953,7 @@ impl Coordinator {
             depends_on: source_ids,
         };
         // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
-        drop(
-            self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
-                .await,
-        );
+        drop(self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to)));
 
         // Ship dataflow.
         self.ship_dataflow(df_desc, cluster_id, target_replica)

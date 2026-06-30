@@ -835,19 +835,6 @@ impl<'a> BuiltinTableAppend<'a> {
 
         (Box::pin(rx.map(|_| ())), Some(write_ts))
     }
-
-    /// Submit a write to a system table, blocking until complete.
-    ///
-    /// Note: if possible you should use the `execute(...)` method, which returns a `Future` that
-    /// can be `await`-ed concurrently with other tasks.
-    ///
-    /// Note: When in read-only mode, this will buffer the update and the
-    /// returned future will resolve immediately, without the update actually
-    /// having been written.
-    pub async fn blocking(self, updates: Vec<BuiltinTableUpdate>) {
-        let (notify, _) = self.execute(updates).await;
-        notify.await;
-    }
 }
 
 /// Returns two sides of a "channel" that can be used to notify the coordinator when we want a
