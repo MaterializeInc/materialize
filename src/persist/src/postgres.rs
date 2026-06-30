@@ -61,6 +61,21 @@ pub const USE_LOCK_FREE_CAS: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
      and no precondition on the client's target; the first write is handled uniformly (no anchor).",
 );
 
+/// Like [`USE_LOCK_FREE_CAS`] but the lock-free post-insert check is a point existence probe of the
+/// `expected` row (`consensus_cas_point`) rather than a second-largest read. Cheaper plan (exact PK
+/// lookup) but the first write takes a separate empty-shard branch. If both lock-free flags are set,
+/// the point check wins. Third arm of the consensus A/B/C comparison.
+pub const USE_LOCK_FREE_CAS_POINT_CHECK: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
+    "persist_consensus_lock_free_cas_point_check",
+    false,
+    "When set (and persist_use_postgres_tuned_queries is also on), decide compare-and-set with a \
+     lock-free optimistic INSERT plus a fresh-snapshot POINT existence check of the `expected` row \
+     (the `consensus_cas_point` PL/pgSQL function): commit iff `expected` is still present (an exact \
+     primary-key probe), which on the contiguous table means `expected == head`. The first write \
+     (expected = None) instead commits iff the shard was empty. Cheaper plan than the second-largest \
+     read of persist_consensus_lock_free_cas; if both are set, the point check takes precedence.",
+);
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
     shard text NOT NULL,
@@ -93,6 +108,39 @@ BEGIN
     FROM consensus WHERE shard = p_shard
     ORDER BY sequence_number DESC OFFSET 1 LIMIT 1;
     IF prev IS DISTINCT FROM p_expected THEN
+        RAISE EXCEPTION 'consensus cas expectation mismatch' USING ERRCODE = 'MZ001';
+    END IF;
+    RETURN 1;
+END;
+$fn$;
+";
+
+// Variant of `consensus_cas` (see `USE_LOCK_FREE_CAS_POINT_CHECK`) that does the post-insert check as
+// a POINT existence probe of the `expected` row instead of a second-largest read. After the
+// optimistic INSERT establishes that `p_seqno` was absent, the contiguous-table equivalence
+// \"`expected` present  <=>  `expected` is the head\" makes the existence of the `expected` row the
+// whole guard: an exact primary-key lookup. `expected` absent means `p_seqno` would land above the
+// head (forward gap) or below the floor (backward gap / resurrection), so we RAISE 'MZ001' and roll
+// the INSERT back. The first write (`p_expected IS NULL`) has no predecessor row, so it instead
+// commits iff the shard was empty (the inserted row is the only one). Same RAISE/rollback and caller
+// mapping as `consensus_cas`. Returns 1 on success.
+const POSTGRES_LOCK_FREE_CAS_POINT_FN: &str = "
+CREATE OR REPLACE FUNCTION consensus_cas_point(p_shard text, p_seqno bigint, p_data bytea, p_expected bigint)
+RETURNS bigint LANGUAGE plpgsql VOLATILE AS $fn$
+DECLARE
+    ok boolean;
+BEGIN
+    INSERT INTO consensus (shard, sequence_number, data) VALUES (p_shard, p_seqno, p_data);
+    IF p_expected IS NULL THEN
+        SELECT NOT EXISTS (
+            SELECT 1 FROM consensus WHERE shard = p_shard AND sequence_number <> p_seqno
+        ) INTO ok;
+    ELSE
+        SELECT EXISTS (
+            SELECT 1 FROM consensus WHERE shard = p_shard AND sequence_number = p_expected
+        ) INTO ok;
+    END IF;
+    IF NOT ok THEN
         RAISE EXCEPTION 'consensus cas expectation mismatch' USING ERRCODE = 'MZ001';
     END IF;
     RETURN 1;
@@ -281,7 +329,8 @@ impl PostgresConsensusConfig {
 
         let dyncfg = ConfigSet::default()
             .add(&USE_POSTGRES_TUNED_QUERIES)
-            .add(&USE_LOCK_FREE_CAS);
+            .add(&USE_LOCK_FREE_CAS)
+            .add(&USE_LOCK_FREE_CAS_POINT_CHECK);
         let config = PostgresConsensusConfig::new(
             &url,
             Box::new(TestConsensusKnobs),
@@ -384,13 +433,16 @@ impl PostgresConsensus {
             PostgresMode::CockroachDB => {}
             PostgresMode::Postgres => {
                 is_pg_backend.store(true, Ordering::Relaxed);
-                // Also (re)create the `consensus_cas` function used by the lock-free CaS path
-                // (USE_LOCK_FREE_CAS). Harmless when the flag is off; never created on CRDB.
+                // Also (re)create the functions used by the lock-free CaS paths (USE_LOCK_FREE_CAS /
+                // USE_LOCK_FREE_CAS_POINT_CHECK). Harmless when the flags are off; never on CRDB.
                 pg_batch_execute(
                     &client,
                     &format!(
-                        "{}; {}; {}",
-                        create_schema, SCHEMA, POSTGRES_LOCK_FREE_CAS_FN
+                        "{}; {}; {}; {}",
+                        create_schema,
+                        SCHEMA,
+                        POSTGRES_LOCK_FREE_CAS_FN,
+                        POSTGRES_LOCK_FREE_CAS_POINT_FN
                     ),
                 )
                 .await?;
@@ -499,17 +551,26 @@ impl Consensus for PostgresConsensus {
         let pg_tune_enabled =
             USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg) && self.mode == PostgresMode::Postgres;
 
-        // Lock-free CaS path (USE_LOCK_FREE_CAS, Postgres + READ COMMITTED only): an optimistic
-        // INSERT followed by a fresh-snapshot predecessor read, via the `consensus_cas` function. It
-        // replaces the FOR KEY SHARE tuned query — no row lock on the hot path. `expected`
-        // (= new.seqno.previous(); None ⇒ NULL ⇒ first write) is the asserted head; the function
-        // Commits iff the row directly below the inserted one equals it, otherwise RAISEs 'MZ001' and
-        // rolls the INSERT back. This is uniform across the first write and appends (the first write
-        // is not special) and has no precondition on the client's target.
-        if pg_tune_enabled && USE_LOCK_FREE_CAS.get(&self.dyncfg) {
-            static LOCK_FREE_CAS_QUERY: &str = "SELECT consensus_cas($1, $2, $3, $4)";
+        // Lock-free CaS paths (Postgres + READ COMMITTED only): an optimistic INSERT followed by a
+        // fresh-snapshot check, via a PL/pgSQL function that replaces the FOR KEY SHARE tuned query
+        // (no row lock on the hot path). `expected` (= new.seqno.previous(); None ⇒ NULL ⇒ first
+        // write) is the asserted head. The two variants differ only in the post-insert check:
+        //   * USE_LOCK_FREE_CAS:             `consensus_cas`       — the second-largest seqno == expected.
+        //   * USE_LOCK_FREE_CAS_POINT_CHECK: `consensus_cas_point` — the `expected` row is still present
+        //                                                            (exact PK probe; cheaper plan).
+        // Both commit iff `expected == head` on the contiguous table, otherwise RAISE 'MZ001' and roll
+        // the INSERT back. No precondition on the client's target. If both flags are set, the point
+        // check wins.
+        let lock_free_query = if pg_tune_enabled && USE_LOCK_FREE_CAS_POINT_CHECK.get(&self.dyncfg) {
+            Some("SELECT consensus_cas_point($1, $2, $3, $4)")
+        } else if pg_tune_enabled && USE_LOCK_FREE_CAS.get(&self.dyncfg) {
+            Some("SELECT consensus_cas($1, $2, $3, $4)")
+        } else {
+            None
+        };
+        if let Some(q) = lock_free_query {
             let client = self.get_connection().await?;
-            let statement = client.prepare_cached(LOCK_FREE_CAS_QUERY).await?;
+            let statement = client.prepare_cached(q).await?;
             let result = pg_execute_prepared(
                 &client,
                 &statement,
@@ -517,13 +578,13 @@ impl Consensus for PostgresConsensus {
             )
             .await;
             return match result {
-                // The function only returns normally on a successful append; every mismatch RAISEs.
+                // The function only returns normally on success; every mismatch RAISEs.
                 Ok(_) => Ok(CaSResult::Committed),
                 // PRIMARY KEY: the target seqno was already present.
                 Err(e) if e.code() == Some(&SqlState::UNIQUE_VIOLATION) => {
                     Ok(CaSResult::ExpectationMismatch)
                 }
-                // `consensus_cas` raised this on a predecessor mismatch (stale / gap / resurrection).
+                // The function RAISEd this on an expectation mismatch (stale / gap / resurrection).
                 Err(e) if e.code().map(|s| s.code()) == Some("MZ001") => {
                     Ok(CaSResult::ExpectationMismatch)
                 }

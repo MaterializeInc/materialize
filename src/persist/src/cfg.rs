@@ -36,6 +36,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
         .add(&crate::postgres::USE_LOCK_FREE_CAS)
+        .add(&crate::postgres::USE_LOCK_FREE_CAS_POINT_CHECK)
 }
 
 /// Config for an implementation of [Blob].
