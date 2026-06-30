@@ -64,7 +64,7 @@ where
 pub struct LocatedStatement {
     /// The parsed AST node.
     pub ast: Statement<Raw>,
-    /// Byte offset of the statement's start within the (resolved) SQL text.
+    /// Byte offset of the statement's start within the raw source file.
     pub byte_offset: usize,
 }
 
@@ -105,6 +105,7 @@ pub(crate) fn parse_statements_with_context(
         }
     }
 
+    let substitutions = resolved.substitutions;
     let sql = resolved.sql;
 
     let mut statements = vec![];
@@ -130,17 +131,19 @@ pub(crate) fn parse_statements_with_context(
     // Because both pointers reference the same allocation, subtracting the
     // base pointer from the slice pointer yields a valid byte offset.
     //
-    // Note: offsets are relative to the *variable-resolved* SQL text (the
-    // `sql` local above), not the raw file contents. When the LSP converts
-    // these to line/column positions it must build the Rope from the same
-    // resolved text, or re-resolve variables before lookup.
+    // The raw subtraction yields an offset into the variable-resolved text. A
+    // `:var` whose value differs in length from the reference shifts every
+    // later offset, so map back to the raw file the consumers (CLI renderer,
+    // LSP) actually read.
     #[allow(clippy::as_conversions)]
     let sql_base = sql.as_ptr() as usize;
     let mut parsed: Vec<LocatedStatement> = parsed_results
         .into_iter()
         .map(|result| {
             #[allow(clippy::as_conversions)]
-            let byte_offset = result.sql.as_ptr() as usize - sql_base;
+            let resolved_offset = result.sql.as_ptr() as usize - sql_base;
+            let byte_offset =
+                super::variables::resolved_to_original(resolved_offset, &substitutions);
             LocatedStatement {
                 ast: result.ast,
                 byte_offset,
@@ -183,11 +186,33 @@ pub(crate) fn statement_type_name(stmt: &Statement<Raw>) -> &'static str {
 
 #[cfg(test)]
 mod test {
-    use crate::project::syntax::parser::parse_statements;
+    use crate::project::syntax::parser::{parse_statements, parse_statements_with_context};
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     #[mz_ore::test]
     fn validate() {
         let _ = parse_statements(vec!["CREATE CLUSTER c (INTROSPECTION INTERVAL = 0)"]).unwrap();
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn statement_offsets_are_relative_to_raw_text() {
+        // The first statement substitutes `:col` with a longer value, shifting
+        // every later offset in the resolved text. The reported offset must
+        // still index the raw file, where consumers read source.
+        let raw = "CREATE VIEW v AS SELECT :col;\nCREATE VIEW w AS SELECT 2;";
+        let mut variables = BTreeMap::new();
+        variables.insert("col".to_string(), "some_long_column_name".to_string());
+
+        let stmts =
+            parse_statements_with_context(raw, PathBuf::from("v.sql"), &variables, true).unwrap();
+        assert_eq!(stmts.len(), 2);
+        assert!(
+            raw[stmts[1].byte_offset..].starts_with("CREATE VIEW w"),
+            "offset {} should index the second statement in raw text",
+            stmts[1].byte_offset,
+        );
     }
 
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
