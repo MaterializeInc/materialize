@@ -804,6 +804,7 @@ pub struct CreateViewExplain {
 pub enum ExplainTimestampStage {
     Optimize(ExplainTimestampOptimize),
     RealTimeRecency(ExplainTimestampRealTimeRecency),
+    LinearizeTimestamp(ExplainTimestampLinearizeTimestamp),
     Finish(ExplainTimestampFinish),
 }
 
@@ -824,7 +825,7 @@ pub struct ExplainTimestampRealTimeRecency {
 }
 
 #[derive(Debug)]
-pub struct ExplainTimestampFinish {
+pub struct ExplainTimestampLinearizeTimestamp {
     validity: PlanValidity,
     format: ExplainFormat,
     optimized_plan: OptimizedMirRelationExpr,
@@ -832,6 +833,23 @@ pub struct ExplainTimestampFinish {
     source_ids: BTreeSet<GlobalId>,
     when: QueryWhen,
     real_time_recency_ts: Option<Timestamp>,
+}
+
+#[derive(Debug)]
+pub struct ExplainTimestampFinish {
+    validity: PlanValidity,
+    format: ExplainFormat,
+    cluster_id: ClusterId,
+    source_ids: BTreeSet<GlobalId>,
+    when: QueryWhen,
+    real_time_recency_ts: Option<Timestamp>,
+    /// The timeline context derived in the preceding `LinearizeTimestamp`
+    /// stage, carried forward so it stays consistent with `oracle_read_ts`.
+    timeline_context: TimelineContext,
+    /// The linearized read timestamp, read off the coordinator loop in the
+    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
+    /// needed.
+    oracle_read_ts: Option<Timestamp>,
 }
 
 #[derive(Debug)]
@@ -970,6 +988,7 @@ pub struct CreateMaterializedViewExplain {
 #[derive(Debug)]
 pub enum SubscribeStage {
     OptimizeMir(SubscribeOptimizeMir),
+    LinearizeTimestamp(SubscribeLinearizeTimestamp),
     TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
     Finish(SubscribeFinish),
     Explain(SubscribeExplain),
@@ -989,6 +1008,20 @@ pub struct SubscribeOptimizeMir {
 }
 
 #[derive(Debug)]
+pub struct SubscribeLinearizeTimestamp {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    timeline: TimelineContext,
+    optimizer: optimize::subscribe::Optimizer,
+    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+    dependency_ids: BTreeSet<GlobalId>,
+    replica_id: Option<ReplicaId>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPLAIN for this statement.
+    explain_ctx: ExplainContext,
+}
+
+#[derive(Debug)]
 pub struct SubscribeTimestampOptimizeLir {
     validity: PlanValidity,
     plan: plan::SubscribePlan,
@@ -997,6 +1030,10 @@ pub struct SubscribeTimestampOptimizeLir {
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
     dependency_ids: BTreeSet<GlobalId>,
     replica_id: Option<ReplicaId>,
+    /// The linearized read timestamp, read off the coordinator loop in the
+    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
+    /// needed.
+    oracle_read_ts: Option<Timestamp>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,

@@ -16,6 +16,7 @@ use mz_compute_types::plan::LirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::GlobalId;
+use mz_repr::Timestamp;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
@@ -23,7 +24,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use std::collections::BTreeSet;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::Span;
+use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
@@ -32,8 +33,8 @@ use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
     Coordinator, ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
-    SubscribeExplain, SubscribeFinish, SubscribeOptimizeMir, SubscribeStage,
-    SubscribeTimestampOptimizeLir, TargetCluster,
+    SubscribeExplain, SubscribeFinish, SubscribeLinearizeTimestamp, SubscribeOptimizeMir,
+    SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -49,6 +50,7 @@ impl Staged for SubscribeStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             SubscribeStage::OptimizeMir(stage) => &mut stage.validity,
+            SubscribeStage::LinearizeTimestamp(stage) => &mut stage.validity,
             SubscribeStage::TimestampOptimizeLir(stage) => &mut stage.validity,
             SubscribeStage::Finish(stage) => &mut stage.validity,
             SubscribeStage::Explain(stage) => &mut stage.validity,
@@ -62,6 +64,11 @@ impl Staged for SubscribeStage {
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             SubscribeStage::OptimizeMir(stage) => coord.subscribe_optimize_mir(stage),
+            SubscribeStage::LinearizeTimestamp(stage) => {
+                coord
+                    .subscribe_linearize_timestamp(ctx.session(), stage)
+                    .await
+            }
             SubscribeStage::TimestampOptimizeLir(stage) => {
                 coord.subscribe_timestamp_optimize_lir(ctx, stage).await
             }
@@ -303,21 +310,71 @@ impl Coordinator {
                             .map(|id| catalog.resolve_item_id(&id)),
                     );
 
-                    let stage =
-                        SubscribeStage::TimestampOptimizeLir(SubscribeTimestampOptimizeLir {
-                            validity,
-                            plan,
-                            timeline,
-                            optimizer,
-                            global_mir_plan,
-                            dependency_ids,
-                            replica_id,
-                            explain_ctx,
-                        });
+                    let stage = SubscribeStage::LinearizeTimestamp(SubscribeLinearizeTimestamp {
+                        validity,
+                        plan,
+                        timeline,
+                        optimizer,
+                        global_mir_plan,
+                        dependency_ids,
+                        replica_id,
+                        explain_ctx,
+                    });
                     Ok(Box::new(stage))
                 })
             },
         )))
+    }
+
+    /// Possibly linearize a timestamp from a `TimestampOracle`, off the
+    /// coordinator loop.
+    #[instrument]
+    async fn subscribe_linearize_timestamp(
+        &self,
+        session: &Session,
+        SubscribeLinearizeTimestamp {
+            validity,
+            plan,
+            timeline,
+            optimizer,
+            global_mir_plan,
+            dependency_ids,
+            replica_id,
+            explain_ctx,
+        }: SubscribeLinearizeTimestamp,
+    ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
+        let oracle = self.linearized_read_ts_oracle(session, &timeline, &plan.when);
+
+        let build_stage = move |oracle_read_ts: Option<Timestamp>| {
+            SubscribeStage::TimestampOptimizeLir(SubscribeTimestampOptimizeLir {
+                validity,
+                plan,
+                timeline,
+                optimizer,
+                global_mir_plan,
+                dependency_ids,
+                replica_id,
+                oracle_read_ts,
+                explain_ctx,
+            })
+        };
+
+        match oracle {
+            Some(oracle) => {
+                // We ship the timestamp oracle off to an async task, so that we
+                // don't block the main task while we wait.
+                let span = Span::current();
+                Ok(StageResult::Handle(mz_ore::task::spawn(
+                    || "subscribe linearize timestamp",
+                    async move {
+                        let oracle_read_ts = oracle.read_ts().await;
+                        Ok(Box::new(build_stage(Some(oracle_read_ts))))
+                    }
+                    .instrument(span),
+                )))
+            }
+            None => Ok(StageResult::Immediate(Box::new(build_stage(None)))),
+        }
     }
 
     #[instrument]
@@ -332,13 +389,14 @@ impl Coordinator {
             global_mir_plan,
             dependency_ids,
             replica_id,
+            oracle_read_ts,
             explain_ctx,
         }: SubscribeTimestampOptimizeLir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan { when, .. } = &plan;
 
-        // Timestamp selection
-        let oracle_read_ts = self.oracle_read_ts(ctx.session(), &timeline, when).await;
+        // Timestamp selection. The linearized read timestamp was already
+        // obtained off the coordinator loop in the preceding stage.
         let bundle = &global_mir_plan.id_bundle(optimizer.cluster_id());
         let (determination, read_holds) = self.determine_timestamp(
             ctx.session(),
