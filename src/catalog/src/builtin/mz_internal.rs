@@ -5185,7 +5185,8 @@ pub static MZ_SHOW_SECRETS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     ontology: None,
 });
 
-pub static MZ_SHOW_COLUMNS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+pub static MZ_SHOW_COLUMNS: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_show_columns",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_SHOW_COLUMNS_OID,
@@ -5198,13 +5199,22 @@ pub static MZ_SHOW_COLUMNS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
         .with_column("comment", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
+    // The `object_type` predicate on the comment join guards against
+    // stale comment rows that can survive when a builtin's type changes
+    // but its catalog id is preserved (e.g. a Table → MaterializedView
+    // schema migration). Without it, a column would match both the old
+    // and new object_type rows and each row would be emitted twice.
     sql: "
-    SELECT columns.id, name, nullable, type, position, COALESCE(comment, '') as comment
+    SELECT columns.id, columns.name, columns.nullable, columns.type, columns.position, COALESCE(comment, '') as comment
     FROM mz_catalog.mz_columns columns
+    LEFT JOIN mz_catalog.mz_objects obj ON obj.id = columns.id
     LEFT JOIN mz_internal.mz_comments comments
-    ON columns.id = comments.id AND columns.position = comments.object_sub_id",
+    ON columns.id = comments.id
+       AND columns.position = comments.object_sub_id
+       AND comments.object_type = obj.type",
     access: vec![PUBLIC_SELECT],
     ontology: None,
+}
 });
 
 pub static MZ_SHOW_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
