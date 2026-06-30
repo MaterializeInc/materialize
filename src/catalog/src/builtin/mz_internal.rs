@@ -3019,55 +3019,123 @@ WHERE data->>'kind' = 'ReplicaSystemConfiguration'",
         }),
     });
 
-pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_comments",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_COMMENTS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_column("object_sub_id", SqlScalarType::Int32.nullable(true))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the object. Corresponds to `mz_objects.id`.",
-        ),
-        (
-            "object_type",
-            "The type of object the comment is associated with.",
-        ),
-        (
-            "object_sub_id",
-            "For a comment on a column of a relation, the column number. `NULL` for other object types.",
-        ),
-        ("comment", "The comment itself."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "comment",
-        description: "A COMMENT ON annotation for a catalog object or column",
-        links: &const {
-            [OntologyLink {
-                name: "comment_on",
-                target: "object",
-                properties: LinkProperties::fk_typed(
-                    "id",
-                    "id",
-                    Cardinality::ManyToOne,
-                    mz_repr::SemanticType::CatalogItemId,
-                ),
-            }]
-        },
-        column_semantic_types: &const {
-            [
-                ("id", SemanticType::CatalogItemId),
-                ("object_type", SemanticType::ObjectType),
-            ]
-        },
-    }),
+pub static MZ_COMMENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_comments",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_COMMENTS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column("object_sub_id", SqlScalarType::Int32.nullable(true))
+            .with_column("comment", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the object. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "object_type",
+                "The type of object the comment is associated with.",
+            ),
+            (
+                "object_sub_id",
+                "For a comment on a column of a relation, the column number. `NULL` for other object types.",
+            ),
+            ("comment", "The comment itself."),
+        ]),
+        // Variant keys ('Table', 'View', etc.) are the serde JSON form of
+        // `proto::CommentObject` (in `mz-catalog-protos`). `object_type`
+        // values are the kebab-case `Display` of `audit_log::ObjectType`.
+        //
+        // Schema and ClusterReplica are nested structs in `mz_catalog_raw`.
+        // We reach one level deeper for them: Schema picks `schema.Id` and
+        // drops the database, ClusterReplica picks `replica_id` and drops
+        // the cluster. That matches what `mz_objects.id` holds for those
+        // rows.
+        //
+        // New variants on `proto::CommentObject` need branches in both CASE
+        // expressions below.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL object_type,
+    ASSERT NOT NULL comment
+) AS
+WITH commented AS (
+    SELECT data->'key'->'object' AS obj,
+           data->'key'->'sub_component' AS sub,
+           data->'value'->>'comment' AS comment
+    FROM mz_internal.mz_catalog_raw
+    WHERE data->>'kind' = 'Comment'
+)
+SELECT
+    CASE
+        WHEN obj ? 'Table'            THEN mz_internal.parse_catalog_id(obj->'Table')
+        WHEN obj ? 'View'             THEN mz_internal.parse_catalog_id(obj->'View')
+        WHEN obj ? 'MaterializedView' THEN mz_internal.parse_catalog_id(obj->'MaterializedView')
+        WHEN obj ? 'Source'           THEN mz_internal.parse_catalog_id(obj->'Source')
+        WHEN obj ? 'Sink'             THEN mz_internal.parse_catalog_id(obj->'Sink')
+        WHEN obj ? 'Index'            THEN mz_internal.parse_catalog_id(obj->'Index')
+        WHEN obj ? 'Func'             THEN mz_internal.parse_catalog_id(obj->'Func')
+        WHEN obj ? 'Connection'       THEN mz_internal.parse_catalog_id(obj->'Connection')
+        WHEN obj ? 'Type'             THEN mz_internal.parse_catalog_id(obj->'Type')
+        WHEN obj ? 'Secret'           THEN mz_internal.parse_catalog_id(obj->'Secret')
+        WHEN obj ? 'Role'             THEN mz_internal.parse_catalog_id(obj->'Role')
+        WHEN obj ? 'Database'         THEN mz_internal.parse_catalog_id(obj->'Database')
+        WHEN obj ? 'Schema'           THEN mz_internal.parse_catalog_id(obj->'Schema'->'schema'->'Id')
+        WHEN obj ? 'Cluster'          THEN mz_internal.parse_catalog_id(obj->'Cluster')
+        WHEN obj ? 'ClusterReplica'   THEN mz_internal.parse_catalog_id(obj->'ClusterReplica'->'replica_id')
+        WHEN obj ? 'NetworkPolicy'    THEN mz_internal.parse_catalog_id(obj->'NetworkPolicy')
+    END                                                              AS id,
+    CASE
+        WHEN obj ? 'Table'            THEN 'table'
+        WHEN obj ? 'View'             THEN 'view'
+        WHEN obj ? 'MaterializedView' THEN 'materialized-view'
+        WHEN obj ? 'Source'           THEN 'source'
+        WHEN obj ? 'Sink'             THEN 'sink'
+        WHEN obj ? 'Index'            THEN 'index'
+        WHEN obj ? 'Func'             THEN 'func'
+        WHEN obj ? 'Connection'       THEN 'connection'
+        WHEN obj ? 'Type'             THEN 'type'
+        WHEN obj ? 'Secret'           THEN 'secret'
+        WHEN obj ? 'Role'             THEN 'role'
+        WHEN obj ? 'Database'         THEN 'database'
+        WHEN obj ? 'Schema'           THEN 'schema'
+        WHEN obj ? 'Cluster'          THEN 'cluster'
+        WHEN obj ? 'ClusterReplica'   THEN 'cluster-replica'
+        WHEN obj ? 'NetworkPolicy'    THEN 'network-policy'
+    END                                                              AS object_type,
+    (sub->'ColumnPos')::int4                                          AS object_sub_id,
+    comment
+FROM commented",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "comment",
+            description: "A COMMENT ON annotation for a catalog object or column",
+            links: &const {
+                [OntologyLink {
+                    name: "comment_on",
+                    target: "object",
+                    properties: LinkProperties::fk_typed(
+                        "id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::CatalogItemId,
+                    ),
+                }]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("object_type", SemanticType::ObjectType),
+                ]
+            },
+        }),
+    }
 });
 
 pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {

@@ -46,17 +46,26 @@ export function buildReplicaUtilizationHistoryQuery({
   const dateBinOrigin = sql.lit("1970-01-01");
 
   let query = queryBuilder
-    .with("replica_history", (qb) =>
-      qb
+    .with("replica_history", (qb) => {
+      let history = qb
         .selectFrom("mz_cluster_replica_history")
-        .select(["replica_id", "cluster_id", "size"])
-        // We need to union the current set of cluster replicas since mz_cluster_replica_history doesn't account for system clusters
-        .union(
-          qb
-            .selectFrom("mz_cluster_replicas")
-            .select(["id as replica_id", "cluster_id", "size"]),
-        ),
-    )
+        .select(["replica_id", "cluster_id", "size"]);
+      // We need to union the current set of cluster replicas since mz_cluster_replica_history doesn't account for system clusters
+      let current = qb
+        .selectFrom("mz_cluster_replicas")
+        .select(["id as replica_id", "cluster_id", "size"]);
+      // Push the cluster filter into both UNION branches up front. Otherwise it
+      // only enters at the final join and the optimizer can't push it into the
+      // shared `replica_utilization_history_binned` CTE, so the metrics
+      // aggregate and all five Top-1 passes run over the whole fleet and only
+      // the last step discards other clusters. Filtering here scopes the heavy
+      // work to the requested cluster(s).
+      if (clusterIds !== undefined && clusterIds.length > 0) {
+        history = history.where("cluster_id", "in", clusterIds);
+        current = current.where("cluster_id", "in", clusterIds);
+      }
+      return history.union(current);
+    })
     .with("replica_name_history", (qb) =>
       qb
         .selectFrom("mz_cluster_replica_name_history")
@@ -128,13 +137,11 @@ export function buildReplicaUtilizationHistoryQuery({
         ]),
     )
     .with("replica_utilization_history_binned", (qb) => {
+      // Read the per-sample rollup directly. replica_metrics_history is already
+      // derived from replica_history, so joining replica_history here would be
+      // redundant and could fan out if a replica ever had two sizes.
       let cte = qb
-        .selectFrom("replica_history as r")
-        .innerJoin(
-          "replica_metrics_history as m",
-          "m.replica_id",
-          "r.replica_id",
-        )
+        .selectFrom("replica_metrics_history as m")
         .select([
           "m.occurred_at",
           "m.replica_id",
@@ -296,6 +303,13 @@ export function buildReplicaUtilizationHistoryQuery({
         // NOTE(SangJunBak): Given processes should share the same state, we can just take the statuses of the first process.
         .where("process_id", "=", "0")
         .where("status", "=", "offline")
+        // Restrict the offline scan to the replicas we're charting. When a
+        // cluster filter is set, replica_history is already scoped to it, so
+        // this turns a full status-history scan into a lookup; when it isn't,
+        // replica_history is the whole fleet and this is a no-op.
+        .where("rsh.replica_id", "in", (eb) =>
+          eb.selectFrom("replica_history").select("replica_id"),
+        )
         .where(
           "occurred_at",
           ">=",
@@ -410,10 +424,6 @@ export function buildReplicaUtilizationHistoryQuery({
       "replica_history.size",
     ])
     .orderBy("bucketStart");
-
-  if (clusterIds !== undefined && clusterIds.length > 0) {
-    query = query.where("replica_history.cluster_id", "in", clusterIds);
-  }
 
   if (replicaId) {
     query = query.where("max_memory.replica_id", "=", replicaId);

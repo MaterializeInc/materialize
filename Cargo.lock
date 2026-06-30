@@ -8077,6 +8077,8 @@ dependencies = [
 name = "mz-row-spine"
 version = "0.0.0"
 dependencies = [
+ "ahash 0.8.12",
+ "columnar",
  "columnation",
  "differential-dataflow",
  "mz-ore",
@@ -8266,6 +8268,16 @@ dependencies = [
  "uncased",
  "uuid",
  "version-compare",
+]
+
+[[package]]
+name = "mz-sql-anonymize"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "mz-sql-parser",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
