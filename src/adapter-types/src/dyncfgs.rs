@@ -303,6 +303,20 @@ pub const PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT: Config<Duration> = Config::new(
     Postgres/CRDB timestamp oracle. A value of zero leaves the statement timeout unset.",
 );
 
+/// Minimum interval between re-checks of pending strict serializable reads.
+///
+/// Advances made by this node are observed eagerly, so this does not bound their
+/// latency. It paces the backstop poll that observes advances made by other
+/// writers sharing the oracle. Lower it to reduce cross-writer linearization
+/// latency at the cost of more oracle traffic. Not load-bearing for starvation,
+/// which the coordinator select prevents structurally.
+pub const LINEARIZE_READS_MIN_INTERVAL: Config<Duration> = Config::new(
+    "linearize_reads_min_interval",
+    Duration::from_millis(100),
+    "Minimum interval between re-checks of strict serializable reads that are \
+    waiting for the timestamp oracle to advance.",
+);
+
 /// Whether per-cluster and per-replica scoped system parameters are evaluated.
 /// Off by default: the parameter sync loop evaluates no cluster/replica
 /// contexts and resolution falls back to the environment-wide value everywhere
@@ -355,5 +369,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
         .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
+        .add(&LINEARIZE_READS_MIN_INTERVAL)
         .add(&ENABLE_SCOPED_SYSTEM_PARAMETERS)
 }
