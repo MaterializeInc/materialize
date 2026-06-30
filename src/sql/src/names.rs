@@ -1280,6 +1280,12 @@ impl From<ObjectId> for SystemObjectId {
 /// well as the inner kind of object that is represented, e.g. [`CatalogItemId`] is used to
 /// identify both Tables and Views. No other kind of ID encapsulates all of this, hence this new
 /// "*Id" type.
+///
+/// New variants here also need to be added to the durable counterpart
+/// `mz_catalog_protos::objects::CommentObject` and to both CASE expressions in
+/// the `mz_internal.mz_comments` materialized view (`MZ_COMMENTS` in
+/// `mz-catalog::builtin::mz_internal`). The MV reads `CommentObject` out of
+/// `mz_catalog_raw` as serde JSON.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
 pub enum CommentObjectId {
     Table(CatalogItemId),

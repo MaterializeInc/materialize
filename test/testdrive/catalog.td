@@ -605,7 +605,6 @@ name                                     comment
 mz_aggregates                            ""
 mz_aws_connections                       ""
 mz_cluster_replica_size_internal         ""
-mz_comments                              ""
 mz_history_retention_strategies          ""
 mz_kafka_source_tables                   ""
 mz_license_keys                          ""
@@ -724,6 +723,7 @@ name                   cluster             comment
 mz_cluster_schedules           mz_catalog_server   ""
 mz_cluster_system_parameters   mz_catalog_server   ""
 mz_cluster_workload_classes    mz_catalog_server   ""
+mz_comments                    mz_catalog_server   ""
 mz_internal_cluster_replicas   mz_catalog_server   ""
 mz_network_policies            mz_catalog_server   ""
 mz_network_policy_rules        mz_catalog_server   ""
@@ -826,7 +826,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-46
+45
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
