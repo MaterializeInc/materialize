@@ -27,15 +27,6 @@ name = "Get started"
 weight = 5
 
 #
-# Architecture Patterns
-#
-
-[[menu.main]]
-identifier = "architecture-patterns"
-name = "Architecture Patterns"
-weight = 8
-
-#
 # Connect sources
 #
 

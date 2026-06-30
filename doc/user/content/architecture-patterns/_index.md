@@ -2,6 +2,11 @@
 title: "Architecture Patterns"
 description: "Patterns for building with Materialize."
 disable_list: true
+menu:
+  main:
+    identifier: "architecture-patterns"
+    name: "Architecture Patterns"
+    weight: 8
 ---
 
 Pattern | Description
