@@ -152,6 +152,37 @@
        The **APP VERSION** will be the value that you will use for upgrading
        Materialize instances.
 
+- name: upgrade-verify-status
+  content: |
+    {{< note >}}
+    `terraform apply` returns once the Materialize custom resource is updated.
+    The Operator then rolls out the new generation asynchronously, so the new
+    `environmentd` pods may take a few minutes to become ready.
+    {{< /note >}}
+
+    1. Check the status of the `materialize` namespace:
+
+       ```bash
+       kubectl -n materialize get all
+       ```
+
+    1. Check the status of the `materialize-environment` namespace:
+
+       ```bash
+       kubectl -n materialize-environment get all
+       ```
+
+    1. Once a new `environmentd` is up (may take a few minutes), confirm the
+       running `environmentd` version matches the version you upgraded to. Check
+       the `Image` field in the pod description.
+
+       ```bash
+       kubectl -n materialize-environment describe pod -l app=environmentd
+       ```
+
+    If you run into an error during the upgrade, refer to the
+    [Troubleshooting](/self-managed-deployments/troubleshooting/).
+
 - name: upgrade-materialize-instance
   content: |
 
@@ -203,3 +234,15 @@
        ```bash
        kubectl -n materialize-environment describe pod -l app=environmentd
        ```
+
+- name: upgrade-request_rollout
+  content: |
+    Update your `terraform.tfvars` file to set the `request_rollout` variable to
+    a new UUID value, substituting the example value in the code block below with
+    a UUID you generate (for example, with `uuidgen`):
+
+    ```hcl
+    # ...
+    # ...
+    request_rollout = "DBB4FCEC-1837-44F6-9CF2-3894678DD8D5"
+    ```
