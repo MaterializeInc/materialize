@@ -2386,8 +2386,16 @@ impl Catalog {
                     Ok::<_, AdapterError>(())
                 };
 
-                // Update all of the items in the schema.
-                for (_name, item_id) in &schema.items {
+                // Update all of the items in the schema. A schema holds items,
+                // types, and functions in separate maps, and any of them may be
+                // referenced by another object's create_sql via a schema-qualified
+                // name, so all three must be rewritten.
+                for (_name, item_id) in schema
+                    .items
+                    .iter()
+                    .chain(schema.types.iter())
+                    .chain(schema.functions.iter())
+                {
                     // Update the item itself.
                     update_item(item_id)?;
 
