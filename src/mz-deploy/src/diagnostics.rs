@@ -321,7 +321,10 @@ pub(crate) fn locate_replacement(
     primary_range: &Range<usize>,
     needle: &str,
 ) -> Range<usize> {
-    let in_bounds = primary_range.end <= source.len() && primary_range.start <= primary_range.end;
+    let in_bounds = primary_range.end <= source.len()
+        && primary_range.start <= primary_range.end
+        && source.is_char_boundary(primary_range.start)
+        && source.is_char_boundary(primary_range.end);
     if in_bounds && &source[primary_range.clone()] == needle {
         return primary_range.clone();
     }
@@ -515,6 +518,15 @@ mod tests {
     fn locate_replacement_falls_back_to_search() {
         let r = locate_replacement("SELECT emails FROM t", &(0..0), "emails");
         assert_eq!(r, 7..13);
+    }
+
+    #[mz_ore::test]
+    fn locate_replacement_mid_char_primary_range_does_not_panic() {
+        // 4 is inside `é` (bytes 3..5), so the primary range is unusable and
+        // must fall back to the whole-word search rather than slicing.
+        let source = "café customers";
+        let r = locate_replacement(source, &(4..4), "customers");
+        assert_eq!(&source[r], "customers");
     }
 
     #[mz_ore::test]
