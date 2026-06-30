@@ -888,8 +888,7 @@ impl CostModel {
                 let (is_cross, deg, pos) = best.expect("remaining is non-empty");
                 let j = remaining.remove(pos);
                 if is_cross {
-                    let frontier_deg =
-                        self.agm_degree_subset_memo(hg_id, &hg, &degs, frontier);
+                    let frontier_deg = self.agm_degree_subset_memo(hg_id, &hg, &degs, frontier);
                     if frontier_deg > EPS && degs[j] > EPS {
                         crosses += 1;
                     }
@@ -904,6 +903,79 @@ impl CostModel {
         degrees.retain(|d| *d > EPS);
         degrees.sort_by(|a, b| b.partial_cmp(a).unwrap());
         (crosses, degrees)
+    }
+
+    /// Surface the per-driver left-deep delta paths: one path per driver (indexed
+    /// by driver position, matching the renderer's `join_orders[source_relation]`).
+    /// Each returned `Vec<JoinStep>` is the LOOKUPS after the driver (the driver is
+    /// not a step), keyed via `frontier_key_cols` against the accumulating per-path
+    /// frontier. Returns `None` if any path has a non-keyed (cross) step, i.e. the
+    /// join is disconnected and has no delta plan. Caller must invoke this only on
+    /// acyclic `Rel::Join` inputs.
+    pub(crate) fn delta_join_order(
+        &self,
+        inputs: &[Rel],
+        equivalences: &[Vec<EScalar>],
+    ) -> Option<Vec<Vec<JoinStep>>> {
+        let n = inputs.len();
+        if n == 0 {
+            return None;
+        }
+        if n == 1 {
+            return Some(vec![vec![]]);
+        }
+        let arities: Vec<usize> = inputs.iter().map(|r| r.arity()).collect();
+        let mut offsets = Vec::with_capacity(n);
+        let mut acc = 0;
+        for &a in &arities {
+            offsets.push(acc);
+            acc += a;
+        }
+        let degs: Vec<f64> = inputs.iter().map(|r| self.size_degree(r)).collect();
+        let hg = Hypergraph::build(inputs, equivalences);
+        let hg_id = self.intern_hg(&hg, &degs);
+
+        let mut all_paths: Vec<Vec<JoinStep>> = Vec::with_capacity(n);
+        for driver in 0..n {
+            let mut placed: Vec<(usize, usize)> = vec![(offsets[driver], arities[driver])];
+            let mut frontier_mask = 1u32 << driver;
+            let mut remaining: Vec<usize> = (0..n).filter(|&i| i != driver).collect();
+            let mut path: Vec<JoinStep> = Vec::with_capacity(n - 1);
+            while !remaining.is_empty() {
+                // Pick the next input: prefer a keyed extension (non-empty
+                // frontier_key_cols), then the lowest resulting AGM degree.
+                // Deterministic, mirroring delta_join_terms.
+                let mut best: Option<(bool, f64, usize, BTreeSet<usize>)> = None;
+                for (pos, &j) in remaining.iter().enumerate() {
+                    let key_cols = frontier_key_cols(offsets[j], arities[j], &placed, equivalences);
+                    let is_cross = key_cols.is_empty();
+                    let deg =
+                        self.agm_degree_subset_memo(hg_id, &hg, &degs, frontier_mask | (1u32 << j));
+                    let cand = (is_cross, deg, pos, key_cols);
+                    best = Some(match best {
+                        None => cand,
+                        Some(b) => {
+                            if (cand.0, cand.1) < (b.0, b.1) {
+                                cand
+                            } else {
+                                b
+                            }
+                        }
+                    });
+                }
+                let (is_cross, _deg, pos, key_cols) = best.expect("remaining is non-empty");
+                if is_cross {
+                    // No keyed extension exists: the join is disconnected. No delta plan.
+                    return None;
+                }
+                let j = remaining.remove(pos);
+                path.push(JoinStep { input: j, key_cols });
+                placed.push((offsets[j], arities[j]));
+                frontier_mask |= 1u32 << j;
+            }
+            all_paths.push(path);
+        }
+        Some(all_paths)
     }
 }
 
@@ -1730,12 +1802,16 @@ mod tests {
 
     #[mz_ore::test]
     fn cost_nodes_is_scalar_aware() {
+        use crate::eqsat::ir::{EScalar, Rel};
         use mz_expr::{BinaryFunc, MirScalarExpr, func};
         use mz_repr::{Datum, ReprScalarType};
-        use crate::eqsat::ir::{EScalar, Rel};
         let lit1 = MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64);
-        let compute = MirScalarExpr::column(1).call_binary(lit1, BinaryFunc::AddInt64(func::AddInt64));
-        let get = Rel::Get { name: "r".to_string(), arity: 2 };
+        let compute =
+            MirScalarExpr::column(1).call_binary(lit1, BinaryFunc::AddInt64(func::AddInt64));
+        let get = Rel::Get {
+            name: "r".to_string(),
+            arity: 2,
+        };
         let map_compute = Rel::Map {
             scalars: vec![EScalar::plain(compute)],
             input: Box::new(get.clone()),
@@ -2634,7 +2710,7 @@ mod tests {
     /// `{a, b}`, so a class containing it touches both inputs — the LEFT-JOIN
     /// null-pad key shape that turns a foreign spelling into a 3-input class).
     fn eq_expr(a: usize, b: usize) -> EScalar {
-        use mz_expr::{func, BinaryFunc};
+        use mz_expr::{BinaryFunc, func};
         EScalar::plain(
             MirScalarExpr::column(a)
                 .call_binary(MirScalarExpr::column(b), BinaryFunc::Eq(func::Eq)),
@@ -2807,6 +2883,43 @@ mod tests {
             got,
             vec![1.0, 1.0, 1.0],
             "4-way star work terms (sorted desc): got {got:?}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn delta_join_order_chain_has_keyed_paths_per_driver() {
+        // 3-input chain: in0.#0 = in1.#0 ; in1.#1 = in2.#0  (each input arity 2).
+        let model = CostModel::new();
+        let inputs = vec![get("i0", 2), get("i1", 2), get("i2", 2)];
+        let equivalences = vec![
+            vec![col(0), col(2)], // in0 col0 == in1 col0
+            vec![col(3), col(4)], // in1 col1 == in2 col0
+        ];
+        let paths = model
+            .delta_join_order(&inputs, &equivalences)
+            .expect("connected chain has a delta plan");
+        assert_eq!(paths.len(), 3, "one path per driver");
+        // Every step in every path is keyed (non-empty key_cols).
+        for path in &paths {
+            assert_eq!(path.len(), 2, "two lookups after the driver");
+            for step in path {
+                assert!(
+                    !step.key_cols.is_empty(),
+                    "every delta lookup must be keyed"
+                );
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn delta_join_order_disconnected_returns_none() {
+        // 2 inputs, NO equivalence between them: a cross product, no delta plan.
+        let model = CostModel::new();
+        let inputs = vec![get("a", 2), get("b", 2)];
+        let equivalences: Vec<Vec<EScalar>> = vec![];
+        assert!(
+            model.delta_join_order(&inputs, &equivalences).is_none(),
+            "disconnected join has no delta plan"
         );
     }
 }
