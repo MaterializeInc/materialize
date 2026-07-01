@@ -334,17 +334,12 @@ impl PreparedStatementLoggingInfo {
     ) -> Self {
         let kind = stmt.map(StatementKind::from);
         let sql = match kind {
-            // Always redact SQL statements that may contain sensitive information.
-            // CREATE SECRET and ALTER SECRET statements can contain secret values, so we redact them.
-            // INSERT, UPDATE, and EXECUTE statements can include large amounts of user data, so we redact them for both
-            // data privacy and to avoid logging excessive data.
-            Some(
-                StatementKind::CreateSecret
-                | StatementKind::AlterSecret
-                | StatementKind::Insert
-                | StatementKind::Update
-                | StatementKind::Execute,
-            ) => stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default(),
+            // Redact the SQL text of statements that can carry sensitive material:
+            // secret values (`CREATE`/`ALTER SECRET`), or bulk/PII user data
+            // (`INSERT`/`UPDATE`/`EXECUTE`). See `StatementKind::is_sensitive`.
+            Some(kind) if kind.is_sensitive() => {
+                stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default()
+            }
             _ => raw_sql,
         };
 

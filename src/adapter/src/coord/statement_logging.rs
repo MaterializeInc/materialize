@@ -21,7 +21,6 @@ use mz_repr::adt::timestamp::TimestampLike;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Params;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql_parser::ast::StatementKind;
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
@@ -493,11 +492,10 @@ impl Coordinator {
                     // cases, but we never persist an unredacted error for these
                     // kinds, regardless of which error variant fired. The client
                     // still receives the real error over pgwire.
-                    let error = match began_record.kind {
-                        Some(StatementKind::CreateSecret | StatementKind::AlterSecret) => {
-                            "<error redacted for secret statement>"
-                        }
-                        _ => error.as_str(),
+                    let error = if began_record.kind.is_some_and(|kind| kind.is_secret()) {
+                        "<error redacted for secret statement>"
+                    } else {
+                        error.as_str()
                     };
                     ("error", Some(error), None, None, None)
                 }

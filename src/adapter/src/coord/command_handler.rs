@@ -37,7 +37,7 @@ use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
 use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSinkAction, AlterSourceAction, AstInfo,
     ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement,
-    SubscribeStatement,
+    StatementKind, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -1382,12 +1382,17 @@ impl Coordinator {
                             }
                         }
 
-                        // Redact literals (e.g. `CREATE SECRET` values) so that
-                        // secret material does not leak into the error message,
-                        // which is persisted in `mz_statement_execution_history`.
-                        return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(
-                            stmt.to_ast_string_redacted(),
-                        )));
+                        // For statements that can carry sensitive material, redact
+                        // literals so they don't leak into the error message, which
+                        // is persisted in `mz_statement_execution_history` (matching
+                        // how their SQL text is redacted). Other statements keep
+                        // their literals for a clearer error.
+                        let op = if StatementKind::from(&*stmt).is_sensitive() {
+                            stmt.to_ast_string_redacted()
+                        } else {
+                            stmt.to_string()
+                        };
+                        return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(op)));
                     }
                 }
             }
