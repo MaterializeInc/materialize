@@ -15,8 +15,11 @@
 use mz_repr::ReprColumnType;
 
 use crate::eqsat::core::Id;
+use crate::eqsat::egraph::combined::ScalarIndex;
 use crate::eqsat::ir::EScalar;
 use crate::eqsat::matcher::Payload;
+use crate::eqsat::scalar::lang::ScalarSym;
+use crate::eqsat::scalar::node::SNode;
 
 use super::{EGraph, ENode, Index, Sym};
 
@@ -33,6 +36,10 @@ pub(crate) trait MatchGraph {
     fn arity(&self, id: Id) -> usize;
     /// Resolve a scalar id to its `EScalar` (base cache or colored delta cache).
     fn escalar(&self, id: Id) -> EScalar;
+    /// The scalar e-nodes of class `id` (empty if the class holds no scalar nodes).
+    fn scalar_class_nodes(&self, id: Id) -> Vec<SNode>;
+    /// Every scalar e-node whose operator symbol is `sym`, as `(class, node)`.
+    fn nodes_by_scalar_sym(&self, sym: ScalarSym) -> Vec<(Id, SNode)>;
     // Color-exact conditions (graph/payload/arity only):
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool;
     fn cond_cols_in_range(&self, p: &Payload, lo: i64, hi: i64) -> bool;
@@ -71,6 +78,7 @@ pub(crate) trait ApplyGraph {
 pub(crate) struct BaseView<'a> {
     pub eg: &'a EGraph,
     pub index: &'a Index,
+    pub scalar_index: &'a ScalarIndex,
     pub an: &'a Analyses,
 }
 
@@ -93,6 +101,21 @@ impl<'a> MatchGraph for BaseView<'a> {
 
     fn escalar(&self, id: Id) -> EScalar {
         self.eg.data().escalar(id).clone()
+    }
+
+    fn scalar_class_nodes(&self, id: Id) -> Vec<SNode> {
+        self.eg
+            .nodes(id)
+            .into_iter()
+            .filter_map(|n| match n {
+                crate::eqsat::egraph::combined::CNode::Scalar(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn nodes_by_scalar_sym(&self, sym: ScalarSym) -> Vec<(Id, SNode)> {
+        self.scalar_index.get(&sym).cloned().unwrap_or_default()
     }
 
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {
@@ -213,10 +236,12 @@ mod tests {
         }));
         eg.rebuild();
         let index = eg.rel_index();
+        let scalar_index = eg.scalar_index();
         let an = Analyses::default();
         let view = BaseView {
             eg: &eg,
             index: &index,
+            scalar_index: &scalar_index,
             an: &an,
         };
         // The trait read methods agree with the inherent ones.
@@ -226,5 +251,30 @@ mod tests {
             view.rel_class_nodes(filt).len(),
             eg.rel_class_nodes(filt).len()
         );
+    }
+}
+
+#[cfg(test)]
+mod scalar_view_tests {
+    use crate::eqsat::egraph::combined::{CNode, EGraph};
+    use crate::eqsat::scalar::lang::ScalarSym;
+    use crate::eqsat::scalar::node::SNode;
+    use mz_expr::UnaryFunc;
+
+    #[mz_ore::test]
+    fn scalar_index_buckets_unary() {
+        let mut eg = EGraph::new();
+        let x = eg.add(CNode::Scalar(SNode::Column(
+            0,
+            mz_ore::treat_as_equal::TreatAsEqual(None),
+        )));
+        let not = eg.add(CNode::Scalar(SNode::CallUnary {
+            func: UnaryFunc::Not(mz_expr::func::Not),
+            expr: x,
+        }));
+        let idx = eg.scalar_index();
+        let unary = idx.get(&ScalarSym::Unary).cloned().unwrap_or_default();
+        assert_eq!(unary.len(), 1);
+        assert_eq!(unary[0].0, eg.find(not));
     }
 }

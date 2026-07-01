@@ -396,9 +396,11 @@ impl EGraph {
             {
                 // Phase 1 (read-only): build the immutable view once for the
                 // round and collect all rule matches before any mutation.
+                let scalar_index = crate::eqsat::egraph::combined::ScalarIndex::new();
                 let view = crate::eqsat::egraph::view::BaseView {
                     eg: self,
                     index: &index,
+                    scalar_index: &scalar_index,
                     an: &analyses,
                 };
                 for (qi, rule) in compiled.iter().enumerate() {

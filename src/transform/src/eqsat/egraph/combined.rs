@@ -175,6 +175,32 @@ pub type EGraph = core::EGraph<CombinedLang>;
 /// `Sym` and bind `ENode`s directly. Built by [`EGraph::rel_index`].
 pub(crate) type Index = HashMap<Sym, Vec<(Id, ENode)>>;
 
+/// Match index for scalar e-nodes, bucketed by scalar operator symbol. Built
+/// per saturation round by the scalar saturate driver, mirroring the relational
+/// `Index`. Kept separate so the relational matcher never sees scalar nodes and
+/// vice versa.
+pub(crate) type ScalarIndex = std::collections::HashMap<ScalarSym, Vec<(Id, SNode)>>;
+
+impl EGraph {
+    /// Bucket every scalar e-node by its `ScalarSym`. One entry per (class, node).
+    ///
+    /// Currently unused outside tests: no scalar rule matcher runs yet. A later
+    /// task wires this into the saturation driver alongside
+    /// `MatchGraph::nodes_by_scalar_sym`.
+    #[allow(dead_code)]
+    pub(crate) fn scalar_index(&self) -> ScalarIndex {
+        let mut idx: ScalarIndex = std::collections::HashMap::new();
+        for id in self.class_ids() {
+            for node in self.nodes(id) {
+                if let CNode::Scalar(s) = node {
+                    idx.entry(ScalarLang::symbol(&s)).or_default().push((id, s));
+                }
+            }
+        }
+        idx
+    }
+}
+
 /// A request to seed an [`ENode::IndexedFilter`] into the e-graph.
 ///
 /// Computed by the physical pass from the production `LiteralConstraints`

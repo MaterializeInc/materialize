@@ -363,6 +363,20 @@ impl<'a, 'b, 'v> MatchGraph for ColoredView<'a, 'b, 'v> {
         self.esc(id)
     }
 
+    // Colored scalar matching is not wired up yet (no colored rule matches
+    // scalar patterns until a later task), so these are sound empty stubs: an
+    // empty result means "no match", never a false positive.
+    fn scalar_class_nodes(&self, _id: Id) -> Vec<crate::eqsat::scalar::node::SNode> {
+        Vec::new()
+    }
+
+    fn nodes_by_scalar_sym(
+        &self,
+        _sym: crate::eqsat::scalar::lang::ScalarSym,
+    ) -> Vec<(Id, crate::eqsat::scalar::node::SNode)> {
+        Vec::new()
+    }
+
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {
         let rel_arity = self.arity_of(rel);
         payload_columns(p, |id| self.esc(id))
