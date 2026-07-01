@@ -1,10 +1,10 @@
 ---
-title: "Version-specific upgrade notes"
+title: "Upgrade notes"
 description: "Version-specific notes for upgrading Self-Managed Materialize."
 menu:
   main:
     parent: "upgrading"
-    weight: 55
+    weight: 75
 ---
 
 Review the notes for your target version before upgrading. For the general

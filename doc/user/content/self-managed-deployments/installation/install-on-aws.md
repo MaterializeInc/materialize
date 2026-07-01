@@ -173,7 +173,7 @@ authentication mechanisms.
    aws_region  = "us-east-1"
    aws_profile = "your-aws-profile"
    license_key = "your-materialize-license-key"
-   crd_version = "v1"   # v1 is available for Materialize v26.30+ and TF v3.1.0+.
+   crd_version = "v1"   # v1 is available for Materialize v26.30+ and TF v3.1.1+.
    tags = {
      environment = "demo"
    }

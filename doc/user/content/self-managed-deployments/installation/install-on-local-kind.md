@@ -110,7 +110,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 1. <a name="install-cert-manager" ></a>Install `cert-manager`. `cert-manager` is
    used for generating TLS certificates needed by the Materialize operator for
    CRD conversion webhooks if enabling CRD `v1`. To simplify future transition,
-   we recommend installing it even if you are not yet enabling CRD `v1`. 
+   we recommend installing it even if you are not yet enabling CRD `v1`.
 
    ```shell
    helm install cert-manager oci://quay.io/jetstack/charts/cert-manager \

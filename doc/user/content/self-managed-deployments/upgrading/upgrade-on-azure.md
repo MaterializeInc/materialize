@@ -4,7 +4,7 @@ description: "Upgrade Materialize on Azure using the new Terraform module."
 menu:
   main:
     parent: "upgrading"
-    weight: 30
+    weight: 25
 ---
 
 The following tutorial upgrades your Materialize deployment running on Azure

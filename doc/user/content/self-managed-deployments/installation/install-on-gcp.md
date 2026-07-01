@@ -198,7 +198,7 @@ authentication mechanisms.
    name_prefix = "simple-demo"
    region      = "us-central1"
    license_key = "your-materialize-license-key"
-   crd_version = "v1"   # v1 is available for Materialize v26.30+ and TF v3.1.0+.
+   crd_version = "v1"   # v1 is available for Materialize v26.30+ and TF v3.1.1+.
    labels = {
      environment = "demo"
      created_by  = "terraform"
