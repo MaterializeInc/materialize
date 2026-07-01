@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, Timestamp};
@@ -348,7 +348,7 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
-        let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
+        let df_desc = LirRelationExpr::finalize_dataflow(df_desc, &self.config.features)?;
 
         self.duration += time.elapsed();
         self.metrics

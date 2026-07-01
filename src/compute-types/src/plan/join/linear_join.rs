@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
 use crate::plan::join::{JoinBuildState, JoinClosure};
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 
 /// A plan for the execution of a linear join.
 ///
@@ -27,7 +28,7 @@ pub struct LinearJoinPlan {
     /// The source relation from which we start the join.
     pub source_relation: usize,
     /// The arrangement to use for the source relation, if any
-    pub source_key: Option<Vec<MirScalarExpr>>,
+    pub source_key: Option<Vec<LirScalarExpr>>,
     /// An initial closure to apply before any stages.
     ///
     /// Values of `None` indicate the identity closure.
@@ -50,13 +51,13 @@ pub struct LinearStagePlan {
     /// The index of the relation into which we will look up.
     pub lookup_relation: usize,
     /// The key expressions to use for the stream relation.
-    pub stream_key: Vec<MirScalarExpr>,
+    pub stream_key: Vec<LirScalarExpr>,
     /// Columns to retain from the stream relation.
     /// These columns are those that are not redundant with `stream_key`,
     /// and cannot be read out of the key component of an arrangement.
     pub stream_thinning: Vec<usize>,
     /// The key expressions to use for the lookup relation.
-    pub lookup_key: Vec<MirScalarExpr>,
+    pub lookup_key: Vec<LirScalarExpr>,
     /// The closure to apply to the concatenation of the key columns,
     /// the stream value columns, and the lookup value colunms.
     pub closure: JoinClosure,
@@ -67,7 +68,7 @@ impl LinearJoinPlan {
     pub fn create_from(
         source_relation: usize,
         // When specified, a key and its corresponding permutation and thinning.
-        source_arrangement: Option<&(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
+        source_arrangement: Option<&(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)>,
         equivalences: &[Vec<MirScalarExpr>],
         join_order: &[(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)],
         input_mapper: mz_expr::JoinInputMapper,
@@ -111,13 +112,14 @@ impl LinearJoinPlan {
         // Iterate through the join order instructions, assembling keys and
         // closures to use.
         for (lookup_relation, lookup_key, _characteristics) in join_order.iter() {
+            let lookup_key = lses_from_mses(lookup_key);
             let available = &available[*lookup_relation];
 
             let (lookup_permutation, lookup_thinning) = available
                 .arranged
                 .iter()
                 .find_map(|(key, permutation, thinning)| {
-                    if key == lookup_key {
+                    if *key == lookup_key {
                         Some((permutation.clone(), thinning.clone()))
                     } else {
                         None
@@ -125,7 +127,7 @@ impl LinearJoinPlan {
                 })
                 .unwrap_or_else(|| {
                     let (permutation, thinning) = permutation_for_arrangement(
-                        lookup_key,
+                        &lookup_key,
                         input_mapper.input_arity(*lookup_relation),
                     );
                     requested[*lookup_relation].arranged.push((

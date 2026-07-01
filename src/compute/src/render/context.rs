@@ -23,9 +23,10 @@ use mz_compute_types::dyncfgs::{
     ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
     ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
 };
+use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
-use mz_expr::{Eval, Id, MapFilterProject, MirScalarExpr};
+use mz_expr::{Eval, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
@@ -443,7 +444,7 @@ pub struct CollectionBundle<'scope, T: RenderTimestamp> {
         VecCollection<'scope, T, Row, Diff>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )>,
-    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<'scope, T>>,
+    pub arranged: BTreeMap<Vec<LirScalarExpr>, ArrangementFlavor<'scope, T>>,
 }
 
 impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
@@ -460,7 +461,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
     /// Inserts arrangements by the expressions on which they are keyed.
     pub fn from_expressions(
-        exprs: Vec<MirScalarExpr>,
+        exprs: Vec<LirScalarExpr>,
         arrangements: ArrangementFlavor<'scope, T>,
     ) -> Self {
         let mut arranged = BTreeMap::new();
@@ -478,7 +479,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     ) -> Self {
         let mut keys = Vec::new();
         for column in columns {
-            keys.push(MirScalarExpr::column(column));
+            keys.push(LirScalarExpr::column(column));
         }
         Self::from_expressions(keys, arrangements)
     }
@@ -548,7 +549,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// [`ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION`].
     pub fn as_specific_collection(
         &self,
-        key: Option<&[MirScalarExpr]>,
+        key: Option<&[LirScalarExpr]>,
         config_set: &ConfigSet,
     ) -> (
         VecCollection<'scope, T, Row, Diff>,
@@ -607,7 +608,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// decode all columns.
     pub fn flat_map<D, DCB, L>(
         &self,
-        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
     ) -> (
@@ -913,7 +914,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
-    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<'scope, T>> {
+    pub fn arrangement(&self, key: &[LirScalarExpr]) -> Option<ArrangementFlavor<'scope, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
 }
@@ -929,17 +930,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// that we can seek to the supplied row.
     pub fn as_collection_core(
         &self,
-        mut mfp: MapFilterProject,
-        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        mfp_plan: MfpPlan<LirScalarExpr>,
+        key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
     ) -> (
         VecCollection<'scope, T, mz_repr::Row, Diff>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
-        mfp.optimize();
-        let mfp_plan = mfp.clone().into_plan().unwrap();
-
         // If the MFP is trivial, we can just call `as_collection`.
         // In the case that we weren't going to apply the `key_val` optimization,
         // this path results in a slightly smaller and faster
@@ -956,10 +954,18 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             return self.as_specific_collection(key.as_deref(), config_set);
         }
 
-        let max_demand = mfp.demand().last().map(|x| *x + 1).unwrap_or(0);
-        mfp.permute_fn(|c| c, max_demand);
-        mfp.optimize();
-        let mfp_plan = mfp.into_plan().unwrap();
+        // Apply demand-based column pruning. We round-trip through MIR
+        // so temporal bounds are folded back as mz_now() predicates —
+        // this way demand() sees all column references (including those
+        // in temporal bounds), and permute_fn applies uniformly.
+        let (mfp_plan, max_demand) = {
+            let mut mir_mfp = mfp_plan_lir_to_mir(mfp_plan).into_map_filter_project();
+            let max_demand = mir_mfp.demand().last().map(|x| *x + 1).unwrap_or(0);
+            mir_mfp.permute_fn(|c| c, max_demand);
+            mir_mfp.optimize();
+            let plan = mfp_mir_to_lir_plan(mir_mfp);
+            (plan, max_demand)
+        };
 
         let mut datum_vec = DatumVec::new();
         // Wrap in an `Rc` so that lifetimes work out.
@@ -1011,8 +1017,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,
-        input_key: Option<Vec<MirScalarExpr>>,
-        input_mfp: MapFilterProject,
+        input_key: Option<Vec<LirScalarExpr>>,
+        input_mfp: MfpPlan<LirScalarExpr>,
         as_of: Antichain<mz_repr::Timestamp>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
@@ -1147,7 +1153,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     fn arrange_collection(
         name: &String,
         oks: VecCollection<'scope, T, Row, Diff>,
-        key: Vec<MirScalarExpr>,
+        key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
         use_paged_path: bool,
     ) -> (

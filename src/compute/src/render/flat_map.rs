@@ -11,8 +11,9 @@ use std::collections::VecDeque;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
+use mz_compute_types::plan::scalar::LirScalarExpr;
+use mz_expr::TableFunc;
 use mz_expr::{Eval, MfpPlan};
-use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
@@ -28,14 +29,13 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
     /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
         &self,
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         input: CollectionBundle<'scope, T>,
-        exprs: Vec<MirScalarExpr>,
+        exprs: Vec<LirScalarExpr>,
         func: TableFunc,
-        mfp: MapFilterProject,
+        mfp_plan: MfpPlan<LirScalarExpr>,
     ) -> CollectionBundle<'scope, T> {
         let until = self.until.clone();
-        let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) =
             input.as_specific_collection(input_key.as_deref(), &self.config_set);
         let stream = ok_collection.inner;
@@ -136,7 +136,7 @@ fn drain_through_mfp<T>(
     input_diff: &Diff,
     datum_vec: &mut DatumVec,
     extensions: &[(Row, Diff)],
-    mfp_plan: &MfpPlan,
+    mfp_plan: &MfpPlan<LirScalarExpr>,
     until: &Antichain<Timestamp>,
     ok_output: &mut Session<
         '_,
