@@ -381,6 +381,14 @@ mz_console_cluster_utilization_overview
 VIEW
 materialize
 mz_internal
+mz_console_cluster_utilization_overview_24h
+VIEW
+materialize
+mz_internal
+mz_console_cluster_utilization_overview_3h
+VIEW
+materialize
+mz_internal
 mz_frontiers
 SOURCE
 materialize
