@@ -1936,11 +1936,6 @@ pub struct Coordinator {
     /// Hands staged group commits to the [`appends::GroupCommitter`] task, which allocates the
     /// write timestamp and applies the commit off the loop.
     group_committer_tx: mpsc::UnboundedSender<appends::GroupCommitRequest>,
-    /// Serializes allocating a write timestamp together with the catalog- and txns-shard advances it
-    /// drives, so the off-loop group committer and on-loop DDL reach those shards in timestamp
-    /// order. Held only around `[allocate ts + advance catalog upper + txns-shard write]`, never
-    /// across the append's completion. Reads never take it, so they are never blocked by it.
-    shard_advance_lock: Arc<tokio::sync::Mutex<()>>,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
@@ -5055,7 +5050,6 @@ pub fn serve(
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
-                let shard_advance_lock = Arc::new(tokio::sync::Mutex::new(()));
                 let mut coord = Coordinator {
                     controller,
                     catalog,
@@ -5063,7 +5057,6 @@ pub fn serve(
                     group_commit_tx,
                     reconcile_now: Arc::new(Notify::new()),
                     group_committer_tx,
-                    shard_advance_lock: Arc::clone(&shard_advance_lock),
                     strict_serializable_reads_tx,
                     linearize_reads_notify: Arc::new(Notify::new()),
                     global_timelines: timestamp_oracles,
@@ -5124,7 +5117,6 @@ pub fn serve(
                         coord.internal_cmd_tx.clone(),
                         coord.catalog().config().now.clone(),
                         coord.metrics.clone(),
-                        shard_advance_lock,
                     );
                 });
 

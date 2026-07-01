@@ -44,6 +44,7 @@ use mz_sql::session::vars::{
 };
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::controller::StorageError;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
@@ -610,17 +611,32 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping tables.
-    pub(crate) fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>, ts: Timestamp) {
+    pub(crate) async fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>) {
         for (item_id, _gid) in &tables {
             self.active_webhooks.remove(item_id);
         }
 
-        let storage_metadata = self.catalog.state().storage_metadata();
-        let table_gids = tables.into_iter().map(|(_id, gid)| gid).collect();
-        self.controller
-            .storage
-            .drop_tables(storage_metadata, table_gids, ts)
-            .unwrap_or_terminate("cannot fail to drop tables");
+        let table_gids: Vec<_> = tables.into_iter().map(|(_id, gid)| gid).collect();
+
+        // Forget the tables in the txns shard, retrying at a fresh timestamp if the off-loop group
+        // committer advanced the txns upper past ours. Reads never take part in the txns shard
+        // advance, so this retry does not affect them.
+        loop {
+            let ts = self.get_local_write_ts().await;
+            let storage_metadata = self.catalog.state().storage_metadata();
+            match self
+                .controller
+                .storage
+                .drop_tables(storage_metadata, table_gids.clone(), ts.timestamp)
+                .await
+            {
+                Ok(()) => break,
+                Err(StorageError::InvalidUppers(_)) => continue,
+                Err(other) => {
+                    Err::<(), _>(other).unwrap_or_terminate("cannot fail to drop tables");
+                }
+            }
+        }
     }
 
     fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = CatalogItemId>) {

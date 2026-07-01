@@ -225,10 +225,6 @@ pub(crate) struct GroupCommitter {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     now: NowFn,
     metrics: Metrics,
-    /// See [`Coordinator::shard_advance_lock`]. Held around allocating the write timestamp and
-    /// issuing the catalog and txns-shard advances, so they interleave with on-loop DDL in timestamp
-    /// order.
-    shard_advance_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl GroupCommitter {
@@ -268,29 +264,21 @@ impl GroupCommitter {
             }
         }
 
-        // Allocate a write timestamp and append. Under `shard_advance_lock` the timestamp allocation
-        // and the txns-shard write are serialized with on-loop DDL, so they reach the txns shard in
-        // timestamp order and neither side ever sees a stale upper. We hold the lock only through
-        // issuing the append, not through awaiting it.
-        //
-        // The `InvalidUppers` retry is a defensive backstop: with the lock held it should not
-        // happen, but if it ever did we retry at a fresh timestamp rather than terminate. A wasted
-        // timestamp is harmless: `apply_write` is a high-water mark, so the eventual, higher
-        // timestamp subsumes it.
+        // Allocate a write timestamp and append. We do not coordinate with on-loop DDL
+        // (register/forget/alter of tables): both the committer and DDL write to the txns shard at
+        // oracle-allocated timestamps, and both retry on conflict. If DDL advanced the txns upper
+        // past our timestamp, the append fails with `InvalidUppers`, and we retry at a fresh
+        // timestamp. A wasted timestamp is harmless: `apply_write` is a high-water mark, so the
+        // eventual, higher timestamp subsumes it.
         let (timestamp, advance_to) = loop {
-            let (timestamp, advance_to, append_recv) = {
-                let _guard = Arc::clone(&self.shard_advance_lock).lock_owned().await;
+            let WriteTimestamp {
+                timestamp,
+                advance_to,
+            } = self.oracle.write_ts().await;
 
-                let WriteTimestamp {
-                    timestamp,
-                    advance_to,
-                } = self.oracle.write_ts().await;
-
-                let append_recv =
-                    self.table_appender
-                        .append(timestamp, advance_to, appends.clone());
-                (timestamp, advance_to, append_recv)
-            };
+            let append_recv = self
+                .table_appender
+                .append(timestamp, advance_to, appends.clone());
 
             let append_start = Instant::now();
             let append_res = append_recv.await;
@@ -301,7 +289,7 @@ impl GroupCommitter {
             match append_res {
                 Ok(Ok(())) => break (timestamp, advance_to),
                 Ok(Err(StorageError::InvalidUppers(_))) => {
-                    // Should not happen while holding the lock; retry at a fresh timestamp.
+                    // On-loop DDL advanced the txns shard past us; retry at a fresh timestamp.
                     continue;
                 }
                 Ok(Err(other)) => {
@@ -378,7 +366,6 @@ pub(crate) fn spawn_group_committer(
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     now: NowFn,
     metrics: Metrics,
-    shard_advance_lock: Arc<tokio::sync::Mutex<()>>,
 ) {
     let committer = GroupCommitter {
         rx,
@@ -387,7 +374,6 @@ pub(crate) fn spawn_group_committer(
         internal_cmd_tx,
         now,
         metrics,
-        shard_advance_lock,
     };
     task::spawn(|| "group_committer", committer.run());
 }

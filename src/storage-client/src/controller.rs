@@ -474,6 +474,12 @@ pub trait StorageController: Debug {
     /// might later give non-tables the same treatment, but hold off on that initially.) Callers
     /// must provide a Some if any of the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
+    ///
+    /// Registering tables in the txns shard is the last step. If `register_ts` is behind the txns
+    /// shard upper (the off-loop group committer raced us), this returns
+    /// [`StorageError::InvalidUppers`] with all other setup already done. At bootstrap no group
+    /// commits run concurrently, so this cannot happen. For runtime DDL the caller re-allocates a
+    /// fresh timestamp and finishes the registration via [`Self::register_table_collections`].
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -531,6 +537,11 @@ pub trait StorageController: Debug {
         source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
     ) -> Result<(), StorageError>;
 
+    /// Registers the evolved table collection in the txns shard at `register_ts` as the last step.
+    ///
+    /// If `register_ts` is behind the txns shard upper (the off-loop group committer raced us),
+    /// returns [`StorageError::InvalidUppers`]. The new collection is set up regardless, so the
+    /// caller re-allocates a fresh timestamp and re-registers it via [`Self::register_table_collections`].
     async fn alter_table_desc(
         &mut self,
         existing_collection: GlobalId,
@@ -538,6 +549,22 @@ pub trait StorageController: Debug {
         new_desc: RelationDesc,
         expected_version: RelationVersion,
         register_ts: Timestamp,
+    ) -> Result<(), StorageError>;
+
+    /// Registers already-created table collections in the txns shard at `register_ts`.
+    ///
+    /// The tables must have been set up by a prior [`Self::create_collections`] or
+    /// [`Self::alter_table_desc`] whose txns registration was deferred or conflicted. This re-opens
+    /// write handles from the stored collection metadata, so it is idempotent across retries.
+    ///
+    /// If `register_ts` is behind the txns shard upper, returns [`StorageError::InvalidUppers`]. The
+    /// caller should allocate a fresh timestamp from the oracle (which is monotonic and thus beyond
+    /// the txns upper) and retry. Reads never observe a partially registered table, because the
+    /// oracle read timestamp is only advanced past `register_ts` after this call succeeds.
+    async fn register_table_collections(
+        &mut self,
+        register_ts: Timestamp,
+        ids: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -573,7 +600,12 @@ pub trait StorageController: Debug {
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the tables and allows their resources to be reclaimed.
-    fn drop_tables(
+    ///
+    /// Forgetting the tables in the txns shard happens synchronously at `ts`. If `ts` is behind the
+    /// txns shard upper (the off-loop group committer raced us), returns
+    /// [`StorageError::InvalidUppers`] without dropping anything, so the caller can re-allocate a
+    /// fresh timestamp and retry.
+    async fn drop_tables(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,

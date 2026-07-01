@@ -135,7 +135,7 @@ async fn handle_commands(
                     }
                 }
                 // We don't care if our waiter has gone away.
-                let _ = tx.send(());
+                let _ = tx.send(Ok(()));
             }
             PersistTableWriteCmd::Update {
                 existing_collection,
@@ -150,7 +150,7 @@ async fn handle_commands(
                     "PersistTableWriteCmd::Update only valid for updating extant write handles",
                 );
                 // We don't care if our waiter has gone away.
-                let _ = tx.send(());
+                let _ = tx.send(Ok(()));
             }
             PersistTableWriteCmd::DropHandles {
                 forget_ts: _,
@@ -167,7 +167,7 @@ async fn handle_commands(
                     write_handles.remove(&id);
                 }
                 // We don't care if our waiter has gone away.
-                let _ = tx.send(());
+                let _ = tx.send(Ok(()));
             }
             PersistTableWriteCmd::Append {
                 write_ts,
