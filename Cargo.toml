@@ -478,7 +478,7 @@ rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ss
 regex = "1.12.3"
 regex-syntax = "0.8.10"
 reqwest = { version = "0.12.28", features = ["blocking", "charset", "cookies", "default-tls", "http2", "json", "native-tls-vendored", "stream"] }
-reqwest-middleware = { version = "0.4.2", features = ["json"] }
+reqwest-middleware = { version = "0.5.2", features = ["json"] }
 reqwest-retry = "0.8.0"
 rlimit = "0.11.0"
 rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
