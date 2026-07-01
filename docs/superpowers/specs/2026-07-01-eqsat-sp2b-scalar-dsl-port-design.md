@@ -114,7 +114,9 @@ Add scalar structural variants to `Pat` and `Tmpl` (`dsl.rs`,
 scalar e-class and reuse the existing metavar mechanism (a metavar is an `Id`,
 sort-agnostic). Variadic scalar operands reuse the existing `ListPat`/`ListTmpl`
 (`items` plus `rest`) machinery, the same `rest...` splice relational Join/Union
-use. A rule is "scalar" iff its LHS root is a scalar variant.
+use today (for example `relational.rewrite:169`,
+`Filter[p] (Join[e](a, rest...)) => Join[e](Filter[p] a, rest...)`). A rule is
+"scalar" iff its LHS root is a scalar variant.
 
 ### 2.2 Codegen: node-vocabulary dispatch
 
@@ -179,6 +181,17 @@ RHS).
 The builtins MUST reuse the same `mz_expr` functions the old rules call
 (`eval`, `call_scalar_type`), not reimplement them.
 
+**Re-home dependency.** Today's `call_scalar_type` (`rules.rs:875`) computes a
+call's result type by calling `raise::raise` on each child
+(`raise::raise(eg, c).typ(eg.col_types())`, see `rules.rs:879`, `951-952`,
+`1148`). Both `rules.rs` and `scalar/raise.rs` are deleted at slice 7. So the
+type-context builtins (slices 5 and 6) must obtain the raise-equivalent and the
+type helper from the new `eqsat/scalar_extract.rs`, not the old `raise.rs`.
+Concretely, `scalar_extract.rs` exposes `pub fn raise(eg: &EGraph<CombinedLang>,
+id: Id) -> MirScalarExpr` and a `call_scalar_type` re-homed to read
+`CNode::Scalar`. Slice 1 pins this public API (see the slice table), so the
+slice-5/6 builtin subagents have a stable target.
+
 ### 2.6 Scalar extractor on CombinedLang, with determinism parity
 
 Port `scalar/raise.rs`'s bottom-up tree-size cost plus fixpoint reconstruction to
@@ -198,9 +211,13 @@ result, not just same cost function:
    construction, not hypothesis.
 2. The And/Or operand `sort()` in `reconstruct`, which matches
    `MirScalarExpr::reduce`'s canonical operand order.
-3. The saturate bounds `MAX_ITERS`, `MAX_ENODES`, `MATCH_LIMIT` matched on the
-   CombinedLang scalar run. A cap makes iteration order observable, so mismatched
-   caps leak order into the result.
+3. The saturate bounds matched on the CombinedLang scalar run. A cap makes
+   iteration order observable, so mismatched caps leak order into the result.
+   Define them as module-level constants in the new scalar canonicalize path,
+   mirroring the values in `scalar/egraph.rs` verbatim: `MAX_ENODES = 600`,
+   `MATCH_LIMIT = 1_000`, `MAX_ITERS = 100`. They are copied, not shared at
+   runtime, because the old constants are private to the `EGraph<ScalarLang>`
+   module that slice 7 deletes.
 
 ### 2.7 Lean: scalar semantics and emission
 
@@ -213,9 +230,13 @@ Trivially-provable rules (boolean laws, `not_not`) get tactics, the rest emit
 `Generated.lean` alongside relational theorems (one grammar, one file).
 
 The **6 builtin-applier rules of 2.5 are the permanent-`sorry` set**. Their RHS
-is a Rust function, never Lean-provable. The theorem ledger marks them as such,
-distinct from provable-later `sorry`s, so the ledger does not read them as
-unfinished proofs.
+is a Rust function, never Lean-provable. The ledger convention: each such theorem
+carries the exact comment line `-- PERMANENT SORRY: RHS is a Rust builtin`
+immediately above its `sorry`, distinct from provable-later `sorry`s (which carry
+a rule-specific `-- TODO` comment). A CI check greps `Generated.lean` and asserts
+the `PERMANENT SORRY` count is exactly 6, so a regression that turns a provable
+rule into a builtin (or vice versa) fails the build rather than silently
+mislabeling the ledger.
 
 ### Component boundaries
 
@@ -225,8 +246,8 @@ unfinished proofs.
 | Codegen | `build/codegen.rs` | add scalar arms in `sym_name`/`Matcher::node`/`tmpl_stmts` |
 | View traits | `egraph/view.rs` | add scalar match/apply methods (read existing `CombinedData.scalar`) |
 | Conditions | `dsl.rs`, `build/codegen.rs`, `lean.rs` | add scalar gate `Cond` variants |
-| Builtin appliers | `build/codegen.rs`, new `eqsat/scalar_builtins.rs` | const-eval / typed-literal RHS builtins (6 rules) |
-| Scalar extractor | new `eqsat/scalar_extract.rs` (from `scalar/raise.rs`) | reads `CNode::Scalar` on CombinedLang, determinism-parity |
+| Builtin appliers | `build/codegen.rs`, new `eqsat/scalar_builtins.rs` | const-eval / typed-literal RHS builtins (6 rules), import raise/`call_scalar_type` from `scalar_extract.rs` |
+| Scalar extractor | new `eqsat/scalar_extract.rs` (from `scalar/raise.rs`) | reads `CNode::Scalar` on CombinedLang, determinism-parity, exposes `pub fn raise(eg, id)` and re-homed `call_scalar_type` (pinned by slice 1) |
 | Lean | `lean/MirRewrite/Semantics.lean`, `lean.rs` | scalar denotation (bounded) plus emission arms |
 | Rules source | `*.rewrite` | 21 scalar rules declarative |
 | Deletions (slice 7) | `scalar/{egraph,rules,raise,lower}.rs` | remove standalone `EGraph<ScalarLang>` path |
@@ -243,7 +264,7 @@ deleted only in slice 7. Every slice also runs the scalar unit tests green.
 
 | Slice | Machinery landed | Rules ported (of 21) | Gate |
 |---|---|---|---|
-| **1, Seam (go/no-go)** | scalar `Pat`/`Tmpl` AST (2.1), codegen scalar arms (2.2), scalar view methods (2.3), scalar extractor on CombinedLang with determinism parity (2.6), CombinedLang `canonicalize` path (lower, saturate, scalar-extract), differential harness, Lean scalar denotation skeleton plus emit dispatch (sorry) | `and_or_dedup`, `and_or_single`, `not_not`, `not_binary_negate` (4, plain structural) | differential parity on these 4, and **scalar-rooted CombinedLang `saturate` reaches old fixpoint under matched bounds** |
+| **1, Seam (go/no-go)** | scalar `Pat`/`Tmpl` AST (2.1), codegen scalar arms (2.2), scalar view methods (2.3), scalar extractor on CombinedLang with determinism parity (2.6) exposing the pinned `pub fn raise(eg, id)` + re-homed `call_scalar_type`, CombinedLang `canonicalize` path (lower, saturate, scalar-extract), differential harness **and the corpus fixture** (one work unit, not split), Lean scalar denotation skeleton plus emit dispatch (sorry) | `and_or_dedup`, `and_or_single`, `not_not`, `not_binary_negate` (4, plain structural) | slice-1 gate below |
 | **2, Variadic** | wire scalar variadic `Pat`/`Tmpl` plus `rest...` splice onto existing `ListPat`/`ListTmpl` | `flatten_assoc`, `not_demorgan` (2, unconditional variadic) | differential parity |
 | **3, Analysis gates** | scalar `Cond` variants plus `scalar_lit`/`scalar_could_error` view methods (2.4) | `and_or_short_circuit`, `and_or_drop_unit`, `if_true`, `if_false_or_null`, `if_same_branches` (5) | differential parity |
 | **4, Const-eval builtin** | builtin-applier term (2.5), `const_eval` builtin, constant-literal RHS template | `const_fold` (builtin), `and_or_empty` (declarative literal) (2) | differential parity |
@@ -274,24 +295,49 @@ builtin-applier rules are the permanent-`sorry` set.
   old_scalar(e, ct)` over the adversarial corpus, both drivers restricted to the
   rules ported so far. Continuous no-changes check against a live oracle, not
   deferred to goldens.
-- **Adversarial corpus.** The corpus must **dominate the slt goldens' feature
-  space** along the three axes where new and old can diverge: equal-cost ties,
-  error-triggering subtrees, and type-context edges (null/error propagation
-  across specific column types). It must also be drawn from predicates as
-  PredicatePushdown, LiteralConstraints, and Fusion actually feed them
-  (post-pushdown predicate shapes, literal-constraint detection forms, fused
-  filter predicates), not an eqsat-relational-local sample. Parity on the corpus
-  implies parity on the goldens only if the corpus dominates the goldens' feature
-  space.
-- **Slice 1 additional.** Scalar-rooted CombinedLang `saturate` reaches the old
-  fixpoint under matched `MAX_ITERS`, `MAX_ENODES`, `MATCH_LIMIT`.
+- **Adversarial corpus (construction procedure).** The corpus is a committed
+  static fixture, built once in slice 1 and part of that slice's work unit (do
+  not split corpus-building from harness-building, they share the file path and
+  format). Construction:
+  1. **Collect.** Instrument the three production callers
+     (`predicate_pushdown.rs`, `literal_constraints.rs`, `fusion/filter.rs`)
+     under `enable_eqsat_scalar_canonicalize` to dump each `(expr, col_types)`
+     pair they pass to `canonicalize_predicates` during a full transform-suite
+     slt run (`bin/sqllogictest --optimized -- test/sqllogictest/transform/`).
+     Deduplicate structurally.
+  2. **Commit** the deduplicated pairs as a static fixture at
+     `src/transform/tests/testdata/eqsat_scalar_corpus` (datadriven format),
+     checked in so the differential test is hermetic and does not re-run slt to
+     regenerate inputs.
+  3. **Acceptance criterion for "dominates".** The harness runs a coverage
+     assertion over the fixture and fails if any of the three divergence axes is
+     unrepresented: at least one input yielding an equal-cost extraction tie, at
+     least one input whose subtree sets `could_error`, and at least one input
+     exercising a non-nullable `isnull_fold` or a type-context null/error
+     propagation. These three assertions are the operational meaning of
+     "dominates the goldens' feature space". Parity on the corpus implies parity
+     on the goldens only if this coverage holds.
+- **Slice 1 gate (operational).** Two checks, both on the 4-rule corpus subset:
+  1. **Extraction identity.** For every corpus input, the CombinedLang scalar
+     `canonicalize` produces the same `MirScalarExpr` as the old
+     `EGraph<ScalarLang>` `canonicalize`. This is the pass/fail criterion. No
+     iteration-count or e-node-count matching is required, extraction identity
+     suffices because the extractor is determinism-parity by construction (2.6),
+     and the bounds are copied constants (2.6.3).
+  2. **Termination.** The CombinedLang scalar `saturate` terminates within the
+     copied bounds on every corpus input (does not hit an unexpected growth
+     blow-up that the old engine did not).
+  Failure of check 1 is the go/no-go trigger: reassess one-grammar-over-CNode
+  having ported only 4 rules.
 - **Every slice.** Existing scalar unit tests (`eqsat::scalar`, `analysis`)
-  green, and relational goldens unchanged (regression check on the additive
-  codegen).
+  green, and relational goldens unchanged, run
+  `bin/sqllogictest --optimized -- test/sqllogictest/transform/` and confirm no
+  diff without `--rewrite` (regression check on the additive codegen).
 - **Slice 7 (the real gate).** Full `enable_eqsat_scalar_canonicalize` slt
-  goldens, **no `--rewrite`, no `insta accept`**. One narrow escape: a golden
-  provably cost-neutral tie churn may be regenerated per-golden with written
-  justification. Default is align.
+  goldens: `bin/sqllogictest --optimized -- test/sqllogictest/transform/` with
+  the flag in its test-on state, **no `--rewrite`, no `insta accept`**. One
+  narrow escape: a golden provably cost-neutral tie churn may be regenerated
+  per-golden with written justification. Default is align.
 - **Lean.** `cargo run -p mz-transform --example gen-lean` produces
   `Generated.lean` with one theorem per scalar rule. The 6 builtin appliers are
   marked permanent-`sorry`.
