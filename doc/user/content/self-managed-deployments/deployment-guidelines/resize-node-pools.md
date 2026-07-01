@@ -10,16 +10,18 @@ aliases:
 ---
 
 When you need a larger (or smaller) VM type for a node pool that Materialize
-runs on, the change cannot be applied in place. The underlying Kubernetes node
-group resources on all three clouds treat the VM type as **immutable**:
+runs on, the change cannot be applied in place. The underlying cloud APIs do
+not support an in-place "change VM type" operation on an existing managed node
+pool, so the Terraform providers mark the VM type field `ForceNew` on all three
+clouds:
 
 - GKE: `google_container_node_pool.node_config.machine_type`
 - AKS: `azurerm_kubernetes_cluster_node_pool.vm_size`
 - EKS: `aws_eks_node_group.instance_types`
 
-Changing the value triggers Terraform to plan a `destroy + create`. The destroy
-step fails if the pool still has Materialize pods running on it, because nothing
-in the Terraform graph migrates the workloads to a replacement pool first.
+Changing the value makes Terraform plan a `destroy + create`. The destroy step
+fails if the pool still has Materialize pods running on it, because nothing in
+the Terraform graph migrates the workloads to a replacement pool first.
 
 The supported pattern is to **add a second pool, trigger a Materialize rollout
 so the new generation of pods lands on it, then drop the old pool**.
@@ -78,7 +80,8 @@ module "materialize_nodepool_xl" {
 The Azure and AWS equivalents change `vm_size` (Azure) or `instance_types` (AWS)
 instead of `machine_type`.
 
-Apply. Both pools now exist; the new one is empty.
+Apply. Both pools now exist. Materialize pods have not yet been scheduled on
+the new pool.
 
 ### 2. Cordon the old pool so new pods schedule on the new one
 
@@ -98,8 +101,8 @@ Use the Materialize CR's rollout machinery to have the operator create a new
 generation of `environmentd` and `clusterd` pods. With the old pool cordoned,
 the new generation schedules onto the new pool's nodes.
 
-If you're using the `materialize-instance` Terraform module, bump the
-`force_rollout` (and `request_rollout`) inputs to a new UUID and apply:
+If you're using the `materialize-instance` Terraform module, bump both
+`force_rollout` and `request_rollout` inputs to a new UUID and apply:
 
 ```hcl
 module "materialize_instance" {
@@ -125,9 +128,10 @@ kubectl patch materialize <instance-name> \
 ```
 
 Both paths set `requestRollout` and `forceRollout` to new UUIDs, which is what
-the operator watches for. `forceRollout` is needed because the spec isn't
-otherwise changing (the node pool move happens at the cluster level, not in
-the CR).
+the operator watches for. Because the Materialize spec itself is unchanged (the
+node pool move happens at the Kubernetes cluster level and not in the
+Materialize CR), you need to update `forceRollout` (in addition to
+`requestRollout`).
 
 The default `rolloutStrategy` is `WaitUntilReady`, which creates the new
 generation alongside the old, waits for it to catch up, then promotes it and
