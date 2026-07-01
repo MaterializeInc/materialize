@@ -15,7 +15,7 @@ import tempfile
 from enum import Enum
 from typing import Any
 
-from materialize import MZ_ROOT, docker
+from materialize import docker
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
@@ -32,6 +32,9 @@ from materialize.mzcompose.service import (
 )
 from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
+from materialize.mzcompose.services.listener_config import (
+    resolve_listeners_config_path,
+)
 from materialize.mzcompose.services.metadata_store import (
     EXTERNAL_METADATA_STORE_ADDRESS,
     METADATA_STORE,
@@ -102,7 +105,7 @@ class Materialized(Service):
         default_replication_factor: int = 1,
         builtin_system_cluster_replication_factor: int | None = None,
         builtin_probe_cluster_replication_factor: int | None = None,
-        listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json",
+        listeners_config_path: str | None = None,
         config_sync_file_path: str | None = None,
         support_external_clusterd: bool = False,
         networks: (
@@ -340,9 +343,12 @@ class Materialized(Service):
         if platform:
             config["platform"] = platform
 
-        if image_version is None or image_version >= "v0.147.0-dev":
-            assert os.path.exists(listeners_config_path)
-            volumes.append(f"{listeners_config_path}:/listeners_config")
+        config_path = listeners_config_path or resolve_listeners_config_path(
+            image_version or MzVersion.parse_cargo()
+        )
+        if config_path is not None:
+            assert os.path.exists(config_path)
+            volumes.append(f"{config_path}:/listeners_config")
             environment.append("MZ_LISTENERS_CONFIG_PATH=/listeners_config")
 
         if config_sync_file_path is not None:

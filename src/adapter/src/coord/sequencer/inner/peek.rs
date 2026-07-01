@@ -657,6 +657,7 @@ impl Coordinator {
                                 optimizer,
                                 global_lir_plan,
                                 optimization_finished_at,
+                                target_replica,
                                 source_ids,
                             })
                         }
@@ -931,6 +932,7 @@ impl Coordinator {
             optimizer,
             global_lir_plan,
             optimization_finished_at,
+            target_replica,
             source_ids,
         }: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
@@ -964,7 +966,8 @@ impl Coordinator {
         );
 
         // Ship dataflow.
-        self.ship_dataflow(df_desc, cluster_id, None).await;
+        self.ship_dataflow(df_desc, cluster_id, target_replica)
+            .await;
 
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(

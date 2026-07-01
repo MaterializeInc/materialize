@@ -58,9 +58,8 @@ use mz_pgwire::MetricsConfig;
 use mz_pgwire_common::ConnectionCounter;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
-use mz_server_core::listeners::{
-    HttpListenerConfig, ListenerConfig, ListenersConfig, SqlListenerConfig,
-};
+use mz_server_core::listeners::v26_32_0::ListenersConfig;
+use mz_server_core::listeners::{HttpListenerConfig, ListenerConfig, SqlListenerConfig};
 use mz_server_core::{
     ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext, ServeConfig,
     TlsCertConfig, TlsMode,
@@ -420,9 +419,8 @@ impl Listeners {
                 metrics_registry: metrics_registry.clone(),
                 mcp_metrics: mcp_metrics.clone(),
                 oauth_metadata_metrics: oauth_metadata_metrics.clone(),
-                allowed_roles: listener.config.allowed_roles(),
                 internal_route_config: Arc::clone(&internal_route_config),
-                routes_enabled: listener.config.routes.clone(),
+                routes_enabled: listener.config.routes,
                 replica_http_locator: Arc::clone(&config.controller.replica_http_locator),
             };
             http_listener_handles.insert(name.clone(), listener.serve_http(http_config).await);

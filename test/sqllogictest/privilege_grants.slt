@@ -5031,10 +5031,10 @@ CREATE TABLE t0(c0 INT4 LIST NOT NULL, c1 NAME NOT NULL);
 statement ok
 INSERT INTO t0 VALUES (LIST[1,2,3], 'foo');
 
-# Regression test for https://github.com/MaterializeInc/database-issues/issues/10074.
-#
+# Regression test for https://linear.app/materializeinc/issue/SQL-442
+
 # TODO: Bad error msg, because we handle ExprContext names badly when inner contexts are created by `with_name`. See
-# https://github.com/MaterializeInc/database-issues/issues/10074
+# https://linear.app/materializeinc/issue/SQL-442
 statement error db error: ERROR: static function definition \(or its outer context 'mz_internal\.mz_role_oid'\) does not allow subqueries
 UPDATE t0 SET c1=has_secret_privilege(t0.c1, '30 minutes') WHERE (t0.c1 BETWEEN t0.c1 AND t0.c1);
 

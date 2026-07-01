@@ -1080,6 +1080,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn renames_table_reference() {
         // The whole point of the AST approach: an object reference in FROM is an
         // item name (an AstInfo associated type), which the old regex mangled
@@ -1092,6 +1093,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn renames_qualified_reference() {
         let m = map(&[("mydb", "db_0"), ("myschema", "schema_1"), ("t", "table_1")]);
         let out =
@@ -1100,6 +1102,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn does_not_rename_inside_other_identifiers() {
         // The old regex would rewrite `id` inside `user_id`; the AST does not.
         let m = map(&[("id", "column_1")]);
@@ -1108,6 +1111,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn redacts_query_literals_including_numbers() {
         let m = map(&[]);
         let out = anonymize(
@@ -1124,6 +1128,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn does_not_rename_inside_string_literals() {
         // A literal containing a word that matches a renamed identifier must not
         // be touched by renaming (it is data).
@@ -1178,6 +1183,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn keeps_numbers_in_ddl_but_renames_strings() {
         // DDL redaction (redact_numbers = false): a numeric default is config
         // that must stay valid for replay; a string default is renamed to a
@@ -1229,6 +1235,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn renames_and_redacts_inside_prepared_statement() {
         // PREPARE/DECLARE carry their inner query as an AstInfo associated type
         // (`NestedStatement`) the generic visitor treats as opaque; without the
@@ -1357,6 +1364,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn keeps_query_date_field_but_redacts_query_duration() {
         // In a query (consistent_names = false, redact_numbers = true) a datetime
         // field is still a specifier and must be kept (else date_trunc/extract
@@ -1378,6 +1386,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn redacts_bare_unit_data_but_keeps_date_fields() {
         // A short unit-shaped data value in a DDL body (`flag = 'y'`) is data and
         // must be redacted, but a bare datetime field used by `date_trunc` is
@@ -1418,6 +1427,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn redacts_numeric_string_literal_in_body() {
         // A view/MV/index body is anonymized with consistent_names AND
         // redact_numbers (unlike a query, which has consistent_names off). A
@@ -1444,6 +1454,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn keeps_retain_history_duration_in_body() {
         // An MV's RETAIN HISTORY duration is a `Value::String` config value (it
         // carries a unit) that replay needs intact. The body path keeps it even
@@ -1468,6 +1479,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn renames_query_local_identifiers() {
         // CTE names, column aliases, and constraint names are not captured
         // objects (not in the mapping) but can embed sensitive substrings. They
@@ -1493,6 +1505,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn keeps_builtins_in_local_positions() {
         // A column alias that shadows a builtin must NOT be renamed (it is in the
         // keyword set), so functions/types keep working.
@@ -1579,6 +1592,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn collect_finds_window_object_names() {
         // Objects absent from the catalog snapshot — DROP SCHEMA/CLUSTER targets
         // (route through visit_unresolved_object_name), FROM references, and a
@@ -1603,6 +1617,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn collect_skips_builtins_and_types() {
         // Builtins (via the keyword set) and type names must never be collected,
         // or the rewrite would corrupt function/type references.

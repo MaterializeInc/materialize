@@ -238,9 +238,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_envelope_materialize
     enable_eq_classes_withholding_errors
     enable_frontend_subscribes
-    enable_glue_schema_registry
     enable_introspection_subscribes
-    enable_kafka_broker_matching_rules
     enable_less_reduce_in_eqprop
     enable_list_length_max
     enable_list_n_layers
@@ -414,7 +412,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     wallclock_global_lag_histogram_retention_interval
     wallclock_lag_histogram_period_interval
     wallclock_lag_history_retention_interval
-    webhook_max_request_size_bytes
     webhooks_secrets_caching_ttl_secs
     with_0dt_caught_up_check_allowed_lag
     with_0dt_caught_up_check_cutoff
@@ -530,6 +527,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_compute_correction_v2
     enable_create_table_from_source
     enable_eager_delta_joins
+    enable_glue_schema_registry
     enable_index_options
     enable_join_prioritize_arranged
     enable_kafka_broker_matching_rules

@@ -202,7 +202,7 @@ def main() -> int:
     parser.add_argument(
         "--listeners-config-path",
         help="Path to json file with environmentd listeners configuration.",
-        default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
     )
     args = parser.parse_intermixed_args()
 
