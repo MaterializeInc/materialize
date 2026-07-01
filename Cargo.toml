@@ -437,7 +437,7 @@ parquet = { version = "57", default-features = false, features = ["arrow", "asyn
 paste = "1.0.15"
 pem = "3.0.6"
 phf = { version = "0.13.1", features = ["uncased"] }
-phf_codegen = "0.13.1"
+phf_codegen = "0.14.0"
 pin-project = "1.1.13"
 postgres = "0.19.12"
 postgres-openssl = "0.5.2"
