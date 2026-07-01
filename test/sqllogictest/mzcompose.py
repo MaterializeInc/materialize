@@ -686,6 +686,9 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/regproc.slt",
         "test/sqllogictest/regressions.slt",
         "test/sqllogictest/regtype.slt",
+        # Selects from temporary objects, which cannot be wrapped in the
+        # persistent indexed views that --auto-index-selects creates.
+        "test/sqllogictest/rename.slt",
         "test/sqllogictest/returning.slt",
         "test/sqllogictest/replacement-materialized-views.slt",
         "test/sqllogictest/role.slt",
@@ -980,6 +983,9 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/replacement-materialized-views.slt",
     }
     tests_no_auto_index_selects = {
+        # Selects from temporary objects, which cannot be wrapped in the
+        # persistent indexed views that --auto-index-selects creates.
+        "test/sqllogictest/rename.slt",
         # pg_typeof contains public schema name in views
         "test/sqllogictest/cast.slt",
         "test/sqllogictest/map.slt",
