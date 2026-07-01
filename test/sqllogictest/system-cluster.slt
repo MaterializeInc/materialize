@@ -412,8 +412,8 @@ Explained Query:
   Finish order_by=[#0{id} asc nulls_last] output=[#0..=#5]
     Project (#2{id}, #3{name}, #0{id}, #5{size}, #1{name}, #20)
       Map (((uint8_to_double(#16{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#10{memory_bytes})) then null else #10{memory_bytes} end)) * 100))
-        Join on=(#2{id} = #13{replica_id} AND #5{size} = #6{size}) type=delta
-          ArrangeBy keys=[[#2{id}], [#5{size}]]
+        Join on=(#2{id} = #13{replica_id} AND #5{size} = #6{size}) type=differential
+          ArrangeBy keys=[[#2{id}]]
             Project (#7{id}, #8{name}, #0{id}..=#3{size})
               Join on=(#2{cluster_id} = #7{id}) type=differential
                 ArrangeBy keys=[[#2{cluster_id}]]
@@ -422,15 +422,15 @@ Explained Query:
                 ArrangeBy keys=[[#0{id}]]
                   ReadIndex on=mz_clusters mz_clusters_ind=[differential join]
           ArrangeBy keys=[[#0{size}]]
-            ReadIndex on=mz_cluster_replica_sizes mz_cluster_replica_sizes_ind=[delta join lookup]
+            ReadIndex on=mz_cluster_replica_sizes mz_cluster_replica_sizes_ind=[differential join]
           ArrangeBy keys=[[#0{replica_id}]]
-            ReadIndex on=mz_cluster_replica_metrics mz_cluster_replica_metrics_ind=[delta join lookup]
+            ReadIndex on=mz_cluster_replica_metrics mz_cluster_replica_metrics_ind=[differential join]
 
 Used Indexes:
   - mz_catalog.mz_clusters_ind (differential join)
   - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
-  - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
-  - mz_internal.mz_cluster_replica_metrics_ind (delta join lookup)
+  - mz_catalog.mz_cluster_replica_sizes_ind (differential join)
+  - mz_internal.mz_cluster_replica_metrics_ind (differential join)
 
 Target cluster: mz_catalog_server
 

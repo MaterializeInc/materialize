@@ -157,8 +157,8 @@ Explained Query:
   Return
     Project (#0{a}..=#2{u}, #14, #15, #17..=#19, #21, #22)
       Map ((#5) IS NULL, case when #13 then null else #0{a} end, case when #13 then null else #4{v} end, (#9) IS NULL, case when #16 then null else #1{b} end, case when #16 then null else #7{c} end, case when #16 then null else #8{w} end, (#12) IS NULL, case when #20 then null else #10{c} end, case when #20 then null else #11{x} end)
-        Join on=(#0{a} = #3{a} AND #1{b} = #6{b} AND #10{c} = case when (#9) IS NULL then null else #7{c} end) type=delta
-          ArrangeBy keys=[[#0{a}], [#1{b}]]
+        Join on=(#0{a} = #3{a} AND #1{b} = #6{b} AND #10{c} = case when (#9) IS NULL then null else #7{c} end) type=differential
+          ArrangeBy keys=[[#1{b}]]
             ReadStorage materialize.public.foo
           ArrangeBy keys=[[#0{a}]]
             Union
@@ -173,7 +173,7 @@ Explained Query:
                     Distinct project=[#0{a}]
                       Project (#0{a})
                         ReadStorage materialize.public.foo
-          ArrangeBy keys=[[#0{b}], [case when (#3) IS NULL then null else #1{c} end]]
+          ArrangeBy keys=[[case when (#3) IS NULL then null else #1{c} end]]
             Union
               Map (true)
                 ReadStorage materialize.public.baz
@@ -234,8 +234,8 @@ Explained Query:
     cte l2 =
       Reduce aggregates=[count(*)]
         Project ()
-          Join on=(#0{a} = #2{a} AND #1{b} = #3{b} AND #6{c} = case when (#5) IS NULL then null else #4{c} end) type=delta
-            ArrangeBy keys=[[#0{a}], [#1{b}]]
+          Join on=(#0{a} = #2{a} AND #1{b} = #3{b} AND #6{c} = case when (#5) IS NULL then null else #4{c} end) type=differential
+            ArrangeBy keys=[[#1{b}]]
               Project (#0{a}, #1{b})
                 ReadStorage materialize.public.foo
             ArrangeBy keys=[[#0{a}]]
@@ -248,7 +248,7 @@ Explained Query:
                     Distinct project=[#0{a}]
                       Project (#0{a})
                         ReadStorage materialize.public.foo
-            ArrangeBy keys=[[#0{b}], [case when (#2) IS NULL then null else #1{c} end]]
+            ArrangeBy keys=[[case when (#2) IS NULL then null else #1{c} end]]
               Union
                 Project (#0{b}, #1{c}, #3)
                   Map (true)
@@ -307,11 +307,11 @@ where foo.a = 7;
 Explained Query:
   Project (#0{a}..=#2{u}, #11..=#13, #15, #16)
     Map ((#6) IS NULL, case when #10 then null else #1{b} end, case when #10 then null else #4{c} end, case when #10 then null else #5{w} end, (#9) IS NULL, case when #14 then null else #7{c} end, case when #14 then null else #8{x} end)
-      Join on=(#1{b} = #3{b} AND #7{c} = case when (#6) IS NULL then null else #4{c} end) type=delta
+      Join on=(#1{b} = #3{b} AND #7{c} = case when (#6) IS NULL then null else #4{c} end) type=differential
         ArrangeBy keys=[[#1{b}]]
           Filter (#0{a} = 7)
             ReadStorage materialize.public.foo
-        ArrangeBy keys=[[#0{b}], [case when (#3) IS NULL then null else #1{c} end]]
+        ArrangeBy keys=[[case when (#3) IS NULL then null else #1{c} end]]
           Union
             Map (true)
               ReadStorage materialize.public.baz
@@ -596,7 +596,7 @@ Explained Query:
     cte l0 =
       Project (#2{a}..=#4{u}, #1) // { keys: "()" }
         Join on=(#0{a} = #2{a}) type=differential // { keys: "()" }
-          ArrangeBy keys=[[#0{a}]] // { keys: "([0])" }
+          ArrangeBy keys=[[#0]] // { keys: "([0])" }
             Project (#0, #2) // { keys: "([0])" }
               Filter (#0{a}) IS NOT NULL // { keys: "([0])" }
                 Get l1 // { keys: "([0])" }
@@ -646,7 +646,7 @@ Explained Query:
     cte l0 =
       Project (#0..=#2, #4{v})
         Join on=(#0{a} = #3{a}) type=differential
-          ArrangeBy keys=[[#0{a}]]
+          ArrangeBy keys=[[#0]]
             Project (#0..=#2)
               Filter (#0{a}) IS NOT NULL
                 Get l1
@@ -767,8 +767,8 @@ Explained Query:
           Union
             Project (#11..=#13)
               Map ((#7) IS NULL, (#0{a} + case when (#4) IS NULL then null else #0 end), (#1{b} + case when #10 then null else #1 end), (#2{u} || smallint_to_text((case when #10 then null else #6{c} end + case when (#9) IS NULL then null else #8{c} end))))
-                Join on=(#0 = #3{a} AND #1 = #5{b} AND #8{c} = case when (#7) IS NULL then null else #6{c} end) type=delta
-                  ArrangeBy keys=[[#0{a}], [#1{b}]]
+                Join on=(#0 = #3{a} AND #1 = #5{b} AND #8{c} = case when (#7) IS NULL then null else #6{c} end) type=differential
+                  ArrangeBy keys=[[#1{b}]]
                     Get l3
                   ArrangeBy keys=[[#0{a}]]
                     Union
@@ -782,7 +782,7 @@ Explained Query:
                             Distinct project=[#0]
                               Project (#0)
                                 Get l2
-                  ArrangeBy keys=[[#0{b}], [case when (#2) IS NULL then null else #1{c} end]]
+                  ArrangeBy keys=[[case when (#2) IS NULL then null else #1{c} end]]
                     Union
                       Project (#0{b}, #1{c}, #3)
                         Map (true)
@@ -858,8 +858,8 @@ Explained Query:
         Distinct project=[#0{a}..=#2{u}] // { arity: 3 }
           Union // { arity: 3 }
             Project (#0..=#2) // { arity: 3 }
-              Join on=(#0 = #3{a} AND #1 = #4{b} AND #7{c} = case when (#6) IS NULL then null else #5{c} end) type=delta // { arity: 8 }
-                ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 3 }
+              Join on=(#0 = #3{a} AND #1 = #4{b} AND #7{c} = case when (#6) IS NULL then null else #5{c} end) type=differential // { arity: 8 }
+                ArrangeBy keys=[[#1{b}]] // { arity: 3 }
                   Get l2 // { arity: 3 }
                 ArrangeBy keys=[[#0{a}]] // { arity: 1 }
                   Union // { arity: 1 }
@@ -871,7 +871,7 @@ Explained Query:
                         Distinct project=[#0] // { arity: 1 }
                           Project (#0{a}) // { arity: 1 }
                             Get l2 // { arity: 3 }
-                ArrangeBy keys=[[#0{b}], [case when (#2) IS NULL then null else #1{c} end]] // { arity: 3 }
+                ArrangeBy keys=[[case when (#2) IS NULL then null else #1{c} end]] // { arity: 3 }
                   Union // { arity: 3 }
                     Project (#0{b}, #1{c}, #3) // { arity: 3 }
                       Map (true) // { arity: 4 }

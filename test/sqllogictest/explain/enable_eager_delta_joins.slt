@@ -62,11 +62,11 @@ materialize.public.mv:
   Project (#1{y}, #3{y}, #3{y})
     Join on=(#0{x} = #2{x} AND #3{y} = #4{y}) type=differential
       implementation
-        %0:t1[#0{x}]K » %1:t2[#0{x}]K » %2:t3[#0{x}]K
+        %2:t3[#0{x}]K » %1:t2[#1]K » %0:t1[#0]K
       ArrangeBy keys=[[#0{x}]]
         Filter (#0{x}) IS NOT NULL
           ReadStorage materialize.public.t1
-      ArrangeBy keys=[[#0{x}]]
+      ArrangeBy keys=[[#1{y}]]
         Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL
           ReadStorage materialize.public.t2
       ArrangeBy keys=[[#0{y}]]
@@ -94,11 +94,11 @@ materialize.public.mv:
   Project (#1{y}, #3{y}, #3{y})
     Join on=(#0{x} = #2{x} AND #3{y} = #4{y}) type=differential
       implementation
-        %0:t1[#0{x}]K » %1:t2[#0{x}]K » %2:t3[#0{x}]K
+        %2:t3[#0{x}]K » %1:t2[#1]K » %0:t1[#0]K
       ArrangeBy keys=[[#0{x}]]
         Filter (#0{x}) IS NOT NULL
           ReadStorage materialize.public.t1
-      ArrangeBy keys=[[#0{x}]]
+      ArrangeBy keys=[[#1{y}]]
         Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL
           ReadStorage materialize.public.t2
       ArrangeBy keys=[[#0{y}]]
@@ -124,15 +124,13 @@ REPLAN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#1{y}, #3{y}, #3{y})
-    Join on=(#0{x} = #2{x} AND #3{y} = #4{y}) type=delta
+    Join on=(#0{x} = #2{x} AND #3{y} = #4{y}) type=differential
       implementation
-        %0:t1 » %1:t2[#0{x}]K » %2:t3[#0{x}]K
-        %1:t2 » %0:t1[#0{x}]K » %2:t3[#0{x}]K
-        %2:t3 » %1:t2[#1{x}]K » %0:t1[#0{x}]K
+        %2:t3[#0{x}]K » %1:t2[#1]K » %0:t1[#0]K
       ArrangeBy keys=[[#0{x}]]
         Filter (#0{x}) IS NOT NULL
           ReadStorage materialize.public.t1
-      ArrangeBy keys=[[#0{x}], [#1{y}]]
+      ArrangeBy keys=[[#1{y}]]
         Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL
           ReadStorage materialize.public.t2
       ArrangeBy keys=[[#0{y}]]
@@ -183,11 +181,11 @@ materialize.public.v:
   Project (#1{y}, #3{y}, #3{y})
     Join on=(#0{x} = #2{x} AND #3{y} = #4{y}) type=differential
       implementation
-        %0:t1[#0{x}]K » %1:t2[#0{x}]K » %2:t3[#0{x}]K
+        %2:t3[#0{x}]K » %1:t2[#1]K » %0:t1[#0]K
       ArrangeBy keys=[[#0{x}]]
         Filter (#0{x}) IS NOT NULL
           ReadStorage materialize.public.t1
-      ArrangeBy keys=[[#0{x}]]
+      ArrangeBy keys=[[#1{y}]]
         Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL
           ReadStorage materialize.public.t2
       ArrangeBy keys=[[#0{y}]]
@@ -219,11 +217,11 @@ materialize.public.v:
   Project (#1{y}, #3{y}, #3{y})
     Join on=(#0{x} = #2{x} AND #3{y} = #4{y}) type=differential
       implementation
-        %0:t1[#0{x}]K » %1:t2[#0{x}]K » %2:t3[#0{x}]K
+        %2:t3[#0{x}]K » %1:t2[#1]K » %0:t1[#0]K
       ArrangeBy keys=[[#0{x}]]
         Filter (#0{x}) IS NOT NULL
           ReadStorage materialize.public.t1
-      ArrangeBy keys=[[#0{x}]]
+      ArrangeBy keys=[[#1{y}]]
         Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL
           ReadStorage materialize.public.t2
       ArrangeBy keys=[[#0{y}]]
@@ -253,15 +251,13 @@ materialize.public.v_idx:
 
 materialize.public.v:
   Project (#1{y}, #3{y}, #3{y})
-    Join on=(#0{x} = #2{x} AND #3{y} = #4{y}) type=delta
+    Join on=(#0{x} = #2{x} AND #3{y} = #4{y}) type=differential
       implementation
-        %0:t1 » %1:t2[#0{x}]K » %2:t3[#0{x}]K
-        %1:t2 » %0:t1[#0{x}]K » %2:t3[#0{x}]K
-        %2:t3 » %1:t2[#1{x}]K » %0:t1[#0{x}]K
+        %2:t3[#0{x}]K » %1:t2[#1]K » %0:t1[#0]K
       ArrangeBy keys=[[#0{x}]]
         Filter (#0{x}) IS NOT NULL
           ReadStorage materialize.public.t1
-      ArrangeBy keys=[[#0{x}], [#1{y}]]
+      ArrangeBy keys=[[#1{y}]]
         Filter (#0{x}) IS NOT NULL AND (#1{y}) IS NOT NULL
           ReadStorage materialize.public.t2
       ArrangeBy keys=[[#0{y}]]

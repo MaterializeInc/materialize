@@ -428,15 +428,15 @@ Explained Query:
         Get l0
     cte l2 =
       ArrangeBy keys=[[#0{b}]]
-        Get l1
+        Filter (#0{b}) IS NOT NULL
+          Get l1
     cte l3 =
       TopK group_by=[#0{b}] limit=1
         Project (#2{b}, #0{a})
-          Filter (#1{b}) IS NOT NULL
-            Join on=(#1{b} = #2{b}) type=differential
-              ArrangeBy keys=[[#1{b}]]
-                ReadIndex on=iv iv_b_idx=[differential join]
-              Get l2
+          Join on=(#1{b} = #2{b}) type=differential
+            ArrangeBy keys=[[#1{b}]]
+              ReadIndex on=iv iv_b_idx=[differential join]
+            Get l2
     cte l4 =
       TopK group_by=[#0{b}] limit=1
         Project (#2{b}, #0{a})
@@ -447,7 +447,7 @@ Explained Query:
             Get l2
   Return
     Project (#2{a}, #4{a})
-      Join on=(#0{b} = #1{b} = #3{b}) type=delta
+      Join on=(#0{b} = #1{b} = #3{b}) type=differential
         ArrangeBy keys=[[#0{b}]]
           Get l0
         ArrangeBy keys=[[#0{b}]]
@@ -498,7 +498,7 @@ Explained Query:
         Get l0
     cte l2 =
       Project (#0{a}..=#2{a})
-        Join on=(#1{b} = #3{b} = #4{b}) type=delta
+        Join on=(#1{b} = #3{b} = #4{b}) type=differential
           Get l1
           Get l1
           ArrangeBy keys=[[#0{b}]]
@@ -734,7 +734,7 @@ Explained Query:
         Get l0
   Return
     Project (#0{a}, #2{a})
-      Join on=(#1{b} = #3{b} = #4{b}) type=delta
+      Join on=(#1{b} = #3{b} = #4{b}) type=differential
         Get l1
         Get l1
         ArrangeBy keys=[[#0{b}]]
@@ -877,9 +877,9 @@ Explained Query:
     Filter (#1{b}) IS NOT NULL AND (#3{d}) IS NOT NULL
       Join on=(#1{b} = #2{c} AND #3{d} = #4{e}) type=delta
         implementation
-          %0:t » %1:u[#0{c}]KA » %2:v[#0{e}]KA
-          %1:u » %0:t[#1{b}]KA » %2:v[#0{e}]KA
-          %2:v » %1:u[#1{d}]KA » %0:t[#1{b}]KA
+          %0:t » %1:u[#0]KA » %2:v[#0]KA
+          %1:u » %0:t[#1]KA » %2:v[#0]KA
+          %2:v » %1:u[#1]KA » %0:t[#1]KA
         ArrangeBy keys=[[#1{b}]]
           ReadIndex on=t t_b_idx=[delta join 1st input (full scan)]
         ArrangeBy keys=[[#0{c}], [#1{d}]]
@@ -909,9 +909,9 @@ Explained Query:
     Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
       Join on=(#0{a} = #2{c} AND #1{b} = #4{e}) type=delta
         implementation
-          %0:t » %1:u[#0{c}]KA » %2:v[#0{e}]KA
-          %1:u » %0:t[#0{a}]KA » %2:v[#0{e}]KA
-          %2:v » %0:t[#1{b}]KA » %1:u[#0{c}]KA
+          %0:t » %1:u[#0]KA » %2:v[#0]KA
+          %1:u » %0:t[#0]KA » %2:v[#0]KA
+          %2:v » %0:t[#1]KA » %1:u[#0]KA
         ArrangeBy keys=[[#0{a}], [#1{b}]]
           ReadIndex on=t t_a_idx=[delta join 1st input (full scan)] t_b_idx=[delta join lookup]
         ArrangeBy keys=[[#0{c}]]

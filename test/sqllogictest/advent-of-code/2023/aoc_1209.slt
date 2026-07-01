@@ -72,12 +72,12 @@ Explained Query:
       Project (#0..=#4, #6) // { arity: 6 }
         Join on=(#1{line_no} = #5{line_no} AND #3{round} = #7{round} AND #6{col_no} = (#2{col_no} + 1)) type=differential // { arity: 8 }
           implementation
-            %0:l0[#1{line_no}, (#2{col_no} + 1), #3{round}]KKKif » %1:l3[#1{line_no}..=#3{round}]KKKiif
-          ArrangeBy keys=[[#1{line_no}, (#2{col_no} + 1), #3{round}]] // { arity: 4 }
+            %1:l3[#1{line_no}, #3{round}]KK » %0:l0[#1, #3]KK
+          ArrangeBy keys=[[#1, #3]] // { arity: 4 }
             Project (#0..=#3) // { arity: 4 }
               Filter (#4 <= 21) AND (#1{line_no}) IS NOT NULL AND (#4 > #3{round}) // { arity: 5 }
                 Get l0 // { arity: 5 }
-          ArrangeBy keys=[[#1{line_no}..=#3{round}]] // { arity: 4 }
+          ArrangeBy keys=[[#1{line_no}, #3{round}]] // { arity: 4 }
             Filter (#2{col_no} <= 21) AND (#1{col_no}) IS NOT NULL AND (#2{col_no} > #3{col_no}) // { arity: 4 }
               Get l3 // { arity: 4 }
     cte l2 =
@@ -104,8 +104,8 @@ Explained Query:
                         Project (#0..=#3) // { arity: 4 }
                           Join on=(#1{col_no} = #4{col_no} AND #2{col_no} = #6{col_no} AND #3{col_no} = #5{col_no}) type=differential // { arity: 7 }
                             implementation
-                              %1:l2[#0{col_no}, #2{col_no}, #1{col_no}]UKKK » %0:l3[#1{col_no}..=#3{col_no}]KKKif
-                            ArrangeBy keys=[[#1{col_no}..=#3{col_no}]] // { arity: 4 }
+                              %1:l2[#0{col_no}, #2{col_no}, #1{col_no}]UKKK » %0:l3[#1..=#3]KKK
+                            ArrangeBy keys=[[#1..=#3]] // { arity: 4 }
                               Filter (#2{col_no} <= 21) AND (#1{col_no}) IS NOT NULL AND (0 != coalesce(#0{col_no}, 0)) AND (#2{col_no} > #3{col_no}) // { arity: 4 }
                                 Get l3 // { arity: 4 }
                             ArrangeBy keys=[[#0{col_no}, #2{col_no}, #1{col_no}]] // { arity: 3 }
@@ -118,12 +118,12 @@ Explained Query:
                       Project (#0..=#3) // { arity: 4 }
                         Join on=(#1{col_no} = #4{col_no} AND #3{col_no} = #5{col_no} AND #6{col_no} = (#2{col_no} + 1)) type=differential // { arity: 7 }
                           implementation
-                            %1:l2[#0{col_no}..=#2{col_no}]UKKK » %0:l0[#1{col_no}, #3{col_no}, (#2{col_no} + 1)]KKKif
-                          ArrangeBy keys=[[#1{col_no}, #3{col_no}, (#2{col_no} + 1)]] // { arity: 4 }
+                            %1:l2[#0{col_no}, #1{col_no}]KK » %0:l0[#1, #3]KK
+                          ArrangeBy keys=[[#1, #3]] // { arity: 4 }
                             Project (#0..=#3) // { arity: 4 }
                               Filter (#4 <= 21) AND (#1{line_no}) IS NOT NULL AND (#4 > #3{round}) AND (0 != (0 - coalesce(#0{value}, 0))) // { arity: 5 }
                                 Get l0 // { arity: 5 }
-                          ArrangeBy keys=[[#0{col_no}..=#2{col_no}]] // { arity: 3 }
+                          ArrangeBy keys=[[#0{col_no}, #1{col_no}]] // { arity: 3 }
                             Get l2 // { arity: 3 }
                     Project (#0..=#3) // { arity: 4 }
                       Filter (#4 <= 21) AND (#4 > #3{round}) AND (0 != (0 - coalesce(#0{value}, 0))) // { arity: 5 }

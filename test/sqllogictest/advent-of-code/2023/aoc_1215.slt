@@ -214,14 +214,15 @@ Explained Query:
         Project (#2, #0) // { arity: 2 }
           Join on=(#1{symb} = #2{symb}) type=differential // { arity: 3 }
             implementation
-              %1:l1[#0{symb}]UKA » %0:l0[#1{symb}]Kef
-            ArrangeBy keys=[[#1{symb}]] // { arity: 2 }
+              %1:l1[#0{symb}]UK » %0:l0[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 2 }
               Project (#0, #3) // { arity: 2 }
                 Filter (#3) IS NOT NULL AND (0 = case when #2 then 0 else text_to_integer(substr(#1{string}, char_length(#1{string}))) end) // { arity: 4 }
                   Map (("-" = substr(#1{string}, char_length(#1{string}))), case when #2 then substr(#1{string}, 1, (char_length(#1{string}) - 1)) else substr(#1{string}, 1, (char_length(#1{string}) - 2)) end) // { arity: 4 }
                     Get l0 // { arity: 2 }
             ArrangeBy keys=[[#0{symb}]] // { arity: 1 }
-              Get l1 // { arity: 1 }
+              Filter (#0{symb}) IS NOT NULL // { arity: 1 }
+                Get l1 // { arity: 1 }
     cte l3 =
       Union // { arity: 2 }
         Get l2 // { arity: 2 }
@@ -259,13 +260,14 @@ Explained Query:
         Project (#2, #0) // { arity: 2 }
           Join on=(#1{symb} = #2{symb}) type=differential // { arity: 3 }
             implementation
-              %1:l5[#0{symb}]UKA » %0:l4[#1{symb}]K
-            ArrangeBy keys=[[#1{symb}]] // { arity: 2 }
+              %1:l5[#0{symb}]UK » %0:l4[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
                 Filter (#1{symb}) IS NOT NULL // { arity: 3 }
                   Get l4 // { arity: 3 }
             ArrangeBy keys=[[#0{symb}]] // { arity: 1 }
-              Get l5 // { arity: 1 }
+              Filter (#0{symb}) IS NOT NULL // { arity: 1 }
+                Get l5 // { arity: 1 }
     cte l7 =
       Union // { arity: 2 }
         Get l6 // { arity: 2 }
@@ -325,8 +327,8 @@ Explained Query:
           Project (#4, #1, #2{min}) // { arity: 3 }
             Join on=(#0{start} = #3{start}) type=differential // { arity: 5 }
               implementation
-                %0:l8[#0{start}]UKf » %1:l11[#0{start}]Kef
-              ArrangeBy keys=[[#0{start}]] // { arity: 3 }
+                %1:l11[#0{start}]K » %0:l8[#0]UK
+              ArrangeBy keys=[[#0]] // { arity: 3 }
                 Project (#0..=#2{min}) // { arity: 3 }
                   Filter NOT(#3) // { arity: 4 }
                     Get l8 // { arity: 4 }
@@ -346,8 +348,8 @@ Explained Query:
               Filter (#3{min} >= #1{min}) // { arity: 4 }
                 Join on=(#0{hash} = #2{hash}) type=differential // { arity: 4 }
                   implementation
-                    %0:l13[#0{hash}]K » %1:l14[#0{hash}]K
-                  ArrangeBy keys=[[#0{hash}]] // { arity: 2 }
+                    %1:l14[#0{hash}]K » %0:l13[#0]K
+                  ArrangeBy keys=[[#0]] // { arity: 2 }
                     Get l13 // { arity: 2 }
                   ArrangeBy keys=[[#0{hash}]] // { arity: 2 }
                     Get l14 // { arity: 2 }

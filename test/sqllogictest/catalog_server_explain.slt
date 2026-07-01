@@ -851,11 +851,7 @@ mz_internal.mz_console_cluster_utilization_overview:
                           Filter: (#1{size}) IS NOT NULL
                             →Arranged l0
                               Key: (#0..=#2)
-                      →Arrange (#0)
-                        →Fused with Child Map/Filter/Project
-                          Project: #0, #1, #3..=#5
-                            →Arranged mz_catalog.mz_cluster_replica_sizes
-                              Key: (#0{size})
+                      →Arranged mz_catalog.mz_cluster_replica_sizes
                       →Arranged mz_internal.mz_cluster_replica_metrics_history
         →Arrange (#0{replica_id})
           →Fused with Child Map/Filter/Project
@@ -978,7 +974,7 @@ mz_internal.mz_console_cluster_utilization_overview:
 
 Used Indexes:
   - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
-  - mz_catalog.mz_cluster_replica_sizes_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replica_sizes_ind (differential join)
   - mz_internal.mz_cluster_replica_status_history_ind (*** full scan ***)
   - mz_internal.mz_cluster_replica_metrics_history_ind (differential join)
   - mz_internal.mz_cluster_replica_history_ind (*** full scan ***)
@@ -1038,24 +1034,20 @@ mz_internal.mz_hydration_statuses:
         →Arranged l0
         →Arranged l1
     cte l4 =
-      →Fused with Child Map/Filter/Project
-        Project: #0
-        Filter: (#4{type} != "webhook") AND (#10{cluster_id}) IS NOT NULL
-          →Arranged mz_catalog.mz_sources
-            Key: (#0{id})
-    cte l5 =
-      →Differential Join %1:mz_source_statistics[#0{id}] » %0:l4[#0]
-        →Arrange (#0)
-          →Stream l4
+      →Differential Join %1:mz_source_statistics[#0{id}] » %0:mz_sources[#0]
+        after %0:
+          Project: #0, #1, #8
+          Filter: (#17{type} != "webhook") AND (#23{cluster_id}) IS NOT NULL
+        →Arranged mz_catalog.mz_sources
         →Arrange (#0{id})
           →Arranged mz_internal.mz_source_statistics
-    cte l6 =
+    cte l5 =
       →Arranged mz_catalog.mz_sinks
-    cte l7 =
-      →Differential Join %1:mz_sink_statuses[#0{id}] » %0:l6[#0]
-        →Arranged l6
+    cte l6 =
+      →Differential Join %1:mz_sink_statuses[#0{id}] » %0:l5[#0]
+        →Arranged l5
         →Arranged mz_internal.mz_sink_statuses
-    cte l8 =
+    cte l7 =
       →Differential Join %1[#1{cluster_id}] » %0:mz_cluster_replicas[#2]
         →Arrange (#2)
           →Arranged mz_catalog.mz_cluster_replicas
@@ -1066,25 +1058,25 @@ mz_internal.mz_hydration_statuses:
               Map: null
                 →Consolidating Union
                   →Negate Diffs
-                    →Differential Join %1:l6[#0{id}] » %0[#0]
+                    →Differential Join %1:l5[#0{id}] » %0[#0]
                       →Distinct GroupAggregate
                         →Fused with Child Map/Filter/Project
                           Project: #0
-                            →Read l7
-                      →Arranged l6
+                            →Read l6
+                      →Arranged l5
                   →Fused with Child Map/Filter/Project
                     Project: #0, #11
                       →Arranged mz_catalog.mz_sinks
                         Key: (#0{id})
-            →Stream l7
-    cte l9 =
+            →Stream l6
+    cte l8 =
       →Arrange (#0{id}, #2{id})
-        →Stream l8
-    cte l10 =
-      →Differential Join %1:l9[#0{id}, #2{id}] » %0:mz_cluster_replica_frontiers[#0, #1]
+        →Stream l7
+    cte l9 =
+      →Differential Join %1:l8[#0{id}, #2{id}] » %0:mz_cluster_replica_frontiers[#0, #1]
         →Arrange (#0, #1)
           →Arranged mz_catalog.mz_cluster_replica_frontiers
-        →Arranged l9
+        →Arranged l8
   →Return
     →Union
       →Map/Filter/Project
@@ -1138,9 +1130,13 @@ mz_internal.mz_hydration_statuses:
                       →Distinct GroupAggregate
                         →Fused with Child Map/Filter/Project
                           Project: #0
-                            →Read l5
-                  →Stream l4
-            →Stream l5
+                            →Read l4
+                  →Fused with Child Map/Filter/Project
+                    Project: #0
+                    Filter: (#4{type} != "webhook") AND (#10{cluster_id}) IS NOT NULL
+                      →Arranged mz_catalog.mz_sources
+                        Key: (#0{id})
+            →Stream l4
       →Map/Filter/Project
         Project: #0, #2, #4
         Map: ((#1{status} = "running") AND (coalesce(#3{write_frontier}, 0) > 0))
@@ -1150,19 +1146,19 @@ mz_internal.mz_hydration_statuses:
               Map: null
                 →Consolidating Union
                   →Negate Diffs
-                    →Differential Join %1:l9[#0{id}, #2{id}] » %0[#0, #1]
+                    →Differential Join %1:l8[#0{id}, #2{id}] » %0[#0, #1]
                       →Distinct GroupAggregate
                         →Fused with Child Map/Filter/Project
                           Project: #0, #2
-                            →Read l10
-                      →Arranged l9
-                  →Stream l8
-            →Stream l10
+                            →Read l9
+                      →Arranged l8
+                  →Stream l7
+            →Stream l9
 
 Used Indexes:
   - mz_internal.mz_source_statistics_ind (*** full scan ***)
   - mz_catalog.mz_indexes_ind (*** full scan ***, differential join)
-  - mz_catalog.mz_sources_ind (*** full scan ***)
+  - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
   - mz_catalog.mz_sinks_ind (*** full scan ***, differential join)
   - mz_catalog.mz_materialized_views_ind (*** full scan ***, differential join)
   - mz_internal.mz_sink_statuses_ind (differential join)
@@ -1599,15 +1595,12 @@ mz_internal.mz_show_clusters_ind:
 mz_internal.mz_show_clusters:
   →With
     cte l0 =
-      →Differential Join %1:mz_cluster_replicas[#2{cluster_id}] » %0:mz_clusters[#0]
-        →Arranged mz_catalog.mz_clusters
+      →Arranged mz_catalog.mz_clusters
+    cte l1 =
+      →Differential Join %1:mz_cluster_replicas[#2{cluster_id}] » %0:l0[#0]
+        →Arranged l0
         →Arrange (#2{cluster_id})
           →Arranged mz_catalog.mz_cluster_replicas
-    cte l1 =
-      →Fused with Child Map/Filter/Project
-        Project: #0, #1
-          →Arranged mz_catalog.mz_clusters
-            Key: (#0{id})
     cte l2 =
       →Non-incremental GroupAggregate
         Aggregation: string_agg[order_by=[#0 asc nulls_last]](row(row((((#2{name} || " (") || #3{size}) || ")"), ", "), #2{name}))
@@ -1619,15 +1612,17 @@ mz_internal.mz_show_clusters:
             Map: null, null
               →Consolidating Union
                 →Negate Diffs
-                  →Differential Join %1[#0] » %0:l1[#0]
-                    →Arrange (#0)
-                      →Stream l1
+                  →Differential Join %1[#0] » %0:l0[#0]
+                    →Arranged l0
                     →Distinct GroupAggregate
                       →Fused with Child Map/Filter/Project
                         Project: #0
-                          →Read l0
-                →Stream l1
-          →Stream l0
+                          →Read l1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1
+                    →Arranged mz_catalog.mz_clusters
+                      Key: (#0{id})
+          →Stream l1
     cte l3 =
       →Arrange (#0{id})
         →Arranged l2
@@ -2240,16 +2235,12 @@ mz_internal.mz_show_sources_ind:
 mz_internal.mz_show_sources:
   →Differential Join %2[#0] » %0:mz_sources[#0] » %1[#0]
     after %0:
-      Project: #0, #3..=#7
+      Project: #0, #4..=#6, #12, #17
       Map: case when (#2) IS NULL then "" else coalesce(#1, "") end
     after %1:
       Project: #1, #3, #4, #8, #2, #0, #5
       Map: case when (#7) IS NULL then null else #6 end
-    →Arrange (#0)
-      →Fused with Child Map/Filter/Project
-        Project: #0, #2..=#4, #10
-          →Arranged mz_catalog.mz_sources
-            Key: (#0{id})
+    →Arranged mz_catalog.mz_sources
     →Arrange (#0)
       →Union
         →Fused with Child Map/Filter/Project
@@ -2303,7 +2294,7 @@ mz_internal.mz_show_sources:
 
 Used Indexes:
   - mz_catalog.mz_clusters_ind (*** full scan ***)
-  - mz_catalog.mz_sources_ind (*** full scan ***)
+  - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
   - mz_internal.mz_comments_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
@@ -2598,27 +2589,33 @@ mz_internal.mz_source_statistics_with_history_ind:
 mz_internal.mz_source_statistics_with_history:
   →With
     cte l0 =
+      →Arranged mz_catalog.mz_sources
+    cte l1 =
       →Fused with Child Map/Filter/Project
         Project: #1, #8
         Filter: (#8{source_id}) IS NOT NULL
           →Arranged mz_catalog.mz_tables
             Key: (#2{schema_id})
-    cte l1 =
+    cte l2 =
       →Differential Join %1[#0{id}] » %0:mz_source_statistics_raw[#0]
         →Arrange (#0)
           →Stream mz_internal.mz_source_statistics_raw
         →Arrange (#0{id})
           →Union
-            →Differential Join %1:mz_object_dependencies[#0{object_id}] » %0:mz_sources[#0] » %2:mz_sources[#0]
-              →Arrange (#0)
-                →Fused with Child Map/Filter/Project
-                  Project: #0
-                  Filter: (#4{type} = "subsource")
-                    →Arranged mz_catalog.mz_sources
-                      Key: (#0{id})
-              →Arranged mz_internal.mz_object_dependencies
-              →Arranged mz_catalog.mz_sources
-            →Stream l0
+            →Delta Join [%0:l0[#0] » %1:mz_object_dependencies[#0] » %2:l0[#0]] [%1:mz_object_dependencies[#0] » %0:l0[#0] » %2:l0[#0]] [%2:l0[#0] » %1:mz_object_dependencies[#1] » %0:l0[#0]]
+              path %1:
+                after %0:
+                  Project: #0, #1
+                  Filter: (#5{type} = "subsource")
+              path %2:
+                after %0:
+                  Project: #0, #1
+                  Filter: (#5{type} = "subsource")
+              →Arranged l0
+              →Arrange (#1)
+                →Arranged mz_internal.mz_object_dependencies
+              →Arranged l0
+            →Stream l1
             →Fused with Child Map/Filter/Project
               Project: #0, #0
               Filter: (#4{type} != "log") AND (#4{type} != "progress")
@@ -2626,7 +2623,7 @@ mz_internal.mz_source_statistics_with_history:
                   Key: (#0{id})
             →Fused with Child Map/Filter/Project
               Project: #0, #0
-                →Read l0
+                →Read l1
   →Return
     →Differential Join %1[#0, #1] » %0[#0, #1]
       after %0:
@@ -2638,20 +2635,20 @@ mz_internal.mz_source_statistics_with_history:
           Project: #11, #0
         →Fused with Child Map/Filter/Project
           Project: #0..=#10, #13
-            →Read l1
+            →Read l2
       →Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
         Aggregations: max, max, min
         Key:
           Project: #4, #0
         →Fused with Child Map/Filter/Project
           Project: #0, #7, #11..=#13
-            →Read l1
+            →Read l2
 
 Source mz_internal.mz_source_statistics_raw
 
 Used Indexes:
-  - mz_catalog.mz_sources_ind (*** full scan ***, differential join)
-  - mz_internal.mz_object_dependencies_ind (differential join)
+  - mz_catalog.mz_sources_ind (*** full scan ***, delta join lookup, delta join 1st input (full scan))
+  - mz_internal.mz_object_dependencies_ind (*** full scan ***, delta join lookup)
   - mz_catalog.mz_tables_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
@@ -2974,7 +2971,7 @@ mz_internal.pg_attribute_all_databases:
             →Arranged mz_catalog.mz_materialized_views
               Key: (#0{id})
     cte l1 =
-      →Differential Join %2:pg_type_all_databases[#0{id}] » %1:mz_columns[#5] » %0[#0] » %3:mz_schemas[#0]
+      →Differential Join %2:pg_type_all_databases[#0{oid}] » %1:mz_columns[#5] » %0[#0] » %3:mz_schemas[#0]
         →Arrange (#0)
           →Union
             →Stream l0
@@ -2990,11 +2987,7 @@ mz_internal.pg_attribute_all_databases:
             Project: #1, #0, #2, #3, #5..=#7
               →Arranged mz_catalog.mz_columns
                 Key: (#1{name})
-        →Arrange (#0{id})
-          →Fused with Child Map/Filter/Project
-            Project: #0, #4, #18
-              →Arranged mz_internal.pg_type_all_databases
-                Key: (#0{oid})
+        →Arranged mz_internal.pg_type_all_databases
         →Arrange (#0)
           →Fused with Parent Map/Filter/Project
             Project: #1, #2, #0, #3..=#5
@@ -3028,7 +3021,7 @@ mz_internal.pg_attribute_all_databases:
           →Stream l2
 
 Used Indexes:
-  - mz_internal.pg_type_all_databases_ind (*** full scan ***)
+  - mz_internal.pg_type_all_databases_ind (differential join)
   - mz_catalog.mz_indexes_ind (*** full scan ***)
   - mz_catalog.mz_sources_ind (*** full scan ***)
   - mz_catalog.mz_materialized_views_ind (*** full scan ***)
@@ -4813,17 +4806,13 @@ EXPLAIN SELECT * FROM "information_schema"."columns";
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %2:mz_schemas[#0{id}] » %1:mz_objects[#1] » %0:mz_columns[#0]
+      →Differential Join %2:mz_schemas[#0{id}] » %1:mz_objects[#2] » %0:mz_columns[#0]
         →Arrange (#0)
           →Fused with Child Map/Filter/Project
             Project: #1, #0, #2..=#5
               →Arranged mz_catalog.mz_columns
                 Key: (#1{name})
-        →Arrange (#1)
-          →Fused with Child Map/Filter/Project
-            Project: #1, #0, #3
-              →Arranged mz_catalog.mz_objects
-                Key: (#2{schema_id})
+        →Arranged mz_catalog.mz_objects
         →Arrange (#0{id})
           →Fused with Parent Map/Filter/Project
             Project: #1, #2, #0, #3..=#5
@@ -4851,7 +4840,7 @@ Explained Query:
 Used Indexes:
   - mz_catalog.mz_databases_ind (lookup)
   - mz_catalog.mz_schemas_ind (*** full scan ***)
-  - mz_catalog.mz_objects_ind (*** full scan ***)
+  - mz_catalog.mz_objects_ind (differential join)
   - mz_catalog.mz_columns_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
@@ -6966,30 +6955,32 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_cluster_replica_utilization";
 ----
 Explained Query:
-  →Differential Join %2:mz_cluster_replica_metrics[#0{replica_id}] » %0:mz_cluster_replicas[#0] » %1:mz_cluster_replica_sizes[#0]
-    after %0:
-      Project: #0, #7, #1..=#4, #8
-      Map: ((uint8_to_double(#5{heap_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#6{heap_limit})) then null else #6{heap_limit} end)) * 100)
-    after %1:
-      Project: #1, #2, #10..=#12, #6
-      Map: ((uint8_to_double(#3{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#7{cpu_nano_cores})) then null else #7{cpu_nano_cores} end)) * 100), ((uint8_to_double(#4{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#8{memory_bytes})) then null else #8{memory_bytes} end)) * 100), ((uint8_to_double(#5{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#9{disk_bytes})) then null else #9{disk_bytes} end)) * 100)
-    →Arrange (#0)
+  →Delta Join [%0:mz_cluster_replicas[#0] » %1:mz_cluster_replica_sizes[#0] » %2:mz_cluster_replica_metrics[#0]] [%1:mz_cluster_replica_sizes[#0] » %0:mz_cluster_replicas[#1] » %2:mz_cluster_replica_metrics[#0]] [%2:mz_cluster_replica_metrics[#0] » %0:mz_cluster_replicas[#0] » %1:mz_cluster_replica_sizes[#0]]
+    path %0:
+      after %2:
+        Project: #0, #4, #10..=#13
+        Map: ((uint8_to_double(#5{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#1{cpu_nano_cores})) then null else #1{cpu_nano_cores} end)) * 100), ((uint8_to_double(#6{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#2{memory_bytes})) then null else #2{memory_bytes} end)) * 100), ((uint8_to_double(#7{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#3{disk_bytes})) then null else #3{disk_bytes} end)) * 100), ((uint8_to_double(#8{heap_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#9{heap_limit})) then null else #9{heap_limit} end)) * 100)
+    path %1:
+      after %2:
+        Project: #0, #4, #10..=#13
+        Map: ((uint8_to_double(#5{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#1{cpu_nano_cores})) then null else #1{cpu_nano_cores} end)) * 100), ((uint8_to_double(#6{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#2{memory_bytes})) then null else #2{memory_bytes} end)) * 100), ((uint8_to_double(#7{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#3{disk_bytes})) then null else #3{disk_bytes} end)) * 100), ((uint8_to_double(#8{heap_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#9{heap_limit})) then null else #9{heap_limit} end)) * 100)
+    path %2:
+      after %1:
+        Project: #1, #2, #13..=#15, #6
+        Map: ((uint8_to_double(#3{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#9{cpu_nano_cores})) then null else #9{cpu_nano_cores} end)) * 100), ((uint8_to_double(#4{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#10{memory_bytes})) then null else #10{memory_bytes} end)) * 100), ((uint8_to_double(#5{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#11{disk_bytes})) then null else #11{disk_bytes} end)) * 100)
+    →Arrange (#0) (#1)
       →Fused with Child Map/Filter/Project
         Project: #0, #3
         Filter: (#3{size}) IS NOT NULL
           →Arranged mz_catalog.mz_cluster_replicas
             Key: (#0{id})
-    →Arrange (#0)
-      →Fused with Child Map/Filter/Project
-        Project: #0, #3..=#5
-          →Arranged mz_catalog.mz_cluster_replica_sizes
-            Key: (#0{size})
+    →Arranged mz_catalog.mz_cluster_replica_sizes
     →Arranged mz_internal.mz_cluster_replica_metrics
 
 Used Indexes:
   - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
-  - mz_catalog.mz_cluster_replica_sizes_ind (*** full scan ***)
-  - mz_internal.mz_cluster_replica_metrics_ind (differential join)
+  - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_metrics_ind (delta join lookup)
 
 Target cluster: mz_catalog_server
 
@@ -6999,30 +6990,32 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_cluster_replica_utilization_history";
 ----
 Explained Query:
-  →Differential Join %2:mz_cluster_replica_metrics_history[#0{replica_id}] » %0:mz_cluster_replicas[#0] » %1:mz_cluster_replica_sizes[#0]
-    after %0:
-      Project: #0, #8, #1..=#5, #9
-      Map: ((uint8_to_double(#6{heap_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#7{heap_limit})) then null else #7{heap_limit} end)) * 100)
-    after %1:
-      Project: #1, #2, #11..=#13, #7, #6
-      Map: ((uint8_to_double(#3{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#8{cpu_nano_cores})) then null else #8{cpu_nano_cores} end)) * 100), ((uint8_to_double(#4{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#9{memory_bytes})) then null else #9{memory_bytes} end)) * 100), ((uint8_to_double(#5{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#10{disk_bytes})) then null else #10{disk_bytes} end)) * 100)
-    →Arrange (#0)
+  →Delta Join [%0:mz_cluster_replicas[#0] » %1:mz_cluster_replica_sizes[#0] » %2:mz_cluster_replica_metrics_history[#0]] [%1:mz_cluster_replica_sizes[#0] » %0:mz_cluster_replicas[#1] » %2:mz_cluster_replica_metrics_history[#0]] [%2:mz_cluster_replica_metrics_history[#0] » %0:mz_cluster_replicas[#0] » %1:mz_cluster_replica_sizes[#0]]
+    path %0:
+      after %2:
+        Project: #0, #4, #11..=#14, #8
+        Map: ((uint8_to_double(#5{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#1{cpu_nano_cores})) then null else #1{cpu_nano_cores} end)) * 100), ((uint8_to_double(#6{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#2{memory_bytes})) then null else #2{memory_bytes} end)) * 100), ((uint8_to_double(#7{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#3{disk_bytes})) then null else #3{disk_bytes} end)) * 100), ((uint8_to_double(#9{heap_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#10{heap_limit})) then null else #10{heap_limit} end)) * 100)
+    path %1:
+      after %2:
+        Project: #0, #4, #11..=#14, #8
+        Map: ((uint8_to_double(#5{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#1{cpu_nano_cores})) then null else #1{cpu_nano_cores} end)) * 100), ((uint8_to_double(#6{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#2{memory_bytes})) then null else #2{memory_bytes} end)) * 100), ((uint8_to_double(#7{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#3{disk_bytes})) then null else #3{disk_bytes} end)) * 100), ((uint8_to_double(#9{heap_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#10{heap_limit})) then null else #10{heap_limit} end)) * 100)
+    path %2:
+      after %1:
+        Project: #1, #2, #14..=#16, #7, #6
+        Map: ((uint8_to_double(#3{cpu_nano_cores}) / uint8_to_double(case when (0 = uint8_to_numeric(#10{cpu_nano_cores})) then null else #10{cpu_nano_cores} end)) * 100), ((uint8_to_double(#4{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#11{memory_bytes})) then null else #11{memory_bytes} end)) * 100), ((uint8_to_double(#5{disk_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#12{disk_bytes})) then null else #12{disk_bytes} end)) * 100)
+    →Arrange (#0) (#1)
       →Fused with Child Map/Filter/Project
         Project: #0, #3
         Filter: (#3{size}) IS NOT NULL
           →Arranged mz_catalog.mz_cluster_replicas
             Key: (#0{id})
-    →Arrange (#0)
-      →Fused with Child Map/Filter/Project
-        Project: #0, #3..=#5
-          →Arranged mz_catalog.mz_cluster_replica_sizes
-            Key: (#0{size})
+    →Arranged mz_catalog.mz_cluster_replica_sizes
     →Arranged mz_internal.mz_cluster_replica_metrics_history
 
 Used Indexes:
   - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
-  - mz_catalog.mz_cluster_replica_sizes_ind (*** full scan ***)
-  - mz_internal.mz_cluster_replica_metrics_history_ind (differential join)
+  - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_metrics_history_ind (delta join lookup)
 
 Target cluster: mz_catalog_server
 
@@ -7612,16 +7605,12 @@ Explained Query:
               Project: #1
                 →Read l3
         cte l5 =
-          →Arrange (#0{object_id})
-            →Fused with Child Map/Filter/Project
-              Project: #0, #2
-                →Arranged mz_internal.mz_frontiers
-                  Key: (#0{object_id})
+          →Arranged mz_internal.mz_frontiers
       →Return
         →Differential Join %1:l5[#0{object_id}] » %0:l1[#0] » %3[#0] » %2[#0]
           after %0:
-            Project: #0, #0, #2, #3
-            Map: tots((text_to_double(mz_timestamp_to_text(#1{write_frontier})) / 1000)), (#2{time}) IS NULL
+            Project: #0, #0, #3, #4
+            Map: tots((text_to_double(mz_timestamp_to_text(#2{write_frontier})) / 1000)), (#3{time}) IS NULL
           after %3:
             Project: #1, #0, #4, #2, #3, #6
             Map: case when #3 then 00:00:00 else case when (#5{time}) IS NULL then null else greatest((#5{time} - #2), 00:00:00) end end
@@ -7639,8 +7628,8 @@ Explained Query:
                   Order By #2 asc nulls_last
                   →Differential Join %1:l5[#0{object_id}] » %0:l2[#1]
                     after %0:
-                      Project: #2, #0, #1, #3
-                      Map: tots((text_to_double(mz_timestamp_to_text(#1{write_frontier})) / 1000))
+                      Project: #3, #0, #2, #4
+                      Map: tots((text_to_double(mz_timestamp_to_text(#2{write_frontier})) / 1000))
                     →Arrange (#1)
                       →Stream l2
                     →Arranged l5
@@ -7652,8 +7641,8 @@ Explained Query:
                   Order By #2 asc nulls_last
                   →Differential Join %2:l5[#0{object_id}] » %1[#0] » %0:l3[#1]
                     after %1:
-                      Project: #0..=#2
-                      Map: tots((text_to_double(mz_timestamp_to_text(#1{write_frontier})) / 1000))
+                      Project: #0, #2, #3
+                      Map: tots((text_to_double(mz_timestamp_to_text(#2{write_frontier})) / 1000))
                     →Arrange (#1)
                       →Stream l3
                     →Arrange (#0)
@@ -7676,7 +7665,7 @@ Used Indexes:
   - mz_catalog.mz_materialized_views_ind (*** full scan ***)
   - mz_internal.mz_object_dependencies_ind (differential join)
   - mz_internal.mz_compute_dependencies_ind (*** full scan ***)
-  - mz_internal.mz_frontiers_ind (*** full scan ***)
+  - mz_internal.mz_frontiers_ind (differential join)
   - mz_catalog.mz_tables_ind (*** full scan ***)
   - mz_catalog.mz_views_ind (*** full scan ***)
 
@@ -8290,11 +8279,11 @@ Explained Query:
           →Arranged mz_catalog.mz_roles
             Key: (#0{id})
     cte l3 =
-      →Differential Join %1[#0] » %0:l1[#3] » %3:mz_schemas[#0] » %4:mz_databases[#0] » %2[#0]
+      →Differential Join %4:mz_databases[#0] » %3:mz_schemas[#2] » %0:l1[#0] » %1[#0] » %2[#0]
         after %2:
           Project: #1..=#5, #8
           Map: case when (#0{grantee} = "p") then "PUBLIC" else case when (#7) IS NULL then null else #6 end end
-        →Arrange (#3)
+        →Arrange (#0)
           →Stream l1
         →Arrange (#0)
           →Union
@@ -8335,11 +8324,7 @@ Explained Query:
                           →Fused with Child Map/Filter/Project
                             Project: #4
                               →Read l1
-        →Arrange (#0)
-          →Fused with Child Map/Filter/Project
-            Project: #1, #0, #3
-              →Arranged mz_catalog.mz_schemas
-                Key: (#2{database_id})
+        →Arranged mz_catalog.mz_schemas
         →Arrange (#0)
           →Fused with Parent Map/Filter/Project
             Project: #1, #2, #0, #3, #4
@@ -8532,7 +8517,7 @@ Used Indexes:
   - mz_catalog.mz_roles_ind (*** full scan ***)
   - mz_internal.mz_comments_ind (differential join)
   - mz_catalog.mz_databases_ind (*** full scan ***)
-  - mz_catalog.mz_schemas_ind (*** full scan ***)
+  - mz_catalog.mz_schemas_ind (*** full scan ***, differential join)
   - mz_catalog.mz_objects_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
@@ -11494,23 +11479,19 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_role_members";
 Explained Query:
   →With
     cte l0 =
-      →Arrange (#0)
-        →Fused with Child Map/Filter/Project
-          Project: #0, #2
-            →Arranged mz_catalog.mz_roles
-              Key: (#0{id})
+      →Arranged mz_catalog.mz_roles
   →Return
-    →Differential Join %3:mz_roles[#0{id}] » %0:mz_role_members[#2] » %2:l0[#0] » %1:l0[#0]
+    →Differential Join %3:l0[#0{id}] » %0:mz_role_members[#2] » %2:l0[#0] » %1:l0[#0]
       →Arrange (#2)
         →Stream mz_catalog.mz_role_members
       →Arranged l0
       →Arranged l0
-      →Arranged mz_catalog.mz_roles
+      →Arranged l0
 
 Source mz_catalog.mz_role_members
 
 Used Indexes:
-  - mz_catalog.mz_roles_ind (*** full scan ***, differential join)
+  - mz_catalog.mz_roles_ind (differential join)
 
 Target cluster: mz_catalog_server
 
@@ -12199,12 +12180,11 @@ Explained Query:
           Simple aggregates: sum(case when ((case when (#4) IS NULL then null else #3 end) IS NULL AND (case when (#12) IS NULL then null else #11 end) IS NULL) then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#12) IS NULL then 0 else coalesce(#11, 0) end) end), sum(case when (#2) IS NULL then null else #1 end), sum(case when ((case when (#6) IS NULL then null else #5 end) IS NULL AND (case when (#14) IS NULL then null else #13 end) IS NULL) then null else (case when (#6) IS NULL then 0 else coalesce(#5, 0) end + case when (#14) IS NULL then 0 else coalesce(#13, 0) end) end), sum(case when ((case when (#8) IS NULL then null else #7 end) IS NULL AND (case when (#16) IS NULL then null else #15 end) IS NULL) then null else (case when (#8) IS NULL then 0 else coalesce(#7, 0) end + case when (#16) IS NULL then 0 else coalesce(#15, 0) end) end), sum(case when ((case when (#10) IS NULL then null else #9 end) IS NULL AND (case when (#18) IS NULL then null else #17 end) IS NULL) then null else (case when (#10) IS NULL then 0 else coalesce(#9, 0) end + case when (#18) IS NULL then 0 else coalesce(#17, 0) end) end)
           Key:
             Project: #0
-          →Differential Join %0:l9[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
+          →Differential Join %0:mz_dataflow_operators_per_worker[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
             after %9:
               Project: #0, #2..=#19
               Filter: ((case when (#3) IS NULL then null else #2 end) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#17) IS NULL then null else #16 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when ((case when (#11) IS NULL then null else #10 end) IS NULL AND (case when (#19) IS NULL then null else #18 end) IS NULL) then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#19) IS NULL then 0 else coalesce(#18, 0) end) end) IS NOT NULL)
-            →Arrange (#0, #1)
-              →Stream l9
+            →Arranged mz_introspection.mz_dataflow_operators_per_worker
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -12378,7 +12358,7 @@ Explained Query:
                           →Stream l9
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_batcher_records_raw_s2_primary_idx (*** full scan ***)
@@ -12440,10 +12420,10 @@ Explained Query:
           →Arranged mz_introspection.mz_dataflow_operators_per_worker
             Key: (#0, #1)
   →Return
-    →Differential Join %0:l9[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
+    →Differential Join %0:mz_dataflow_operators_per_worker[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
       after %1:
-        Project: #0, #1, #4
-        Map: case when (#3) IS NULL then null else #2 end
+        Project: #0, #1, #5
+        Map: case when (#4) IS NULL then null else #3 end
       after %2:
         Project: #0, #1, #3, #4, #2, #5
         Map: case when (#4) IS NULL then null else #3 end
@@ -12469,8 +12449,7 @@ Explained Query:
         Project: #0, #1, #19, #16, #21, #23, #28
         Filter: ((#16) IS NOT NULL OR (case when #18 then null else (case when (#3) IS NULL then 0 else coalesce(#2, 0) end + case when (#11) IS NULL then 0 else coalesce(#10, 0) end) end) IS NOT NULL OR (case when #20 then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when #22 then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when #27 then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#25) IS NULL then 0 else coalesce(#24, 0) end) end) IS NOT NULL)
         Map: case when (#25) IS NULL then null else #24 end, ((#17) IS NULL AND (#26) IS NULL), case when #27 then null else (coalesce(#17, 0) + coalesce(#26, 0)) end
-      →Arrange (#0, #1)
-        →Stream l9
+      →Arranged mz_introspection.mz_dataflow_operators_per_worker
       →Arrange (#0, #1)
         →Union
           →Fused with Child Map/Filter/Project
@@ -12644,7 +12623,7 @@ Explained Query:
                     →Stream l9
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_batcher_records_raw_s2_primary_idx (*** full scan ***)
@@ -13026,191 +13005,189 @@ Explained Query:
             Key: (#0, #1)
     cte l12 =
       →Differential Join %1:l10[#0{id}] » %0[#0]
-        →Arrange (#0)
-          →Map/Filter/Project
-            Project: #0, #6..=#10
-            Map: numeric_to_bigint(#1), numeric_to_bigint(#2), numeric_to_bigint(#3), numeric_to_bigint(#4), numeric_to_bigint(#5)
-              →Accumulable GroupAggregate
-                Simple aggregates: sum(case when ((case when (#4) IS NULL then null else #3 end) IS NULL AND (case when (#12) IS NULL then null else #11 end) IS NULL) then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#12) IS NULL then 0 else coalesce(#11, 0) end) end), sum(case when (#2) IS NULL then null else #1 end), sum(case when ((case when (#6) IS NULL then null else #5 end) IS NULL AND (case when (#14) IS NULL then null else #13 end) IS NULL) then null else (case when (#6) IS NULL then 0 else coalesce(#5, 0) end + case when (#14) IS NULL then 0 else coalesce(#13, 0) end) end), sum(case when ((case when (#8) IS NULL then null else #7 end) IS NULL AND (case when (#16) IS NULL then null else #15 end) IS NULL) then null else (case when (#8) IS NULL then 0 else coalesce(#7, 0) end + case when (#16) IS NULL then 0 else coalesce(#15, 0) end) end), sum(case when ((case when (#10) IS NULL then null else #9 end) IS NULL AND (case when (#18) IS NULL then null else #17 end) IS NULL) then null else (case when (#10) IS NULL then 0 else coalesce(#9, 0) end + case when (#18) IS NULL then 0 else coalesce(#17, 0) end) end)
-                Key:
-                  Project: #0
-                →Differential Join %0:l11[#0{id}, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
-                  after %9:
-                    Project: #0, #2..=#19
-                    Filter: ((case when (#3) IS NULL then null else #2 end) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#17) IS NULL then null else #16 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when ((case when (#11) IS NULL then null else #10 end) IS NULL AND (case when (#19) IS NULL then null else #18 end) IS NULL) then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#19) IS NULL then 0 else coalesce(#18, 0) end) end) IS NOT NULL)
-                  →Arrange (#0{id}, #1)
-                    →Stream l11
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l0
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l0
-                                        Key: (#0, #1)
-                                →Stream l11
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l1
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l1
-                                        Key: (#0, #1)
-                                →Stream l11
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l2
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l2
-                                        Key: (#0, #1)
-                                →Stream l11
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l3
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l3
-                                        Key: (#0, #1)
-                                →Stream l11
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l4
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l4
-                                        Key: (#0, #1)
-                                →Stream l11
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l5
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l5
-                                        Key: (#0, #1)
-                                →Stream l11
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l6
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l6
-                                        Key: (#0, #1)
-                                →Stream l11
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l7
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l7
-                                        Key: (#0, #1)
-                                →Stream l11
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l8
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l8
-                                        Key: (#0, #1)
-                                →Stream l11
+        after %0:
+          Project: #1, #2, #8..=#12
+          Map: numeric_to_bigint(#3), numeric_to_bigint(#4), numeric_to_bigint(#5), numeric_to_bigint(#6), numeric_to_bigint(#7)
+        →Accumulable GroupAggregate
+          Simple aggregates: sum(case when ((case when (#4) IS NULL then null else #3 end) IS NULL AND (case when (#12) IS NULL then null else #11 end) IS NULL) then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#12) IS NULL then 0 else coalesce(#11, 0) end) end), sum(case when (#2) IS NULL then null else #1 end), sum(case when ((case when (#6) IS NULL then null else #5 end) IS NULL AND (case when (#14) IS NULL then null else #13 end) IS NULL) then null else (case when (#6) IS NULL then 0 else coalesce(#5, 0) end + case when (#14) IS NULL then 0 else coalesce(#13, 0) end) end), sum(case when ((case when (#8) IS NULL then null else #7 end) IS NULL AND (case when (#16) IS NULL then null else #15 end) IS NULL) then null else (case when (#8) IS NULL then 0 else coalesce(#7, 0) end + case when (#16) IS NULL then 0 else coalesce(#15, 0) end) end), sum(case when ((case when (#10) IS NULL then null else #9 end) IS NULL AND (case when (#18) IS NULL then null else #17 end) IS NULL) then null else (case when (#10) IS NULL then 0 else coalesce(#9, 0) end + case when (#18) IS NULL then 0 else coalesce(#17, 0) end) end)
+          Key:
+            Project: #0
+          →Differential Join %0:mz_dataflow_operators_per_worker[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
+            after %9:
+              Project: #0, #2..=#19
+              Filter: ((case when (#3) IS NULL then null else #2 end) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#17) IS NULL then null else #16 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when ((case when (#11) IS NULL then null else #10 end) IS NULL AND (case when (#19) IS NULL then null else #18 end) IS NULL) then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#19) IS NULL then 0 else coalesce(#18, 0) end) end) IS NOT NULL)
+            →Arranged mz_introspection.mz_dataflow_operators_per_worker
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l0
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l0
+                                  Key: (#0, #1)
+                          →Stream l11
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l1
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l1
+                                  Key: (#0, #1)
+                          →Stream l11
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l2
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l2
+                                  Key: (#0, #1)
+                          →Stream l11
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l3
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l3
+                                  Key: (#0, #1)
+                          →Stream l11
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l4
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l4
+                                  Key: (#0, #1)
+                          →Stream l11
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l5
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l5
+                                  Key: (#0, #1)
+                          →Stream l11
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l6
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l6
+                                  Key: (#0, #1)
+                          →Stream l11
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l7
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l7
+                                  Key: (#0, #1)
+                          →Stream l11
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l8
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l8
+                                  Key: (#0, #1)
+                          →Stream l11
         →Arrange (#0{id})
           →Stream l10
   →Return
@@ -13238,7 +13215,7 @@ Explained Query:
                 →Read l12
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join)
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)
@@ -13541,31 +13518,46 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_introspection"."mz_dataflow_operator_dataflows_per_worker";
 ----
 Explained Query:
-  →With
-    cte l0 =
-      →Arranged mz_introspection.mz_dataflow_operators_per_worker
-  →Return
-    →Differential Join %3:l0[#0, #1] » %2:mz_dataflow_addresses_per_worker[#0, #1] » %1:mz_dataflow_addresses_per_worker[#1] » %0:l0[#0, #1]
-      after %2:
-        Project: #3, #1, #2
-        Filter: (1 = list_length(#3{address}))
+  →Delta Join [%0:mz_dataflow_operators_per_worker[#0, #1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1] » %3:mz_dataflow_operators_per_worker[#0, #1]] [%1:mz_dataflow_addresses_per_worker[#0, #1] » %0:mz_dataflow_operators_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1] » %3:mz_dataflow_operators_per_worker[#0, #1]] [%2:mz_dataflow_addresses_per_worker[#0, #1] » %0:mz_dataflow_operators_per_worker[#1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %3:mz_dataflow_operators_per_worker[#0, #1]] [%3:mz_dataflow_operators_per_worker[#0, #1] » %0:mz_dataflow_operators_per_worker[#1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#0, #1]]
+    path %0:
       after %1:
-        Project: #3, #0, #2, #5
-        Filter: (#5) IS NOT NULL
-        Map: list_index(#4{address}, 1)
-        Equivalences: list_index(#1{address}, 1) = list_index(#4{address}, 1)
-      →Arranged l0
-      →Arrange (#1)
-        →Fused with Child Map/Filter/Project
-          Filter: (list_index(#2{address}, 1)) IS NOT NULL
-            →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-              Key: (#0, #1)
-      →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-      →Arranged l0
+        Project: #0..=#4
+        Filter: (#4) IS NOT NULL
+        Map: list_index(#3{address}, 1)
+      after %2:
+        Project: #1, #0, #2, #5, #4
+        Equivalences: list_index(#6{address}, 1) = list_index(#3{address}, 1)
+    path %1:
+      after %2:
+        Project: #1..=#3, #0, #6, #5
+        Equivalences: list_index(#7{address}, 1) = list_index(#4{address}, 1)
+    path %2:
+      after %1:
+        Project: #0, #2..=#4, #1, #7
+        Filter: (#7) IS NOT NULL
+        Map: list_index(#6{address}, 1)
+        Equivalences: list_index(#5{address}, 1) = list_index(#6{address}, 1)
+    path %3:
+      after %1:
+        Project: #0, #2, #3, #6, #4, #1, #5, #7
+        Filter: (#7) IS NOT NULL
+        Map: list_index(#6{address}, 1)
+      after %2:
+        Project: #2, #4, #3, #7, #6
+        Equivalences: list_index(#8{address}, 1) = list_index(#5{address}, 1)
+    →Arrange (#1)
+      →Arranged mz_introspection.mz_dataflow_operators_per_worker
+    →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+    →Arrange (#0, #1) (#1)
+      →Fused with Child Map/Filter/Project
+        Filter: (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
+          →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+            Key: (#0, #1)
+    →Arranged mz_introspection.mz_dataflow_operators_per_worker
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (differential join)
-  - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, differential join)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, delta join lookup, delta join 1st input (full scan))
+  - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, delta join lookup)
 
 Target cluster: mz_catalog_server
 
@@ -13855,7 +13847,10 @@ Explained Query:
           →Arranged mz_introspection.mz_dataflow_operators_per_worker
             Key: (#0, #1)
     cte l14 =
-      →Differential Join %4[#0{operator_id}] » %1:l12[#0] » %2:l12[#1] » %3:l9[#0] » %0:l11[#0]
+      →Differential Join %4[#0] » %1:l12[#0] » %2:l12[#1] » %3:l9[#0] » %0:l11[#0]
+        after %1:
+          Project: #3, #0, #4, #5
+          Map: numeric_to_bigint(#1), numeric_to_bigint(#2)
         →Arrange (#0)
           →Fused with Child Map/Filter/Project
             Project: #0, #3
@@ -13869,197 +13864,204 @@ Explained Query:
           →Fused with Child Map/Filter/Project
             Project: #0
               →Read l9
-        →Arrange (#0{operator_id})
-          →Map/Filter/Project
-            Project: #0, #3, #4
-            Map: numeric_to_bigint(#1), numeric_to_bigint(#2)
-              →Accumulable GroupAggregate
-                Simple aggregates: sum(case when ((case when (#2) IS NULL then null else #1 end) IS NULL AND (case when (#6) IS NULL then null else #5 end) IS NULL) then null else (case when (#2) IS NULL then 0 else coalesce(#1, 0) end + case when (#6) IS NULL then 0 else coalesce(#5, 0) end) end), sum(case when ((case when (#4) IS NULL then null else #3 end) IS NULL AND (case when (#8) IS NULL then null else #7 end) IS NULL) then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#8) IS NULL then 0 else coalesce(#7, 0) end) end)
-                Key:
-                  Project: #0
-                →Differential Join %0:l13[#0{id}, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
-                  after %9:
-                    Project: #0, #4..=#7, #12..=#15
-                    Filter: ((case when (#3) IS NULL then null else #2 end) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#17) IS NULL then null else #16 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when ((case when (#11) IS NULL then null else #10 end) IS NULL AND (case when (#19) IS NULL then null else #18 end) IS NULL) then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#19) IS NULL then 0 else coalesce(#18, 0) end) end) IS NOT NULL)
-                  →Arrange (#0{id}, #1)
-                    →Stream l13
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l0
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l0
-                                        Key: (#0, #1)
-                                →Stream l13
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l1
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l1
-                                        Key: (#0, #1)
-                                →Stream l13
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l2
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l2
-                                        Key: (#0, #1)
-                                →Stream l13
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l3
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l3
-                                        Key: (#0, #1)
-                                →Stream l13
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l4
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l4
-                                        Key: (#0, #1)
-                                →Stream l13
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l5
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l5
-                                        Key: (#0, #1)
-                                →Stream l13
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l6
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l6
-                                        Key: (#0, #1)
-                                →Stream l13
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l7
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l7
-                                        Key: (#0, #1)
-                                →Stream l13
-                  →Arrange (#0, #1)
-                    →Union
-                      →Fused with Child Map/Filter/Project
-                        Project: #0..=#3
-                        Map: true
-                          →Arranged l8
-                            Key: (#0, #1)
-                      →Map/Filter/Project
-                        Project: #0..=#3
-                        Map: null, null
-                          →Threshold Diffs #0, #1
-                            →Arrange (#0, #1)
-                              →Consolidating Union
-                                →Negate Diffs
-                                  →Fused with Child Map/Filter/Project
-                                    Project: #0, #1
-                                      →Arranged l8
-                                        Key: (#0, #1)
-                                →Stream l13
+        →Accumulable GroupAggregate
+          Simple aggregates: sum(case when ((case when (#2) IS NULL then null else #1 end) IS NULL AND (case when (#6) IS NULL then null else #5 end) IS NULL) then null else (case when (#2) IS NULL then 0 else coalesce(#1, 0) end + case when (#6) IS NULL then 0 else coalesce(#5, 0) end) end), sum(case when ((case when (#4) IS NULL then null else #3 end) IS NULL AND (case when (#8) IS NULL then null else #7 end) IS NULL) then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#8) IS NULL then 0 else coalesce(#7, 0) end) end)
+          Key:
+            Project: #0
+          →Differential Join %0:mz_dataflow_operators_per_worker[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
+            after %9:
+              Project: #0, #4..=#7, #12..=#15
+              Filter: ((case when (#3) IS NULL then null else #2 end) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#17) IS NULL then null else #16 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when ((case when (#11) IS NULL then null else #10 end) IS NULL AND (case when (#19) IS NULL then null else #18 end) IS NULL) then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#19) IS NULL then 0 else coalesce(#18, 0) end) end) IS NOT NULL)
+            →Arranged mz_introspection.mz_dataflow_operators_per_worker
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l0
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l0
+                                  Key: (#0, #1)
+                          →Stream l13
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l1
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l1
+                                  Key: (#0, #1)
+                          →Stream l13
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l2
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l2
+                                  Key: (#0, #1)
+                          →Stream l13
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l3
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l3
+                                  Key: (#0, #1)
+                          →Stream l13
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l4
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l4
+                                  Key: (#0, #1)
+                          →Stream l13
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l5
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l5
+                                  Key: (#0, #1)
+                          →Stream l13
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l6
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l6
+                                  Key: (#0, #1)
+                          →Stream l13
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l7
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l7
+                                  Key: (#0, #1)
+                          →Stream l13
+            →Arrange (#0, #1)
+              →Union
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#3
+                  Map: true
+                    →Arranged l8
+                      Key: (#0, #1)
+                →Map/Filter/Project
+                  Project: #0..=#3
+                  Map: null, null
+                    →Threshold Diffs #0, #1
+                      →Arrange (#0, #1)
+                        →Consolidating Union
+                          →Negate Diffs
+                            →Fused with Child Map/Filter/Project
+                              Project: #0, #1
+                                →Arranged l8
+                                  Key: (#0, #1)
+                          →Stream l13
   →Return
-    →Differential Join %2:l11[#3{dataflow_id}, #0{id}] » %1[#0, #1] » %0[#0, #1]
-      after %0:
-        Project: #0, #4, #1, #3, #2, #5..=#7
-        Filter: (#5 > 0)
-        Map: (power(16, bigint_to_double((#2{levels} - #5{to_cut}))) - 1)
+    →Delta Join [%0[#0, #1] » %1[#0, #1] » %2:l11[#0, #3]] [%1[#0, #1] » %0[#0, #1] » %2:l11[#0, #3]] [%2:l11[#0, #3] » %0[#0, #1] » %1[#0, #1]]
+      path %0:
+        after %1:
+          Project: #0..=#5
+          Map: (power(16, bigint_to_double((#4{levels} - #2{to_cut}))) - 1)
+      path %1:
+        after %0:
+          Project: #0, #1, #3, #4, #0..=#2, #5
+          Filter: (#3 > 0)
+          Map: (power(16, bigint_to_double((#2{levels} - #3{to_cut}))) - 1)
+      path %2:
+        after %0:
+          Project: #0, #1, #4, #5, #1..=#3, #0
+          Filter: (#4 > 0)
+        after %1:
+          Project: #2, #7, #3, #6, #8, #4, #5, #9
+          Map: (power(16, bigint_to_double((#8{levels} - #4{to_cut}))) - 1)
       →Accumulable GroupAggregate
         Simple aggregates: count(*), sum(#2{size})
         Key:
@@ -14087,11 +14089,11 @@ Explained Query:
         →Fused with Child Map/Filter/Project
           Project: #1, #2
             →Read l14
-      →Arrange (#3{dataflow_id}, #0{id})
+      →Arrange (#0, #3)
         →Stream l11
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join)
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)
@@ -14141,24 +14143,20 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_mappable_objects";
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %3:mz_compute_dataflow_global_ids_per_worker[#0{export_id}] » %1:mz_compute_exports_per_worker[#1] » %0:mz_objects[#0] » %2:mz_schemas[#0]
+      →Differential Join %2:mz_schemas[#0{export_id}] » %0:mz_objects[#2] » %1:mz_compute_exports_per_worker[#0] » %3:mz_compute_dataflow_global_ids_per_worker[#0]
+        →Arranged mz_catalog.mz_objects
         →Arrange (#0)
-          →Fused with Child Map/Filter/Project
-            Project: #1, #0, #3
-              →Arranged mz_catalog.mz_objects
-                Key: (#2{schema_id})
-        →Arrange (#1)
           →Fused with Child Map/Filter/Project
             Project: #0, #2
             Filter: (#1{worker_id} = 0)
               →Arranged mz_introspection.mz_compute_exports_per_worker
                 Key: (#0, #1)
-        →Arrange (#0)
+        →Arrange (#0{export_id})
           →Fused with Child Map/Filter/Project
             Project: #1, #0, #3
               →Arranged mz_catalog.mz_schemas
                 Key: (#2{database_id})
-        →Arrange (#0{export_id})
+        →Arrange (#0)
           →Fused with Child Map/Filter/Project
             Filter: (#1{worker_id} = 0)
               →Arranged mz_introspection.mz_compute_dataflow_global_ids_per_worker
@@ -14194,7 +14192,7 @@ Explained Query:
 Used Indexes:
   - mz_catalog.mz_databases_ind (*** full scan ***)
   - mz_catalog.mz_schemas_ind (*** full scan ***)
-  - mz_catalog.mz_objects_ind (*** full scan ***)
+  - mz_catalog.mz_objects_ind (differential join)
   - mz_introspection.mz_compute_exports_per_worker_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_compute_dataflow_global_ids_per_worker_s2_primary_idx (*** full scan ***)
 
@@ -14216,7 +14214,7 @@ Explained Query:
     Simple aggregates: sum(#1{sent}), sum(#2{received}), sum(#3{batch_sent}), sum(#4{batch_received})
     Key:
       Project: #0
-    →Differential Join %3[#0..=#2] » %2[#0..=#2] » %1[#0..=#2] » %0[#0..=#2]
+    →Delta Join [%0[#0..=#2] » %1[#0..=#2] » %2[#0..=#2] » %3[#0..=#2]] [%1[#0..=#2] » %0[#0..=#2] » %2[#0..=#2] » %3[#0..=#2]] [%2[#0..=#2] » %0[#0..=#2] » %1[#0..=#2] » %3[#0..=#2]] [%3[#0..=#2] » %0[#0..=#2] » %1[#0..=#2] » %2[#0..=#2]]
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
         →Arranged mz_introspection.mz_message_counts_sent_raw
@@ -14244,7 +14242,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_introspection"."mz_message_counts_per_worker";
 ----
 Explained Query:
-  →Differential Join %3[#0..=#2] » %2[#0..=#2] » %1[#0..=#2] » %0[#0..=#2]
+  →Delta Join [%0[#0..=#2] » %1[#0..=#2] » %2[#0..=#2] » %3[#0..=#2]] [%1[#0..=#2] » %0[#0..=#2] » %2[#0..=#2] » %3[#0..=#2]] [%2[#0..=#2] » %0[#0..=#2] » %1[#0..=#2] » %3[#0..=#2]] [%3[#0..=#2] » %0[#0..=#2] » %1[#0..=#2] » %2[#0..=#2]]
     →Accumulable GroupAggregate
       Simple aggregates: count(*)
       →Arranged mz_introspection.mz_message_counts_sent_raw
@@ -14310,74 +14308,76 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_records_per_dataflow";
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %1:mz_dataflow_operators_per_worker[#0, #1] » %0:mz_dataflow_addresses_per_worker[#0, #1]
+      →Arranged mz_introspection.mz_dataflow_operators_per_worker
+    cte l1 =
+      →Differential Join %1:l0[#0, #1] » %0:mz_dataflow_addresses_per_worker[#0, #1]
         after %0:
           Project: #1, #2, #4
           Filter: (1 = list_length(#3{address})) AND (#4) IS NOT NULL
           Map: list_index(#3{address}, 1)
         →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-        →Arranged mz_introspection.mz_dataflow_operators_per_worker
-    cte l1 =
-      →Accumulable GroupAggregate
-        Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batches_raw
+        →Arranged l0
     cte l2 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_records_raw
+        →Arranged mz_introspection.mz_arrangement_batches_raw
     cte l3 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_heap_size_raw
+        →Arranged mz_introspection.mz_arrangement_records_raw
     cte l4 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_heap_capacity_raw
+        →Arranged mz_introspection.mz_arrangement_heap_size_raw
     cte l5 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_heap_allocations_raw
+        →Arranged mz_introspection.mz_arrangement_heap_capacity_raw
     cte l6 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batcher_records_raw
+        →Arranged mz_introspection.mz_arrangement_heap_allocations_raw
     cte l7 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batcher_size_raw
+        →Arranged mz_introspection.mz_arrangement_batcher_records_raw
     cte l8 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batcher_capacity_raw
+        →Arranged mz_introspection.mz_arrangement_batcher_size_raw
     cte l9 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batcher_allocations_raw
+        →Arranged mz_introspection.mz_arrangement_batcher_capacity_raw
     cte l10 =
-      →Fused with Child Map/Filter/Project
-        Project: #0, #1
-          →Arranged mz_introspection.mz_dataflow_operators_per_worker
-            Key: (#0, #1)
+      →Accumulable GroupAggregate
+        Simple aggregates: count(*)
+        →Arranged mz_introspection.mz_arrangement_batcher_allocations_raw
     cte l11 =
-      →Differential Join %2:l0[#0{id}] » %1:mz_dataflow_addresses_per_worker[#1] » %0:l10[#0, #1]
-        after %1:
-          Project: #2, #0, #1
-          Equivalences: list_index(#3{address}, 1) = #1{id}
-        →Arrange (#0, #1)
-          →Stream l10
-        →Arrange (#1)
+      →Delta Join [%0:l0[#0, #1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:l1[#0, #1]] [%1:mz_dataflow_addresses_per_worker[#0, #1] » %0:l0[#0, #1] » %2:l1[#0, #1]] [%2:l1[#0, #1] » %1:mz_dataflow_addresses_per_worker[#1] » %0:l0[#0, #1]]
+        path %2:
+          after %1:
+            Project: #2, #0, #1
+            Equivalences: list_index(#3{address}, 1) = #1{id}
+        →Arranged l0
+        →Arrange (#0, #1) (#1)
           →Fused with Child Map/Filter/Project
             Filter: (list_index(#2{address}, 1)) IS NOT NULL
               →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                 Key: (#0, #1)
-        →Arrange (#0{id})
+        →Arrange (#0, #1)
           →Fused with Child Map/Filter/Project
             Project: #0, #2
-              →Read l0
+              →Read l1
     cte l12 =
       →Arrange (#0{id}, #1{worker_id})
         →Stream l11
     cte l13 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #1
+          →Arranged mz_introspection.mz_dataflow_operators_per_worker
+            Key: (#0, #1)
+    cte l14 =
       →Differential Join %0:l12[#0{id}, #1{worker_id}] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
         after %1:
           Project: #0..=#2, #5
@@ -14413,25 +14413,6 @@ Explained Query:
             →Fused with Child Map/Filter/Project
               Project: #0..=#3
               Map: true
-                →Arranged l1
-                  Key: (#0, #1)
-            →Map/Filter/Project
-              Project: #0..=#3
-              Map: null, null
-                →Threshold Diffs #0, #1
-                  →Arrange (#0, #1)
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Fused with Child Map/Filter/Project
-                          Project: #0, #1
-                            →Arranged l1
-                              Key: (#0, #1)
-                      →Stream l10
-        →Arrange (#0, #1)
-          →Union
-            →Fused with Child Map/Filter/Project
-              Project: #0..=#3
-              Map: true
                 →Arranged l2
                   Key: (#0, #1)
             →Map/Filter/Project
@@ -14445,7 +14426,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l2
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14464,7 +14445,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l3
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14483,7 +14464,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l4
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14502,7 +14483,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l5
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14521,7 +14502,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l6
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14540,7 +14521,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l7
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14559,7 +14540,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l8
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14578,7 +14559,26 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l9
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
+        →Arrange (#0, #1)
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #0..=#3
+              Map: true
+                →Arranged l10
+                  Key: (#0, #1)
+            →Map/Filter/Project
+              Project: #0..=#3
+              Map: null, null
+                →Threshold Diffs #0, #1
+                  →Arrange (#0, #1)
+                    →Consolidating Union
+                      →Negate Diffs
+                        →Fused with Child Map/Filter/Project
+                          Project: #0, #1
+                            →Arranged l10
+                              Key: (#0, #1)
+                      →Stream l13
   →Return
     →Map/Filter/Project
       Project: #0, #1, #7..=#11
@@ -14593,7 +14593,7 @@ Explained Query:
                 Simple aggregates: sum(#2{records}), sum(#3{batches}), sum(#4{size}), sum(#5{capacity}), sum(#6{allocations})
                 Key:
                   Project: #1, #7, #0
-                →Differential Join %1:l0[#0{worker_id}, #2{id}] » %0[#0, #1]
+                →Differential Join %1:l1[#0{worker_id}, #2{id}] » %0[#0, #1]
                   →Arrange (#0, #1)
                     →Union
                       →Map/Filter/Project
@@ -14606,18 +14606,18 @@ Explained Query:
                                 →Distinct GroupAggregate
                                   →Fused with Child Map/Filter/Project
                                     Project: #0, #1
-                                      →Read l13
+                                      →Read l14
                             →Fused with Child Map/Filter/Project
                               Project: #1, #2
                                 →Read l11
                       →Fused with Child Map/Filter/Project
                         Project: #1, #2, #4, #3, #5..=#7
-                          →Read l13
+                          →Read l14
                   →Arrange (#0{worker_id}, #2{id})
-                    →Stream l0
+                    →Stream l1
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join, delta join 1st input (full scan))
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, differential join)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)
@@ -14675,35 +14675,52 @@ Explained Query:
         Simple aggregates: count(*)
         →Arranged mz_introspection.mz_arrangement_batcher_allocations_raw
     cte l9 =
-      →Arranged mz_introspection.mz_dataflow_operators_per_worker
-    cte l10 =
-      →Differential Join %3:l9[#0, #1] » %2:mz_dataflow_addresses_per_worker[#0, #1] » %1:mz_dataflow_addresses_per_worker[#1] » %0:l9[#0, #1]
-        after %2:
-          Project: #3, #1
-          Filter: (1 = list_length(#3{address}))
-        after %1:
-          Project: #2, #0, #4
-          Filter: (#4) IS NOT NULL
-          Map: list_index(#3{address}, 1)
-          Equivalences: list_index(#1{address}, 1) = list_index(#3{address}, 1)
-        →Arranged l9
+      →Delta Join [%0:mz_dataflow_operators_per_worker[#0, #1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1] » %3:mz_dataflow_operators_per_worker[#0, #1]] [%1:mz_dataflow_addresses_per_worker[#0, #1] » %0:mz_dataflow_operators_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1] » %3:mz_dataflow_operators_per_worker[#0, #1]] [%2:mz_dataflow_addresses_per_worker[#0, #1] » %0:mz_dataflow_operators_per_worker[#1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %3:mz_dataflow_operators_per_worker[#0, #1]] [%3:mz_dataflow_operators_per_worker[#0, #1] » %0:mz_dataflow_operators_per_worker[#1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#0, #1]]
+        path %0:
+          after %1:
+            Project: #0..=#4
+            Filter: (#4) IS NOT NULL
+            Map: list_index(#3{address}, 1)
+          after %2:
+            Project: #1, #0, #2, #5, #4
+            Equivalences: list_index(#6{address}, 1) = list_index(#3{address}, 1)
+        path %1:
+          after %2:
+            Project: #1..=#3, #0, #6, #5
+            Equivalences: list_index(#7{address}, 1) = list_index(#4{address}, 1)
+        path %2:
+          after %1:
+            Project: #0, #2..=#4, #1, #7
+            Filter: (#7) IS NOT NULL
+            Map: list_index(#6{address}, 1)
+            Equivalences: list_index(#5{address}, 1) = list_index(#6{address}, 1)
+        path %3:
+          after %1:
+            Project: #0, #2, #3, #5, #4, #1, #6
+            Filter: (#6) IS NOT NULL
+            Map: list_index(#5{address}, 1)
+          after %2:
+            Project: #2..=#4, #6
+            Equivalences: list_index(#7{address}, 1) = list_index(#5{address}, 1)
         →Arrange (#1)
+          →Arranged mz_introspection.mz_dataflow_operators_per_worker
+        →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+        →Arrange (#0, #1) (#1)
           →Fused with Child Map/Filter/Project
-            Filter: (list_index(#2{address}, 1)) IS NOT NULL
+            Filter: (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
               →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                 Key: (#0, #1)
-        →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-        →Arranged l9
-    cte l11 =
+        →Arranged mz_introspection.mz_dataflow_operators_per_worker
+    cte l10 =
       →Arrange (#0{id}, #1{worker_id})
-        →Stream l10
-    cte l12 =
+        →Stream l9
+    cte l11 =
       →Fused with Child Map/Filter/Project
         Project: #0, #1
           →Arranged mz_introspection.mz_dataflow_operators_per_worker
             Key: (#0, #1)
-    cte l13 =
-      →Differential Join %0:l11[#0{id}, #1{worker_id}] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
+    cte l12 =
+      →Differential Join %0:l10[#0{id}, #1{worker_id}] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
         after %1:
           Project: #0..=#3, #6
           Map: case when (#5) IS NULL then null else #4 end
@@ -14732,7 +14749,7 @@ Explained Query:
           Project: #0..=#3, #18, #21, #23, #25, #30
           Filter: ((#18) IS NOT NULL OR (case when #20 then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when #22 then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when #24 then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when #29 then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#27) IS NULL then 0 else coalesce(#26, 0) end) end) IS NOT NULL)
           Map: case when (#27) IS NULL then null else #26 end, ((#19) IS NULL AND (#28) IS NULL), case when #29 then null else (coalesce(#19, 0) + coalesce(#28, 0)) end
-        →Arranged l11
+        →Arranged l10
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14751,7 +14768,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l0
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14770,7 +14787,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l1
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14789,7 +14806,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l2
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14808,7 +14825,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l3
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14827,7 +14844,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l4
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14846,7 +14863,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l5
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14865,7 +14882,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l6
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14884,7 +14901,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l7
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -14903,7 +14920,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l8
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
   →Return
     →Map/Filter/Project
       Project: #0..=#2, #8..=#12
@@ -14918,22 +14935,22 @@ Explained Query:
               Map: null, null, null, null, null
                 →Consolidating Union
                   →Negate Diffs
-                    →Differential Join %1[#0, #1] » %0:l11[#0, #1]
-                      →Arranged l11
+                    →Differential Join %1[#0, #1] » %0:l10[#0, #1]
+                      →Arranged l10
                       →Distinct GroupAggregate
                         →Fused with Child Map/Filter/Project
                           Project: #0, #1
-                            →Read l13
+                            →Read l12
                   →Fused with Child Map/Filter/Project
                     Project: #0, #2, #3
-                      →Read l10
+                      →Read l9
             →Fused with Child Map/Filter/Project
               Project: #0, #2, #3, #5, #4, #6..=#8
-                →Read l13
+                →Read l12
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join)
-  - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, differential join)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, delta join lookup, delta join 1st input (full scan))
+  - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, delta join lookup)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_batcher_records_raw_s2_primary_idx (*** full scan ***)
@@ -14990,35 +15007,52 @@ Explained Query:
         Simple aggregates: count(*)
         →Arranged mz_introspection.mz_arrangement_batcher_allocations_raw
     cte l9 =
-      →Arranged mz_introspection.mz_dataflow_operators_per_worker
-    cte l10 =
-      →Differential Join %3:l9[#0, #1] » %2:mz_dataflow_addresses_per_worker[#0, #1] » %1:mz_dataflow_addresses_per_worker[#1] » %0:l9[#0, #1]
-        after %2:
-          Project: #3, #1
-          Filter: (1 = list_length(#3{address}))
-        after %1:
-          Project: #2, #0, #4
-          Filter: (#4) IS NOT NULL
-          Map: list_index(#3{address}, 1)
-          Equivalences: list_index(#1{address}, 1) = list_index(#3{address}, 1)
-        →Arranged l9
+      →Delta Join [%0:mz_dataflow_operators_per_worker[#0, #1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1] » %3:mz_dataflow_operators_per_worker[#0, #1]] [%1:mz_dataflow_addresses_per_worker[#0, #1] » %0:mz_dataflow_operators_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1] » %3:mz_dataflow_operators_per_worker[#0, #1]] [%2:mz_dataflow_addresses_per_worker[#0, #1] » %0:mz_dataflow_operators_per_worker[#1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %3:mz_dataflow_operators_per_worker[#0, #1]] [%3:mz_dataflow_operators_per_worker[#0, #1] » %0:mz_dataflow_operators_per_worker[#1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#0, #1]]
+        path %0:
+          after %1:
+            Project: #0..=#4
+            Filter: (#4) IS NOT NULL
+            Map: list_index(#3{address}, 1)
+          after %2:
+            Project: #1, #0, #2, #5, #4
+            Equivalences: list_index(#6{address}, 1) = list_index(#3{address}, 1)
+        path %1:
+          after %2:
+            Project: #1..=#3, #0, #6, #5
+            Equivalences: list_index(#7{address}, 1) = list_index(#4{address}, 1)
+        path %2:
+          after %1:
+            Project: #0, #2..=#4, #1, #7
+            Filter: (#7) IS NOT NULL
+            Map: list_index(#6{address}, 1)
+            Equivalences: list_index(#5{address}, 1) = list_index(#6{address}, 1)
+        path %3:
+          after %1:
+            Project: #0, #2, #3, #5, #4, #1, #6
+            Filter: (#6) IS NOT NULL
+            Map: list_index(#5{address}, 1)
+          after %2:
+            Project: #2..=#4, #6
+            Equivalences: list_index(#7{address}, 1) = list_index(#5{address}, 1)
         →Arrange (#1)
+          →Arranged mz_introspection.mz_dataflow_operators_per_worker
+        →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+        →Arrange (#0, #1) (#1)
           →Fused with Child Map/Filter/Project
-            Filter: (list_index(#2{address}, 1)) IS NOT NULL
+            Filter: (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
               →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                 Key: (#0, #1)
-        →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-        →Arranged l9
-    cte l11 =
+        →Arranged mz_introspection.mz_dataflow_operators_per_worker
+    cte l10 =
       →Arrange (#0{id}, #1{worker_id})
-        →Stream l10
-    cte l12 =
+        →Stream l9
+    cte l11 =
       →Fused with Child Map/Filter/Project
         Project: #0, #1
           →Arranged mz_introspection.mz_dataflow_operators_per_worker
             Key: (#0, #1)
-    cte l13 =
-      →Differential Join %0:l11[#0{id}, #1{worker_id}] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
+    cte l12 =
+      →Differential Join %0:l10[#0{id}, #1{worker_id}] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
         after %1:
           Project: #0..=#3, #6
           Map: case when (#5) IS NULL then null else #4 end
@@ -15047,7 +15081,7 @@ Explained Query:
           Project: #0..=#3, #18, #21, #23, #25, #30
           Filter: ((#18) IS NOT NULL OR (case when #20 then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when #22 then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when #24 then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when #29 then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#27) IS NULL then 0 else coalesce(#26, 0) end) end) IS NOT NULL)
           Map: case when (#27) IS NULL then null else #26 end, ((#19) IS NULL AND (#28) IS NULL), case when #29 then null else (coalesce(#19, 0) + coalesce(#28, 0)) end
-        →Arranged l11
+        →Arranged l10
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15066,7 +15100,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l0
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15085,7 +15119,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l1
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15104,7 +15138,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l2
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15123,7 +15157,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l3
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15142,7 +15176,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l4
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15161,7 +15195,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l5
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15180,7 +15214,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l6
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15199,7 +15233,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l7
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15218,7 +15252,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l8
                               Key: (#0, #1)
-                      →Stream l12
+                      →Stream l11
   →Return
     →Union
       →Map/Filter/Project
@@ -15226,22 +15260,22 @@ Explained Query:
         Map: null, null, null, null, null
           →Consolidating Union
             →Negate Diffs
-              →Differential Join %1:l11[#0{id}, #1{worker_id}] » %0[#0, #1]
+              →Differential Join %1:l10[#0{id}, #1{worker_id}] » %0[#0, #1]
                 →Distinct GroupAggregate
                   →Fused with Child Map/Filter/Project
                     Project: #0, #1
-                      →Read l13
-                →Arranged l11
+                      →Read l12
+                →Arranged l10
             →Fused with Child Map/Filter/Project
               Project: #0, #2, #1, #3
-                →Read l10
+                →Read l9
       →Fused with Child Map/Filter/Project
         Project: #0, #2, #1, #3, #5, #4, #6..=#8
-          →Read l13
+          →Read l12
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join)
-  - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, differential join)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, delta join lookup, delta join 1st input (full scan))
+  - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, delta join lookup)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_batcher_records_raw_s2_primary_idx (*** full scan ***)
@@ -15262,74 +15296,76 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_records_per_dataflow_per_worker";
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %1:mz_dataflow_operators_per_worker[#0, #1] » %0:mz_dataflow_addresses_per_worker[#0, #1]
+      →Arranged mz_introspection.mz_dataflow_operators_per_worker
+    cte l1 =
+      →Differential Join %1:l0[#0, #1] » %0:mz_dataflow_addresses_per_worker[#0, #1]
         after %0:
           Project: #1, #2, #4
           Filter: (1 = list_length(#3{address})) AND (#4) IS NOT NULL
           Map: list_index(#3{address}, 1)
         →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-        →Arranged mz_introspection.mz_dataflow_operators_per_worker
-    cte l1 =
-      →Accumulable GroupAggregate
-        Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batches_raw
+        →Arranged l0
     cte l2 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_records_raw
+        →Arranged mz_introspection.mz_arrangement_batches_raw
     cte l3 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_heap_size_raw
+        →Arranged mz_introspection.mz_arrangement_records_raw
     cte l4 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_heap_capacity_raw
+        →Arranged mz_introspection.mz_arrangement_heap_size_raw
     cte l5 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_heap_allocations_raw
+        →Arranged mz_introspection.mz_arrangement_heap_capacity_raw
     cte l6 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batcher_records_raw
+        →Arranged mz_introspection.mz_arrangement_heap_allocations_raw
     cte l7 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batcher_size_raw
+        →Arranged mz_introspection.mz_arrangement_batcher_records_raw
     cte l8 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batcher_capacity_raw
+        →Arranged mz_introspection.mz_arrangement_batcher_size_raw
     cte l9 =
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
-        →Arranged mz_introspection.mz_arrangement_batcher_allocations_raw
+        →Arranged mz_introspection.mz_arrangement_batcher_capacity_raw
     cte l10 =
-      →Fused with Child Map/Filter/Project
-        Project: #0, #1
-          →Arranged mz_introspection.mz_dataflow_operators_per_worker
-            Key: (#0, #1)
+      →Accumulable GroupAggregate
+        Simple aggregates: count(*)
+        →Arranged mz_introspection.mz_arrangement_batcher_allocations_raw
     cte l11 =
-      →Differential Join %2:l0[#0{id}] » %1:mz_dataflow_addresses_per_worker[#1] » %0:l10[#0, #1]
-        after %1:
-          Project: #2, #0, #1
-          Equivalences: list_index(#3{address}, 1) = #1{id}
-        →Arrange (#0, #1)
-          →Stream l10
-        →Arrange (#1)
+      →Delta Join [%0:l0[#0, #1] » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:l1[#0, #1]] [%1:mz_dataflow_addresses_per_worker[#0, #1] » %0:l0[#0, #1] » %2:l1[#0, #1]] [%2:l1[#0, #1] » %1:mz_dataflow_addresses_per_worker[#1] » %0:l0[#0, #1]]
+        path %2:
+          after %1:
+            Project: #2, #0, #1
+            Equivalences: list_index(#3{address}, 1) = #1{id}
+        →Arranged l0
+        →Arrange (#0, #1) (#1)
           →Fused with Child Map/Filter/Project
             Filter: (list_index(#2{address}, 1)) IS NOT NULL
               →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                 Key: (#0, #1)
-        →Arrange (#0{id})
+        →Arrange (#0, #1)
           →Fused with Child Map/Filter/Project
             Project: #0, #2
-              →Read l0
+              →Read l1
     cte l12 =
       →Arrange (#0{id}, #1{worker_id})
         →Stream l11
     cte l13 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #1
+          →Arranged mz_introspection.mz_dataflow_operators_per_worker
+            Key: (#0, #1)
+    cte l14 =
       →Differential Join %0:l12[#0{id}, #1{worker_id}] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]
         after %1:
           Project: #0..=#2, #5
@@ -15365,25 +15401,6 @@ Explained Query:
             →Fused with Child Map/Filter/Project
               Project: #0..=#3
               Map: true
-                →Arranged l1
-                  Key: (#0, #1)
-            →Map/Filter/Project
-              Project: #0..=#3
-              Map: null, null
-                →Threshold Diffs #0, #1
-                  →Arrange (#0, #1)
-                    →Consolidating Union
-                      →Negate Diffs
-                        →Fused with Child Map/Filter/Project
-                          Project: #0, #1
-                            →Arranged l1
-                              Key: (#0, #1)
-                      →Stream l10
-        →Arrange (#0, #1)
-          →Union
-            →Fused with Child Map/Filter/Project
-              Project: #0..=#3
-              Map: true
                 →Arranged l2
                   Key: (#0, #1)
             →Map/Filter/Project
@@ -15397,7 +15414,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l2
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15416,7 +15433,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l3
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15435,7 +15452,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l4
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15454,7 +15471,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l5
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15473,7 +15490,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l6
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15492,7 +15509,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l7
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15511,7 +15528,7 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l8
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
         →Arrange (#0, #1)
           →Union
             →Fused with Child Map/Filter/Project
@@ -15530,7 +15547,26 @@ Explained Query:
                           Project: #0, #1
                             →Arranged l9
                               Key: (#0, #1)
-                      →Stream l10
+                      →Stream l13
+        →Arrange (#0, #1)
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #0..=#3
+              Map: true
+                →Arranged l10
+                  Key: (#0, #1)
+            →Map/Filter/Project
+              Project: #0..=#3
+              Map: null, null
+                →Threshold Diffs #0, #1
+                  →Arrange (#0, #1)
+                    →Consolidating Union
+                      →Negate Diffs
+                        →Fused with Child Map/Filter/Project
+                          Project: #0, #1
+                            →Arranged l10
+                              Key: (#0, #1)
+                      →Stream l13
   →Return
     →Map/Filter/Project
       Project: #0..=#2, #8..=#12
@@ -15539,7 +15575,7 @@ Explained Query:
           Simple aggregates: sum(#2{records}), sum(#3{batches}), sum(#4{size}), sum(#5{capacity}), sum(#6{allocations})
           Key:
             Project: #1, #7, #0
-          →Differential Join %1:l0[#0{worker_id}, #2{id}] » %0[#0, #1]
+          →Differential Join %1:l1[#0{worker_id}, #2{id}] » %0[#0, #1]
             →Arrange (#0, #1)
               →Union
                 →Map/Filter/Project
@@ -15552,18 +15588,18 @@ Explained Query:
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
                               Project: #0, #1
-                                →Read l13
+                                →Read l14
                       →Fused with Child Map/Filter/Project
                         Project: #1, #2
                           →Read l11
                 →Fused with Child Map/Filter/Project
                   Project: #1, #2, #4, #3, #5..=#7
-                    →Read l13
+                    →Read l14
             →Arrange (#0{worker_id}, #2{id})
-              →Stream l0
+              →Stream l1
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, differential join, delta join 1st input (full scan))
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, differential join)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)
@@ -15718,13 +15754,9 @@ EXPLAIN SELECT * FROM "pg_catalog"."pg_auth_members";
 Explained Query:
   →With
     cte l0 =
-      →Arrange (#0)
-        →Fused with Child Map/Filter/Project
-          Project: #0, #1
-            →Arranged mz_catalog.mz_roles
-              Key: (#0{id})
+      →Arranged mz_catalog.mz_roles
   →Return
-    →Differential Join %3:mz_roles[#0{id}] » %0:mz_role_members[#2] » %2:l0[#0] » %1:l0[#0]
+    →Differential Join %3:l0[#0{id}] » %0:mz_role_members[#2] » %2:l0[#0] » %1:l0[#0]
       Final closure:
         Project: #0..=#3
         Map: false
@@ -15732,12 +15764,12 @@ Explained Query:
         →Stream mz_catalog.mz_role_members
       →Arranged l0
       →Arranged l0
-      →Arranged mz_catalog.mz_roles
+      →Arranged l0
 
 Source mz_catalog.mz_role_members
 
 Used Indexes:
-  - mz_catalog.mz_roles_ind (*** full scan ***, differential join)
+  - mz_catalog.mz_roles_ind (differential join)
 
 Target cluster: mz_catalog_server
 
@@ -17158,13 +17190,9 @@ EXPLAIN SELECT * FROM "pg_catalog"."pg_index";
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %3:mz_schemas[#0{id}] » %1[#2] » %0:mz_indexes[#2] » %2:mz_index_columns[#0]
-        →Arrange (#2)
-          →Fused with Child Map/Filter/Project
-            Project: #0, #1, #3
-              →Arranged mz_catalog.mz_indexes
-                Key: (#0{id})
-        →Arrange (#2)
+      →Differential Join %2:mz_index_columns[#0{id}] » %0:mz_indexes[#0] » %1[#0] » %3:mz_schemas[#0]
+        →Arranged mz_catalog.mz_indexes
+        →Arrange (#0)
           →Union
             →Fused with Child Map/Filter/Project
               Project: #1, #2, #0
@@ -17182,9 +17210,9 @@ Explained Query:
               Project: #0..=#2
                 →Arranged mz_catalog.mz_materialized_views
                   Key: (#0{id})
-        →Arrange (#0)
-          →Read mz_catalog.mz_index_columns
         →Arrange (#0{id})
+          →Read mz_catalog.mz_index_columns
+        →Arrange (#0)
           →Fused with Parent Map/Filter/Project
             Project: #1, #2, #0, #3..=#5
             →Arranged mz_catalog.mz_schemas
@@ -17209,19 +17237,59 @@ Explained Query:
         Project: #0, #1
           →Read l1
   →Return
-    →Differential Join %3[#0, #1] » %2[#0, #1] » %1[#0, #1] » %0[#0, #1]
-      after %2:
-        Project: #0, #1, #4, #5
-        Map: strtoint2vector(#2), (("{" || #3) || "}")
-      after %1:
-        Project: #0..=#3, #5
-        Map: strtoint2vector(#4)
-      after %0:
-        Project: #0..=#4, #6
-        Map: bigint_to_smallint(#5)
-      Final closure:
-        Project: #0, #1, #5, #6, #6, #6, #6, #7, #6, #2, #4, #3, #8
-        Map: false, true, null
+    →Delta Join [%0[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1]] [%1[#0, #1] » %0[#0, #1] » %2[#0, #1] » %3[#0, #1]] [%2[#0, #1] » %0[#0, #1] » %1[#0, #1] » %3[#0, #1]] [%3[#0, #1] » %0[#0, #1] » %1[#0, #1] » %2[#0, #1]]
+      path %0:
+        after %1:
+          Project: #0..=#2, #4
+          Map: strtoint2vector(#3)
+        after %2:
+          Project: #0..=#3, #5
+          Map: (("{" || #4) || "}")
+        after %3:
+          Project: #0..=#4, #6
+          Map: strtoint2vector(#5)
+        Final closure:
+          Project: #0..=#2, #6, #6, #6, #6, #7, #6, #5, #3, #4, #8
+          Map: false, true, null
+      path %1:
+        after %0:
+          Project: #0, #1, #0..=#2, #4
+          Map: bigint_to_smallint(#3)
+        after %2:
+          Project: #2, #3, #0, #1, #4, #5, #7
+          Map: (("{" || #6) || "}")
+        after %3:
+          Project: #2..=#6, #8
+          Map: strtoint2vector(#7)
+        Final closure:
+          Project: #0, #1, #3, #6, #6, #6, #6, #7, #6, #5, #2, #4, #8
+          Map: false, true, null
+      path %2:
+        after %0:
+          Project: #0, #1, #0..=#2, #4
+          Map: bigint_to_smallint(#3)
+        after %1:
+          Project: #2, #3, #0, #1, #4, #5, #7
+          Map: strtoint2vector(#6)
+        after %3:
+          Project: #2..=#6, #8
+          Map: strtoint2vector(#7)
+        Final closure:
+          Project: #0, #1, #3, #6, #6, #6, #6, #7, #6, #5, #4, #2, #8
+          Map: false, true, null
+      path %3:
+        after %0:
+          Project: #0, #1, #0..=#2, #4
+          Map: bigint_to_smallint(#3)
+        after %1:
+          Project: #2, #3, #0, #1, #4, #5, #7
+          Map: strtoint2vector(#6)
+        after %2:
+          Project: #2..=#6, #8
+          Map: (("{" || #7) || "}")
+        Final closure:
+          Project: #0, #1, #3, #6, #6, #6, #6, #7, #6, #2, #4, #5, #8
+          Map: false, true, null
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
         →Stream l2
@@ -17247,7 +17315,7 @@ Source mz_catalog.mz_index_columns
   project=(#0..=#3)
 
 Used Indexes:
-  - mz_catalog.mz_indexes_ind (*** full scan ***)
+  - mz_catalog.mz_indexes_ind (differential join)
   - mz_catalog.mz_sources_ind (*** full scan ***)
   - mz_catalog.mz_materialized_views_ind (*** full scan ***)
   - mz_catalog.mz_databases_ind (lookup)
@@ -18754,15 +18822,11 @@ query T multiline
 EXPLAIN SELECT * FROM "pg_catalog"."pg_views";
 ----
 Explained Query:
-  →Differential Join %1[case when (#3) IS NULL then null else #1 end] » %2[#0] » %0:mz_views[#0] » %3:mz_roles[#0]
+  →Differential Join %1[case when (#3) IS NULL then null else #1 end] » %2[#0] » %0:mz_views[#2] » %3:mz_roles[#0]
     after %2:
       Project: #1, #5
       Map: case when (#4) IS NULL then null else #3 end
-    →Arrange (#0)
-      →Fused with Child Map/Filter/Project
-        Project: #0, #3..=#5
-          →Arranged mz_catalog.mz_views
-            Key: (#2{schema_id})
+    →Arranged mz_catalog.mz_views
     →Arrange (case when (#3) IS NULL then null else #1 end)
       →Union
         →Fused with Child Map/Filter/Project
@@ -18808,7 +18872,7 @@ Used Indexes:
   - mz_catalog.mz_roles_ind (differential join)
   - mz_catalog.mz_databases_ind (lookup)
   - mz_catalog.mz_schemas_ind (*** full scan ***)
-  - mz_catalog.mz_views_ind (*** full scan ***)
+  - mz_catalog.mz_views_ind (*** full scan ***, differential join)
 
 Target cluster: mz_catalog_server
 

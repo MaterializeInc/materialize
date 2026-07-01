@@ -234,7 +234,7 @@ Explained Query:
                 FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
                   ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      ArrangeBy keys=[[#0{c}, #1{c}]] // { arity: 3 }
+      ArrangeBy keys=[[#0, #1]] // { arity: 3 }
         Get l0 // { arity: 3 }
   Return // { arity: 2 }
     With Mutually Recursive
@@ -248,7 +248,7 @@ Explained Query:
               Map ((#4{steps} + 1), (#5{cost} + #8{cost})) // { arity: 11 }
                 Join on=(#6{c} = (#0{r} + #2{dr}) AND #7{c} = (#1{c} + #3{dc})) type=differential // { arity: 9 }
                   implementation
-                    %0:l3[(#0{r} + #2{dr}), (#1{c} + #3{dc})]KKif » %1:l1[#0{c}, #1{c}]KKif
+                    %0:l3[(#0{r} + #2{dr}), (#1{c} + #3{dc})]KK » %1:l1[#0, #1]KK
                   ArrangeBy keys=[[(#0{r} + #2{dr}), (#1{c} + #3{dc})]] // { arity: 6 }
                     Filter (#4{steps} < 3) // { arity: 6 }
                       Get l3 // { arity: 6 }
@@ -257,7 +257,7 @@ Explained Query:
               Map ((#4{cost} + #7{cost}), 1) // { arity: 10 }
                 Join on=(#5{c} = (#0{cost} + #3{cost}) AND #6{c} = (#1{c} + #2{dr})) type=differential // { arity: 8 }
                   implementation
-                    %0:l2[(#0{cost} + #3{cost}), (#1{c} + #2{dr})]KK » %1:l1[#0{c}, #1{c}]KK
+                    %0:l2[(#0{cost} + #3{cost}), (#1{c} + #2{dr})]KK » %1:l1[#0, #1]KK
                   ArrangeBy keys=[[(#0{cost} + #3{cost}), (#1{c} + #2{dr})]] // { arity: 5 }
                     Get l2 // { arity: 5 }
                   Get l1 // { arity: 3 }
@@ -265,7 +265,7 @@ Explained Query:
               Map (-(#3{dc}), -(#2{dr}), (#4{cost} + #7{cost}), 1) // { arity: 12 }
                 Join on=(#5{c} = (#0{r} - #3{dc}) AND #6{c} = (#1{c} - #2{dr})) type=differential // { arity: 8 }
                   implementation
-                    %0:l2[(#0{r} - #3{dc}), (#1{c} - #2{dr})]KK » %1:l1[#0{c}, #1{c}]KK
+                    %0:l2[(#0{r} - #3{dc}), (#1{c} - #2{dr})]KK » %1:l1[#0, #1]KK
                   ArrangeBy keys=[[(#0{r} - #3{dc}), (#1{c} - #2{dr})]] // { arity: 5 }
                     Get l2 // { arity: 5 }
                   Get l1 // { arity: 3 }
@@ -277,15 +277,15 @@ Explained Query:
           Project (#2{min}) // { arity: 1 }
             Join on=(#0{c} = #3{max} AND #1{c} = #4{max}) type=differential // { arity: 5 }
               implementation
-                %1[×]UA » %2[×]UA » %0:l3[#0{c}, #1{c}]KK
-              ArrangeBy keys=[[#0{c}, #1{c}]] // { arity: 3 }
+                %2[#0{c}]UK » %0:l3[#1]K » %1[#0]UK
+              ArrangeBy keys=[[#1{c}]] // { arity: 3 }
                 Project (#0{c}, #1{c}, #5{min}) // { arity: 3 }
                   Get l3 // { arity: 6 }
-              ArrangeBy keys=[[]] // { arity: 1 }
+              ArrangeBy keys=[[#0{max}]] // { arity: 1 }
                 Reduce aggregates=[max(#0{r})] // { arity: 1 }
                   Project (#0) // { arity: 1 }
                     Get l0 // { arity: 3 }
-              ArrangeBy keys=[[]] // { arity: 1 }
+              ArrangeBy keys=[[#0{max}]] // { arity: 1 }
                 Reduce aggregates=[max(#0{c})] // { arity: 1 }
                   Project (#1) // { arity: 1 }
                     Get l0 // { arity: 3 }
@@ -300,7 +300,7 @@ Explained Query:
               Map ((#4{steps} + 1), (#5{cost} + #8{cost})) // { arity: 11 }
                 Join on=(#6{c} = (#0{r} + #2{dr}) AND #7{c} = (#1{c} + #3{dc})) type=differential // { arity: 9 }
                   implementation
-                    %0:l6[(#0{r} + #2{dr}), (#1{c} + #3{dc})]KKif » %1:l1[#0{c}, #1{c}]KKif
+                    %0:l6[(#0{r} + #2{dr}), (#1{c} + #3{dc})]KK » %1:l1[#0, #1]KK
                   ArrangeBy keys=[[(#0{r} + #2{dr}), (#1{c} + #3{dc})]] // { arity: 6 }
                     Filter (#4{steps} < 10) // { arity: 6 }
                       Get l6 // { arity: 6 }
@@ -309,7 +309,7 @@ Explained Query:
               Map ((#4{cost} + #7{cost}), 1) // { arity: 10 }
                 Join on=(#5{c} = (#0{cost} + #3{cost}) AND #6{c} = (#1{c} + #2{dr})) type=differential // { arity: 8 }
                   implementation
-                    %0:l5[(#0{cost} + #3{cost}), (#1{c} + #2{dr})]KKif » %1:l1[#0{c}, #1{c}]KKif
+                    %0:l5[(#0{cost} + #3{cost}), (#1{c} + #2{dr})]KK » %1:l1[#0, #1]KK
                   ArrangeBy keys=[[(#0{cost} + #3{cost}), (#1{c} + #2{dr})]] // { arity: 5 }
                     Get l5 // { arity: 5 }
                   Get l1 // { arity: 3 }
@@ -317,7 +317,7 @@ Explained Query:
               Map (-(#3{dc}), -(#2{dr}), (#4{cost} + #7{cost}), 1) // { arity: 12 }
                 Join on=(#5{c} = (#0{r} - #3{dc}) AND #6{c} = (#1{c} - #2{dr})) type=differential // { arity: 8 }
                   implementation
-                    %0:l5[(#0{r} - #3{dc}), (#1{c} - #2{dr})]KKif » %1:l1[#0{c}, #1{c}]KKif
+                    %0:l5[(#0{r} - #3{dc}), (#1{c} - #2{dr})]KK » %1:l1[#0, #1]KK
                   ArrangeBy keys=[[(#0{r} - #3{dc}), (#1{c} - #2{dr})]] // { arity: 5 }
                     Get l5 // { arity: 5 }
                   Get l1 // { arity: 3 }
@@ -331,16 +331,16 @@ Explained Query:
             Project (#2{min}) // { arity: 1 }
               Join on=(#0{c} = #3{max} AND #1{c} = #4{max}) type=differential // { arity: 5 }
                 implementation
-                  %1[×]UA » %2[×]UA » %0:l6[#0{c}, #1{c}]KKif
-                ArrangeBy keys=[[#0{c}, #1{c}]] // { arity: 3 }
+                  %2[#0{c}]UK » %0:l6[#1]K » %1[#0]UK
+                ArrangeBy keys=[[#1{c}]] // { arity: 3 }
                   Project (#0{c}, #1{c}, #5{min}) // { arity: 3 }
                     Filter (#4{steps} >= 4) // { arity: 6 }
                       Get l6 // { arity: 6 }
-                ArrangeBy keys=[[]] // { arity: 1 }
+                ArrangeBy keys=[[#0{max}]] // { arity: 1 }
                   Reduce aggregates=[max(#0{r})] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l0 // { arity: 3 }
-                ArrangeBy keys=[[]] // { arity: 1 }
+                ArrangeBy keys=[[#0{max}]] // { arity: 1 }
                   Reduce aggregates=[max(#0{c})] // { arity: 1 }
                     Project (#1) // { arity: 1 }
                       Get l0 // { arity: 3 }

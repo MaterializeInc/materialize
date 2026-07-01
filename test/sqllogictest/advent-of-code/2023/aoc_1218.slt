@@ -248,8 +248,8 @@ Explained Query:
               Map ((#4{r2} + (#1{dr} * #3{steps})), (#5{c2} + (#2{dc} * #3{steps})), (#6{rounds} + 1)) // { arity: 10 }
                 Join on=(#0{r} = #6{rounds}) type=differential // { arity: 7 }
                   implementation
-                    %0:l0[#0{r}]K » %1:l3[#2{rounds}]K
-                  ArrangeBy keys=[[#0{r}]] // { arity: 4 }
+                    %1:l3[#2{rounds}]K » %0:l0[#0]K
+                  ArrangeBy keys=[[#0]] // { arity: 4 }
                     Project (#0, #4..=#6) // { arity: 4 }
                       Map (regexp_split_to_array[" ", case_insensitive=false](#1{line}), array_index(#2, 1), case when (#3 = "U") then -1 else case when ("D" = array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 1)) then 1 else 0 end end, case when (#3 = "L") then -1 else case when ("R" = array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 1)) then 1 else 0 end end, text_to_integer(array_index(#2, 2))) // { arity: 7 }
                         Get l0 // { arity: 2 }
@@ -279,8 +279,8 @@ Explained Query:
               Map ((#4{r2} + integer_to_bigint((#1{dr} * #3{steps}))), (#5{c2} + integer_to_bigint((#2{dc} * #3{steps}))), (#6{rounds} + 1)) // { arity: 10 }
                 Join on=(#0{r} = #6{rounds}) type=differential // { arity: 7 }
                   implementation
-                    %0:l0[#0{r}]K » %1:l6[#2{rounds}]K
-                  ArrangeBy keys=[[#0{r}]] // { arity: 4 }
+                    %1:l6[#2{rounds}]K » %0:l0[#0]K
+                  ArrangeBy keys=[[#0]] // { arity: 4 }
                     Project (#0, #4, #5, #7) // { arity: 4 }
                       Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 3), substr(#2, 8, 1), case when (#3 = "3") then -1 else case when ("1" = substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 3), 8, 1)) then 1 else 0 end end, case when (#3 = "2") then -1 else case when ("0" = substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1{line}), 3), 8, 1)) then 1 else 0 end end, decode(("0" || substr(#2, 3, 5)), "hex"), (((65536 * get_byte(#6, 0)) + (256 * get_byte(#6, 1))) + get_byte(#6, 2))) // { arity: 8 }
                         Get l0 // { arity: 2 }

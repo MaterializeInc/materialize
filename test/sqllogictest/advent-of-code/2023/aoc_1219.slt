@@ -325,7 +325,7 @@ Explained Query:
   With
     cte l0 =
       Project (#0, #2, #6..=#9) // { arity: 6 }
-        Map (array_index(regexp_split_to_array[",", case_insensitive=false](#1{trans}), integer_to_bigint(#2{priority})), substr(#3{rule}, 2, 1), ((#4 = "<") OR (#4 = ">")), case when #5 then substr(#3, 1, 1) else "x" end, case when #5 then #4 else ">" end, case when #5 then text_to_integer(array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 1)) else 0 end, case when #5 then array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 2) else #3 end) // { arity: 10 }
+        Map (array_index(regexp_split_to_array[",", case_insensitive=false](#1{trans}), integer_to_bigint(#2{priority})), substr(#3{rule}, 2, 1), ((#4 = "<") OR (#4 = ">")), case when #5 then substr(#3, 1, 1) else "x" end, case when #5 then substr(#3, 2, 1) else ">" end, case when #5 then text_to_integer(array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 1)) else 0 end, case when #5 then array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 2) else #3 end) // { arity: 10 }
           FlatMap generate_series(1, array_length(regexp_split_to_array[",", case_insensitive=false](#1{trans}), 1), 1) // { arity: 3 }
             Project (#3, #4) // { arity: 2 }
               Filter (#3) IS NOT NULL // { arity: 5 }
@@ -350,8 +350,8 @@ Explained Query:
                 Filter case when (#8{cmp} = "<") then case when (#7{field} = "x") then (#1{x} < #9{val}) else case when (#7{field} = "m") then (#2{m} < #9{val}) else case when (#7{field} = "a") then (#3{a} < #9{val}) else case when (#7{field} = "s") then (#4{s} < #9{val}) else false end end end end else case when (#8{cmp} = ">") then case when (#7{field} = "x") then (#1{x} > #9{val}) else case when (#7{field} = "m") then (#2{m} > #9{val}) else case when (#7{field} = "a") then (#3{a} > #9{val}) else case when (#7{field} = "s") then (#4{s} > #9{val}) else false end end end end else false end end // { arity: 11 }
                   Join on=(#0{state} = #5{state}) type=differential // { arity: 11 }
                     implementation
-                      %0:l1[#0{state}]K » %1:l0[#0{state}]K
-                    ArrangeBy keys=[[#0{state}]] // { arity: 5 }
+                      %1:l0[#0{state}]K » %0:l1[#0]K
+                    ArrangeBy keys=[[#0]] // { arity: 5 }
                       Filter (#0{state}) IS NOT NULL // { arity: 5 }
                         Get l1 // { arity: 5 }
                     ArrangeBy keys=[[#0{state}]] // { arity: 6 }
@@ -365,8 +365,8 @@ Explained Query:
         Project (#0..=#9, #12..=#15) // { arity: 14 }
           Join on=(#0{state} = #10{state} AND #1{priority} = #11{priority}) type=differential // { arity: 16 }
             implementation
-              %0:l4[#0{state}, #1{priority}]KK » %1:l0[#0{state}, #1{priority}]KK
-            ArrangeBy keys=[[#0{state}, #1{priority}]] // { arity: 10 }
+              %1:l0[#0{state}, #1{priority}]KK » %0:l4[#0, #1]KK
+            ArrangeBy keys=[[#0, #1]] // { arity: 10 }
               Filter (#0{state}) IS NOT NULL // { arity: 10 }
                 Get l4 // { arity: 10 }
             ArrangeBy keys=[[#0{state}, #1{priority}]] // { arity: 6 }

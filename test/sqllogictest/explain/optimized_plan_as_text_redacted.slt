@@ -297,15 +297,15 @@ Explained Query:
         Get l0
     cte l2 =
       ArrangeBy keys=[[#0{b}]]
-        Get l1
+        Filter (#0{b}) IS NOT NULL
+          Get l1
     cte l3 =
       TopK group_by=[#0{b}] limit=█
         Project (#2{b}, #0{a})
-          Filter (#1{b}) IS NOT NULL
-            Join on=(#1{b} = #2{b}) type=differential
-              ArrangeBy keys=[[#1{b}]]
-                ReadIndex on=iv iv_b_idx=[differential join]
-              Get l2
+          Join on=(#1{b} = #2{b}) type=differential
+            ArrangeBy keys=[[#1{b}]]
+              ReadIndex on=iv iv_b_idx=[differential join]
+            Get l2
     cte l4 =
       TopK group_by=[#0{b}] limit=█
         Project (#2{b}, #0{a})
@@ -316,7 +316,7 @@ Explained Query:
             Get l2
   Return
     Project (#2{a}, #4{a})
-      Join on=(#0{b} = #1{b} = #3{b}) type=delta
+      Join on=(#0{b} = #1{b} = #3{b}) type=differential
         ArrangeBy keys=[[#0{b}]]
           Get l0
         ArrangeBy keys=[[#0{b}]]
@@ -418,7 +418,7 @@ Explained Query:
         Get l0
     cte l2 =
       Project (#0{a}..=#2{a})
-        Join on=(#1{b} = #3{b} = #4{b}) type=delta
+        Join on=(#1{b} = #3{b} = #4{b}) type=differential
           Get l1
           Get l1
           ArrangeBy keys=[[#0{b}]]

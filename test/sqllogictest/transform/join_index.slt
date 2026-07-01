@@ -418,10 +418,9 @@ Explained Query:
   Project (#1{b}, #3{b}, #5{b}) // { arity: 3 }
     Join on=(#0{a} = #2{a} AND #4{a} = (#0{a} + 4)) type=differential // { arity: 6 }
       implementation
-        %0:foo[(#0{a} + 4)]K » %2:baz[#0]K » %1:bar[#0]K
-      ArrangeBy keys=[[(#0{a} + 4)]] // { arity: 2 }
-        Filter (#0{a}) IS NOT NULL // { arity: 2 }
-          ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
+        %1:bar[#0{a}]K » %0:foo[#0]KA » %2:baz[#0]K
+      ArrangeBy keys=[[#0{a}]] // { arity: 2 }
+        ReadIndex on=foo foo_idx=[differential join] // { arity: 2 }
       ArrangeBy keys=[[#0{a}]] // { arity: 2 }
         Filter (#0{a}) IS NOT NULL // { arity: 2 }
           ReadIndex on=bar bar_idx2=[*** full scan ***] // { arity: 2 }
@@ -433,7 +432,7 @@ Source materialize.public.baz
   filter=((#0{a}) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.foo_idx (*** full scan ***)
+  - materialize.public.foo_idx (differential join)
   - materialize.public.bar_idx2 (*** full scan ***)
 
 Target cluster: quickstart

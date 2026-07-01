@@ -87,9 +87,9 @@ Explained Query:
       linear_stage[0]
         closure
           project=()
-        lookup={ relation=1, key=[#0] }
+        lookup={ relation=0, key=[#0] }
         stream={ key=[#0], thinning=() }
-      source={ relation=0, key=[#0] }
+      source={ relation=1, key=[#0] }
       Reduce::Distinct
         key_plan=id
         val_plan
