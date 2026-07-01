@@ -32,10 +32,15 @@ to migrate on your own schedule before the upgrade is mandatory.
 
 ## Prerequisites
 
-- First, install `cert-manager` (or provide your own certificate) and allow
-  internal network ingress on port `8001`.
+To adopt v1, you must be on Materialize v26.30+.
 
-- Then enable the `v1` CRD by setting the Helm value
+In addition, you must:
+
+- First, set up infrastructure requirements:
+  - Install `cert-manager` (or provide your own certificate).
+  - Allow internal network ingress on port `8001`.
+
+- Then, enable the `v1` CRD by setting the Helm value
   `operator.args.installV1CRD=true`.
 
 Materialize uses conversion webhooks to allow you to gracefully migrate from
@@ -56,7 +61,7 @@ modules](https://github.com/MaterializeInc/materialize-terraform-self-managed),
 the required infrastructure changes (cert-manager and network ingress) will be
 handled for you automatically.
 
-Update each module's `source` to point to the new release tag (v3.0.15 or
+Update each module's `source` to point to the new release tag (v3.1.0 or
 greater), then run `terraform init && terraform plan && terraform apply`. To
 enable the `v1` CRD, set the Helm value `operator.args.installV1CRD=true` in the
 values passed to the operator module.
@@ -280,31 +285,40 @@ webhook that converts between `v1` and `v1alpha1`.
 </div>
 </div>
 
-## How it works
+## Submit a `v1` CR to adopt `v1`
 
-The v1alpha1 CRD remains the storage version. When you submit a v1 CR, the
-operator's conversion webhook automatically converts it to v1alpha1 for storage.
-During conversion, the webhook computes a SHA256 hash of a subset of the spec
-fields and derives a deterministic `requestRollout` UUID from it. The hash covers
-the fields that affect the running `environmentd` (for example,
-`environmentdImageRef`, `environmentdExtraArgs`, `environmentdExtraEnv`, resource
-requirements, `podAnnotations`, `podLabels`, `authenticatorKind`, `enableRbac`,
+After you have fulfilled the pre-requisites (Materialize v26.30+, set up
+infrastructure requirements, enabled `v1` CRD), you can submit a `v1` CR to
+adopt `v1`.
+
+{{< important >}}
+
+Schedule `v1` apdoption during a window where a rollout is acceptable.
+{{< /important >}}
+
+### How the switchover works
+
+When you submit a `v1` CR, the operator's conversion webhook automatically
+converts it to `v1alpha1` for storage. During conversion, the webhook computes a
+SHA256 hash of a subset of the spec fields and derives a deterministic
+`requestRollout` UUID from it. The hash covers the fields that affect the
+running `environmentd` (for example, `environmentdImageRef`,
+`environmentdExtraArgs`, `environmentdExtraEnv`, resource requirements,
+`podAnnotations`, `podLabels`, `authenticatorKind`, `enableRbac`,
 `rolloutStrategy`, and `forceRollout`). It excludes fields that do not require a
 rollout, such as `balancerd`/`console` resource requirements and replica counts.
-The operator triggers a rollout whenever `requestRollout` differs from the last
-completed rollout, so:
 
-- **Adopting v1 on an existing v1alpha1 instance typically triggers one
-  rollout.** The derived `requestRollout` is computed from the spec hash and will
-  not match the `requestRollout` you previously set by hand, so the instance
-  rolls out once even if nothing else in the spec changed. Adopt v1 during a
-  window where a rollout is acceptable.
-- **Once on v1, an unchanged spec does not trigger a rollout.** Reapplying the
-  same spec produces the same hash and the same derived `requestRollout`.
-  Changing a hashed spec field produces a new value and triggers a rollout
-  automatically.
+{{< important >}}
 
-## Using kubectl
+Schedule `v1` apdoption during a window where a rollout is acceptable. Adopting
+`v1` on an existing `v1alpha1` instance typically triggers a rollout. The
+derived `requestRollout` is computed from the spec hash and will not match the
+`requestRollout` you previously set by hand, so the instance rolls out once even
+if nothing else in the spec changed.
+
+{{< /important >}}
+
+### Using kubectl
 
 To adopt v1 for an existing instance, apply your CR with `apiVersion:
 materialize.cloud/v1` and remove the `requestRollout` field:
@@ -323,7 +337,11 @@ spec:
 EOF
 ```
 
-## Using Terraform
+**Once on v1, an unchanged spec will not trigger a rollout.** Reapplying the
+same spec produces the same hash and the same derived `requestRollout`. Changing
+a hashed spec field produces a new value and triggers a rollout automatically.
+
+### Using Terraform
 
 If you are managing your Materialize instance with the [Materialize Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed),
@@ -333,6 +351,10 @@ set:
 crd_version     = "v1"
 request_rollout = null
 ```
+
+**Once on v1, an unchanged spec will not trigger a rollout.** Reapplying the
+same spec produces the same hash and the same derived `requestRollout`. Changing
+a hashed spec field produces a new value and triggers a rollout automatically.
 
 ## Returning to the v1alpha1 behavior
 

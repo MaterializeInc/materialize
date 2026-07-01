@@ -1,4 +1,16 @@
-- name: check-crd-version
+- name: check-crd-version-kind
+  content: |
+    To determine which CRD version is in use, run the following command,
+    replacing <instance-name> with your instance name. For the
+    `sample-materialize.yaml` used in this example, the instance name is
+    `12345678-1234-1234-1234-123456789012`:
+
+    ```sh
+    kubectl get materialize <instance-name> -n materialize-environment \
+      -o jsonpath='{.metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration}' \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin)["apiVersion"])'
+    ```
+- name: check-crd-version-tf
   content: |
     To check the CRD version of the Materialize manifest that was applied, run
     the following:
@@ -8,9 +20,6 @@
       | grep -iE 'api_?version|kind'
     ```
 
-    If you renamed the module or are running multiple instances, you can find
-    module name(s) with `terraform state list | grep -i materialize_instance`.
-
 - name: check-crd-v1-enablement
   content: |
 
@@ -19,7 +28,7 @@
 
     ```sh
     kubectl get crd materializes.materialize.cloud \
-      -o jsonpath='{range .spec.versions[*]}{.name} (served={.served}, storage={.  storage}){"\n"}{end}'
+      -o jsonpath='{range .spec.versions[*]}{.name} (served={.served}, storage={.storage}){"\n"}{end}'
     ```
 
     - If the output lists both `v1` and `v1alpha1`, the `v1` CRD is enabled.

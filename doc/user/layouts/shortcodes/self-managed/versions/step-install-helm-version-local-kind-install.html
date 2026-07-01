@@ -3,16 +3,17 @@
 1. Install the Materialize Operator. The operator will be installed in the
    `materialize` namespace.
 
-   Starting in v26.30, you can choose between CRD versions
-   [`v1`](/self-managed-deployments/upgrading/version-notes/#upgrading-to-v2630-and-later-versions)
-   and `v1alpha1`. The following enables the `v1` CRD version by setting
-   `operator.args.installV1CRD=true`. The `v1` CRD provides a [simplified
-   rollout
-   behavior](/self-managed-deployments/upgrading/version-notes/#upgrading-to-v2630-and-later-versions),
-   but requires `cert-manager`, installed in an [earlier
-   step](#install-cert-manager) in this guide.
+   <a name="step-enable-v1"></a>
 
-   ```shell
+   Starting in v26.30, you can choose between CRD versions: [`v1` (which
+   provides a simplified rollout behavior and is available starting in
+   v26.30)](/self-managed-deployments/upgrading/version-notes/#upgrading-to-v2630-and-later-versions)
+   and `v1alpha1` (default). The following enables the use of `v1` CRD version
+   by setting `operator.args.installV1CRD=true`. To use `v1` CRD requires
+   `cert-manager`, installed in an [earlier step](#install-cert-manager) in this
+   guide.
+
+   ```shell {hl_lines="5"}
    helm install my-materialize-operator materialize/materialize-operator \
        --namespace=materialize --create-namespace \
        --version {{ $operator_version }} \
@@ -21,6 +22,6 @@
        -f sample-values.yaml
    ```
 
-   To remain on the default `v1alpha1` CRD version, omit `--set
-   operator.args.installV1CRD=true`. With `v1alpha1`, rollouts require manually
-   rotating a UUID.
+   Even if using the default `v1alpha1` CRD version, you can still enable the
+   `v1` CRD to simplify the transition to `v1` in the future. However, you can
+   also omit `--set operator.args.installV1CRD=true` if you prefer.

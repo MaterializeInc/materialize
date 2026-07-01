@@ -141,7 +141,7 @@
        see [Adopting the v1
        CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/). (The `v1`
        CRD API version is available starting in Materialize v26.30 / Terraform
-       module v3.0.15.)
+       module v3.1.0.)
 
        <div class="code-tabs">
        <ul class="nav-tabs"></ul>
@@ -222,12 +222,10 @@
     **After** you have upgraded your Materialize Operator, upgrade your
     Materialize instance(s) to the **APP Version** of the Operator.
 
-    Select the tab for the CRD API version your deployment currently uses. This
-    step does not cover migrating from `v1alpha1` to `v1`; to migrate, see
-    [Adopting the v1
-    CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/). (The `v1`
-    CRD API version is available starting in Materialize v26.30 / Terraform
-    module v3.0.15.)
+    Select the tab for the CRD API version your deployment **currently** uses
+    (**CRD v1alpha1** or **CRD v1**). This step does not cover [migrating from
+    `v1alpha1` to
+    `v1`](/self-managed-deployments/upgrading/adopting-the-v1-crd/).
 
     <div class="code-tabs">
     <ul class="nav-tabs"></ul>
@@ -284,12 +282,231 @@
 
 - name: upgrade-request_rollout
   content: |
-    Update your `terraform.tfvars` file to set the `request_rollout` variable to
-    a new UUID value, substituting the example value in the code block below with
-    a UUID you generate (for example, with `uuidgen`):
+    **If you are using `v1alpha1`**, update your `terraform.tfvars` file to set
+    the `request_rollout` variable to a new UUID value, substituting the example
+    value in the code block below with a UUID you generate (for example, with
+    `uuidgen`):
 
     ```hcl
     # ...
     # ...
-    request_rollout = "DBB4FCEC-1837-44F6-9CF2-3894678DD8D5"
+    request_rollout = "DBB4FCEC-1837-44F6-9CF2-3894678DD8D5" # ONLY for v1alpha1
     ```
+
+- name: upgrade-steps-local-kind
+  content: |
+    1. Open a Terminal window.
+
+    1. Go to your Materialize working directory.
+
+       ```shell
+       cd my-local-mz
+       ```
+
+    1. Upgrade the Materialize Helm chart.
+
+       ```shell
+       helm repo update materialize
+       ```
+
+    1. Get the sample configuration files for the new version.
+
+       ```shell
+       mz_version={{< self-managed/versions/get-latest-version >}}
+
+       curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/operator/values.yaml
+       ```
+
+       If you have previously modified the `sample-values.yaml` file for your
+       deployment, include the changes into the `upgrade-values.yaml` file.
+
+    1. Check the CRD version (`v1alpha1` or, available starting
+       in Materialize v26.30, `v1`) being used for your Materialize instance.
+       {{< include-from-yaml data="self_managed/crd_version_checks"
+       name="check-crd-version-kind" >}}
+
+    1. Upgrade the Materialize Operator, specifying the new version and the updated
+       configuration file. Include any additional configurations that you specify
+       for your deployment.
+
+       Select the tab for your Materialize CRD API version (`v1alpha1` or,
+       available starting in Materialize v26.30, `v1`) your deployment
+       **currently** uses. This step does not cover [migrating from `v1alpha1`
+       to `v1` (including setting up
+       prerequisites)](/self-managed-deployments/upgrading/adopting-the-v1-crd/).
+
+       <div class="code-tabs">
+       <ul class="nav-tabs"></ul>
+       <div class="tab-content">
+       <div class="tab-pane" title="CRD v1" id="upgrade-operator-kind-v1">
+
+       If currently using `v1` (available starting in Materialize v26.30):
+
+       ```shell{hl_lines="3-4 6"}
+       helm upgrade my-materialize-operator materialize/materialize-operator \
+       --namespace=materialize \
+       --version {{< self-managed/versions/get-latest-version >}} \
+       -f upgrade-values.yaml \
+       --set observability.podMetrics.enabled=true \
+       --set operator.args.installV1CRD=true
+       ```
+
+       </div>
+       <div class="tab-pane" title="CRD v1alpha1" id="upgrade-operator-kind-v1alpha1">
+
+       If currently using `v1alpha1` (default):
+
+       ```shell{hl_lines="3-4"}
+       helm upgrade my-materialize-operator materialize/materialize-operator \
+       --namespace=materialize \
+       --version {{< self-managed/versions/get-latest-version >}} \
+       -f upgrade-values.yaml \
+       --set observability.podMetrics.enabled=true
+       ```
+
+       </div>
+       </div>
+       </div>
+
+    1. Verify that the operator is running:
+
+       ```bash
+       kubectl -n materialize get all
+       ```
+
+       Verify the operator upgrade by checking its events:
+
+       ```bash
+       kubectl -n materialize describe pod -l app.kubernetes.io/name=materialize-operator
+       ```
+
+    1. As of v26.0, Self-Managed Materialize requires a license key. If your
+    deployment has not been configured with a license key:
+
+       a. Contact [Materialize support](https://materialize.com/docs/support/).
+
+       b. Once you have your license key, run the following command to add it to the `materialize-backend` secret:
+
+          ```bash
+          kubectl -n materialize-environment patch secret materialize-backend -p '{"stringData":{"license_key":"<your license key goes here>"}}' --type=merge
+          ```
+
+    1. Create a new `upgrade-materialize.yaml` file, updating the following fields:
+
+       Select the tab for the CRD API version your deployment currently uses. This
+       step does not cover [migrating from `v1alpha1` to `v1`](/self-managed-deployments/upgrading/adopting-the-v1-crd/). (The `v1` CRD
+       API version is available starting in Materialize v26.30.)
+
+       <div class="code-tabs">
+       <ul class="nav-tabs"></ul>
+       <div class="tab-content">
+       <div class="tab-pane" title="CRD v1" id="local-kind-v1">
+
+       If using `v1`, update the following fields:
+
+       | Field | Description |
+       |-------|-------------|
+       | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{< self-managed/versions/get-latest-version >}}`. Updating this field automatically triggers a rollout. |
+       | `forceRollout` | **Optional.** Set to a new UUID (can be generated with `uuidgen`) only to force a rollout when no other changes exist. |
+
+
+       ```yaml
+       apiVersion: materialize.cloud/v1
+       kind: Materialize
+       metadata:
+         name: 12345678-1234-1234-1234-123456789012
+         namespace: materialize-environment
+       spec:
+         environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}} # Update version
+         # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
+         rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version.
+         backendSecretName: materialize-backend
+       ```
+
+       </div>
+       <div class="tab-pane" title="CRD v1alpha1" id="local-kind-v1alpha1">
+
+       {{< self-managed/crd-version-note "v1alpha1" >}}
+
+       If using `v1alpha1`, update the following fields:
+
+       | Field | Description |
+       |-------|-------------|
+       | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{< self-managed/versions/get-latest-version >}}`. |
+       | `requestRollout` or `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`requestRollout` triggers a rollout only if changes exist. </li><li>`forceRollout` triggers a rollout even if no changes exist.</li></ul> |
+
+
+       ```yaml
+       apiVersion: materialize.cloud/v1alpha1
+       kind: Materialize
+       metadata:
+         name: 12345678-1234-1234-1234-123456789012
+         namespace: materialize-environment
+       spec:
+         environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}} # Update version
+         requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID
+       # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
+         rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version.
+         backendSecretName: materialize-backend
+       ```
+
+       </div>
+       </div>
+       </div>
+
+    1. Apply the upgrade-materialize.yaml file to your Materialize instance:
+
+       ```shell
+       kubectl apply -f upgrade-materialize.yaml
+       ```
+
+
+    1. Verify that the components are running after the upgrade:
+
+       ```bash
+       kubectl -n materialize-environment get all
+       ```
+
+       Verify upgrade by checking the `balancerd` events:
+
+       ```bash
+       kubectl -n materialize-environment describe pod -l app=balancerd
+       ```
+
+       The **Events** section should list that the new version of the `balancerd`
+       have been pulled.
+
+       Verify the upgrade by checking the `environmentd` events:
+
+       ```bash
+       kubectl -n materialize-environment describe pod -l app=environmentd
+       ```
+
+       The **Events** section should list that the new version of the `environmentd`
+       have been pulled.
+
+    1. Open the Materialize Console. The Console should display the new version.
+
+- name: upgrade-tf-apply
+  content: |
+    1. Initialize the Terraform directory to download the required providers
+        and modules:
+
+        ```bash
+        terraform init
+        ```
+
+    1. Review the execution plan before applying. In particular, check for any
+      resources Terraform plans to destroy and recreate (shown as `-/+` in the
+      plan), especially stateful resources such as your cluster, storage, and
+      database:
+
+        ```bash
+        terraform plan
+        ```
+
+    1. After reviewing the plan, apply the Terraform configuration.
+
+        ```bash
+        terraform apply
+        ```

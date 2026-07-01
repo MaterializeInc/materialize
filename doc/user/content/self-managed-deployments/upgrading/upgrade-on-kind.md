@@ -49,7 +49,7 @@ having both the old and new Materialize instances running.
 
 {{</ important >}}
 
-{{% self-managed/versions/upgrade/upgrade-steps-local-kind %}}
+{{% include-from-yaml data="self_managed/upgrades" name="upgrade-steps-local-kind" %}}
 
 ## See also
 

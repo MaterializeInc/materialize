@@ -92,33 +92,20 @@ module "materialize_instance" {
 # Update the source of any additional Materialize-provided modules to the same release tag
 ```
 
-### Step 2: Request rollout
+### Step 2: Explicitly request rollout if using v1alpha1
 
-{{% include-from-yaml data="self_managed/upgrades" name="upgrade-request_rollout" %}}
+{{< self-managed/crd-version-note "v1alpha1" >}}
+
+{{< include-from-yaml data="self_managed/crd_version_checks"
+name="check-crd-version-tf" >}}
+
+- If you are using `v1`, skip to the [Apply the updated TF
+  step](#step-3-apply-the-updated-tf).
+- {{< include-from-yaml data="self_managed/upgrades" name="upgrade-request_rollout" >}}
 
 ### Step 3: Apply the updated TF
 
-1. Initialize the Terraform directory to download the required providers
-    and modules:
-
-    ```bash
-    terraform init
-    ```
-
-1. Review the execution plan before applying. In particular, check for any
-   resources Terraform plans to destroy and recreate (shown as `-/+` in the
-   plan), especially stateful resources such as your cluster, storage, and
-   database:
-
-    ```bash
-    terraform plan
-    ```
-
-1. After reviewing the plan, apply the Terraform configuration.
-
-    ```bash
-    terraform apply
-    ```
+{{% include-from-yaml data="self_managed/upgrades" name="upgrade-tf-apply" %}}
 
 ### Step 4: Verify the upgrade
 

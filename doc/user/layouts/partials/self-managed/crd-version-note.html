@@ -7,7 +7,9 @@
 {{- $base := strings.TrimRight "/" (urls.Parse site.BaseURL).Path -}}
 {{- $adopt := printf "%s/self-managed-deployments/upgrading/adopting-the-v1-crd/" $base -}}
 {{- if eq $v "v1alpha1" -}}
-<p><code>v1alpha1</code> is the default CRD version. With <code>v1alpha1</code>, rollouts require manually rotating a UUID. For a simplified rollout behavior, see <a href="{{ $adopt }}">Adopting the v1 CRD</a>.</p>
+<p><code>v1alpha1</code> is the default CRD version for a Materialize instance.
+With <code>v1alpha1</code>, instance rollouts require manually rotating a
+UUID.</p>
 {{- else -}}
 <p>The <code>v1</code> CRD is available starting in v26.30 and is opt-in. See <a href="{{ $adopt }}">Adopting the v1 CRD</a> to enable it.</p>
 {{- end -}}
