@@ -8309,6 +8309,7 @@ dependencies = [
  "mz-ccsr",
  "mz-cloud-provider",
  "mz-cloud-resources",
+ "mz-compute-types",
  "mz-controller-types",
  "mz-dyncfg",
  "mz-dyncfgs",

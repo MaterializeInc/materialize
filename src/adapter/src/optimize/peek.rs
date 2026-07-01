@@ -414,7 +414,11 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 // Finalize the dataflow. This includes:
                 // - MIR ⇒ LIR lowering
                 // - LIR ⇒ LIR transforms
-                let df_desc = LirRelationExpr::finalize_dataflow(df_desc, &self.config.features)?;
+                let df_desc = LirRelationExpr::finalize_dataflow(
+                    df_desc,
+                    &self.config.features,
+                    Some(self.metrics.lowering()),
+                )?;
 
                 // Trace the pipeline output under `optimize`.
                 trace_plan(&df_desc);
