@@ -63,17 +63,27 @@ import {
   fetchClusterReplicasWithUtilization,
 } from "~/api/materialize/cluster/replicasWithUtilization";
 import {
+  BinnedSubscribeRow,
+  bucketRowsToBucketsByReplicaId,
+  parseBinnedSubscribeRow,
+  rebucketUtilizationSamples,
+  toReplicaUtilizationGraphData,
+  UtilizationSample,
+} from "~/api/materialize/cluster/replicaUtilizationBinning";
+import {
+  buildConsoleClusterUtilizationOverview24hSubscribe,
+  buildConsoleClusterUtilizationUnbinned3hSubscribe,
   fetchReplicaUtilizationHistory,
   ReplicaUtilizationHistoryParameters,
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
 import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
 import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
+import { useSubscribe } from "~/api/materialize/useSubscribe";
 import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
-import { DEFAULT_OPTIONS as TIME_PERIOD_OPTIONS } from "~/hooks/useTimePeriodSelect";
+import { useEnvironmentGate } from "~/store/environments";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 import { sortLagInfo } from "~/utils/freshness";
 
-import { OfflineEvent } from "./ClusterOverview/types";
 type ReplicaUtilizationHistoryFilters = {
   clusterIds: ReplicaUtilizationHistoryParameters["clusterIds"];
   replicaId: ReplicaUtilizationHistoryParameters["replicaId"];
@@ -441,140 +451,203 @@ export function useMaterializationLag(params: MaterializationLagParams) {
   });
 }
 
-type TimePeriodOptionValues =
-  (typeof TIME_PERIOD_OPTIONS)[keyof typeof TIME_PERIOD_OPTIONS];
+// Window tiers, bounded by the maintained view that serves each. Up to 24h is a
+// live SUBSCRIBE (push). Beyond that we poll. Bounds are the views' retentions.
+const SUBSCRIBE_UNBINNED_MAX_MINUTES = 180; // 3h: live un-binned base, client-binned
+const SUBSCRIBE_BINNED_MAX_MINUTES = 1440; // 24h: live 5-min binned view
+const OVERVIEW_MAX_MINUTES = 20160; // 14d: polled overview view; beyond, ad-hoc
 
 /**
- * Fetches a normalized table of an object, the lag between its direct parent, and
- * the lag between its source/table objects
+ * SUBSCRIBE variant for the live (≤3h) window: streams the un-binned 3h base
+ * (lineage resolved in SQL), bins client-side, shapes like the poll path.
+ * Subscribes by cluster (not replica) so the socket survives the replica dropdown.
+ *
+ * NOTE: when `enabled` is false the subscribe is undefined, so the socket opens
+ * but sends no query: an idle connection, not catalog-server load.
  */
+function useReplicaUtilizationHistorySubscribe(
+  params: ReplicaUtilizationHistoryFilters,
+  enabled: boolean,
+) {
+  const { replicaId, timePeriodMinutes, bucketSizeMs } = params;
+  // Key on content, not array identity (the caller passes a fresh array each
+  // render), so the socket survives re-renders. Ids contain no commas, so the
+  // comma join/split round-trips them.
+  const clusterIdsKey = (params.clusterIds ?? []).join(",");
+
+  const subscribe = useMemo(() => {
+    const clusterIds = clusterIdsKey ? clusterIdsKey.split(",") : [];
+    if (!enabled || clusterIds.length === 0) {
+      return undefined;
+    }
+    // The frontier only needs to reach back to the window start; the view itself
+    // retains the last 3h.
+    const minDate = subMinutes(new Date(), timePeriodMinutes);
+    return buildConsoleClusterUtilizationUnbinned3hSubscribe<UtilizationSample>(
+      clusterIds,
+      minDate,
+    );
+  }, [enabled, clusterIdsKey, timePeriodMinutes]);
+
+  const { data, isError, snapshotComplete } = useSubscribe({
+    subscribe,
+    upsertKey: (row) => `${row.data.replicaId} ${row.data.occurredAt}`,
+    select: (row) => ({
+      ...row.data,
+      occurredAt: new Date(row.data.occurredAt),
+    }),
+  });
+
+  const result = useMemo(() => {
+    const endDate = new Date();
+    const startDate = subMinutes(endDate, timePeriodMinutes);
+
+    const samples = replicaId
+      ? data.filter((sample) => sample.replicaId === replicaId)
+      : data;
+    const rows = rebucketUtilizationSamples(
+      samples,
+      bucketSizeMs,
+      startDate.getTime(),
+    );
+    return toReplicaUtilizationGraphData(
+      bucketRowsToBucketsByReplicaId(rows),
+      startDate,
+      endDate,
+    );
+  }, [data, replicaId, timePeriodMinutes, bucketSizeMs]);
+
+  return {
+    data: result,
+    isLoading: enabled && !snapshotComplete,
+    isError,
+  };
+}
+
+/**
+ * SUBSCRIBE variant for the 3h-24h window: streams the server-binned 24h view
+ * (lineage resolved in SQL). The rows are already binned, so they feed
+ * `bucketRowsToBucketsByReplicaId` directly with no client-side rebinning.
+ * ENVELOPE UPSERT yields an unordered keyed set, so we sort by bucket start.
+ */
+function useReplicaUtilizationHistoryBinnedSubscribe(
+  params: ReplicaUtilizationHistoryFilters,
+  enabled: boolean,
+) {
+  const { replicaId, timePeriodMinutes } = params;
+  const clusterIdsKey = (params.clusterIds ?? []).join(",");
+
+  const subscribe = useMemo(() => {
+    const clusterIds = clusterIdsKey ? clusterIdsKey.split(",") : [];
+    if (!enabled || clusterIds.length === 0) {
+      return undefined;
+    }
+    const minDate = subMinutes(new Date(), timePeriodMinutes);
+    return buildConsoleClusterUtilizationOverview24hSubscribe<BinnedSubscribeRow>(
+      clusterIds,
+      minDate,
+    );
+  }, [enabled, clusterIdsKey, timePeriodMinutes]);
+
+  const { data, isError, snapshotComplete } = useSubscribe({
+    subscribe,
+    upsertKey: (row) => `${row.data.replicaId} ${row.data.bucketStart}`,
+    select: (row) => parseBinnedSubscribeRow(row.data),
+  });
+
+  const result = useMemo(() => {
+    const endDate = new Date();
+    const startDate = subMinutes(endDate, timePeriodMinutes);
+
+    const rows = replicaId
+      ? data.filter((row) => row.replicaId === replicaId)
+      : [...data];
+    // ENVELOPE UPSERT yields an unordered keyed set; the chart needs time order.
+    rows.sort((a, b) => a.bucketStart.getTime() - b.bucketStart.getTime());
+
+    return toReplicaUtilizationGraphData(
+      bucketRowsToBucketsByReplicaId(rows),
+      startDate,
+      endDate,
+    );
+  }, [data, replicaId, timePeriodMinutes]);
+
+  return {
+    data: result,
+    isLoading: enabled && !snapshotComplete,
+    isError,
+  };
+}
+
 export function useReplicaUtilizationHistory(
   params: ReplicaUtilizationHistoryFilters,
   queryOptions?: { enabled?: boolean },
 ) {
-  return useQuery({
+  const enabled = queryOptions?.enabled ?? true;
+  const minutes = params.timePeriodMinutes;
+  // The un-binned 3h and 24h indexed views (and their SUBSCRIBEs) only exist on
+  // mz >= 26.32. On older environments (e.g. mid-rollout) these paths are gated
+  // off and everything falls back to the poll. The 14d `overview` view predates
+  // this, so its poll path is not gated.
+  // TODO: remove the gate once all environments are >= 26.32.
+  const hasIndexedViews = useEnvironmentGate("26.32.0") === true;
+
+  const useUnbinnedSubscribe =
+    hasIndexedViews && minutes <= SUBSCRIBE_UNBINNED_MAX_MINUTES;
+  const useBinnedSubscribe =
+    hasIndexedViews &&
+    minutes > SUBSCRIBE_UNBINNED_MAX_MINUTES &&
+    minutes <= SUBSCRIBE_BINNED_MAX_MINUTES;
+
+  const unbinnedResult = useReplicaUtilizationHistorySubscribe(
+    params,
+    enabled && useUnbinnedSubscribe,
+  );
+  const binnedResult = useReplicaUtilizationHistoryBinnedSubscribe(
+    params,
+    enabled && useBinnedSubscribe,
+  );
+
+  const queryResult = useQuery({
     queryKey: clusterQueryKeys.replicaUtilizationHistory(params),
     refetchInterval: 20_000,
-    enabled: queryOptions?.enabled,
+    // Poll whatever a subscribe isn't serving: >24h on new mz, and every window
+    // on old mz (where the subscribes are gated off).
+    enabled: enabled && !useUnbinnedSubscribe && !useBinnedSubscribe,
     queryFn: async ({ queryKey, signal }) => {
       const [, queryKeyParams] = queryKey;
 
       const endDate = new Date();
       const startDate = subMinutes(endDate, queryKeyParams.timePeriodMinutes);
 
-      const last14DaysOptionValue: TimePeriodOptionValues = "Last 14 days";
-
-      const last14DaysTimePeriodMinutes = Number(
-        Object.entries(TIME_PERIOD_OPTIONS).find(
-          ([_, option]) => option === last14DaysOptionValue,
-        )?.[0],
-      );
-
+      // The 14d `overview` view serves 24h..14d. Beyond 14d, and on old mz the
+      // <=24h windows a subscribe would cover, use the ad-hoc whole-fleet query.
       const data = await fetchReplicaUtilizationHistory({
         params: {
           ...queryKeyParams,
           startDate: startDate.toISOString(),
           shouldUseConsoleClusterUtilizationOverviewView:
-            queryKeyParams.timePeriodMinutes === last14DaysTimePeriodMinutes,
+            queryKeyParams.timePeriodMinutes > SUBSCRIBE_BINNED_MAX_MINUTES &&
+            queryKeyParams.timePeriodMinutes <= OVERVIEW_MAX_MINUTES,
         },
         queryKey,
         requestOptions: { signal },
       });
 
-      const graphData = Object.entries(data.bucketsByReplicaId).map(
-        ([replicaId, replicaData]) => {
-          return {
-            id: replicaId,
-            data: replicaData.map(
-              ({
-                bucketEnd,
-                bucketStart,
-                maxHeap,
-                maxMemory,
-                maxCpu,
-                maxDisk,
-                maxMemoryAndDisk,
-                size,
-                offlineEvents,
-                name,
-              }) => ({
-                id: replicaId,
-                name,
-                bucketEnd: bucketEnd.getTime(),
-                bucketStart: bucketStart.getTime(),
-                cpuPercent: maxCpu?.percent ? maxCpu.percent * 100 : null,
-                diskPercent: maxDisk?.percent ? maxDisk.percent * 100 : null,
-                memoryPercent: maxMemory?.percent
-                  ? maxMemory.percent * 100
-                  : null,
-                // Memory utilization calculated in SQL: (memory_bytes + disk_bytes) / (available_memory + available_disk)
-                maxMemoryAndDiskPercent: maxMemoryAndDisk?.percent
-                  ? maxMemoryAndDisk.percent * 100
-                  : null,
-                heapPercent: maxHeap?.percent ? maxHeap.percent * 100 : null,
-                size,
-                offlineEvents:
-                  offlineEvents?.map((event) => ({
-                    id: event.replicaId,
-                    offlineReason: event.reason,
-                    status: event.status,
-                    timestamp: new Date(event.occurredAt).getTime(),
-                  })) ?? [],
-              }),
-            ),
-          };
-        },
-      );
-
-      const offlineEvents: Array<OfflineEvent> = [];
-
-      for (const replicaId in graphData) {
-        const replica = graphData[replicaId];
-
-        for (const replicaDatum of replica?.data ?? []) {
-          for (const {
-            status,
-            offlineReason,
-            timestamp,
-          } of replicaDatum.offlineEvents) {
-            if (
-              (status === "not-ready" || status === "offline") &&
-              offlineReason !== "oom-killed"
-            ) {
-              offlineEvents.push({
-                id: replicaDatum.id,
-                offlineReason,
-                status,
-                timestamp,
-              });
-            }
-          }
-        }
-      }
-
-      /**
-       * If the selected range is within the bounds of the data, we clamp it to the data's min and
-       * max since we can have buckets outside the selected range so that each bucket has the same
-       * size. However, if the selected range is larger than the bounds of the data, we wanted the
-       * returned start date and end date to represent the selected range. For example, we might
-       * select the last 30 days but if the data only goes back 7 days, we still want the range
-       * in our graph to be the last 30 days.
-       */
-      const clampedStartDate = new Date(
-        Math.min(new Date(startDate).getTime(), data.minBucketStartMs),
-      );
-      const clampedEndDate = new Date(
-        Math.max(new Date(endDate).getTime(), data.maxBucketEndMs),
-      );
-
-      return {
-        startDate: clampedStartDate,
-        endDate: clampedEndDate,
-        graphData,
-        offlineEvents,
-      };
+      return toReplicaUtilizationGraphData(data, startDate, endDate);
     },
   });
+
+  const active = useUnbinnedSubscribe
+    ? unbinnedResult
+    : useBinnedSubscribe
+      ? binnedResult
+      : queryResult;
+  return {
+    data: active.data,
+    isLoading: active.isLoading,
+    isError: active.isError,
+  };
 }
 
 export const LINE_MAX_COUNT = 10;
