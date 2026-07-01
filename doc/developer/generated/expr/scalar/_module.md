@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar.rs
-revision: 0251567b59
+revision: 90083b87c2
 ---
 
 # mz-expr::scalar

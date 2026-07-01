@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http.rs
-revision: 4061850066
+revision: 59b1f165b2
 ---
 
 # environmentd::http
@@ -8,7 +8,8 @@ revision: 4061850066
 Implements `environmentd`'s embedded HTTP server using Axum.
 Supports multiple authentication modes (`None`, `Password`, `Frontegg`, `Oidc`) via a layered middleware stack, manages session-based and per-request authentication (including WebSocket credential exchange), and routes requests across a rich set of endpoints: SQL execution (REST and WebSocket), Prometheus metrics scraping, memory/heap profiling, catalog and coordinator introspection, webhook ingestion, MCP (AI agent interface), audit event injection, console proxy, cluster replica proxying, and internal deployment management.
 Key types include `HttpServer`, `HttpConfig`, `AuthedClient`, `Metrics`, and `InternalRouteConfig`.
-`HttpConfig` carries `allowed_origin` (the `AllowOrigin` predicate for the CORS layer), `allowed_origin_list` (the raw `Vec<HeaderValue>` injected as an Axum `Extension` into the MCP router for server-side origin validation against DNS rebinding attacks), `frontegg_oauth_issuer_url` (the optional Frontegg workspace URL advertised as the authorization server in MCP OAuth discovery), `mcp_metrics` (a `McpMetrics` handle injected as an Axum `Extension` into the MCP router for Prometheus metrics tracking), and `oauth_metadata_metrics` (an `OauthMetadataMetrics` handle for Prometheus metrics on OAuth metadata endpoints). The MCP CORS layer restricts allowed methods to POST and allowed headers to `Authorization` and `Content-Type`.
+`HttpConfig` carries `allowed_origin` (the `AllowOrigin` predicate for the CORS layer), `allowed_origin_list` (the raw `Vec<HeaderValue>` injected as an Axum `Extension` into the MCP router for server-side origin validation against DNS rebinding attacks), `frontegg_oauth_issuer_url` (the optional Frontegg workspace URL advertised as the authorization server in MCP OAuth discovery), `dyncfgs` (the process-wide `Arc<ConfigSet>` threaded into `WebhookState` for per-request dyncfg reads), `mcp_metrics` (a `McpMetrics` handle injected as an Axum `Extension` into the MCP router for Prometheus metrics tracking), `oauth_metadata_metrics` (an `OauthMetadataMetrics` handle for Prometheus metrics on OAuth metadata endpoints), `routes_enabled` (the `HttpRoutesEnabled` value that governs which route groups are active and which `AllowedRoles` each group enforces). Role policy lives per route group via `RouteGroup` values in `HttpRoutesEnabled`, not at the listener level. The MCP CORS layer restricts allowed methods to POST and allowed headers to `Authorization` and `Content-Type`.
+`WebhookState` carries `dyncfgs: Arc<ConfigSet>` so the webhook handler can read the `WEBHOOK_MAX_REQUEST_SIZE_BYTES` limit from the live config without a coordinator round-trip.
 `AuthError` enumerates authentication failure modes; the `OidcFailed(String)` variant carries the sanitized `OidcError` display string, which is forwarded to the client so the console can surface OIDC sign-in failures on the login page.
 `group_claim_for` (which resolves the group claim via a coordinator `Command::GetSystemVars` round-trip) is called only when the authenticator is `Frontegg`; for `None`, `Password`, and `OIDC` paths the call is skipped so liveness and readiness probes are not coupled to coordinator health.
 

@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr/src/value.rs
-revision: 2bd0f58824
+revision: 4ea428c6cb
 ---
 
 # mz-pgrepr::value
@@ -8,7 +8,7 @@ revision: 2bd0f58824
 Defines the `Value` enum — the central PostgreSQL datum type — together with its serialization to and from both the PostgreSQL text and binary wire formats, and bidirectional conversion to and from `mz_repr::Datum`.
 
 `Value` mirrors every PostgreSQL type supported by Materialize, including Materialize-specific extensions (unsigned integers, `MzTimestamp`, lists, maps, ranges, and ACL items).
-The main entry points are `Value::from_datum` (converting an `mz_repr::Datum` to a `Value`), `Value::into_datum` (the reverse), `Value::encode` (writing to the wire), and `Value::decode` (reading from the wire).
+The main entry points are `Value::from_datum` (converting an `mz_repr::Datum` to a `Value`), `Value::into_datum` (the reverse), `Value::encode` (writing to the wire), and `Value::decode` (reading from the wire). When decoding a `Numeric` value, the internal `rescale_numeric` helper rescales the decoded value to the `max_scale` declared by the target `Type::Numeric` constraints, if any, so that text, CSV, and binary decoding all produce consistently scaled results.
 The helper function `values_from_row` converts a full `mz_repr::RowRef` into a `Vec<Option<Value>>` for use by the pgwire protocol layer.
 
 The child modules supply `ToSql`/`FromSql` implementations for types that require non-trivial encoding logic:

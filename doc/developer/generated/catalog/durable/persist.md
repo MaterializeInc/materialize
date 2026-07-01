@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/durable/persist.rs
-revision: 3953456a45
+revision: 26f46d16d4
 ---
 
 # catalog::durable::persist

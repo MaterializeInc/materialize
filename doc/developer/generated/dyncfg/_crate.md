@@ -1,6 +1,6 @@
 ---
 source: src/dyncfg/src/lib.rs
-revision: a8f4526d28
+revision: 141cb2a0a5
 ---
 
 # mz-dyncfg
@@ -26,7 +26,7 @@ The `impls` private submodule contains `ConfigType` and `From<T>` implementation
 * `ConfigEntry` — the storage record for one config inside a `ConfigSet`, exposing name, description, scope, default, and current value. `scope()` returns the `ParameterScope`; `parse_val(val: &str)` parses a string into a `ConfigVal` of the entry's type (type-erased analog of `Config::parse_val`).
 * `ConfigVal` — type-erased enum used for storage and serialization; variants mirror the supported `ConfigType` implementations.
 * `ConfigValHandle<T>` — a pre-looked-up, cheaply-cloneable handle that amortizes the name-lookup cost on hot paths.
-* `ConfigUpdates` — a serializable `BTreeMap<String, ConfigVal>` batch; `apply` writes all values into a target `ConfigSet`, skipping unknown names.
+* `ConfigUpdates` — a serializable `BTreeMap<String, ConfigVal>` batch; `apply` writes all values into a target `ConfigSet`, skipping unknown names. `From<&ConfigSet>` captures a dense snapshot of every current config value in a set, useful for seeding another set to reproduce the same values.
 
 ## Internals
 

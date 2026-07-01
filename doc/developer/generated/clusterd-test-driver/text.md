@@ -1,6 +1,6 @@
 ---
 source: src/clusterd-test-driver/src/text.rs
-revision: 6d4c0fbb2b
+revision: 141cb2a0a5
 ---
 
 # mz-clusterd-test-driver::text
@@ -12,3 +12,5 @@ A script is a sequence of stanzas. Each stanza is a command (a directive line pl
 `run(path, driver)` parses the script file and executes each command against the `Driver`, comparing actual output to the expected block. A command failure renders as `error: <message>`, so expected failures are verified by their golden block. Assertions use level-triggered waits on monotonic frontiers, making a single sequential script deterministic.
 
 The `define` command carries arbitrary MIR (as pretty-form specs parsed by `mz-expr-parser`), including index imports, over the full `DataflowBuilder` surface. `define_index` is sugar for the common single-index shape. `write-rows` payloads are typed against the schema token-by-token via `cell_from_token` (reusing `mz_repr::strconv`).
+
+The `create-instance` command accepts an optional body of `name type value` rows (the same format as `update-configuration`) to supply an `initial_config` snapshot delivered to the replica before create-time setup.

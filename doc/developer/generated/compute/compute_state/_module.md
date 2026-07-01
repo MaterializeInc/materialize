@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/compute_state.rs
-revision: 31e0aab020
+revision: 141cb2a0a5
 ---
 
 # mz-compute::compute_state
@@ -8,6 +8,7 @@ revision: 31e0aab020
 Contains the per-worker `ComputeState` and `ActiveComputeState` types that hold all live dataflow state, pending peeks, pending subscribes, copy-to sinks, and the command history.
 `ComputeState` owns collections, the `TraceManager`, subscribe/copy-to response buffers, per-worker dynamic configuration (`worker_config`), suspended collections awaiting scheduling, replica expiration state, and an optional `StorageTimelyLogReader` that is consumed when logging is initialized. When configuration is applied, `ComputeState` also configures the column-paged-batcher by calling `mz_timely_util::column_pager::apply_tiered_config`, deriving a resident-byte budget from `COLUMN_PAGED_BATCHER_BUDGET_FRACTION` and the announced memory limit, selecting a file or swap pager backend depending on whether a scratch directory is available, and forwarding `COLUMN_PAGED_BATCHER_SWAP_PAGEOUT` to control eager RSS eviction of lz4-compressed swap-backend spill chunks.
 `ActiveComputeState` is an activated view of `ComputeState` bundled with the Timely worker and response sender; it handles each `ComputeCommand`, processes ready peeks (both index and persist fast-path), and drains subscribe and copy-to response buffers.
+When `handle_create_instance` is called, it first applies `InstanceConfig::initial_config` to the worker configuration so that create-time setup observes controller-synced dyncfg values rather than defaults, then calls `apply_worker_config` to ensure state consistency before initialization.
 When `initialize_logging` is called on `CreateInstance`, the `storage_log_reader` is taken from `ComputeState` and forwarded to the logging setup so the timely logging dataflow can replay storage worker events.
 In read-only mode, the output frontier for collections excludes the write frontier (which can't be advanced by the dataflow), preventing stalled progress reporting.
 

@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/state_diff.rs
-revision: 5680493e7d
+revision: 25802a51f9
 ---
 
 # persist-client::internal::state_diff
