@@ -158,4 +158,25 @@ theorem letRec_congr (body body' : Bag → Bag) (h : body = body') :
     letRecB body = letRecB body' := by
   rw [h]
 
+/-! ### Scalar expressions
+
+A denotation for the subset of `MirScalarExpr` that scalar rewrite rules have
+exercised so far (just `not`, for `not_not`). `var` stands for an arbitrary
+scalar leaf the rule does not inspect (a column reference, a literal, or any
+other subexpression); `env` supplies its Boolean value by index. This is
+deliberately not a full `MirScalarExpr` model: later scalar rules grow
+`ScalarExpr`/`denoteS` only as far as their own proofs require. -/
+
+/-- A scalar expression, bounded to what `not_not` needs: an opaque leaf and
+    logical negation. -/
+inductive ScalarExpr where
+  | var : Nat → ScalarExpr
+  | notE : ScalarExpr → ScalarExpr
+
+/-- Boolean denotation of a `ScalarExpr` under an environment giving each leaf
+    index its truth value. -/
+def denoteS (env : Nat → Bool) : ScalarExpr → Bool
+  | ScalarExpr.var n => env n
+  | ScalarExpr.notE e => not (denoteS env e)
+
 end MirRewrite

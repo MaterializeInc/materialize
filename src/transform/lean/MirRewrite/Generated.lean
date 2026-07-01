@@ -23,11 +23,22 @@ theorem rule_fuse_projects :
     -- not modeled at the bag level (acts on row/column structure)
     sorry
 
+-- project([0..n], r) = r  (identity projection is the identity)
+theorem rule_drop_identity_project :
+    ∀ (p : Row → Row) (r : Bag), projB p r = r := by
+    -- not modeled at the bag level (acts on row/column structure)
+    sorry
+
 -- filter(p, map(s, r)) = map(s, filter(p, r))  when p reads only r's columns
 theorem rule_push_filter_through_map :
     ∀ (p : Row → Bool) (s : Row → Row) (r : Bag), filterB p (mapB s r) = mapB s (filterB p r) := by
     -- not modeled at the bag level (acts on row/column structure)
     sorry
+
+-- filter(p, flatmap(f, es, r)) = flatmap(f, es, filter(p, r))  when p reads only r's columns
+theorem rule_push_filter_past_flatmap :
+    ∀ (p : Row → Bool) (f : TableFunc) (es : Row → Row) (r : Bag), filterB p (flatMapB r) = flatMapB (filterB p r) := by
+    intro p f es r; funext x; simp only [filterB, unionB, negateB, thresholdB, predAnd, emptyBag]; cases p x <;> simp_all <;> try omega
 
 -- filter(p, a + b) = filter(p, a) + filter(p, b)  when no predicate is known-false
 theorem rule_distribute_filter_union :
@@ -138,11 +149,6 @@ theorem rule_empty_false_filter :
     ∀ (p : Row → Bool) (r : Bag) (h_p : ∀ x, p x = false), filterB p r = emptyBag := by
     intro p r h_p; funext x; simp only [filterB, emptyBag]; rw [h_p x]
 
--- r = 0  when r's equivalences are unsatisfiable
-theorem rule_collapse_unsatisfiable :
-    ∀ (r : Bag), r = emptyBag := by
-    intro r; sorry
-
 -- map(s, r) = project(iota(|r|) ++ cols_of(s), r)  when s is all column refs
 theorem rule_map_columns_to_projection :
     ∀ (s : Row → Row) (r : Bag), mapB s r = projB (catRows iota (colsOf s)) r := by
@@ -153,6 +159,29 @@ theorem rule_map_columns_to_projection :
 theorem rule_join_to_wcoj :
     ∀ (e : JoinSpec) (rs : List Bag), joinB e rs = wcoJoinB e rs := by
     intro e rs; rfl
+
+-- join(e, a, b, rest) = join(equivs_outer(e, |a|+|b|), join(equivs_inner(e, |a|+|b|), a, b), rest)
+theorem rule_binarize_join_first :
+    ∀ (e : JoinSpec) (a : Bag) (b : Bag) (rest : List Bag), joinB e (a :: b :: rest) = joinB (equivsOuter e) ([joinB (equivsInner e) ([a] ++ [b])] ++ rest) := by
+    -- not modeled at the bag level (acts on row/column structure)
+    sorry
+
+-- join(a, b) = project([restore], join(b, a)): reorder inputs, restore column order
+theorem rule_commute_binary_join :
+    ∀ (e : JoinSpec) (a : Bag) (b : Bag), joinB e [a, b] = projB swapProjection (joinB (swapEquivs e) ([b] ++ [a])) := by
+    -- not modeled at the bag level (acts on row/column structure)
+    sorry
+
+-- join(project(o, a), b) = project(m, join(a, b)),  m = o ++ shift(iota(|b|), |a|)
+theorem rule_pull_project_out_of_join_first :
+    ∀ (e : JoinSpec) (o : Row → Row) (a : Bag) (b : Bag), joinB e [projB o a, b] = projB (catRows o (shiftRows iota)) (joinB (remapSpec e (catRows o (shiftRows iota))) ([a] ++ [b])) := by
+    -- not modeled at the bag level (acts on row/column structure)
+    sorry
+
+-- ArrangeBy[k](x) = x  (x already produces an arrangement keyed by k)
+theorem rule_arrange_idempotent :
+    ∀ (x : Bag), x = x := by
+    intro x; sorry
 
 -- topk(0) = 0
 theorem rule_topk_empty :
@@ -189,5 +218,10 @@ theorem rule_union_drop_empty_right :
     ∀ (a : Bag) (e : Bag), unionB a e = a := by
     -- union identity: requires is_rel_empty oracle (not modeled in bag algebra)
     sorry
+
+-- Not(Not(x)) = x
+theorem rule_not_not :
+    ∀ (env : Nat → Bool) (x : ScalarExpr), denoteS env (ScalarExpr.notE (ScalarExpr.notE x)) = denoteS env x := by
+    intro env x; simp [denoteS]
 
 end MirRewrite

@@ -59,6 +59,20 @@ fn emit_rule(rule: &Rule) -> String {
     let mut seen = BTreeMap::new();
     collect_binders(&rule.lhs, &mut binders, &mut seen);
 
+    // A scalar rule (LHS rooted at `Pat::SUnary`) never mixes relation and
+    // scalar metavariables (slice-1 covers only `SUnary` chains), so every
+    // binder `collect_binders` found is really a `ScalarExpr`, not a `Bag`.
+    // Its Lean theorem also denotes through `denoteS`, which takes an explicit
+    // `env : Nat -> Bool` argument that relational (env-free `Bag`) theorems
+    // do not need.
+    let is_scalar = is_scalar_rule(&rule.lhs);
+    if is_scalar {
+        for (_, ty) in &mut binders {
+            *ty = "ScalarExpr";
+        }
+        binders.insert(0, ("env".to_string(), "Nat → Bool"));
+    }
+
     let lhs = translate_pat(&rule.lhs);
     let rhs = translate_tmpl(&rule.rhs, "h");
 
@@ -107,6 +121,7 @@ fn emit_rule(rule: &Rule) -> String {
         all_true.as_deref(),
         any_false.as_deref(),
         is_empty_prop,
+        is_scalar,
     );
 
     let quantifier = if binders.is_empty() && hyps.is_empty() {
@@ -128,10 +143,29 @@ fn emit_rule(rule: &Rule) -> String {
         .map(|d| format!("-- {d}\n"))
         .unwrap_or_default();
 
+    // A scalar `Pat`/`Tmpl` translates to a `ScalarExpr` syntax tree, not a
+    // `Bool`; wrap both sides in `denoteS` so the equation is over the
+    // denotations, matching what `choose_proof`'s `simp [denoteS]` unfolds.
+    let (lhs, rhs) = if is_scalar {
+        (
+            format!("denoteS env {}", arg(lhs)),
+            format!("denoteS env {}", arg(rhs)),
+        )
+    } else {
+        (lhs, rhs)
+    };
+
     format!(
         "{doc}theorem rule_{name} :\n    {quantifier}{lhs} = {rhs} := {proof}\n",
         name = rule.name,
     )
+}
+
+/// Whether a rule's left-hand side is a scalar pattern (rooted at
+/// `Pat::SUnary`). Its Lean theorem denotes through `denoteS`, unlike a
+/// relational rule whose `Bag` denotation is direct.
+fn is_scalar_rule(pat: &Pat) -> bool {
+    matches!(pat, Pat::SUnary { .. })
 }
 
 fn collect_binders(
@@ -219,10 +253,17 @@ fn arg(s: String) -> String {
 
 fn translate_pat(pat: &Pat) -> String {
     match pat {
+        // Also covers a scalar metavariable leaf (e.g. `not_not`'s `x`): the
+        // bound Lean variable's type follows from `emit_rule`'s binder
+        // retyping, so the identifier alone is the right translation either way.
         Pat::RelVar(n) => n.clone(),
-        // Scalar Lean semantics land in SP2b slice-1 Task 9. `gen-lean` is not run
-        // until then, so this stub is never reached before that task.
-        Pat::SUnary { .. } => todo!("scalar Lean translation lands in SP2b slice-1 Task 9"),
+        Pat::SUnary { func, input } => match func.as_str() {
+            "not" => format!("ScalarExpr.notE {}", arg(translate_pat(input))),
+            other => unimplemented!(
+                "no Lean scalar translation for func {other:?}; extend Semantics.lean's \
+                 ScalarExpr/denoteS and this match when a rule needs it"
+            ),
+        },
         Pat::Filter { preds, input } => format!("filterB {preds} {}", arg(translate_pat(input))),
         Pat::Map { scalars, input } => format!("mapB {scalars} {}", arg(translate_pat(input))),
         Pat::Project { outputs, input } => {
@@ -271,6 +312,9 @@ fn translate_pat(pat: &Pat) -> String {
 /// an enclosing `map(...)` list combinator.
 fn translate_tmpl(t: &Tmpl, hole: &str) -> String {
     match t {
+        // Also covers a scalar metavariable RHS (e.g. `not_not`'s `x`): the
+        // bound Lean variable's type follows from `emit_rule`'s binder
+        // retyping, so the identifier alone is the right translation either way.
         Tmpl::RelVar(n) => n.clone(),
         Tmpl::Hole => hole.to_string(),
         // `Empty(r)` is the zero-row constant with `r`'s arity; in the bag
@@ -500,6 +544,7 @@ fn choose_proof(
     all_true: Option<&str>,
     any_false: Option<&str>,
     is_empty_prop: bool,
+    is_scalar: bool,
 ) -> String {
     let both = format!("{lhs} {rhs}");
     let mut intros: Vec<&str> = binders.iter().map(|(n, _)| n.as_str()).collect();
@@ -509,6 +554,21 @@ fn choose_proof(
     } else {
         format!("intro {}; ", intros.join(" "))
     };
+
+    // Scalar rules denote through `denoteS`; unfolding it reduces the goal to
+    // a `Bool` identity. `not_not`'s shape (double negation) is exactly
+    // `not (not b) = b`, which `simp` closes directly. A future scalar rule
+    // with a different shape is not guaranteed to close the same way, so it
+    // falls back to an explicit `sorry` rather than emitting a tactic that
+    // might not discharge the goal.
+    if is_scalar {
+        if lhs.contains("ScalarExpr.notE (ScalarExpr.notE") {
+            return format!("by\n    {intro}simp [denoteS]");
+        }
+        return format!(
+            "by\n    -- TODO: choose a proof tactic for this scalar rule's shape\n    {intro}sorry"
+        );
+    }
 
     // A filter by an everywhere-true predicate is the identity; by an
     // everywhere-false predicate it is empty. `filterB p b = fun x => cond (p x)
