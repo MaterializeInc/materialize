@@ -5,7 +5,7 @@ menu:
   main:
     parent: "enterprise-sso"
     identifier: "enterprise-sso-identity-providers"
-    weight: 40
+    weight: 45
 ---
 
 Once the Ory stack is deployed, you connect it to your identity
@@ -256,7 +256,7 @@ curl -s -H "Authorization: Api-Key $POLIS_API_KEY" \
 ```
 
 Mapping these groups to Materialize SQL grants currently has to be done
-manually with `GRANT role_name TO "user@email"`. Tracking the
+manually with `GRANT role_name TO "user@email"`. We track the
 end-to-end automation as future work.
 
 ## What happens when users sign in

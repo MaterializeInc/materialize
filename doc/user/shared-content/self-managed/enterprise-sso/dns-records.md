@@ -21,4 +21,4 @@ cert-manager issues TLS certs as soon as DNS resolves. Wait for all Certificates
 kubectl get certificate -A -w
 ```
 
-The first issuance via Let's Encrypt DNS-01 typically takes 1 to 3 minutes per cert.
+The first certificate issuance typically takes 1 to 3 minutes per cert when using ACME (Let's Encrypt DNS-01); in-cluster self-signed certs issue near-instantly.

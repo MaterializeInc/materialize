@@ -230,7 +230,7 @@ Key signals to alert on:
 Items tracked but not yet shipped:
 
 - **API key management for service accounts** via Ory Talos
-  (tracked as DEP-143). When this lands, this page will gain a section
+  is tracked as future work. When this lands, this page will gain a section
   on issuing and revoking API keys for non-interactive clients.
 - **IdP group to SQL role mapping**. Today, group memberships push to
   Polis but don't translate to Materialize SQL role grants. The
