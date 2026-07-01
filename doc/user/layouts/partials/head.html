@@ -211,20 +211,41 @@ document.addEventListener("DOMContentLoaded", function () {
         targetPane.classList.add("active");
       }
 
+      updateTabJoin();
+
       // Trigger scroll event to update TOC highlighting
       $(window).trigger('scroll');
     }
 
+    function updateTabJoin() {
+      const activeTab = tabGroup.querySelector(".nav-item.active");
+      if (!activeTab) return;
+
+      const tabTop = tabContent.getBoundingClientRect().top;
+      const activeBottom = activeTab.getBoundingClientRect().bottom;
+      const overlap = Math.max(2, Math.ceil(tabTop - activeBottom + 2));
+
+      activeTab.style.setProperty("--tab-join-overlap", `${overlap}px`);
+    }
+
+    const navTabsScroll = tabGroup.querySelector(".nav-tabs-scroll");
+
     const updateOverflow = () => {
-      const scrollLeft = navTabs.scrollLeft;
-      const scrollRight = navTabs.scrollWidth - navTabs.clientWidth - scrollLeft;
+      if (!navTabsScroll) return;
+
+      const scrollLeft = navTabsScroll.scrollLeft;
+      const scrollRight = navTabsScroll.scrollWidth - navTabsScroll.clientWidth - scrollLeft;
 
       tabGroup.classList.toggle('has-left-overflow', scrollLeft > 0);
       tabGroup.classList.toggle('has-right-overflow', scrollRight > 1);
+
+      updateTabJoin();
     };
 
     updateOverflow();
-    navTabs.addEventListener('scroll', updateOverflow);
+    if (navTabsScroll) {
+      navTabsScroll.addEventListener('scroll', updateOverflow);
+    }
     window.addEventListener('resize', updateOverflow);
   });
 
@@ -257,6 +278,11 @@ document.addEventListener("DOMContentLoaded", function () {
           if (targetNavItem && targetPane) {
             targetNavItem.classList.add("active");
             targetPane.classList.add("active");
+
+            const tabTop = otherTabContent.getBoundingClientRect().top;
+            const activeBottom = targetNavItem.getBoundingClientRect().bottom;
+            const overlap = Math.max(2, Math.ceil(tabTop - activeBottom + 2));
+            targetNavItem.style.setProperty("--tab-join-overlap", `${overlap}px`);
           }
         }
       });

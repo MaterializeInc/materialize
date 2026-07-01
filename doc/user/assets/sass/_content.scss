@@ -1524,6 +1524,42 @@ p+p {
             }
         }
 
+        :not(div.footnotes) > ol.has-p:not(ol.has-p ol.has-p) {
+            --steps-accent: var(--sg-teal-5);
+
+            > li {
+                &:before {
+                    background: color-mix(in srgb, var(--steps-accent) 10%, var(--white));
+                    border-color: color-mix(in srgb, var(--sg-teal-3) 55%, transparent);
+                    box-shadow:
+                        0 0 0 rem(0.35) color-mix(in srgb, var(--sg-teal-3) 12%, transparent),
+                        0 rem(0.35) rem(1) color-mix(in srgb, var(--sg-teal-3) 8%, transparent);
+                    color: var(--sg-teal-5);
+                }
+
+                &:not(:last-child)::after {
+                    background: linear-gradient(
+                        to bottom,
+                        color-mix(in srgb, var(--sg-teal-3) 45%, transparent),
+                        color-mix(in srgb, var(--sg-teal-3) 8%, transparent)
+                    );
+                }
+
+                .highlight {
+                    border-color: color-mix(in srgb, var(--sg-gray-1) 85%, transparent);
+                }
+
+                pre {
+                    background: color-mix(in srgb, var(--sg-lavender-1) 18%, var(--white));
+                    border-color: color-mix(in srgb, var(--sg-gray-1) 85%, transparent);
+                }
+
+                .highlight + pre {
+                    border-top-color: color-mix(in srgb, var(--sg-gray-1) 70%, var(--sg-teal-3));
+                }
+            }
+        }
+
         .mz-offerings {
             &__headers {
                 background: linear-gradient(
@@ -1594,6 +1630,13 @@ p+p {
                 background: var(--linkbox-accent);
             }
         }
+
+        .code-tabs {
+            --code-tabs-bar-surface: color-mix(in srgb, var(--sg-lavender-1) 72%, var(--white));
+            --code-tabs-border: color-mix(in srgb, var(--sg-gray-1) 85%, transparent);
+            --code-tabs-surface: var(--white);
+            box-shadow: var(--docs-card-shadow);
+        }
     }
 
     pre {
@@ -1660,17 +1703,80 @@ p+p {
     }
 
     :not(div.footnotes) > ol.has-p:not(ol.has-p ol.has-p) {
+        --steps-accent: var(--highlight);
+        --steps-badge-size: #{rem(3)};
+        --steps-rail-width: 2px;
+
         list-style-type: none;
         counter-reset: list-counter;
-        margin: 0;
+        margin: rem(0.8) 0 rem(1.6);
         padding: 0;
 
          >li {
+            --steps-badge-offset: #{rem(0.1)};
             counter-increment: list-counter;
             min-height: rem(5);
+            padding: rem(0.4) 0 rem(2.6) calc(var(--steps-badge-size) + #{rem(1.6)});
             position: relative;
-            padding: rem(1.6) 0 rem(1.6) rem(6);
-            border-top: 1px solid var(--divider-light);
+
+            &:has(> :is(h2, h3, h4):first-child) {
+                --steps-badge-offset: #{rem(0.45)};
+            }
+
+            &:not(:last-child)::after {
+                background: linear-gradient(
+                    to bottom,
+                    color-mix(in srgb, var(--steps-accent) 55%, transparent),
+                    color-mix(in srgb, var(--steps-accent) 10%, transparent)
+                );
+                bottom: rem(0.35);
+                content: "";
+                left: calc(var(--steps-badge-size) / 2 - var(--steps-rail-width) / 2);
+                position: absolute;
+                top: calc(var(--steps-badge-offset) + var(--steps-badge-size) + #{rem(0.55)});
+                width: var(--steps-rail-width);
+                z-index: 0;
+            }
+
+            .highlight {
+                border: 1px solid var(--table-border);
+                border-radius: rem(0.8);
+                margin: rem(1.2) 0;
+                overflow: hidden;
+
+                pre {
+                    border: none;
+                    border-radius: 0;
+                    margin: 0;
+                }
+            }
+
+            .highlight:has(+ pre) {
+                border-bottom: none;
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+                margin-bottom: 0;
+            }
+
+            .highlight + pre {
+                border-top: 1px solid color-mix(in srgb, var(--table-border) 75%, var(--steps-accent));
+                border-top-left-radius: 0;
+                border-top-right-radius: 0;
+                margin-top: 0;
+                padding-top: rem(1.2);
+            }
+
+            .code-tabs {
+                --code-tabs-accent: var(--steps-accent);
+            }
+
+            pre {
+                background: var(--table-surface-raised);
+                border: 1px solid var(--table-border);
+                border-radius: rem(0.8);
+                margin: rem(1.2) 0;
+                margin-left: 0;
+            }
 
             ul,
             ol {
@@ -1684,39 +1790,59 @@ p+p {
             }
 
             @media(max-width: 850px) {
-                padding-left: rem(4.5);
+                padding-left: calc(var(--steps-badge-size) + #{rem(1.2)});
             }
 
             @media(max-width: 480px) {
-                padding-left: rem(3);
+                --steps-badge-size: #{rem(2.6)};
+                padding-bottom: rem(2.2);
             }
 
             &:before {
+                align-items: center;
+                background: color-mix(in srgb, var(--steps-accent) 18%, var(--card-light));
+                border: 2px solid color-mix(in srgb, var(--steps-accent) 70%, transparent);
+                border-radius: 50%;
+                box-shadow:
+                    0 0 0 rem(0.35) color-mix(in srgb, var(--steps-accent) 14%, transparent),
+                    0 rem(0.35) rem(1) color-mix(in srgb, var(--steps-accent) 12%, transparent);
+                color: color-mix(in srgb, var(--steps-accent) 88%, var(--heading));
                 content: counter(list-counter);
-                color: var(--orchid);
-                font-size: rem(3);
-                font-weight: 100;
+                display: flex;
+                font-family: var(--font-mono);
+                font-size: rem(1.25);
+                font-weight: 700;
+                height: var(--steps-badge-size);
+                justify-content: center;
+                left: 0;
+                letter-spacing: -0.02em;
+                line-height: 1;
                 position: absolute;
-                top: 100;
-                left: rem(1);
-
-                @media(max-width: 850px) {
-                    font-size: rem(4);
-                    left: rem(.5);
-                }
-
-                @media(max-width: 480px) {
-                    font-size: rem(3.5);
-                    left: 0;
-                }
+                top: var(--steps-badge-offset);
+                width: var(--steps-badge-size);
+                z-index: 1;
             }
 
             &:last-child {
-                padding-bottom: 0;
+                padding-bottom: rem(0.6);
+            }
+
+            > :is(h2, h3, h4):first-child {
+                color: var(--inline-lifted);
+                margin-top: 0;
+            }
+
+            > p:first-child {
+                color: var(--inline-lifted);
             }
 
             p {
                 display: block;
+            }
+
+            > p:first-child,
+            > :first-child:not(.highlight):not(pre):not(.code-tabs) {
+                margin-top: 0;
             }
         }
     }
@@ -2028,88 +2154,145 @@ p+p {
 
 // Navigation tabs (tab+tabs.html)
 .code-tabs {
+    --code-tabs-accent: var(--highlight);
+    --code-tabs-border: var(--table-border);
+    --code-tabs-bar-surface: var(--table-surface-header);
+    --code-tabs-surface: var(--table-surface);
+
+    background: var(--code-tabs-surface);
+    border: 1px solid var(--code-tabs-border);
+    border-radius: var(--table-radius);
+    box-shadow: var(--table-shadow);
+    margin: rem(1.2) 0;
+    overflow: hidden;
     position: relative;
 
-    .nav-tabs {
-        list-style: none;
-        padding: 0;
+    .nav-tabs-bar {
+        background: var(--code-tabs-bar-surface);
+        border-bottom: 1px solid var(--code-tabs-border);
+        padding: rem(0.6) rem(0.6) 0;
+        position: relative;
+        z-index: 2;
 
-        display: flex;
-        overflow-x: auto;
-        overflow-y: hidden;
-        // white-space: nowrap;
-
-        li {
-            display: inline-block;
-            margin: 0 rem(0.1);
-            padding: 0;
-            position: relative;
-            bottom: -1px;
-            background: var(--bg);
-            border-top: 1px solid var(--highlight);
-            border-left: 1px solid var(--highlight);
-            border-right: 1px solid var(--highlight);
-            border-radius: 2px 2px 2px 2px;
-            background: var(--tab-bg);
-
-            a {
-                color: var(--body);
-                display: block;
-                padding: rem(0.8) rem(1.6);
-                font-size: rem(1.4);
-                text-decoration: none;
-                font-weight: 500;
-
-                @media(max-width: 850px) {
-                    padding: rem(0.8) rem(1.6);
-                }
-
-                @media(max-width: 380px) {
-                    padding: rem(0.8) rem(0.8);
-                }
-
-                &:hover {
-                    color: $purple;
-                    border-bottom: none;
-                }
-            }
-
-            &.active {
-
-                border-radius: 2px 2px 0 0;
-                border: 1px solid #9c86e0;
-                border-bottom-color: var(--bg);
-
-                a {
-                    color: var(--highlight);
-                    background: var(--tab-selected-bg);
-                }
-            }
+        &::before,
+        &::after {
+            bottom: 0;
+            content: "";
+            opacity: 0;
+            pointer-events: none;
+            position: absolute;
+            top: 0;
+            transition: opacity 0.15s ease;
+            width: rem(2.4);
+            z-index: 4;
         }
 
+        &::before {
+            background: linear-gradient(to right, var(--code-tabs-bar-surface), transparent);
+            left: 0;
+        }
+
+        &::after {
+            background: linear-gradient(to left, var(--code-tabs-bar-surface), transparent);
+            right: 0;
+        }
+    }
+
+    .nav-tabs-scroll {
+        overflow: visible;
+        scrollbar-width: none;
+
+        &::-webkit-scrollbar {
+            display: none;
+        }
+    }
+
+    .nav-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: rem(0.2);
+        list-style: none;
+        margin: 0;
+        overflow: visible;
+        padding: 0;
+        position: relative;
+    }
+
+    .tab-content {
+        background: var(--code-tabs-surface);
+        position: relative;
+        z-index: 1;
     }
 
     .tab-pane {
         display: none;
-        padding: rem(1.6) 0;
+        padding: rem(1.2);
 
         &.active {
             display: block;
-            border-radius: 0 0 rem(1) rem(1);
-            border: 1px solid #9c86e0;
-            padding: rem(0.8) rem(0.5) rem(0.6) rem(0.6);
         }
     }
 
-    &.has-left-overflow .nav-tabs::before {
+    .nav-tabs li {
+        background: transparent;
+        border: 1px solid transparent;
+        flex-shrink: 0;
+        margin: 0;
+        padding: 0;
+
+        a {
+            color: var(--sub);
+            display: block;
+            font-size: rem(1.35);
+            font-weight: 500;
+            padding: rem(0.55) rem(1.2);
+            text-decoration: none;
+            transition: color 0.15s ease;
+
+            @media(max-width: 380px) {
+                padding: rem(0.55) rem(0.8);
+            }
+
+            &:hover,
+            &:focus {
+                color: var(--inline-lifted);
+                text-decoration: none;
+            }
+        }
+
+        &.active {
+            background: var(--code-tabs-surface);
+            border-color: var(--code-tabs-border);
+            border-bottom: none;
+            border-radius: rem(0.5) rem(0.5) 0 0;
+            position: relative;
+            z-index: 2;
+
+            // Bridges the tab bar divider so the active tab reads as connected to the content.
+            &::after {
+                background: var(--code-tabs-surface);
+                content: "";
+                height: var(--tab-join-overlap, 2px);
+                left: 0;
+                position: absolute;
+                right: 0;
+                top: 100%;
+                z-index: 3;
+            }
+
+            a {
+                color: color-mix(in srgb, var(--code-tabs-accent) 88%, var(--heading));
+            }
+        }
+    }
+
+    &.has-left-overflow .nav-tabs-bar::before {
         opacity: 1;
     }
 
-    &.has-right-overflow .nav-tabs::after {
+    &.has-right-overflow .nav-tabs-bar::after {
         opacity: 1;
     }
-
-
 }
 
 .table-scrollable {
@@ -2475,18 +2658,6 @@ body.dark .content {
 .back-to-top {
     @media(max-width: 850px) {
         margin: var(--medium) 0;
-    }
-}
-
-body.dark {
-    .code-tabs .nav-tabs {
-        li {
-            background: var(--bg-sub);
-
-            &.active {
-                background: var(--bg);
-            }
-        }
     }
 }
 
