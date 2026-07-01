@@ -198,9 +198,6 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     #[mz_ore::test]
     fn statement_offsets_are_relative_to_raw_text() {
-        // The first statement substitutes `:col` with a longer value, shifting
-        // every later offset in the resolved text. The reported offset must
-        // still index the raw file, where consumers read source.
         let raw = "CREATE VIEW v AS SELECT :col;\nCREATE VIEW w AS SELECT 2;";
         let mut variables = BTreeMap::new();
         variables.insert("col".to_string(), "some_long_column_name".to_string());
