@@ -19,7 +19,7 @@ use mz_expr::func::variadic::RecordCreate;
 use mz_expr::visit::Visit;
 use mz_expr::{ColumnOrder, UnaryFunc, VariadicFunc};
 use mz_ore::stack::RecursionLimitError;
-use mz_repr::{ColumnName, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{ColumnName, Datum, SqlColumnType, SqlRelationType, SqlScalarType};
 
 use crate::plan::hir::{
     AbstractExpr, AggregateFunc, AggregateWindowExpr, HirRelationExpr, HirScalarExpr,
@@ -770,5 +770,88 @@ pub fn fuse_window_functions(
             _ => {}
         }
         Ok(())
+    })
+}
+
+/// Specializes `lag`/`lead` calls whose `offset` and `default` arguments are constant-foldable
+/// into the dedicated `ValueWindowFunc::LagLeadConst` variant (which carries the offset as an
+/// `i32` and the default as a `Row`, and is fed a bare value arg instead of the encoded
+/// `(value, offset, default)` record).
+///
+/// For every `Lag`/`Lead` call whose `args` is a 3-field `RecordCreate(value, offset, default)`,
+/// we attempt to constant-fold the `offset` and `default` children using
+/// [`HirScalarExpr::simplify_to_literal_with_result`]. When both fold and the offset is a
+/// non-NULL `Int32(n)` with `n != 0`, we replace `args` with the bare `value` field and replace
+/// `func` with `LagLeadConst { offset: if Lag { -n } else { n }, default }`. Any other outcome
+/// (not constant-foldable, evaluation error, NULL offset, non-`Int32` offset, `offset == 0`, or
+/// `args` not in the expected `RecordCreate` shape) leaves the call as `Lag`/`Lead`.
+pub fn specialize_lag_lead(
+    root: &mut HirRelationExpr,
+    _context: &crate::plan::lowering::Context,
+) -> Result<(), RecursionLimitError> {
+    #[allow(deprecated)]
+    root.visit_scalar_expressions_mut(0, &mut |scalar: &mut HirScalarExpr, _depth: usize| {
+        scalar.try_visit_mut_post(&mut |e: &mut HirScalarExpr| {
+            if let HirScalarExpr::Windowing(
+                WindowExpr {
+                    func:
+                        WindowExprType::Value(ValueWindowExpr {
+                            func: vw_func @ (ValueWindowFunc::Lag | ValueWindowFunc::Lead),
+                            args,
+                            ..
+                        }),
+                    ..
+                },
+                _name,
+            ) = e
+            {
+                // Expect the encoded `(value, offset, default)` record produced by
+                // `plan_lag_lead`. Don't mutate yet — first non-destructively check the
+                // shape and try to fold offset/default.
+                let (offset_expr_clone, default_expr_clone) = match args.as_ref() {
+                    HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate(RecordCreate { .. }),
+                        exprs,
+                        ..
+                    } if exprs.len() == 3 => (exprs[1].clone(), exprs[2].clone()),
+                    _ => return Ok(()),
+                };
+                // Unconditionally attempt to constant-fold the offset and default.
+                let offset_row = match offset_expr_clone.simplify_to_literal_with_result() {
+                    Ok(row) => row,
+                    Err(_) => return Ok(()),
+                };
+                let default_row = match default_expr_clone.simplify_to_literal_with_result() {
+                    Ok(row) => row,
+                    Err(_) => return Ok(()),
+                };
+                let n = match offset_row.unpack_first() {
+                    Datum::Int32(n) if n != 0 => n,
+                    // NULL offset, `Int32(0)`, or non-Int32 offset: bail out.
+                    _ => return Ok(()),
+                };
+                // We have decided to specialize. Now it's safe to mutate.
+                let signed_offset = match vw_func {
+                    ValueWindowFunc::Lag => -n,
+                    ValueWindowFunc::Lead => n,
+                    _ => unreachable!("matched Lag | Lead above"),
+                };
+                // Extract the bare value expr out of the record.
+                let value_expr = match args.as_mut() {
+                    HirScalarExpr::CallVariadic { exprs, .. } => {
+                        let mut drain = exprs.drain(..);
+                        let v = drain.next().expect("len == 3");
+                        v
+                    }
+                    _ => unreachable!("shape already checked above"),
+                };
+                *vw_func = ValueWindowFunc::LagLeadConst {
+                    offset: signed_offset,
+                    default: default_row,
+                };
+                **args = value_expr;
+            }
+            Ok(())
+        })
     })
 }

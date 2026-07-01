@@ -1279,12 +1279,45 @@ Explained Query:
     Map: record_get[0](#0)
       →Fused with Child Table Function unnest_list
         →Non-incremental GroupAggregate
-          Aggregation: lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0{x}, 3, "default")), (#0{x} || #0{x})))
+          Aggregation: lag_lead_const[ignore_nulls=true, offset=-3, default="default", order_by=[#0 asc nulls_last]](row(row(row(#0), #0{x}), (#0{x} || #0{x})))
         Key:
           Project: ()
         →Stream materialize.public.t1
 
 Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+# Column-typed offset: the `specialize_lag_lead` HIR transform must NOT
+# rewrite this to lag_lead_const, since the offset cannot be folded to a
+# literal. This pins the default-EXPLAIN rendering of the unspecialized
+# `lag[...]` fallback so we don't lose the user-facing lag/lead printer in
+# future refactors.
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SELECT lag(t1.x, length(t2.x)) OVER (ORDER BY t1.x)
+FROM t1, t2;
+----
+Explained Query:
+  →Map/Filter/Project
+    Project: #1
+    Map: record_get[0](#0)
+      →Fused with Child Table Function unnest_list
+        →Non-incremental GroupAggregate
+          Aggregation: lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, char_length(#1{x}), null)), #0{x}))
+        Key:
+          Project: ()
+        →Differential Join %0 » %1
+          Join stage 0 in %1
+          →Arrange (empty key)
+            →Stream materialize.public.t1
+          →Arrange (empty key)
+            →Stream materialize.public.t2
+
+Source materialize.public.t1
+Source materialize.public.t2
 
 Target cluster: quickstart
 
