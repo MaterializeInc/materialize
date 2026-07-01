@@ -48,7 +48,7 @@
 
 - `MatchGraph` gains: `fn scalar_class_nodes(&self, id: Id) -> Vec<SNode>;` and `fn nodes_by_scalar_sym(&self, sym: ScalarSym) -> Vec<(Id, SNode)>;`
 - `BaseView` gains field `scalar_index: &'a ScalarIndex` where `pub(crate) type ScalarIndex = HashMap<ScalarSym, Vec<(Id, SNode)>>;`
-- `EGraph<CombinedLang>` (alias `EGraph`) gains: `pub(crate) fn scalar_index(&self) -> ScalarIndex;`, `pub(crate) fn lower_scalar(&mut self, expr: &MirScalarExpr) -> Id;`
+- `EGraph<CombinedLang>` (alias `EGraph`) gains: `pub(crate) fn scalar_index(&self) -> ScalarIndex;`. Scalar lowering reuses the existing `crate::eqsat::scalar::lower::lower_into(&mut EGraph, &MirScalarExpr) -> Id` (the dropped `lower_scalar` was a redundant reimplementation).
 - `scalar_extract::raise(eg: &EGraph, id: Id) -> MirScalarExpr` (pinned public API for slices 4-6).
 - `scalar_saturate::saturate(eg: &mut EGraph) -> usize` and `scalar_saturate::canonicalize_combined(expr: &MirScalarExpr, col_types: &[ReprColumnType]) -> MirScalarExpr`.
 - `rules::scalar_all() -> CompiledRuleSet` (backed by `SCALAR_COMPILED_RULES`).
@@ -666,7 +666,7 @@ mod tests {
     fn raise_roundtrips_lowered_scalar() {
         let e = MirScalarExpr::column(0).call_unary(UnaryFunc::Not(mz_expr::func::Not));
         let mut eg = EGraph::new();
-        let root = eg.lower_scalar(&e);
+        let root = crate::eqsat::scalar::lower::lower_into(&mut eg, &e);
         assert_eq!(raise(&eg, root), e);
     }
 }
@@ -697,7 +697,7 @@ git commit -m "eqsat: determinism-parity scalar extractor on the combined e-grap
 
 **Interfaces:**
 - Produces: `scalar_saturate::saturate(eg: &mut EGraph) -> usize`, `scalar_saturate::canonicalize_combined(expr, col_types) -> MirScalarExpr`, `rules::scalar_all() -> CompiledRuleSet`.
-- Consumes: `SCALAR_COMPILED_RULES` (Task 3), `BaseView` with `scalar_index` (Task 1), `EGraph::scalar_index`/`lower_scalar` (Tasks 1, 4), `scalar_extract::raise` (Task 5), scalar analysis recompute.
+- Consumes: `SCALAR_COMPILED_RULES` (Task 3), `BaseView` with `scalar_index` (Task 1), `EGraph::scalar_index` (Task 1), `scalar::lower::lower_into` (existing, used instead of the dropped `lower_scalar`), `scalar_extract::raise` (Task 5), scalar analysis recompute.
 
 - [ ] **Step 1: Expose the scalar rule set**
 
@@ -807,7 +807,7 @@ pub(crate) fn canonicalize_combined(
 ) -> MirScalarExpr {
     let mut eg = EGraph::new();
     eg.data_mut().scalar.col_types = col_types.to_vec();
-    let root = eg.lower_scalar(expr);
+    let root = crate::eqsat::scalar::lower::lower_into(&mut eg, expr);
     saturate(&mut eg);
     scalar_extract::raise(&eg, root)
 }
