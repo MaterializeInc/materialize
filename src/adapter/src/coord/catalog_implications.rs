@@ -1096,12 +1096,15 @@ impl Coordinator {
         table_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
+        // Source-fed tables and webhooks flow through here too (they are table catalog items), but
+        // `register_table_collections` below only registers the real (`DataSource::Table`) tables in
+        // the txns shard, so we can hand it all of them.
         let table_ids: Vec<GlobalId> = table_collections_to_create.keys().copied().collect();
         let collections = table_collections_to_create.into_iter().collect_vec();
 
-        // Allocate a write timestamp, make the catalog readable at the read ts we bump to below
-        // (this `advance_upper` also serves as the leader/fencing check, see materialize#28216),
-        // and create the collections.
+        // Allocate a write timestamp and make the catalog readable at the read ts we bump to below
+        // (this `advance_upper` also serves as the leader/fencing check, see materialize#28216). The
+        // tables become available for reads at this timestamp.
         let write_ts = self.get_local_write_ts().await;
         let register_ts = write_ts.timestamp;
         self.catalog
@@ -1109,45 +1112,48 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("unable to advance catalog upper");
 
-        // Registering in the txns shard is the last step of `create_collections`. If the off-loop
-        // committer advanced the txns upper past us it returns `InvalidUppers` with everything else
-        // already set up. We then re-allocate a fresh timestamp and finish the registration via
-        // `register_table_collections`, retrying until we win. Reads never observe a partially
-        // registered table, since we only bump the oracle read ts (`apply_local_write`) after a
-        // successful register.
-        let create_res = {
+        {
             let storage_metadata = self.catalog.state().storage_metadata();
             self.controller
                 .storage
                 .create_collections(storage_metadata, Some(register_ts), collections)
                 .await
-        };
-        let register_ts = match create_res {
-            Ok(()) => register_ts,
-            Err(StorageError::InvalidUppers(_)) => loop {
-                let write_ts = self.get_local_write_ts().await;
-                self.catalog
-                    .advance_upper(write_ts.advance_to)
-                    .await
-                    .unwrap_or_terminate("unable to advance catalog upper");
-                match self
-                    .controller
-                    .storage
-                    .register_table_collections(write_ts.timestamp, table_ids.clone())
-                    .await
-                {
-                    Ok(()) => break write_ts.timestamp,
-                    Err(StorageError::InvalidUppers(_)) => continue,
-                    Err(other) => {
-                        Err::<(), _>(other).unwrap_or_terminate("cannot fail to register tables");
-                    }
+                .unwrap_or_terminate("cannot fail to create collections");
+        }
+
+        // Register the tables in the txns shard, making them available for writes. This is a
+        // separate, retryable step: if the off-loop group committer advanced the txns upper past our
+        // register timestamp it returns `InvalidUppers`, and we re-allocate a fresh timestamp
+        // (necessarily beyond the txns upper) and retry. The first attempt uses `register_ts`, so it
+        // matches the read-availability timestamp above. Reads never observe a partially registered
+        // table, since we only bump the oracle read ts (`apply_local_write`) after a successful
+        // register.
+        //
+        // NOTE: On a retry the table since (set to the initial `register_ts` in `create_collections`)
+        // ends up below the final register ts. That is the safe direction: txns registration does
+        // not constrain the data shard since, and reads only ever happen at >= the final register ts.
+        let mut register_ts = register_ts;
+        loop {
+            match self
+                .controller
+                .storage
+                .register_table_collections(register_ts, table_ids.clone())
+                .await
+            {
+                Ok(()) => break,
+                Err(StorageError::InvalidUppers(_)) => {
+                    let write_ts = self.get_local_write_ts().await;
+                    self.catalog
+                        .advance_upper(write_ts.advance_to)
+                        .await
+                        .unwrap_or_terminate("unable to advance catalog upper");
+                    register_ts = write_ts.timestamp;
                 }
-            },
-            Err(other) => {
-                Err::<(), _>(other).unwrap_or_terminate("cannot fail to create collections");
-                unreachable!("unwrap_or_terminate does not return on Err");
+                Err(other) => {
+                    Err::<(), _>(other).unwrap_or_terminate("cannot fail to register tables");
+                }
             }
-        };
+        }
 
         for id in execution_timestamps_to_set {
             self.set_statement_execution_timestamp(id, register_ts);
@@ -1381,12 +1387,9 @@ impl Coordinator {
             .desc
             .at_version(RelationVersionSelector::Specific(new_version));
 
-        // Allocate a write timestamp, make the catalog readable at the read ts we bump to below,
-        // and alter the table description (creating a "new" collection). Registering the new
-        // collection in the txns shard is the last step of `alter_table_desc`; if the off-loop
-        // committer advanced the txns upper past us it returns `InvalidUppers` with the new
-        // collection already set up. We then re-allocate a fresh timestamp and finish the
-        // registration via `register_table_collections`, retrying until we win.
+        // Allocate a write timestamp, make the catalog readable at the read ts we bump to below, and
+        // alter the table description (creating a "new" collection). The evolved collection becomes
+        // available for reads at this timestamp.
         let write_ts = self.get_local_write_ts().await;
         let register_ts = write_ts.timestamp;
         self.catalog
@@ -1394,44 +1397,37 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("unable to advance catalog upper");
 
-        let alter_res = self
-            .controller
+        self.controller
             .storage
-            .alter_table_desc(
-                existing_gid,
-                new_gid,
-                new_desc,
-                expected_version,
-                register_ts,
-            )
-            .await;
-        let register_ts = match alter_res {
-            Ok(()) => register_ts,
-            Err(StorageError::InvalidUppers(_)) => loop {
-                let write_ts = self.get_local_write_ts().await;
-                self.catalog
-                    .advance_upper(write_ts.advance_to)
-                    .await
-                    .unwrap_or_terminate("unable to advance catalog upper");
-                match self
-                    .controller
-                    .storage
-                    .register_table_collections(write_ts.timestamp, vec![new_gid])
-                    .await
-                {
-                    Ok(()) => break write_ts.timestamp,
-                    Err(StorageError::InvalidUppers(_)) => continue,
-                    Err(other) => {
-                        Err::<(), _>(other)
-                            .unwrap_or_terminate("cannot fail to register altered table");
-                    }
+            .alter_table_desc(existing_gid, new_gid, new_desc, expected_version)
+            .await
+            .unwrap_or_terminate("failed to alter desc of table");
+
+        // Register the evolved collection in the txns shard, making it available for writes. As with
+        // CREATE TABLE this is a separate, retryable step against the off-loop group committer.
+        let mut register_ts = register_ts;
+        loop {
+            match self
+                .controller
+                .storage
+                .register_table_collections(register_ts, vec![new_gid])
+                .await
+            {
+                Ok(()) => break,
+                Err(StorageError::InvalidUppers(_)) => {
+                    let write_ts = self.get_local_write_ts().await;
+                    self.catalog
+                        .advance_upper(write_ts.advance_to)
+                        .await
+                        .unwrap_or_terminate("unable to advance catalog upper");
+                    register_ts = write_ts.timestamp;
                 }
-            },
-            Err(other) => {
-                Err::<(), _>(other).unwrap_or_terminate("failed to alter desc of table");
-                unreachable!("unwrap_or_terminate does not return on Err");
+                Err(other) => {
+                    Err::<(), _>(other)
+                        .unwrap_or_terminate("cannot fail to register altered table");
+                }
             }
-        };
+        }
 
         // Initialize the ReadPolicy which ensures we have the correct read holds.
         let compaction_window = new_table

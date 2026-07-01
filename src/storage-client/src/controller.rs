@@ -470,16 +470,14 @@ pub trait StorageController: Debug {
     /// collections and leave the controller in an inconsistent state. It is almost
     /// always wrong to do anything but abort the process on `Err`.
     ///
-    /// The `register_ts` is used as the initial timestamp that tables are available for reads. (We
+    /// The `register_ts` is the initial timestamp at which tables become available for reads. (We
     /// might later give non-tables the same treatment, but hold off on that initially.) Callers
     /// must provide a Some if any of the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
     ///
-    /// Registering tables in the txns shard is the last step. If `register_ts` is behind the txns
-    /// shard upper (the off-loop group committer raced us), this returns
-    /// [`StorageError::InvalidUppers`] with all other setup already done. At bootstrap no group
-    /// commits run concurrently, so this cannot happen. For runtime DDL the caller re-allocates a
-    /// fresh timestamp and finishes the registration via [`Self::register_table_collections`].
+    /// This sets up storage but does not register tables in the txns shard. The caller registers
+    /// them (making them available for writes) via [`Self::register_table_collections`], which is
+    /// retryable against the off-loop group committer.
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -537,30 +535,36 @@ pub trait StorageController: Debug {
         source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
     ) -> Result<(), StorageError>;
 
-    /// Registers the evolved table collection in the txns shard at `register_ts` as the last step.
+    /// Evolves the [`RelationDesc`] of a table, creating the new collection.
     ///
-    /// If `register_ts` is behind the txns shard upper (the off-loop group committer raced us),
-    /// returns [`StorageError::InvalidUppers`]. The new collection is set up regardless, so the
-    /// caller re-allocates a fresh timestamp and re-registers it via [`Self::register_table_collections`].
+    /// This sets up the new collection but does not register it in the txns shard. The caller
+    /// registers it (making it available for writes) via [`Self::register_table_collections`].
     async fn alter_table_desc(
         &mut self,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        register_ts: Timestamp,
     ) -> Result<(), StorageError>;
 
-    /// Registers already-created table collections in the txns shard at `register_ts`.
+    /// Registers tables in the txns shard, making them available for writes at `register_ts`.
     ///
-    /// The tables must have been set up by a prior [`Self::create_collections`] or
-    /// [`Self::alter_table_desc`] whose txns registration was deferred or conflicted. This re-opens
-    /// write handles from the stored collection metadata, so it is idempotent across retries.
+    /// This is the sole path that registers tables in the txns shard, used both for the initial
+    /// registration after [`Self::create_collections`] / [`Self::alter_table_desc`] and for
+    /// retries. It re-opens write handles from the stored collection metadata, so it is idempotent
+    /// across retries (a conflicting register consumes the originals). In read-only mode only
+    /// migrated tables are registered, since the read-write environment owns the rest.
     ///
-    /// If `register_ts` is behind the txns shard upper, returns [`StorageError::InvalidUppers`]. The
-    /// caller should allocate a fresh timestamp from the oracle (which is monotonic and thus beyond
-    /// the txns upper) and retry. Reads never observe a partially registered table, because the
-    /// oracle read timestamp is only advanced past `register_ts` after this call succeeds.
+    /// Only `DataSource::Table` collections among `ids` are registered. Source-fed tables
+    /// (`IngestionExport`) and webhooks are created as table catalog items too but are written by
+    /// the storage layer, so they are ignored here. Callers may therefore pass all the collections
+    /// they created without pre-filtering.
+    ///
+    /// If `register_ts` is behind the txns shard upper (the off-loop group committer raced us),
+    /// returns [`StorageError::InvalidUppers`]. The caller should allocate a fresh timestamp from
+    /// the oracle (which is monotonic and thus beyond the txns upper) and retry. Reads never observe
+    /// a partially registered table, because the oracle read timestamp is only advanced past
+    /// `register_ts` after this call succeeds.
     async fn register_table_collections(
         &mut self,
         register_ts: Timestamp,

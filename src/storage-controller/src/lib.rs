@@ -856,7 +856,6 @@ impl StorageController for Controller {
         // `DataSource::IngestionExport` is added as a new collection, but is
         // not executed directly.
         let mut new_collections = BTreeSet::new();
-        let mut table_registers = Vec::with_capacity(to_register.len());
 
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
@@ -1059,9 +1058,9 @@ impl StorageController for Controller {
                 DataSource::Table => {
                     debug!(
                         ?data_source, meta = ?metadata,
-                        "registering {id} with persist table worker",
+                        "not registering {id} with the txns shard here; the caller does that via \
+                         register_table_collections",
                     );
-                    table_registers.push((id, write));
                 }
                 DataSource::Progress | DataSource::Other => {
                     debug!(
@@ -1164,21 +1163,9 @@ impl StorageController for Controller {
             };
         }
 
-        // Register the tables in the txns shard as the last step, so that if the register conflicts
-        // (see below) all the other setup has already happened and a retry only needs to re-register.
-        //
-        // NOTE: If the register timestamp is behind the txns upper, `register_table_writes` returns
-        // `InvalidUppers`. That happens when the off-loop group committer advanced the txns shard
-        // between the caller's timestamp allocation and this call. At bootstrap no group commits run
-        // concurrently, so this cannot happen and the caller terminates on it. For runtime DDL the
-        // caller re-allocates a fresh timestamp and registers via `register_table_collections`.
-        if !table_registers.is_empty() {
-            let register_ts = register_ts
-                .expect("caller should have provided a register_ts when creating a table");
-            self.register_table_writes(register_ts, table_registers, migrated_storage_collections)
-                .await?;
-        }
-
+        // We do not register tables in the txns shard here. The caller does that as a separate,
+        // retryable step via `register_table_collections`, so it can re-allocate a fresh timestamp
+        // if the off-loop group committer advanced the txns shard past our register timestamp.
         Ok(())
     }
 
@@ -1359,7 +1346,6 @@ impl StorageController for Controller {
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        register_ts: Timestamp,
     ) -> Result<(), StorageError> {
         let data_shard = {
             let Controller {
@@ -1388,20 +1374,6 @@ impl StorageController for Controller {
             existing.collection_metadata.data_shard.clone()
         };
 
-        let persist_client = self
-            .persist
-            .open(self.persist_location.clone())
-            .await
-            .expect("invalid persist location");
-        let write_handle = self
-            .open_data_handles(
-                &existing_collection,
-                data_shard,
-                new_desc.clone(),
-                &persist_client,
-            )
-            .await;
-
         let collection_meta = CollectionMetadata {
             persist_location: self.persist_location.clone(),
             data_shard,
@@ -1424,15 +1396,8 @@ impl StorageController for Controller {
 
         self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
 
-        // Register the evolved collection in the txns shard as the last step. If `register_ts` is
-        // behind the txns upper (the off-loop committer raced us), this returns `InvalidUppers`; the
-        // caller re-allocates a fresh timestamp and re-registers via `register_table_collections`,
-        // for which the new collection is already set up above.
-        self.persist_table_worker
-            .register(register_ts, vec![(new_collection, write_handle)])
-            .await
-            .expect("table worker unexpectedly shut down")?;
-
+        // We do not register the evolved collection in the txns shard here. The caller does that via
+        // `register_table_collections`, which is retryable against the off-loop group committer.
         Ok(())
     }
 
@@ -1441,28 +1406,65 @@ impl StorageController for Controller {
         register_ts: Timestamp,
         ids: Vec<GlobalId>,
     ) -> Result<(), StorageError> {
+        // Only `DataSource::Table` collections are written via the txns table-write path and thus
+        // registered in the txns shard. Source-fed tables (`IngestionExport`) and webhooks are also
+        // created as table catalog items, but they are written by the storage layer, so we ignore
+        // them here. Keeping this decision in the storage controller, where the data source is
+        // authoritative, means callers can pass all the collections they created without having to
+        // know which ones belong in the txns shard.
+        let mut ids = {
+            let mut tables = Vec::with_capacity(ids.len());
+            for id in ids {
+                if matches!(self.collection(id)?.data_source, DataSource::Table) {
+                    tables.push(id);
+                }
+            }
+            tables
+        };
+
+        // In read-only mode only migrated tables are registered; the read-write environment owns
+        // the rest and we must not re-register them. The read-only table worker keeps a migrated
+        // table's shard upper tracking the txns upper so it stays readable at a recent timestamp,
+        // which lets dependent dataflows (re-)hydrate.
+        if self.read_only {
+            ids.retain(|id| self.migrated_storage_collections.contains(id));
+        }
+        if ids.is_empty() {
+            return Ok(());
+        }
+
         // The tables must already be set up in `self.collections` (via `create_collections` or
-        // `alter_table_desc`, whose register was deferred or conflicted). We re-open write handles
-        // from that metadata rather than reuse the originals, since the txns register consumed them.
+        // `alter_table_desc`). We re-open write handles from that metadata rather than reuse any
+        // originals, since a conflicting register consumes them. Open them concurrently, since
+        // bootstrap registers many tables at once.
         let persist_client = self
             .persist
             .open(self.persist_location.clone())
             .await
             .expect("invalid persist location");
-        let mut table_registers = Vec::with_capacity(ids.len());
-        for id in ids {
-            let (data_shard, relation_desc) = {
-                let metadata = &self.collection(id)?.collection_metadata;
-                (metadata.data_shard, metadata.relation_desc.clone())
-            };
-            let write = self
-                .open_data_handles(&id, data_shard, relation_desc, &persist_client)
-                .await;
-            table_registers.push((id, write));
-        }
-        // Runtime DDL is never in read-only mode, so there are no migrated tables to filter out.
-        self.register_table_writes(register_ts, table_registers, &BTreeSet::new())
+        let persist_client = &persist_client;
+
+        let this = &*self;
+        use futures::stream::{StreamExt, TryStreamExt};
+        let table_registers: Vec<_> = futures::stream::iter(ids)
+            .map(|id| async move {
+                let (data_shard, relation_desc) = {
+                    let metadata = &this.collection(id)?.collection_metadata;
+                    (metadata.data_shard, metadata.relation_desc.clone())
+                };
+                let write = this
+                    .open_data_handles(&id, data_shard, relation_desc, persist_client)
+                    .await;
+                Ok::<_, StorageError>((id, write))
+            })
+            .buffer_unordered(50)
+            .try_collect()
+            .await?;
+
+        self.persist_table_worker
+            .register(register_ts, table_registers)
             .await
+            .expect("table worker unexpectedly shut down")
     }
 
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError> {
@@ -3079,36 +3081,6 @@ where
             self.export(id)?;
         }
         Ok(())
-    }
-
-    /// Registers the given table write handles in the txns shard at `register_ts`.
-    ///
-    /// In read-only mode only migrated tables are registered. The read-only table worker keeps
-    /// their shard upper tracking the txns upper so they stay readable at a recent timestamp, which
-    /// lets dependent dataflows (re-)hydrate. Non-migrated tables are left out and never written to
-    /// in read-only mode.
-    ///
-    /// Returns `InvalidUppers` if `register_ts` is behind the txns upper. The worker rolls back its
-    /// bookkeeping in that case, so the caller can retry at a fresh timestamp.
-    async fn register_table_writes(
-        &self,
-        register_ts: Timestamp,
-        mut table_registers: Vec<(
-            GlobalId,
-            WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-        )>,
-        migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError> {
-        if self.read_only {
-            table_registers.retain(|(id, _write_handle)| migrated_storage_collections.contains(id));
-        }
-        if table_registers.is_empty() {
-            return Ok(());
-        }
-        self.persist_table_worker
-            .register(register_ts, table_registers)
-            .await
-            .expect("table worker unexpectedly shut down")
     }
 
     /// Opens a write and critical since handles for the given `shard`.

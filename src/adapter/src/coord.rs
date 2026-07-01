@@ -3400,6 +3400,11 @@ impl Coordinator {
             })
             .collect();
 
+        // Collect every storage collection we create so we can register the tables among them in
+        // the txns shard after all layers are set up (below). `register_table_collections` selects
+        // the `DataSource::Table` collections, so handing it source-fed tables and the like is fine.
+        let mut created_gids = Vec::new();
+
         while !pending.is_empty() {
             // Drain collections whose dependencies have all been registered already
             // (i.e., are not in `pending`).
@@ -3445,6 +3450,8 @@ impl Coordinator {
                 ready = mem::take(&mut pending).into_iter().collect();
             }
 
+            created_gids.extend(ready.iter().map(|(gid, _collection)| *gid));
+
             self.controller
                 .storage
                 .create_collections_for_bootstrap(
@@ -3456,6 +3463,15 @@ impl Coordinator {
                 .await
                 .unwrap_or_terminate("cannot fail to create collections");
         }
+
+        // Register the tables in the txns shard, making them available for writes. Bootstrap runs no
+        // group commits concurrently, so this cannot conflict with the off-loop committer. In
+        // read-only mode `register_table_collections` registers only migrated tables.
+        self.controller
+            .storage
+            .register_table_collections(register_ts, created_gids)
+            .await
+            .unwrap_or_terminate("cannot fail to register tables");
 
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
