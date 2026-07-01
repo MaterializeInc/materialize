@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: dfa6a85e5b
+revision: 9fa76fcc63
 ---
 
 # mz-sql::plan::statement::ddl
@@ -15,6 +15,7 @@ Iceberg sinks support two modes: `MODE UPSERT` (requires a key) and `MODE APPEND
 The `iceberg_sink_builder` function accepts an optional `storage_connection: Option<ResolvedItemName>` for the AWS storage credentials; when present it must resolve to an `Connection::Aws` item; when absent the resulting `IcebergSinkConnection` carries `storage_connection_id: None`.
 `REFRESH EVERY` intervals are validated to be at least 1 ms; intervals smaller than 1 ms produce a `PlanError`.
 `TOPIC METADATA REFRESH INTERVAL` for Kafka sources and sinks is validated to be between 1 second and 1 hour (inclusive); intervals outside this range produce a planning error (enforcing librdkafka runtime constraints at plan time for the upper bound, and preventing excessive refreshes or zero/negative durations for the lower bound).
+`plan_alter_cluster` rejects `ALTER CLUSTER ... WITH (...)` on unmanaged clusters: when the cluster is not managed, any non-empty `with_options` list produces the error `"ALTER... WITH not supported for unmanaged clusters"`.
 `plan_role_variable` (used by `plan_alter_role`) accepts a `StatementContext` and calls `vars::check_transaction_isolation_feature_flag` on any `SET` assignment, enforcing the same feature-flag gate as the `SET` and connection-option paths.
 `DROP … name1, name2, …` resolves all named items before running the non-cascade dependency check, so that two co-dependent items listed in the same statement do not block each other: dependents whose ids appear in the same drop set are excluded from `ensure_no_blocking_dependents`.
 `AvroSchema::Glue { connection, seed, .. }` in a source format is fully planned: the connection is resolved and must be a `Connection::GlueSchemaRegistry` item, and the `seed` must be present (populated by purification); a missing seed produces the error `"Avro Glue seed resolution has not been performed"`. The resulting `Schema` carries `wire_format: WireFormat::Glue { registry: Some(glue_connection_id) }`.
