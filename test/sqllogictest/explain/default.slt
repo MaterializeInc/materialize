@@ -453,41 +453,41 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %1[#0] » %0:t[#0{a}]
-        →Arranged materialize.public.t
+      →Differential Join %1:t[#0{a}] » %0[#0]
         →Distinct GroupAggregate
-          →Differential Cross Join %0[×] » %1:mv[×]
+          →Differential Cross Join %0:mv[×] » %1[×]
             after %1:
-              Project: #0
-              Filter: (#0{a} < #1{a})
+              Project: #1
+              Filter: (#1{a} < #0{a})
+            →Arrange (empty key)
+              →Fused with Child Map/Filter/Project
+                Project: #0
+                  →Read materialize.public.mv
             →Arrange (empty key)
               →Distinct GroupAggregate
                 →Fused with Child Map/Filter/Project
                   Project: #0
                     →Arranged materialize.public.t
                       Key: (#0{a})
-            →Arrange (empty key)
-              →Fused with Child Map/Filter/Project
-                Project: #0
-                  →Read materialize.public.mv
+        →Arranged materialize.public.t
   →Return
-    →Differential Join %1[#0] » %0:l0[#1]
-      →Arrange (#1)
-        →Stream l0
+    →Differential Join %1:l0[#1] » %0[#0]
       →Distinct GroupAggregate
-        →Differential Cross Join %0[×] » %1:mv[×]
+        →Differential Cross Join %0:mv[×] » %1[×]
           after %1:
-            Project: #0
-            Filter: (#0{b} > #1{b})
+            Project: #1
+            Filter: (#1{b} > #0{b})
+          →Arrange (empty key)
+            →Fused with Child Map/Filter/Project
+              Project: #1
+                →Read materialize.public.mv
           →Arrange (empty key)
             →Distinct GroupAggregate
               →Fused with Child Map/Filter/Project
                 Project: #1
                   →Read l0
-          →Arrange (empty key)
-            →Fused with Child Map/Filter/Project
-              Project: #1
-                →Read materialize.public.mv
+      →Arrange (#1)
+        →Stream l0
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***, differential join)
@@ -512,24 +512,26 @@ Explained Query:
       →Distinct GroupAggregate
         →Stream l0
     cte l2 =
-      →Arranged l1
+      →Arrange (#0{b})
+        →Fused with Child Map/Filter/Project
+          Filter: (#0{b}) IS NOT NULL
+            →Arranged l1
+              Key: (#0)
     cte l3 =
       →Consolidating Monotonic Top1
         Group By #0
-        →Differential Join %0:l2[#0] » %1:iv[#1{b}]
-          after %1:
-            Filter: (#0{b}) IS NOT NULL
-          →Arranged l2
+        →Differential Join %1:l2[#0{b}] » %0:iv[#1]
           →Arranged materialize.public.iv
+          →Arranged l2
     cte l4 =
       →Consolidating Monotonic Top1
         Group By #0
-        →Differential Join %0:l2[#0] » %1:mv[#1{b}]
-          →Arranged l2
-          →Arrange (#1{b})
+        →Differential Join %1:l2[#0{b}] » %0:mv[#1]
+          →Arrange (#1)
             →Read materialize.public.mv
+          →Arranged l2
   →Return
-    →Delta Join [%0:l0[#0] » %1[#0] » %2[#0]] [%1[#0] » %2[#0] » %0:l0[#0]] [%2[#0] » %1[#0] » %0:l0[#0]]
+    →Differential Join %2[#0] » %0:l0[#0] » %1[#0]
       →Arrange (#0)
         →Stream l0
       →Arrange (#0)
@@ -586,18 +588,16 @@ Explained Query:
           →Arranged materialize.public.t
             Key: (#0{a})
     cte l1 =
-      →Arrange (#1{b})
+      →Arrange (#1)
         →Stream l0
     cte l2 =
-      →Arrange (#0{b})
-        →Fused with Child Map/Filter/Project
-          Project: #1
-            →Read l0
-    cte l3 =
-      →Delta Join [%0:l1[#1{b}] » %1:l1[#1{b}] » %2:l2[#0{b}]] [%1:l1[#1{b}] » %0:l1[#1{b}] » %2:l2[#0{b}]] [%2:l2[#0{b}] » %0:l1[#1{b}] » %1:l1[#1{b}]]
+      →Differential Join %2:l0[#0{b}] » %1:l1[#1] » %0:l1[#1]
         →Arranged l1
         →Arranged l1
-        →Arranged l2
+        →Arrange (#0{b})
+          →Fused with Child Map/Filter/Project
+            Project: #1
+              →Read l0
   →Return
     →Union
       →Map/Filter/Project
@@ -605,19 +605,19 @@ Explained Query:
         Map: null, null
           →Consolidating Union
             →Negate Diffs
-              →Differential Join %1[#0] » %0:l2[#0{b}]
-                →Arranged l2
+              →Differential Join %1[#0] » %0:l1[#1]
+                →Arranged l1
                 →Distinct GroupAggregate
                   →Fused with Child Map/Filter/Project
                     Project: #1
-                      →Read l3
+                      →Read l2
             →Fused with Child Map/Filter/Project
               Project: ()
                 →Arranged materialize.public.t
                   Key: (#0{a})
       →Fused with Child Map/Filter/Project
         Project: #0, #2
-          →Read l3
+          →Read l2
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -753,46 +753,42 @@ FROM
 Explained Query:
   →With
     cte l0 =
-      →Fused with Child Map/Filter/Project
-        Project: #0
-          →Arranged materialize.public.t
-            Key: (#0{a})
-    cte l1 =
       →Arrange (empty key)
-        →Stream l0
-    cte l2 =
-      →Differential Join %1[#0] » %0:t[#0{a}]
-        after %0:
-          Project: #0, #2, #1
-          Filter: (#0 != #1{m})
         →Arranged materialize.public.t
+    cte l1 =
+      →Differential Join %1:t[#0{a}] » %0[#0]
+        after %0:
+          Filter: (#0{a} != #2{m})
         →Consolidating Monotonic GroupAggregate
           Aggregations: max
           Key:
             Project: #0
-          →Differential Cross Join %0[×] » %1:l1[×]
+          →Differential Cross Join %0[×] » %1:l0[×]
             →Arrange (empty key)
               →Distinct GroupAggregate
-                →Stream l0
-            →Arranged l1
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Arranged materialize.public.t
+                      Key: (#0{a})
+            →Arranged l0
+        →Arranged materialize.public.t
   →Return
-    →Differential Join %1[#0] » %0:l2[#0]
+    →Differential Join %1:l1[#0] » %0[#0]
       after %0:
-        Project: #0, #2, #3, #1
-        Filter: (#0 != #1{m})
-      →Arrange (#0)
-        →Stream l2
+        Filter: (#0{a} != #3{m})
       →Consolidating Monotonic GroupAggregate
         Aggregations: max
         Key:
           Project: #0
-        →Differential Cross Join %0[×] » %1:l1[×]
+        →Differential Cross Join %0[×] » %1:l0[×]
           →Arrange (empty key)
             →Distinct GroupAggregate
               →Fused with Child Map/Filter/Project
                 Project: #0
-                  →Read l2
-          →Arranged l1
+                  →Read l1
+          →Arranged l0
+      →Arrange (#0)
+        →Stream l1
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***, differential join)
@@ -810,10 +806,7 @@ Explained Query:
   →With
     cte l0 =
       →Arrange (empty key)
-        →Fused with Child Map/Filter/Project
-          Project: #0
-            →Arranged materialize.public.t
-              Key: (#0{a})
+        →Arranged materialize.public.t
   →Return
     →Differential Cross Join %0:l0[×] » %1:l0[×]
       →Arranged l0
@@ -844,10 +837,10 @@ Explained Query:
           →Arranged materialize.public.t
             Key: (#0{a})
     cte l1 =
-      →Arrange (#1{b})
+      →Arrange (#1)
         →Stream l0
   →Return
-    →Delta Join [%0:l1[#1{b}] » %1:l1[#1{b}] » %2:l0[#0{b}]] [%1:l1[#1{b}] » %0:l1[#1{b}] » %2:l0[#0{b}]] [%2:l0[#0{b}] » %0:l1[#1{b}] » %1:l1[#1{b}]]
+    →Differential Join %2:l0[#0{b}] » %1:l1[#1] » %0:l1[#1]
       →Arranged l1
       →Arranged l1
       →Arrange (#0{b})
@@ -887,20 +880,23 @@ FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
-  →Differential Join %0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{e}, #1{f}]
-    after %1:
-      Filter: (#0{a}) IS NOT NULL
-    →Arranged materialize.public.t
-    →Arranged materialize.public.u
-    →Arrange (#0{e}, #1{f})
+  →Delta Join [%0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{a}, #1{b}]] [%1:u[#0{c}] » %0:t[#0{a}] » %2:v[#0{a}, #1{b}]] [%2:v[#0{a}, #1{b}] » %1:u[#1{d}] » %0:t[#0{a}, #1{b}]]
+    →Arrange (#0{a}) (#0{a}, #1{b})
       →Fused with Child Map/Filter/Project
-        Filter: (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
+        Filter: (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
+          →Arranged materialize.public.t
+            Key: (#0{a})
+    →Arranged materialize.public.u
+    →Arrange (#0{a}, #1{b})
+      →Fused with Child Map/Filter/Project
+        Filter: (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
           →Arranged materialize.public.v
             Key: (#0{e})
 
 Used Indexes:
-  - materialize.public.t_a_idx (differential join)
-  - materialize.public.u_c_idx (differential join)
+  - materialize.public.t_a_idx (*** full scan ***)
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
   - materialize.public.v_e_idx (*** full scan ***)
 
 Target cluster: quickstart
@@ -915,20 +911,23 @@ FROM t, u, v
 WHERE a = c and d = e and b = f
 ----
 Explained Query:
-  →Differential Join %0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{e}, #1{f}]
-    after %1:
-      Filter: (#0{a}) IS NOT NULL
-    →Arranged materialize.public.t
-    →Arranged materialize.public.u
-    →Arrange (#0{e}, #1{f})
+  →Delta Join [%0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{a}, #1{b}]] [%1:u[#0{c}] » %0:t[#0{a}] » %2:v[#0{a}, #1{b}]] [%2:v[#0{a}, #1{b}] » %1:u[#1{d}] » %0:t[#0{a}, #1{b}]]
+    →Arrange (#0{a}) (#0{a}, #1{b})
       →Fused with Child Map/Filter/Project
-        Filter: (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
+        Filter: (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
+          →Arranged materialize.public.t
+            Key: (#0{a})
+    →Arranged materialize.public.u
+    →Arrange (#0{a}, #1{b})
+      →Fused with Child Map/Filter/Project
+        Filter: (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
           →Arranged materialize.public.v
             Key: (#0{e})
 
 Used Indexes:
-  - materialize.public.t_a_idx (differential join)
-  - materialize.public.u_c_idx (differential join)
+  - materialize.public.t_a_idx (*** full scan ***)
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
   - materialize.public.v_e_idx (*** full scan ***)
 
 Target cluster: quickstart
@@ -996,11 +995,11 @@ FROM t, u, v
 WHERE b = c and d = e
 ----
 Explained Query:
-  →Delta Join [%0:t[#1{b}] » %1:u[#0{c}] » %2:v[#0{e}]] [%1:u[#0{c}] » %0:t[#1{b}] » %2:v[#0{e}]] [%2:v[#0{e}] » %1:u[#1{d}] » %0:t[#1{b}]]
+  →Delta Join [%0:t[#1] » %1:u[#0] » %2:v[#0]] [%1:u[#0] » %0:t[#1] » %2:v[#0]] [%2:v[#0] » %1:u[#1] » %0:t[#1]]
     path %0:
       after %1:
         Project: #1, #0, #2
-        Filter: (#2{d}) IS NOT NULL
+        Filter: (#2{b}) IS NOT NULL
     path %1:
       after %0:
         Project: #2, #0, #1
@@ -1008,7 +1007,7 @@ Explained Query:
     path %2:
       after %1:
         Project: #2, #0, #1
-        Filter: (#0{d}) IS NOT NULL
+        Filter: (#0{b}) IS NOT NULL
       after %0:
         Project: #3, #0..=#2
         Filter: (#0{b}) IS NOT NULL
@@ -1034,11 +1033,11 @@ FROM t, u, v
 WHERE b = c and d = e
 ----
 Explained Query:
-  →Delta Join [%0:t[#1{b}] » %1:u[#0{c}] » %2:v[#0{e}]] [%1:u[#0{c}] » %0:t[#1{b}] » %2:v[#0{e}]] [%2:v[#0{e}] » %1:u[#1{d}] » %0:t[#1{b}]]
+  →Delta Join [%0:t[#1] » %1:u[#0] » %2:v[#0]] [%1:u[#0] » %0:t[#1] » %2:v[#0]] [%2:v[#0] » %1:u[#1] » %0:t[#1]]
     path %0:
       after %1:
         Project: #1, #0, #2
-        Filter: (#2{d}) IS NOT NULL
+        Filter: (#2{b}) IS NOT NULL
     path %1:
       after %0:
         Project: #2, #0, #1
@@ -1046,7 +1045,7 @@ Explained Query:
     path %2:
       after %1:
         Project: #2, #0, #1
-        Filter: (#0{d}) IS NOT NULL
+        Filter: (#0{b}) IS NOT NULL
       after %0:
         Project: #3, #0..=#2
         Filter: (#0{b}) IS NOT NULL
@@ -1072,7 +1071,7 @@ FROM t, u, v
 WHERE a = c and b = e
 ----
 Explained Query:
-  →Delta Join [%0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{e}]] [%1:u[#0{c}] » %0:t[#0{a}] » %2:v[#0{e}]] [%2:v[#0{e}] » %0:t[#1{b}] » %1:u[#0{c}]]
+  →Delta Join [%0:t[#0] » %1:u[#0] » %2:v[#0]] [%1:u[#0] » %0:t[#0] » %2:v[#0]] [%2:v[#0] » %0:t[#1] » %1:u[#0]]
     path %1:
       after %0:
         Project: #0, #2, #1
@@ -1199,10 +1198,10 @@ WHERE
 Explained Query:
   →With
     cte l0 =
-      →Arrange (#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16})
+      →Arrange (#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16)
         →Read materialize.public.r
   →Return
-    →Differential Join %0:l0[#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}] » %1:l0[#0{f0}, #2{f2}..=#4{f4}, #6{f6}, #8{f8}, #9{f9}, #11{f11}..=#13{f13}, #15{f15}, #16{f16}]
+    →Differential Join %1:l0[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16] » %0:l0[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16]
       →Arranged l0
       →Arranged l0
 
@@ -1353,8 +1352,8 @@ FROM t, u
 WHERE t.b = u.c;
 ----
 Explained Query:
-  →Differential Join %1:u[#0{c}] » %0:t[#1{b}]
-    →Arrange (#1{b})
+  →Differential Join %1:u[#0{c}] » %0:t[#1]
+    →Arrange (#1)
       →Read materialize.public.t
     →Arranged materialize.public.u
 
@@ -1375,8 +1374,8 @@ FROM t, u
 WHERE t.b = u.d;
 ----
 Explained Query:
-  →Differential Join %1:u[#1{d}] » %0:t[#1{b}]
-    →Arrange (#1{b})
+  →Differential Join %1:u[#1{d}] » %0:t[#1]
+    →Arrange (#1)
       →Read materialize.public.t
     →Arranged materialize.public.u
 
@@ -1408,12 +1407,12 @@ FROM t, u
 WHERE t.a = u.c
 ----
 Explained Query:
-  →Differential Join %0:t[#0{a}] » %1:u[#0{c}]
+  →Differential Join %1:u[#0{a}] » %0:t[#0]
     →Arranged materialize.public.t
-    →Arrange (#0{c})
+    →Arrange (#0{a})
       →Fused with Child Map/Filter/Project
         Project: #1, #0
-        Filter: (#1{c}) IS NOT NULL
+        Filter: (#1{a}) IS NOT NULL
           →Arranged materialize.public.u
             Key: (#1{d})
 
@@ -1437,7 +1436,7 @@ Explained Query:
     cte l0 =
       →Arranged materialize.public.t
   →Return
-    →Delta Join [%0:l0[#0{a}] » %1:l0[#0{a}] » %2:l0[#0{a}]] [%1:l0[#0{a}] » %0:l0[#0{a}] » %2:l0[#0{a}]] [%2:l0[#0{a}] » %0:l0[#0{a}] » %1:l0[#0{a}]]
+    →Delta Join [%0:l0[#0] » %1:l0[#0] » %2:l0[#0]] [%1:l0[#0] » %0:l0[#0] » %2:l0[#0]] [%2:l0[#0] » %0:l0[#0] » %1:l0[#0]]
       path %1:
         after %0:
           Project: #0, #2, #0, #1
@@ -1475,11 +1474,11 @@ Explained Query:
   →Return
     →Distinct GroupAggregate
       →Union
-        →Differential Join %0:l0[#0{a}] » %1:l0[#0{a}]
-          after %1:
+        →Differential Join %1:l0[#0{a}] » %0:l0[#0]
+          after %0:
             Project: #3, #4
             Filter: (#0{a}) IS NOT NULL
-            Map: (#0{a} + #0{a}), (#1{b} + #2{b})
+            Map: (#0{a} + #0{a}), (#2{b} + #1{b})
           →Arranged l0
           →Arranged l0
         →Fused with Child Map/Filter/Project
@@ -1508,7 +1507,7 @@ UNION
 Explained Query:
   →With
     cte l0 =
-      →Arrange (#1{b})
+      →Arrange (#1)
         →Fused with Child Map/Filter/Project
           Filter: (#1{b}) IS NOT NULL
             →Arranged materialize.public.t
@@ -1516,10 +1515,10 @@ Explained Query:
   →Return
     →Distinct GroupAggregate
       →Union
-        →Differential Join %0:l0[#1{b}] » %1:l0[#1{b}]
-          after %1:
+        →Differential Join %1:l0[#1] » %0:l0[#1]
+          after %0:
             Project: #3, #4
-            Map: (#1{a} + #2{a}), (#0{b} + #0{b})
+            Map: (#2{a} + #1{a}), (#0{b} + #0{b})
           →Arranged l0
           →Arranged l0
         →Fused with Child Map/Filter/Project
@@ -1559,15 +1558,15 @@ UNION
 Explained Query:
   →With
     cte l0 =
-      →Arrange (#1{b})
+      →Arrange (#1)
         →Arranged materialize.public.t_non_null
   →Return
     →Distinct GroupAggregate
       →Union
-        →Differential Join %0:l0[#1{b}] » %1:l0[#1{b}]
-          after %1:
+        →Differential Join %1:l0[#1] » %0:l0[#1]
+          after %0:
             Project: #3, #4
-            Map: (#1{a} + #2{a}), (#0{b} + #0{b})
+            Map: (#2{a} + #1{a}), (#0{b} + #0{b})
           →Arranged l0
           →Arranged l0
         →Fused with Child Map/Filter/Project
@@ -1597,11 +1596,11 @@ UNION
 Explained Query:
   →Distinct GroupAggregate
     →Union
-      →Differential Join %0:t_non_null[#1{b}] » %1:t_non_null[(#1{b} + 1)]
-        after %1:
+      →Differential Join %1:t_non_null[(#1{b} + 1)] » %0:t_non_null[#1]
+        after %0:
           Project: #4, #5
-          Map: (#1{a} + #2{a}), (#0{b} + #3{b})
-        →Arrange (#1{b})
+          Map: (#3{a} + #1{a}), (#0{b} + #2{b})
+        →Arrange (#1)
           →Arranged materialize.public.t_non_null
         →Arrange ((#1{b} + 1))
           →Arranged materialize.public.t_non_null
@@ -1831,8 +1830,8 @@ FROM t5, t6
 WHERE x = a AND b IN (8,9);
 ----
 Explained Query:
-  →Differential Join %1:t6[#0{a}] » %0:t5[#0{x}]
-    →Arrange (#0{x})
+  →Differential Join %1:t6[#0{a}] » %0:t5[#0]
+    →Arrange (#0)
       →Read materialize.public.t5
     →Arrange (#0{a})
       →Read materialize.public.t6
@@ -1853,8 +1852,8 @@ FROM t5, t6
 WHERE x = a AND b IN (8,9);
 ----
 Explained Query:
-  →Differential Join %1:t6[#0{a}] » %0:t5[#0{x}]
-    →Arrange (#0{x})
+  →Differential Join %1:t6[#0{a}] » %0:t5[#0]
+    →Arrange (#0)
       →Read materialize.public.t5
     →Arrange (#0{a})
       →Read materialize.public.t6
@@ -2004,31 +2003,33 @@ FROM t4;
 Explained Query:
   →With
     cte l0 =
+      →Read materialize.public.t4
+    cte l1 =
       →Non-monotonic TopK
         Offset 1
         →Fused with Child Map/Filter/Project
           Project: #2
           Map: (#0{a} * #1{b})
-            →Read materialize.public.t4
-    cte l1 =
+            →Read l0
+    cte l2 =
       →Union
-        →Stream l0
+        →Stream l1
         →Table Function guard_subquery_size(#0)
           →Accumulable GroupAggregate
             Simple aggregates: count(*)
             →Fused with Child Map/Filter/Project
               Project: ()
-                →Read l0
+                →Read l1
   →Return
-    →Differential Cross Join %0:t4[×] » %1[×]
+    →Differential Cross Join %0:l0[×] » %1[×]
       after %1:
         Project: #3, #2
         Map: (#0{a} + #1{b})
       →Arrange (empty key)
-        →Read materialize.public.t4
+        →Stream l0
       →Arrange (empty key)
         →Union
-          →Stream l1
+          →Stream l2
           →Map/Filter/Project
             Project: #0
             Map: null
@@ -2038,7 +2039,7 @@ Explained Query:
                     →Distinct GroupAggregate
                       →Fused with Child Map/Filter/Project
                         Project: ()
-                          →Read l1
+                          →Read l2
                 →Constant (1 row)
 
 Source materialize.public.t4
@@ -2066,16 +2067,14 @@ EXPLAIN
 SELECT * FROM tnn JOIN unn USING (x, y);
 ----
 Explained Query:
-  →Differential Join %0:tnn[#2{y}, #1{x}] » %1:unn[#0{y}, #1{x}]
-    →Arrange (#2{y}, #1{x})
-      →Fused with Parent Map/Filter/Project
-        Project: #2, #0, #1
-        →Arranged materialize.public.tnn
-    →Arranged materialize.public.unn
+  →Differential Join %1:unn[#1{x}, #0{x}] » %0:tnn[#1, #2]
+    →Arranged materialize.public.tnn
+    →Arrange (#1{x}, #0{x})
+      →Arranged materialize.public.unn
 
 Used Indexes:
-  - materialize.public.tnn_idx (*** full scan ***)
-  - materialize.public.unn_idx (differential join)
+  - materialize.public.tnn_idx (differential join)
+  - materialize.public.unn_idx (*** full scan ***)
 
 Target cluster: no_replicas
 

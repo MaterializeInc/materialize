@@ -33,12 +33,10 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   Project (#0{f1}..=#2{f1}, #1{f2}, #0{f1}, #5{f2}) // { arity: 6 }
     Filter (#0{f1} <= #2{f1}) // { arity: 6 }
-      Join on=(#0{f1} = #4{f1} AND #1{f2} = #3{f2}) type=delta // { arity: 6 }
+      Join on=(#0{f1} = #4{f1} AND #1{f2} = #3{f2}) type=differential // { arity: 6 }
         implementation
-          %0:t1 » %2:t3[#0{f1}]Kif » %1:t2[#1{f2}]K
-          %1:t2 » %0:t1[#1{f2}]Kif » %2:t3[#0{f1}]Kif
-          %2:t3 » %0:t1[#0{f1}]Kif » %1:t2[#1{f2}]K
-        ArrangeBy keys=[[#0{f1}], [#1{f2}]] // { arity: 2 }
+          %2:t3[#0{f1}]K » %0:t1[#0]K » %1:t2[#1]K
+        ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Filter (#0{f1} > 0) AND (#1{f2}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
         ArrangeBy keys=[[#1{f2}]] // { arity: 2 }
@@ -120,9 +118,9 @@ Explained Query:
     Filter (#5{l_shipdate} != #11{o_orderdate}) AND (#14{c_acctbal} >= #10{o_totalprice}) // { arity: 15 }
       Join on=(#0{l_orderkey} = #8{o_orderkey} AND date_to_timestamp(#11{o_orderdate}) = (#5{l_shipdate} - 9 months)) type=delta // { arity: 15 }
         implementation
-          %0:lineitem » %1:orders[#0{o_orderkey}, date_to_timestamp(#3{o_orderdate})]KK » %2:customer[×]
+          %0:lineitem » %1:orders[#0{l_orderkey}, date_to_timestamp(#3{o_orderdate})]KK » %2:customer[×]
           %1:orders » %0:lineitem[#0{l_orderkey}, (#5{l_shipdate} - 9 months)]KK » %2:customer[×]
-          %2:customer » %0:lineitem[×] » %1:orders[#0{o_orderkey}, date_to_timestamp(#3{o_orderdate})]KK
+          %2:customer » %0:lineitem[×] » %1:orders[#0{l_orderkey}, date_to_timestamp(#3{o_orderdate})]KK
         ArrangeBy keys=[[], [#0{l_orderkey}, (#5{l_shipdate} - 9 months)]] // { arity: 8 }
           ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }
         ArrangeBy keys=[[#0{o_orderkey}, date_to_timestamp(#3{o_orderdate})]] // { arity: 4 }
@@ -156,28 +154,25 @@ Explained Query:
     cte l1 =
       Reduce aggregates=[min(#0{o_orderkey})] // { arity: 1 }
         Project (#1{o_orderkey}) // { arity: 1 }
-          Join on=(#0{l_extendedprice} = #2{o_totalprice} AND #1{o_orderkey} = #3{l_orderkey}) type=delta // { arity: 4 }
-            implementation
-              %0:lineitem » %1:orders[#1{o_totalprice}]Keiif » %2[#0]K
-              %1:orders » %0:lineitem[#0{l_extendedprice}]Kef » %2[#0]K
-              %2 » %1:orders[#0{o_orderkey}]KAeiif » %0:lineitem[#0{l_extendedprice}]Kef
-            ArrangeBy keys=[[#0{l_extendedprice}]] // { arity: 1 }
-              Project (#4{l_extendedprice}) // { arity: 1 }
-                Filter (#6{l_commitdate} = 1997-01-25) // { arity: 8 }
-                  ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 8 }
-            ArrangeBy keys=[[#0{o_orderkey}], [#1{o_totalprice}]] // { arity: 2 }
-              Project (#0{o_orderkey}, #2{o_totalprice}) // { arity: 2 }
-                Filter (#0{o_orderkey} <= 195) AND (#0{o_orderkey} >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#3{o_orderdate})) // { arity: 4 }
-                  ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
-            ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 1 }
-              Union // { arity: 1 }
-                Get l0 // { arity: 1 }
-                Project (#1) // { arity: 1 }
-                  Filter (#1 <= 195) AND (#1 >= 38) // { arity: 2 }
-                    FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
-                      Reduce aggregates=[count(*)] // { arity: 1 }
-                        Project () // { arity: 0 }
-                          Get l0 // { arity: 1 }
+          Filter (#1{o_orderkey} <= 195) AND (#1{o_orderkey} >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#4{o_orderdate})) // { arity: 6 }
+            Join on=(#0{l_extendedprice} = #3{o_totalprice} AND #1{o_orderkey} = #5{l_orderkey}) type=differential // { arity: 6 }
+              implementation
+                %2[#0{l_extendedprice}]K » %1:orders[#0]KA » %0:lineitem[#0]K
+              ArrangeBy keys=[[#0{l_extendedprice}]] // { arity: 1 }
+                Project (#4{l_extendedprice}) // { arity: 1 }
+                  Filter (#6{l_commitdate} = 1997-01-25) // { arity: 8 }
+                    ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 8 }
+              ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 4 }
+                ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 4 }
+              ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 1 }
+                Union // { arity: 1 }
+                  Get l0 // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Filter (#1{o_orderkey} <= 195) AND (#1{o_orderkey} >= 38) // { arity: 2 }
+                      FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
+                        Reduce aggregates=[count(*)] // { arity: 1 }
+                          Project () // { arity: 0 }
+                            Get l0 // { arity: 1 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l1 // { arity: 1 }
@@ -190,7 +185,7 @@ Explained Query:
             - ()
 
 Used Indexes:
-  - materialize.public.pk_orders_orderkey (*** full scan ***)
+  - materialize.public.pk_orders_orderkey (differential join)
   - materialize.public.fk_lineitem_orderkey (*** full scan ***, lookup)
 
 Target cluster: quickstart
@@ -213,11 +208,11 @@ Explained Query:
           - (134)
   Return // { arity: 3 }
     Project (#1{l_partkey}, #0{l_orderkey}, #1{l_partkey}) // { arity: 3 }
-      Join on=(#2{l_extendedprice} = #4{o_totalprice} AND #3{l_commitdate} = #5{o_orderdate}) type=delta // { arity: 6 }
+      Join on=(#2{l_extendedprice} = #4{o_totalprice} AND #3{l_commitdate} = #5{o_orderdate}) type=delta // { arity: 9 }
         implementation
-          %0:lineitem » %1:orders[#0{o_totalprice}, #1{o_orderdate}]KKef » %2:customer[×]e
-          %1:orders » %0:lineitem[#2{l_extendedprice}, #3{l_commitdate}]KKf » %2:customer[×]e
-          %2:customer » %1:orders[×]ef » %0:lineitem[#2{l_extendedprice}, #3{l_commitdate}]KKf
+          %0:lineitem » %1:orders[#0{l_commitdate}, #1{l_commitdate}]KKef » %2:customer[×]e
+          %1:orders » %0:lineitem[#2{l_commitdate}, #3{l_commitdate}]KKf » %2:customer[×]e
+          %2:customer » %1:orders[×]ef » %0:lineitem[#2{l_commitdate}, #3{l_commitdate}]KKf
         ArrangeBy keys=[[#2{l_extendedprice}, #3{l_commitdate}]] // { arity: 4 }
           Project (#0{l_orderkey}, #1{l_partkey}, #4{l_extendedprice}, #6{l_commitdate}) // { arity: 4 }
             Filter (#4{l_extendedprice} = (#4{l_extendedprice} % 5)) // { arity: 8 }
@@ -226,8 +221,8 @@ Explained Query:
           Project (#2{o_totalprice}, #3{o_orderdate}) // { arity: 2 }
             Filter (#2{o_totalprice} = (#2{o_totalprice} % 5)) // { arity: 5 }
               ReadIndex on=materialize.public.orders fk_orders_custkey=[lookup values=<Get l0>] // { arity: 5 }
-        ArrangeBy keys=[[]] // { arity: 0 }
-          Project () // { arity: 0 }
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Project (#0{c_custkey}..=#2{c_acctbal}) // { arity: 3 }
             ReadIndex on=materialize.public.customer pk_customer_custkey=[lookup values=<Get l0>] // { arity: 4 }
 
 Used Indexes:

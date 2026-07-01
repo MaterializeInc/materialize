@@ -248,25 +248,25 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW sections_of_top_3_courses_per_teacher;
 ----
 materialize.public.sections_of_top_3_courses_per_teacher:
-  Project (#0{id}, #2{id})
-    Join on=(#0{id} = #1{id}) type=differential
-      ArrangeBy keys=[[#0{id}]]
-        Project (#0{id})
-          ReadStorage materialize.public.teachers
+  Project (#0{id}, #1{id})
+    Join on=(#0{id} = #2{id}) type=differential
       ArrangeBy keys=[[#0{id}]]
         Project (#0{id}, #1{id})
           TopK group_by=[#0{id}] order_by=[#2{course_id} desc nulls_first] limit=3 exp_group_size=1000
-            Project (#0{id}, #1{id}, #3{course_id})
-              Join on=(#0{id} = #2{teacher_id}) type=differential
+            Project (#3{id}, #0{id}, #2{course_id})
+              Join on=(#1{teacher_id} = #3{id}) type=differential
+                ArrangeBy keys=[[#1{teacher_id}]]
+                  Project (#0{id}..=#2{course_id})
+                    Filter (#1{teacher_id}) IS NOT NULL
+                      ReadStorage materialize.public.sections
                 ArrangeBy keys=[[#0{id}]]
                   Distinct project=[#0{id}]
                     Project (#0{id})
                       Filter (#0{id}) IS NOT NULL
                         ReadStorage materialize.public.teachers
-                ArrangeBy keys=[[#1{teacher_id}]]
-                  Project (#0{id}..=#2{course_id})
-                    Filter (#1{teacher_id}) IS NOT NULL
-                      ReadStorage materialize.public.sections
+      ArrangeBy keys=[[#0{id}]]
+        Project (#0{id})
+          ReadStorage materialize.public.teachers
 
 Source materialize.public.teachers
 Source materialize.public.sections
@@ -297,26 +297,26 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW max_sections_of_top_3_courses_per_teacher;
 ----
 materialize.public.max_sections_of_top_3_courses_per_teacher:
-  Project (#0{id}, #2{max_id})
-    Join on=(#0{id} = #1{id}) type=differential
-      ArrangeBy keys=[[#0{id}]]
-        Project (#0{id})
-          ReadStorage materialize.public.teachers
+  Project (#0{id}, #1{max_id})
+    Join on=(#0{id} = #2{id}) type=differential
       ArrangeBy keys=[[#0{id}]]
         Project (#0{id}, #2{max_id})
           TopK group_by=[#0{id}] order_by=[#1{course_id} desc nulls_first] limit=3 exp_group_size=20
             Reduce group_by=[#0{id}, #2{course_id}] aggregates=[max(#1{id})] exp_group_size=1000
-              Project (#0{id}, #1{id}, #3{course_id})
-                Join on=(#0{id} = #2{teacher_id}) type=differential
+              Project (#3{id}, #0{id}, #2{course_id})
+                Join on=(#1{teacher_id} = #3{id}) type=differential
+                  ArrangeBy keys=[[#1{teacher_id}]]
+                    Project (#0{id}..=#2{course_id})
+                      Filter (#1{teacher_id}) IS NOT NULL
+                        ReadStorage materialize.public.sections
                   ArrangeBy keys=[[#0{id}]]
                     Distinct project=[#0{id}]
                       Project (#0{id})
                         Filter (#0{id}) IS NOT NULL
                           ReadStorage materialize.public.teachers
-                  ArrangeBy keys=[[#1{teacher_id}]]
-                    Project (#0{id}..=#2{course_id})
-                      Filter (#1{teacher_id}) IS NOT NULL
-                        ReadStorage materialize.public.sections
+      ArrangeBy keys=[[#0{id}]]
+        Project (#0{id})
+          ReadStorage materialize.public.teachers
 
 Source materialize.public.teachers
 Source materialize.public.sections

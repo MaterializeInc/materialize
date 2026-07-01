@@ -1063,19 +1063,19 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SHOW VIE
 Explained Query:
   With
     cte l0 =
-      Project (#0{id}..=#2{name}, #4{comment})
-        Join on=(#0{id} = #3{id}) type=differential
-          ArrangeBy keys=[[#0{id}]]
-            Project (#0{id}, #2{schema_id}, #3{name})
-              ReadStorage mz_catalog.mz_views
+      Project (#0{id}, #3{name})
+        Filter (#2{schema_id} = "u3")
+          ReadStorage mz_catalog.mz_views
+    cte l1 =
+      Project (#2{id}..=#4{name}, #1{comment})
+        Join on=(#0{id} = #2{id}) type=differential
           ArrangeBy keys=[[#0{id}]]
             Project (#0{id}, #3{comment})
               Filter (#2{object_sub_id}) IS NULL AND (#1{object_type} = "view")
                 ReadStorage mz_internal.mz_comments
-    cte l1 =
-      Project (#0{id}, #3{name})
-        Filter (#2{schema_id} = "u3")
-          ReadStorage mz_catalog.mz_views
+          ArrangeBy keys=[[#0{id}]]
+            Project (#0{id}, #2{schema_id}, #3{name})
+              ReadStorage mz_catalog.mz_views
   Return
     Project (#0{name}, #2)
       Map (coalesce(#1{comment}, ""))
@@ -1086,16 +1086,16 @@ Explained Query:
                 Project (#1{name})
                   Join on=(#0{id} = #2{id}) type=differential
                     ArrangeBy keys=[[#0{id}]]
-                      Get l1
+                      Get l0
                     ArrangeBy keys=[[#0{id}]]
                       Distinct project=[#0{id}]
                         Project (#0{id})
-                          Get l0
+                          Get l1
               Project (#1{name})
-                Get l1
+                Get l0
           Project (#2{name}, #3{comment})
             Filter (#1{schema_id} = "u3")
-              Get l0
+              Get l1
 
 Source mz_catalog.mz_views
 Source mz_internal.mz_comments

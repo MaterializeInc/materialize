@@ -1,0 +1,490 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+
+# Equality-preserving rewrites over a subset of MIR relational expressions.
+#
+# This file is the single source of truth: the Rust optimizer in `src/` parses
+# it to build the rewrite engine, and `gen-lean` emits one Lean 4 theorem per
+# rule (`lean/MirRewrite/Generated.lean`) so the semantic-preservation claims
+# can be machine-checked.
+#
+# Semantics (see lean/MirRewrite/Semantics.lean): a relation denotes a
+# multiplicity function `Row -> Int` (a signed multiset, matching differential
+# dataflow). Every rule below is an identity of those functions, so it never
+# changes results — it only changes evaluation cost.
+#
+# The rules are deliberately *relational*: scalar payloads (predicates, map
+# expressions, projections, equivalences) are moved around as opaque whole
+# lists, never destructured.
+
+# Two consecutive filters are one filter of the conjoined predicates.
+# Fewer operators => strictly cheaper.
+# Guard: do not fire when r is already empty. When r is empty the inner
+# filter is already in the same empty e-class as its input (via
+# filter_empty or empty_false_filter), which would make the outer filter
+# also collapse into that class. Applying merge_filters in that situation
+# produces a new Filter node in the same self-referential class, causing
+# repeated application with ever-growing predicate lists. The guard is
+# semantically safe: when r is empty both sides of the rule are empty
+# regardless, so skipping the merge changes nothing.
+rule merge_filters {
+    doc "filter(p, filter(q, r)) = filter(p && q, r)"
+    colored
+    Filter[p] (Filter[q] r) => Filter[concat(q, p)] r
+    where not_rel_empty(r)
+}
+
+# Two consecutive projections compose into one.
+rule fuse_projects {
+    doc "project(a, project(b, r)) = project(b . a, r)"
+    Project[a] (Project[b] r) => Project[compose(a, b)] r
+}
+
+# An identity projection is a no-op: drop it. Fired when `fuse_projects`
+# composes a swap and its inverse into the identity permutation, e.g. after
+# `commute_binary_join` fuses with a swap-ordering outer project. Without this
+# rule the composed identity `Project[id](r)` would remain, costing an extra
+# time term and node relative to `r` itself.
+rule drop_identity_project {
+    doc "project([0..n], r) = r  (identity projection is the identity)"
+    Project[p] r => r
+    where identity_projection(p, r)
+}
+
+# A filter that only reads input columns can sink below a map (which only
+# *appends* columns), so the map processes the filtered rows. Cost-neutral in
+# the worst case, but always valid and never harmful.
+# Guard: do not relocate an error-bearing predicate (see no_error). Moving an
+# error filter toward the leaves can expose it to a downstream constant fold
+# that raises it at plan time, mirroring why production predicate_pushdown
+# refuses to push literal errors freely.
+rule push_filter_through_map {
+    doc "filter(p, map(s, r)) = map(s, filter(p, r))  when p reads only r's columns"
+    colored
+    Filter[p] (Map[s] r) => Map[s] (Filter[p] r)
+    where uses_only_input(p, r)
+    where no_error(p)
+}
+
+# FlatMap appends func-output columns exactly as Map appends scalar columns, so
+# a predicate reading only input columns sinks below the FlatMap, letting it
+# process the filtered rows. Cost-neutral in the worst case, but always valid.
+# Guard: do not relocate an error-bearing predicate (see no_error). Moving an
+# error filter toward the leaves can expose it to a downstream constant fold
+# that raises it at plan time, mirroring why production predicate_pushdown
+# refuses to push literal errors freely.
+rule push_filter_past_flatmap {
+    doc "filter(p, flatmap(f, es, r)) = flatmap(f, es, filter(p, r))  when p reads only r's columns"
+    colored
+    Filter[p] (FlatMap[f, es] r) => FlatMap[f, es] (Filter[p] r)
+    where uses_only_input(p, r)
+    where no_error(p)
+}
+
+# A filter distributes over a (binary) union. This *increases* the operator
+# count on its own, so a greedy cost-monotone optimizer will never take it —
+# yet it unlocks `merge_filters` in each branch, for a net win. Saturation finds
+# the win; greedy gets stuck. (A list-mapping combinator would generalize this
+# to n-ary unions.)
+# Guard `no_error(p)`: distributing an error filter into both branches would
+# push it toward the leaves of each branch (via the per-branch movement rules),
+# exposing it to a downstream constant fold. See `no_error` in dsl.rs.
+rule distribute_filter_union {
+    doc "filter(p, a + b) = filter(p, a) + filter(p, b)  when no predicate is known-false"
+    colored
+    Filter[p] (Union(a, b)) => Union(Filter[p] a, Filter[p] b)
+    where no_false(p)
+    where no_error(p)
+}
+
+# Unions are associative; flatten nested binary unions into one n-ary union.
+rule flatten_union {
+    doc "a + (b + c) = a + b + c"
+    Union(a, Union(b, c)) => Union(a, b, c)
+}
+
+# Double negation cancels.
+rule negate_negate {
+    doc "negate(negate(r)) = r"
+    Negate (Negate r) => r
+}
+
+# Threshold is idempotent (keeping positive-count rows twice = once).
+rule threshold_idempotent {
+    doc "threshold(threshold(r)) = threshold(r)"
+    Threshold (Threshold r) => Threshold r
+}
+
+# Fuse cascading maps (mirrors transform/fusion/map.rs). A `Map` only *appends*
+# columns, so the outer map's column references keep their indices over the
+# fused input — no reindexing needed, just like filter fusion.
+rule fuse_maps {
+    doc "map(s2, map(s1, r)) = map(s1 ++ s2, r)"
+    Map[s2] (Map[s1] r) => Map[concat(s1, s2)] r
+}
+
+# Filter commutes through Negate (the predicate mask is independent of the
+# multiplicity's sign). A movement rule, like predicate_pushdown.
+# Guard `no_error(p)`: production predicate_pushdown explicitly refuses to push
+# a literal error past a Negate (see its Negate arm and database-issues/5691),
+# because the error stream cannot be negated coherently and the relocated error
+# can be folded to a plan-time failure. See `no_error` in dsl.rs.
+rule push_filter_through_negate {
+    doc "filter(p, negate(r)) = negate(filter(p, r))"
+    colored
+    Filter[p] (Negate r) => Negate (Filter[p] r)
+    where no_error(p)
+}
+
+# Filter commutes through Threshold (filtering rows then dropping non-positive
+# multiplicities = the other order).
+# Guard `no_error(p)`: see `push_filter_through_negate`. Moving an error filter
+# below the threshold relocates it toward the leaves where it can be folded.
+rule push_filter_through_threshold {
+    doc "filter(p, threshold(r)) = threshold(filter(p, r))"
+    colored
+    Filter[p] (Threshold r) => Threshold (Filter[p] r)
+    where no_error(p)
+}
+
+# Negate distributes over Union (mirrors compound/union.rs, which distributes a
+# negated union into its parent). -(a + b) = (-a) + (-b).
+rule distribute_negate_union {
+    doc "negate(a + b) = negate(a) + negate(b)"
+    Negate (Union(a, b)) => Union(Negate a, Negate b)
+}
+
+# Push a filter that only reads the *first* join input's columns onto that
+# input (a slice of predicate_pushdown). The first input occupies columns
+# 0..arity(a) in the join's output, so those indices are unchanged below the
+# join, no reindexing.
+# Guard `no_error(p)`: pushing an error filter into a join input relocates it
+# toward the leaves, where a downstream fold (e.g. the join's constant-error
+# handling in fold_constants) can raise it at plan time. See `no_error`.
+rule push_filter_into_join_first {
+    doc "filter(p, join(a, rest)) = join(filter(p, a), rest)  when p reads only a's columns"
+    colored
+    Filter[p] (Join[e](a, rest...)) => Join[e](Filter[p] a, rest...)
+    where uses_only_input(p, a)
+    where no_error(p)
+}
+
+# --- n-ary variants, using the list-map combinator `map(F[_], xs)` ----------
+# These generalize the binary rules above to the variadic Union/Join that MIR
+# actually produces. They are provable by induction on the input list (the
+# binary forms above carry the machine-checked proofs).
+
+# Distribute a filter over an n-ary union.
+# Guard `no_error(p)`: see `distribute_filter_union`.
+rule distribute_filter_union_nary {
+    doc "filter(p, a1 + .. + ak) = filter(p, a1) + .. + filter(p, ak)  when no predicate is known-false"
+    colored
+    Filter[p] (Union(xs...)) => Union(map(Filter[p] _, xs))
+    where no_false(p)
+    where no_error(p)
+}
+
+# Distribute negation over an n-ary union.
+rule distribute_negate_union_nary {
+    doc "negate(a1 + .. + ak) = negate(a1) + .. + negate(ak)"
+    Negate (Union(xs...)) => Union(map(Negate _, xs))
+}
+
+# Flatten a union nested as the first arm of another union (n-ary).
+rule flatten_union_nary {
+    doc "(a1 + .. + ak) + bs = a1 + .. + ak + bs"
+    Union(Union(xs...), ys...) => Union(xs..., ys...)
+}
+
+# Flatten a join nested as the *first* input of another join. The first input
+# occupies the leading columns in both plans, so neither equivalence list needs
+# reindexing — they just merge (mirrors fusion/join.rs for this case; the
+# general case needs the column arithmetic of Phase 2).
+rule flatten_join_first {
+    doc "join(e1, join(e2, xs), ys) = join(e1 ++ e2, xs, ys)"
+    Join[e1](Join[e2](xs...), ys...) => Join[concat(e2, e1)](xs..., ys...)
+}
+
+# --- Phase 2: column arithmetic (shift / remap) -----------------------------
+
+# Push a filter below a projection. The predicate reads projected positions; we
+# `remap` each position `c` to the underlying column `outs[c]`, then re-project.
+# (A direction of movement/projection_pushdown.)
+# Guard `no_error(p)`: pushing an error filter below a projection relocates it
+# toward the leaves and lets `merge_filters` fuse it with leaf predicates over
+# a Get, exposing it to a downstream fold. See `no_error`.
+rule push_filter_past_project {
+    doc "filter(p, project(o, r)) = project(o, filter(p . o, r))"
+    colored
+    Filter[p] (Project[o] r) => Project[o] (Filter[remap(p, o)] r)
+    where no_error(p)
+}
+
+# Push a filter that reads only the *second* join input onto that input. That
+# input starts at column arity(a), so its predicate columns are shifted down by
+# arity(a). The general predicate_pushdown for the i-th input is the same shape
+# (mirrors predicate_pushdown.rs).
+# Guard `no_error(p)`: see `push_filter_into_join_first`.
+rule push_filter_into_join_second {
+    doc "filter(p, join(a, b, rest)) = join(a, filter(shift(p,-|a|), b), rest)  when p reads only b"
+    colored
+    Filter[p] (Join[e](a, b, rest...))
+        => Join[e](a, Filter[shift(p, -arity(a))] b, rest...)
+    where cols_in_range(p, arity(a), arity(a) + arity(b))
+    where no_error(p)
+}
+
+# --- Phase 3: analysis-backed conditions + arity constructors ---------------
+
+# Elide a Threshold whose input is known non-negative (it then drops nothing).
+# The `non_negative` analysis is conservative (no Negate in the input). Mirrors
+# threshold_elision.rs.
+rule threshold_elision {
+    doc "threshold(r) = r  when r has non-negative multiplicities"
+    Threshold r => r
+    where non_negative(r)
+}
+
+# A collection unioned with its own negation cancels to nothing. The two `a`s
+# must be the *same* relation — the e-graph enforces that via the shared
+# metavariable. `Empty(a)` builds a constant with a's arity. Mirrors
+# union_cancel / threshold_elision's cancellation.
+rule union_cancel {
+    doc "a + negate(a) = 0"
+    Union(a, Negate a) => Empty(a)
+}
+
+# Elide a grouping over a relation that is already distinct on the group key:
+# the reduce then emits exactly the input rows, projected to the key columns.
+# Needs no aggregates, and the unique-key analysis (Keys) to establish the key.
+# Mirrors reduce_elision.rs (restricted to the no-aggregate case, since turning
+# aggregates into per-row Map expressions needs scalar synthesis).
+rule reduce_elision {
+    doc "reduce(gk, [], r) = project(cols(gk), r)  when gk is a unique key of r"
+    Reduce[gk, aggs](r) => Project[cols_of(gk)] r
+    where empty(aggs)
+    where is_unique_key(gk, r)
+}
+
+# --- Phase 5: scalar-structure conditions (backed by the scalar IR) ---------
+# These read scalar *structure* through analysis-style side conditions, so the
+# relational rewrite stays declarative even though the decision needs to look
+# inside a scalar. (Folding a scalar in place is a separate scalar-layer
+# normalization done once at lower time by `reduced_escalar` in lower.rs.)
+
+# A filter all of whose predicates are constantly true is the identity. Covers a
+# folded `filter(1 = 1, r)` (and the empty predicate list). Mirrors the
+# fold_constants consequence on Filter.
+rule drop_true_filter {
+    doc "filter(p, r) = r  when every predicate is constantly true"
+    colored
+    Filter[p] r => r
+    where all_true(p)
+}
+
+# A filter with a constantly-false predicate is empty. `Empty(r)` is a Constant
+# with r's arity. Mirrors fold_constants emptying an unsatisfiable filter.
+rule empty_false_filter {
+    doc "filter(p, r) = 0  when some predicate is constantly false"
+    colored
+    Filter[p] r => Empty(r)
+    where any_false(p)
+}
+
+# NOTE: dropping a Filter[#a=#b] when r's equivalences prove #a=#b is
+# deferred. The equivalences analysis has no nullability facts, so it cannot
+# distinguish null-rejecting joins (sound to drop) from null-preserving sources
+# like Map[#1:=#0] (unsound: NULL rows survive the map but are rejected by
+# #0=#1). A sound implementation requires column types, which are only available
+# in the typed/physical phase.
+
+# A Map that only appends bare column references just copies columns, so it is a
+# projection: keep all of r's columns (iota(|r|)) then the copied ones
+# (cols_of(s)). Mirrors canonicalization/projection_extraction.
+rule map_columns_to_projection {
+    doc "map(s, r) = project(iota(|r|) ++ cols_of(s), r)  when s is all column refs"
+    Map[s] r => Project[concat(iota(arity(r)), cols_of(s))] r
+    where all_columns(s)
+}
+
+# Re-implement a binary join plan as a worst-case-optimal (generic / leapfrog
+# triejoin) multiway join. Semantically identical, but its cost is the AGM
+# bound rather than the worst-case-quadratic intermediate of a binary plan, so
+# extraction picks it exactly when the join is "cyclic enough" to benefit.
+#
+# Gated to cyclic joins: a worst-case-optimal join only beats a binary join tree
+# asymptotically when the join is cyclic. Acyclic joins are handled optimally by
+# a binary tree (Yannakakis), so creating a WcoJoin there would only let the
+# AGM-bound cost model regress them to a delta plan. The guard decides cyclicity
+# structurally (GYO over the join's equivalence hypergraph), so it works at
+# saturation time without the cost model.
+rule join_to_wcoj {
+    doc "Join(rs) = WcoJoin(rs)  (same multiset, worst-case-optimal evaluation)"
+    Join[e](rs...) => WcoJoin[e](rs...)
+    where join_is_cyclic()
+}
+
+# Binarize a join with three or more inputs by peeling off the first two inputs
+# as an inner binary join. The inner join over (a, b) carries the equivalence
+# classes fully contained in columns [0, arity(a)+arity(b)). The outer join over
+# (ab, rest...) carries the complement: the classes that touch any column beyond
+# that boundary. Column indices of rest... are unchanged because the inner join
+# preserves a-then-b column order.
+#
+# The `has_three_or_more_inputs` guard prevents this rule from firing on an
+# already-binary join, which would trigger an infinite loop. The arrangement-count
+# objective extracts the binarized form only when it reuses more arrangements than
+# the n-ary form; otherwise the n-ary form wins.
+#
+# Join commutativity (swapping inputs) is intentionally absent: swapping inputs
+# changes the output column order, so a commuted Join is NOT in the same e-class
+# as the original without a compensating reordering Projection. Implementing
+# commutativity correctly requires a Project wrapper, which is deferred.
+rule binarize_join_first {
+    doc "join(e, a, b, rest) = join(equivs_outer(e, |a|+|b|), join(equivs_inner(e, |a|+|b|), a, b), rest)"
+    Join[e](a, b, rest...)
+        => Join[equivs_outer(e, arity(a) + arity(b))](
+               Join[equivs_inner(e, arity(a) + arity(b))](a, b),
+               rest...)
+    where has_three_or_more_inputs()
+    where has_inner_equiv(e, arity(a) + arity(b))
+}
+
+# Swap the two inputs of a binary join, wrapping the result in a projection that
+# restores the original column order. The commuted Join(b, a) outputs [b | a];
+# the enclosing Project[swap_projection(|a|, |b|)] maps that back to [a | b], so
+# the Project-wrapped commuted join is schema-identical to the original Join(a, b)
+# and the two expressions belong to the same e-class.
+#
+# The `is_binary_join` guard restricts the rule to joins with exactly two inputs.
+# N-ary joins are binarized first by `binarize_join_first` before commutativity
+# can apply.
+#
+# Termination: this rule is its own inverse. Applying it twice gives
+# Project[P1](Project[P2](Join(a, b))), which `fuse_projects` collapses to
+# Project[identity](Join(a, b)). `commute_binary_join` does not fire on a Project
+# node, so no further nodes are generated. Saturation converges via hash-consing
+# and the MAX_ENODES cap.
+rule commute_binary_join {
+    doc "join(a, b) = project([restore], join(b, a)): reorder inputs, restore column order"
+    Join[e](a, b)
+        => Project[swap_projection(arity(a), arity(b))](
+               Join[swap_equivs(e, arity(a), arity(b))](b, a))
+    where is_binary_join()
+}
+
+# Pull a narrowing projection out of the *first* join input. With the projection
+# lifted, the join input becomes a bare index-backed `Get`, which downstream
+# `JoinImplementation` can serve from the maintained arrangement (a free delta
+# join). The rule is sound for any projection (pure column bookkeeping); the
+# guards only prevent no-ops and bound e-graph growth.
+#
+# m = concat(o, shift(iota(|b|), |a|)) is the shared old-to-new column map.
+# `iota(|b|)` is [0..|b|); `shift(_, |a|)` makes it [|a|..|a|+|b|) (b's new
+# positions); `concat(o, _)` prepends `o` (the underlying columns of a's
+# projected positions). As `Project[m]` it recovers the original output: position
+# `i` reads new join column `m[i]`. As `remap(e, m)` it renumbers every
+# equivalence column `c` to its new position `m[c]`. `m` has length |o| + |b| =
+# the old join-output arity, so every equivalence column (old-output space)
+# indexes into `m` in range; no out-of-range -1 arises.
+#
+# Guards: `is_binary_join()` restricts to two inputs (it reads the root e-class,
+# which is the Join, as required). `non_identity_projection(o, a)` skips a no-op
+# projection (which would add nothing and risk a churn loop with
+# `drop_identity_project`). `reads_indexed_global(a)` limits the rule to inputs
+# where pulling the projection up exposes a reusable index, the only case with a
+# payoff, bounding e-graph blowup elsewhere.
+#
+# Physical phase only: the payoff is a physical-plan artifact (exposing the bare
+# index-backed Get so join planning can pick a free delta join), and
+# `reads_indexed_global` reads index availability, which only the physical pass
+# populates. In the logical pass availability is empty, so the guard is always
+# false and the rule never fires there; gating it physical avoids wasted logical
+# match attempts.
+rule pull_project_out_of_join_first {
+    doc "join(project(o, a), b) = project(m, join(a, b)),  m = o ++ shift(iota(|b|), |a|)"
+    phase physical
+    Join[e](Project[o] a, b)
+        => Project[concat(o, shift(iota(arity(b)), arity(a)))](
+               Join[remap(e, concat(o, shift(iota(arity(b)), arity(a))))](a, b))
+    where is_binary_join()
+    where non_identity_projection(o, a)
+    where reads_indexed_global(a)
+}
+
+# Drop an arrangement that the input already maintains. An ArrangeBy is a
+# multiset identity, so removing a redundant one is semantically free; the cost
+# model charges the arrangement memory term, so extraction prefers the
+# un-arranged form. Sound because produces_key asserts a physical property (the
+# input is already materialized keyed by k), not a linearity property. Physical
+# phase only: redundant arrangements are a physical-plan artifact, and the
+# cost-model arrangement charge is what makes dropping them a win.
+rule arrange_idempotent {
+    doc "ArrangeBy[k](x) = x  (x already produces an arrangement keyed by k)"
+    phase physical
+    ArrangeBy[k](x) => x
+    where produces_key(x, k)
+}
+
+# --- Empty propagation: collapse operators applied to a zero-row input ------
+#
+# These rules propagate an Empty (0-row Constant) upward through operators that
+# yield another 0-row relation when their input is empty. The `is_rel_empty`
+# guard ensures the rule fires only after `empty_false_filter` or `union_cancel`
+# has already produced an Empty node in the e-class; without it the rules would
+# be circular.
+#
+# Termination: each rule replaces O(Empty) with Empty, strictly lowering the
+# node count. Saturation terminates because no rule in the set increases the
+# node count of an Empty subtree.
+
+# threshold(0) = 0  (threshold of the empty multiset is empty)
+rule topk_empty {
+    doc "topk(0) = 0"
+    TopK e => Empty(e)
+    where is_rel_empty(e)
+}
+
+rule threshold_empty {
+    doc "threshold(0) = 0"
+    Threshold e => Empty(e)
+    where is_rel_empty(e)
+}
+
+# negate(0) = 0  (negating the empty multiset is empty)
+rule negate_empty {
+    doc "negate(0) = 0"
+    Negate e => Empty(e)
+    where is_rel_empty(e)
+}
+
+# filter(p, 0) = 0  (filtering an empty relation is always empty)
+rule filter_empty {
+    doc "filter(p, 0) = 0"
+    Filter[p] e => Empty(e)
+    where is_rel_empty(e)
+}
+
+# 0 + b = b  (Empty is the additive identity; first branch). The `not_rel_empty(b)`
+# guard prevents the rule from firing when both branches are empty, which would
+# merge the Union class with a class that already has Filter nodes in it,
+# creating self-referential Filter structures that cause `merge_filters` to
+# concatenate predicates without bound.
+rule union_drop_empty_left {
+    doc "0 + b = b"
+    Union(e, b) => b
+    where is_rel_empty(e)
+    where not_rel_empty(b)
+}
+
+# a + 0 = a  (Empty is the additive identity; second branch). Guarded with
+# `not_rel_empty(a)` for the same reason as `union_drop_empty_left`: when both
+# branches are empty the merge would create self-referential Filter structures.
+rule union_drop_empty_right {
+    doc "a + 0 = a"
+    Union(a, e) => a
+    where is_rel_empty(e)
+    where not_rel_empty(a)
+}

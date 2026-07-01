@@ -63,7 +63,7 @@ GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
 u2  5  NULL  Differential␠Join␠%0␠»␠%1
-u2  4  5  ␠␠Arrange␠(#0{y})
+u2  4  5  ␠␠Arrange␠(#0{x})
 u2  3  4  ␠␠␠␠Read␠u1
 u2  2  5  ␠␠Arrange␠(#0{x})
 u2  1  2  ␠␠␠␠Read␠u1
@@ -80,7 +80,7 @@ GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
 u2  5  NULL  Differential␠Join␠%0␠»␠%1
-u2  4  5  ␠␠Arrange␠(#0{y})
+u2  4  5  ␠␠Arrange␠(#0{x})
 u2  3  4  ␠␠␠␠Read␠u1
 u2  2  5  ␠␠Arrange␠(#0{x})
 u2  1  2  ␠␠␠␠Read␠u1
@@ -146,7 +146,7 @@ GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
 t<id>  5  NULL  Differential␠Join␠%0␠»␠%1
-t<id>  4  5  ␠␠Arrange␠(#0{y})
+t<id>  4  5  ␠␠Arrange␠(#0{x})
 t<id>  3  4  ␠␠␠␠Read␠u4
 t<id>  2  5  ␠␠Arrange␠(#0{x})
 t<id>  1  2  ␠␠␠␠Read␠u4
@@ -161,7 +161,7 @@ GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
 t<id>  5  NULL  Differential␠Join␠%0␠»␠%1
-t<id>  4  5  ␠␠Arrange␠(#0{y})
+t<id>  4  5  ␠␠Arrange␠(#0{x})
 t<id>  3  4  ␠␠␠␠Read␠u4
 t<id>  2  5  ␠␠Arrange␠(#0{x})
 t<id>  1  2  ␠␠␠␠Read␠u4
@@ -431,13 +431,13 @@ t<id>  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
 t<id>  ␠␠Distinct␠GroupAggregate
 t<id>  ␠␠␠␠Union
 t<id>  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
-t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
-t<id>  ␠␠␠␠␠␠␠␠␠␠Read␠l0
-t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#9{id})
 t<id>  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#0{id})
+t<id>  ␠␠␠␠␠␠␠␠␠␠Read␠l0
 t<id>  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
 t<id>  ␠␠␠␠␠␠␠␠Arranged␠u13
-t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#8{id})
 t<id>  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
 t<id>  ␠␠␠␠␠␠Arranged␠u13
 u10  Arrange␠(#1{person1id})
@@ -468,12 +468,12 @@ u21  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{parentmessageid})
 u21  ␠␠␠␠␠␠␠␠Arranged␠u17
 u22  Arrange␠(#0{src})
 u22  ␠␠Stream␠u21
-u23  Returning␠Differential␠Join␠%1␠»␠%0
-u23  ␠␠Arrange␠(#0)
-u23  ␠␠␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
-u23  ␠␠␠␠␠␠Read␠l5
+u23  Returning␠Differential␠Join␠%0␠»␠%1
 u23  ␠␠Arrange␠(#2{w})
 u23  ␠␠␠␠Stream␠l5
+u23  ␠␠Arrange␠(#0{w})
+u23  ␠␠␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
+u23  ␠␠␠␠␠␠Read␠l5
 u23  With␠Recursive␠l7␠=␠Union
 u23  ␠␠Map/Filter/Project
 u23  ␠␠␠␠Consolidating␠Union

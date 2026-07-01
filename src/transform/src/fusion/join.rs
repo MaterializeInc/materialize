@@ -53,8 +53,9 @@ impl crate::Transform for Join {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
+        let enable_eqsat_scalar = ctx.features.enable_eqsat_scalar_canonicalize;
         // We need to stick with post-order here because `action` only fuses a
         // Join with its direct children. This means that we can only fuse a
         // tree of Join nodes in a single pass if we work bottom-up.
@@ -73,8 +74,12 @@ impl crate::Transform for Join {
         // should re-evaluate if we need this ad-hoc re-normalization step when
         // LiteralLifting is removed in favor of EquivalencePropagation.
         if transformed {
-            PredicatePushdown::default().action(relation, &mut BTreeMap::new())?;
-            CanonicalizeMfp.action(relation)?
+            PredicatePushdown::default().action(
+                relation,
+                &mut BTreeMap::new(),
+                enable_eqsat_scalar,
+            )?;
+            CanonicalizeMfp.action(relation, enable_eqsat_scalar)?
         }
         mz_repr::explain::trace_plan(&*relation);
         Ok(())

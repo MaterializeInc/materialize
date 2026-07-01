@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::JoinImplementation::IndexedFilter;
-use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::func::variadic::{And, Or};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{BinaryFunc, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, VariadicFunc};
@@ -62,11 +61,19 @@ impl crate::Transform for LiteralConstraints {
 }
 
 impl LiteralConstraints {
-    fn action(
+    /// Detect literal constraints over indexed `Get`s and rewrite them into
+    /// `IndexedFilter` joins.
+    ///
+    /// This is the bare transform logic, without the `actually_perform_transform`
+    /// wrapper's `trace_plan` and instrumentation span. The eqsat physical pass
+    /// calls it directly on cloned candidate subtrees, where emitting a trace per
+    /// subtree would pollute the optimizer trace.
+    pub(crate) fn action(
         &self,
         relation: &mut MirRelationExpr,
         transform_ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
+        let enable_eqsat_scalar = transform_ctx.features.enable_eqsat_scalar_canonicalize;
         let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
         relation.try_visit_mut_children(|e| self.action(e, transform_ctx))?;
 
@@ -91,10 +98,16 @@ impl LiteralConstraints {
                 orig_mfp: &MapFilterProject,
                 relation: &MirRelationExpr,
                 relation_type: ReprRelationType,
+                enable_eqsat_scalar: bool,
             ) {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
-                LiteralConstraints::canonicalize_predicates(mfp, relation, relation_type);
+                LiteralConstraints::canonicalize_predicates(
+                    mfp,
+                    relation,
+                    relation_type,
+                    enable_eqsat_scalar,
+                );
                 // undo inline_literal_constraints
                 mfp.optimize();
                 // We can usually undo, but sometimes not (see comment on `distribute_and_over_or`),
@@ -122,7 +135,13 @@ impl LiteralConstraints {
                     // We didn't find a usable index, so no chance to remove literal constraints.
                     // But, we might have removed contradicting OR args.
                     if removed_contradicting_or_args {
-                        undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ);
+                        undo_preparation(
+                            &mut mfp,
+                            &orig_mfp,
+                            relation,
+                            inp_typ,
+                            enable_eqsat_scalar,
+                        );
                     } else {
                         // We didn't remove anything, so let's go with the original MFP.
                         mfp = orig_mfp;
@@ -136,7 +155,13 @@ impl LiteralConstraints {
                     {
                         // We were able to remove the literal constraints or contradicting OR args,
                         // so we would like to use this new MFP, so we try undoing the preparation.
-                        undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ.clone());
+                        undo_preparation(
+                            &mut mfp,
+                            &orig_mfp,
+                            relation,
+                            inp_typ.clone(),
+                            enable_eqsat_scalar,
+                        );
                     } else {
                         // We were not able to remove the literal constraint, so `mfp` is
                         // equivalent to `orig_mfp`, but `orig_mfp` is often simpler (or the same).
@@ -208,7 +233,7 @@ impl LiteralConstraints {
             }
         }
 
-        CanonicalizeMfp::rebuild_mfp(mfp, relation);
+        CanonicalizeMfp::rebuild_mfp(mfp, relation, enable_eqsat_scalar);
 
         Ok(())
     }
@@ -608,17 +633,25 @@ impl LiteralConstraints {
     }
 
     /// Call [mz_expr::canonicalize::canonicalize_predicates] on each of the predicates in the MFP.
+    ///
+    /// `enable_eqsat_scalar` selects the scalar canonicalizer. See
+    /// [`crate::eqsat::scalar::canonicalize_predicates`].
     fn canonicalize_predicates(
         mfp: &mut MapFilterProject,
         relation: &MirRelationExpr,
         relation_type: ReprRelationType,
+        enable_eqsat_scalar: bool,
     ) {
         let (map, mut predicates, project) = mfp.as_map_filter_project();
         let typ_after_map = relation
             .clone()
             .map(map.clone())
             .typ_with_input_types(&[relation_type]);
-        canonicalize_predicates(&mut predicates, &typ_after_map.column_types);
+        crate::eqsat::scalar::canonicalize_predicates(
+            &mut predicates,
+            &typ_after_map.column_types,
+            enable_eqsat_scalar,
+        );
         // Rebuild the MFP with the new predicates.
         *mfp = MapFilterProject::new(mfp.input_arity)
             .map(map)

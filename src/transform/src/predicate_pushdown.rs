@@ -136,10 +136,11 @@ impl crate::Transform for PredicatePushdown {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         let mut empty = BTreeMap::new();
-        let result = self.action(relation, &mut empty);
+        let enable_eqsat_scalar = ctx.features.enable_eqsat_scalar_canonicalize;
+        let result = self.action(relation, &mut empty, enable_eqsat_scalar);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -160,6 +161,7 @@ impl PredicatePushdown {
         &self,
         relation: &mut MirRelationExpr,
         get_predicates: &mut BTreeMap<Id, BTreeSet<MirScalarExpr>>,
+        enable_eqsat_scalar: bool,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             // In the case of Filter or Get we have specific work to do;
@@ -186,7 +188,7 @@ impl PredicatePushdown {
                                 .take_dangerous()
                                 .filter(std::mem::replace(predicates, Vec::new()));
 
-                            self.action(input, get_predicates)?;
+                            self.action(input, get_predicates, enable_eqsat_scalar)?;
                         }
                         MirRelationExpr::Get { id, .. } => {
                             // We can report the predicates upward in `get_predicates`,
@@ -295,7 +297,7 @@ impl PredicatePushdown {
                             Self::update_join_inputs_with_push_downs(inputs, push_downs);
 
                             // Recursively descend on the join
-                            self.action(input, get_predicates)?;
+                            self.action(input, get_predicates, enable_eqsat_scalar)?;
 
                             // remove all predicates that were pushed down from the current Filter node
                             *predicates = retain;
@@ -352,7 +354,7 @@ impl PredicatePushdown {
                             if !push_down.is_empty() {
                                 **inner = inner.take_dangerous().filter(push_down);
                             }
-                            self.action(inner, get_predicates)?;
+                            self.action(inner, get_predicates, enable_eqsat_scalar)?;
 
                             // remove all predicates that were pushed down from the current Filter node
                             std::mem::swap(&mut retain, predicates);
@@ -397,12 +399,12 @@ impl PredicatePushdown {
                                 **input = input.take_dangerous().filter(push_down);
                             }
 
-                            self.action(input, get_predicates)?;
+                            self.action(input, get_predicates, enable_eqsat_scalar)?;
                         }
                         MirRelationExpr::Threshold { input } => {
                             let predicates = std::mem::take(predicates);
                             *relation = input.take_dangerous().filter(predicates).threshold();
-                            self.action(relation, get_predicates)?;
+                            self.action(relation, get_predicates, enable_eqsat_scalar)?;
                         }
                         MirRelationExpr::Project { input, outputs } => {
                             let predicates = predicates.drain(..).map(|mut predicate| {
@@ -414,7 +416,7 @@ impl PredicatePushdown {
                                 .filter(predicates)
                                 .project(outputs.clone());
 
-                            self.action(relation, get_predicates)?;
+                            self.action(relation, get_predicates, enable_eqsat_scalar)?;
                         }
                         MirRelationExpr::Filter {
                             input,
@@ -423,7 +425,7 @@ impl PredicatePushdown {
                             *relation = input
                                 .take_dangerous()
                                 .filter(predicates.clone().into_iter().chain(predicates2.clone()));
-                            self.action(relation, get_predicates)?;
+                            self.action(relation, get_predicates, enable_eqsat_scalar)?;
                         }
                         MirRelationExpr::Map { input, scalars } => {
                             let (retained, pushdown) = Self::push_filters_through_map(
@@ -437,7 +439,7 @@ impl PredicatePushdown {
                             if !pushdown.is_empty() {
                                 result = result.filter(pushdown);
                             }
-                            self.action(&mut result, get_predicates)?;
+                            self.action(&mut result, get_predicates, enable_eqsat_scalar)?;
                             result = result.map(scalars);
                             if !retained.is_empty() {
                                 result = result.filter(retained);
@@ -457,15 +459,15 @@ impl PredicatePushdown {
                             }
 
                             // ... and keep pushing predicates down
-                            self.action(input, get_predicates)?;
+                            self.action(input, get_predicates, enable_eqsat_scalar)?;
                         }
                         MirRelationExpr::Union { base, inputs } => {
                             let predicates = std::mem::take(predicates);
                             **base = base.take_dangerous().filter(predicates.clone());
-                            self.action(base, get_predicates)?;
+                            self.action(base, get_predicates, enable_eqsat_scalar)?;
                             for input in inputs {
                                 *input = input.take_dangerous().filter(predicates.clone());
-                                self.action(input, get_predicates)?;
+                                self.action(input, get_predicates, enable_eqsat_scalar)?;
                             }
                         }
                         MirRelationExpr::Negate { input } => {
@@ -484,7 +486,7 @@ impl PredicatePushdown {
                             if !pushdown.is_empty() {
                                 result = result.filter(pushdown);
                             }
-                            self.action(&mut result, get_predicates)?;
+                            self.action(&mut result, get_predicates, enable_eqsat_scalar)?;
                             result = result.negate();
                             if !retained.is_empty() {
                                 result = result.filter(retained);
@@ -492,7 +494,9 @@ impl PredicatePushdown {
                             *relation = result;
                         }
                         x => {
-                            x.try_visit_mut_children(|e| self.action(e, get_predicates))?;
+                            x.try_visit_mut_children(|e| {
+                                self.action(e, get_predicates, enable_eqsat_scalar)
+                            })?;
                         }
                     }
 
@@ -517,15 +521,21 @@ impl PredicatePushdown {
                 }
                 MirRelationExpr::Let { id, body, value } => {
                     // Push predicates and collect intersection at `Get`s.
-                    self.action(body, get_predicates)?;
+                    self.action(body, get_predicates, enable_eqsat_scalar)?;
 
                     // `get_predicates` should now contain the intersection
                     // of predicates at each *use* of the binding. If it is
                     // non-empty, we can move those predicates to the value.
-                    Self::push_into_let_binding(get_predicates, id, value, &mut [body]);
+                    Self::push_into_let_binding(
+                        get_predicates,
+                        id,
+                        value,
+                        &mut [body],
+                        enable_eqsat_scalar,
+                    );
 
                     // Continue recursively on the value.
-                    self.action(value, get_predicates)
+                    self.action(value, get_predicates, enable_eqsat_scalar)
                 }
                 MirRelationExpr::LetRec {
                     ids,
@@ -540,7 +550,7 @@ impl PredicatePushdown {
                     let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values);
 
                     // Predicate pushdown within the body
-                    self.action(body, get_predicates)?;
+                    self.action(body, get_predicates, enable_eqsat_scalar)?;
 
                     // `users` will be the body plus the values of those bindings that we have seen
                     // so far, while going one-by-one through the list of bindings backwards.
@@ -559,11 +569,17 @@ impl PredicatePushdown {
                         // `get_predicates`: We push a predicate into the value of a binding, only
                         // if all Gets of this Id have this same predicate on top of them.
                         if !ids_used_across_iterations.contains(id) {
-                            Self::push_into_let_binding(get_predicates, id, value, &mut users);
+                            Self::push_into_let_binding(
+                                get_predicates,
+                                id,
+                                value,
+                                &mut users,
+                                enable_eqsat_scalar,
+                            );
                         }
 
                         // Predicate pushdown within a binding
-                        self.action(value, get_predicates)?;
+                        self.action(value, get_predicates, enable_eqsat_scalar)?;
 
                         users.push(value);
                     }
@@ -785,14 +801,16 @@ impl PredicatePushdown {
 
                     // Recursively descend on each of the inputs.
                     for input in inputs.iter_mut() {
-                        self.action(input, get_predicates)?;
+                        self.action(input, get_predicates, enable_eqsat_scalar)?;
                     }
 
                     Ok(())
                 }
                 x => {
                     // Recursively descend.
-                    x.try_visit_mut_children(|e| self.action(e, get_predicates))
+                    x.try_visit_mut_children(|e| {
+                        self.action(e, get_predicates, enable_eqsat_scalar)
+                    })
                 }
             }
         })
@@ -825,6 +843,7 @@ impl PredicatePushdown {
         id: &LocalId,
         value: &mut MirRelationExpr,
         users: &mut [&mut MirRelationExpr],
+        enable_eqsat_scalar: bool,
     ) {
         if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
             if !list.is_empty() {
@@ -843,9 +862,10 @@ impl PredicatePushdown {
                 // Apply the predicates in `list` to value. Canonicalize
                 // `list` so that plans are always deterministic.
                 let mut list = list.into_iter().collect::<Vec<_>>();
-                mz_expr::canonicalize::canonicalize_predicates(
+                crate::eqsat::scalar::canonicalize_predicates(
                     &mut list,
                     &value.typ().column_types,
+                    enable_eqsat_scalar,
                 );
                 *value = value.take_dangerous().filter(list);
             }

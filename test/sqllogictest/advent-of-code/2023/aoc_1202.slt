@@ -230,33 +230,31 @@ Explained Query:
       Filter (#0{game}) IS NOT NULL // { arity: 3 }
         Get l0 // { arity: 3 }
     cte l2 =
-      ArrangeBy keys=[[#0{game}]] // { arity: 1 }
+      ArrangeBy keys=[[#0]] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Get l1 // { arity: 3 }
     cte l3 =
-      Reduce aggregates=[sum(#0{game})] // { arity: 1 }
-        Distinct project=[#0] // { arity: 1 }
+      Reduce aggregates=[sum(#0{color})] // { arity: 1 }
+        Distinct project=[#0{color}] // { arity: 1 }
           Union // { arity: 1 }
             Negate // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Join on=(#0{game} = #1) type=differential // { arity: 2 }
+                Join on=(#0{color} = #1{color}) type=differential // { arity: 2 }
                   implementation
-                    %1[#0]UKA » %0:l2[#0{game}]K
+                    %1[#0{color}]UKA » %0:l2[#0]K
                   Get l2 // { arity: 1 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
+                  ArrangeBy keys=[[#0{color}]] // { arity: 1 }
+                    Distinct project=[#0{color}] // { arity: 1 }
                       Project (#0) // { arity: 1 }
                         Filter (#3{number} > #5{number}) // { arity: 6 }
-                          Join on=(#0{game} = #1{game} AND #2{color} = #4{color}) type=delta // { arity: 6 }
+                          Join on=(#0{color} = #1{color} AND #2{color} = #4{color}) type=differential // { arity: 6 }
                             implementation
-                              %0:l2 » %1:l0[#0{game}]K » %2[#0{color}]UK
-                              %1:l0 » %2[#0{color}]UK » %0:l2[#0{game}]K
-                              %2 » %1:l0[#1{color}]K » %0:l2[#0{game}]K
+                              %1:l0[#0{color}]K » %0:l2[#0]K » %2[#0]UK
                             Get l2 // { arity: 1 }
-                            ArrangeBy keys=[[#0{game}], [#1{color}]] // { arity: 3 }
+                            ArrangeBy keys=[[#0{color}]] // { arity: 3 }
                               Filter (#0{game}) IS NOT NULL AND (#1{color}) IS NOT NULL // { arity: 3 }
                                 Get l0 // { arity: 3 }
-                            ArrangeBy keys=[[#0{color}]] // { arity: 2 }
+                            ArrangeBy keys=[[#0]] // { arity: 2 }
                               Constant // { arity: 2 }
                                 - ("red", 12)
                                 - ("blue", 14)
@@ -269,20 +267,18 @@ Explained Query:
     cte l5 =
       Reduce aggregates=[sum(#0{count})] // { arity: 1 }
         Project (#1{count}) // { arity: 1 }
-          Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+          Reduce group_by=[#0{game}] aggregates=[count(*)] // { arity: 2 }
             Project (#0) // { arity: 1 }
-              Join on=(#0{game} = #1{game} = #2{game}) type=delta // { arity: 3 }
+              Join on=(#0{game} = #1{game} = #2{game}) type=differential // { arity: 3 }
                 implementation
-                  %0 » %1[#0{game}]K » %2[#0{game}]K
-                  %1 » %0[#0{game}]K » %2[#0{game}]K
-                  %2 » %0[#0{game}]K » %1[#0{game}]K
-                ArrangeBy keys=[[#0{game}]] // { arity: 1 }
+                  %2[#0{game}]K » %1[#0]K » %0[#0]K
+                ArrangeBy keys=[[#0]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
                     FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then integer_to_bigint(#1{max}) else 0 end) // { arity: 2 }
                       Project (#0, #2{max}) // { arity: 2 }
                         Filter (#1{color} = "red") // { arity: 3 }
                           Get l4 // { arity: 3 }
-                ArrangeBy keys=[[#0{game}]] // { arity: 1 }
+                ArrangeBy keys=[[#0]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
                     FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then integer_to_bigint(#1{max}) else 0 end) // { arity: 2 }
                       Project (#0, #2{max}) // { arity: 2 }

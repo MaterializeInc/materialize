@@ -295,21 +295,21 @@ Explained Query:
             Get l0 // { arity: 2 }
     cte l2 =
       ArrangeBy keys=[[#0{card_id}, #1{val}]] // { arity: 2 }
-        Filter (#0{card_id}) IS NOT NULL AND (#1{val}) IS NOT NULL // { arity: 2 }
+        Filter (#0{card_id}) IS NOT NULL AND (#1{unnest}) IS NOT NULL // { arity: 2 }
           Get l1 // { arity: 2 }
     cte l3 =
-      Project (#0, #1) // { arity: 2 }
+      Project (#2, #3) // { arity: 2 }
         Join on=(#0{card_id} = #2{card_id} AND #1{val} = #3{val}) type=differential // { arity: 4 }
           implementation
-            %0:l2[#0{card_id}, #1{val}]KK » %1[#0{card_id}, #1{val}]KK
-          Get l2 // { arity: 2 }
-          ArrangeBy keys=[[#0{card_id}, #1{val}]] // { arity: 2 }
+            %1:l2[#0{card_id}, #1{val}]KK » %0[#0, #1]KK
+          ArrangeBy keys=[[#0, #1]] // { arity: 2 }
             Project (#0, #3) // { arity: 2 }
               Filter (#2{unnest}) IS NOT NULL // { arity: 4 }
                 Map (text_to_integer(#2{unnest})) // { arity: 4 }
                   FlatMap unnest_array(regexp_split_to_array["\s+", case_insensitive=false](btrim(array_index(#1{parts}, 1)))) // { arity: 3 }
                     Filter (#0{card_id}) IS NOT NULL // { arity: 2 }
                       Get l0 // { arity: 2 }
+          Get l2 // { arity: 2 }
     cte l4 =
       Distinct project=[#0, #1] // { arity: 2 }
         Union // { arity: 2 }
@@ -325,7 +325,7 @@ Explained Query:
                             Project (#0) // { arity: 1 }
                               Join on=(#0{card_id} = #2 AND #1{val} = #3) type=differential // { arity: 4 }
                                 implementation
-                                  %1[#0, #1]UKKA » %0:l2[#0{card_id}, #1{val}]KK
+                                  %1[#0, #1]UKKA » %0:l2[#0, #1]KK
                                 Get l2 // { arity: 2 }
                                 ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                                   Distinct project=[#0, #1] // { arity: 2 }
@@ -340,13 +340,13 @@ Explained Query:
     With Mutually Recursive
       cte l5 =
         Project (#1, #3) // { arity: 2 }
-          Join on=(#0{card_id} = #2) type=differential // { arity: 4 }
+          Join on=(#0{card_id} = #2{card_id}) type=differential // { arity: 4 }
             implementation
-              %1:l6[#0]UK » %0:l4[#0{card_id}]K
-            ArrangeBy keys=[[#0{card_id}]] // { arity: 2 }
+              %1:l6[#0{card_id}]UK » %0:l4[#0]K
+            ArrangeBy keys=[[#0]] // { arity: 2 }
               Filter (#0{card_id}) IS NOT NULL // { arity: 2 }
                 Get l4 // { arity: 2 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
+            ArrangeBy keys=[[#0{card_id}]] // { arity: 2 }
               Filter (#0{card_id}) IS NOT NULL // { arity: 2 }
                 Get l6 // { arity: 2 }
       cte l6 =
@@ -532,8 +532,8 @@ Explained Query:
         FlatMap unnest_array(#0{wins}) // { arity: 3 }
           Get l1 // { arity: 2 }
     cte l3 =
-      Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
-        Project (#0, #1) // { arity: 2 }
+      Reduce group_by=[#0, #1{have}] aggregates=[count(*)] // { arity: 3 }
+        Project (#0, #1{have}) // { arity: 2 }
           Distinct project=[#0..=#2] // { arity: 3 }
             Union // { arity: 3 }
               Get l2 // { arity: 3 }
@@ -551,25 +551,25 @@ Explained Query:
         Map (0) // { arity: 3 }
           Union // { arity: 2 }
             Negate // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
+              Project (#0, #1{have}) // { arity: 2 }
                 Get l3 // { arity: 3 }
             Get l1 // { arity: 2 }
     cte l5 =
-      Project (#0, #5{count}) // { arity: 2 }
-        Join on=(#1 = #3 AND #2 = #4) type=differential // { arity: 6 }
+      Project (#3, #2{count}) // { arity: 2 }
+        Join on=(#0 = #4 AND #1{have} = #5) type=differential // { arity: 6 }
           implementation
-            %1[#0, #1]UKK » %0:l0[#1, #2]KK
-          ArrangeBy keys=[[#1, #2]] // { arity: 3 }
-            Get l0 // { arity: 3 }
-          ArrangeBy keys=[[#0, #1]] // { arity: 3 }
+            %1:l0[#1, #2]KK » %0[#0, #1]UKK
+          ArrangeBy keys=[[#0, #1{have}]] // { arity: 3 }
             Union // { arity: 3 }
               Get l4 // { arity: 3 }
               Map (null) // { arity: 3 }
                 Union // { arity: 2 }
                   Negate // { arity: 2 }
-                    Project (#0, #1) // { arity: 2 }
+                    Project (#0, #1{have}) // { arity: 2 }
                       Get l4 // { arity: 3 }
                   Get l1 // { arity: 2 }
+          ArrangeBy keys=[[#1, #2]] // { arity: 3 }
+            Get l0 // { arity: 3 }
     cte l6 =
       Reduce aggregates=[sum(power(2, bigint_to_double((#0{count} - 1))))] // { arity: 1 }
         Project (#1{count}) // { arity: 1 }

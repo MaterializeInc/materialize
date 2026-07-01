@@ -175,8 +175,8 @@ Explained Query:
         Project (#1, #3) // { arity: 2 }
           Join on=(#0{line} = #2{line}) type=differential // { arity: 4 }
             implementation
-              %0[#0{line}]UK » %1[#0{line}]UK
-            ArrangeBy keys=[[#0{line}]] // { arity: 2 }
+              %1[#0{line}]UK » %0[#0]UK
+            ArrangeBy keys=[[#0]] // { arity: 2 }
               Project (#0, #2) // { arity: 2 }
                 TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1 // { arity: 3 }
                   Get l0 // { arity: 3 }

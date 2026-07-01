@@ -477,12 +477,12 @@ Explained Query:
         CrossJoin type=differential
           ArrangeBy keys=[[]]
             Project ()
-              ReadStorage materialize.public.series_bounds
-          ArrangeBy keys=[[]]
-            Project ()
               FlatMap generate_series(-5000000000000000000, 5000000000000000000, 1)
                 Constant
                   - ()
+          ArrangeBy keys=[[]]
+            Project ()
+              ReadStorage materialize.public.series_bounds
   Return
     Union
       Get l0
