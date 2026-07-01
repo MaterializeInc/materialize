@@ -40,6 +40,7 @@ pub mod objective;
 pub mod raise;
 pub mod rules;
 pub mod scalar;
+pub(crate) mod scalar_extract;
 pub mod transform;
 
 #[cfg(test)]
