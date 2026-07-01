@@ -1,0 +1,53 @@
+# Fuzz crate for mz-storage: exercise the upsert state machine's value
+# consolidation/encoding over untrusted source values. Excluded from the main
+# workspace because libFuzzer requires nightly Rust.
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-storage-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-storage = { path = "..", features = ["fuzzing"] }
+mz-repr = { path = "../../repr" }
+mz-storage-types = { path = "../../storage-types" }
+mz-row-spine = { path = "../../row-spine" }
+differential-dataflow = "0.24.0"
+timely = "0.30.0"
+tokio = { version = "1", features = ["rt"] }
+chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
+uuid = "1.19.0"
+
+[[bin]]
+name = "upsert_consolidate"
+path = "fuzz_targets/upsert_consolidate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "upsert_value_roundtrip_v2"
+path = "fuzz_targets/upsert_value_roundtrip_v2.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "upsert_state_consolidate"
+path = "fuzz_targets/upsert_state_consolidate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "upsert_runtime"
+path = "fuzz_targets/upsert_runtime.rs"
+test = false
+doc = false
+bench = false
