@@ -2624,10 +2624,18 @@ fn test_subscribe_on_dropped_source() {
 
     fn assert_subscribe_error(res: Result<(), tokio_postgres::error::Error>) {
         assert_err!(res);
+        let err = res.unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            &SqlState::UNDEFINED_OBJECT,
+            "subscribe on a dropped dependency should report 42704, got {:?}: {}",
+            err.code(),
+            err.message()
+        );
         assert!(
-            res.unwrap_db_error()
-                .message()
-                .contains("query could not complete because relation")
+            err.message().contains("relation") && err.message().contains("was dropped"),
+            "unexpected error message: {}",
+            err.message()
         );
     }
 
