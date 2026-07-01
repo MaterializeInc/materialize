@@ -30,7 +30,7 @@
         }
 
         .active {
-            font-weight: bold;
+            font-weight: 500;
         }
 
         @media(max-width: 850px) {
@@ -52,22 +52,30 @@
     }
 
     a:not([class*="btn"]) {
+        color: var(--important);
+        font-family: var(--font-body);
+        font-weight: var(--weight-body);
         text-decoration: none;
-        border-bottom: 1px solid transparent;
+        border-bottom: none;
 
         &:hover,
         &:focus,
         &.active {
             text-decoration: none;
-            color: var(--important);
-            border-color: var(--important);
+            color: var(--highlight);
         }
+    }
+
+    .btn {
+        font-family: var(--font-body);
+        font-weight: var(--weight-body);
     }
 
     &-logo {
         display: flex;
         align-items: center;
-        font-weight: 600;
+        font-family: var(--font-heading);
+        font-weight: 500;
         font-size: rem(1.8);
         color: var(--important);
 
@@ -151,7 +159,7 @@ button.show-topics {
     display: none;
     margin: 0 0 var(--small) !important;
     text-align: left;
-    font-weight: 300;
+    font-weight: var(--weight-body);
     font-size: var(--base);
     color: var(--sub);
 

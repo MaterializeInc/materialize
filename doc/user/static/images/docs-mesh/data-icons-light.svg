@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220">
+  <defs>
+    <pattern id="data-icons" width="220" height="220" patternUnits="userSpaceOnUse">
+      <g fill="none" stroke="#736F81" stroke-width="0.85" stroke-linecap="round" stroke-linejoin="round">
+        <!-- database -->
+        <g transform="translate(16 18) scale(1.08)">
+          <ellipse cx="8" cy="4.5" rx="5.5" ry="2"/>
+          <path d="M2.5 4.5v7c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2v-7"/>
+          <ellipse cx="8" cy="11.5" rx="5.5" ry="2"/>
+        </g>
+        <!-- bar chart -->
+        <g transform="translate(124 22) scale(1.08)">
+          <line x1="2" y1="13" x2="14" y2="13"/>
+          <line x1="4.1" y1="13" x2="4.1" y2="8"/>
+          <line x1="8.1" y1="13" x2="8.1" y2="4"/>
+          <line x1="12.1" y1="13" x2="12.1" y2="9"/>
+        </g>
+        <!-- table -->
+        <g transform="translate(68 102) scale(1.08)">
+          <rect x="2" y="2" width="12" height="11" rx="1"/>
+          <line x1="2" y1="6.5" x2="14" y2="6.5"/>
+          <line x1="8" y1="2" x2="8" y2="13"/>
+        </g>
+        <!-- stream nodes -->
+        <g transform="translate(156 86) scale(1.02)">
+          <circle cx="4" cy="8" r="1.85"/>
+          <circle cx="13" cy="3.5" r="1.85"/>
+          <circle cx="13" cy="12.5" r="1.85"/>
+          <path d="M6.2 7.2 L10.8 5"/>
+          <path d="M6.2 8.8 L10.8 11"/>
+        </g>
+        <!-- lightning / real-time -->
+        <g transform="translate(28 152) scale(1.02)">
+          <path d="M9 2 L5.5 8.5 H8.5 L6.5 14 L12 6.5 H9 Z"/>
+        </g>
+        <!-- code brackets -->
+        <g transform="translate(132 156) scale(1.08)">
+          <path d="M5.5 3.5 L2.5 8 L5.5 12.5"/>
+          <path d="M10.5 3.5 L13.5 8 L10.5 12.5"/>
+          <line x1="8.5" y1="2.5" x2="7.5" y2="13.5"/>
+        </g>
+        <!-- pipeline arrow -->
+        <g transform="translate(84 32) scale(1.02)">
+          <rect x="1" y="5" width="8" height="5" rx="1"/>
+          <path d="M11 7.5 H15"/>
+          <path d="M13.5 5.5 L15.5 7.5 L13.5 9.5"/>
+        </g>
+        <!-- lock / security -->
+        <g transform="translate(46 48) scale(0.98)">
+          <rect x="4" y="7" width="8" height="6" rx="1"/>
+          <path d="M6 7 V5.2 C6 3.4 10 3.4 10 5.2 V7"/>
+        </g>
+        <!-- shield -->
+        <g transform="translate(168 118) scale(0.98)">
+          <path d="M8 1.5 L14.5 4 V9 C14.5 12.8 8 15 8 15 C8 15 1.5 12.8 1.5 9 V4 Z"/>
+        </g>
+        <!-- cloud -->
+        <g transform="translate(162 28) scale(0.95)">
+          <path d="M3.5 10 H13 C15.2 10 16 8.2 14.8 6.8 C14.2 5 12 4.5 10.8 5.6 C9.8 3.4 6 3.2 4.8 5.6 C2.8 5.8 2 7.8 3.5 10 Z"/>
+        </g>
+        <!-- laptop -->
+        <g transform="translate(4 74) scale(0.95)">
+          <rect x="2.5" y="3" width="11" height="7.5" rx="1"/>
+          <path d="M1 11.5 H15"/>
+        </g>
+        <!-- server rack -->
+        <g transform="translate(50 162) scale(0.98)">
+          <rect x="2" y="2" width="12" height="4" rx="0.8"/>
+          <rect x="2" y="7.5" width="12" height="4" rx="0.8"/>
+          <line x1="4.5" y1="4" x2="6" y2="4"/>
+          <line x1="4.5" y1="9.5" x2="6" y2="9.5"/>
+        </g>
+        <!-- stream waves -->
+        <g transform="translate(96 158) scale(0.98)">
+          <path d="M1 7 Q4.5 3.5 8 7 T15 7"/>
+          <path d="M1 10.5 Q4.5 7 8 10.5 T15 10.5"/>
+        </g>
+        <!-- wifi / signal -->
+        <g transform="translate(182 44) scale(0.95)">
+          <circle cx="8" cy="12.5" r="0.8" fill="#736F81" stroke="none"/>
+          <path d="M5.5 9.5 Q8 7 10.5 9.5"/>
+          <path d="M3.5 7 Q8 3 12.5 7"/>
+          <path d="M1.5 4.5 Q8 0 14.5 4.5"/>
+        </g>
+        <!-- key / access -->
+        <g transform="translate(178 168) scale(0.92)">
+          <circle cx="4" cy="4" r="2.4"/>
+          <path d="M6.2 6.2 L12.5 12.5"/>
+          <line x1="9.5" y1="9.5" x2="9.5" y2="12"/>
+          <line x1="11.5" y1="8.5" x2="11.5" y2="11"/>
+        </g>
+        <!-- chip / compute -->
+        <g transform="translate(104 48) scale(0.92)">
+          <rect x="4" y="4" width="8" height="8" rx="1.2"/>
+          <line x1="6" y1="2" x2="6" y2="4"/>
+          <line x1="10" y1="2" x2="10" y2="4"/>
+          <line x1="6" y1="12" x2="6" y2="14"/>
+          <line x1="10" y1="12" x2="10" y2="14"/>
+          <line x1="2" y1="6" x2="4" y2="6"/>
+          <line x1="2" y1="10" x2="4" y2="10"/>
+          <line x1="12" y1="6" x2="14" y2="6"/>
+          <line x1="12" y1="10" x2="14" y2="10"/>
+        </g>
+        <!-- message / event stream -->
+        <g transform="translate(188 92) scale(0.92)">
+          <rect x="2" y="3" width="12" height="9" rx="1.2"/>
+          <path d="M2 5 L8 8.5 L14 5"/>
+        </g>
+      </g>
+    </pattern>
+  </defs>
+  <rect width="220" height="220" fill="url(#data-icons)"/>
+</svg>

@@ -5,3 +5,99 @@
 
     box-shadow: var(--shadow-default);
 }
+
+// Homepage promo blocks: What's new callout + offerings table
+@mixin docs-feature-card($top-accent: false) {
+    $glow-foot: var(--docs-card-glow-foot, color-mix(in srgb, var(--docs-card-glow) 45%, transparent));
+    $surface:
+        radial-gradient(120% 90% at 50% -22%, var(--docs-card-glow), transparent 62%),
+        linear-gradient(180deg, transparent 48%, #{$glow-foot} 100%),
+        var(--docs-card-surface, var(--table-surface));
+
+    @if $top-accent {
+        background:
+            linear-gradient(
+                90deg,
+                transparent 0%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 35%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-center-mix, 90%), var(--sg-lavender-2)) 50%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 65%,
+                transparent 100%
+            ) 0 0 / 100% 2px no-repeat,
+            $surface;
+    } @else {
+        background: $surface;
+    }
+
+    border: 1px solid var(--docs-card-border, var(--table-border));
+    border-radius: var(--table-radius);
+    box-shadow: var(--docs-card-shadow);
+}
+
+@mixin callout-item-accent($token) {
+    --callout-accent: var(#{$token});
+    --callout-accent-soft: color-mix(in srgb, var(#{$token}) var(--callout-accent-soft-mix, 10%), transparent);
+    --callout-accent-border: color-mix(in srgb, var(#{$token}) var(--callout-accent-border-mix, 22%), transparent);
+}
+
+@mixin offering-row-theme($accent, $cta: null) {
+    $cta-token: if($cta, $cta, $accent);
+
+    --offering-accent: var(#{$accent});
+    --offering-badge-bg: color-mix(in srgb, var(#{$accent}) 12%, transparent);
+    --offering-badge-border: color-mix(in srgb, var(#{$accent}) 24%, transparent);
+    --offering-row-glow: color-mix(in srgb, var(#{$accent}) 4%, transparent);
+    --offering-cta-accent: var(#{$cta-token});
+    --offering-action-bg: color-mix(in srgb, var(#{$cta-token}) 8%, transparent);
+    --offering-action-border: color-mix(in srgb, var(#{$cta-token}) 22%, transparent);
+    --offering-action-hover: color-mix(in srgb, var(#{$cta-token}) 14%, transparent);
+}
+
+@mixin docs-page-mesh-grid-layers() {
+    background-image:
+        var(--docs-mesh-icons),
+        linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
+}
+
+@mixin docs-page-mesh-grid-layers-no-icons() {
+    background-image:
+        linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
+}
+
+@mixin docs-page-mesh-size($icons-step, $major-step, $minor-step, $dot-step, $accent-cover: null) {
+    @if $accent-cover {
+        background-size:
+            $accent-cover,
+            $icons-step $icons-step,
+            $major-step $major-step,
+            $major-step $major-step,
+            $minor-step $minor-step,
+            $minor-step $minor-step,
+            $dot-step $dot-step;
+    } @else {
+        background-size:
+            $icons-step $icons-step,
+            $major-step $major-step,
+            $major-step $major-step,
+            $minor-step $minor-step,
+            $minor-step $minor-step,
+            $dot-step $dot-step;
+    }
+}
+
+@mixin docs-page-mesh-grid-size($major-step, $minor-step, $dot-step) {
+    background-size:
+        $major-step $major-step,
+        $major-step $major-step,
+        $minor-step $minor-step,
+        $minor-step $minor-step,
+        $dot-step $dot-step;
+}

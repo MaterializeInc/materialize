@@ -3,6 +3,11 @@
 /* Background */
 .chroma {
     background-color: #ffffff;
+    font-family: var(--font-mono);
+    font-size: rem(1.5);
+    font-weight: 400;
+    letter-spacing: var(--tracking-code);
+    line-height: var(--leading-code);
 }
 
 /* Error */

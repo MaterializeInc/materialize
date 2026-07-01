@@ -11,14 +11,35 @@ $rem-scale: 0.585;
 :root {
     --nav-height: #{rem(6.5)}; // Changes to height requires changes to partials/toc.html since custom scroll logic implementation
 
-    --h1: #{rem(4.0)};
+    // Brand typefaces (style guide): FAIRE Sprig Sans → headlines; Inter → body/UI; FAIRE Sprig Sans Mono → code
+    --font-body: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-heading: "FAIRE Sprig Sans", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "FAIRE Sprig Sans Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+    // Style guide rhythm
+    --leading-headline: 1.4;
+    --leading-code: 1.55;
+    --tracking-eyebrow: 0.05em;
+    --tracking-code: 0.05em;
+    --weight-body: 400;
+    --weight-body-emphasis: 500;
+    --weight-body-strong: 600;
+    --weight-heading: 500;
+
+    // Typography reference (docs content)
+    --h1: #{rem(3.9)};
     --h2: #{rem(2.8)};
     --h3: #{rem(2.1)};
     --h4: #{rem(1.7)};
     --h5: #{rem(1.6)};
-    --base: #{rem(1.6)};
+    --base: #{rem(1.5)};
     --sm: #{rem(1.4)};
     --xsm: #{rem(1.2)};
+    --leading-h1: 1.3;
+    --leading-h2: 1.4;
+    --leading-body: 1.625;
+    --tracking-h1: -0.02em;
+    --tracking-h2: -0.015em;
 
     @media(max-width: 850px) {
         --h1: #{rem(3.4)};
@@ -38,46 +59,119 @@ $rem-scale: 0.585;
     --medium: #{rem(5)};
     --large: #{rem(6)};
 
-    --orchid: #e537c0;
+    --orchid: var(--color-pink-500);
     --orange: #ee8660;
-    --lavender: #ad37e5;
-    --brand: #7f4eff;
-    --purple-dark: #472f85;
+    --lavender: var(--color-purple-300);
+    --brand: var(--color-purple-500);
+    --purple-dark: var(--color-purple-800);
 
-    --white: #fff;
+    --white: var(--color-white);
     --white-light: #fefefe;
     --code-block-light: #f9f7fd;
 
-    --nav-light: #fff;
-    --nav-dark: #111111d9;
+    --nav-light: var(--color-white);
+    --nav-dark: oklch(0.14 0.012 291 / 88%);
 
-    --black: #111111;
-    --black-mid: #141414;
-    --black-light: #181818;
-    --black-lighter: #222222;
-    --black-lightest: #343434;
+    --bg-black: oklch(0.14 0.012 291);
+
+    --black: var(--color-black);
+    --black-mid: oklch(0.18 0.014 291);
+    --black-light: oklch(0.21 0.016 291);
+    --black-lighter: oklch(0.25 0.018 292);
+    --black-lightest: oklch(0.30 0.020 292);
 
     --gray-dark: #555555;
     --gray-mid: #888888;
-    --gray: #bbb;
+    --gray: #bbbbbb;
     --gray-light: #dddddd;
-    --gray-lighter: #dddd;
+    --gray-lighter: rgba(221, 221, 221, 0.87);
     --gray-lightest: #eeeeee;
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} #{rem(0)} rgba(0, 0, 0, 0.08);
+
+    --table-surface: #111115;
+    --table-surface-raised: #15151a;
+    --table-surface-header: #19191f;
+    --table-border: #2a2b32;
+    --table-grid: #24252b;
+    --table-heading: #5e606a;
+    --table-text: #d9d9de;
+    --table-body: #a3a3ad;
+    --table-muted: #5f606a;
+    --table-link: #8b97ff;
+    --table-green: #3ff47a;
+    --table-green-bg: #0f2a1c;
+    --table-green-border: #1b5d37;
+    --table-blue: #8b97ff;
+    --table-blue-bg: #1b1d33;
+    --table-blue-border: #333b75;
+    --table-orange: #ff9a3d;
+    --table-orange-bg: #332113;
+    --table-orange-border: #704017;
+    --table-yellow: #fbbf24;
+    --table-yellow-bg: rgba(251, 191, 36, 0.08);
+    --table-yellow-border: rgba(251, 191, 36, 0.22);
+    --table-blue-glow: rgba(124, 143, 255, 0.9);
+    --table-radius: 14px;
+    --table-shadow: 0 18px 50px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+
+    --surface-subtle: rgba(255, 255, 255, 0.015);
+    --surface-inset:  rgba(0, 0, 0, 0.25);
+    --surface-faint:  rgba(255, 255, 255, 0.01);
+    --border-subtle:  rgba(255, 255, 255, 0.06);
+    --border-faint:   rgba(255, 255, 255, 0.04);
+
+    --offerings-cols: minmax(170px, 220px) minmax(0, 1fr) minmax(150px, 190px);
+
+    // Page background mesh rhythm (theme sets colors only)
+    --docs-mesh-icons-step: #{rem(28)};
+    --docs-mesh-icons-step-sm: #{rem(24)};
+    --docs-mesh-dot-size: 1px;
+    --docs-mesh-dot-step: #{rem(3)};
+    --docs-mesh-dot-step-sm: #{rem(2.75)};
+    --docs-mesh-grid-minor-step: #{rem(2)};
+    --docs-mesh-grid-minor-step-sm: #{rem(1.75)};
+    --docs-mesh-grid-major-step: #{rem(8)};
+    --docs-mesh-grid-major-step-sm: #{rem(7)};
+
+    // Style guide palette (0326-083)
+    --sg-midnight: #100C21;
+    --sg-white: #FFFFFF;
+    --sg-violet: #7F4EFF;
+    --sg-lavender-1: #F2EDFF;
+    --sg-lavender-2: #C0B2E4;
+    --sg-lavender-3: #8F76CF;
+    --sg-lavender-4: #472F85;
+    --sg-lavender-5: #342260;
+    --sg-lavender-6: #2C1D52;
+    --sg-gray-1: #DED9EE;
+    --sg-gray-2: #9B97A3;
+    --sg-gray-3: #736F81;
+    --sg-gray-4: #403D4D;
+    --sg-gray-5: #201D2C;
+    --sg-heading: #F0EEFF;
+    --sg-body: #9B97A3;
+    --sg-inline-lifted: #E2E0F0;
+    --sg-link: #8F76CF;
+    --sg-link-hover: #B09EE0;
+    --sg-divider: #2A2745;
+    --sg-page-bg: #13111E;
+    --sg-teal-3: #00C2AA;
+    --sg-teal-5: #007567;
 }
 
 body.dark {
-    --bg: #100b21;
+    --bg: var(--bg-black);
     --bg-nav: var(--nav-dark);
     --bg-sub: var(--black-light);
     --card: var(--black-mid);
     --card-light: var(--black-light);
     --color-scheme: dark;
-    --divider: var(--black-lighter);
-    --divider-light: var(--black-lightest);
+    --divider: var(--sg-divider);
+    --divider-light: var(--sg-divider);
 
-    --link: var(--highlight);
+    --link: var(--sg-link);
+    --link-hover: var(--sg-link-hover);
 
     --code-block: var(--card-light);
     --code-simple: #c2c2c2;
@@ -88,10 +182,32 @@ body.dark {
     --code-green: #819A7B;
     --code-highlight: var(--code-blue);
 
-    --important: var(--gray-lightest);
-    --sub: var(--gray-light);
-    --body: var(--gray);
-    --highlight: #e0a5fb;
+    --heading: var(--sg-heading);
+    --body: var(--sg-body);
+    --inline-lifted: var(--sg-inline-lifted);
+    --sub: var(--sg-lavender-2);
+    --caption: var(--sg-gray-2);
+    --important: var(--heading);
+    --highlight: var(--color-teal-500);
+    --font-h4: var(--heading);
+
+    // Shared homepage promo surfaces (callout + offerings table)
+    --docs-card-surface: color-mix(in srgb, var(--card-light) 72%, var(--bg));
+    --docs-card-border: color-mix(in srgb, var(--divider-light) 88%, transparent);
+    --docs-card-divider: color-mix(in srgb, var(--divider-light) 55%, transparent);
+    --docs-card-divider-strong: color-mix(in srgb, var(--divider-light) 72%, transparent);
+    --docs-card-glow: color-mix(in srgb, var(--sg-lavender-6) 14%, transparent);
+    --docs-card-inset: color-mix(in srgb, var(--bg) 55%, transparent);
+    --docs-card-shadow:
+        0 1px 0 color-mix(in srgb, var(--heading) 4%, transparent) inset,
+        0 16px 40px color-mix(in srgb, var(--bg) 35%, transparent);
+
+    // Style guide background mesh (dark): grid + data icons + purple accent on the right
+    --docs-mesh-icons: url("/images/docs-mesh/data-icons-dark.svg");
+    --docs-mesh-dot: color-mix(in srgb, #1e293b 25%, transparent);
+    --docs-mesh-grid-minor: rgba(255, 255, 255, 0.033);
+    --docs-mesh-grid-major: rgba(255, 255, 255, 0.055);
+    --docs-mesh-accent: color-mix(in srgb, var(--sg-lavender-6) 13%, transparent);
 
     --shadow-default: 0 #{rem(0.625)} #{rem(1.5)} 0 rgba(0, 0, 0, 0.4);
     --note: #fffad411;
@@ -120,20 +236,30 @@ body.dark {
 
     --tab-bg: var(--gray-lightest);
     --tab-selected-bg: var(--tip-after);
-    --font-h4: var(--gray-lightest);
+
+    --th-border: oklch(var(--color-teal-500-oklch) / 30%);
+
+    --offering-nested-border: var(--border-subtle);
+    --offering-nested-header-bg: color-mix(in srgb, var(--sg-lavender-6) 38%, var(--card-light));
+    --offering-nested-surface: var(--surface-inset);
+
+    --offering-edition-label: var(--sg-lavender-2);
+    --offering-edition-heading: var(--sg-lavender-2);
+    --offering-edition-value: var(--sg-lavender-3);
 }
 
 body.light {
-    --bg: var(--white-light);
-    --bg-nav: var(--nav-light);
-    --bg-sub: var(--gray-lighter);
-    --card: var(--gray-lightest);
+    --bg: #F7F6FA;
+    --bg-nav: color-mix(in srgb, var(--bg) 88%, transparent);
+    --bg-sub: color-mix(in srgb, var(--sg-lavender-1) 45%, var(--white));
+    --card: color-mix(in srgb, var(--sg-lavender-1) 30%, var(--white));
     --card-light: var(--white);
     --color-scheme: light;
-    --divider: var(--gray);
-    --divider-light: var(--gray-lighter);
+    --divider: color-mix(in srgb, var(--sg-gray-1) 75%, var(--gray));
+    --divider-light: color-mix(in srgb, var(--sg-lavender-1) 55%, var(--gray-lighter));
 
-    --link: var(--brand);
+    --link: var(--sg-violet);
+    --link-hover: var(--sg-lavender-4);
 
     --code-block: var(--code-block-light);
     --code-simple: #505050;
@@ -144,11 +270,46 @@ body.light {
     --code-green: #177500;
 
 
-    --important: var(--black);
-    --code-highlight: var(--important);
-    --sub: var(--black-lighter);
-    --body: var(--black-light);
-    --highlight: var(--purple-dark);
+    --heading: var(--sg-midnight);
+    --body: var(--sg-gray-4);
+    --inline-lifted: var(--sg-gray-5);
+    --sub: var(--sg-gray-3);
+    --caption: var(--sg-gray-2);
+    --important: var(--heading);
+    --code-highlight: var(--heading);
+    --highlight: var(--sg-teal-5);
+    --font-h4: var(--heading);
+
+    --table-green: var(--color-teal-700);
+    --table-orange: #C65D17;
+
+    --docs-card-surface: linear-gradient(
+        165deg,
+        color-mix(in srgb, var(--white) 88%, var(--sg-lavender-1)) 0%,
+        var(--white) 42%,
+        color-mix(in srgb, var(--white) 94%, var(--sg-lavender-1)) 100%
+    );
+    --docs-card-border: color-mix(in srgb, var(--sg-lavender-2) 28%, var(--gray-light));
+    --docs-card-divider: color-mix(in srgb, var(--sg-lavender-2) 24%, var(--gray-lighter));
+    --docs-card-divider-strong: color-mix(in srgb, var(--sg-lavender-2) 38%, var(--gray-light));
+    --docs-card-glow: color-mix(in srgb, var(--sg-violet) 7%, transparent);
+    --docs-card-glow-foot: color-mix(in srgb, var(--sg-lavender-1) 55%, transparent);
+    --docs-card-inset: color-mix(in srgb, var(--sg-lavender-1) 38%, var(--white));
+    --docs-card-shadow:
+        0 1px 2px rgba(16, 12, 33, 0.04),
+        0 10px 32px rgba(16, 12, 33, 0.06);
+
+    --callout-accent-soft-mix: 7%;
+    --callout-accent-border-mix: 28%;
+    --docs-card-top-accent-mix: 30%;
+    --docs-card-top-accent-center-mix: 65%;
+
+    // Style guide background mesh (light): grid + data icons
+    --docs-mesh-icons: url("/images/docs-mesh/data-icons-light.svg");
+    --docs-mesh-icons-opacity: 0.12;
+    --docs-mesh-dot: rgba(64, 61, 77, 0.085);
+    --docs-mesh-grid-minor: rgba(64, 61, 77, 0.020);
+    --docs-mesh-grid-major: rgba(64, 61, 77, 0.035);
 
     --note: #fffad411;
     --note-border: #b9a61545;
@@ -175,7 +336,21 @@ body.light {
 
     --tab-bg: var(--gray-lighter);
     --tab-selected-bg: var(--tip);
-    --font-h4: var(--gray-dark);
+
+    --surface-subtle: rgba(0, 0, 0, 0.025);
+    --surface-inset:  rgba(0, 0, 0, 0.04);
+    --surface-faint:  rgba(0, 0, 0, 0.015);
+    --border-subtle:  rgba(0, 0, 0, 0.10);
+    --border-faint:   rgba(0, 0, 0, 0.06);
+
+    --offering-nested-border: color-mix(in srgb, var(--sg-lavender-2) 20%, var(--gray-lighter));
+    --offering-nested-header-bg: color-mix(in srgb, var(--sg-lavender-1) 75%, var(--white));
+    --offering-nested-surface: color-mix(in srgb, var(--sg-lavender-1) 32%, var(--white));
+
+    --offering-edition-label: var(--sg-violet);
+    --offering-edition-heading: var(--sg-gray-3);
+    --offering-edition-value: var(--sg-violet);
+
 }
 
 *,
@@ -187,15 +362,86 @@ body.light {
 }
 
 body {
-    font-family: "Inter", sans-serif;
-    color: var(--important);
+    font-family: var(--font-body);
+    color: var(--body);
     color-scheme: var(--color-scheme);
     background: var(--bg);
     font-size: var(--base);
-    line-height: 1.7;
-    font-weight: 300;
+    line-height: var(--leading-body);
+    font-weight: var(--weight-body);
     max-width: 100vw;
     overflow-x: hidden;
+    position: relative;
+
+    &::before,
+    &::after {
+        content: "";
+        inset: 0;
+        pointer-events: none;
+        position: fixed;
+        z-index: -1;
+    }
+
+    &.dark::before {
+        background-color: #000;
+        background-image:
+            radial-gradient(ellipse 42% 85% at 100% 45%, var(--docs-mesh-accent) 0%, transparent 68%),
+            linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
+            linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
+            linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+            linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+            radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
+        background-position: center;
+        background-repeat: no-repeat, repeat, repeat, repeat, repeat, repeat;
+        background-size:
+            100% 100%,
+            var(--docs-mesh-grid-major-step) var(--docs-mesh-grid-major-step),
+            var(--docs-mesh-grid-major-step) var(--docs-mesh-grid-major-step),
+            var(--docs-mesh-grid-minor-step) var(--docs-mesh-grid-minor-step),
+            var(--docs-mesh-grid-minor-step) var(--docs-mesh-grid-minor-step),
+            var(--docs-mesh-dot-step) var(--docs-mesh-dot-step);
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.65) 0%, black 28%, black 100%);
+    }
+
+    &.light::before {
+        background-color: var(--bg);
+        @include docs-page-mesh-grid-layers-no-icons;
+        background-position: center;
+        background-repeat: repeat;
+        @include docs-page-mesh-grid-size(
+            var(--docs-mesh-grid-major-step),
+            var(--docs-mesh-grid-minor-step),
+            var(--docs-mesh-dot-step)
+        );
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.72) 45%, rgba(0, 0, 0, 0.58) 100%);
+    }
+
+    @media (max-width: 850px) {
+        &.dark::before {
+            background-size:
+                100% 100%,
+                var(--docs-mesh-grid-major-step-sm) var(--docs-mesh-grid-major-step-sm),
+                var(--docs-mesh-grid-major-step-sm) var(--docs-mesh-grid-major-step-sm),
+                var(--docs-mesh-grid-minor-step-sm) var(--docs-mesh-grid-minor-step-sm),
+                var(--docs-mesh-grid-minor-step-sm) var(--docs-mesh-grid-minor-step-sm),
+                var(--docs-mesh-dot-step-sm) var(--docs-mesh-dot-step-sm);
+        }
+
+        &.light::before {
+            @include docs-page-mesh-grid-size(
+                var(--docs-mesh-grid-major-step-sm),
+                var(--docs-mesh-grid-minor-step-sm),
+                var(--docs-mesh-dot-step-sm)
+            );
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        &::before,
+        &::after {
+            background-attachment: scroll;
+        }
+    }
 
     @media(max-width: 500px) {
         font-size: rem(1.5);
@@ -230,8 +476,7 @@ input[type="submit"] {
     5. Links inside notes
     6. Links inside notes with <code/>
 **/
-.btn,
-.btn-ghost {
+.btn {
     color: var(--white);
     text-decoration: none;
 
@@ -242,46 +487,88 @@ input[type="submit"] {
     }
 }
 
-nav {
+.nav,
+.sidebar,
+.toc,
+.toc-wrapper,
+.footer {
+    a:not([class*="btn"]) {
+        color: var(--important);
+
+        &:hover,
+        &:focus {
+            text-decoration: none;
+        }
+    }
+
     .link-with-code {
-        color: var(--sub);
+        color: var(--important);
 
         &:hover,
         &:focus {
             text-decoration: underline;
-            color: var(--link);
+            color: var(--important);
+        }
+    }
+
+    .btn-ghost {
+        color: var(--important);
+
+        &:hover,
+        &:focus {
+            color: var(--important);
+            text-decoration: none;
         }
     }
 }
 
+.content a:not([class]),
 p > a,
 .note > a,
 .tip > a,
 .annotation > a,
-.link-with-code {
+.content .link-with-code {
     color: var(--link);
+    font-family: var(--font-body);
+    font-weight: var(--weight-body);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--link) 30%, transparent);
+    text-underline-offset: 3px;
+    transition: color 0.15s ease, text-decoration-color 0.15s ease;
 
     &:hover,
     &:focus {
+        color: var(--link-hover);
         text-decoration: underline;
-        color: var(--sub);
+        text-decoration-color: var(--link-hover);
+    }
+}
+
+.content .btn-ghost {
+    color: var(--important);
+
+    &:hover,
+    &:focus {
+        color: var(--important);
+        text-decoration: none;
     }
 }
 
 .annotation-title {
-    font-weight: 600;
+    font-family: var(--font-heading);
+    font-weight: 500;
+    line-height: var(--leading-headline);
     padding-bottom: rem(1.2);
 }
 
 a {
+    color: inherit;
+    text-decoration: none;
+
     &:hover,
     &:focus {
         text-decoration: underline;
-        color: var(--link);
     }
-
-    color: var(--sub);
-    text-decoration: none;
 }
 
 /*-------- Finish links color--------*/
@@ -290,11 +577,12 @@ a {
     display: inline-flex;
     justify-content: center;
     align-items: center;
+    font-family: var(--font-body);
     font-size: 12px;
     text-transform: uppercase;
     white-space: nowrap;
-    font-weight: 600;
-    letter-spacing: 0.1em;
+    font-weight: var(--weight-body);
+    letter-spacing: var(--tracking-eyebrow);
     background: var(--brand);
     color: var(--white);
     padding: rem(0.6) rem(1.2);
@@ -316,13 +604,39 @@ a {
 
 .btn-ghost {
     position: relative;
-    background: var(--bg);
-    border: 1px solid var(--brand);
+    display: inline-flex;
+    align-items: center;
+    gap: rem(0.75);
+    padding: rem(0.55) rem(0.85);
+    border: 1px solid var(--divider-light);
+    border-radius: rem(0.75);
+    background: var(--card-light);
     color: var(--important);
+    font-family: var(--font-body);
+    font-size: var(--sm);
+    font-weight: var(--weight-body);
+    letter-spacing: 0;
+    line-height: 1;
+    text-decoration: none;
+    text-transform: none;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    svg {
+        flex: 0 0 auto;
+    }
 
     &:hover,
     &:focus {
         color: var(--important);
+        border-color: var(--highlight);
+        background: var(--tip);
+        box-shadow: none;
+        text-decoration: none;
+    }
+
+    &:focus-visible {
+        outline: 2px solid var(--highlight);
+        outline-offset: 2px;
     }
 }
 
@@ -333,9 +647,9 @@ a {
 }
 
 select.version-dropdown {
-    appearance: none;
 	-moz-appearance: none;
 	-webkit-appearance: none;
+    appearance: none;
 	background-image: url('https://res.cloudinary.com/mzimgcdn/image/upload/v1737129759/dropdown.svg');
 	background-position: right 0.5rem top 50%, 0 0;
 	background-repeat: no-repeat, repeat;
