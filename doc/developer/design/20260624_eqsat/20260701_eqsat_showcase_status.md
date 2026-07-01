@@ -108,8 +108,8 @@ This is a bet on future maintainability against present engineering cost.
 
 ## Pointers
 
-* `doc/developer/design/20260629_eqsat_join_cost_findings.md`: the cost-model bottleneck findings.
-* `doc/developer/design/20260630_eqsat_acyclic_delta_and_hints.md`: the delta and hints design notes.
-* `doc/developer/design/20260630_joinimplementation_internals.md`: the JI subsume map.
+* `doc/developer/design/20260624_eqsat/20260629_eqsat_join_cost_findings.md`: the cost-model bottleneck findings.
+* `doc/developer/design/20260624_eqsat/20260630_eqsat_acyclic_delta_and_hints.md`: the delta and hints design notes.
+* `doc/developer/design/20260624_eqsat/20260630_joinimplementation_internals.md`: the JI subsume map.
 * Cost model and orderer: `src/transform/src/eqsat/cost.rs` (`best_left_deep_sequence`, `binary_join_order`, `delta_join_order`).
 * Commit path: `src/transform/src/eqsat/join_commit.rs`, `src/transform/src/eqsat/raise.rs`.

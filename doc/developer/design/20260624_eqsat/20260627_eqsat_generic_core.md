@@ -1,6 +1,6 @@
 # Equality saturation: a generic language-parameterized e-graph core (SP1)
 
-- Associated: CLU-137; `doc/developer/design/20260625_eqsat_scalar_expressions.md` (the scalar engine this builds on)
+- Associated: CLU-137; `doc/developer/design/20260624_eqsat/20260625_eqsat_scalar_expressions.md` (the scalar engine this builds on)
 
 > File and line references were grounded on 2026-06-27 against branch
 > `claude/mir-equality-optimizer-sodbej`. Re-verify before relying on a specific

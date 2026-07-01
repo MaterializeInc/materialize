@@ -33,7 +33,7 @@ both visible in the corpus diff:
    JI's format.
 
 Both move eqsat toward parity with JI — i.e. toward the north-star of removing
-JI from the eqsat path (`doc/developer/design/20260630_joinimplementation_internals.md`).
+JI from the eqsat path (`doc/developer/design/20260624_eqsat/20260630_joinimplementation_internals.md`).
 
 ---
 
@@ -225,5 +225,5 @@ to near-parity with JI — both straight toward removing JI from the eqsat path.
   the start-key derivation at `~1305-1318`, `implement_arrangements`,
   `install_lifted_mfp`, `permute_order`.
 - `JoinInputCharacteristics`: `src/expr/src/relation.rs` (V1/V2).
-- Related: `doc/developer/design/20260630_joinimplementation_internals.md`
-  (the JI subsume map), `doc/developer/design/20260629_eqsat_join_cost_findings.md`.
+- Related: `doc/developer/design/20260624_eqsat/20260630_joinimplementation_internals.md`
+  (the JI subsume map), `doc/developer/design/20260624_eqsat/20260629_eqsat_join_cost_findings.md`.

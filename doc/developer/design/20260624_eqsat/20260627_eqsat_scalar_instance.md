@@ -1,7 +1,7 @@
 # Equality saturation: scalar as a second instance of the generic core (SP2a)
 
-- Associated: CLU-137; `doc/developer/design/20260627_eqsat_generic_core.md` (SP1, the
-  generic core this builds on); `doc/developer/design/20260625_eqsat_scalar_expressions.md`
+- Associated: CLU-137; `doc/developer/design/20260624_eqsat/20260627_eqsat_generic_core.md` (SP1, the
+  generic core this builds on); `doc/developer/design/20260624_eqsat/20260625_eqsat_scalar_expressions.md`
   (the scalar engine being migrated).
 
 > File and line references were grounded on 2026-06-27 against branch

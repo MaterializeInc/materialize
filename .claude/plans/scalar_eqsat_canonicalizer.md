@@ -1,6 +1,6 @@
 # Plan: scalar equality-saturation canonicalizer
 
-Implements the design note `doc/developer/design/20260625_eqsat_scalar_expressions.md`.
+Implements the design note `doc/developer/design/20260624_eqsat/20260625_eqsat_scalar_expressions.md`.
 Grounded against branch `claude/mir-equality-optimizer-sodbej`, rev `5a94e4189f`.
 Re-verify line references before editing, they drift.
 

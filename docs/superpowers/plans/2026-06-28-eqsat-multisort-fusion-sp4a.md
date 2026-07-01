@@ -17,7 +17,7 @@
 - **No new feature flag.** SP4a runs under the existing `enable_eqsat_optimizer`.
 - **Repo conventions.** No `mod.rs` files (use `analysis.rs` beside `analysis/`, mirroring `colored.rs`/`colored/`). Third-party versions only via `[workspace.dependencies]`. `clippy -p mz-transform --all-targets -- -D warnings` is CI and must stay clean. Tests use `#[mz_ore::test]`, never bare `#[test]`. Do not edit anything under `doc/developer/generated/`.
 - **Test commands.** Unit/datadriven: `bin/cargo-test -p mz-transform <filter>` (nextest; sets the metadata-store env). slt: `bin/sqllogictest --optimized -- <paths>`. Build the binary once; allow ≥10 min for first build.
-- **Spec.** `doc/developer/design/20260628_eqsat_multisort_fusion_sp4a.md` is the source of truth; this plan implements it.
+- **Spec.** `doc/developer/design/20260624_eqsat/20260628_eqsat_multisort_fusion_sp4a.md` is the source of truth; this plan implements it.
 
 ## File Structure
 

@@ -9,7 +9,7 @@
 **Tech Stack:** Rust, the `mz-transform` crate (`src/transform/src/eqsat/`), the optimizer feature-flag macro (`src/repr/src/optimize.rs`), system vars (`src/sql/src/session/vars/definitions.rs`), `bin/cargo-test` (nextest), `bin/sqllogictest`.
 
 **Spec:** `docs/superpowers/specs/2026-06-29-eqsat-delta-join-cost-design.md`
-**Investigation:** `doc/developer/design/20260629_eqsat_join_cost_findings.md`
+**Investigation:** `doc/developer/design/20260624_eqsat/20260629_eqsat_join_cost_findings.md`
 
 ## Global Constraints
 

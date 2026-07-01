@@ -3,7 +3,7 @@
 > **Status:** approved design, ready for an implementation plan.
 > Follow-on to SP-B1 (`docs/superpowers/specs/2026-06-30-eqsat-native-join-commit-design.md`).
 > Supersedes the relevant parts of the design notes in
-> `doc/developer/design/20260630_eqsat_acyclic_delta_and_hints.md`.
+> `doc/developer/design/20260624_eqsat/20260630_eqsat_acyclic_delta_and_hints.md`.
 
 ## Goal
 
@@ -34,7 +34,7 @@ in the corpus diff:
    EXPLAIN-only, but they hurt readability and inflate golden diffs vs JI.
 
 Both move eqsat toward parity with JI, i.e. toward removing JI from the eqsat
-path (`doc/developer/design/20260630_joinimplementation_internals.md`).
+path (`doc/developer/design/20260624_eqsat/20260630_joinimplementation_internals.md`).
 
 ## Architecture
 
@@ -380,6 +380,6 @@ crosses `t1`, so `delta_join_order` returns `None`).
 ## Pointers
 
 - SP-B1 spec: `docs/superpowers/specs/2026-06-30-eqsat-native-join-commit-design.md`
-- Design notes (superseded in part): `doc/developer/design/20260630_eqsat_acyclic_delta_and_hints.md`
-- JI subsume map: `doc/developer/design/20260630_joinimplementation_internals.md`
+- Design notes (superseded in part): `doc/developer/design/20260624_eqsat/20260630_eqsat_acyclic_delta_and_hints.md`
+- JI subsume map: `doc/developer/design/20260624_eqsat/20260630_joinimplementation_internals.md`
 - Delta lowering (the viability evidence): `src/compute-types/src/plan/join/delta_join.rs`

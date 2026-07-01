@@ -8,7 +8,7 @@
 //! `ScalarLang` makes the scalar engine a second user of `core::EGraph<L>`. The
 //! per-class analysis ([`ClassAnalysis`]) is maintained incrementally through the
 //! `on_add`/`on_union` hooks (the fixpoint recompute lives in the scalar
-//! `saturate` driver). See `doc/developer/design/20260627_eqsat_scalar_instance.md`.
+//! `saturate` driver). See `doc/developer/design/20260624_eqsat/20260627_eqsat_scalar_instance.md`.
 
 use std::collections::HashMap;
 

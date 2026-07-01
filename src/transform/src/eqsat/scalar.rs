@@ -11,7 +11,7 @@
 //! round-trip test asserts. Later phases add analyses, rules, a form-targeted
 //! cost, and the `CanonicalizeMfp` boundary.
 //!
-//! See `doc/developer/design/20260625_eqsat_scalar_expressions.md`.
+//! See `doc/developer/design/20260624_eqsat/20260625_eqsat_scalar_expressions.md`.
 
 pub mod analysis;
 pub mod egraph;

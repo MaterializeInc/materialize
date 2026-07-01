@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, `mz-transform` crate, `core::EGraph<L>` / `Language` from SP1, `#[mz_ore::test]` harness.
 
-**Spec:** `doc/developer/design/20260627_eqsat_colored_full_sp3b.md`
+**Spec:** `doc/developer/design/20260624_eqsat/20260627_eqsat_colored_full_sp3b.md`
 
 ## Global Constraints
 
@@ -56,7 +56,7 @@ Convert SP3a's single `colored.rs` into the `colored/` submodule, carry the toy 
 //! `core::EGraph<L>`. A color is a coarsening of the base congruence
 //! (`≅ ⊆ ≅_c`): colors only add edges. Colors form a tree; a layered `find`
 //! canonicalizes through the ancestor chain to black, then applies each color's
-//! own delta. See `doc/developer/design/20260627_eqsat_colored_full_sp3b.md`.
+//! own delta. See `doc/developer/design/20260624_eqsat/20260627_eqsat_colored_full_sp3b.md`.
 //!
 //! Components: [`union_find`] (sparse delta UF), the color tree + layered find
 //! (this file, Task 2), `congruence` (Task 3), `conclusions` (Task 4),

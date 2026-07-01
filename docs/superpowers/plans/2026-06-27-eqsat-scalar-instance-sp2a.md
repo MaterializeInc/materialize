@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust; crate `mz-transform`; module `src/transform/src/eqsat`. Tests via `bin/cargo-test` and `#[mz_ore::test]`.
 
-**Spec:** `doc/developer/design/20260627_eqsat_scalar_instance.md`. **SP1 core:** `doc/developer/design/20260627_eqsat_generic_core.md`.
+**Spec:** `doc/developer/design/20260624_eqsat/20260627_eqsat_scalar_instance.md`. **SP1 core:** `doc/developer/design/20260624_eqsat/20260627_eqsat_generic_core.md`.
 
 ## Global Constraints
 
@@ -319,7 +319,7 @@ Create `src/transform/src/eqsat/scalar/lang.rs`:
 //! `ScalarLang` makes the scalar engine a second user of `core::EGraph<L>`. The
 //! per-class analysis ([`ClassAnalysis`]) is maintained incrementally through the
 //! `on_add`/`on_union` hooks (the fixpoint recompute lives in the scalar
-//! `saturate` driver). See `doc/developer/design/20260627_eqsat_scalar_instance.md`.
+//! `saturate` driver). See `doc/developer/design/20260624_eqsat/20260627_eqsat_scalar_instance.md`.
 
 use std::collections::HashMap;
 

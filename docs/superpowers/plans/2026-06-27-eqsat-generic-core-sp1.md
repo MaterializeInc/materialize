@@ -153,7 +153,7 @@ Prepend to `src/transform/src/eqsat/core.rs` (above the `#[cfg(test)] mod tests`
 //!
 //! SP1 introduces this core and instantiates it once, for the relational
 //! engine (`EGraph<RelLang>`). The scalar engine and colored e-graphs are added
-//! in later sub-projects. See `doc/developer/design/20260627_eqsat_generic_core.md`.
+//! in later sub-projects. See `doc/developer/design/20260624_eqsat/20260627_eqsat_generic_core.md`.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;

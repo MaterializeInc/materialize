@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, the `mz-transform` crate, `eqsat/core` (`EGraph<L>`, `Language`, `Id`), `#[mz_ore::test]`.
 
-**Spec:** `doc/developer/design/20260627_eqsat_colored_spike.md`
+**Spec:** `doc/developer/design/20260624_eqsat/20260627_eqsat_colored_spike.md`
 
 ## Global Constraints
 
@@ -78,7 +78,7 @@ Create `src/transform/src/eqsat/colored.rs`:
 //! runs congruence closure for one color over the immutable base e-nodes and
 //! records explosion metrics. Generators + harness (Tasks 3–4) measure the
 //! color-explosion phenomenon to gate SP3b. See
-//! `doc/developer/design/20260627_eqsat_colored_spike.md`.
+//! `doc/developer/design/20260624_eqsat/20260627_eqsat_colored_spike.md`.
 
 use crate::eqsat::core::{EGraph, Id, Language};
 
@@ -739,7 +739,7 @@ git commit -m "eqsat: SP3a workload generators (Lcg, GenParams, gen_base, gen_co
 
 **Files:**
 - Modify: `src/transform/src/eqsat/colored.rs`
-- Modify: `doc/developer/design/20260627_eqsat_colored_spike.md` (§8 "Findings & Gate Verdict")
+- Modify: `doc/developer/design/20260624_eqsat/20260627_eqsat_colored_spike.md` (§8 "Findings & Gate Verdict")
 
 **Interfaces:**
 - Consumes: `GenParams`, `Locality`, `gen_base`, `gen_colors`, `close_color`, `ColorMetrics`, `EGraph::node_count`.
@@ -832,7 +832,7 @@ Expected: the CSV header + one row per swept cell printed to stdout. Save the fu
 
 - [ ] **Step 4: Write the Findings & Gate Verdict**
 
-Replace the placeholder body of §8 in `doc/developer/design/20260627_eqsat_colored_spike.md` (the line `_To be written by the final task from a real measure_color_explosion run._`) with:
+Replace the placeholder body of §8 in `doc/developer/design/20260624_eqsat/20260627_eqsat_colored_spike.md` (the line `_To be written by the final task from a real measure_color_explosion run._`) with:
 - The captured CSV table (verbatim, in a code block).
 - The two headline readings: how the **sharing ratio** behaves as `base_size` and `n_colors` grow (flat/≪1 ⇒ shared-delta viable; rising/→1 ⇒ mitigations needed), and how the **cascade factor** responds to `fan_out`/`locality`.
 - An explicit verdict, one of: *proceed with shared-delta as-is* / *proceed with named mitigations (list them)* / *reconsider the colored approach*.
@@ -841,7 +841,7 @@ Replace the placeholder body of §8 in `doc/developer/design/20260627_eqsat_colo
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/transform/src/eqsat/colored.rs doc/developer/design/20260627_eqsat_colored_spike.md
+git add src/transform/src/eqsat/colored.rs doc/developer/design/20260624_eqsat/20260627_eqsat_colored_spike.md
 git commit -m "eqsat: SP3a color-explosion harness + findings/gate verdict"
 ```
 

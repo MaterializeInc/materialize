@@ -29,7 +29,7 @@ landed but inert) built a delta-aware keyed-ness cost (`CostModel::delta_join_te
 one (`#2`) at extraction, so a delta path stays keyed instead of crossing.
 
 It is inert end-to-end because of the pipeline order
-(`doc/developer/design/20260630_joinimplementation_internals.md`):
+(`doc/developer/design/20260624_eqsat/20260630_joinimplementation_internals.md`):
 
 1. The eqsat physical pass extracts a plan. For the VOJ, an acyclic multi-way
    `LEFT JOIN`, extraction produces a `Rel::Join` (the cyclic-only
@@ -337,6 +337,6 @@ Follow `enable_eqsat_delta_join_cost` as the template; see
   `install_lifted_mfp:1048-1095`, Differential emit `814-822`.
 - `JoinImplementation` enum: `src/expr/src/relation.rs:3218-3261`.
 - Selector (prior cycle): `eqsat/join_spelling.rs`.
-- Subsume map: `doc/developer/design/20260630_joinimplementation_internals.md`.
-- Findings: `doc/developer/design/20260629_eqsat_join_cost_findings.md`.
+- Subsume map: `doc/developer/design/20260624_eqsat/20260630_joinimplementation_internals.md`.
+- Findings: `doc/developer/design/20260624_eqsat/20260629_eqsat_join_cost_findings.md`.
 - Memory: `eqsat-joinimpl-undoes-spelling`, `eqsat-local-vs-global-cost-model`.

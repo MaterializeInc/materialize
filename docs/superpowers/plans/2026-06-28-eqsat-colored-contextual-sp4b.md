@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Spec: `doc/developer/design/20260628_eqsat_colored_contextual_sp4b.md`. Every task implicitly includes its requirements.
+- Spec: `doc/developer/design/20260624_eqsat/20260628_eqsat_colored_contextual_sp4b.md`. Every task implicitly includes its requirements.
 - One worktree/branch: `claude/mir-equality-optimizer-sodbej`, worktree `.claude/worktrees/mir-equality-optimizer`. Run all commands from the worktree root.
 - **Test commands (mz-test skill):** unit tests `bin/cargo-test -p mz-transform <filter>`; a single slt file `bin/sqllogictest --optimized -- <path>`; regenerate slt `bin/sqllogictest --optimized -- --rewrite-results <path>`. Rust tests use `#[mz_ore::test]`. Clippy gate: `cargo clippy -p mz-transform --all-targets -- -D warnings`.
 - **Behavior neutrality through Task 6:** Tasks 1–6 must leave optimizer output unchanged (`EquivMode::Phase2a` is the default), so the full slt suite and goldens stay green. The behavior change is isolated to Task 7.

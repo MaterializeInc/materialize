@@ -2,7 +2,7 @@
 
 > **Status:** approved design (brainstorm output), revised after review. Next
 > step: `writing-plans`. Builds on the investigation in
-> `doc/developer/design/20260629_eqsat_join_cost_findings.md` (findings + a
+> `doc/developer/design/20260624_eqsat/20260629_eqsat_join_cost_findings.md` (findings + a
 > probe that de-risked the cost math). This spec turns those findings into a
 > buildable, gated, end-to-end change.
 
@@ -325,4 +325,4 @@ the A/B baseline.
 - Flags: `src/sql/src/session/vars/definitions.rs`
   (`enable_eqsat_physical_optimizer`, `enable_eager_delta_joins`);
   `src/repr/src/optimize.rs` (`optimizer_feature_flags!`).
-- Investigation: `doc/developer/design/20260629_eqsat_join_cost_findings.md`.
+- Investigation: `doc/developer/design/20260624_eqsat/20260629_eqsat_join_cost_findings.md`.
