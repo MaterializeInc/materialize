@@ -34,6 +34,30 @@
     box-shadow: var(--docs-card-shadow);
 }
 
+// Brand gradient hairline pinned to the top edge of a docs-feature-card.
+// The host element needs position: relative.
+@mixin docs-card-top-hairline() {
+    &::before {
+        background: linear-gradient(
+            90deg,
+            transparent 0%,
+            color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 35%,
+            color-mix(in srgb, var(--brand) var(--docs-card-top-accent-center-mix, 90%), var(--sg-lavender-2)) 50%,
+            color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 65%,
+            transparent 100%
+        );
+        border-radius: var(--table-radius) var(--table-radius) 0 0;
+        content: "";
+        height: 1px;
+        left: 0;
+        pointer-events: none;
+        position: absolute;
+        right: 0;
+        top: 0;
+        z-index: 1;
+    }
+}
+
 @mixin callout-item-accent($token) {
     --callout-accent: var(#{$token});
     --callout-accent-soft: color-mix(in srgb, var(#{$token}) var(--callout-accent-soft-mix, 10%), transparent);
@@ -104,6 +128,12 @@
     --offering-accent: var(#{$accent});
     --offering-badge-bg: color-mix(in srgb, var(#{$accent}) 12%, transparent);
     --offering-badge-border: color-mix(in srgb, var(#{$accent}) 24%, transparent);
+    --offering-tile-bg: linear-gradient(
+        145deg,
+        color-mix(in srgb, var(#{$accent}) 22%, transparent),
+        color-mix(in srgb, var(#{$accent}) 7%, transparent)
+    );
+    --offering-tile-glow: 0 0 14px color-mix(in srgb, var(#{$accent}) 14%, transparent);
     --offering-row-glow: color-mix(in srgb, var(#{$accent}) 4%, transparent);
     --offering-cta-accent: var(#{$cta-token});
     --offering-action-bg: color-mix(in srgb, var(#{$cta-token}) 8%, transparent);

@@ -339,25 +339,7 @@ p+p {
             text-decoration: none;
         }
 
-        &::before {
-            background: linear-gradient(
-                90deg,
-                transparent 0%,
-                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 35%,
-                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-center-mix, 90%), var(--sg-lavender-2)) 50%,
-                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 65%,
-                transparent 100%
-            );
-            border-radius: var(--table-radius) var(--table-radius) 0 0;
-            content: "";
-            height: 2px;
-            left: 0;
-            pointer-events: none;
-            position: absolute;
-            right: 0;
-            top: 0;
-            z-index: 1;
-        }
+        @include docs-card-top-hairline;
 
         @include docs-feature-card;
         color: var(--body);
@@ -485,8 +467,7 @@ p+p {
             text-decoration: none;
             transition:
                 background-color 0.18s ease,
-                border-color 0.18s ease,
-                box-shadow 0.18s ease;
+                border-color 0.18s ease;
 
             &:nth-child(2) {
                 @include callout-item-accent("--highlight");
@@ -500,36 +481,39 @@ p+p {
             &:focus {
                 background-color: color-mix(in srgb, var(--callout-accent-soft) 20%, var(--callout-item-surface));
                 border-color: var(--callout-accent-border);
-                box-shadow: none;
 
                 .whats-new-callout__item-heading {
                     color: var(--heading);
                 }
 
                 .whats-new-callout__item-icon {
-                    background-color: color-mix(in srgb, var(--callout-accent-soft) 55%, var(--callout-item-surface));
-                    border-color: var(--callout-accent-border);
-                    box-shadow: none;
                     color: var(--heading);
+                }
+
+                .whats-new-callout__item-arrow {
+                    color: color-mix(in srgb, var(--callout-accent) 72%, var(--heading));
+                    opacity: 1;
+                    transform: translateX(2px);
                 }
             }
         }
 
         &__item-icon {
             align-items: center;
-            background-color: color-mix(in srgb, var(--callout-accent-soft) 70%, var(--callout-item-surface));
-            border: 1px solid var(--callout-accent-border);
+            background: linear-gradient(
+                145deg,
+                color-mix(in srgb, var(--callout-accent) 24%, transparent),
+                color-mix(in srgb, var(--callout-accent) 8%, transparent)
+            );
+            border: 1px solid color-mix(in srgb, var(--callout-accent) 32%, transparent);
             border-radius: rem(0.6);
-            color: color-mix(in srgb, var(--callout-accent) 72%, var(--heading));
+            box-shadow: 0 0 16px color-mix(in srgb, var(--callout-accent) 14%, transparent);
+            color: color-mix(in srgb, var(--callout-accent) 76%, var(--heading));
             display: flex;
             flex-shrink: 0;
             height: 40px;
             justify-content: center;
-            transition:
-                background 0.18s ease,
-                border-color 0.18s ease,
-                box-shadow 0.18s ease,
-                color 0.18s ease;
+            transition: color 0.18s ease;
             width: 40px;
 
             svg {
@@ -540,8 +524,21 @@ p+p {
 
         &__item-copy {
             display: grid;
+            flex: 1;
             gap: 6px;
             min-width: 0;
+        }
+
+        &__item-arrow {
+            align-self: center;
+            color: var(--body);
+            display: flex;
+            flex-shrink: 0;
+            opacity: 0.45;
+            transition:
+                color 0.18s ease,
+                opacity 0.18s ease,
+                transform 0.18s ease;
         }
 
         &__item-heading {
@@ -1185,7 +1182,10 @@ p+p {
         color: var(--body);
         font-family: var(--font-body);
         overflow: hidden;
+        position: relative;
         width: 100%;
+
+        @include docs-card-top-hairline;
 
         &,
         * {
@@ -1239,7 +1239,7 @@ p+p {
                 position: absolute;
                 top: 0;
                 transition: opacity 0.2s ease;
-                width: 2px;
+                width: 1px;
             }
 
             &:hover {
@@ -1260,6 +1260,8 @@ p+p {
                 // Identity + CTA: neutral surfaces; purple only on the row stripe + inner table
                 --offering-badge-bg: var(--surface-inset);
                 --offering-badge-border: var(--border-subtle);
+                --offering-tile-bg: var(--surface-inset);
+                --offering-tile-glow: none;
                 --offering-cta-accent: var(--inline-lifted);
                 --offering-action-bg: var(--surface-subtle);
                 --offering-action-border: color-mix(in srgb, var(--sg-lavender-2) 28%, var(--border-subtle));
@@ -1303,9 +1305,10 @@ p+p {
 
         &__icon-tile {
             align-items: center;
-            background: var(--offering-badge-bg);
+            background: var(--offering-tile-bg, var(--offering-badge-bg));
             border: 1px solid var(--offering-badge-border);
             border-radius: rem(0.6);
+            box-shadow: var(--offering-tile-glow, none);
             color: color-mix(in srgb, var(--offering-identity-accent, var(--offering-accent)) 72%, var(--heading));
             display: flex;
             flex-shrink: 0;
@@ -1545,12 +1548,20 @@ p+p {
             transition: background-color 0.15s ease, border-color 0.15s ease;
             white-space: normal;
 
+            svg {
+                transition: transform 0.15s ease;
+            }
+
             &:hover,
             &:focus {
                 background: var(--offering-action-hover);
                 border-color: var(--offering-cta-accent, var(--offering-accent));
                 color: var(--offering-cta-accent, var(--offering-accent));
                 text-decoration: none;
+
+                svg {
+                    transform: translateX(2px);
+                }
             }
         }
 
