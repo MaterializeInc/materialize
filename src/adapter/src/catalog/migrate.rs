@@ -1045,22 +1045,21 @@ fn ast_rewrite_add_missing_index_ids(
 fn ast_rewrite_kafka_metadata_refresh_intervals(
     stmt: &mut Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
-    use mz_repr::strconv::parse_interval;
     use mz_sql::ast::{
         CreateSinkConnection, CreateSourceConnection, KafkaSinkConfigOptionName,
         KafkaSourceConfigOptionName, Value, WithOptionValue,
     };
-    let interval: Option<&mut String> = match stmt {
+    use mz_sql::plan::TryFromValue;
+    let interval: Option<&mut Value> = match stmt {
         Statement::CreateSource(stmt) => {
             if let CreateSourceConnection::Kafka { options, .. } = &mut stmt.connection {
                 options.iter_mut().find_map(|option| {
                     if matches!(
                         option.name,
                         KafkaSourceConfigOptionName::TopicMetadataRefreshInterval
-                    ) && let Some(WithOptionValue::Value(Value::String(ref mut s))) =
-                        option.value
+                    ) && let Some(WithOptionValue::Value(ref mut val)) = option.value
                     {
-                        Some(s)
+                        Some(val)
                     } else {
                         None
                     }
@@ -1075,10 +1074,9 @@ fn ast_rewrite_kafka_metadata_refresh_intervals(
                     if matches!(
                         option.name,
                         KafkaSinkConfigOptionName::TopicMetadataRefreshInterval
-                    ) && let Some(WithOptionValue::Value(Value::String(ref mut s))) =
-                        option.value
+                    ) && let Some(WithOptionValue::Value(ref mut val)) = option.value
                     {
-                        Some(s)
+                        Some(val)
                     } else {
                         None
                     }
@@ -1094,12 +1092,12 @@ fn ast_rewrite_kafka_metadata_refresh_intervals(
         return Ok(());
     };
 
-    let interval_dur = parse_interval(interval)
-        .map_err(|e| anyhow::anyhow!("failed to parse interval: {e}"))?
-        .duration()?;
+    let interval_dur = Duration::try_from_value(interval.clone()).map_err(|e| {
+        anyhow::anyhow!("invalid value for kafka metadata refresh interval: {interval:?}: {e}")
+    })?;
 
     if interval_dur < Duration::from_secs(1) {
-        *interval = "1s".to_string();
+        *interval = Value::String("1s".to_string());
     }
 
     Ok(())

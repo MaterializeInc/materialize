@@ -124,9 +124,9 @@ pub use statement::{
     StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
     resolve_cluster_for_materialized_view,
 };
+pub use with_options::TryFromValue;
 
 use self::statement::ddl::ClusterAlterOptionExtracted;
-use self::with_options::TryFromValue;
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]
