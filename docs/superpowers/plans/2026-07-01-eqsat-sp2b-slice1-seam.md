@@ -24,23 +24,23 @@
 ## File Structure
 
 **New files:**
-- `src/transform/src/eqsat/rules/scalar.rewrite` — scalar rule source (one grammar, separate file for human organization by sort).
-- `src/transform/src/eqsat/scalar_extract.rs` — determinism-parity scalar extractor over `EGraph<CombinedLang>`, exposes `pub fn raise(eg, id)`.
-- `src/transform/src/eqsat/scalar_saturate.rs` — scalar saturate driver + `canonicalize_combined` entry, over `EGraph<CombinedLang>`, using copied bounds and `SCALAR_COMPILED_RULES`.
-- `src/transform/tests/testdata/eqsat_scalar_corpus` — committed differential corpus fixture (datadriven).
-- `src/transform/tests/eqsat_scalar_parity.rs` — the differential harness test.
+- `src/transform/src/eqsat/rules/scalar.rewrite`: scalar rule source (one grammar, separate file for human organization by sort).
+- `src/transform/src/eqsat/scalar_extract.rs`: determinism-parity scalar extractor over `EGraph<CombinedLang>`, exposes `pub fn raise(eg, id)`.
+- `src/transform/src/eqsat/scalar_saturate.rs`: scalar saturate driver + `canonicalize_combined` entry, over `EGraph<CombinedLang>`, using copied bounds and `SCALAR_COMPILED_RULES`.
+- `src/transform/tests/testdata/eqsat_scalar_corpus`: committed differential corpus fixture (datadriven).
+- `src/transform/tests/eqsat_scalar_parity.rs`: the differential harness test.
 
 **Modified files:**
-- `src/transform/src/eqsat/dsl.rs` — add `Pat::SUnary { func, input }`.
-- `src/transform/build/grammar.rs` — parse `Unary[<func>](child)` into `Pat::SUnary`.
-- `src/transform/build/codegen.rs` — scalar arms in `sym_name`/`Matcher::node`/`Matcher::child`/`find_stmts`; a scalar-func-keyword table; split emitted rules into `COMPILED_RULES` (relational-root) and `SCALAR_COMPILED_RULES` (scalar-root).
-- `src/transform/build.rs` — read `scalar.rewrite` in addition to `relational.rewrite`, concatenate rule lists.
-- `src/transform/src/eqsat/egraph/view.rs` — scalar methods on `MatchGraph`; `scalar_index` field on `BaseView`; impls.
-- `src/transform/src/eqsat/egraph/combined.rs` — `scalar_index()` builder + `add_scalar`/`lower_scalar` helpers on `EGraph<CombinedLang>`.
-- `src/transform/src/eqsat/rules.rs` — expose `SCALAR_COMPILED_RULES` via a `scalar_all()` accessor.
-- `src/transform/src/eqsat/lean.rs` — scalar denotation dispatch + `emit_rule` scalar arm (sorry).
-- `src/transform/lean/MirRewrite/Semantics.lean` — bounded scalar denotation for `not`.
-- `src/transform/src/eqsat.rs` (or the eqsat mod file) — register the new modules `scalar_extract`, `scalar_saturate`.
+- `src/transform/src/eqsat/dsl.rs`: add `Pat::SUnary { func, input }`.
+- `src/transform/build/grammar.rs`: parse `Unary[<func>](child)` into `Pat::SUnary`.
+- `src/transform/build/codegen.rs`: scalar arms in `sym_name`/`Matcher::node`/`Matcher::child`/`find_stmts`; a scalar-func-keyword table; split emitted rules into `COMPILED_RULES` (relational-root) and `SCALAR_COMPILED_RULES` (scalar-root).
+- `src/transform/build.rs`: read `scalar.rewrite` in addition to `relational.rewrite`, concatenate rule lists.
+- `src/transform/src/eqsat/egraph/view.rs`: scalar methods on `MatchGraph`; `scalar_index` field on `BaseView`; impls.
+- `src/transform/src/eqsat/egraph/combined.rs`: `scalar_index()` builder + `add_scalar`/`lower_scalar` helpers on `EGraph<CombinedLang>`.
+- `src/transform/src/eqsat/rules.rs`: expose `SCALAR_COMPILED_RULES` via a `scalar_all()` accessor.
+- `src/transform/src/eqsat/lean.rs`: scalar denotation dispatch + `emit_rule` scalar arm (sorry).
+- `src/transform/lean/MirRewrite/Semantics.lean`: bounded scalar denotation for `not`.
+- `src/transform/src/eqsat.rs` (or the eqsat mod file): register the new modules `scalar_extract`, `scalar_saturate`.
 
 ---
 
@@ -419,7 +419,7 @@ git commit -m "eqsat codegen: scalar-unary match arms + SCALAR_COMPILED_RULES sp
 - Test: inline `#[cfg(test)]` in `combined.rs`
 
 **Interfaces:**
-- Produces: `EGraph::lower_scalar(&mut self, expr: &MirScalarExpr) -> Id` — lowers a `MirScalarExpr` into `CNode::Scalar` classes, reusing `scalar::lower::snode_of`.
+- Produces: `EGraph::lower_scalar(&mut self, expr: &MirScalarExpr) -> Id`, lowers a `MirScalarExpr` into `CNode::Scalar` classes, reusing `scalar::lower::snode_of`.
 - Consumes: `scalar::lower::snode_of` (already `pub(crate)`, lower.rs:25), `CNode::Scalar`, `SNode`.
 
 - [ ] **Step 1: Add `lower_scalar`**
@@ -451,7 +451,7 @@ In `combined.rs`, in the `impl EGraph` block, add:
     }
 ```
 
-(This test depends on Task 5's `raise`. If executing strictly in order, write the test now and let it fail to compile until Task 5; that is the intended TDD ordering. Alternatively move this assertion into Task 5's commit. The subagent driving this task should keep the `lower_scalar` unit assertion minimal — e.g. assert the root class holds a `CNode::Scalar(SNode::CallUnary{..})` — and defer the round-trip to Task 5.)
+(This test depends on Task 5's `raise`. If executing strictly in order, write the test now and let it fail to compile until Task 5; that is the intended TDD ordering. Alternatively move this assertion into Task 5's commit. The subagent driving this task should keep the `lower_scalar` unit assertion minimal, e.g. assert the root class holds a `CNode::Scalar(SNode::CallUnary{..})`, and defer the round-trip to Task 5.)
 
 Minimal standalone assertion (no dependency on Task 5):
 
@@ -651,7 +651,7 @@ fn reconstruct(
 
 - [ ] **Step 2: Register the module**
 
-In the eqsat module file (the one with `pub mod egraph;` / `pub mod scalar;` — check `src/transform/src/eqsat.rs`), add `pub(crate) mod scalar_extract;`.
+In the eqsat module file (the one with `pub mod egraph;` / `pub mod scalar;`, check `src/transform/src/eqsat.rs`), add `pub(crate) mod scalar_extract;`.
 
 - [ ] **Step 3: Write the failing test (round-trip identity, no rules)**
 
@@ -1114,7 +1114,7 @@ git commit --allow-empty -m "eqsat: slice-1 seam go/no-go PASS (not_not parity +
 ## Self-Review
 
 **Spec coverage (against `2026-07-01-eqsat-sp2b-scalar-dsl-port-design.md`, slice-1 row):**
-- Scalar `Pat` AST (2.1) → Task 2. Scalar `Tmpl` deferred (not_not RHS is a metavar; construction first fires in slice 2) — consistent with the spec's "introduce shapes, exercise when a rule needs them".
+- Scalar `Pat` AST (2.1) → Task 2. Scalar `Tmpl` deferred (not_not RHS is a metavar; construction first fires in slice 2), consistent with the spec's "introduce shapes, exercise when a rule needs them".
 - Codegen scalar arms (2.2) → Task 3.
 - Scalar view methods (2.3) → Task 1.
 - Scalar extractor with determinism parity (2.6) + pinned `pub fn raise` → Task 5.
@@ -1128,4 +1128,4 @@ git commit --allow-empty -m "eqsat: slice-1 seam go/no-go PASS (not_not parity +
 
 **Type consistency:** `ScalarIndex = HashMap<ScalarSym, Vec<(Id, SNode)>>` (Task 1) is consumed identically in `BaseView` (Task 1) and `scalar_saturate` (Task 6). `raise(eg, id)` signature identical in Tasks 5, 6. `canonicalize_combined(expr, col_types)` identical in Tasks 6, 7, 8. `SCALAR_COMPILED_RULES` (Task 3) consumed by `scalar_all()` (Task 6).
 
-**Open risk to verify during execution:** `Matcher::child`'s scalar branch (Task 3 Step 4) assumes a scalar operator child is detected by `matches!(pat, Pat::SUnary { .. })`. When more scalar `Pat` variants land (slices 2+), that check must widen to all scalar variants — noted for those slices, correct for slice 1 (SUnary is the only scalar variant).
+**Open risk to verify during execution:** `Matcher::child`'s scalar branch (Task 3 Step 4) assumes a scalar operator child is detected by `matches!(pat, Pat::SUnary { .. })`. When more scalar `Pat` variants land (slices 2+), that check must widen to all scalar variants, noted for those slices, correct for slice 1 (SUnary is the only scalar variant).
