@@ -41,6 +41,9 @@ pub struct PreflightInput {
     pub ddl_check_interval: Duration,
     pub panic_after_timeout: bool,
     pub bootstrap_args: BootstrapArgs,
+    /// Whether to idle in place, rather than exit, when fenced out by a newer
+    /// generation. See [`crate::Config::idle_when_fenced_out`].
+    pub idle_when_fenced_out: bool,
 }
 
 /// Output of preflight checks.
@@ -67,6 +70,7 @@ pub async fn preflight_0dt(
         ddl_check_interval,
         panic_after_timeout,
         bootstrap_args,
+        idle_when_fenced_out,
     }: PreflightInput,
 ) -> Result<PreflightOutput, CatalogError> {
     info!(%deploy_generation, ?caught_up_max_wait, "performing 0dt preflight checks");
@@ -221,6 +225,14 @@ pub async fn preflight_0dt(
             read_only: false,
             caught_up_trigger: None,
         })
+    } else if idle_when_fenced_out {
+        // Exiting under a Kubernetes StatefulSet (`restartPolicy: Always`) would
+        // restart the container straight back into this fenced-out state, a
+        // crash loop until the orchestrator deletes the StatefulSet. Idle until
+        // pod deletion's SIGTERM terminates us instead.
+        info!("this deployment has been fenced out; idling until terminated");
+        std::future::pending::<()>().await;
+        unreachable!("pending() never resolves");
     } else {
         exit!(0, "this deployment has been fenced out");
     }

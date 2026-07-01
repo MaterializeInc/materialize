@@ -10,7 +10,26 @@
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
 
+# Extract libeatmydata from a Debian image for CI use. eatmydata disables
+# fsync for faster test execution. Activated via LD_PRELOAD=libeatmydata.so
+# set as a container environment variable (must be set before process start).
+FROM debian:13-slim AS eatmydata
+RUN apt-get update && apt-get install -y --no-install-recommends eatmydata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Statically-linked `tini`, the PID 1 init for all distroless prod images.
+# Distroless ships no init, so without this each leaf binary would run as PID 1
+# and have to forward signals and reap zombies (e.g. ssh tunnel subprocesses)
+# itself. Leaf images opt in via ENTRYPOINT ["/usr/bin/tini", "--", <binary>].
+MZFROM tini-static AS tini
+
 FROM gcr.io/distroless/cc-debian13:nonroot-28078d2e5e77671d2046dcc9e2c75334e31efa4d
+
+# Copy libeatmydata for CI performance optimization (no-op unless
+# LD_PRELOAD=libeatmydata.so is set as a container env var).
+COPY --from=eatmydata /usr/lib/*/libeatmydata.so /usr/lib/
+COPY --from=tini /output/tini /usr/bin/tini
+
 USER nonroot
 ENV HOME=/home/nonroot
 ENTRYPOINT []
