@@ -34,7 +34,6 @@ name="downgrade-restriction" >}}
 - [Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform)
 - [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
-- [Helm 3.2.0+](https://helm.sh/docs/intro/install/)
 
 ## Upgrade process
 
@@ -44,79 +43,96 @@ The following procedure performs a rolling upgrade, where both the old and new M
 
 {{</ important >}}
 
-### Step 1: Set up
+### Step 1: Update TF module source version
 
-1. Open a Terminal window.
-
-1. Configure Google Cloud CLI with your GCP credentials. For details, see the [Google Cloud
-   documentation](https://cloud.google.com/sdk/docs/initializing).
-
-1. Go to the Terraform directory for your Materialize deployment. For example,
-   if you deployed from the `gcp/examples/simple` directory:
-
-   ```bash
-   cd materialize-terraform-self-managed/gcp/examples/simple
-   ```
-
-1. Configure `kubectl` to connect to your GKE cluster, replacing:
-
-   - `<your-gke-cluster-name>` with your cluster name; i.e., the
-     `gke_cluster_name` in the Terraform output. For the sample example, your
-     cluster name has the form `<name_prefix>-gke`; e.g., `simple-demo-gke`
-
-   - `<your-region>` with your cluster location; i.e., the
-     `gke_cluster_location` in the Terraform output. Your
-     region can also be found in your `terraform.tfvars` file.
-
-   - `<your-project-id>` with your GCP project ID.
-
-   ```bash
-   # gcloud container clusters get-credentials <your-gke-cluster-name> --region <your-region> --project <your-project-id>
-   gcloud container clusters get-credentials $(terraform output -raw gke_cluster_name) \
-    --region $(terraform output -raw gke_cluster_location) \
-    --project <your-project-id>
-   ```
-
-   To verify that you have configured correctly, run the following command:
-
-   ```bash
-   kubectl get nodes
-   ```
-
-   For help with `kubectl` commands, see [kubectl Quick reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
-
-### Step 2: Update the Helm Chart
+Update each module's `source` to point to the desired release tag, substituting
+`<RELEASE_TAG>` in the code block below with your tag version:
 
 {{< important >}}
 
-{{% include-from-yaml data="self_managed/upgrades" name="upgrade-order-rule" %}}
+The following code block is not comprehensive. Only the core modules and their
+dependency chain are shown below.
 
-{{</ important >}}
+If your configuration includes additional modules (networking, storage,
+database, node pools, etc.) provided by Materialize, **update those to the same
+release tag as well**.
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-update-helm-chart" %}}
+{{< /important >}}
 
-### Step 3: Upgrade the Materialize Operator
+```hcl
+module "gke" {
+  source = "github.com/MaterializeInc/materialize-terraform-self-managed//gcp/modules/gke?ref=<RELEASE_TAG>"
+  # ... your existing configuration ...
+}
 
-{{< important >}}
+module "cert_manager" {
+  source = "github.com/MaterializeInc/materialize-terraform-self-managed//kubernetes/modules/cert-manager?ref=<RELEASE_TAG>"
+  # ... your existing configuration ...
 
-{{% include-from-yaml data="self_managed/upgrades" name="upgrade-order-rule" %}}
+  # Your configuration may have additional dependencies here.
+  depends_on = [module.gke]
+}
 
-{{</ important >}}
+module "operator" {
+  source = "github.com/MaterializeInc/materialize-terraform-self-managed//gcp/modules/operator?ref=<RELEASE_TAG>"
+  # ... your existing configuration ...
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-materialize-operator" %}}
+  # Your configuration may have additional dependencies here.
+  depends_on = [module.cert_manager]
+}
 
-### Step 4: Upgrading Materialize Instances
+module "materialize_instance" {
+  source = "github.com/MaterializeInc/materialize-terraform-self-managed//kubernetes/modules/materialize-instance?ref=<RELEASE_TAG>"
+  # ... your existing configuration ...
 
-{{< important >}}
+  # Your configuration may have additional dependencies here.
+  depends_on = [module.operator]
+}
 
-{{% include-from-yaml data="self_managed/upgrades" name="upgrade-order-rule" %}}
+# Update the source of any additional Materialize-provided modules to the same release tag
+```
 
-{{</ important >}}
+### Step 2: Request rollout
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-materialize-instance" %}}
+{{% include-from-yaml data="self_managed/upgrades" name="upgrade-request_rollout" %}}
+
+### Step 3: Apply the updated TF
+
+1. Initialize the Terraform directory to download the required providers
+    and modules:
+
+    ```bash
+    terraform init
+    ```
+
+1. Review the execution plan before applying. In particular, check for any
+   resources Terraform plans to destroy and recreate (shown as `-/+` in the
+   plan), especially stateful resources such as your cluster, storage, and
+   database:
+
+    ```bash
+    terraform plan
+    ```
+
+1. After reviewing the plan, apply the Terraform configuration.
+
+    ```bash
+    terraform apply
+    ```
+
+### Step 4: Verify the upgrade
+
+Configure `kubectl` to connect to your GKE cluster, replacing `<your-project-id>`
+with your GCP project ID:
+
+```bash
+# gcloud container clusters get-credentials <your-gke-cluster-name> --region <your-region> --project <your-project-id>
+gcloud container clusters get-credentials $(terraform output -raw gke_cluster_name) \
+ --region $(terraform output -raw gke_cluster_location) \
+ --project <your-project-id>
+```
+
+{{% include-from-yaml data="self_managed/upgrades" name="upgrade-verify-status" %}}
 
 ## See also
 

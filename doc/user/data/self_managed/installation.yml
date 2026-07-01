@@ -74,7 +74,7 @@
     ```bash
     kubectl -n materialize get all
     ```
-    {{< /tabs >}}
+    {{< /tab >}}
     {{< tab "Materialize instance" >}}
     To check the status of the Materialize instance, which runs in the `materialize-environment` namespace:
     ```bash
