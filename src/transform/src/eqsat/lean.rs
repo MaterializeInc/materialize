@@ -149,6 +149,9 @@ fn collect_binders(
     };
     match pat {
         Pat::RelVar(name) => add(name, "Bag", out, seen),
+        // A scalar-unary pattern binds a fixed function, not a metavariable, so
+        // only its input contributes binders.
+        Pat::SUnary { input, .. } => collect_binders(input, out, seen),
         Pat::Filter { preds, input } => {
             add(preds, "Row → Bool", out, seen);
             collect_binders(input, out, seen);
@@ -217,6 +220,9 @@ fn arg(s: String) -> String {
 fn translate_pat(pat: &Pat) -> String {
     match pat {
         Pat::RelVar(n) => n.clone(),
+        // Scalar Lean semantics land in SP2b slice-1 Task 9. `gen-lean` is not run
+        // until then, so this stub is never reached before that task.
+        Pat::SUnary { .. } => todo!("scalar Lean translation lands in SP2b slice-1 Task 9"),
         Pat::Filter { preds, input } => format!("filterB {preds} {}", arg(translate_pat(input))),
         Pat::Map { scalars, input } => format!("mapB {scalars} {}", arg(translate_pat(input))),
         Pat::Project { outputs, input } => {

@@ -111,6 +111,16 @@ fn sym_name(p: &Pat) -> &'static str {
         Pat::WcoJoin { .. } => "WcoJoin",
         Pat::Union { .. } => "Union",
         Pat::RelVar(_) => unreachable!("relvars have no operator symbol"),
+        Pat::SUnary { .. } => unreachable!("scalar patterns have no relational operator symbol"),
+    }
+}
+
+/// The Rust pattern text matching a fixed scalar `UnaryFunc` by keyword. Extend
+/// this table as scalar rules reference more unary functions.
+fn unary_func_pat(func: &str) -> String {
+    match func {
+        "not" => "mz_expr::UnaryFunc::Not(_)".to_string(),
+        other => panic!("unknown scalar unary func keyword: {other}"),
     }
 }
 
@@ -252,6 +262,14 @@ impl Matcher {
                 ));
                 self.variadic(inputs, c);
             }
+            Pat::SUnary { func, input } => {
+                let c = self.fresh.id();
+                let fpat = unary_func_pat(func);
+                self.stmts.push(format!(
+                    "let SNode::CallUnary {{ func: {fpat}, expr: e{c} }} = {node} else {{ continue }};"
+                ));
+                self.child(input, &format!("e{c}"));
+            }
             Pat::RelVar(_) => unreachable!("node() is only called on operators"),
         }
     }
@@ -289,10 +307,17 @@ impl Matcher {
             }
             _ => {
                 let c = self.fresh.id();
-                // Iterate only the relational e-nodes of the child class; scalar
-                // classes never match a relational pattern.
-                self.stmts
-                    .push(format!("for n{c} in g.rel_class_nodes({class}) {{"));
+                // A scalar operator child scans the scalar e-nodes of the class;
+                // a relational one scans only the relational e-nodes. A scalar
+                // class never matches a relational pattern and vice versa.
+                let scalar = matches!(pat, Pat::SUnary { .. });
+                if scalar {
+                    self.stmts
+                        .push(format!("for n{c} in g.scalar_class_nodes({class}) {{"));
+                } else {
+                    self.stmts
+                        .push(format!("for n{c} in g.rel_class_nodes({class}) {{"));
+                }
                 // Reborrow as reference so match ergonomics work identically to
                 // the inherent EGraph::rel_class_nodes (&ENode) return type.
                 self.stmts.push(format!("let n{c} = &n{c};"));
@@ -499,6 +524,23 @@ fn find_stmts(rule: &Rule, mode: &FindMode) -> String {
             s.push_str("for root_id in g.rel_class_ids() {\n");
             s.push_str(&format!("let {local} = root_id;\n"));
             s.push_str(&body(rule, &m, mode));
+            s.push_str("}\n");
+        }
+        Pat::SUnary { .. } => {
+            s.push_str(
+                "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::Unary) {\n",
+            );
+            s.push_str("let root_id = root_id;\n");
+            s.push_str("let root_node = &root_node;\n");
+            m.node(&rule.lhs, "root_node");
+            for stmt in &m.stmts {
+                s.push_str(stmt);
+                s.push('\n');
+            }
+            s.push_str(&body(rule, &m, mode));
+            for _ in 0..m.open_braces {
+                s.push_str("}\n");
+            }
             s.push_str("}\n");
         }
         _ => {
@@ -835,8 +877,45 @@ fn emit_apply(rule: &Rule) -> String {
     )
 }
 
+/// True for rules whose left-hand-side root is a scalar-sort operator. These
+/// are compiled into `SCALAR_COMPILED_RULES` so they never run in the relational
+/// saturation pass.
+fn is_scalar_rule(r: &Rule) -> bool {
+    matches!(r.lhs, Pat::SUnary { .. })
+}
+
+/// The `CompiledRule { .. }` table literal for one rule. Identical text for every
+/// rule regardless of sort, so the relational and scalar tables share it.
+fn compiled_rule_literal(r: &Rule) -> String {
+    // Which e-class analyses this rule's conditions read, so the saturation
+    // loop can skip recomputing analyses no active rule needs. Derived from
+    // the same conditions that generate `find`, so it cannot drift.
+    let nonneg = r
+        .conds
+        .iter()
+        .any(|c| matches!(c, Cond::NonNegative { .. }));
+    let keys = r
+        .conds
+        .iter()
+        .any(|c| matches!(c, Cond::IsUniqueKey { .. } | Cond::ProducesKey { .. }));
+    let monotonic = r.conds.iter().any(|c| matches!(c, Cond::Monotonic { .. }));
+    format!(
+        "    CompiledRule {{ name: {:?}, phase: {}, needs: AnalysisNeeds {{ nonneg: {}, keys: {}, monotonic: {} }}, colored: {}, find: find_{}_base, apply: apply_{}_base }},\n",
+        r.name,
+        phase(&r.phase),
+        nonneg,
+        keys,
+        monotonic,
+        r.colored,
+        r.name,
+        r.name
+    )
+}
+
 fn emit_compiled(rules: &[Rule]) -> String {
     let mut s = String::new();
+    // The per-rule find/apply function bodies are emitted for ALL rules; only
+    // the table partition below differs by root sort.
     for r in rules {
         s.push_str(&emit_find(r));
         s.push('\n');
@@ -847,30 +926,16 @@ fn emit_compiled(rules: &[Rule]) -> String {
         "/// Every built-in rewrite rule, compiled to `find`/`apply` functions.\n\
          pub(crate) static COMPILED_RULES: &[CompiledRule] = &[\n",
     );
-    for r in rules {
-        // Which e-class analyses this rule's conditions read, so the saturation
-        // loop can skip recomputing analyses no active rule needs. Derived from
-        // the same conditions that generate `find`, so it cannot drift.
-        let nonneg = r
-            .conds
-            .iter()
-            .any(|c| matches!(c, Cond::NonNegative { .. }));
-        let keys = r
-            .conds
-            .iter()
-            .any(|c| matches!(c, Cond::IsUniqueKey { .. } | Cond::ProducesKey { .. }));
-        let monotonic = r.conds.iter().any(|c| matches!(c, Cond::Monotonic { .. }));
-        s.push_str(&format!(
-            "    CompiledRule {{ name: {:?}, phase: {}, needs: AnalysisNeeds {{ nonneg: {}, keys: {}, monotonic: {} }}, colored: {}, find: find_{}_base, apply: apply_{}_base }},\n",
-            r.name,
-            phase(&r.phase),
-            nonneg,
-            keys,
-            monotonic,
-            r.colored,
-            r.name,
-            r.name
-        ));
+    for r in rules.iter().filter(|r| !is_scalar_rule(r)) {
+        s.push_str(&compiled_rule_literal(r));
+    }
+    s.push_str("];\n");
+    s.push_str(
+        "/// Every scalar-sort rewrite rule, compiled to `find`/`apply` functions.\n\
+         pub(crate) static SCALAR_COMPILED_RULES: &[CompiledRule] = &[\n",
+    );
+    for r in rules.iter().filter(|r| is_scalar_rule(r)) {
+        s.push_str(&compiled_rule_literal(r));
     }
     s.push_str("];\n");
     s
@@ -1048,6 +1113,11 @@ fn listpat(l: &ListPat) -> String {
 fn pat(p: &Pat) -> String {
     match p {
         Pat::RelVar(n) => format!("{P}::Pat::RelVar({})", s(n)),
+        Pat::SUnary { func, input } => format!(
+            "{P}::Pat::SUnary {{ func: {}, input: Box::new({}) }}",
+            s(func),
+            pat(input)
+        ),
         Pat::Filter { preds, input } => format!(
             "{P}::Pat::Filter {{ preds: {}, input: Box::new({}) }}",
             s(preds),
