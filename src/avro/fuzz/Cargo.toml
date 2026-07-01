@@ -1,0 +1,43 @@
+# Fuzz crate for mz-avro decoders. Avro bytes arrive from Kafka, so a
+# decoder bug here is a crash/poisoning risk for source ingestion.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+# Run via the repo-wide runner: `bin/ci-builder run nightly ci/test/cargo-fuzz.sh`,
+# or locally:
+#     cd src/avro/fuzz
+#     cargo +nightly fuzz run reader_decode -- -max_total_time=60
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-avro-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-avro = { path = ".." }
+
+[[bin]]
+name = "reader_decode"
+path = "fuzz_targets/reader_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "schema_resolve"
+path = "fuzz_targets/schema_resolve.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "avro_schema_parse"
+path = "fuzz_targets/avro_schema_parse.rs"
+test = false
+doc = false
+bench = false
