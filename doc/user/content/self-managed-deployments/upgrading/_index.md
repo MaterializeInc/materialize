@@ -146,7 +146,7 @@ kubectl patch materialize <instance-name> \
 
 With v1, updating the spec automatically triggers a rollout and there is no
 `requestRollout` field. For details on the underlying mechanism, see [How it
-works](/self-managed-deployments/upgrading/adopting-the-v1-crd/#how-it-works).
+works](/self-managed-deployments/upgrading/adopting-the-v1-crd/#how-the-switchover-works).
 
 To trigger a rollout even when there are no other changes to the instance,
 specify a new `UUID` value for `forceRollout`. That is:

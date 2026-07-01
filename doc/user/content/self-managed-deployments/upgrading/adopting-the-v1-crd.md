@@ -201,7 +201,7 @@ webhook that converts between `v1` and `v1alpha1`.
 {{< /tab >}}
 {{< /tabs >}}
 
-## Adopt `v1`
+## Switch to `v1`
 
 After you have fulfilled the pre-requisites (Materialize v26.30+, set up
 infrastructure requirements, enabled `v1` CRD), you can submit a `v1` CR to
