@@ -1518,7 +1518,7 @@ class KafkaTopicMetadataRefreshInterval(Check):
         # version still accepts the value; otherwise the CREATE in initialize()
         # fails up-front. Also makes this a no-op in non-upgrade scenarios
         # (base == current, rejecting build).
-        return self.base_version < MzVersion.parse_mz("v26.30.0-dev")
+        return self.base_version < MzVersion.parse_mz("v26.32.0-dev")
 
     def initialize(self) -> Testdrive:
         # '999ms' source / '500ms' sink: accepted and functional pre-rejection,
