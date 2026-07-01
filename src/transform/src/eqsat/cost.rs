@@ -574,8 +574,57 @@ impl CostModel {
         if self.available.is_empty() {
             return false;
         }
-        // Only match a bare opaque global Get.
+        // Only match a bare opaque global Get that has an available index. The
+        // presence guard here means an unconstrained input (empty join key)
+        // counts as arranged only when it is actually an available base
+        // relation, matching the cost model's "no arrangement to build" case.
+        //
+        // NOTE: This is deliberately conservative and does NOT strip leading
+        // Filter/Map wrappers, unlike the join orderer's use of
+        // `key_cols_arranged`. The cost model's memory estimate drives extractor
+        // plan selection, and crediting a filtered index here shifts those
+        // choices (e.g. flips delta stars to differential), so it stays bare-get
+        // only. The orderer, whose job is to match the committed arrangement count
+        // that `per_input_available` computes, does strip wrappers.
         let gid = match global_id_from_leaf(input) {
+            Some(g) => g,
+            None => return false,
+        };
+        if !self.available.contains_key(&gid) {
+            return false;
+        }
+        // The set of local column indices (relative to this input's arity) that
+        // the equivalences require this input to be keyed by.
+        let join_key_cols = join_key_cols_for_input(offset, input.arity(), equivalences);
+        self.key_cols_arranged(input, &join_key_cols)
+    }
+
+    /// Whether `input` (through leading Filter/Map wrappers) is an opaque global
+    /// `Get` whose available index covers exactly `key_cols`.
+    ///
+    /// This is the single notion of "arranged" shared by the cost model
+    /// ([`Self::input_already_arranged`]) and the differential join orderer
+    /// ([`Self::binary_join_order`]). Divergent arranged-ness checks in those two
+    /// places are exactly what let the orderer pick index-blind orders that the
+    /// cost model then had to arrange, so both go through here.
+    ///
+    /// An empty `key_cols` means the input carries no join constraint, so no
+    /// arrangement is needed and it counts as arranged. Otherwise an index whose
+    /// key column set equals `key_cols` means the collection is already arranged
+    /// by exactly what is needed. Only plain column references in the index key
+    /// are matched; expression keys are not.
+    ///
+    /// NOTE: Wrapper stripping here matches `per_input_available`, the
+    /// authoritative commit-time arrangement recognizer, so the orderer's reuse
+    /// decisions line up with the arrangements the commit actually builds.
+    /// `input_already_arranged` layers a stricter bare-Get guard on top before
+    /// calling this, because the cost model's memory estimate must stay
+    /// conservative to avoid shifting extractor plan choices.
+    fn key_cols_arranged(&self, input: &Rel, key_cols: &BTreeSet<usize>) -> bool {
+        if key_cols.is_empty() {
+            return true;
+        }
+        let gid = match global_id_from_leaf(strip_arrangement_wrappers(input)) {
             Some(g) => g,
             None => return false,
         };
@@ -583,22 +632,9 @@ impl CostModel {
             Some(ks) => ks,
             None => return false,
         };
-        // Compute the set of local column indices (relative to this input's
-        // arity) that the equivalences require this input to be keyed by.
-        let input_arity = input.arity();
-        let join_key_cols = join_key_cols_for_input(offset, input_arity, equivalences);
-        if join_key_cols.is_empty() {
-            // No join constraint on this input: no arrangement needed.
-            return true;
-        }
-        // Check whether any available index covers exactly the join key columns.
-        // An index whose key column set equals the join key column set means the
-        // collection is already arranged by exactly what is needed.
         keys.iter().any(|key| {
-            // Collect the column indices in this index key (only plain column
-            // references; expressions are not matched).
             let idx_cols: BTreeSet<usize> = key.iter().filter_map(|e| e.as_column()).collect();
-            idx_cols == join_key_cols
+            &idx_cols == key_cols
         })
     }
 
@@ -764,7 +800,29 @@ impl CostModel {
                     .collect();
                 !frontier_key_cols(offsets[add], arities[add], &placed, equivalences).is_empty()
             };
-            best_left_deep_sequence(n, &agm, &is_keyed)?
+            // Whether adding `add` onto the non-empty frontier `frontier_mask`
+            // reuses an existing arrangement rather than building a fresh one. The
+            // key that step needs is `add`'s frontier key against the placed
+            // inputs. Availability is tested through the SAME `key_cols_arranged`
+            // the cost model uses, so the orderer and cost model never disagree
+            // about what is arranged.
+            //
+            // `frontier_mask` is always non-empty here: the DP accounts the start
+            // input's own arrangement at the first transition, keying the start
+            // against the second input (its first-edge key). That mirrors
+            // `commit_differential`, which aligns the committed start key to the
+            // first lookup, NOT the start's full join key. Using the full join key
+            // would over-widen a join-graph hub's start key and hide the very
+            // index reuse this dimension exists to reward.
+            let is_arranged = |frontier_mask: u32, add: usize| -> bool {
+                let placed: Vec<(usize, usize)> = (0..n)
+                    .filter(|&j| frontier_mask & (1 << j) != 0)
+                    .map(|j| (offsets[j], arities[j]))
+                    .collect();
+                let key = frontier_key_cols(offsets[add], arities[add], &placed, equivalences);
+                self.key_cols_arranged(&inputs[add], &key)
+            };
+            best_left_deep_sequence(n, &agm, &is_keyed, &is_arranged)?
         };
 
         let mut placed: Vec<(usize, usize)> = Vec::new();
@@ -989,6 +1047,24 @@ impl CostModel {
 ///
 /// Returns `Some(gid)` only for `Rel::Opaque(MirRelationExpr::Get { Id::Global(gid) })`.
 /// All other leaves (local gets, filtered/projected inputs) return `None`.
+/// Strip leading `Filter`/`Map` wrappers to reach the base leaf. Both preserve
+/// the base collection's column indices, so an index on the base still covers a
+/// join key expressed in those columns. `Project` shifts columns and is not
+/// stripped. This mirrors [`crate::eqsat::raise::per_input_available`]'s wrapper
+/// handling so the join orderer's arranged check and the commit-time arrangement
+/// count agree on which inputs are already arranged. Without it, a null-rejection
+/// `Filter` pushed onto an indexed `Get` would hide the index from the orderer.
+fn strip_arrangement_wrappers(rel: &Rel) -> &Rel {
+    let mut node = rel;
+    loop {
+        match node {
+            Rel::Filter { input, .. } | Rel::Map { input, .. } => node = input,
+            _ => break,
+        }
+    }
+    node
+}
+
 fn global_id_from_leaf(rel: &Rel) -> Option<GlobalId> {
     if let Rel::Opaque(mir) = rel {
         if let MirRelationExpr::Get {
@@ -1108,26 +1184,44 @@ pub(super) fn frontier_key_cols(
     key_cols
 }
 
-/// The input sequence (global indices) of the cheapest left-deep order, with
-/// **keyed-ness primary**: minimize `(forced_crosses, AGM terms_cost)`
-/// lexicographically. `is_keyed(frontier_mask, add)` reports whether placing
-/// input `add` on top of the inputs in `frontier_mask` is a keyed step (a
-/// non-keyed step is a forced cross). This mirrors `delta_join_terms`' cross
-/// count and the findings doc's "keyed-ness is primary" rule. Returns `None`
-/// only when `n == 0`.
+/// The input sequence (global indices) of the cheapest left-deep order, ranked
+/// lexicographically by `(forced_crosses, unarranged_steps, AGM terms_cost)`.
+///
+/// `is_keyed(frontier_mask, add)` reports whether placing input `add` on top of
+/// the inputs in `frontier_mask` is a keyed step (a non-keyed step is a forced
+/// cross). This is primary and mirrors `delta_join_terms`' cross count.
+///
+/// `is_arranged(frontier_mask, add)` reports whether that same step reuses an
+/// available arrangement rather than building a fresh one. `unarranged_steps`
+/// counts the steps that are NOT arranged, so a lower count means more index
+/// reuse. It ranks below crosses (a forced cross is worse than any build) and
+/// above the AGM work vector, so among orders with the same number of crosses
+/// the orderer prefers the one reusing the most arrangements, matching what the
+/// cost model then charges.
+///
+/// The start input's own arrangement is accounted at the first transition
+/// (singleton to pair), keyed by the start's first-edge key against the second
+/// input, not its full join key. This mirrors `commit_differential`, which
+/// aligns the committed start key to the first lookup. `is_arranged` is therefore
+/// only ever called with a non-empty `frontier_mask`. Returns `None` only when
+/// `n == 0`.
 fn best_left_deep_sequence(
     n: usize,
     agm: &dyn Fn(u32) -> f64,
     is_keyed: &dyn Fn(u32, usize) -> bool,
+    is_arranged: &dyn Fn(u32, usize) -> bool,
 ) -> Option<Vec<usize>> {
     if n == 0 {
         return None;
     }
     let full = (1u32 << n) - 1;
-    // best[S] = (crosses, cost terms, predecessor subset, last input added).
-    let mut best: Vec<Option<(usize, Vec<f64>, u32, usize)>> = vec![None; 1 << n];
+    // best[S] = (crosses, unarranged, cost terms, predecessor subset, last input).
+    let mut best: Vec<Option<(usize, usize, Vec<f64>, u32, usize)>> = vec![None; 1 << n];
     for i in 0..n {
-        best[1 << i] = Some((0, vec![], 0, i)); // single input: 0 crosses, no work
+        // Single input: it is the start. Its own arrangement cost is deferred to
+        // the first transition, where the second input fixes the start's
+        // first-edge key.
+        best[1 << i] = Some((0, 0, vec![], 0, i));
     }
     for s in 1..=full {
         if s.count_ones() < 2 {
@@ -1139,18 +1233,32 @@ fn best_left_deep_sequence(
             let i = sub.trailing_zeros() as usize;
             let rest = s & !(1 << i);
             if rest != 0 {
-                if let Some((rest_crosses, rest_terms, _, _)) = &best[rest as usize] {
-                    let cross_delta = if is_keyed(rest, i) { 0 } else { 1 };
-                    let cand_crosses = rest_crosses + cross_delta;
+                if let Some((rest_crosses, rest_unarranged, rest_terms, _, _)) =
+                    &best[rest as usize]
+                {
+                    let cand_crosses = rest_crosses + if is_keyed(rest, i) { 0 } else { 1 };
+                    let mut cand_unarranged =
+                        rest_unarranged + if is_arranged(rest, i) { 0 } else { 1 };
+                    // The first transition also fixes the start's own arrangement:
+                    // `rest` is the singleton start, keyed against `i` (the second
+                    // input) by its first-edge key. Count that build too.
+                    if rest.count_ones() == 1 {
+                        let start = rest.trailing_zeros() as usize;
+                        cand_unarranged += if is_arranged(1 << i, start) { 0 } else { 1 };
+                    }
                     let mut cand_terms = rest_terms.clone();
                     cand_terms.push(agm_s);
-                    let better = best[s as usize].as_ref().is_none_or(|(c_cr, c_tm, _, _)| {
-                        cand_crosses < *c_cr
-                            || (cand_crosses == *c_cr
-                                && terms_cost(&cand_terms).lt(&terms_cost(c_tm)))
-                    });
+                    let better =
+                        best[s as usize]
+                            .as_ref()
+                            .is_none_or(|(c_cr, c_un, c_tm, _, _)| {
+                                (cand_crosses, cand_unarranged) < (*c_cr, *c_un)
+                                    || ((cand_crosses, cand_unarranged) == (*c_cr, *c_un)
+                                        && terms_cost(&cand_terms).lt(&terms_cost(c_tm)))
+                            });
                     if better {
-                        best[s as usize] = Some((cand_crosses, cand_terms, rest, i));
+                        best[s as usize] =
+                            Some((cand_crosses, cand_unarranged, cand_terms, rest, i));
                     }
                 }
             }
@@ -1161,7 +1269,7 @@ fn best_left_deep_sequence(
     let mut seq = Vec::with_capacity(n);
     let mut s = full;
     loop {
-        let (_, _, pred, last) = best[s as usize].clone()?;
+        let (_, _, _, pred, last) = best[s as usize].clone()?;
         seq.push(last);
         if pred == 0 {
             break;
@@ -2855,6 +2963,72 @@ mod tests {
         assert!(
             order.steps[1].key_cols.is_empty(),
             "disconnected step must be a cross (empty key)"
+        );
+    }
+
+    #[mz_ore::test]
+    fn binary_join_order_prefers_arranged_input() {
+        // A 4-input chain A-B-C-D, all base relations (uniform degree), where an
+        // index is available on C keyed by its local column 0.
+        //
+        //   A(#0,#1) B(#2,#3) C(#4,#5) D(#6,#7)
+        //   A.1 = B.0  (col1 = col2)
+        //   B.1 = C.0  (col3 = col4)   -> C's local col 0 is the B-side key
+        //   C.1 = D.0  (col5 = col6)   -> C's local col 1 is the D-side key
+        //
+        // C is only arranged by [0] when it is added with B already placed and D
+        // not yet placed. The index-blind orderer, breaking ties by input index,
+        // picks [D, C, B, A]: there C keys onto {D} by local col 1 (a fresh
+        // arrangement). The index-aware orderer must instead pick an order that
+        // keys C by local col 0 (reusing the available index).
+        let inputs = vec![
+            global_opaque(1, 2),
+            global_opaque(2, 2),
+            global_opaque(3, 2),
+            global_opaque(4, 2),
+        ];
+        let equivalences = vec![
+            vec![col(1), col(2)],
+            vec![col(3), col(4)],
+            vec![col(5), col(6)],
+        ];
+        // Index on C (id 3) keyed by local column 0.
+        let model = CostModel::with_available(avail_one(3, &[0]));
+
+        let order = model
+            .binary_join_order(&inputs, &equivalences)
+            .expect("connected chain has an order");
+        assert_eq!(order.steps.len(), 4);
+
+        // Column offsets, to recompute C's actual arrangement key.
+        let arities = [2usize, 2, 2, 2];
+        let offsets = [0usize, 2, 4, 6];
+        let c_pos = order
+            .steps
+            .iter()
+            .position(|s| s.input == 2)
+            .expect("C must be one of the steps");
+        // C's committed arrangement key is its frontier key against the inputs
+        // placed before it. For a lookup that is the preceding frontier. For the
+        // start it is the first-edge key against the SECOND input, matching how
+        // `commit_differential` aligns the start key to the first lookup. Either
+        // way, reusing C's index means that key is exactly {0}.
+        let c_key = if c_pos == 0 {
+            let second = order.steps[1].input;
+            super::frontier_key_cols(
+                offsets[2],
+                arities[2],
+                &[(offsets[second], arities[second])],
+                &equivalences,
+            )
+        } else {
+            order.steps[c_pos].key_cols.clone()
+        };
+        assert_eq!(
+            c_key,
+            BTreeSet::from([0usize]),
+            "index-aware orderer must arrange C by its indexed column 0 (reusing the \
+             available arrangement); got {c_key:?} at position {c_pos}"
         );
     }
 
