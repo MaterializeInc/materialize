@@ -452,10 +452,17 @@ impl EGraph {
     }
 
     /// Arities of the bound relation metavariables.
+    ///
+    /// `b.rels` also carries scalar metavariables bound inside a scalar
+    /// pattern (the grammar has no separate binding kind for them), so this
+    /// uses `try_arity` and skips entries with no well-defined arity rather
+    /// than `arity`'s panic. A template that queries a skipped name via
+    /// `IxExpr::Arity` gets the generated `apply` function's "unbound
+    /// relation" error, not a panic.
     pub(crate) fn binding_arities(&self, b: &EBindings) -> BTreeMap<String, usize> {
         b.rels
             .iter()
-            .map(|(n, &id)| (n.clone(), self.arity(id)))
+            .filter_map(|(n, &id)| self.try_arity(id).map(|a| (n.clone(), a)))
             .collect()
     }
 }

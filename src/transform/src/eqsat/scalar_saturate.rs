@@ -197,10 +197,17 @@ mod tests {
 
     #[mz_ore::test]
     fn canonicalize_combined_is_identity_without_rules() {
-        // Until `not_not` is compiled (a later slice), the scalar rule set is
-        // empty and this is the identity. A dedicated test asserts the rewrite
-        // once the rule lands.
+        // A single `Not` matches no compiled scalar rule (`not_not` needs a
+        // double negation), so this is the identity.
         let e = MirScalarExpr::column(0).call_unary(UnaryFunc::Not(mz_expr::func::Not));
         assert_eq!(canonicalize_combined(&e, &[]), e);
+    }
+
+    #[mz_ore::test]
+    fn not_not_rewrites_via_combined() {
+        let not = |e: MirScalarExpr| e.call_unary(UnaryFunc::Not(mz_expr::func::Not));
+        let x = MirScalarExpr::column(0);
+        let e = not(not(x.clone()));
+        assert_eq!(canonicalize_combined(&e, &[]), x);
     }
 }

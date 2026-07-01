@@ -1,0 +1,17 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+
+# Equality-preserving rewrites over MIR scalar expressions.
+#
+# Parsed by the same build-time grammar as `relational.rewrite`, and compiled
+# into `SCALAR_COMPILED_RULES` (see `build/codegen.rs::is_scalar_rule`). These
+# rules run only in the scalar saturation pass over the combined e-graph
+# (`eqsat::scalar_saturate`), never in the relational `EGraph::saturate` pass.
+
+# Double negation cancels.
+rule not_not {
+    doc "Not(Not(x)) = x"
+    Unary[not](Unary[not](x)) => x
+}

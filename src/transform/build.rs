@@ -9,11 +9,13 @@
 
 //! Compile-time code generation for the eqsat rewrite rules.
 //!
-//! `src/eqsat/rules/relational.rewrite` is the single source of truth for the
-//! equality-saturation rewrite rules. This build script parses it with a
-//! [`chumsky`] grammar and emits Rust source into `$OUT_DIR/eqsat_rules.rs`,
-//! which `src/eqsat/rules.rs` includes. Nothing parses the rule file at run
-//! time: the generated code is the rule engine.
+//! `src/eqsat/rules/relational.rewrite` and `src/eqsat/rules/scalar.rewrite`
+//! are the single source of truth for the equality-saturation rewrite rules,
+//! split by the sort (relational vs. scalar) of the rule's left-hand-side
+//! root. This build script parses both with a [`chumsky`] grammar, concatenates
+//! the rule lists, and emits Rust source into `$OUT_DIR/eqsat_rules.rs`, which
+//! `src/eqsat/rules.rs` includes. Nothing parses the rule files at run time:
+//! the generated code is the rule engine.
 //!
 //! The AST types ([`Rule`], [`Pat`], [`Tmpl`], …) are shared with the crate by
 //! `include!`ing `src/eqsat/dsl.rs` below, so the grammar, the codegen, and the
@@ -54,6 +56,21 @@ fn main() {
         }
         panic!("{msg}");
     });
+
+    let scalar_path = Path::new(&manifest).join("src/eqsat/rules/scalar.rewrite");
+    println!("cargo:rerun-if-changed={}", scalar_path.display());
+    let scalar_src = fs::read_to_string(&scalar_path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", scalar_path.display()));
+    let scalar_rules = grammar::parse(&scalar_src).unwrap_or_else(|errs| {
+        let mut msg = format!("failed to parse {}:\n", scalar_path.display());
+        for e in errs {
+            msg.push_str(&format!("  {e}\n"));
+        }
+        panic!("{msg}");
+    });
+
+    let mut rules = rules;
+    rules.extend(scalar_rules);
 
     let generated = codegen::emit(&rules);
 

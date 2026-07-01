@@ -163,16 +163,25 @@ mod tests {
         assert!(!names.iter().any(|n| *n == "reduce_elision")); // uses is_unique_key
     }
 
-    /// The two generated backends (compiled `COMPILED_RULES` and the AST
-    /// `rules_ast()`) come from the same source, so their rule names and phases
-    /// must agree.
+    /// The two generated backends (compiled rules and the AST `rules_ast()`)
+    /// come from the same source, so their rule names and phases must agree.
+    /// `rules_ast()` carries every rule regardless of sort (it feeds the Lean
+    /// emitter, which will translate scalar patterns starting in a later
+    /// slice), so it is compared against `COMPILED_RULES` followed by
+    /// `SCALAR_COMPILED_RULES`: build.rs appends `scalar.rewrite`'s rules after
+    /// `relational.rewrite`'s and codegen's per-sort filters are stable, so
+    /// that concatenation reproduces the original declaration order.
     #[mz_ore::test]
     fn compiled_and_ast_agree() {
         let ast = super::rules_ast();
-        let compiled = super::all();
         let ast_names: Vec<&str> = ast.rules.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(compiled.rule_names(), ast_names);
-        for (c, a) in super::COMPILED_RULES.iter().zip(&ast.rules) {
+        let compiled: Vec<&super::CompiledRule> = super::COMPILED_RULES
+            .iter()
+            .chain(super::SCALAR_COMPILED_RULES.iter())
+            .collect();
+        let compiled_names: Vec<&str> = compiled.iter().map(|r| r.name).collect();
+        assert_eq!(compiled_names, ast_names);
+        for (c, a) in compiled.iter().zip(&ast.rules) {
             assert_eq!(c.name, a.name);
             assert_eq!(c.phase, a.phase, "phase mismatch for {}", c.name);
         }
