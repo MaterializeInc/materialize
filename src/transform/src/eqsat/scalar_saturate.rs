@@ -210,4 +210,39 @@ mod tests {
         let e = not(not(x.clone()));
         assert_eq!(canonicalize_combined(&e, &[]), x);
     }
+
+    // Differential parity harness (SP2b Slice 1): asserts the combined path
+    // equals the old standalone scalar engine (`crate::eqsat::scalar::canonicalize`)
+    // on the expressions the ported rules cover. Both entry points are
+    // `pub(crate)`, so this lives in-crate rather than as an external
+    // integration test; the committed corpus fixture is read via `include_str!`
+    // relative to this file.
+    //
+    // Slice 1 ports only `not_not`, so the corpus is restricted to
+    // `not(not(...))`-shaped expressions over a bare column: no literals, no
+    // type context, nothing that would trigger one of the old engine's other
+    // 20 rules the new path lacks. A failure here is the slice-1 go/no-go
+    // trigger, not something to paper over by adjusting the assertion.
+
+    /// Committed corpus fixture (see the file for the format and slice-1 scope).
+    const CORPUS: &str = include_str!("../../tests/testdata/eqsat_scalar_corpus");
+
+    #[mz_ore::test]
+    fn scalar_parity_not_not() {
+        let not = |e: MirScalarExpr| e.call_unary(UnaryFunc::Not(mz_expr::func::Not));
+        let x = MirScalarExpr::column(0);
+        let cases = vec![not(not(x.clone())), not(not(not(x.clone()))), x.clone()];
+        for e in cases {
+            let new = canonicalize_combined(&e, &[]);
+            let old = crate::eqsat::scalar::canonicalize(&e, &[]);
+            assert_eq!(new, old, "parity failed for {e:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_slice1() {
+        // Slice 1 requires at least one double-negation case. Later slices add
+        // tie / could_error / type-context coverage assertions here.
+        assert!(CORPUS.contains("not(not("), "corpus must exercise not_not");
+    }
 }

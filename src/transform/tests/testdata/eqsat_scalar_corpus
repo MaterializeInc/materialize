@@ -1,0 +1,11 @@
+# eqsat scalar differential corpus (slice 1 seed).
+# Format: `expr` line, `types` line (comma-separated ReprScalarType names), blank separator.
+# Slice 1 covers not_not; ties/could_error/type axes are seeded here and grown per slice.
+expr: not(not(#0))
+types: bool
+
+expr: not(not(not(#0)))
+types: bool
+
+expr: #0
+types: bool
