@@ -265,7 +265,7 @@ impl Matcher {
             Pat::SUnary { func, input } => {
                 let fpat = unary_func_pat(func);
                 self.stmts.push(format!(
-                    "let SNode::CallUnary {{ func: {fpat}, expr: e{c} }} = {node} else {{ continue }};"
+                    "let crate::eqsat::scalar::node::SNode::CallUnary {{ func: {fpat}, expr: e{c} }} = {node} else {{ continue }};"
                 ));
                 self.child(input, &format!("*e{c}"));
             }
