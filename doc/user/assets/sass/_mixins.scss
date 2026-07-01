@@ -40,6 +40,54 @@
     --callout-accent-border: color-mix(in srgb, var(#{$token}) var(--callout-accent-border-mix, 22%), transparent);
 }
 
+@mixin docs-admonition-theme($token) {
+    @include callout-item-accent($token);
+
+    --admonition-surface: color-mix(in srgb, var(--callout-accent-soft) 42%, var(--docs-card-inset, var(--card-light)));
+    --admonition-border: color-mix(in srgb, var(--callout-accent-border) 85%, var(--table-border, var(--divider-light)));
+    --admonition-label: color-mix(in srgb, var(--callout-accent) 78%, var(--heading));
+}
+
+@mixin docs-admonition-card() {
+    background: var(--admonition-surface);
+    border: 1px solid var(--admonition-border);
+    border-radius: var(--table-radius);
+    box-shadow: var(--docs-card-shadow);
+    box-sizing: border-box;
+    color: var(--body);
+    margin: rem(1.2) 0;
+    overflow: hidden;
+    padding: rem(1.2) rem(1.4) rem(1.2) rem(1.6);
+    position: relative;
+
+    &::before {
+        background: linear-gradient(
+            180deg,
+            var(--callout-accent),
+            color-mix(in srgb, var(--callout-accent) 40%, transparent)
+        );
+        bottom: 0;
+        content: "";
+        left: 0;
+        position: absolute;
+        top: 0;
+        width: 3px;
+    }
+
+    p:first-of-type {
+        margin-top: 0;
+    }
+
+    a:not(a[class]) {
+        color: var(--link);
+
+        &:hover,
+        &:focus {
+            color: var(--link-hover);
+        }
+    }
+}
+
 @mixin offering-row-theme($accent, $cta: null) {
     $cta-token: if($cta, $cta, $accent);
 

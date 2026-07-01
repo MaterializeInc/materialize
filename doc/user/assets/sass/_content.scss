@@ -1637,27 +1637,77 @@ p+p {
             --code-tabs-surface: var(--white);
             box-shadow: var(--docs-card-shadow);
         }
+
+        pre,
+        .highlight {
+            background: var(--white);
+            border-color: color-mix(in srgb, var(--sg-gray-1) 85%, transparent);
+            box-shadow: var(--docs-card-shadow);
+        }
+
+        .copy_button {
+            background: color-mix(in srgb, var(--sg-lavender-1) 65%, var(--white));
+            border-color: color-mix(in srgb, var(--sg-gray-1) 80%, transparent);
+            color: var(--sg-gray-3);
+
+            &:hover,
+            &:focus {
+                background: color-mix(in srgb, var(--sg-teal-3) 10%, var(--white));
+                border-color: color-mix(in srgb, var(--sg-teal-3) 30%, transparent);
+                color: var(--sg-teal-5);
+            }
+
+            &.success {
+                background: color-mix(in srgb, var(--color-teal-100) 85%, var(--white));
+                border-color: color-mix(in srgb, var(--sg-teal-3) 35%, transparent);
+                color: var(--sg-teal-5);
+            }
+        }
     }
 
     pre {
-        background-color: var(--code-block);
-        border-radius: 4px;
-        border: 1px solid var(--divider-light);
-        color: $black-v2;
+        background: var(--table-surface-raised);
+        border: 1px solid var(--table-border);
+        border-radius: rem(0.8);
+        color: var(--sub);
         font-family: var(--font-mono);
         font-size: rem(1.5);
         font-weight: var(--weight-body);
         letter-spacing: var(--tracking-code);
         line-height: var(--leading-code);
-        margin: rem(1) 0 rem(0.5);
+        margin: rem(1.2) 0;
         overflow: auto;
-        padding: rem(1.6);
+        padding: rem(1.4) rem(1.6);
 
         code {
-            color: $black-v2;
             background: none;
             border: none;
+            color: inherit;
             padding: 0;
+        }
+    }
+
+    .highlight {
+        background: var(--table-surface-raised);
+        border: 1px solid var(--table-border);
+        border-radius: rem(0.8);
+        box-shadow: var(--table-shadow);
+        margin: rem(1.2) 0;
+        overflow: hidden;
+        position: relative;
+
+        pre,
+        .chroma {
+            background: transparent !important;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+            margin: 0;
+            padding: rem(2.8) rem(1.6) rem(1.4);
+        }
+
+        .chroma {
+            background-color: transparent;
         }
     }
 
@@ -1854,187 +1904,80 @@ p+p {
         width: 80%;
     }
 
-    .warning,
-    .private-preview {
-        // NOTE(benesch): please ensure these colors stay yellowish/orange.
-        // Private preview and warnings should indicate a moderate amount of
-        // caution--not serious danger, but nothing to overlook either.
-        background: rgba(238, 134, 96, 0.05);
-        border: 1px solid rgba(238, 134, 96, 0.2);
-
-        &::after {
-            border-color: var(--bg) var(--bg) #fbe2d9 #fbe2d9;
-            background: #fbe2d9;
-        }
-
-        .gutter {
-            color: #d33902;
-        }
-    }
-
-    .private-preview-inline {
-        color: #d33902;
-        white-space: nowrap;
-        background: rgba(238, 134, 96, 0.05);
-        border: 1px solid rgba(238, 134, 96, 0.2);
-        border-radius: rem(0.6);
-        padding: rem(0.1);
-    }
-
+    // NOTE(benesch): warning/private-preview colors stay yellowish/orange.
+    // Public preview stays blueish (caution, not encouragement).
     .note,
     .important {
-        background: var(--note);
-        border: 1px solid var(--note-border);
-
-        a {
-            &:hover,
-            &:focus {
-                color: var(--sub) !important;
-            }
-
-            code {
-                &:hover,
-                &:focus {
-                    color: var(--sub) !important;
-                }
-            }
-        }
-
-        &::after {
-            border-color: var(--bg) var(--bg) var(--note-after) var(--note-after);
-            background: var(--note-after);
-        }
-
-        .gutter {
-            color: var(--note-gutter);
-        }
+        @include docs-admonition-theme("--table-yellow");
+        @include docs-admonition-card;
     }
 
     .tip {
-        background: var(--tip);
-        border: 1px solid var(--tip-border);
-
-        a {
-            &:hover,
-            &:focus {
-                color: var(--sub) !important;
-            }
-
-            code {
-                &:hover,
-                &:focus {
-                    color: var(--sub) !important;
-                }
-            }
-        }
-
-        &::after {
-            border-color: var(--bg) var(--bg) var(--tip-after) var(--tip-after);
-            background: var(--tip-after);
-        }
-
-        .gutter {
-            color: var(--tip-gutter);
-        }
+        @include docs-admonition-theme("--sg-violet");
+        @include docs-admonition-card;
     }
 
-    .annotation {
-        border: 1px solid var(--annotation-border);
-
-        a {
-            &:hover,
-            &:focus {
-                color: var(--sub) !important;
-            }
-
-            code {
-                &:hover,
-                &:focus {
-                    color: var(--sub) !important;
-                }
-            }
-        }
-
+    .warning,
+    .private-preview {
+        @include docs-admonition-theme("--table-orange");
+        @include docs-admonition-card;
     }
 
     .public-preview {
-        background: var(--public-preview);
-        border: 1px solid var(--public-preview-border);
-        color: var(--public-preview-text);
-
-        &::after {
-            border-color: var(--bg) var(--bg) var(--public-preview-after) var(--public-preview-after);
-            background: var(--public-preview-after);
-        }
-
-        .gutter {
-            color: var(--public-preview-gutter);
-        }
+        @include docs-admonition-theme("--table-blue");
+        @include docs-admonition-card;
+        color: var(--public-preview-text, var(--body));
     }
 
     .annotation {
-        box-sizing: border-box;
-        margin: rem(1.6) 0;
-        padding: rem(1) rem(1) rem(1) rem(2);
-        position: relative;
+        @include docs-admonition-theme("--highlight");
+        @include docs-admonition-card;
 
-        @media(max-width: 510px) {
-            padding: rem(.8) rem(.8) rem(.8) rem(1);
+        .annotation-title {
+            color: var(--admonition-label);
+            font-family: var(--font-heading);
+            font-size: var(--xsm);
+            font-weight: var(--weight-heading);
+            letter-spacing: var(--tracking-eyebrow);
+            line-height: 1.3;
+            margin: 0 0 rem(0.6);
+            padding-bottom: 0;
+            text-transform: uppercase;
         }
-
-        p:first-of-type {
-            margin-top: 0;
-        }
-
     }
+
     .warning,
     .note,
     .tip,
     .important,
     .private-preview,
     .public-preview {
-        box-sizing: border-box;
-        margin: rem(1.6) 0;
-        padding: rem(1.6) rem(1.6) rem(1.6) rem(10.4);
-        position: relative;
-        border-radius: rem(1.2);
-
-        @media(max-width: 510px) {
-            padding: rem(1) rem(1) rem(1) rem(6);
-        }
-
-        p:first-of-type {
-            margin-top: 0;
-        }
-
-        &::after {
-            content: "";
-            position: absolute;
-            top: -1px;
-            right: -1px;
-            border-width: 0 rem(1.6) rem(1.6) 0;
-            border-style: solid;
-        }
+        font-size: rem(1.5);
+        line-height: var(--leading-body);
 
         .gutter {
-            position: absolute;
-            left: rem(1.6);
-            top: rem(1.8);
-            line-height: 23px;
-            font-size: rem(1.2);
-            font-weight: bold;
+            color: var(--admonition-label);
+            display: block;
+            font-family: var(--font-heading);
+            font-size: var(--xsm);
+            font-weight: var(--weight-heading);
+            letter-spacing: var(--tracking-eyebrow);
+            line-height: 1.3;
+            margin: 0 0 rem(0.6);
+            position: static;
             text-transform: uppercase;
-
-            @media(max-width: 510px) {
-                top: rem(1.2);
-            }
         }
     }
 
-    .warning {
-        @media(max-width: 510px) {
-            padding-left: rem(9);
-        }
+    .private-preview-inline {
+        background: color-mix(in srgb, var(--table-orange) 10%, transparent);
+        border: 1px solid color-mix(in srgb, var(--table-orange) 28%, transparent);
+        border-radius: rem(0.45);
+        color: color-mix(in srgb, var(--table-orange) 88%, var(--heading));
+        font-size: var(--xsm);
+        font-weight: var(--weight-body-emphasis);
+        padding: rem(0.15) rem(0.45);
+        white-space: nowrap;
     }
 
     .cta {
@@ -2356,31 +2299,46 @@ p+p {
 
 .highlight {
     position: relative;
-
 }
 
 .copy_button {
-    display: none;
-    position: absolute;
-    right: 10px;
-    top: 10px;
-
-    font-size: rem(1.2);
-            font-weight: var(--weight-body);
-    border: none;
-    background-color: $grey-light;
-    color: var(--black);
-    height: 26px;
-    padding: 0 12px;
+    align-items: center;
+    background: color-mix(in srgb, var(--table-surface-header) 90%, var(--heading));
+    border: 1px solid var(--table-border);
+    border-radius: rem(0.45);
+    color: var(--sub);
     cursor: pointer;
-    border-radius: $border-radius;
+    display: none;
+    font-family: var(--font-mono);
+    font-size: rem(1.1);
+    font-weight: var(--weight-body-emphasis);
+    height: rem(2.4);
+    justify-content: center;
+    letter-spacing: var(--tracking-code);
+    line-height: 1;
+    padding: 0 rem(0.9);
+    position: absolute;
+    right: rem(0.8);
+    top: rem(0.8);
+    transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease,
+        color 0.15s ease;
     white-space: nowrap;
-    line-height: 2;
-    font-family: var(--font-body);
+    z-index: 2;
+
+    &:hover,
+    &:focus {
+        background: color-mix(in srgb, var(--highlight) 14%, var(--table-surface-header));
+        border-color: color-mix(in srgb, var(--highlight) 35%, var(--table-border));
+        color: var(--inline-lifted);
+    }
 
     &.success {
-        opacity: 0.8;
-        background: #70f2a3;
+        background: color-mix(in srgb, var(--table-green) 18%, var(--table-surface-header));
+        border-color: color-mix(in srgb, var(--table-green) 35%, var(--table-border));
+        color: color-mix(in srgb, var(--table-green) 88%, var(--heading));
+        display: inline-flex;
     }
 }
 
@@ -2602,54 +2560,15 @@ td span.copyableCode pre:hover .copy_button {
 }
 
 .highlight {
-    position: relative;
-
-    &:hover {
+    &:hover,
+    &:focus-within {
         .copy_button {
-            display: inline-block;
+            display: inline-flex;
         }
     }
 }
 
 body.dark .content {
-
-    .note,
-    .important {
-        a {
-            color: var(--link);
-        }
-
-        &::after {
-            border-color: --var(--note-border);
-            background: var(--note);
-        }
-    }
-
-    .tip {
-        a {
-            color: var(--link);
-        }
-
-        &::after {
-            border-color: --var(--tip-border);
-            background: var(--tip);
-        }
-    }
-
-    .annotation {
-        a {
-            color: var(--link);
-        }
-
-    }
-
-    .warning,
-    .private-preview {
-        .gutter {
-            color: #ff8504;
-        }
-    }
-
     pre code {
         color: var(--sub);
     }
