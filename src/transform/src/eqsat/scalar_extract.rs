@@ -8,10 +8,12 @@
 //! A verbatim port of `scalar/raise.rs`'s bottom-up tree-size extraction, reading
 //! `CNode::Scalar` nodes from `EGraph<CombinedLang>`. The tie-break
 //! (`cost` then `SNode::Ord`) and the And/Or operand `sort()` are copied exactly
-//! so extraction is byte-identical to the standalone scalar engine.
+//! so extraction is byte-identical to the standalone scalar engine. The
+//! rationale comments below are ported from `scalar/raise.rs` as well. See
+//! there for the original write-up.
 
-// `raise` is a pinned public API that later slices wire into production use; until
-// then only the round-trip test below exercises it.
+// `raise` is a pinned public API that later slices wire into production use.
+// Until then, only the round-trip test below exercises it.
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
@@ -40,6 +42,13 @@ pub fn raise(eg: &EGraph, id: Id) -> MirScalarExpr {
     build(eg, id, &costs, &mut memo)
 }
 
+/// Cost of the cheapest reconstruction of `node`'s subtree given per-class costs
+/// of its children. Returns `None` if any child has no finite cost yet.
+///
+/// Child ids are canonicalized before lookup: `costs` is keyed by canonical id,
+/// but a node's stored child ids can be stale when `raise` runs mid-saturation
+/// (rules call it between unions, before the next `rebuild` recanonicalizes class
+/// contents), so a raw lookup would spuriously miss a costed class.
 fn node_cost(eg: &EGraph, node: &SNode, costs: &HashMap<Id, usize>) -> Option<usize> {
     let mut total = 1usize;
     for child in node.children() {
@@ -48,6 +57,18 @@ fn node_cost(eg: &EGraph, node: &SNode, costs: &HashMap<Id, usize>) -> Option<us
     Some(total)
 }
 
+/// Compute `costs[class] = min over nodes of (1 + sum of child costs)` for every
+/// class reachable from `id`.
+///
+/// Rules introduce cycles (constant folding unions a call class with its own
+/// literal-descendant class, and De Morgan plus `not_not` relate a class to a
+/// rewrite of itself), so a single bottom-up pass cannot cost every class: a
+/// class whose only finite derivation routes through a class still on the DFS
+/// stack would be missed and later panic in `build`. We instead relax to a
+/// least-fixpoint. Costs only ever decrease (or go from absent to present) and
+/// are bounded below by 1, and every class holds at least one finite-cost
+/// derivation (the lowered subtree it came from), so the iteration converges and
+/// assigns a finite cost to every reachable class.
 fn compute_costs(eg: &EGraph, id: Id) -> HashMap<Id, usize> {
     let mut reachable: Vec<Id> = Vec::new();
     let mut seen: HashSet<Id> = HashSet::new();
@@ -63,6 +84,9 @@ fn compute_costs(eg: &EGraph, id: Id) -> HashMap<Id, usize> {
             }
         }
     }
+    // Relax until no cost improves. A class adopts a cost only when it is its
+    // first finite cost or strictly cheaper than the current one, so the loop
+    // makes monotone progress and terminates.
     let mut costs: HashMap<Id, usize> = HashMap::new();
     loop {
         let mut changed = false;
@@ -85,6 +109,7 @@ fn compute_costs(eg: &EGraph, id: Id) -> HashMap<Id, usize> {
     costs
 }
 
+/// Reconstruct the cheapest node in `id`'s class, recursing into its children.
 fn build(
     eg: &EGraph,
     id: Id,
@@ -96,6 +121,7 @@ fn build(
         return expr.clone();
     }
     let nodes = scalar_nodes(eg, rep);
+    // Pick the cheapest node, breaking ties by `Ord` for determinism.
     let best = nodes
         .into_iter()
         .filter(|node| node_cost(eg, node, costs).is_some())
@@ -134,6 +160,16 @@ fn reconstruct(
         SNode::CallVariadic { func, exprs } => {
             let mut operands: Vec<MirScalarExpr> =
                 exprs.iter().map(|e| build(eg, *e, costs, memo)).collect();
+            // Sort And/Or operands to match `MirScalarExpr::reduce`'s
+            // `exprs.sort()` in `reduce_and_canonicalize_and_or`. This produces
+            // the same canonical operand order at extraction so EXPLAIN goldens
+            // differ from reduce only on genuine plan changes, not
+            // operand-order noise. Sorting is exact-eval safe: And/Or are an
+            // order-independent join (value, max-error, and short-circuit all
+            // agree regardless of operand order). This also eliminates
+            // HashSet-iteration-order nondeterminism in extracted And/Or. Only
+            // And/Or are sorted. Other variadics (Coalesce, etc.) are
+            // order-significant and are left unchanged.
             if matches!(func, VariadicFunc::And(_) | VariadicFunc::Or(_)) {
                 operands.sort();
             }
