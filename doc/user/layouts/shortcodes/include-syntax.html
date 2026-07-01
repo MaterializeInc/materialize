@@ -23,6 +23,7 @@
 {{- if .syntax_elements }}
 
 {{ partial "yaml-tables/generic-table.html" (dict
+  "class" "syntax-table"
   "columns" (slice
     (dict "column" "name" "header" "Syntax element")
     (dict "column" "description" "header" "Description")

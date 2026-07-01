@@ -1,4 +1,4 @@
-{{/*  Converts data/sql_funcs.yml into table. */}}
+{{/*  Converts data/sql_funcs.yml into a definition list. */}}
 {{ $parentPath := partial "relative-link.html" . }}
 {{$releasedVersions := dict}}
 {{range (where $.Site.RegularPages "Section" "releases")}}
@@ -17,78 +17,74 @@
 
 {{ if or (eq ($.Get 0) .type) (not (isset $.Params 0)) }}
 
-<!-- Keep table left-aligned to render since mix of md + html-->
-
-<table class="inline-headings">
-<tr>
-<th>
-<p class="heading">Function</p>
-</th>
-</tr>
-{{ range .functions }}
-<tr>
-{{/*  Extract the function's name from its signature and use it as the ID
-    to facilitate deeplinking. The `docsearch_l3` class is a special
-    class that is scraped by our Algolia DocSearch configuration.  */}}
-<td>
-{{/*  We use clojure highlighting simply because it looks best with the
-components we want to highlight. In the future, this should be customized
-in some way.  */}}
-<div class="heading {{if (not (isset $.Params 0))}}docsearch_l3{{end}}" id="{{ index (split .signature "(") 0 | urlize }}">
-  {{ highlight .signature "clojure" "hl_inline=false" }}
+<div class="fn-list">
+<div class="fn-list__header">
+<span class="fn-list__label">Function</span>
+<span class="fn-list__label">Description</span>
 </div>
+{{ $accents := slice "violet" "blue" "green" "orange" "pink" }}
+{{ range $i, $fn := .functions }}
+{{ $accent := index $accents (mod $i 5) }}
+{{ $parts := split $fn.signature "(" }}
+{{ $name := index $parts 0 | strings.TrimSpace }}
+{{ $sigBody := "" }}
+{{ if gt (len $parts) 1 }}
+  {{ $sigBody = printf "(%s" (index $parts 1) }}
+{{ end }}
+<dl class="fn-entry fn-entry--{{ $accent }}">
+<dt class="fn-term {{if (not (isset $.Params 0))}}docsearch_l3{{end}}" id="{{ $name | urlize }}">
+<span class="fn-name">{{ $name }}</span>
+{{ if $sigBody }}
+<div class="fn-sig-pill">{{ highlight $sigBody "clojure" "hl_inline=true" }}</div>
+{{ else }}
+<div class="fn-sig-pill">{{ highlight $fn.signature "clojure" "hl_inline=true" }}</div>
+{{ end }}
+</dt>
+<dd class="fn-desc">
+{{ $fn.description | $.Page.RenderString }}{{ if $fn.url }} <a class="fn-desc__link" href="{{ $parentPath }}{{ $fn.url | relURL }}">(docs)</a>.{{ end }}
+</dd>
 
-<p>
-  {{ .description | $.Page.RenderString }}
-
-  {{ if .url }}
-  <a href="{{ $parentPath }}{{ .url | relURL }}">(docs)</a>.
-  {{ end }}
-
-</p>
-
-{{ if .unmaterializable }}
-  <p><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>.</p>
+{{ if $fn.unmaterializable }}
+<dd class="fn-note"><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>.</dd>
 {{ end }}
 
-{{ if .unmaterializable_unless_temporal_filter }}
-  <p><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>, but
-  can be used in limited contexts in materialized views as a <a href="{{ $parentPath }}{{ "/transform-data/patterns/temporal-filters/" | relURL }}">temporal filter</a>.</p>
+{{ if $fn.unmaterializable_unless_temporal_filter }}
+<dd class="fn-note"><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>, but
+can be used in limited contexts in materialized views as a <a href="{{ $parentPath }}{{ "/transform-data/patterns/temporal-filters/" | relURL }}">temporal filter</a>.</dd>
 {{ end }}
 
-{{ if .known_time_zone_limitation_cast }}
-  <p><b>Known limitation:</b> You must explicitly cast the type for the time zone.</p>
+{{ if $fn.known_time_zone_limitation_cast }}
+<dd class="fn-note"><b>Known limitation:</b> You must explicitly cast the type for the time zone.</dd>
 {{ end }}
 
-{{ if .side_effecting }}
-  <p><b>Note:</b> This function is <a href="#side-effecting-functions">side-effecting</a>.</p>
+{{ if $fn.side_effecting }}
+<dd class="fn-note"><b>Note:</b> This function is <a href="#side-effecting-functions">side-effecting</a>.</dd>
 {{ end }}
 
-{{ $versionAdded := index . "version-added" }}
+{{ $versionAdded := index $fn "version-added" }}
 {{ if $versionAdded }}
   {{ $releasePage := index $releasedVersions $versionAdded }}
   {{ if not $releasePage.Params.released }}
-    <p>
-      <b>Unreleased: </b> This function will be released in
-      <a href="{{ printf "%s/releases#release-notes" $parentPath | relURL }}"><strong>{{$versionAdded}}</strong></a>.
-      It may not be available in your region yet.
-      The release is scheduled to complete by <strong>{{dateFormat "January 2, 2006" $releasePage.Params.date}}</strong>.
-    </p>
+<dd class="fn-note">
+<b>Unreleased: </b> This function will be released in
+<a href="{{ printf "%s/releases#release-notes" $parentPath | relURL }}"><strong>{{$versionAdded}}</strong></a>.
+It may not be available in your region yet.
+The release is scheduled to complete by <strong>{{dateFormat "January 2, 2006" $releasePage.Params.date}}</strong>.
+</dd>
   {{ end }}
 {{ end }}
 
-</td>
-</tr>
-{{ end }} {{/*  {{ range .functions }} */}}
-</table>
+</dl>
+{{ end }}
+</div>
 
 {{end}}
 
 {{ end }}{{/*  {{ range $.Site.Data.sql_funcs }} */}}
 
-{{/*  When someone is deeplinked to a td on the page, highlight the tr  */}}
+{{/*  When someone is deeplinked to a signature, highlight the entry.  */}}
 <script type="text/javascript">
   $(function() {
-    $(location.hash).parents('tr').css('background-color', '#FFFF5522');
+    $(location.hash).closest('.fn-entry').css('background-color', '#FFFF5522');
   });
 </script>

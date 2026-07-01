@@ -30,6 +30,10 @@ Apache License, Version 2.0. */}}
       } else {
         document.body.classList.add("light");
       }
+
+      document.documentElement.dataset.theme = document.body.classList.contains("dark")
+        ? "dark"
+        : "light";
     </script>
 
     {{ partial "header.html" . }} {{ block "body" .}}
@@ -77,7 +81,7 @@ Apache License, Version 2.0. */}}
     <script>
       /* Add anchor links to headings */
       anchors.add(
-        ".content h2, .content h3, .content h4, .content h5, .content h6, .heading"
+        ".content h2, .content h3, .content h4, .content h5, .content h6, .heading, .fn-term"
       );
 
       /* Copy anchor links to clipboard on click */
@@ -289,6 +293,12 @@ Apache License, Version 2.0. */}}
 
       highlightButton(theme);
 
+      const syncDocSearchTheme = () => {
+        document.documentElement.dataset.theme = document.body.classList.contains("dark")
+          ? "dark"
+          : "light";
+      };
+
       darkMediaQuery.addEventListener("change", () => {
         const storedTheme = localStorage.getItem("theme");
         if (storedTheme === "system") {
@@ -298,6 +308,7 @@ Apache License, Version 2.0. */}}
           } else {
             document.body.classList.replace("dark", "light");
           }
+          syncDocSearchTheme();
         }
       });
 
@@ -309,18 +320,21 @@ Apache License, Version 2.0. */}}
         }
         localStorage.setItem("theme", "system");
         highlightButton("system");
+        syncDocSearchTheme();
       });
 
       lightButton.addEventListener("click", () => {
         document.body.classList.replace("dark", "light");
         localStorage.setItem("theme", "light");
         highlightButton("light");
+        syncDocSearchTheme();
       });
 
       darkButton.addEventListener("click", () => {
         document.body.classList.replace("light", "dark");
         localStorage.setItem("theme", "dark");
         highlightButton("dark");
+        syncDocSearchTheme();
       });
 
       const allLinks = document.querySelectorAll("a");

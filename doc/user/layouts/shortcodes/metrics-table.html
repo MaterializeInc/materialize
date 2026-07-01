@@ -40,22 +40,24 @@ so empty groupings don't show up.
 {{- with .Get "description" }}
 {{ . | markdownify }}
 {{- end }}
-<table>
-  <thead>
-    <tr>
-      <th>Metric</th>
-      <th>Description</th>
-      <th>Labels</th>
-    </tr>
-  </thead>
-  <tbody>
-    {{- range $metrics }}
-    <tr>
-      <td><code>{{ .name }}</code></td>
-      <td>{{ .help }}</td>
-      <td>{{- range $i, $label := .labels }}{{ if $i }}, {{ end }}<code>{{ $label }}</code>{{- end }}</td>
-    </tr>
-    {{- end }}
-  </tbody>
-</table>
+<div class="metrics-list">
+<div class="metrics-list__header">
+<span class="metrics-list__label">Metric</span>
+<span class="metrics-list__label">Description</span>
+<span class="metrics-list__label">Labels</span>
+</div>
+{{ $accents := slice "violet" "blue" "green" "orange" "pink" }}
+{{- range $i, $metric := $metrics }}
+{{ $accent := index $accents (mod $i 5) }}
+<dl class="metrics-entry metrics-entry--{{ $accent }}">
+<dt class="metrics-term"><span class="metrics-name-pill"><code>{{ $metric.name }}</code></span></dt>
+<dd class="metrics-desc">{{ $metric.help }}</dd>
+<dd class="metrics-labels">
+{{- range $label := $metric.labels -}}
+<span class="metrics-label-pill"><code>{{ $label }}</code></span>
+{{- end -}}
+</dd>
+</dl>
+{{- end }}
+</div>
 {{- end }}

@@ -181,6 +181,9 @@ body.dark {
     --code-blue: #4b73f8;
     --code-green: #819A7B;
     --code-highlight: var(--code-blue);
+    --code-line-highlight: color-mix(in srgb, var(--highlight) 14%, transparent);
+    --code-lineno: var(--caption);
+    --code-preproc: color-mix(in srgb, var(--code-green) 72%, var(--caption));
 
     --heading: var(--sg-heading);
     --body: var(--sg-body);
@@ -268,7 +271,9 @@ body.light {
     --code-pink: #a90d91;
     --code-blue: #1c01ce;
     --code-green: #177500;
-
+    --code-line-highlight: color-mix(in srgb, var(--table-yellow) 22%, transparent);
+    --code-lineno: var(--sg-gray-2);
+    --code-preproc: color-mix(in srgb, var(--code-green) 78%, var(--sg-gray-3));
 
     --heading: var(--sg-midnight);
     --body: var(--sg-gray-4);
@@ -279,6 +284,9 @@ body.light {
     --code-highlight: var(--heading);
     --highlight: var(--sg-teal-5);
     --font-h4: var(--heading);
+
+    --table-text: var(--inline-lifted);
+    --table-body: var(--body);
 
     --table-green: var(--color-teal-700);
     --table-orange: #C65D17;
@@ -574,52 +582,66 @@ a {
 /*-------- Finish links color--------*/
 
 [class*="btn"] {
+    background: var(--brand);
+    border: 1px solid color-mix(in srgb, var(--brand) 70%, transparent);
+    border-radius: rem(0.8);
+    box-shadow: var(--docs-card-shadow);
+    color: var(--white);
     display: inline-flex;
-    justify-content: center;
     align-items: center;
     font-family: var(--font-body);
-    font-size: 12px;
-    text-transform: uppercase;
-    white-space: nowrap;
-    font-weight: var(--weight-body);
+    font-size: rem(1.2);
+    font-weight: var(--weight-body-emphasis);
+    justify-content: center;
     letter-spacing: var(--tracking-eyebrow);
-    background: var(--brand);
-    color: var(--white);
     padding: rem(0.6) rem(1.2);
-    border-radius: 8px;
+    text-transform: uppercase;
+    transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease,
+        box-shadow 0.15s ease,
+        opacity 0.15s ease;
+    white-space: nowrap;
 
     svg {
-        margin-right: rem(.6);
-        width: 18px;
         height: 18px;
+        margin-right: rem(0.6);
+        width: 18px;
     }
 
     &:hover,
     &:focus {
+        box-shadow:
+            var(--docs-card-shadow),
+            0 0 0 rem(0.35) color-mix(in srgb, var(--brand) 25%, transparent);
         color: var(--white);
         text-decoration: none;
-        box-shadow: rgba(128,78,255,.3) 0px 0px 0px 8px
     }
 }
 
 .btn-ghost {
-    position: relative;
+    background: var(--docs-card-inset);
+    border: 1px solid var(--docs-card-divider);
+    border-radius: rem(0.75);
+    box-shadow: none;
+    color: var(--important);
     display: inline-flex;
     align-items: center;
-    gap: rem(0.75);
-    padding: rem(0.55) rem(0.85);
-    border: 1px solid var(--divider-light);
-    border-radius: rem(0.75);
-    background: var(--card-light);
-    color: var(--important);
     font-family: var(--font-body);
     font-size: var(--sm);
     font-weight: var(--weight-body);
+    gap: rem(0.75);
     letter-spacing: 0;
     line-height: 1;
+    padding: rem(0.55) rem(0.85);
+    position: relative;
     text-decoration: none;
     text-transform: none;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+    transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease,
+        color 0.15s ease,
+        box-shadow 0.15s ease;
 
     svg {
         flex: 0 0 auto;
@@ -627,10 +649,10 @@ a {
 
     &:hover,
     &:focus {
-        color: var(--important);
-        border-color: var(--highlight);
-        background: var(--tip);
-        box-shadow: none;
+        background: color-mix(in srgb, var(--highlight) 8%, var(--docs-card-inset));
+        border-color: color-mix(in srgb, var(--highlight) 35%, var(--docs-card-divider));
+        box-shadow: var(--docs-card-shadow);
+        color: var(--heading);
         text-decoration: none;
     }
 
@@ -647,25 +669,26 @@ a {
 }
 
 select.version-dropdown {
-	-moz-appearance: none;
-	-webkit-appearance: none;
+    -moz-appearance: none;
+    -webkit-appearance: none;
     appearance: none;
-	background-image: url('https://res.cloudinary.com/mzimgcdn/image/upload/v1737129759/dropdown.svg');
-	background-position: right 0.5rem top 50%, 0 0;
-	background-repeat: no-repeat, repeat;
-	background-size: 1.3rem auto, 100%;
-	outline: 1px solid transparent;
-    border: 1px solid var(--divider);
+    background-color: var(--docs-card-inset);
+    background-image: url('https://res.cloudinary.com/mzimgcdn/image/upload/v1737129759/dropdown.svg');
+    background-position: right 0.5rem top 50%, 0 0;
+    background-repeat: no-repeat, repeat;
+    background-size: 1.3rem auto, 100%;
+    border: 1px solid var(--docs-card-divider);
+    border-radius: rem(0.6);
+    color: var(--body);
+    outline: 1px solid transparent;
     padding: var(--pico) var(--nano);
-    border-radius: 4px;
-    background-color: var(--bg);
 
-	&:focus,
-	&:active {
-		outline: none;
-	}
+    &:focus,
+    &:active {
+        border-color: color-mix(in srgb, var(--highlight) 40%, var(--docs-card-divider));
+        outline: none;
+    }
 }
 
-
 red { color: var(--code-red); }
-blue { color: #2300ce; }
+blue { color: var(--code-blue); }

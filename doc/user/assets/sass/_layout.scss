@@ -57,17 +57,590 @@
     overflow-x: auto;
 }
 
-table.inline-headings {
-    th, td {
-        p {
-            margin-top: 0.3em;
-            margin-bottom: 0.3em;
-            padding-left: 2em;
+.content .fn-list {
+    --fn-list-cols: minmax(14rem, 44%) 1fr;
+
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--sg-lavender-3) 14%, transparent) 0%,
+            color-mix(in srgb, var(--sg-violet) 5%, transparent) 42%,
+            transparent 100%
+        )
+        0 0 / 100% rem(1.4) no-repeat,
+        radial-gradient(130% 90% at 50% -40%, color-mix(in srgb, var(--sg-violet) 7%, transparent), transparent 58%),
+        var(--bg);
+    border: 1px solid var(--docs-card-border);
+    border-radius: var(--table-radius);
+    box-shadow: var(--docs-card-shadow);
+    font-size: var(--sm);
+    line-height: var(--leading-body);
+    margin: rem(1) 0;
+    overflow: hidden;
+
+    &__header {
+        backdrop-filter: blur(8px);
+        background: color-mix(in srgb, var(--bg-sub) 42%, var(--bg));
+        border-bottom: 1px solid var(--docs-card-divider);
+        display: grid;
+        gap: rem(1.75);
+        grid-template-columns: var(--fn-list-cols);
+        padding: rem(0.85) rem(1.4);
+    }
+
+    &__label {
+        color: var(--table-text);
+        font-family: var(--font-heading);
+        font-size: var(--xsm);
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+}
+
+body.light .content .fn-list {
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--sg-lavender-2) 18%, transparent) 0%,
+            color-mix(in srgb, var(--sg-violet) 4%, transparent) 45%,
+            transparent 100%
+        )
+        0 0 / 100% rem(1.4) no-repeat,
+        radial-gradient(130% 90% at 50% -40%, color-mix(in srgb, var(--sg-violet) 5%, transparent), transparent 58%),
+        var(--bg);
+    border-color: var(--docs-card-border);
+    box-shadow: var(--docs-card-shadow);
+
+    &__header {
+        background: color-mix(in srgb, var(--bg-sub) 55%, var(--bg));
+    }
+
+    &__label {
+        color: var(--caption);
+    }
+}
+
+.content .fn-entry {
+    --fn-accent: var(--sg-violet);
+    --fn-accent-name: color-mix(in srgb, var(--fn-accent) 72%, var(--heading));
+    --fn-accent-soft: color-mix(in srgb, var(--fn-accent) 10%, var(--bg));
+    --fn-accent-border: color-mix(in srgb, var(--fn-accent) 20%, var(--divider-light));
+    --fn-accent-text: color-mix(in srgb, var(--fn-accent) 65%, var(--heading));
+    --fn-accent-highlight: color-mix(in srgb, var(--fn-accent) 54%, var(--sub));
+
+    border-bottom: 1px solid var(--docs-card-divider);
+    display: grid;
+    gap: rem(0.45) rem(1.75);
+    grid-template-columns: var(--fn-list-cols);
+    margin: 0;
+    padding: rem(0.85) rem(1.4);
+    position: relative;
+    transition:
+        background-color 0.2s ease,
+        box-shadow 0.2s ease;
+
+    &:last-child {
+        border-bottom: none;
+    }
+
+    &::before {
+        background: color-mix(in srgb, var(--fn-accent) 26%, var(--divider-light));
+        border-radius: 0 rem(0.15) rem(0.15) 0;
+        bottom: 0;
+        content: "";
+        left: 0;
+        position: absolute;
+        top: 0;
+        transition: background-color 0.2s ease;
+        width: 1px;
+    }
+
+    &:hover {
+        background: color-mix(in srgb, var(--fn-accent) 4%, var(--bg));
+
+        &::before {
+            background: color-mix(in srgb, var(--fn-accent) 45%, var(--divider-light));
         }
-        .heading .highlight {
-            display: inline-block;
+
+        .fn-sig-pill {
+            border-color: color-mix(in srgb, var(--fn-accent) 28%, var(--divider-light));
+            box-shadow: 0 2px 8px color-mix(in srgb, var(--fn-accent) 10%, transparent);
         }
     }
+
+    &--violet {
+        --fn-accent: var(--sg-violet);
+    }
+
+    &--blue {
+        --fn-accent: var(--table-blue);
+    }
+
+    &--green {
+        --fn-accent: var(--table-green);
+    }
+
+    &--orange {
+        --fn-accent: var(--table-orange);
+    }
+
+    &--pink {
+        --fn-accent: var(--orchid);
+    }
+
+    > dt,
+    > dd {
+        margin: 0;
+    }
+
+    > dt {
+        align-self: center;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: rem(0.6) rem(0.75);
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
+    }
+
+    > dd {
+        align-self: center;
+        color: var(--table-body);
+        grid-column: 2;
+        line-height: 1.55;
+        min-width: 0;
+
+        &:nth-of-type(1) {
+            grid-row: 1;
+        }
+
+        &:nth-of-type(2) {
+            grid-row: 2;
+        }
+
+        &:nth-of-type(3) {
+            grid-row: 3;
+        }
+
+        &:nth-of-type(4) {
+            grid-row: 4;
+        }
+
+        p {
+            margin: 0;
+
+            &:not(:last-child) {
+                margin-bottom: rem(0.45);
+            }
+        }
+    }
+
+    @media (max-width: 640px) {
+        gap: rem(0.35) 0;
+        grid-template-columns: 1fr;
+
+        > dt,
+        > dd {
+            grid-column: 1;
+        }
+    }
+}
+
+.content .fn-name {
+    color: var(--fn-accent-name);
+    flex: 0 0 auto;
+    font-family: var(--font-heading);
+    font-size: rem(1.35);
+    font-weight: 600;
+    letter-spacing: 0.015em;
+    line-height: var(--leading-code);
+}
+
+.content .fn-sig-pill {
+    align-self: center;
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--fn-accent) 9%, var(--bg-sub)),
+        var(--fn-accent-soft) 58%,
+        color-mix(in srgb, var(--fn-accent) 7%, var(--bg))
+    );
+    border: 1px solid var(--fn-accent-border);
+    border-radius: rem(99);
+    box-shadow: none;
+    display: inline-flex;
+    flex: 0 1 auto;
+    max-width: 100%;
+    min-width: 0;
+    padding: rem(0.22) rem(0.7);
+    transition:
+        border-color 0.2s ease,
+        box-shadow 0.2s ease;
+
+    .code-inline,
+    .highlight {
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        font-family: var(--font-mono);
+        font-size: rem(1.25);
+        letter-spacing: var(--tracking-code);
+        line-height: var(--leading-code);
+        margin: 0;
+        max-width: 100%;
+        overflow: hidden;
+        padding: 0;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+
+        pre,
+        .chroma {
+            background: transparent !important;
+            border: none;
+            box-shadow: none;
+            display: inline;
+            font-family: inherit;
+            font-size: inherit;
+            letter-spacing: inherit;
+            line-height: inherit;
+            margin: 0;
+            padding: 0;
+            white-space: inherit;
+        }
+    }
+
+    .code-inline .cl,
+    .code-inline .err,
+    .code-inline .nb,
+    .code-inline .nf,
+    .code-inline .nv,
+    .code-inline .p,
+    .chroma .cl,
+    .chroma .err,
+    .chroma .nb,
+    .chroma .nf,
+    .chroma .nv,
+    .chroma .p {
+        color: var(--fn-accent-text);
+    }
+}
+
+body.light .content .fn-sig-pill {
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--fn-accent) 7%, var(--bg)),
+        color-mix(in srgb, var(--fn-accent) 5%, var(--bg-sub)) 58%,
+        color-mix(in srgb, var(--fn-accent) 4%, var(--bg))
+    );
+}
+
+.content .fn-desc {
+    code,
+    em {
+        color: var(--fn-accent-highlight);
+        font-style: normal;
+        font-weight: 500;
+    }
+
+    code {
+        background: color-mix(in srgb, var(--fn-accent) 9%, var(--bg));
+        border: 1px solid color-mix(in srgb, var(--fn-accent) 12%, transparent);
+        border-radius: rem(0.35);
+        font-size: rem(1.2);
+        padding: rem(0.08) rem(0.32);
+    }
+
+    &__link {
+        border-bottom: 1px solid color-mix(in srgb, var(--fn-accent-name) 35%, transparent);
+        color: var(--fn-accent-name);
+        font-weight: var(--weight-body-strong);
+        text-decoration: none;
+        transition: border-color 0.15s ease, color 0.15s ease;
+
+        &:hover,
+        &:focus {
+            border-bottom-color: var(--fn-accent-name);
+            text-decoration: none;
+        }
+    }
+}
+
+body.light .content .fn-desc code {
+    background: color-mix(in srgb, var(--fn-accent) 7%, var(--bg));
+}
+
+.content .fn-note {
+    color: var(--caption);
+    font-size: var(--xsm);
+    grid-column: 2;
+    line-height: var(--leading-body);
+    padding-left: rem(0.75);
+    position: relative;
+
+    &::before {
+        background: color-mix(in srgb, var(--fn-accent) 35%, var(--table-grid));
+        border-radius: rem(0.15);
+        bottom: rem(0.15);
+        content: "";
+        left: 0;
+        position: absolute;
+        top: rem(0.15);
+        width: 2px;
+    }
+}
+
+.content .metrics-list {
+    --metrics-list-cols: minmax(13rem, 30%) 1fr minmax(9rem, 22%);
+
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--sg-lavender-3) 14%, transparent) 0%,
+            color-mix(in srgb, var(--sg-violet) 5%, transparent) 42%,
+            transparent 100%
+        )
+        0 0 / 100% rem(1.4) no-repeat,
+        radial-gradient(130% 90% at 50% -40%, color-mix(in srgb, var(--sg-violet) 7%, transparent), transparent 58%),
+        var(--bg);
+    border: 1px solid var(--docs-card-border);
+    border-radius: var(--table-radius);
+    box-shadow: var(--docs-card-shadow);
+    font-size: var(--sm);
+    line-height: var(--leading-body);
+    margin: rem(1) 0;
+    overflow: hidden;
+
+    &__header {
+        backdrop-filter: blur(8px);
+        background: color-mix(in srgb, var(--bg-sub) 42%, var(--bg));
+        border-bottom: 1px solid var(--docs-card-divider);
+        display: grid;
+        gap: rem(1.75);
+        grid-template-columns: var(--metrics-list-cols);
+        padding: rem(0.85) rem(1.4);
+    }
+
+    &__label {
+        color: var(--table-text);
+        font-family: var(--font-heading);
+        font-size: var(--xsm);
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+}
+
+body.light .content .metrics-list {
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--sg-lavender-2) 18%, transparent) 0%,
+            color-mix(in srgb, var(--sg-violet) 4%, transparent) 45%,
+            transparent 100%
+        )
+        0 0 / 100% rem(1.4) no-repeat,
+        radial-gradient(130% 90% at 50% -40%, color-mix(in srgb, var(--sg-violet) 5%, transparent), transparent 58%),
+        var(--bg);
+    border-color: var(--docs-card-border);
+
+    &__header {
+        background: color-mix(in srgb, var(--bg-sub) 55%, var(--bg));
+    }
+
+    &__label {
+        color: var(--caption);
+    }
+}
+
+.content .metrics-entry {
+    --metrics-accent: var(--sg-violet);
+    --metrics-accent-soft: color-mix(in srgb, var(--metrics-accent) 10%, var(--bg));
+    --metrics-accent-border: color-mix(in srgb, var(--metrics-accent) 20%, var(--divider-light));
+    --metrics-accent-text: color-mix(in srgb, var(--metrics-accent) 65%, var(--heading));
+
+    border-bottom: 1px solid var(--docs-card-divider);
+    display: grid;
+    gap: rem(0.45) rem(1.75);
+    grid-template-columns: var(--metrics-list-cols);
+    margin: 0;
+    padding: rem(0.85) rem(1.4);
+    position: relative;
+    transition: background-color 0.2s ease;
+
+    &:last-child {
+        border-bottom: none;
+    }
+
+    &::before {
+        background: color-mix(in srgb, var(--metrics-accent) 26%, var(--divider-light));
+        border-radius: 0 rem(0.15) rem(0.15) 0;
+        bottom: 0;
+        content: "";
+        left: 0;
+        position: absolute;
+        top: 0;
+        transition: background-color 0.2s ease;
+        width: 1px;
+    }
+
+    &:hover {
+        background: color-mix(in srgb, var(--metrics-accent) 4%, var(--bg));
+
+        &::before {
+            background: color-mix(in srgb, var(--metrics-accent) 45%, var(--divider-light));
+        }
+
+        .metrics-name-pill,
+        .metrics-label-pill {
+            border-color: color-mix(in srgb, var(--metrics-accent) 28%, var(--divider-light));
+        }
+    }
+
+    &--violet {
+        --metrics-accent: var(--sg-violet);
+    }
+
+    &--blue {
+        --metrics-accent: var(--table-blue);
+    }
+
+    &--green {
+        --metrics-accent: var(--table-green);
+    }
+
+    &--orange {
+        --metrics-accent: var(--table-orange);
+    }
+
+    &--pink {
+        --metrics-accent: var(--orchid);
+    }
+
+    > dt,
+    > dd {
+        margin: 0;
+    }
+
+    > dt {
+        align-self: center;
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
+    }
+
+    > dd {
+        align-self: center;
+        min-width: 0;
+    }
+
+    @media (max-width: 768px) {
+        gap: rem(0.35) 0;
+        grid-template-columns: 1fr;
+
+        > dt,
+        > dd {
+            grid-column: 1;
+        }
+
+        > dt {
+            grid-row: 1;
+        }
+
+        .metrics-desc {
+            grid-column: 1;
+            grid-row: 2;
+        }
+
+        .metrics-labels {
+            grid-column: 1;
+            grid-row: 3;
+        }
+    }
+}
+
+.content .metrics-term {
+    min-width: 0;
+}
+
+.content .metrics-name-pill {
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--metrics-accent) 9%, var(--bg-sub)),
+        var(--metrics-accent-soft) 58%,
+        color-mix(in srgb, var(--metrics-accent) 7%, var(--bg))
+    );
+    border: 1px solid var(--metrics-accent-border);
+    border-radius: rem(0.55);
+    display: inline-block;
+    max-width: 100%;
+    padding: rem(0.22) rem(0.65);
+    transition: border-color 0.2s ease;
+
+    code {
+        background: transparent;
+        border: none;
+        color: var(--metrics-accent-text);
+        font-family: var(--font-mono);
+        font-size: rem(1.15);
+        font-weight: 500;
+        letter-spacing: var(--tracking-code);
+        line-height: var(--leading-code);
+        overflow-wrap: anywhere;
+        padding: 0;
+        white-space: normal;
+        word-break: break-word;
+    }
+}
+
+body.light .content .metrics-name-pill {
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--metrics-accent) 7%, var(--bg)),
+        color-mix(in srgb, var(--metrics-accent) 5%, var(--bg-sub)) 58%,
+        color-mix(in srgb, var(--metrics-accent) 4%, var(--bg))
+    );
+}
+
+.content .metrics-desc {
+    color: var(--table-body);
+    grid-column: 2;
+    grid-row: 1;
+    line-height: 1.55;
+}
+
+.content .metrics-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: rem(0.35) rem(0.45);
+    grid-column: 3;
+    grid-row: 1;
+}
+
+.content .metrics-label-pill {
+    background: color-mix(in srgb, var(--metrics-accent) 8%, var(--bg));
+    border: 1px solid var(--metrics-accent-border);
+    border-radius: rem(99);
+    display: inline-flex;
+    padding: rem(0.12) rem(0.5);
+    transition: border-color 0.2s ease;
+
+    code {
+        background: transparent;
+        border: none;
+        color: var(--metrics-accent-text);
+        font-family: var(--font-mono);
+        font-size: rem(1.05);
+        letter-spacing: var(--tracking-code);
+        line-height: var(--leading-code);
+        padding: 0;
+        white-space: nowrap;
+    }
+}
+
+body.light .content .metrics-label-pill {
+    background: color-mix(in srgb, var(--metrics-accent) 6%, var(--bg));
 }
 
 .relative {
@@ -134,20 +707,90 @@ table.inline-headings {
  Theme override for the Algolia Docsearch modal
 */
 
+body.dark {
+    --docsearch-text-color: var(--heading);
+    --docsearch-muted-color: var(--caption);
+    --docsearch-container-background: color-mix(in srgb, var(--bg) 35%, rgba(0, 0, 0, 0.72));
+    --docsearch-modal-background: var(--card-light);
+    --docsearch-modal-shadow: var(--docs-card-shadow);
+    --docsearch-searchbox-background: color-mix(in srgb, var(--bg-sub) 70%, var(--card-light));
+    --docsearch-searchbox-focus-background: color-mix(in srgb, var(--bg-sub) 55%, var(--card-light));
+    --docsearch-searchbox-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sg-violet) 45%, transparent);
+    --docsearch-primary-color: var(--sg-violet);
+    --docsearch-highlight-color: var(--highlight);
+    --docsearch-hit-color: var(--body);
+    --docsearch-hit-active-color: var(--heading);
+    --docsearch-hit-background: color-mix(in srgb, var(--card-light) 88%, var(--bg-sub));
+    --docsearch-hit-shadow: none;
+    --docsearch-footer-background: color-mix(in srgb, var(--bg-sub) 50%, var(--card-light));
+    --docsearch-footer-shadow: inset 0 1px 0 color-mix(in srgb, var(--divider-light) 40%, transparent);
+    --docsearch-logo-color: var(--link);
+    --docsearch-key-gradient: linear-gradient(-225deg, var(--card), var(--card-light));
+    --docsearch-key-shadow: inset 0 -2px 0 0 color-mix(in srgb, var(--divider-light) 65%, transparent);
 
-.DocSearch-Modal {
-    --docsearch-primary-color: #{$purple-v2};
-    --docsearch-highlight-color: #{$purple-v2};
-    --docsearch-searchbox-shadow: inset 0 0 0 2px var(--docsearch-primary-color);
+    .DocSearch-Hit[aria-selected="true"] a {
+        background-color: color-mix(in srgb, var(--highlight) 18%, var(--card-light));
+    }
+
+    .DocSearch-Hit-source {
+        color: color-mix(in srgb, var(--highlight) 75%, var(--heading));
+    }
+
+    .DocSearch-Input {
+        color: var(--heading);
+    }
+
+    .DocSearch-Hit[aria-selected="true"] mark {
+        color: var(--highlight) !important;
+    }
+}
+
+body.light {
+    --docsearch-primary-color: var(--sg-violet);
+    --docsearch-highlight-color: var(--highlight);
+    --docsearch-text-color: var(--sg-midnight);
+    --docsearch-muted-color: var(--sg-gray-2);
+    --docsearch-container-background: color-mix(in srgb, var(--bg) 25%, rgba(16, 12, 33, 0.38));
+    --docsearch-modal-background: var(--white);
+    --docsearch-modal-shadow: var(--docs-card-shadow);
+    --docsearch-searchbox-background: color-mix(in srgb, var(--bg-sub) 80%, var(--white));
+    --docsearch-searchbox-focus-background: var(--white);
+    --docsearch-searchbox-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sg-violet) 35%, transparent);
+    --docsearch-hit-color: var(--body);
+    --docsearch-hit-active-color: var(--heading);
+    --docsearch-hit-background: var(--white);
+    --docsearch-hit-shadow: none;
+    --docsearch-footer-background: color-mix(in srgb, var(--bg-sub) 65%, var(--white));
+    --docsearch-footer-shadow: inset 0 1px 0 color-mix(in srgb, var(--docs-card-divider) 55%, transparent);
+    --docsearch-logo-color: var(--link);
+    --docsearch-key-gradient: linear-gradient(-225deg, var(--bg-sub), var(--white));
+    --docsearch-key-shadow: inset 0 -2px 0 0 color-mix(in srgb, var(--docs-card-divider) 65%, transparent);
+
+    .DocSearch-Hit[aria-selected="true"] a {
+        background-color: color-mix(in srgb, var(--highlight) 12%, var(--white));
+    }
+
+    .DocSearch-Hit-source {
+        color: color-mix(in srgb, var(--highlight) 70%, var(--sg-midnight));
+    }
+
+    .DocSearch-Input {
+        color: var(--heading);
+    }
+
+    .DocSearch-Hit[aria-selected="true"] mark {
+        color: var(--highlight) !important;
+    }
 }
 
 .backdrop {
-    position: fixed;
-    height: 100vh;
-    width: 100vw;
-    inset: 0;
-    background: rgba(0, 0, 0, .7);
+    backdrop-filter: blur(4px);
+    background: color-mix(in srgb, var(--bg) 35%, rgba(0, 0, 0, 0.72));
     display: none;
+    height: 100vh;
+    inset: 0;
+    position: fixed;
+    width: 100vw;
 }
 
 .sidebar-wrapper {
@@ -580,13 +1223,13 @@ table.inline-headings {
 }
 
 .footer {
+    border-top: 1px solid var(--docs-card-divider);
     display: flex;
     flex-direction: column;
     gap: var(--x-small);
-    text-align: center;
     margin-top: var(--large);
     padding: var(--small) 0 0;
-    border-top: 1px solid var(--divider-light);
+    text-align: center;
 
     &-links {
         display: flex;
@@ -611,6 +1254,12 @@ table.inline-headings {
         color: var(--sub) !important;
         font-weight: var(--weight-body) !important;
         text-decoration: none;
+        transition: color 0.15s ease;
+
+        &:hover,
+        &:focus {
+            color: var(--link) !important;
+        }
 
         &[href*="https://"] {
             border-bottom: none;
@@ -633,9 +1282,9 @@ table.inline-headings {
     }
 
     svg {
+        fill: var(--gray-mid);
         height: rem(2.2);
         width: rem(2.2);
-        fill: var(--gray-mid);
     }
 
     .system.active {
@@ -723,7 +1372,11 @@ body.dark {
 }
 
 .banner {
-    background-color: var(--tip);
+    background: color-mix(in srgb, var(--sg-violet) 12%, var(--docs-card-inset));
+    border: 1px solid color-mix(in srgb, var(--sg-violet) 22%, var(--docs-card-divider));
+    border-radius: var(--table-radius);
+    box-shadow: var(--docs-card-shadow);
+    margin: var(--milli) 0;
     padding: var(--pico) var(--milli);
     text-align: center;
 
@@ -733,6 +1386,7 @@ body.dark {
 
     a {
         color: var(--link);
+        font-weight: var(--weight-body-emphasis);
     }
 }
 
