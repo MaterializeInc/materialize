@@ -2509,3 +2509,71 @@ fn test_system_schema_2part_not_qualified() {
         panic!("Expected CreateView statement");
     }
 }
+
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+#[mz_ore::test]
+fn test_staging_external_index_cluster_name_uses_raw_value() {
+    let stmts = parse_statements(vec![
+        "CREATE INDEX my_idx IN CLUSTER \"prod-cluster\" ON my_view (id)",
+    ])
+    .expect("valid SQL");
+    let mut indexes: Vec<_> = stmts
+        .into_iter()
+        .map(|s| match s {
+            Statement::CreateIndex(i) => i,
+            _ => panic!("expected CREATE INDEX"),
+        })
+        .collect();
+
+    transform_cluster_names_for_staging(&mut indexes, "_staging");
+
+    match indexes[0].in_cluster.as_ref().expect("index has a cluster") {
+        RawClusterName::Unresolved(ident) => {
+            assert_eq!(ident.as_str(), "prod-cluster_staging");
+        }
+        RawClusterName::Resolved(_) => panic!("expected unresolved cluster name"),
+    }
+}
+
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+#[mz_ore::test]
+fn test_staging_deployed_index_cluster_name_uses_raw_value() {
+    let fqn = staging_test_fqn();
+    let external_deps = BTreeSet::new();
+    let replacement_objects = BTreeSet::new();
+    let transformer = transformers::StagingTransformer::new(
+        &fqn,
+        "_staging".to_string(),
+        &external_deps,
+        None,
+        &replacement_objects,
+    );
+
+    let staged = transformer.transform_cluster(&Ident::new_unchecked("prod-cluster"));
+    assert_eq!(staged.as_str(), "prod-cluster_staging");
+}
+
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+#[mz_ore::test]
+fn test_staging_external_index_name_is_suffixed() {
+    let stmts = parse_statements(vec![
+        "CREATE INDEX my_idx IN CLUSTER compute ON my_view (id)",
+    ])
+    .expect("valid SQL");
+    let mut indexes: Vec<_> = stmts
+        .into_iter()
+        .map(|s| match s {
+            Statement::CreateIndex(i) => i,
+            _ => panic!("expected CREATE INDEX"),
+        })
+        .collect();
+
+    transform_cluster_names_for_staging(&mut indexes, "_staging");
+
+    // The index name must be suffixed so the recreated external index does not
+    // collide with the production index of the same name.
+    assert_eq!(
+        indexes[0].name.as_ref().expect("named index").as_str(),
+        "my_idx_staging"
+    );
+}
