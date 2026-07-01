@@ -30,7 +30,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::watch;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::AlterCompatible;
 use crate::connections::inline::{
@@ -576,6 +576,11 @@ impl CredentialPrefetcher {
         let initial = Self::fetch(&inner, &config)
             .await
             .with_context(|| format!("initial credential prefetch failed for {diagnostic}"))?;
+        debug!(
+            connection = %diagnostic,
+            expiry = ?initial.expiry(),
+            "initial credential prefetch succeeded"
+        );
         let (tx, cache) = watch::channel(Some(initial));
         let task_name = format!("credential-prefetch:{diagnostic}");
         let refresh_task = mz_ore::task::spawn(
@@ -619,6 +624,11 @@ impl CredentialPrefetcher {
     ) {
         loop {
             let wait = next_refresh_wait(tx.borrow().as_ref(), &config);
+            debug!(
+                connection = %diagnostic,
+                ?wait,
+                "sleeping until next credential refresh"
+            );
             tokio::time::sleep(wait).await;
             // Nothing holds the cache anymore (the dataflow tore down). Stop.
             if tx.is_closed() {
@@ -626,9 +636,15 @@ impl CredentialPrefetcher {
             }
             match Self::fetch(&inner, &config).await {
                 Ok(creds) => {
+                    let expiry = creds.expiry();
                     if tx.send(Some(creds)).is_err() {
                         return;
                     }
+                    debug!(
+                        connection = %diagnostic,
+                        ?expiry,
+                        "credential prefetch refresh succeeded"
+                    );
                 }
                 Err(e) => {
                     // Keep the last-good credentials. The next iteration's wait
