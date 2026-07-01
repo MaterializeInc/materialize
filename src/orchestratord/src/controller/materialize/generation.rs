@@ -92,6 +92,17 @@ static PER_ROUTE_GROUP_ROLES_VERSION: LazyLock<Version> = LazyLock::new(|| Versi
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 
+/// Minimum version for distroless environmentd/clusterd images (nonroot
+/// uid/gid 65534). Balancerd transitioned earlier at V26_18_0 (see
+/// balancer.rs).
+static V26_32_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 32,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
 /// Describes the status of a deployment.
 ///
 /// This is a simplified representation of `DeploymentState`, suitable for
@@ -887,8 +898,23 @@ fn create_environmentd_statefulset_object(
             ephemeral_volume_class
         ));
     }
-    // The `materialize` user used by clusterd always has gid 999.
-    args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());
+    // Distroless environmentd/clusterd (v26.32.0+) run as `nonroot` (uid/gid
+    // 65534). Older images run as `materialize` (999). This sets both the
+    // environmentd pod security context and the
+    // --orchestrator-kubernetes-service-fs-group arg controlling clusterd
+    // pods, so both transition together.
+    // NOTE: fsGroup re-chowns volume contents on mount, so existing PVCs with
+    // uid-999 files migrate automatically (may add startup latency on large
+    // volumes).
+    let service_fs_group: i64 = if mz.meets_minimum_version(&V26_32_0) {
+        65534
+    } else {
+        999
+    };
+    args.push(format!(
+        "--orchestrator-kubernetes-service-fs-group={}",
+        service_fs_group
+    ));
 
     // Add system_param configmap
     // This feature was enabled in 0.163 but did not have testing until after 0.164.
@@ -1241,9 +1267,9 @@ fn create_environmentd_statefulset_object(
             service_account_name: Some(mz.service_account_name()),
             volumes: Some(volumes),
             security_context: Some(PodSecurityContext {
-                fs_group: Some(999),
-                run_as_user: Some(999),
-                run_as_group: Some(999),
+                fs_group: Some(service_fs_group),
+                run_as_user: Some(service_fs_group),
+                run_as_group: Some(service_fs_group),
                 ..Default::default()
             }),
             tolerations,
