@@ -898,14 +898,14 @@ fn create_environmentd_statefulset_object(
             ephemeral_volume_class
         ));
     }
-    // Distroless images (v26.28+) run as the `nonroot` user (uid/gid 65534).
-    // Older Ubuntu-based images use the `materialize` user (uid/gid 999).
-    // This value is used for both the environmentd pod security context and
-    // the --orchestrator-kubernetes-service-fs-group arg (which controls
-    // clusterd pod security contexts). Both transition at the same version.
-    // Note: Kubernetes fsGroup re-chowns volume contents on mount, so
-    // existing PVCs with UID 999 files will be migrated automatically
-    // (may add startup latency for large volumes).
+    // Distroless environmentd/clusterd (v26.32.0+) run as `nonroot` (uid/gid
+    // 65534). Older images run as `materialize` (999). This sets both the
+    // environmentd pod security context and the
+    // --orchestrator-kubernetes-service-fs-group arg controlling clusterd
+    // pods, so both transition together.
+    // NOTE: fsGroup re-chowns volume contents on mount, so existing PVCs with
+    // uid-999 files migrate automatically (may add startup latency on large
+    // volumes).
     let service_fs_group: i64 = if mz.meets_minimum_version(&V26_32_0) {
         65534
     } else {
