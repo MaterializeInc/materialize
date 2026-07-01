@@ -21,6 +21,14 @@
 pub enum Pat {
     /// A relation metavariable; matches and binds any subtree.
     RelVar(String),
+    /// A scalar unary call with a FIXED function, e.g. `Unary[not](x)`. `func`
+    /// is the scalar-func keyword text, resolved to a concrete `UnaryFunc` by
+    /// codegen. Func-metavar binding (a bound `UnaryFunc`) is a later-slice
+    /// capability and is a distinct variant when it lands.
+    SUnary {
+        func: String,
+        input: Box<Pat>,
+    },
     Filter {
         preds: String,
         input: Box<Pat>,

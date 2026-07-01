@@ -379,11 +379,18 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
         let union = kw("Union")
             .ignore_then(listpat.clone())
             .map(|inputs| Pat::Union { inputs });
+        let sunary = kw("Unary")
+            .ignore_then(bracket_ident())
+            .then(pat.clone())
+            .map(|(func, input)| Pat::SUnary {
+                func,
+                input: Box::new(input),
+            });
         let relvar = relvar_ident().map(Pat::RelVar);
 
         choice((
             paren, filter, map, project, reduce, flatmap, negate, threshold, topk, arrangeby, join,
-            wcojoin, union, relvar,
+            wcojoin, union, sunary, relvar,
         ))
     });
 
@@ -605,4 +612,28 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
         );
 
     rule.repeated().collect::<Vec<_>>().then_ignore(end())
+}
+
+// NOTE: `grammar.rs` is a build-script module (`#[path]`-included by
+// `build.rs`), not part of the crate's normal lib/test target, so `cargo
+// test` does not run this. It documents the expected parse shape; behavioral
+// coverage comes from `cargo check` failing to build if a real `.rewrite`
+// rule using `Unary[..](..)` fails to parse.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_scalar_unary_nested() {
+        let src = "rule not_not { Unary[not](Unary[not](x)) => x }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        assert_eq!(rules.len(), 1);
+        match &rules[0].lhs {
+            crate::dsl::Pat::SUnary { func, input } => {
+                assert_eq!(func, "not");
+                assert!(matches!(**input, crate::dsl::Pat::SUnary { .. }));
+            }
+            other => panic!("expected SUnary, got {other:?}"),
+        }
+    }
 }
