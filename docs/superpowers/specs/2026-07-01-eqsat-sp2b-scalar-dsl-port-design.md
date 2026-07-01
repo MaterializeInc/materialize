@@ -112,7 +112,16 @@ Add scalar structural variants to `Pat` and `Tmpl` (`dsl.rs`,
 `SUnary(UnaryFunc, pat)`, `SBinary(BinaryFunc, pat, pat)`,
 `SVariadic(VariadicFunc, listpat)`, `SIf(pat, pat, pat)`. Scalar metavars bind a
 scalar e-class and reuse the existing metavar mechanism (a metavar is an `Id`,
-sort-agnostic). Variadic scalar operands reuse the existing `ListPat`/`ListTmpl`
+sort-agnostic).
+
+**Func spelling: fixed vs metavar.** A scalar call pattern names its function
+two ways. A *fixed-func* pattern pins the function (`SUnary(UnaryFunc::Not, ...)`,
+spelled `Unary[not](x)` in the grammar with a func keyword resolved to the
+concrete func). A *func-metavar* pattern binds the function so the RHS can
+transform it (`f(a, b)` binding `f: BinaryFunc`). Slice 1 uses fixed-func only
+(`not_not` pins `Not`). Func-metavar binding is a distinct capability introduced
+in slice 5, where `null_prop_binary`/`err_prop_binary`/`not_binary_negate` first
+need to match an arbitrary binary func. Variadic scalar operands reuse the existing `ListPat`/`ListTmpl`
 (`items` plus `rest`) machinery, the same `rest...` splice relational Join/Union
 use today (for example `relational.rewrite:169`,
 `Filter[p] (Join[e](a, rest...)) => Join[e](Filter[p] a, rest...)`). A rule is
@@ -264,25 +273,31 @@ deleted only in slice 7. Every slice also runs the scalar unit tests green.
 
 | Slice | Machinery landed | Rules ported (of 21) | Gate |
 |---|---|---|---|
-| **1, Seam (go/no-go)** | scalar `Pat`/`Tmpl` AST (2.1), codegen scalar arms (2.2), scalar view methods (2.3), scalar extractor on CombinedLang with determinism parity (2.6) exposing the pinned `pub fn raise(eg, id)` + re-homed `call_scalar_type`, CombinedLang `canonicalize` path (lower, saturate, scalar-extract), differential harness **and the corpus fixture** (one work unit, not split), Lean scalar denotation skeleton plus emit dispatch (sorry) | `and_or_dedup`, `and_or_single`, `not_not`, `not_binary_negate` (4, plain structural) | slice-1 gate below |
-| **2, Variadic** | wire scalar variadic `Pat`/`Tmpl` plus `rest...` splice onto existing `ListPat`/`ListTmpl` | `flatten_assoc`, `not_demorgan` (2, unconditional variadic) | differential parity |
+| **1, Seam (go/no-go)** | scalar `Pat`/`Tmpl` AST (2.1), codegen scalar arms (2.2), scalar view methods (2.3), scalar extractor on CombinedLang with determinism parity (2.6) exposing the pinned `pub fn raise(eg, id)` + re-homed `call_scalar_type`, CombinedLang `canonicalize` path (lower, saturate, scalar-extract), differential harness **and the corpus fixture** (one work unit, not split), Lean scalar denotation skeleton plus emit dispatch (sorry) | `not_not` (1, fixed-func unary, the minimal seam) | slice-1 gate below |
+| **2, Variadic** | wire scalar variadic `Pat`/`Tmpl` plus `rest...` splice onto existing `ListPat`/`ListTmpl` | `and_or_single`, `flatten_assoc`, `not_demorgan` (3, variadic) | differential parity |
 | **3, Analysis gates** | scalar `Cond` variants plus `scalar_lit`/`scalar_could_error` view methods (2.4) | `and_or_short_circuit`, `and_or_drop_unit`, `if_true`, `if_false_or_null`, `if_same_branches` (5) | differential parity |
 | **4, Const-eval builtin** | builtin-applier term (2.5), `const_eval` builtin, constant-literal RHS template | `const_fold` (builtin), `and_or_empty` (declarative literal) (2) | differential parity |
-| **5, Type-context builtin (binary)** | `typed_null`/`typed_err` builtins plus `scalar_is_non_nullable` cond, reading `col_types` | `if_err_cond`, `null_prop_binary`, `err_prop_binary` (builtins), `isnull_fold` (declarative plus cond) (4) | differential parity |
-| **6, Variadic-set** | `inner_sets`-style variadic-set reasoning in DSL/builtins | `null_prop_variadic`, `err_prop_variadic` (builtins), `factor_and_or`, `absorb_and_or` (4) | differential parity |
+| **5, Type-context builtin (binary)** | func-metavar binding (bind a `UnaryFunc`/`BinaryFunc` metavar), `negate` builtin, `typed_null`/`typed_err` builtins plus `scalar_is_non_nullable` cond, reading `col_types` | `if_err_cond`, `null_prop_binary`, `err_prop_binary` (builtins), `isnull_fold` (declarative plus cond), `not_binary_negate` (func-metavar plus negate builtin) (5) | differential parity |
+| **6, Variadic-set** | `inner_sets`-style variadic-set reasoning in DSL/builtins, operand-dedup builtin | `null_prop_variadic`, `err_prop_variadic` (builtins), `factor_and_or`, `absorb_and_or`, `and_or_dedup` (5) | differential parity |
 | **7, Flip plus delete** | route production `crate::eqsat::scalar::canonicalize_predicates` to CombinedLang, delete `scalar/{egraph,rules,raise,lower}.rs` standalone path (keep `ScalarLang`/`SNode`/`ScalarGraphData`/`analysis.rs`) | none | **full `enable_eqsat_scalar_canonicalize` slt goldens, no `--rewrite`**, scalar unit tests green |
 
-**Rule tally.** 4 plus 2 plus 5 plus 2 plus 4 plus 4 equals 21.
+**Rule tally.** 1 plus 3 plus 5 plus 2 plus 5 plus 5 equals 21. The 21 rules are
+the exact entries of `rules()` in `scalar/rules.rs` (`const_fold` through
+`isnull_fold`, verified by direct count).
 
 **Ordering.** Linear dependency, since each slice's machinery is used by later
 ones, but slices 2 through 6 are independent in their *rule* content. Slice 1 is
 the critical seam and the go/no-go. It proves determinism-parity and
-fixpoint-equivalence on 4 trivial rules under matched bounds. Pass, and slices 2
-through 7 grind a proven path. Fail, and you reassess the one-grammar-over-CNode
-approach having ported only 4 rules. Slice 7 is the irreversible production flip
-and must be last. Capability-ascending order means a gate failure localizes to
-the one capability that slice added. The heaviest rules (type, error,
-variadic-set) come last, when the machinery beneath them is parity-proven.
+fixpoint-equivalence on one trivial rule (`not_not`) under matched bounds. Pass,
+and slices 2 through 7 grind a proven path. Fail, and you reassess the
+one-grammar-over-CNode approach having ported only `not_not`. Slice 7 is the
+irreversible production flip and must be last. Capability-ascending order means a
+gate failure localizes to the one capability that slice added, so a rule moves to
+the slice that lands its machinery: `and_or_single` needs variadic matching
+(slice 2), `not_binary_negate` needs func-metavar binding plus the negate builtin
+(slice 5), `and_or_dedup` needs the operand-dedup builtin (slice 6). The heaviest
+rules (type, error, variadic-set) come last, when the machinery beneath them is
+parity-proven.
 
 **Lean is per-slice, not a trailing slice.** Each slice extends the scalar
 denotation for its operators and emits a theorem per ported rule (tactic where
@@ -317,18 +332,20 @@ builtin-applier rules are the permanent-`sorry` set.
      propagation. These three assertions are the operational meaning of
      "dominates the goldens' feature space". Parity on the corpus implies parity
      on the goldens only if this coverage holds.
-- **Slice 1 gate (operational).** Two checks, both on the 4-rule corpus subset:
+- **Slice 1 gate (operational).** Two checks, on the corpus restricted to the
+  `not_not` rule (slice 1 ports `not_not` alone):
   1. **Extraction identity.** For every corpus input, the CombinedLang scalar
-     `canonicalize` produces the same `MirScalarExpr` as the old
-     `EGraph<ScalarLang>` `canonicalize`. This is the pass/fail criterion. No
-     iteration-count or e-node-count matching is required, extraction identity
-     suffices because the extractor is determinism-parity by construction (2.6),
-     and the bounds are copied constants (2.6.3).
+     `canonicalize` (with only `not_not` active) produces the same
+     `MirScalarExpr` as the old `EGraph<ScalarLang>` `canonicalize` (with only
+     `not_not` active). This is the pass/fail criterion. No iteration-count or
+     e-node-count matching is required, extraction identity suffices because the
+     extractor is determinism-parity by construction (2.6), and the bounds are
+     copied constants (2.6.3).
   2. **Termination.** The CombinedLang scalar `saturate` terminates within the
      copied bounds on every corpus input (does not hit an unexpected growth
      blow-up that the old engine did not).
   Failure of check 1 is the go/no-go trigger: reassess one-grammar-over-CNode
-  having ported only 4 rules.
+  having ported only `not_not`.
 - **Every slice.** Existing scalar unit tests (`eqsat::scalar`, `analysis`)
   green, and relational goldens unchanged, run
   `bin/sqllogictest --optimized -- test/sqllogictest/transform/` and confirm no
