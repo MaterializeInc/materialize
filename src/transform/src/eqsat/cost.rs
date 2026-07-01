@@ -680,6 +680,79 @@ impl CostModel {
         })
     }
 
+    /// Whether `input` (through leading Filter/Map/Project wrappers) is an opaque
+    /// global `Get` with an available index whose key equals `key` at full
+    /// EXPRESSION granularity, the same `available.contains(needed_key)` test the
+    /// commit's `implement_arrangements` uses (join_implementation.rs). Unlike
+    /// [`Self::key_cols_arranged`] this distinguishes a plain-column key `[#0]`
+    /// from an expression key `[#0 + 4]`, so the orderer's start-arrangement
+    /// prediction lines up with the commit's expression-level reuse.
+    ///
+    /// `key` is in `input`'s projected column space. It is mapped DOWN through the
+    /// wrappers into the base collection's column space (the same see-through as
+    /// `key_cols_arranged`, which for injective projections is the inverse of
+    /// `per_input_available`'s lift), then compared for exact `Vec<MirScalarExpr>`
+    /// equality against the base index keys. An empty `key` needs no arrangement
+    /// and counts as arranged.
+    fn expr_key_arranged(&self, input: &Rel, key: &[MirScalarExpr]) -> bool {
+        if key.is_empty() {
+            return true;
+        }
+        let mut node = input;
+        let mut key: Vec<MirScalarExpr> = key.to_vec();
+        loop {
+            match node {
+                Rel::Filter { input, .. } => node = input,
+                Rel::Map { input, .. } => {
+                    // A key referencing a Map-appended column is not a base column
+                    // and cannot be covered by a base index.
+                    let base_arity = input.arity();
+                    if key
+                        .iter()
+                        .any(|e| e.support().iter().any(|&c| c >= base_arity))
+                    {
+                        return false;
+                    }
+                    node = input;
+                }
+                Rel::Project { input, outputs } => {
+                    // Map each key expression's columns from output position `c` to
+                    // the base column `outputs[c]`. A projection that is not
+                    // injective on the referenced columns cannot correspond to a
+                    // lifted index key, so bail (mirrors `key_cols_arranged`).
+                    let mut map: BTreeMap<usize, usize> = BTreeMap::new();
+                    for e in &key {
+                        for c in e.support() {
+                            match outputs.get(c) {
+                                Some(&base_c) => {
+                                    map.insert(c, base_c);
+                                }
+                                None => return false,
+                            }
+                        }
+                    }
+                    let distinct: BTreeSet<usize> = map.values().copied().collect();
+                    if distinct.len() != map.len() {
+                        return false;
+                    }
+                    for e in &mut key {
+                        e.permute_map(&map);
+                    }
+                    node = input;
+                }
+                _ => break,
+            }
+        }
+        let gid = match global_id_from_leaf(node) {
+            Some(g) => g,
+            None => return false,
+        };
+        match self.available.get(&gid) {
+            Some(keys) => keys.iter().any(|k| k.as_slice() == key.as_slice()),
+            None => false,
+        }
+    }
+
     /// Whether an `ArrangeBy(input, key)` is already covered by an available
     /// index. Matches only a bare opaque global `Get` under the arrangement
     /// (no intervening column-shifting wrappers), against an index whose key
@@ -864,7 +937,23 @@ impl CostModel {
                 let key = frontier_key_cols(offsets[add], arities[add], &placed, equivalences);
                 self.key_cols_arranged(&inputs[add], &key)
             };
-            best_left_deep_sequence(n, &agm, &is_keyed, &is_arranged)?
+            // Whether the START input's own arrangement reuses an index. Its key
+            // is the first-edge EXPRESSION aligned to the first lookup (`second`),
+            // scored at expression granularity so an expression key like
+            // `foo.a + 4` is not spuriously credited to an index on plain `foo.a`.
+            // This is the seam that `is_arranged` (column-set) cannot see, and it
+            // matches how `commit_differential` derives and reuses the start key.
+            let is_start_arranged = |second: usize, start: usize| -> bool {
+                let start_range = (offsets[start], arities[start]);
+                let second_range = (offsets[second], arities[second]);
+                match start_key_exprs(start_range, second_range, equivalences) {
+                    Some(key) => self.expr_key_arranged(&inputs[start], &key),
+                    // No start key aligns with the first lookup: the commit would
+                    // reject this order as differential. Count the start as a build.
+                    None => false,
+                }
+            };
+            best_left_deep_sequence(n, &agm, &is_keyed, &is_arranged, &is_start_arranged)?
         };
 
         let mut placed: Vec<(usize, usize)> = Vec::new();
@@ -1208,6 +1297,56 @@ pub(super) fn frontier_key_cols(
     key_cols
 }
 
+/// The start input's differential arrangement key, as EXPRESSIONS in the start's
+/// local column space, derived exactly as `commit_differential` (join_commit.rs).
+///
+/// The start is the stream side of the first binary join, so its arrangement key
+/// must line up component-for-component with the first lookup's key. For each
+/// component of that lookup key (the second input's first-edge simple columns, per
+/// [`frontier_key_cols`]), this finds the equated expression whose columns are all
+/// bound in the start input and returns it in the start's local column space. This
+/// mirrors `JoinInputMapper::find_bound_expr`: the equivalence class containing the
+/// lookup-key column, then the class member fully bound in the start.
+///
+/// `start`/`second` are the `(offset, arity)` spans of the start and first-lookup
+/// inputs in the join's concatenated column space. Returns `None` if any lookup-key
+/// component has no start-bound equivalent, the case where `commit_differential`
+/// rejects the differential plan. An empty first-edge key (a cross into the start)
+/// yields an empty key vector, which needs no arrangement.
+fn start_key_exprs(
+    start: (usize, usize),
+    second: (usize, usize),
+    equivalences: &[Vec<EScalar>],
+) -> Option<Vec<MirScalarExpr>> {
+    let (start_off, start_arity) = start;
+    let (second_off, second_arity) = second;
+    // The first lookup's key: the second input's simple columns equated to the
+    // start, matching the committed second_key and `frontier_key_cols`.
+    let second_key = frontier_key_cols(second_off, second_arity, &[start], equivalences);
+    let in_start = |c: usize| c >= start_off && c < start_off + start_arity;
+    let mut aligned = Vec::with_capacity(second_key.len());
+    for c_local in second_key {
+        let target = second_off + c_local; // the lookup-key column, global index
+        // find_bound_expr: the class holding `#target`, then a member all of whose
+        // columns are bound in the start input.
+        let bound = equivalences.iter().find_map(|class| {
+            if !class.iter().any(|e| e.is_col() == Some(target)) {
+                return None;
+            }
+            class.iter().find(|e| {
+                let cols = e.cols();
+                !cols.is_empty() && cols.iter().all(|&c| in_start(c))
+            })
+        })?;
+        // Rebase the expression into the start's local column space.
+        let local = bound
+            .permute_cols(|c| (c as i64) - (start_off as i64))
+            .ok()?;
+        aligned.push(local.expr);
+    }
+    Some(aligned)
+}
+
 /// The input sequence (global indices) of the cheapest left-deep order, ranked
 /// lexicographically by `(forced_crosses, unarranged_steps, AGM terms_cost)`.
 ///
@@ -1224,16 +1363,18 @@ pub(super) fn frontier_key_cols(
 /// cost model then charges.
 ///
 /// The start input's own arrangement is accounted at the first transition
-/// (singleton to pair), keyed by the start's first-edge key against the second
-/// input, not its full join key. This mirrors `commit_differential`, which
-/// aligns the committed start key to the first lookup. `is_arranged` is therefore
-/// only ever called with a non-empty `frontier_mask`. Returns `None` only when
-/// `n == 0`.
+/// (singleton to pair) via `is_start_arranged(second, start)`, not `is_arranged`.
+/// The start's key is the first-edge EXPRESSION aligned to the second input (the
+/// first lookup), not its full join key. This mirrors `commit_differential`,
+/// which aligns the committed start key to the first lookup and reuses it at
+/// expression granularity. `is_arranged` is only ever called for LOOKUP steps
+/// (non-empty `frontier_mask`). Returns `None` only when `n == 0`.
 fn best_left_deep_sequence(
     n: usize,
     agm: &dyn Fn(u32) -> f64,
     is_keyed: &dyn Fn(u32, usize) -> bool,
     is_arranged: &dyn Fn(u32, usize) -> bool,
+    is_start_arranged: &dyn Fn(usize, usize) -> bool,
 ) -> Option<Vec<usize>> {
     if n == 0 {
         return None;
@@ -1265,10 +1406,10 @@ fn best_left_deep_sequence(
                         rest_unarranged + if is_arranged(rest, i) { 0 } else { 1 };
                     // The first transition also fixes the start's own arrangement:
                     // `rest` is the singleton start, keyed against `i` (the second
-                    // input) by its first-edge key. Count that build too.
+                    // input) by its first-edge expression. Count that build too.
                     if rest.count_ones() == 1 {
                         let start = rest.trailing_zeros() as usize;
-                        cand_unarranged += if is_arranged(1 << i, start) { 0 } else { 1 };
+                        cand_unarranged += if is_start_arranged(i, start) { 0 } else { 1 };
                     }
                     let mut cand_terms = rest_terms.clone();
                     cand_terms.push(agm_s);
@@ -3098,6 +3239,102 @@ mod tests {
             BTreeSet::from([0usize]),
             "index-aware orderer must arrange C by its indexed column 0 (reusing the \
              available arrangement); got {c_key:?} at position {c_pos}"
+        );
+    }
+
+    /// An `EScalar` for `#c + k` (a complex expression whose only column is `c`),
+    /// the shape of the `foo.a + 4 = baz.a` edge in database-issues#2449.
+    fn plus_lit(c: usize, k: i64) -> EScalar {
+        use mz_expr::{BinaryFunc, func};
+        use mz_repr::{Datum, ReprScalarType};
+        let lit = MirScalarExpr::literal_ok(Datum::Int64(k), ReprScalarType::Int64);
+        EScalar::plain(
+            MirScalarExpr::column(c).call_binary(lit, BinaryFunc::AddInt64(func::AddInt64)),
+        )
+    }
+
+    #[mz_ore::test]
+    fn expr_key_arranged_distinguishes_expression_from_column() {
+        // A bare global Get with an index on plain column 0. The expression-level
+        // arranged check (the commit's `available.contains(key)` predicate) must
+        // accept the plain-column key `[#0]` and reject the expression key
+        // `[#0 + 4]`, which the column-set check could not tell apart.
+        let model = CostModel::with_available(avail_one(1, &[0]));
+        let foo = global_opaque(1, 2);
+        assert!(
+            model.expr_key_arranged(&foo, &[MirScalarExpr::column(0)]),
+            "index [0] covers key [#0]"
+        );
+        assert!(
+            !model.expr_key_arranged(&foo, &[plus_lit(0, 4).expr]),
+            "index [0] does NOT cover expression key [#0 + 4]"
+        );
+        // An empty key needs no arrangement, so it is trivially arranged.
+        assert!(model.expr_key_arranged(&foo, &[]), "empty key is arranged");
+    }
+
+    #[mz_ore::test]
+    fn binary_join_order_expr_key_start_reuses_index() {
+        // database-issues#2449: `foo, bar, baz WHERE foo.a = bar.a AND
+        // foo.a + 4 = baz.a`, with indexes on foo.a and bar.a.
+        //
+        //   foo(#0,#1) bar(#2,#3) baz(#4,#5)
+        //   foo.a = bar.a       (#0 = #2)
+        //   foo.a + 4 = baz.a   (#0 + 4 = #4)
+        //
+        // Ordering foo » baz » bar start-keys foo by the EXPRESSION `foo.a + 4`
+        // (the first lookup baz's edge), which the index on plain `foo.a` cannot
+        // cover, so foo must be re-arranged (a full scan). Ordering foo » bar »
+        // baz start-keys foo by plain `foo.a`, reusing foo's index. The orderer
+        // must prefer the latter: the start's arranged-ness is scored at
+        // expression granularity, exactly as the commit derives and matches the
+        // start key.
+        let inputs = vec![
+            global_opaque(1, 2), // foo
+            global_opaque(2, 2), // bar
+            global_opaque(3, 2), // baz
+        ];
+        let equivalences = vec![
+            vec![col(0), col(2)],         // foo.a = bar.a
+            vec![plus_lit(0, 4), col(4)], // foo.a + 4 = baz.a
+        ];
+        // Indexes on foo (id 1) and bar (id 2), both keyed by local column 0.
+        let mut available = avail_one(1, &[0]);
+        available.extend(avail_one(2, &[0]));
+        let model = CostModel::with_available(available);
+
+        let order = model
+            .binary_join_order(&inputs, &equivalences)
+            .expect("connected join has an order");
+        let seq: Vec<usize> = order.steps.iter().map(|s| s.input).collect();
+
+        // baz's only edge is `foo.a + 4 = baz.a`, whose foo side is a complex
+        // expression, so baz can only enter as a keyed lookup after foo is placed.
+        // It must therefore be the final step, and cannot be the start. Both
+        // remaining orders (foo » bar » baz and bar » foo » baz) reuse foo's and
+        // bar's indexes and build only baz's arrangement, exactly matching JI's
+        // single-arrangement plan. The rejected order is foo » baz » bar, where
+        // foo would be start-keyed by `a + 4` (a full scan on an index over plain
+        // `a`).
+        assert_eq!(seq[2], 2, "baz must be the final lookup; got {seq:?}");
+        assert_ne!(seq[0], 2, "baz cannot be the start; got {seq:?}");
+
+        // The chosen start reuses its index: its first-edge key aligns to a plain
+        // column, not the `a + 4` expression that the index on plain `a` cannot
+        // cover. This is precisely the residual the expression-level check closes.
+        let arities = [2usize, 2, 2];
+        let offsets = [0usize, 2, 4];
+        let (start, second) = (seq[0], seq[1]);
+        let start_key = start_key_exprs(
+            (offsets[start], arities[start]),
+            (offsets[second], arities[second]),
+            &equivalences,
+        )
+        .expect("start key aligns to the first lookup");
+        assert!(
+            model.expr_key_arranged(&inputs[start], &start_key),
+            "start input {start} must reuse its index (aligned key {start_key:?}); the \
+             rejected foo » baz start would key foo by (a + 4) and miss the index"
         );
     }
 
