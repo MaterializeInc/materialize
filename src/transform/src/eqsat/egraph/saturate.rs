@@ -10,9 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use mz_expr::{Columns, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 
-use crate::eqsat::analysis::{
-    ConstCols, KeySet, Keys, LocalFacts, Monotonic, NonNeg, is_superkey,
-};
+use crate::eqsat::analysis::{ConstCols, KeySet, Keys, LocalFacts, Monotonic, NonNeg, is_superkey};
 use crate::eqsat::core::Id;
 use crate::eqsat::ir::EScalar;
 use crate::eqsat::matcher::Payload;
@@ -246,8 +244,8 @@ impl EGraph {
     /// cyclic congruence. Gates the pull-up rule so it fires only where exposing
     /// the bare `Get` unlocks an existing index.
     pub(crate) fn cond_reads_indexed_global(&self, id: Id) -> bool {
-        use std::collections::HashSet;
         use mz_expr::MirRelationExpr;
+        use std::collections::HashSet;
         let mut stack = vec![self.find(id)];
         let mut seen = HashSet::new();
         while let Some(cls) = stack.pop() {
@@ -412,8 +410,7 @@ impl EGraph {
                     // extra lets the matcher report that it hit the cap
                     // (explosive) so we ban it for a growing number of
                     // iterations.
-                    let (matches, hit_limit) =
-                        (rule.find)(&view, &analyses, MATCH_LIMIT + 1);
+                    let (matches, hit_limit) = (rule.find)(&view, &analyses, MATCH_LIMIT + 1);
                     if hit_limit {
                         banned_until[qi] = iter + ban_len[qi];
                         ban_len[qi] = ban_len[qi].saturating_mul(2);
@@ -459,7 +456,6 @@ impl EGraph {
             .map(|(n, &id)| (n.clone(), self.arity(id)))
             .collect()
     }
-
 }
 
 /// Apply a `BTreeMap` reducer to `expr` using an **outermost-first** strategy:
@@ -516,9 +512,7 @@ fn reduce_outermost(
             let c2 = reduce_outermost(reducer, expr2, max_col);
             c1 || c2
         }
-        MirScalarExpr::CallUnary { expr: inner, .. } => {
-            reduce_outermost(reducer, inner, max_col)
-        }
+        MirScalarExpr::CallUnary { expr: inner, .. } => reduce_outermost(reducer, inner, max_col),
         MirScalarExpr::CallVariadic { exprs, .. } => exprs
             .iter_mut()
             .fold(false, |acc, e| reduce_outermost(reducer, e, max_col) || acc),
@@ -698,10 +692,8 @@ mod tests {
         use mz_repr::{Datum, ReprScalarType};
 
         let one = MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64);
-        let add_col1_1 =
-            col(1).call_binary(one.clone(), BinaryFunc::AddInt64(func::AddInt64));
-        let add_col0_1 =
-            col(0).call_binary(one.clone(), BinaryFunc::AddInt64(func::AddInt64));
+        let add_col1_1 = col(1).call_binary(one.clone(), BinaryFunc::AddInt64(func::AddInt64));
+        let add_col0_1 = col(0).call_binary(one.clone(), BinaryFunc::AddInt64(func::AddInt64));
 
         let mut reducer: BTreeMap<MirScalarExpr, MirScalarExpr> = BTreeMap::new();
         // Whole-expr rewrite to out-of-range col(2) (col 2 is NOT < max_col=2).
@@ -712,7 +704,10 @@ mod tests {
         let escalar = EScalar::plain(add_col1_1);
         let (changed, result) = reduce_escalar(&escalar, &reducer, 2);
 
-        assert!(changed, "child rewrite #1→#0 must be accepted and report a change");
+        assert!(
+            changed,
+            "child rewrite #1→#0 must be accepted and report a change"
+        );
         assert_eq!(
             result.expr, add_col0_1,
             "add(#1,1) must become add(#0,1), not col(2) and not the original add(#1,1)"

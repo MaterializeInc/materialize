@@ -150,13 +150,13 @@ pub(crate) fn gen_base(p: &GenParams, seed: u64) -> EGraph<ToyLang> {
 }
 
 /// Generate `n_colors` equality sets over `base`'s classes (deterministic).
-pub(crate) fn gen_colors(
-    p: &GenParams,
-    base: &EGraph<ToyLang>,
-    seed: u64,
-) -> Vec<Vec<(Id, Id)>> {
+pub(crate) fn gen_colors(p: &GenParams, base: &EGraph<ToyLang>, seed: u64) -> Vec<Vec<(Id, Id)>> {
     let mut rng = Lcg::new(seed ^ 0x00C0_FFEE);
-    let mut roots: Vec<Id> = base.class_ids().into_iter().filter(|&id| base.find(id) == id).collect();
+    let mut roots: Vec<Id> = base
+        .class_ids()
+        .into_iter()
+        .filter(|&id| base.find(id) == id)
+        .collect();
     roots.sort_unstable(); // Ensure deterministic order regardless of HashMap iteration order.
 
     // Classes that contain a leaf e-node.
@@ -169,7 +169,12 @@ pub(crate) fn gen_colors(
     // Classes ranked by in-degree, descending; take the top quartile as "hot".
     let deg = indegree(base);
     let mut ranked: Vec<Id> = roots.clone();
-    ranked.sort_by(|a, b| deg.get(b).unwrap_or(&0).cmp(deg.get(a).unwrap_or(&0)).then(a.cmp(b)));
+    ranked.sort_by(|a, b| {
+        deg.get(b)
+            .unwrap_or(&0)
+            .cmp(deg.get(a).unwrap_or(&0))
+            .then(a.cmp(b))
+    });
     let hot_n = (ranked.len() / 4).max(1);
     let hot: Vec<Id> = ranked.into_iter().take(hot_n).collect();
 
@@ -204,9 +209,7 @@ impl CostModel<ToyLang> for ToyCost {
     fn cost(&self, node: &ToyNode, child_cost: &dyn Fn(Id) -> u64) -> u64 {
         match node {
             ToyNode::Leaf(_) => 1,
-            ToyNode::Op(_, children) => {
-                1 + children.iter().map(|&c| child_cost(c)).sum::<u64>()
-            }
+            ToyNode::Op(_, children) => 1 + children.iter().map(|&c| child_cost(c)).sum::<u64>(),
         }
     }
 }
@@ -231,16 +234,27 @@ mod tests {
         let p = small_params();
         let a = gen_base(&p, 7);
         let b = gen_base(&p, 7);
-        assert_eq!(a.node_count(), b.node_count(), "same seed ⇒ same node count");
+        assert_eq!(
+            a.node_count(),
+            b.node_count(),
+            "same seed ⇒ same node count"
+        );
         // Same seed ⇒ same class structure: compare sorted node sets per partition size.
-        assert_eq!(a.class_ids().len(), b.class_ids().len(), "same seed ⇒ same class count");
+        assert_eq!(
+            a.class_ids().len(),
+            b.class_ids().len(),
+            "same seed ⇒ same class count"
+        );
     }
 
     #[mz_ore::test]
     fn gen_base_reaches_target_size() {
         let p = small_params();
         let eg = gen_base(&p, 1);
-        assert!(eg.node_count() >= p.base_size, "base reaches target node count");
+        assert!(
+            eg.node_count() >= p.base_size,
+            "base reaches target node count"
+        );
     }
 
     #[mz_ore::test]
@@ -266,14 +280,21 @@ mod tests {
         let base = gen_base(&p, 42);
         let colors_a = gen_colors(&p, &base, 99);
         let colors_b = gen_colors(&p, &base, 99);
-        assert_eq!(colors_a, colors_b, "gen_colors must be deterministic given the same seed");
+        assert_eq!(
+            colors_a, colors_b,
+            "gen_colors must be deterministic given the same seed"
+        );
     }
 
     #[mz_ore::test]
     fn locality_steers_toward_shared_classes() {
         // SharedHot should, on average, touch classes of higher in-degree than
         // LeafOnly on the same base.
-        let base_p = GenParams { n_colors: 30, eqs_per_color: 4, ..small_params() };
+        let base_p = GenParams {
+            n_colors: 30,
+            eqs_per_color: 4,
+            ..small_params()
+        };
         let base = gen_base(&base_p, 1);
         let deg = super::indegree(&base);
         let avg_deg = |colors: &Vec<Vec<(Id, Id)>>| -> f64 {
@@ -288,8 +309,22 @@ mod tests {
             }
             sum as f64 / n.max(1) as f64
         };
-        let leaf = gen_colors(&GenParams { locality: Locality::LeafOnly, ..base_p.clone() }, &base, 2);
-        let hot = gen_colors(&GenParams { locality: Locality::SharedHot, ..base_p.clone() }, &base, 2);
+        let leaf = gen_colors(
+            &GenParams {
+                locality: Locality::LeafOnly,
+                ..base_p.clone()
+            },
+            &base,
+            2,
+        );
+        let hot = gen_colors(
+            &GenParams {
+                locality: Locality::SharedHot,
+                ..base_p.clone()
+            },
+            &base,
+            2,
+        );
         assert!(
             avg_deg(&hot) > avg_deg(&leaf),
             "SharedHot ({}) must touch higher-degree classes than LeafOnly ({})",

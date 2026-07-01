@@ -592,15 +592,17 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
         .then(tmpl)
         .then(conds)
         .then_ignore(just(Token::RBrace))
-        .map(|((((((name, doc), phase), colored), lhs), rhs), conds)| Rule {
-            name,
-            doc,
-            phase: phase.unwrap_or(Phase::Both),
-            colored,
-            lhs,
-            rhs,
-            conds,
-        });
+        .map(
+            |((((((name, doc), phase), colored), lhs), rhs), conds)| Rule {
+                name,
+                doc,
+                phase: phase.unwrap_or(Phase::Both),
+                colored,
+                lhs,
+                rhs,
+                conds,
+            },
+        );
 
     rule.repeated().collect::<Vec<_>>().then_ignore(end())
 }

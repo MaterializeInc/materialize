@@ -39,11 +39,11 @@ pub mod recursion;
 
 pub use constant_columns::{ConstCols, ConstantColumns};
 pub use equivalences::Equivalences;
-pub use keys::{is_superkey, rel_keys, Key, KeySet, Keys};
+pub use keys::{Key, KeySet, Keys, is_superkey, rel_keys};
 pub use monotonic::Monotonic;
 pub use nonneg::NonNeg;
 pub use recursion::{
-    letrec_local_facts, rec_analyze, rel_monotonic, rel_non_negative, Direction, LocalFacts,
+    Direction, LocalFacts, letrec_local_facts, rec_analyze, rel_monotonic, rel_non_negative,
 };
 
 use crate::eqsat::core::Id;

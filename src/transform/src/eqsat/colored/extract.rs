@@ -74,9 +74,7 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
 
         by_class
             .keys()
-            .filter_map(|&cls| {
-                Some((cls, (best_node.get(&cls)?.clone(), best.get(&cls)?.clone())))
-            })
+            .filter_map(|&cls| Some((cls, (best_node.get(&cls)?.clone(), best.get(&cls)?.clone()))))
             .collect()
     }
 }
@@ -213,7 +211,11 @@ mod tests {
         let mut base_ceg = ColoredEGraph::new(&eg);
         let bc = base_ceg.new_color(None);
         let base = base_ceg.extract_colored(bc, &ToyCost);
-        assert_eq!(base[&eg.find(expensive)].1, 3, "base cost of expensive tree");
+        assert_eq!(
+            base[&eg.find(expensive)].1,
+            3,
+            "base cost of expensive tree"
+        );
 
         // Colored: expensive ≅ cheap ⇒ the class can pick the Leaf, cost 1.
         let mut ceg = ColoredEGraph::new(&eg);
@@ -221,6 +223,9 @@ mod tests {
         ceg.close(c, &[(expensive, cheap)]);
         let colored = ceg.extract_colored(c, &ToyCost);
         let rep = ceg.find(c, expensive);
-        assert_eq!(colored[&rep].1, 1, "colored equality exposes the cheap Leaf");
+        assert_eq!(
+            colored[&rep].1, 1,
+            "colored equality exposes the cheap Leaf"
+        );
     }
 }

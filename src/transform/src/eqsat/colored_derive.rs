@@ -12,7 +12,6 @@
 //! "merge across all nodes in a class + bounded fixpoint" semantics are
 //! identical to production.
 
-
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use mz_expr::{Columns, MirScalarExpr};
@@ -140,7 +139,12 @@ pub(crate) fn build_colored_layer<'b>(base: &'b EGraph, scopes: DerivedScopes) -
     // 1. Sort scope indices by ascending (|unions|, unions) so parents
     //    (smaller equality-sets) are created before children.
     let mut order: Vec<usize> = (0..scopes.scopes.len()).collect();
-    order.sort_by_key(|&i| (scopes.scopes[i].unions.len(), scopes.scopes[i].unions.clone()));
+    order.sort_by_key(|&i| {
+        (
+            scopes.scopes[i].unions.len(),
+            scopes.scopes[i].unions.clone(),
+        )
+    });
 
     // 2. For each scope (in sorted order), find its parent: the already-placed
     //    scope whose union-set is a proper subset, maximal by |unions| (last
@@ -194,7 +198,11 @@ pub(crate) fn build_colored_layer<'b>(base: &'b EGraph, scopes: DerivedScopes) -
         .into_iter()
         .map(|(cls, idx)| (base.find(cls), color_ids[idx].unwrap()))
         .collect();
-    let empty_classes = scopes.empty_classes.into_iter().map(|c| base.find(c)).collect();
+    let empty_classes = scopes
+        .empty_classes
+        .into_iter()
+        .map(|c| base.find(c))
+        .collect();
     ColoredLayer {
         ceg,
         color_of,
@@ -202,7 +210,6 @@ pub(crate) fn build_colored_layer<'b>(base: &'b EGraph, scopes: DerivedScopes) -
         delta_escalar: HashMap::new(),
     }
 }
-
 
 /// Cheapest [`EScalar`] spelling of payload `id` under `color`, among its
 /// colored-class base members whose column support is in range (`< max_col`).
@@ -235,7 +242,13 @@ pub(crate) fn resolve_scalar_colored(
         .into_iter()
         .map(|m| base.data().escalar(m).clone())
         .filter(|e| e.expr.support().into_iter().all(|c| c < max_col))
-        .min_by_key(|e| (scalar_expr_cost(&e.expr), e.expr.support().into_iter().collect::<Vec<_>>(), e.name_key()))
+        .min_by_key(|e| {
+            (
+                scalar_expr_cost(&e.expr),
+                e.expr.support().into_iter().collect::<Vec<_>>(),
+                e.name_key(),
+            )
+        })
         .unwrap_or_else(|| base.data().escalar(base.find(id)).clone())
 }
 
@@ -396,8 +409,7 @@ pub(crate) fn derive(eg: &mut EGraph) -> DerivedScopes {
             let max_col = eg.arity(input);
             for &payload_id in &payloads {
                 let escalar = eg.data().escalar(payload_id).clone();
-                let (changed, reduced) =
-                    reduce_escalar_fixpoint(&escalar, &input_reducer, max_col);
+                let (changed, reduced) = reduce_escalar_fixpoint(&escalar, &input_reducer, max_col);
                 if changed {
                     let reduced_id = eg.intern_scalar(&reduced);
                     by_context
@@ -693,9 +705,7 @@ mod tests {
         // Filter predicate `#0 = #1` ⇒ the Filter class's fact equates #0 and #1.
         let (eg, filter_class) = filter_eq_fixture();
         let facts = derive_facts(&eg);
-        let ec = facts[&eg.find(filter_class)]
-            .as_ref()
-            .expect("non-empty");
+        let ec = facts[&eg.find(filter_class)].as_ref().expect("non-empty");
         assert!(ec.reducer().values().any(|_| true), "has a reducer");
         // #0 and #1 are in one class:
         assert_eq!(ec_canon(ec, col(0)), ec_canon(ec, col(1)));
@@ -864,7 +874,10 @@ mod tests {
         // Sanity: the cheaper out-of-range column IS a member of the colored
         // class, so an unguarded `min_by_key` would select it.
         let members = layer.ceg.colored_class_members(color, eg.find(payload));
-        assert!(members.contains(&eg.find(oor)), "#5 is in the colored class");
+        assert!(
+            members.contains(&eg.find(oor)),
+            "#5 is in the colored class"
+        );
 
         let got = resolve_scalar_colored(&eg, &mut layer, color, eg.find(payload), 2);
         assert_eq!(
@@ -872,7 +885,11 @@ mod tests {
             None,
             "must not return the out-of-range column #5, got {got:?}",
         );
-        assert_eq!(got.expr, add1(col(1)), "returns the in-range payload `#1 + 1`");
+        assert_eq!(
+            got.expr,
+            add1(col(1)),
+            "returns the in-range payload `#1 + 1`"
+        );
     }
 
     /// Task 7 gate (reducer parity): equal-cost tie-break prefers lower column index.
@@ -920,8 +937,7 @@ mod tests {
         // max_col = 2: both `#0` and `#1` are in range; neither is filtered.
         let got = resolve_scalar_colored(&eg, &mut layer, color, eg.find(payload_id), 2);
         assert_eq!(
-            got.expr,
-            expr_col0,
+            got.expr, expr_col0,
             "equal-cost tie must prefer the lower-column-index spelling `#0 + 1`, got {:?}",
             got.expr,
         );
@@ -1017,8 +1033,12 @@ mod tests {
 
         let scopes = DerivedScopes {
             scopes: vec![
-                ScopeEqualities { unions: large_unions }, // index 0 → rel_large
-                ScopeEqualities { unions: small_unions }, // index 1 → rel_small
+                ScopeEqualities {
+                    unions: large_unions,
+                }, // index 0 → rel_large
+                ScopeEqualities {
+                    unions: small_unions,
+                }, // index 1 → rel_small
             ],
             class_scope: [(rel_large, 0), (rel_small, 1)].into_iter().collect(),
             empty_classes: HashSet::new(),
@@ -1116,8 +1136,14 @@ mod tests {
         let d = derive(&mut eg);
         // The scalar class must not be recorded as an empty relational class, nor
         // assigned a scope.
-        assert!(!d.empty_classes.contains(&scalar), "scalar class is not an empty relation");
-        assert!(!d.class_scope.contains_key(&scalar), "scalar class gets no scope");
+        assert!(
+            !d.empty_classes.contains(&scalar),
+            "scalar class is not an empty relation"
+        );
+        assert!(
+            !d.class_scope.contains_key(&scalar),
+            "scalar class gets no scope"
+        );
         // Sanity: it really is a scalar-only class.
         assert!(
             !eg.nodes(scalar).iter().any(|n| matches!(n, CNode::Rel(_))),
@@ -1162,7 +1188,14 @@ mod tests {
             .extract_with(top, &model, &ArrangementCount, Some(&mut layer), None)
             .expect("colored extraction");
         assert!(
-            matches!(colored, Rel::Constant { card: 0, arity: 1, .. }),
+            matches!(
+                colored,
+                Rel::Constant {
+                    card: 0,
+                    arity: 1,
+                    ..
+                }
+            ),
             "colored extraction must empty-fold to Constant(card=0, arity=1), got {colored}",
         );
     }

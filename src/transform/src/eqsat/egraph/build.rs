@@ -393,8 +393,7 @@ impl EGraph {
             "arity() requires a class with a well-defined arity; class {id} has no \
              relational e-node (called on a scalar class?)",
         );
-        self.try_arity(id)
-            .expect("class has a well-defined arity")
+        self.try_arity(id).expect("class has a well-defined arity")
     }
 
     fn arity_guarded(&self, id: Id, visiting: &mut HashSet<Id>) -> Option<usize> {
@@ -647,16 +646,20 @@ impl EGraph {
         use crate::eqsat::cost::join_key_cols_for_input;
         match node {
             ENode::ArrangeBy { input, key } => {
-                let cols: Vec<usize> =
-                    key.iter().filter_map(|&s| self.data().escalar(s).is_col()).collect();
+                let cols: Vec<usize> = key
+                    .iter()
+                    .filter_map(|&s| self.data().escalar(s).is_col())
+                    .collect();
                 vec![(self.find(*input), cols)]
             }
             ENode::ArrangeByMany { input, keys } => {
                 // One entry per key list: each list is a separate maintained arrangement.
                 keys.iter()
                     .map(|key| {
-                        let cols: Vec<usize> =
-                            key.iter().filter_map(|&s| self.data().escalar(s).is_col()).collect();
+                        let cols: Vec<usize> = key
+                            .iter()
+                            .filter_map(|&s| self.data().escalar(s).is_col())
+                            .collect();
                         (self.find(*input), cols)
                     })
                     .collect()
@@ -706,7 +709,9 @@ impl EGraph {
 
     /// Resolve a list of scalar e-class ids to their cached `EScalar` facts.
     pub(crate) fn resolve_scalars(&self, ids: &[Id]) -> Vec<EScalar> {
-        ids.iter().map(|&id| self.data().escalar(id).clone()).collect()
+        ids.iter()
+            .map(|&id| self.data().escalar(id).clone())
+            .collect()
     }
 
     /// Color-aware variant of [`Self::resolve_scalars`] (SP4b): when a colored
@@ -749,7 +754,13 @@ impl EGraph {
                     for (&id, &max_col) in ids.iter().zip(max_cols) {
                         // Reborrow `layer` per id: `resolve_scalar_colored` takes
                         // `&mut ColoredLayer` (its layered `find` is `&mut self`).
-                        out.push(resolve_scalar_colored(self, &mut *layer, color, id, max_col));
+                        out.push(resolve_scalar_colored(
+                            self,
+                            &mut *layer,
+                            color,
+                            id,
+                            max_col,
+                        ));
                     }
                     out
                 }
@@ -783,7 +794,13 @@ impl EGraph {
     // through the configured `Extractor` (see `engine`).
     #[cfg(test)]
     pub(crate) fn extract(&self, root: Id, model: &CostModel) -> Option<Rel> {
-        self.extract_with(root, model, &crate::eqsat::objective::PeakDegree, None, None)
+        self.extract_with(
+            root,
+            model,
+            &crate::eqsat::objective::PeakDegree,
+            None,
+            None,
+        )
     }
 
     /// Extract the cheapest plan rooted at `root` under `model`, using the

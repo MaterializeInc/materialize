@@ -156,7 +156,11 @@ mod tests {
         uf.union_local(1, 3);
         let big_root = uf.find_local(1);
         uf.union_local(4, 1);
-        assert_eq!(uf.find_local(4), big_root, "singleton joins the larger class's root");
+        assert_eq!(
+            uf.find_local(4),
+            big_root,
+            "singleton joins the larger class's root"
+        );
     }
 
     #[mz_ore::test]
@@ -164,7 +168,11 @@ mod tests {
         let mut uf = ColoredUnionFind::new();
         uf.union_local(1, 2);
         uf.remove(2);
-        assert_eq!(uf.find_local(2), 2, "removed element reverts to its own rep");
+        assert_eq!(
+            uf.find_local(2),
+            2,
+            "removed element reverts to its own rep"
+        );
         assert_eq!(uf.find_local(1), 1, "remaining element keeps a valid rep");
     }
 
@@ -175,7 +183,15 @@ mod tests {
         uf.union_local(1, 2);
         uf.union_local(1, 3);
         uf.remove(1);
-        assert_eq!(uf.find_local(2), uf.find_local(3), "remaining members stay merged");
-        assert_eq!(uf.find_local(1), 1, "removed element reverts to its own rep");
+        assert_eq!(
+            uf.find_local(2),
+            uf.find_local(3),
+            "remaining members stay merged"
+        );
+        assert_eq!(
+            uf.find_local(1),
+            1,
+            "removed element reverts to its own rep"
+        );
     }
 }

@@ -19,12 +19,12 @@
 #![allow(clippy::all, unused)]
 
 use crate::eqsat::dsl::Phase;
+use crate::eqsat::egraph::view::{ApplyGraph, MatchGraph};
 use crate::eqsat::egraph::{
     Analyses, CNode, EBindings, EGraph, ENode, Id, Index, Sym, cond_all_columns, cond_all_true,
     cond_any_false, cond_cols_in_range, cond_identity_projection, cond_no_error, cond_no_false,
     cond_uses_only_input,
 };
-use crate::eqsat::egraph::view::{ApplyGraph, MatchGraph};
 use crate::eqsat::matcher::{
     Payload, cols_of_payload, compose_payload, concat_payload, equivs_inner, equivs_outer,
     iota_payload, remap_payload, shift_payload, swap_equivs, swap_projection,
@@ -63,7 +63,8 @@ pub struct CompiledRule {
     /// Enumerate every left-hand-side match in the e-graph that also satisfies
     /// the side conditions, up to `limit` matches. The `bool` is `true` when
     /// the cap was reached (so the caller can throttle an explosive rule).
-    pub(crate) find: fn(&crate::eqsat::egraph::view::BaseView, &Analyses, usize) -> (Vec<EBindings>, bool),
+    pub(crate) find:
+        fn(&crate::eqsat::egraph::view::BaseView, &Analyses, usize) -> (Vec<EBindings>, bool),
     /// Instantiate the right-hand side for a match, returning the new e-class.
     pub(crate) apply: fn(&mut EGraph, &EBindings) -> Result<Id, String>,
 }

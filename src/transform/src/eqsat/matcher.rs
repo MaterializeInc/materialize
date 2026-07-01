@@ -111,7 +111,10 @@ pub(crate) fn iota_payload(n: i64) -> Result<Payload, String> {
 
 /// Turn a payload of bare column references into a projection (`Outputs`). The
 /// scalar ids are resolved via `escalar` to read whether each is a bare column.
-pub(crate) fn cols_of_payload(escalar: &dyn Fn(Id) -> EScalar, p: Payload) -> Result<Payload, String> {
+pub(crate) fn cols_of_payload(
+    escalar: &dyn Fn(Id) -> EScalar,
+    p: Payload,
+) -> Result<Payload, String> {
     let scalars = match p {
         Payload::GroupKey(s) | Payload::Predicates(s) | Payload::Scalars(s) => s,
         Payload::Outputs(o) => return Ok(Payload::Outputs(o)),
@@ -217,7 +220,11 @@ fn map_payload_cols<G: ApplyGraph + ?Sized>(
 }
 
 /// Shift every column index in `p` by `k`.
-pub(crate) fn shift_payload<G: ApplyGraph + ?Sized>(g: &mut G, p: Payload, k: i64) -> Result<Payload, String> {
+pub(crate) fn shift_payload<G: ApplyGraph + ?Sized>(
+    g: &mut G,
+    p: Payload,
+    k: i64,
+) -> Result<Payload, String> {
     map_payload_cols(g, p, |c| c as i64 + k)
 }
 
@@ -479,8 +486,7 @@ mod tests {
     #[mz_ore::test]
     fn equivs_split_and_swap() {
         let mut eg = EGraph::new();
-        let col =
-            |eg: &mut EGraph, c| eg.intern_scalar(&EScalar::plain(MirScalarExpr::column(c)));
+        let col = |eg: &mut EGraph, c| eg.intern_scalar(&EScalar::plain(MirScalarExpr::column(c)));
         // Classes: {#0,#2} fully in [0,3); {#1,#4} crosses boundary 3.
         let c0 = col(&mut eg, 0);
         let c2 = col(&mut eg, 2);

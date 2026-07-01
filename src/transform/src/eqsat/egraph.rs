@@ -27,14 +27,14 @@
 /// definition.
 pub use crate::eqsat::core::Id;
 
-mod node;
-mod combined;
 mod build;
+mod combined;
+mod node;
 mod saturate;
 pub(crate) mod view;
 
-pub use self::node::*;
 pub use self::combined::*;
+pub use self::node::*;
 pub use self::saturate::*;
 
 /// Re-export the scalar-payload reducer so the colored-derivation pass
@@ -228,7 +228,10 @@ mod tests {
         let mut eg1 = EGraph::new();
         let id_a = eg1.intern_scalar(&col_a());
         let id_b = eg1.intern_scalar(&col_b());
-        assert_eq!(id_a, id_b, "same column index hash-conses to one scalar class");
+        assert_eq!(
+            id_a, id_b,
+            "same column index hash-conses to one scalar class"
+        );
         let mut eg2 = EGraph::new();
         eg2.intern_scalar(&col_b());
         let id_ba = eg2.intern_scalar(&col_a());
@@ -288,35 +291,47 @@ mod tests {
     fn reduce_input_avoids_negate_representative() {
         let mut eg = EGraph::new();
         // Base relation `a`.
-        let a = add(&mut eg, ENode::Get {
-            name: "a".to_string(),
-            arity: 1,
-        });
+        let a = add(
+            &mut eg,
+            ENode::Get {
+                name: "a".to_string(),
+                arity: 1,
+            },
+        );
         // Cheap, sign-negative representative: Negate(a). 2 nodes.
         let neg = add(&mut eg, ENode::Negate { input: a });
         // Costlier non-negative representative: Filter(Filter(a)). 3 nodes, more
         // time terms, so strictly costlier than the negate form.
         let p = sc(&mut eg, MirScalarExpr::column(0));
-        let f1 = add(&mut eg, ENode::Filter {
-            input: a,
-            predicates: vec![p],
-        });
-        let pos = add(&mut eg, ENode::Filter {
-            input: f1,
-            predicates: vec![p],
-        });
+        let f1 = add(
+            &mut eg,
+            ENode::Filter {
+                input: a,
+                predicates: vec![p],
+            },
+        );
+        let pos = add(
+            &mut eg,
+            ENode::Filter {
+                input: f1,
+                predicates: vec![p],
+            },
+        );
         // Merge the two representatives into one class `c`.
         eg.union(neg, pos);
         eg.rebuild();
         let c = eg.find(neg);
         // A reduce with a MAX aggregate over `c`.
-        let root = add(&mut eg, ENode::Reduce {
-            input: c,
-            group_key: vec![],
-            aggregates: vec![max_aggregate()],
-            monotonic: false,
-            expected_group_size: None,
-        });
+        let root = add(
+            &mut eg,
+            ENode::Reduce {
+                input: c,
+                group_key: vec![],
+                aggregates: vec![max_aggregate()],
+                monotonic: false,
+                expected_group_size: None,
+            },
+        );
 
         let model = CostModel::new();
         let extracted = eg
@@ -338,25 +353,37 @@ mod tests {
     #[mz_ore::test]
     fn negate_free_graph_extracts_cheapest() {
         let mut eg = EGraph::new();
-        let a = add(&mut eg, ENode::Get {
-            name: "a".to_string(),
-            arity: 1,
-        });
+        let a = add(
+            &mut eg,
+            ENode::Get {
+                name: "a".to_string(),
+                arity: 1,
+            },
+        );
         let p = sc(&mut eg, MirScalarExpr::column(0));
         // Cheap plan: a single filter.
-        let cheap = add(&mut eg, ENode::Filter {
-            input: a,
-            predicates: vec![p],
-        });
+        let cheap = add(
+            &mut eg,
+            ENode::Filter {
+                input: a,
+                predicates: vec![p],
+            },
+        );
         // Costlier plan: two stacked filters.
-        let mid = add(&mut eg, ENode::Filter {
-            input: a,
-            predicates: vec![p],
-        });
-        let costly = add(&mut eg, ENode::Filter {
-            input: mid,
-            predicates: vec![p],
-        });
+        let mid = add(
+            &mut eg,
+            ENode::Filter {
+                input: a,
+                predicates: vec![p],
+            },
+        );
+        let costly = add(
+            &mut eg,
+            ENode::Filter {
+                input: mid,
+                predicates: vec![p],
+            },
+        );
         eg.union(cheap, costly);
         eg.rebuild();
         let root = eg.find(cheap);
@@ -381,22 +408,31 @@ mod tests {
     #[mz_ore::test]
     fn reduce_input_only_nonneg_extracts_unchanged() {
         let mut eg = EGraph::new();
-        let a = add(&mut eg, ENode::Get {
-            name: "a".to_string(),
-            arity: 1,
-        });
+        let a = add(
+            &mut eg,
+            ENode::Get {
+                name: "a".to_string(),
+                arity: 1,
+            },
+        );
         let p = sc(&mut eg, MirScalarExpr::column(0));
-        let pos = add(&mut eg, ENode::Filter {
-            input: a,
-            predicates: vec![p],
-        });
-        let root = add(&mut eg, ENode::Reduce {
-            input: pos,
-            group_key: vec![],
-            aggregates: vec![max_aggregate()],
-            monotonic: false,
-            expected_group_size: None,
-        });
+        let pos = add(
+            &mut eg,
+            ENode::Filter {
+                input: a,
+                predicates: vec![p],
+            },
+        );
+        let root = add(
+            &mut eg,
+            ENode::Reduce {
+                input: pos,
+                group_key: vec![],
+                aggregates: vec![max_aggregate()],
+                monotonic: false,
+                expected_group_size: None,
+            },
+        );
 
         let model = CostModel::new();
         let extracted = eg
@@ -551,10 +587,13 @@ mod tests {
         // Build: Project over the Opaque global Get.
         let mut eg = EGraph::new();
         let get_id = add(&mut eg, ENode::Opaque(get.clone()));
-        let proj_id = add(&mut eg, ENode::Project {
-            input: get_id,
-            outputs: vec![0],
-        });
+        let proj_id = add(
+            &mut eg,
+            ENode::Project {
+                input: get_id,
+                outputs: vec![0],
+            },
+        );
 
         // No availability: false.
         assert!(!eg.cond_reads_indexed_global(proj_id));

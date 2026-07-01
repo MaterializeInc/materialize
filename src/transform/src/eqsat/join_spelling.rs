@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 
 use mz_expr::{Columns, MirScalarExpr};
 
-use crate::eqsat::cost::{delta_score_lt, CostModel};
+use crate::eqsat::cost::{CostModel, delta_score_lt};
 use crate::eqsat::ir::{EScalar, Rel};
 
 /// Maximum number of multi-spelling classes to enumerate jointly, and the
@@ -169,7 +169,7 @@ mod tests {
         EScalar::plain(MirScalarExpr::column(c))
     }
     fn eq_expr(a: usize, b: usize) -> EScalar {
-        use mz_expr::{func, BinaryFunc};
+        use mz_expr::{BinaryFunc, func};
         EScalar::plain(
             MirScalarExpr::column(a)
                 .call_binary(MirScalarExpr::column(b), BinaryFunc::Eq(func::Eq)),
@@ -186,8 +186,7 @@ mod tests {
         // real (overlapping) VOJ shape.
         let base = vec![vec![col(5), eq_expr(0, 4)], vec![col(0), col(2)]];
         // The analysis proves {#0, #2} equal, offering #0 -> #2 for expr keys.
-        let analysis_classes =
-            vec![vec![MirScalarExpr::column(0), MirScalarExpr::column(2)]];
+        let analysis_classes = vec![vec![MirScalarExpr::column(0), MirScalarExpr::column(2)]];
 
         let chosen = select_join_spelling(&model, &inputs, &base, &analysis_classes);
 
@@ -207,10 +206,7 @@ mod tests {
         // Already-local base: no cross. The selector must return it unchanged
         // (byte-identical), regardless of available spellings.
         let base = vec![vec![col(5), eq_expr(2, 4)], vec![col(0), col(2)]];
-        let analysis_classes = vec![vec![
-            MirScalarExpr::column(0),
-            MirScalarExpr::column(2),
-        ]];
+        let analysis_classes = vec![vec![MirScalarExpr::column(0), MirScalarExpr::column(2)]];
 
         let chosen = select_join_spelling(&model, &inputs, &base, &analysis_classes);
         assert_eq!(chosen, base);

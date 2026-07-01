@@ -3,7 +3,8 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-#![allow(dead_code)] // Trait methods are resolved to concrete types by generated rules; a few methods (e.g. analysis-gated conds on ColoredView) remain conditionally-used.
+#![allow(dead_code)]
+// Trait methods are resolved to concrete types by generated rules; a few methods (e.g. analysis-gated conds on ColoredView) remain conditionally-used.
 
 //! `MatchGraph` / `ApplyGraph` abstraction layer over the base e-graph.
 //!

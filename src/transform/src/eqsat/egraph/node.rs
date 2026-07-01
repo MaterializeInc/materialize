@@ -254,7 +254,10 @@ impl ENode {
                     *s = f(*s);
                 }
             }
-            ENode::Filter { input, predicates } | ENode::IndexedFilter { input, predicates, .. } => {
+            ENode::Filter { input, predicates }
+            | ENode::IndexedFilter {
+                input, predicates, ..
+            } => {
                 *input = f(*input);
                 for s in predicates.iter_mut() {
                     *s = f(*s);

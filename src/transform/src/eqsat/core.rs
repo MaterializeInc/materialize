@@ -37,13 +37,7 @@ pub trait Language {
     /// hash-cons hit). `get` resolves a child id to its canonical root. Lets a
     /// language maintain `GraphData`-resident per-class analysis incrementally.
     /// Default: no-op (the relational engine uses the batch `Analysis` driver).
-    fn on_add(
-        _data: &mut Self::GraphData,
-        _id: Id,
-        _node: &Self::Node,
-        _get: &dyn Fn(Id) -> Id,
-    ) {
-    }
+    fn on_add(_data: &mut Self::GraphData, _id: Id, _node: &Self::Node, _get: &dyn Fn(Id) -> Id) {}
 
     /// Hook fired when `union` folds `loser`'s class into `winner`'s. Lets a
     /// language merge its `GraphData`-resident analysis. Default: no-op.
@@ -319,11 +313,7 @@ impl<L: Language> EGraph<L> {
     }
 
     /// Run a lattice analysis to a fixpoint with the default iteration bound.
-    pub fn run_analysis<A: Analysis<L>>(
-        &self,
-        a: &A,
-        ctx: A::Ctx<'_>,
-    ) -> HashMap<Id, A::Domain> {
+    pub fn run_analysis<A: Analysis<L>>(&self, a: &A, ctx: A::Ctx<'_>) -> HashMap<Id, A::Domain> {
         self.run_analysis_bounded(a, ctx, MAX_ANALYSIS_ITERS)
     }
 }
@@ -497,7 +487,11 @@ mod tests {
         let a = eg.add(Arith::Num(1));
         let b = eg.add(Arith::Num(2));
         let s = eg.add(Arith::Add(a, b));
-        assert_eq!(eg.lookup(&Arith::Add(a, b)), Some(eg.find(s)), "present node");
+        assert_eq!(
+            eg.lookup(&Arith::Add(a, b)),
+            Some(eg.find(s)),
+            "present node"
+        );
         assert_eq!(eg.lookup(&Arith::Num(99)), None, "absent node");
     }
 }

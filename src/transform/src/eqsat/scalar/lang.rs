@@ -110,10 +110,8 @@ mod tests {
 
     fn err_lit() -> SNode {
         // Build a typed error literal SNode directly.
-        let mir = mz_expr::MirScalarExpr::literal(
-            Err(EvalError::DivisionByZero),
-            ReprScalarType::Int64,
-        );
+        let mir =
+            mz_expr::MirScalarExpr::literal(Err(EvalError::DivisionByZero), ReprScalarType::Int64);
         match mir {
             mz_expr::MirScalarExpr::Literal(row, typ) => SNode::Literal(row, typ),
             _ => unreachable!("literal builder returns a Literal"),

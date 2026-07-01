@@ -108,7 +108,10 @@ pub fn recompute_analysis(eg: &mut EGraph<ScalarLang>) {
         for &id in &all_ids {
             let nodes = eg.nodes(id);
             // A live class always holds at least one node.
-            debug_assert!(!nodes.is_empty(), "recompute_analysis: class {id} has no nodes");
+            debug_assert!(
+                !nodes.is_empty(),
+                "recompute_analysis: class {id} has no nodes"
+            );
             let mut acc = ClassAnalysis {
                 could_error: false,
                 literal: None,

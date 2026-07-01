@@ -478,7 +478,11 @@ mod tests {
         let m = inc.close(c, &[(eg.find(x), eg.find(y))]);
 
         // Non-vacuous: the multi-step congruence merges actually happened.
-        assert_eq!(inc.find(c, fx), inc.find(c, fy), "f(x)≅f(y) must be induced");
+        assert_eq!(
+            inc.find(c, fx),
+            inc.find(c, fy),
+            "f(x)≅f(y) must be induced"
+        );
         assert_eq!(
             inc.find(c, ffx),
             inc.find(c, ffy),

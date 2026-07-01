@@ -160,9 +160,7 @@ impl Language for CombinedLang {
         // — both sides carry a scalar analysis entry. Routing a relational union
         // into `ScalarLang::on_union` would panic (no analysis to merge). The
         // relational side is a no-op (batch-driven analysis).
-        if data.scalar.analysis.contains_key(&winner)
-            && data.scalar.analysis.contains_key(&loser)
-        {
+        if data.scalar.analysis.contains_key(&winner) && data.scalar.analysis.contains_key(&loser) {
             ScalarLang::on_union(&mut data.scalar, winner, loser);
         }
     }

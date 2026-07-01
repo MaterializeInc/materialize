@@ -143,10 +143,10 @@ fn colored_saturation_keeps_nullable_self_eq_filter() {
 /// drop it).
 #[mz_ore::test]
 fn colored_saturation_keeps_nullable_equijoin_filter() {
-    let join = MirRelationExpr::join(vec![get(1, 1, true), get(2, 1, true)], vec![vec![
-        (0, 0),
-        (1, 0),
-    ]]);
+    let join = MirRelationExpr::join(
+        vec![get(1, 1, true), get(2, 1, true)],
+        vec![vec![(0, 0), (1, 0)]],
+    );
     let pred = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::Eq);
     let plan = join.filter(vec![pred]);
 

@@ -167,7 +167,7 @@ pub(crate) fn oracle_extract<L: Language, C: CostModel<L>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eqsat::colored::toy::{gen_base, gen_colors, GenParams, Locality, ToyLang, ToyNode};
+    use crate::eqsat::colored::toy::{GenParams, Locality, ToyLang, ToyNode, gen_base, gen_colors};
 
     fn fixed_base() -> (EGraph<ToyLang>, [Id; 5]) {
         let mut eg = EGraph::<ToyLang>::new();
@@ -228,7 +228,10 @@ mod tests {
             let c = ceg.new_color(None);
             ceg.close(c, eqs);
             let oracle = oracle_close(&eg, eqs, &[]);
-            assert!(same_partition(&mut ceg, c, &oracle, &ids), "disagree on {eqs:?}");
+            assert!(
+                same_partition(&mut ceg, c, &oracle, &ids),
+                "disagree on {eqs:?}"
+            );
         }
     }
 

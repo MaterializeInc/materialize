@@ -44,8 +44,8 @@ mod oracle;
 
 use std::collections::HashMap;
 
-use crate::eqsat::core::{EGraph, Language};
 use crate::eqsat::colored::union_find::ColoredUnionFind;
+use crate::eqsat::core::{EGraph, Language};
 
 // Re-export Id so the test's `use super::*` picks it up.
 pub(crate) use crate::eqsat::core::Id;
@@ -195,8 +195,8 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
 #[cfg(test)]
 mod color_tree_tests {
     use super::*;
-    use crate::eqsat::core::EGraph;
     use crate::eqsat::colored::toy::{ToyLang, ToyNode};
+    use crate::eqsat::core::EGraph;
 
     /// a=Leaf(0), b=Leaf(1), x=Leaf(2), fa=Op(0,[a]), fb=Op(0,[b]).
     fn fixed_base() -> (EGraph<ToyLang>, [Id; 5]) {
@@ -216,7 +216,11 @@ mod color_tree_tests {
         let mut ceg = ColoredEGraph::new(&eg);
         let c = ceg.new_color(None);
         for &id in &ids {
-            assert_eq!(ceg.find(c, id), eg.find(id), "fresh color matches base for {id}");
+            assert_eq!(
+                ceg.find(c, id),
+                eg.find(id),
+                "fresh color matches base for {id}"
+            );
         }
     }
 
@@ -240,11 +244,23 @@ mod color_tree_tests {
         ceg.union(parent, a, b);
         let child = ceg.new_color(Some(parent));
         // Child sees parent's a≅b for free...
-        assert_eq!(ceg.find(child, a), ceg.find(child, b), "child inherits parent union");
+        assert_eq!(
+            ceg.find(child, a),
+            ceg.find(child, b),
+            "child inherits parent union"
+        );
         // ...and can add its own without affecting the parent.
         ceg.union(child, a, x);
-        assert_eq!(ceg.find(child, a), ceg.find(child, x), "child has its own union");
-        assert_ne!(ceg.find(parent, a), ceg.find(parent, x), "parent unaffected by child");
+        assert_eq!(
+            ceg.find(child, a),
+            ceg.find(child, x),
+            "child has its own union"
+        );
+        assert_ne!(
+            ceg.find(parent, a),
+            ceg.find(parent, x),
+            "parent unaffected by child"
+        );
     }
 
     #[mz_ore::test]
@@ -257,9 +273,17 @@ mod color_tree_tests {
         ceg.union(s1, a, b);
         ceg.union(s2, a, x);
         assert_eq!(ceg.find(s1, a), ceg.find(s1, b));
-        assert_ne!(ceg.find(s1, a), ceg.find(s1, x), "s1 does not see s2's union");
+        assert_ne!(
+            ceg.find(s1, a),
+            ceg.find(s1, x),
+            "s1 does not see s2's union"
+        );
         assert_eq!(ceg.find(s2, a), ceg.find(s2, x));
-        assert_ne!(ceg.find(s2, a), ceg.find(s2, b), "s2 does not see s1's union");
+        assert_ne!(
+            ceg.find(s2, a),
+            ceg.find(s2, b),
+            "s2 does not see s1's union"
+        );
     }
 
     #[mz_ore::test]

@@ -9,8 +9,8 @@
 //! synthetically here via [`ColoredEGraph::add_colored`]; SP4 supplies a rule
 //! driver.
 
-use crate::eqsat::core::{Id, Language};
 use crate::eqsat::colored::{ColorId, ColoredEGraph};
+use crate::eqsat::core::{Id, Language};
 
 impl<'b, L: Language> ColoredEGraph<'b, L> {
     /// Insert `node` as a colored e-node in `c`. Children are canonicalized
@@ -47,9 +47,9 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::eqsat::core::{EGraph, Id};
     use crate::eqsat::colored::ColoredEGraph;
     use crate::eqsat::colored::toy::{ToyLang, ToyNode};
+    use crate::eqsat::core::{EGraph, Id};
 
     fn base_with_two_leaves() -> (EGraph<ToyLang>, Id, Id) {
         let mut eg = EGraph::<ToyLang>::new();
@@ -67,7 +67,10 @@ mod tests {
         let n1 = ceg.add_colored(c, ToyNode::Op(7, vec![a]));
         let n2 = ceg.add_colored(c, ToyNode::Op(7, vec![a]));
         assert_eq!(n1, n2, "identical colored conclusions hash-cons to one id");
-        assert!(n1 >= eg.uf_len(), "colored id is allocated above the base id space");
+        assert!(
+            n1 >= eg.uf_len(),
+            "colored id is allocated above the base id space"
+        );
     }
 
     #[mz_ore::test]
@@ -81,7 +84,11 @@ mod tests {
         let mut ceg = ColoredEGraph::new(&eg);
         let c = ceg.new_color(None);
         let got = ceg.add_colored(c, ToyNode::Op(0, vec![a]));
-        assert_eq!(got, eg.find(fa), "form present in base returns the base class");
+        assert_eq!(
+            got,
+            eg.find(fa),
+            "form present in base returns the base class"
+        );
         assert!(got < eg.uf_len(), "no colored id allocated");
     }
 
@@ -95,7 +102,10 @@ mod tests {
         ceg.union(c, a, b);
         let na = ceg.add_colored(c, ToyNode::Op(7, vec![a]));
         let nb = ceg.add_colored(c, ToyNode::Op(7, vec![b]));
-        assert_eq!(na, nb, "a≅b ⇒ Op(7,[a]) and Op(7,[b]) are the same colored node");
+        assert_eq!(
+            na, nb,
+            "a≅b ⇒ Op(7,[a]) and Op(7,[b]) are the same colored node"
+        );
     }
 
     #[mz_ore::test]
@@ -128,6 +138,10 @@ mod tests {
         let nb = ceg.add_colored(c, ToyNode::Op(5, vec![b]));
         assert_ne!(ceg.find(c, na), ceg.find(c, nb), "distinct before a≅b");
         ceg.close(c, &[(a, b)]);
-        assert_eq!(ceg.find(c, na), ceg.find(c, nb), "congruence merges colored nodes");
+        assert_eq!(
+            ceg.find(c, na),
+            ceg.find(c, nb),
+            "congruence merges colored nodes"
+        );
     }
 }

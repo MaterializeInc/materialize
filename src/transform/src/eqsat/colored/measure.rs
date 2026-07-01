@@ -14,7 +14,7 @@
 #[cfg(test)]
 mod tests {
     use crate::eqsat::colored::ColoredEGraph;
-    use crate::eqsat::colored::toy::{gen_base, gen_colors, GenParams, Locality};
+    use crate::eqsat::colored::toy::{GenParams, Locality, gen_base, gen_colors};
 
     /// Run one sweep cell: build a base + colors, close every color, aggregate.
     fn run_cell(axis: &str, value: usize, p: &GenParams) {
@@ -64,22 +64,63 @@ mod tests {
         println!("# SP3b color-explosion sweep (ported from SP3a)");
         println!("# sharing_ratio = delta_nodes / (n_colors * node_count)");
         println!("# cascade_factor = induced_merges / applied_equalities");
-        println!("axis,value,sharing_ratio,cascade_factor,delta_nodes,node_count,wall_ms,max_iters");
+        println!(
+            "axis,value,sharing_ratio,cascade_factor,delta_nodes,node_count,wall_ms,max_iters"
+        );
 
         for v in [100usize, 250, 500, 1000, 2500, 5000] {
-            run_cell("base_size", v, &GenParams { base_size: v, ..baseline.clone() });
+            run_cell(
+                "base_size",
+                v,
+                &GenParams {
+                    base_size: v,
+                    ..baseline.clone()
+                },
+            );
         }
         for v in [1usize, 2, 4, 8, 16, 32] {
-            run_cell("fan_out", v, &GenParams { fan_out: v, ..baseline.clone() });
+            run_cell(
+                "fan_out",
+                v,
+                &GenParams {
+                    fan_out: v,
+                    ..baseline.clone()
+                },
+            );
         }
         for v in [10usize, 50, 100, 250, 500, 1000] {
-            run_cell("n_colors", v, &GenParams { n_colors: v, ..baseline.clone() });
+            run_cell(
+                "n_colors",
+                v,
+                &GenParams {
+                    n_colors: v,
+                    ..baseline.clone()
+                },
+            );
         }
         for v in [1usize, 2, 4, 8, 16, 32] {
-            run_cell("eqs_per_color", v, &GenParams { eqs_per_color: v, ..baseline.clone() });
+            run_cell(
+                "eqs_per_color",
+                v,
+                &GenParams {
+                    eqs_per_color: v,
+                    ..baseline.clone()
+                },
+            );
         }
-        for (label, loc) in [(0usize, Locality::LeafOnly), (1, Locality::Mixed), (2, Locality::SharedHot)] {
-            run_cell("locality", label, &GenParams { locality: loc, ..baseline.clone() });
+        for (label, loc) in [
+            (0usize, Locality::LeafOnly),
+            (1, Locality::Mixed),
+            (2, Locality::SharedHot),
+        ] {
+            run_cell(
+                "locality",
+                label,
+                &GenParams {
+                    locality: loc,
+                    ..baseline.clone()
+                },
+            );
         }
     }
 }

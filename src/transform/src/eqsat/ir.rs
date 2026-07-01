@@ -540,22 +540,40 @@ impl Rel {
             Rel::Filter { predicates, .. } | Rel::IndexedFilter { predicates, .. } => {
                 predicates.iter().map(|s| scalar_expr_cost(&s.expr)).sum()
             }
-            Rel::Join { equivalences, .. } | Rel::WcoJoin { equivalences, .. } => {
-                equivalences.iter().flatten().map(|s| scalar_expr_cost(&s.expr)).sum()
-            }
+            Rel::Join { equivalences, .. } | Rel::WcoJoin { equivalences, .. } => equivalences
+                .iter()
+                .flatten()
+                .map(|s| scalar_expr_cost(&s.expr))
+                .sum(),
             Rel::FlatMap { exprs, .. } => exprs.iter().map(|s| scalar_expr_cost(&s.expr)).sum(),
             Rel::ArrangeBy { key, .. } => key.iter().map(|s| scalar_expr_cost(&s.expr)).sum(),
-            Rel::ArrangeByMany { keys, .. } => {
-                keys.iter().flatten().map(|s| scalar_expr_cost(&s.expr)).sum()
-            }
-            Rel::Reduce { group_key, aggregates, .. } => {
-                group_key.iter().map(|s| scalar_expr_cost(&s.expr)).sum::<usize>()
-                    + aggregates.iter().map(|a| scalar_expr_cost(&a.expr)).sum::<usize>()
+            Rel::ArrangeByMany { keys, .. } => keys
+                .iter()
+                .flatten()
+                .map(|s| scalar_expr_cost(&s.expr))
+                .sum(),
+            Rel::Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                group_key
+                    .iter()
+                    .map(|s| scalar_expr_cost(&s.expr))
+                    .sum::<usize>()
+                    + aggregates
+                        .iter()
+                        .map(|a| scalar_expr_cost(&a.expr))
+                        .sum::<usize>()
             }
             Rel::TopK { shape, .. } => shape.limit.as_ref().map_or(0, scalar_expr_cost),
             _ => 0,
         };
-        here + self.children().iter().map(|c| c.scalar_node_count()).sum::<usize>()
+        here + self
+            .children()
+            .iter()
+            .map(|c| c.scalar_node_count())
+            .sum::<usize>()
     }
 
     /// Pretty-print the plan as an indented tree.
@@ -722,8 +740,12 @@ mod tests {
         use mz_repr::{Datum, ReprScalarType};
         // `#1 + 1` is a 3-node scalar (Add, column, literal); `#0` is 1 node.
         let lit1 = MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64);
-        let compute = MirScalarExpr::column(1).call_binary(lit1, BinaryFunc::AddInt64(func::AddInt64));
-        let get = Rel::Get { name: "r".to_string(), arity: 2 };
+        let compute =
+            MirScalarExpr::column(1).call_binary(lit1, BinaryFunc::AddInt64(func::AddInt64));
+        let get = Rel::Get {
+            name: "r".to_string(),
+            arity: 2,
+        };
         let map_compute = Rel::Map {
             scalars: vec![EScalar::plain(compute.clone())],
             input: Box::new(get.clone()),
@@ -738,8 +760,10 @@ mod tests {
         assert_eq!(map_compute.scalar_node_count(), 3);
         assert_eq!(map_col.scalar_node_count(), 1);
         // Recursion: Filter over the computing Map sums both levels (filter pred #0 = 1 is 3).
-        let pred = MirScalarExpr::column(0)
-            .call_binary(MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64), BinaryFunc::Eq(func::Eq));
+        let pred = MirScalarExpr::column(0).call_binary(
+            MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64),
+            BinaryFunc::Eq(func::Eq),
+        );
         let filt = Rel::Filter {
             predicates: vec![EScalar::plain(pred)],
             input: Box::new(map_compute.clone()),

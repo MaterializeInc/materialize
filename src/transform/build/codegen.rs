@@ -778,7 +778,12 @@ fn tmpl_stmts(t: &Tmpl, hole: Option<&str>, out: &mut String, fresh: &mut Fresh)
 
 /// Emit the statements that build a template input list into `out`, returning
 /// the name of the local that holds the resulting `Vec<Id>`.
-fn listtmpl_stmts(list: &ListTmpl, hole: Option<&str>, out: &mut String, fresh: &mut Fresh) -> String {
+fn listtmpl_stmts(
+    list: &ListTmpl,
+    hole: Option<&str>,
+    out: &mut String,
+    fresh: &mut Fresh,
+) -> String {
     let c = fresh.id();
     let v = format!("vl{c}");
     out.push_str(&format!("let mut {v}: Vec<Id> = Vec::new();\n"));

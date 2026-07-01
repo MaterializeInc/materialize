@@ -142,7 +142,13 @@ impl Extractor for IlpExtractor {
 impl IlpExtractor {
     /// Build and solve the 0/1 extraction program. Returns the extracted plan
     /// on success, or `None` to signal fallback to [`GreedyExtractor`].
-    fn solve(&self, egraph: &EGraph, root: Id, model: &CostModel, spellings: Option<&HashMap<Id, EquivalenceClasses>>) -> Option<Rel> {
+    fn solve(
+        &self,
+        egraph: &EGraph,
+        root: Id,
+        model: &CostModel,
+        spellings: Option<&HashMap<Id, EquivalenceClasses>>,
+    ) -> Option<Rel> {
         use good_lp::{ProblemVariables, Solution, SolverModel, constraint, variable};
 
         // Collect every class and its e-nodes reachable from root.

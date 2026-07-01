@@ -3,7 +3,6 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-
 //! `ColoredView`: a color-aware implementation of the [`MatchGraph`] /
 //! [`ApplyGraph`] surfaces over a [`ColoredEGraph`] at a given color.
 //!
@@ -173,9 +172,7 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
                     }
                 }
                 None => {
-                    if let Some(a) =
-                        structural_arity(&class_nodes, base, r, &mut HashSet::new())
-                    {
+                    if let Some(a) = structural_arity(&class_nodes, base, r, &mut HashSet::new()) {
                         arity.insert(r, a);
                     }
                 }
@@ -250,10 +247,7 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
     }
 
     /// Arities of the bound relation metavariables (colored-canonical).
-    pub fn binding_arities(
-        &self,
-        b: &crate::eqsat::egraph::EBindings,
-    ) -> BTreeMap<String, usize> {
+    pub fn binding_arities(&self, b: &crate::eqsat::egraph::EBindings) -> BTreeMap<String, usize> {
         b.rels
             .iter()
             .map(|(n, &id)| (n.clone(), self.arity_of(id)))
@@ -294,8 +288,7 @@ fn structural_arity(
                 ENode::Opaque(m) => Some(m.arity()),
                 ENode::Project { outputs, .. } => Some(outputs.len()),
                 ENode::Map { input, scalars } => {
-                    structural_arity(class_nodes, base, *input, visiting)
-                        .map(|a| a + scalars.len())
+                    structural_arity(class_nodes, base, *input, visiting).map(|a| a + scalars.len())
                 }
                 ENode::FlatMap { input, func, .. } => {
                     structural_arity(class_nodes, base, *input, visiting)
@@ -319,9 +312,7 @@ fn structural_arity(
                     .iter()
                     .map(|i| structural_arity(class_nodes, base, *i, visiting))
                     .sum::<Option<usize>>(),
-                ENode::Union { inputs } => {
-                    structural_arity(class_nodes, base, inputs[0], visiting)
-                }
+                ENode::Union { inputs } => structural_arity(class_nodes, base, inputs[0], visiting),
             };
             if a.is_some() {
                 result = a;
@@ -585,9 +576,8 @@ fn lower_colored_impl(
     color: ColorId,
     expr: &mz_expr::MirScalarExpr,
 ) -> Id {
-    let node = crate::eqsat::scalar::lower::snode_of(expr, |child| {
-        lower_colored_impl(ceg, color, child)
-    });
+    let node =
+        crate::eqsat::scalar::lower::snode_of(expr, |child| lower_colored_impl(ceg, color, child));
     ceg.add_colored(color, CNode::Scalar(node))
 }
 
@@ -645,10 +635,10 @@ mod tests {
         let mut delta_escalar = HashMap::new();
         let mut view = ColoredView::new(&mut ceg, color, &eg, &mut delta_escalar);
 
-        let sum = EScalar::plain(
-            MirScalarExpr::column(0)
-                .call_binary(MirScalarExpr::column(1), BinaryFunc::AddInt64(func::AddInt64)),
-        );
+        let sum = EScalar::plain(MirScalarExpr::column(0).call_binary(
+            MirScalarExpr::column(1),
+            BinaryFunc::AddInt64(func::AddInt64),
+        ));
         let id = view.intern_scalar(&sum);
         // A brand-new spelling gets a colored-delta id, never a base id.
         assert!(
@@ -738,10 +728,10 @@ mod tests {
         // The external cache is owned here and threaded through both views.
         let mut delta_escalar: HashMap<_, _> = HashMap::new();
 
-        let sum = EScalar::plain(
-            MirScalarExpr::column(0)
-                .call_binary(MirScalarExpr::column(1), BinaryFunc::AddInt64(func::AddInt64)),
-        );
+        let sum = EScalar::plain(MirScalarExpr::column(0).call_binary(
+            MirScalarExpr::column(1),
+            BinaryFunc::AddInt64(func::AddInt64),
+        ));
 
         // Round 1: mint a colored-delta scalar id.
         let minted_id = {

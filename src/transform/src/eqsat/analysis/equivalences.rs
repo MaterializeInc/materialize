@@ -113,8 +113,10 @@ impl Analysis<CombinedLang> for Equivalences {
             } => {
                 let mut equivalences = get(*input);
                 if let Some(equivalences) = &mut equivalences {
-                    let mut class: Vec<MirScalarExpr> =
-                        predicates.iter().map(|&p| data.escalar(p).expr.clone()).collect();
+                    let mut class: Vec<MirScalarExpr> = predicates
+                        .iter()
+                        .map(|&p| data.escalar(p).expr.clone())
+                        .collect();
                     class.push(MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool));
                     equivalences.classes.push(class);
                 }
@@ -150,11 +152,12 @@ impl Analysis<CombinedLang> for Equivalences {
                 }
                 // Fold the join's own equivalence scalars (each vec is one class).
                 result.as_mut().map(|e| {
-                    e.classes.extend(
-                        join_equivs.iter().map(|class| {
-                            class.iter().map(|&s| data.escalar(s).expr.clone()).collect()
-                        }),
-                    )
+                    e.classes.extend(join_equivs.iter().map(|class| {
+                        class
+                            .iter()
+                            .map(|&s| data.escalar(s).expr.clone())
+                            .collect()
+                    }))
                 });
                 result
             }
@@ -260,10 +263,10 @@ mod tests {
     use mz_expr::MirScalarExpr;
 
     use crate::analysis::equivalences::EquivalenceClasses;
+    use crate::eqsat::core::Analysis;
     use crate::eqsat::core::Id;
     use crate::eqsat::egraph::{CNode, CombinedLang, EGraph, ENode};
     use crate::eqsat::ir::EScalar;
-    use crate::eqsat::core::Analysis;
 
     use super::{Equivalences, RelCtx};
 
