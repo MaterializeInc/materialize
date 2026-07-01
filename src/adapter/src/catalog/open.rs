@@ -755,6 +755,7 @@ fn add_new_remove_old_builtin_items_migration(
     // We compare the builtin items that are compiled into the binary with the builtin items that
     // are persisted in the catalog to discover new and deleted builtin items.
     let mut builtins = Vec::new();
+
     for builtin in BUILTINS::iter() {
         let desc = SystemObjectDescription {
             schema_name: builtin.schema().to_string(),

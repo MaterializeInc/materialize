@@ -640,6 +640,8 @@ mz_cluster_replica_utilization           ""
 mz_cluster_replica_utilization_history   ""
 mz_compute_hydration_statuses            ""
 mz_console_cluster_utilization_overview  ""
+mz_console_cluster_utilization_overview_24h  ""
+mz_console_cluster_utilization_overview_3h  ""
 mz_global_frontiers                      ""
 mz_hydration_statuses                    ""
 mz_index_advice                          ""
@@ -830,7 +832,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-268
+270
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
