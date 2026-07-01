@@ -299,6 +299,33 @@ impl StorageWriteOp {
     }
 }
 
+/// A cloneable, `Send + Sync` handle for appending to tables from off the main
+/// storage-controller loop.
+///
+/// Appends issued through this handle go through the same single serializing
+/// worker as [`StorageController::append_table`], so they are applied in the
+/// order `append` is called, not the order the returned futures are polled. An
+/// [`StorageError::InvalidUppers`] result means `write_ts` was below the current
+/// table upper. The caller must re-issue the append at a higher timestamp.
+///
+/// The handle stays valid for the lifetime of the controller (and thus the
+/// process). It does not track catalog rebuilds because the underlying worker
+/// is independent of them.
+pub trait TableAppender: Debug + Send + Sync {
+    /// Appends `commands` at `write_ts`, advancing the upper of all registered
+    /// tables to `advance_to`.
+    ///
+    /// The returned receiver resolves once the append is durable, or with an
+    /// error if the write could not be applied. A dropped sender (receiver
+    /// error) means the worker has shut down.
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     /// Marks the end of any initialization commands.
@@ -443,10 +470,14 @@ pub trait StorageController: Debug {
     /// collections and leave the controller in an inconsistent state. It is almost
     /// always wrong to do anything but abort the process on `Err`.
     ///
-    /// The `register_ts` is used as the initial timestamp that tables are available for reads. (We
+    /// The `register_ts` is the initial timestamp at which tables become available for reads. (We
     /// might later give non-tables the same treatment, but hold off on that initially.) Callers
     /// must provide a Some if any of the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
+    ///
+    /// This sets up storage but does not register tables in the txns shard. The caller registers
+    /// them (making them available for writes) via [`Self::register_table_collections`], which is
+    /// retryable against the off-loop group committer.
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
@@ -504,13 +535,40 @@ pub trait StorageController: Debug {
         source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
     ) -> Result<(), StorageError>;
 
+    /// Evolves the [`RelationDesc`] of a table, creating the new collection.
+    ///
+    /// This sets up the new collection but does not register it in the txns shard. The caller
+    /// registers it (making it available for writes) via [`Self::register_table_collections`].
     async fn alter_table_desc(
         &mut self,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
+    ) -> Result<(), StorageError>;
+
+    /// Registers tables in the txns shard, making them available for writes at `register_ts`.
+    ///
+    /// This is the sole path that registers tables in the txns shard, used both for the initial
+    /// registration after [`Self::create_collections`] / [`Self::alter_table_desc`] and for
+    /// retries. It re-opens write handles from the stored collection metadata, so it is idempotent
+    /// across retries (a conflicting register consumes the originals). In read-only mode only
+    /// migrated tables are registered, since the read-write environment owns the rest.
+    ///
+    /// Only `DataSource::Table` collections among `ids` are registered. Source-fed tables
+    /// (`IngestionExport`) and webhooks are created as table catalog items too but are written by
+    /// the storage layer, so they are ignored here. Callers may therefore pass all the collections
+    /// they created without pre-filtering.
+    ///
+    /// If `register_ts` is behind the txns shard upper (the off-loop group committer raced us),
+    /// returns [`StorageError::InvalidUppers`]. The caller should allocate a fresh timestamp from
+    /// the oracle (which is monotonic and thus beyond the txns upper) and retry. Reads never observe
+    /// a partially registered table, because the oracle read timestamp is only advanced past
+    /// `register_ts` after this call succeeds.
+    async fn register_table_collections(
+        &mut self,
         register_ts: Timestamp,
+        ids: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -546,7 +604,12 @@ pub trait StorageController: Debug {
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the tables and allows their resources to be reclaimed.
-    fn drop_tables(
+    ///
+    /// Forgetting the tables in the txns shard happens synchronously at `ts`. If `ts` is behind the
+    /// txns shard upper (the off-loop group committer raced us), returns
+    /// [`StorageError::InvalidUppers`] without dropping anything, so the caller can re-allocate a
+    /// fresh timestamp and retry.
+    async fn drop_tables(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
@@ -613,6 +676,12 @@ pub trait StorageController: Debug {
         advance_to: Timestamp,
         commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
+
+    /// Returns a cloneable handle for appending to tables off the main loop.
+    ///
+    /// See [`TableAppender`]. The returned handle stays valid for the lifetime
+    /// of the controller.
+    fn table_appender(&self) -> Arc<dyn TableAppender>;
 
     /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
     /// append to the specified [`GlobalId`].

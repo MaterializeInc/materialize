@@ -471,7 +471,7 @@ impl Coordinator {
                         statement_logging_id,
                         self.internal_cmd_tx.clone(),
                     );
-                    let result = self
+                    match self
                         .implement_subscribe(
                             &mut ctx_extra,
                             df_desc,
@@ -483,8 +483,21 @@ impl Coordinator {
                             read_holds,
                             plan,
                         )
-                        .await;
-                    let _ = tx.send(result);
+                        .await
+                    {
+                        Ok((resp, write_notify)) => {
+                            // Wait for the `mz_subscriptions` bookkeeping write to be durable
+                            // off the coordinator loop before responding, so we don't block
+                            // the loop on a group commit.
+                            task::spawn(|| "execute_subscribe::await_bookkeeping", async move {
+                                write_notify.await;
+                                let _ = tx.send(Ok(resp));
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                        }
+                    }
                 }
 
                 Command::CopyToPreflight {

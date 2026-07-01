@@ -51,7 +51,7 @@ enum PersistTableWriteCmd {
             GlobalId,
             WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         )>,
-        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     ),
     Update {
         /// Existing collection for the table.
@@ -65,14 +65,14 @@ enum PersistTableWriteCmd {
         /// New write handle to register.
         handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         /// Notifies us when the handle has been updated.
-        tx: oneshot::Sender<()>,
+        tx: oneshot::Sender<Result<(), StorageError>>,
     },
     DropHandles {
         forget_ts: Timestamp,
         /// Tables that we want to drop our handle for.
         ids: Vec<GlobalId>,
         /// Notifies us when all resources have been cleaned up.
-        tx: oneshot::Sender<()>,
+        tx: oneshot::Sender<Result<(), StorageError>>,
     },
     Append {
         write_ts: Timestamp,
@@ -201,7 +201,7 @@ impl PersistTableWriteWorker {
             GlobalId,
             WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         )>,
-    ) -> tokio::sync::oneshot::Receiver<()> {
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
         // We expect this to be awaited, so keep the span connected.
         let span = info_span!("PersistTableWriteCmd::Register");
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -225,7 +225,7 @@ impl PersistTableWriteWorker {
         forget_ts: Timestamp,
         register_ts: Timestamp,
         handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-    ) -> oneshot::Receiver<()> {
+    ) -> oneshot::Receiver<Result<(), StorageError>> {
         let (tx, rx) = oneshot::channel();
         self.send(PersistTableWriteCmd::Update {
             existing_collection,
@@ -262,18 +262,44 @@ impl PersistTableWriteWorker {
     ///
     /// Note that this does not perform any other cleanup, such as finalizing
     /// the handle's shard.
+    ///
+    /// Returns an `InvalidUppers` error if `forget_ts` is behind the txns shard
+    /// upper. The worker bookkeeping is rolled back in that case, so the caller
+    /// can re-allocate a fresh timestamp and retry.
     pub(crate) fn drop_handles(
         &self,
         ids: Vec<GlobalId>,
         forget_ts: Timestamp,
-    ) -> BoxFuture<'static, ()> {
+    ) -> BoxFuture<'static, Result<(), StorageError>> {
         let (tx, rx) = oneshot::channel();
         self.send(PersistTableWriteCmd::DropHandles { forget_ts, ids, tx });
-        Box::pin(rx.map(|_| ()))
+        Box::pin(rx.map(|res| match res {
+            Ok(res) => res,
+            // The worker is gone; treat as shutting down.
+            Err(_recv) => Err(StorageError::ShuttingDown("persist_table_worker")),
+        }))
     }
 
     fn send(&self, cmd: PersistTableWriteCmd) {
         self.inner.send(cmd);
+    }
+}
+
+/// A cloneable [`TableAppender`](mz_storage_client::controller::TableAppender)
+/// backed by the [`PersistTableWriteWorker`].
+///
+/// A newtype so the trait `append` does not clash with the inherent `append`.
+#[derive(Debug, Clone)]
+pub(crate) struct TableAppenderHandle(pub(crate) PersistTableWriteWorker);
+
+impl mz_storage_client::controller::TableAppender for TableAppenderHandle {
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> oneshot::Receiver<Result<(), StorageError>> {
+        self.0.append(write_ts, advance_to, commands)
     }
 }
 
@@ -291,11 +317,12 @@ impl TxnsTableWorker {
         while let Some((span, command)) = rx.recv().await {
             match command {
                 PersistTableWriteCmd::Register(register_ts, ids_handles, tx) => {
-                    self.register(register_ts, ids_handles)
+                    let res = self
+                        .register(register_ts, ids_handles)
                         .instrument(span)
                         .await;
                     // We don't care if our waiter has gone away.
-                    let _ = tx.send(());
+                    let _ = tx.send(res);
                 }
                 PersistTableWriteCmd::Update {
                     existing_collection,
@@ -305,21 +332,21 @@ impl TxnsTableWorker {
                     handle,
                     tx,
                 } => {
-                    async {
+                    let res = async {
                         self.drop_handles(vec![existing_collection], forget_ts)
-                            .await;
+                            .await?;
                         self.register(register_ts, vec![(new_collection, handle)])
-                            .await;
+                            .await
                     }
                     .instrument(span)
                     .await;
                     // We don't care if our waiter has gone away.
-                    let _ = tx.send(());
+                    let _ = tx.send(res);
                 }
                 PersistTableWriteCmd::DropHandles { forget_ts, ids, tx } => {
-                    self.drop_handles(ids, forget_ts).instrument(span).await;
+                    let res = self.drop_handles(ids, forget_ts).instrument(span).await;
                     // We don't care if our waiter has gone away.
-                    let _ = tx.send(());
+                    let _ = tx.send(res);
                 }
                 PersistTableWriteCmd::Append {
                     write_ts,
@@ -348,7 +375,7 @@ impl TxnsTableWorker {
             GlobalId,
             WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         )>,
-    ) {
+    ) -> Result<(), StorageError> {
         // As tables evolve (e.g. columns are added) we treat the older versions as
         // "views" on the later versions. While it's not required, it's easier to reason
         // about table registration if we do it in GlobalId order.
@@ -373,38 +400,79 @@ impl TxnsTableWorker {
         match res {
             Ok(tidy) => {
                 self.tidy.merge(tidy);
+                Ok(())
             }
             Err(current) => {
-                panic!(
-                    "cannot register {:?} at {:?} because txns is at {:?}",
-                    new_ids, register_ts, current
+                // The register timestamp was behind the txns upper, most likely because the
+                // off-loop group committer advanced it between our timestamp allocation and this
+                // call. Roll back the bookkeeping we just did so the caller can retry at a fresh
+                // timestamp, and report the conflict as an `InvalidUppers`.
+                debug!(
+                    "register at {:?} conflicted with txns upper {:?}, rolling back {:?}",
+                    register_ts, current, new_ids
                 );
+                for id in &new_ids {
+                    self.write_handles.remove(id);
+                }
+                Err(StorageError::InvalidUppers(
+                    new_ids
+                        .into_iter()
+                        .map(|id| InvalidUpper {
+                            id,
+                            current_upper: Antichain::from_elem(current),
+                        })
+                        .collect(),
+                ))
             }
         }
     }
 
-    async fn drop_handles(&mut self, ids: Vec<GlobalId>, forget_ts: Timestamp) {
+    async fn drop_handles(
+        &mut self,
+        ids: Vec<GlobalId>,
+        forget_ts: Timestamp,
+    ) -> Result<(), StorageError> {
         tracing::info!(?ids, "drop tables");
-        let data_ids = ids
+        let removed = ids
             .iter()
             // n.b. this should only remove the handle from the persist
             // worker and not take any additional action such as closing
             // the shard it's connected to because dataflows might still
             // be using it.
-            .filter_map(|id| self.write_handles.remove(id))
+            .filter_map(|id| self.write_handles.remove(id).map(|shard| (*id, shard)))
+            .collect::<Vec<_>>();
+        let data_ids = removed
+            .iter()
+            .map(|(_, shard)| *shard)
             .collect::<BTreeSet<_>>();
         if !data_ids.is_empty() {
             match self.txns.forget(forget_ts, data_ids.clone()).await {
                 Ok(tidy) => {
                     self.tidy.merge(tidy);
+                    Ok(())
                 }
                 Err(current) => {
-                    panic!(
-                        "cannot forget {:?} at {:?} because txns is at {:?}",
-                        ids, forget_ts, current
+                    // The forget timestamp was behind the txns upper (see `register`). Restore the
+                    // bookkeeping so the caller can retry at a fresh timestamp.
+                    debug!(
+                        "forget at {:?} conflicted with txns upper {:?}, restoring {:?}",
+                        forget_ts, current, ids
                     );
+                    for (id, shard) in removed {
+                        self.write_handles.insert(id, shard);
+                    }
+                    Err(StorageError::InvalidUppers(
+                        ids.into_iter()
+                            .map(|id| InvalidUpper {
+                                id,
+                                current_upper: Antichain::from_elem(current),
+                            })
+                            .collect(),
+                    ))
                 }
             }
+        } else {
+            Ok(())
         }
     }
 
