@@ -199,6 +199,37 @@ impl EGraph {
         }
         idx
     }
+
+    /// Lower a `MirScalarExpr` into this combined e-graph as `CNode::Scalar`
+    /// classes, returning the root scalar class. Reuses `scalar::lower::snode_of`
+    /// so the decomposition is identical to the standalone scalar lower.
+    ///
+    /// Currently unused outside tests: relational lowering interns scalars via
+    /// `intern_scalar` (which also caches the `EScalar` fact via `lower_into`). A
+    /// later task (raise-side round-tripping) is expected to call this directly.
+    #[allow(dead_code)]
+    pub(crate) fn lower_scalar(&mut self, expr: &mz_expr::MirScalarExpr) -> Id {
+        let node = crate::eqsat::scalar::lower::snode_of(expr, |child| self.lower_scalar(child));
+        self.add(CNode::Scalar(node))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn lower_scalar_builds_scalar_nodes() {
+        use mz_expr::{MirScalarExpr, UnaryFunc};
+        let e = MirScalarExpr::column(0).call_unary(UnaryFunc::Not(mz_expr::func::Not));
+        let mut eg = EGraph::new();
+        let root = eg.lower_scalar(&e);
+        assert!(
+            eg.nodes(root)
+                .iter()
+                .any(|n| matches!(n, CNode::Scalar(SNode::CallUnary { .. })))
+        );
+    }
 }
 
 /// A request to seed an [`ENode::IndexedFilter`] into the e-graph.
