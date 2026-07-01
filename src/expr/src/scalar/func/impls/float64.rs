@@ -188,9 +188,13 @@ fn cast_float64_to_uint32(a: f64) -> Result<u32, EvalError> {
 )]
 fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
     let f = round_float64(a);
+    // This condition is delicate because u64::MAX cannot be represented exactly by
+    // an f64: `u64::MAX as f64` rounds up to 2^64. A `<=` bound would therefore let
+    // 2^64 pass, and the subsequent `as u64` cast saturates it to u64::MAX. Comparing
+    // with `<` keeps 2^64 (and larger) out of range, mirroring the f64 -> i64 cast.
     // TODO(benesch): remove potentially dangerous usage of `as`.
     #[allow(clippy::as_conversions)]
-    if (f >= 0.0) && (f <= (u64::MAX as f64)) {
+    if (f >= 0.0) && (f < (u64::MAX as f64)) {
         Ok(f as u64)
     } else {
         Err(EvalError::UInt64OutOfRange(f.to_string().into()))
