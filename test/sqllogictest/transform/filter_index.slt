@@ -177,13 +177,12 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
 ----
 Explained Query:
-  Project (#0{a}..=#2{c}, #4{d}, #5{e}) // { arity: 5 }
-    Join on=(#0{a} = #3{a}) type=differential // { arity: 6 }
+  Project (#0{a}..=#2{c}, #5{d}, #6{e}) // { arity: 5 }
+    Join on=(#0{a} = #4{a}) type=differential // { arity: 7 }
       implementation
-        %1:bar[#0{a}]KA » %0:foo[#0]K
-      ArrangeBy keys=[[#0{a}]] // { arity: 3 }
-        Project (#0{a}..=#2{c}) // { arity: 3 }
-          ReadIndex on=materialize.public.foo foo_idx3=[lookup value=("this")] // { arity: 4 }
+        %1:bar[#0{a}]KA » %0:foo[#0]KA
+      ArrangeBy keys=[[#0{a}]] // { arity: 4 }
+        ReadIndex on=materialize.public.foo foo_idx3=[lookup value=("this")] // { arity: 4 }
       ArrangeBy keys=[[#0{a}]] // { arity: 3 }
         ReadIndex on=bar bar_idx=[differential join] // { arity: 3 }
 

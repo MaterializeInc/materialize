@@ -152,24 +152,25 @@ where foo.a = bar.a
   and baz.a = bar.b
 ----
 Explained Query:
-  Project (#0{a}, #4{b}) // { arity: 2 }
-    Join on=(#0{a} = #1{a} AND #2{b} = #3{a}) type=differential // { arity: 5 }
+  Project (#0{a}, #5{b}) // { arity: 2 }
+    Join on=(#0{a} = #2{a} AND #3{b} = #4{a}) type=delta // { arity: 6 }
       implementation
-        %1:bar[#0{a}]KA » %0:foo[#0]K » %2:baz[#0]UK
-      ArrangeBy keys=[[#0{a}]] // { arity: 1 }
-        Project (#0{a}) // { arity: 1 }
-          Filter (#0{a}) IS NOT NULL // { arity: 2 }
-            ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
+        %0:foo » %1:bar[#0]KA » %2:baz[#0]UK
+        %1:bar » %0:foo[#0]KA » %2:baz[#0]UK
+        %2:baz » %1:bar[#1]K » %0:foo[#0]KA
       ArrangeBy keys=[[#0{a}]] // { arity: 2 }
-        ReadIndex on=bar bar_idx=[differential join] // { arity: 2 }
+        ReadIndex on=foo foo_idx=[delta join 1st input (full scan)] // { arity: 2 }
+      ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
+        Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL // { arity: 2 }
+          ReadIndex on=bar bar_idx=[*** full scan ***] // { arity: 2 }
       ArrangeBy keys=[[#0{a}]] // { arity: 2 }
         ReadStorage materialize.public.baz // { arity: 2 }
 
 Source materialize.public.baz
 
 Used Indexes:
-  - materialize.public.foo_idx (*** full scan ***)
-  - materialize.public.bar_idx (differential join)
+  - materialize.public.foo_idx (delta join 1st input (full scan))
+  - materialize.public.bar_idx (*** full scan ***)
 
 Target cluster: quickstart
 
@@ -206,16 +207,14 @@ where foo.a = bar.a
   and baz.a = bar.b
 ----
 Explained Query:
-  Project (#0{a}, #4{b}) // { arity: 2 }
-    Join on=(#0{a} = #1{a} AND #2{b} = #3{a}) type=delta // { arity: 5 }
+  Project (#0{a}, #5{b}) // { arity: 2 }
+    Join on=(#0{a} = #2{a} AND #3{b} = #4{a}) type=delta // { arity: 6 }
       implementation
         %0:foo » %1:bar[#0]KA » %2:baz[#0]KA
-        %1:bar » %0:foo[#0]K » %2:baz[#0]KA
-        %2:baz » %1:bar[#1]K » %0:foo[#0]K
-      ArrangeBy keys=[[#0{a}]] // { arity: 1 }
-        Project (#0{a}) // { arity: 1 }
-          Filter (#0{a}) IS NOT NULL // { arity: 2 }
-            ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
+        %1:bar » %0:foo[#0]KA » %2:baz[#0]KA
+        %2:baz » %1:bar[#1]K » %0:foo[#0]KA
+      ArrangeBy keys=[[#0{a}]] // { arity: 2 }
+        ReadIndex on=foo foo_idx=[delta join 1st input (full scan)] // { arity: 2 }
       ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
         Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL // { arity: 2 }
           ReadIndex on=bar bar_idx=[*** full scan ***] // { arity: 2 }
@@ -223,7 +222,7 @@ Explained Query:
         ReadIndex on=baz baz_idx=[delta join lookup] // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.foo_idx (*** full scan ***)
+  - materialize.public.foo_idx (delta join 1st input (full scan))
   - materialize.public.bar_idx (*** full scan ***)
   - materialize.public.baz_idx (delta join lookup)
 
@@ -698,18 +697,17 @@ t0.s LIKE 'a%'
 ;
 ----
 Explained Query:
-  Project (#0{a}..=#14{a}, #0{a}, #16{c}..=#29{b}, #0{a}, #31{d}..=#41{s}) // { arity: 42 }
-    Filter like["a%"](#13{s}) // { arity: 42 }
-      Join on=(#0{a} = #15{b} = #30{c}) type=delta // { arity: 42 }
+  Project (#0{a}..=#14{a}, #0{a}, #16{c}..=#27{s}, #29{a}, #30{b}, #0{a}, #32{d}..=#42{s}) // { arity: 42 }
+    Filter like["a%"](#13{s}) // { arity: 43 }
+      Join on=(#0{a} = #15{b} = #31{c}) type=delta // { arity: 43 }
         implementation
-          %0:big » %1:big[#1]K » %2:big[#2]KA
+          %0:big » %1:big[#1]KA » %2:big[#2]KA
           %1:big » %0:big[#0]KA » %2:big[#2]KA
-          %2:big » %1:big[#1]K » %0:big[#0]KA
+          %2:big » %1:big[#1]KA » %0:big[#0]KA
         ArrangeBy keys=[[#0{a}]] // { arity: 14 }
           ReadIndex on=big big_idx_a=[delta join 1st input (full scan)] // { arity: 14 }
-        ArrangeBy keys=[[#1{b}]] // { arity: 14 }
-          Project (#0{a}..=#13{s}) // { arity: 14 }
-            ReadIndex on=materialize.public.big big_idx_y=[lookup value=(42)] // { arity: 15 }
+        ArrangeBy keys=[[#1{b}]] // { arity: 15 }
+          ReadIndex on=materialize.public.big big_idx_y=[lookup value=(42)] // { arity: 15 }
         ArrangeBy keys=[[#2{c}]] // { arity: 14 }
           ReadIndex on=big big_idx_c=[delta join lookup] // { arity: 14 }
 

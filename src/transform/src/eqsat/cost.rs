@@ -614,7 +614,7 @@ impl CostModel {
     /// by exactly what is needed. Only plain column references in the index key
     /// are matched; expression keys are not.
     ///
-    /// NOTE: Wrapper stripping here matches `per_input_available`, the
+    /// NOTE: Wrapper handling here matches `per_input_available`, the
     /// authoritative commit-time arrangement recognizer, so the orderer's reuse
     /// decisions line up with the arrangements the commit actually builds.
     /// `input_already_arranged` layers a stricter bare-Get guard on top before
@@ -624,7 +624,49 @@ impl CostModel {
         if key_cols.is_empty() {
             return true;
         }
-        let gid = match global_id_from_leaf(strip_arrangement_wrappers(input)) {
+        // Walk leading Filter/Map/Project wrappers, mapping `key_cols` down from
+        // the input's (projected) column space to the base collection's column
+        // space. Filter and Map preserve base column indices (Map only appends),
+        // so they pass through unchanged. A key column that references a
+        // Map-appended column is not a base column and cannot be covered by a base
+        // index, so we bail. A `Project` selects columns, so a key column at
+        // output position `c` refers to base column `outputs[c]`; a projection
+        // that is not injective on the key columns cannot correspond to a lifted
+        // index key, so we bail there too. This mirrors `per_input_available`'s
+        // see-through, keeping the orderer's arranged check and the commit-time
+        // arrangement count in agreement on which inputs are already arranged.
+        let mut node = input;
+        let mut cols: BTreeSet<usize> = key_cols.clone();
+        loop {
+            match node {
+                Rel::Filter { input, .. } => node = input,
+                Rel::Map { input, .. } => {
+                    let base_arity = input.arity();
+                    if cols.iter().any(|&c| c >= base_arity) {
+                        return false;
+                    }
+                    node = input;
+                }
+                Rel::Project { input, outputs } => {
+                    let mut mapped = BTreeSet::new();
+                    for &c in &cols {
+                        match outputs.get(c) {
+                            Some(&base_c) => {
+                                mapped.insert(base_c);
+                            }
+                            None => return false,
+                        }
+                    }
+                    if mapped.len() != cols.len() {
+                        return false;
+                    }
+                    cols = mapped;
+                    node = input;
+                }
+                _ => break,
+            }
+        }
+        let gid = match global_id_from_leaf(node) {
             Some(g) => g,
             None => return false,
         };
@@ -634,7 +676,7 @@ impl CostModel {
         };
         keys.iter().any(|key| {
             let idx_cols: BTreeSet<usize> = key.iter().filter_map(|e| e.as_column()).collect();
-            &idx_cols == key_cols
+            idx_cols == cols
         })
     }
 
@@ -1047,24 +1089,6 @@ impl CostModel {
 ///
 /// Returns `Some(gid)` only for `Rel::Opaque(MirRelationExpr::Get { Id::Global(gid) })`.
 /// All other leaves (local gets, filtered/projected inputs) return `None`.
-/// Strip leading `Filter`/`Map` wrappers to reach the base leaf. Both preserve
-/// the base collection's column indices, so an index on the base still covers a
-/// join key expressed in those columns. `Project` shifts columns and is not
-/// stripped. This mirrors [`crate::eqsat::raise::per_input_available`]'s wrapper
-/// handling so the join orderer's arranged check and the commit-time arrangement
-/// count agree on which inputs are already arranged. Without it, a null-rejection
-/// `Filter` pushed onto an indexed `Get` would hide the index from the orderer.
-fn strip_arrangement_wrappers(rel: &Rel) -> &Rel {
-    let mut node = rel;
-    loop {
-        match node {
-            Rel::Filter { input, .. } | Rel::Map { input, .. } => node = input,
-            _ => break,
-        }
-    }
-    node
-}
-
 fn global_id_from_leaf(rel: &Rel) -> Option<GlobalId> {
     if let Rel::Opaque(mir) = rel {
         if let MirRelationExpr::Get {
@@ -2413,6 +2437,51 @@ mod tests {
             mem.len(),
             3,
             "partial-key index must not suppress the arrangement term; got {mem:?}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn key_cols_arranged_sees_through_projection() {
+        // `Project([5,1,0])(Filter(Get))` over an index on base col 0. The
+        // projection is a pure column selection, so the base index is reusable:
+        // its key col 0 sits at output position 2. A join key referencing the
+        // projected position 2 maps down to base col 0 and matches the index.
+        let base = global_opaque(1, 6);
+        let input = Rel::Project {
+            input: Box::new(Rel::Filter {
+                input: Box::new(base),
+                predicates: vec![col(0)],
+            }),
+            outputs: vec![5, 1, 0],
+        };
+        let model = CostModel::with_available(avail_one(1, &[0]));
+        assert!(
+            model.key_cols_arranged(&input, &BTreeSet::from([2usize])),
+            "projected position 2 maps to indexed base col 0 and must count as arranged"
+        );
+        // Projected position 0 maps to base col 5, which is not indexed.
+        assert!(
+            !model.key_cols_arranged(&input, &BTreeSet::from([0usize])),
+            "projected position 0 maps to un-indexed base col 5 and must not count as arranged"
+        );
+    }
+
+    #[mz_ore::test]
+    fn key_cols_arranged_projection_dropping_key_col() {
+        // The projection drops base col 0 (the index key), so no projected
+        // position maps to the indexed base column and nothing is arranged.
+        let base = global_opaque(1, 6);
+        let input = Rel::Project {
+            input: Box::new(Rel::Filter {
+                input: Box::new(base),
+                predicates: vec![col(0)],
+            }),
+            outputs: vec![1, 5],
+        };
+        let model = CostModel::with_available(avail_one(1, &[0]));
+        assert!(
+            !model.key_cols_arranged(&input, &BTreeSet::from([0usize])),
+            "index on the dropped base col 0 must not count as arranged"
         );
     }
 

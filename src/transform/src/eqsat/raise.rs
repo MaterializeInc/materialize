@@ -23,7 +23,9 @@
 use std::collections::BTreeMap;
 
 use mz_expr::visit::VisitChildren;
-use mz_expr::{AccessStrategy, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr};
+use mz_expr::{
+    AccessStrategy, Columns, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
+};
 use mz_ore::cast::CastFrom;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{GlobalId, ReprRelationType, ReprScalarType};
@@ -511,10 +513,17 @@ fn differential_new_arrangements(
 ///
 /// For each input, collect the arrangement keys already materialized on it: the
 /// index keys of a global `Get` (from `available`), explicit `ArrangeBy` keys, a
-/// `Reduce`'s group-key prefix, and an `IndexedFilter`'s index keys. Leading
-/// `Filter`/`Map` wrappers are stripped to reach the base, since they leave
-/// existing column indices unchanged; a `Project` shifts columns, so the scan
-/// stops there and credits no arrangement through it.
+/// `Reduce`'s group-key prefix, and an `IndexedFilter`'s index keys.
+///
+/// Leading `Map`/`Filter`/`Project` wrappers are extracted as one `MapFilterProject`
+/// (via [`MapFilterProject::extract_non_errors_from_expr`], the exact same extraction
+/// `join_implementation::implement_arrangements` performs when it lifts the MFP to
+/// reuse an index). The result's keys are reported in the input's PROJECTED column
+/// space, so a base index whose key columns survive a pure column-selecting
+/// `Project` is credited at those columns' projected positions. `implement_arrangements`
+/// then lifts the projection above the arrangement and permutes the needed key back
+/// down to the base. A base key is dropped when any of its columns does not survive
+/// the projection, matching the case where the lift could not reproduce it.
 ///
 /// The result feeds the delta and differential planners so neither charges an
 /// arrangement that an existing index already provides.
@@ -525,16 +534,37 @@ fn per_input_available(
     inputs
         .iter()
         .map(|input| {
-            // Strip leading non-projecting MFP wrappers to reach the base node.
-            let mut node = input;
-            loop {
-                match node {
-                    MirRelationExpr::Filter { input, .. } | MirRelationExpr::Map { input, .. } => {
-                        node = input
-                    }
-                    _ => break,
-                }
+            // Extract the leading error-free Map/Filter/Project run, reaching the
+            // non-MFP base under it. `project` maps each projected (input-space)
+            // column to the base column it selects.
+            let (mfp, node) = MapFilterProject::extract_non_errors_from_expr(input);
+            let (_, _, project) = mfp.as_map_filter_project();
+            // Invert `project`: base column -> a projected position that selects
+            // it. When a column is selected more than once, the first position is
+            // used; a duplicated key column then simply fails to match a wider
+            // needed key, which is conservative (a fresh arrangement is built).
+            let mut base_to_projected: BTreeMap<usize, usize> = BTreeMap::new();
+            for (projected_pos, &base_col) in project.iter().enumerate() {
+                base_to_projected.entry(base_col).or_insert(projected_pos);
             }
+            // Lift a base-space key into the projected column space, or drop it if
+            // any referenced column does not survive the projection.
+            let lift = |key: &[MirScalarExpr]| -> Option<Vec<MirScalarExpr>> {
+                key.iter()
+                    .map(|e| {
+                        if e.support()
+                            .iter()
+                            .all(|c| base_to_projected.contains_key(c))
+                        {
+                            let mut e = e.clone();
+                            e.permute_map(&base_to_projected);
+                            Some(e)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
             let mut keys: Vec<Vec<MirScalarExpr>> = Vec::new();
             match node {
                 MirRelationExpr::Get {
@@ -542,33 +572,37 @@ fn per_input_available(
                     ..
                 } => {
                     if let Some(idx) = available.get(gid) {
-                        keys.extend(idx.iter().cloned());
+                        keys.extend(idx.iter().filter_map(|k| lift(k)));
                     }
                 }
                 MirRelationExpr::ArrangeBy {
                     keys: arr_keys,
                     input,
                 } => {
-                    keys.extend(arr_keys.iter().cloned());
+                    keys.extend(arr_keys.iter().filter_map(|k| lift(k)));
                     if let MirRelationExpr::Get {
                         id: Id::Global(gid),
                         ..
                     } = &**input
                     {
                         if let Some(idx) = available.get(gid) {
-                            keys.extend(idx.iter().cloned());
+                            keys.extend(idx.iter().filter_map(|k| lift(k)));
                         }
                     }
                 }
                 MirRelationExpr::Reduce { group_key, .. } => {
-                    keys.push((0..group_key.len()).map(MirScalarExpr::column).collect());
+                    let group_key: Vec<MirScalarExpr> =
+                        (0..group_key.len()).map(MirScalarExpr::column).collect();
+                    if let Some(k) = lift(&group_key) {
+                        keys.push(k);
+                    }
                 }
                 MirRelationExpr::Join {
                     implementation: mz_expr::JoinImplementation::IndexedFilter(gid, ..),
                     ..
                 } => {
                     if let Some(idx) = available.get(gid) {
-                        keys.extend(idx.iter().cloned());
+                        keys.extend(idx.iter().filter_map(|k| lift(k)));
                     }
                 }
                 _ => {}
@@ -1327,5 +1361,64 @@ mod tests {
                 "raise (commit_wcoj={commit_wcoj}) must preserve arity; got {raised:?}"
             );
         }
+    }
+
+    /// Build a global `Get` for a transient id with the given arity, all columns
+    /// non-nullable `Int64`.
+    fn global_get(id: u64, arity: usize) -> MirRelationExpr {
+        use mz_repr::GlobalId;
+        let typ = ReprRelationType::new(
+            (0..arity)
+                .map(|_| ReprScalarType::Int64.nullable(false))
+                .collect(),
+        );
+        MirRelationExpr::Get {
+            id: Id::Global(GlobalId::Transient(id)),
+            typ,
+            access_strategy: AccessStrategy::UnknownOrLocal,
+        }
+    }
+
+    /// A single-index availability map keyed by column references.
+    fn avail(id: u64, key_cols: &[usize]) -> BTreeMap<mz_repr::GlobalId, Vec<Vec<MirScalarExpr>>> {
+        use mz_repr::GlobalId;
+        let key: Vec<MirScalarExpr> = key_cols.iter().map(|&c| MirScalarExpr::column(c)).collect();
+        let mut m = BTreeMap::new();
+        m.insert(GlobalId::Transient(id), vec![key]);
+        m
+    }
+
+    #[mz_ore::test]
+    fn per_input_available_sees_through_projection() {
+        // `Project([5,1,0])(Filter(Get wa))` over an index on base col 0. The
+        // projection is a pure column selection, so the base index is reusable:
+        // its key col 0 survives at output position 2. `per_input_available` must
+        // credit the index in the PROJECTED column space, i.e. `[#2]`.
+        use super::per_input_available;
+        let pred = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::Eq);
+        let input = global_get(1, 6).filter(vec![pred]).project(vec![5, 1, 0]);
+        let available = avail(1, &[0]);
+        let per_input = per_input_available(&[input], &available);
+        assert_eq!(
+            per_input,
+            vec![vec![vec![MirScalarExpr::column(2)]]],
+            "index on base col 0 must be credited at its projected position #2"
+        );
+    }
+
+    #[mz_ore::test]
+    fn per_input_available_projection_dropping_index_col_credits_nothing() {
+        // The projection drops base col 0 (the index key), so the base index no
+        // longer survives into the projected space and must not be credited.
+        use super::per_input_available;
+        let pred = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::Eq);
+        let input = global_get(1, 6).filter(vec![pred]).project(vec![1, 5]);
+        let available = avail(1, &[0]);
+        let per_input = per_input_available(&[input], &available);
+        assert_eq!(
+            per_input,
+            vec![Vec::<Vec<MirScalarExpr>>::new()],
+            "dropping the index col must credit no arrangement; got {per_input:?}"
+        );
     }
 }

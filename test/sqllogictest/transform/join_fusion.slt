@@ -154,26 +154,25 @@ Explained Query:
     cte l1 =
       Reduce aggregates=[min(#0{o_orderkey})] // { arity: 1 }
         Project (#1{o_orderkey}) // { arity: 1 }
-          Join on=(#0{l_extendedprice} = #2{o_totalprice} AND #1{o_orderkey} = #3{l_orderkey}) type=differential // { arity: 4 }
-            implementation
-              %2[#0{l_extendedprice}]K » %1:orders[#0]K » %0:lineitem[#0]K
-            ArrangeBy keys=[[#0{l_extendedprice}]] // { arity: 1 }
-              Project (#4{l_extendedprice}) // { arity: 1 }
-                Filter (#6{l_commitdate} = 1997-01-25) // { arity: 8 }
-                  ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 8 }
-            ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 2 }
-              Project (#0{o_orderkey}, #2{o_totalprice}) // { arity: 2 }
-                Filter (#0{o_orderkey} <= 195) AND (#0{o_orderkey} >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#3{o_orderdate})) // { arity: 4 }
-                  ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
-            ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 1 }
-              Union // { arity: 1 }
-                Get l0 // { arity: 1 }
-                Project (#1) // { arity: 1 }
-                  Filter (#1{o_orderkey} <= 195) AND (#1{o_orderkey} >= 38) // { arity: 2 }
-                    FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
-                      Reduce aggregates=[count(*)] // { arity: 1 }
-                        Project () // { arity: 0 }
-                          Get l0 // { arity: 1 }
+          Filter (#1{o_orderkey} <= 195) AND (#1{o_orderkey} >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#4{o_orderdate})) // { arity: 6 }
+            Join on=(#0{l_extendedprice} = #3{o_totalprice} AND #1{o_orderkey} = #5{l_orderkey}) type=differential // { arity: 6 }
+              implementation
+                %2[#0{l_extendedprice}]K » %1:orders[#0]KA » %0:lineitem[#0]K
+              ArrangeBy keys=[[#0{l_extendedprice}]] // { arity: 1 }
+                Project (#4{l_extendedprice}) // { arity: 1 }
+                  Filter (#6{l_commitdate} = 1997-01-25) // { arity: 8 }
+                    ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 8 }
+              ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 4 }
+                ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 4 }
+              ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 1 }
+                Union // { arity: 1 }
+                  Get l0 // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Filter (#1{o_orderkey} <= 195) AND (#1{o_orderkey} >= 38) // { arity: 2 }
+                      FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
+                        Reduce aggregates=[count(*)] // { arity: 1 }
+                          Project () // { arity: 0 }
+                            Get l0 // { arity: 1 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l1 // { arity: 1 }
@@ -186,7 +185,7 @@ Explained Query:
             - ()
 
 Used Indexes:
-  - materialize.public.pk_orders_orderkey (*** full scan ***)
+  - materialize.public.pk_orders_orderkey (differential join)
   - materialize.public.fk_lineitem_orderkey (*** full scan ***, lookup)
 
 Target cluster: quickstart
