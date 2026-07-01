@@ -424,11 +424,21 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             > CREATE TABLE IF NOT EXISTS public_table.table (c INT)
             > GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public_table.table TO "infra+qacanaryload@materialize.io"
 
+            # table_mv and its index go on qa_canary_environment_sinks, NOT the
+            # shared qa_canary_environment_compute. compute is mz-deploy's
+            # blue/green target: `promote` clones it, swaps the clone in, and
+            # drops the old cluster CASCADE. The model MVs survive because the
+            # deploy re-creates them in the clone every time, but table_mv is
+            # testdrive-managed and created once, so a swap would drop it (and its
+            # index, and the sinks reading it) with no recreation. Only clusters
+            # referenced by the blue/green MVs/views are staged and swapped; the
+            # sinks cluster is not (sinks are applied in place), so table_mv is
+            # safe there, alongside the two sinks that already read it.
             > CREATE MATERIALIZED VIEW IF NOT EXISTS public_table.table_mv
-              IN CLUSTER qa_canary_environment_compute
+              IN CLUSTER qa_canary_environment_sinks
               AS SELECT max(c) FROM public_table.table
             > CREATE INDEX IF NOT EXISTS table_mv_idx
-              IN CLUSTER qa_canary_environment_compute
+              IN CLUSTER qa_canary_environment_sinks
               ON public_table.table_mv (max)
             > GRANT ALL PRIVILEGES ON TABLE public_table.table_mv TO "infra+bot@materialize.com", "infra+qacanaryload@materialize.io"
 
