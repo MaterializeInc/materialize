@@ -130,8 +130,7 @@ pub(crate) fn saturate(eg: &mut EGraph) -> usize {
         iters += 1;
         eg.rebuild();
         recompute_analysis(eg);
-        let n_nodes: usize = eg.class_ids().iter().map(|&id| eg.nodes(id).len()).sum();
-        if n_nodes > MAX_ENODES {
+        if eg.node_count() > MAX_ENODES {
             break;
         }
 
@@ -171,7 +170,6 @@ pub(crate) fn saturate(eg: &mut EGraph) -> usize {
             break;
         }
     }
-    eg.rebuild();
     iters
 }
 
