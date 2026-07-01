@@ -136,6 +136,15 @@ pub fn all() -> CompiledRuleSet {
     }
 }
 
+/// The scalar-sort rewrite rules, run only by the scalar canonicalizer
+/// (`crate::eqsat::scalar_saturate`) and never in the relational saturation pass.
+/// Backed by the generated `SCALAR_COMPILED_RULES` table.
+pub(crate) fn scalar_all() -> CompiledRuleSet {
+    CompiledRuleSet {
+        rules: SCALAR_COMPILED_RULES.iter().collect(),
+    }
+}
+
 include!(concat!(env!("OUT_DIR"), "/eqsat_rules.rs"));
 
 #[cfg(test)]
