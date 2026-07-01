@@ -123,6 +123,14 @@ p+p {
 /* ------------------------------------------------- */
 
 .content {
+    --code-highlight-font-size: #{rem(1.5)};
+    --code-highlight-padding-top: #{rem(2.8)};
+    --code-highlight-padding-inline: #{rem(1.6)};
+    --code-highlight-padding-bottom: #{rem(1.4)};
+    --code-pre-font-size: #{rem(1.5)};
+    --code-pre-padding-block: #{rem(1.4)};
+    --code-pre-padding-inline: #{rem(1.6)};
+
     border-left: 1px solid var(--divider-light);
     border-right: 1px solid var(--divider-light);
     color: var(--body);
@@ -994,6 +1002,8 @@ p+p {
         }
 
         td {
+            @include docs-nested-code-vars;
+
             color: var(--body);
 
             @media(max-width: 500px) {
@@ -1004,9 +1014,11 @@ p+p {
                 background-color: inherit;
                 border: 0;
                 box-shadow: none;
-                font-size: inherit;
                 margin: 0;
-                padding: 0;
+            }
+
+            .highlight {
+                margin: rem(0.6) 0;
             }
         }
 
@@ -1102,13 +1114,16 @@ p+p {
         }
 
         td {
+            @include docs-nested-code-vars;
+
             color: var(--body);
 
             @media(max-width: 500px) {
                 padding: var(--nano) var(--pico);
             }
 
-            code {
+            // Inline code chips only. Block snippets live in .highlight / pre.
+            code:not(pre code):not(.highlight code) {
                 background: color-mix(in srgb, var(--highlight) 9%, var(--bg));
                 border: 1px solid color-mix(in srgb, var(--highlight) 12%, transparent);
                 border-radius: rem(0.35);
@@ -1116,13 +1131,27 @@ p+p {
                 padding: rem(0.08) rem(0.32);
             }
 
+            pre,
+            .highlight {
+                code {
+                    background: none;
+                    border: none;
+                    border-radius: 0;
+                    color: inherit;
+                    font-size: inherit;
+                    padding: 0;
+                }
+            }
+
             pre {
                 background-color: inherit;
                 border: 0;
                 box-shadow: none;
-                font-size: inherit;
                 margin: 0;
-                padding: 0;
+            }
+
+            .highlight {
+                margin: rem(0.6) 0;
             }
         }
 
@@ -1799,8 +1828,13 @@ p+p {
                 background: color-mix(in srgb, var(--highlight) 6%, var(--bg));
             }
 
-            td code {
+            td code:not(pre code):not(.highlight code) {
                 background: color-mix(in srgb, var(--highlight) 7%, var(--bg));
+            }
+
+            td pre code,
+            td .highlight code {
+                background: none;
             }
         }
 
@@ -1878,13 +1912,13 @@ p+p {
         box-shadow: var(--docs-card-shadow);
         color: var(--sub);
         font-family: var(--font-mono);
-        font-size: rem(1.5);
+        font-size: var(--code-pre-font-size);
         font-weight: var(--weight-body);
         letter-spacing: var(--tracking-code);
         line-height: var(--leading-code);
         margin: rem(1.2) 0;
         overflow: auto;
-        padding: rem(1.4) rem(1.6);
+        padding: var(--code-pre-padding-block) var(--code-pre-padding-inline);
 
         code {
             background: none;
@@ -1909,8 +1943,12 @@ p+p {
             border: none;
             border-radius: 0;
             box-shadow: none;
+            font-size: var(--code-highlight-font-size);
             margin: 0;
-            padding: rem(2.8) rem(1.6) rem(1.4);
+            padding:
+                var(--code-highlight-padding-top)
+                var(--code-highlight-padding-inline)
+                var(--code-highlight-padding-bottom);
         }
 
         .chroma {
@@ -1931,6 +1969,24 @@ p+p {
         letter-spacing: var(--tracking-code);
         line-height: var(--leading-code);
         padding: rem(0.1) rem(0.35) rem(0);
+    }
+
+    li,
+    .callout,
+    .note,
+    .warning,
+    .tip,
+    .important,
+    .annotation,
+    .public-preview,
+    .code-tabs .tab-pane {
+        @include docs-nested-code-vars;
+    }
+
+    li {
+        .highlight {
+            margin: rem(0.6) 0;
+        }
     }
 
     // Merge a highlighted code block followed by a non-highlighted code block,
@@ -2562,7 +2618,7 @@ body.light .table-scrollable {
     border-radius: rem(0.45);
     color: var(--sub);
     cursor: pointer;
-    display: none;
+    display: inline-flex;
     font-family: var(--font-mono);
     font-size: rem(1.1);
     font-weight: var(--weight-body-emphasis);
@@ -2773,27 +2829,6 @@ div.json_widget {
 
     &.success {
         width: rem(8);
-    }
-}
-
-/* Unclear why we are suppressing the copy button in tables
-   but ... at least, allow for cases where we want to enable copy button in tables.
-*/
-
-td:not(.copyableCode) .copy_button {
-    display: none !important;
-}
-
-td span.copyableCode pre:hover .copy_button {
-    display: inline-block !important;
-}
-
-.highlight {
-    &:hover,
-    &:focus-within {
-        .copy_button {
-            display: inline-flex;
-        }
     }
 }
 

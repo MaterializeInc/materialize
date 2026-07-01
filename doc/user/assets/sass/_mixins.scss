@@ -88,6 +88,16 @@
     }
 }
 
+@mixin docs-nested-code-vars {
+    --code-highlight-font-size: #{rem(1.35)};
+    --code-highlight-padding-top: #{rem(2.2)};
+    --code-highlight-padding-inline: #{rem(1.2)};
+    --code-highlight-padding-bottom: #{rem(1)};
+    --code-pre-font-size: #{rem(1.35)};
+    --code-pre-padding-block: #{rem(1)};
+    --code-pre-padding-inline: #{rem(1.2)};
+}
+
 @mixin offering-row-theme($accent, $cta: null) {
     $cta-token: if($cta, $cta, $accent);
 
