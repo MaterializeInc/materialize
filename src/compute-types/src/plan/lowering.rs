@@ -30,6 +30,7 @@ use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::{
     ArrangementStrategy, AvailableCollections, GetPlan, LirId, LirRelationExpr, LirRelationNode,
+    LoweringMetrics,
 };
 
 /// Pick an [`ArrangementStrategy`] based on whether the input may contain future-stamped
@@ -68,10 +69,16 @@ pub(super) struct Context {
     debug_info: LirDebugInfo,
     /// Whether to enable fusion of MFPs in reductions.
     enable_reduce_mfp_fusion: bool,
+    /// Metrics recorded during lowering, if any are being collected.
+    metrics: Option<LoweringMetrics>,
 }
 
 impl Context {
-    pub fn new(debug_name: String, features: &OptimizerFeatures) -> Self {
+    pub fn new(
+        debug_name: String,
+        features: &OptimizerFeatures,
+        metrics: Option<&LoweringMetrics>,
+    ) -> Self {
         Self {
             arrangements: Default::default(),
             has_future_updates: Default::default(),
@@ -81,6 +88,7 @@ impl Context {
                 id: GlobalId::Transient(0),
             },
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
+            metrics: metrics.cloned(),
         }
     }
 
@@ -254,7 +262,12 @@ impl Context {
                         mfp.literal_constraints(
                             &key.0.iter().map(MirScalarExpr::from).collect_vec(),
                         )
-                        .map(|val| (key.clone(), val))
+                        .map(|val| {
+                            if let Some(metrics) = &self.metrics {
+                                metrics.inc_literal_constraints("get");
+                            }
+                            (key.clone(), val)
+                        })
                     })
                     .max_by_key(|(key, _val)| key.0.len());
 
@@ -1151,7 +1164,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     let mut mfp = mfp.clone();
                     mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                     mfp.literal_constraints(&key.iter().map(MirScalarExpr::from).collect_vec())
-                        .map(|val| (key.clone(), permutation, thinning, val))
+                        .map(|val| {
+                            if let Some(metrics) = &self.metrics {
+                                metrics.inc_literal_constraints("mfp");
+                            }
+                            (key.clone(), permutation, thinning, val)
+                        })
                 })
                 .max_by_key(|(key, _, _, _)| key.len());
 
