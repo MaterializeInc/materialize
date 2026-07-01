@@ -309,6 +309,13 @@ export interface components {
              */
             cluster_grouping_key: string;
             /**
+             * @description Resource category for rows that aren't a compute cluster — "Storage" or
+             *     "Egress", derived from the Orb price's item name — so storage and egress
+             *     (which share an empty `cluster_grouping_key`) render as separate rows.
+             *     Empty for compute rows, which are identified by `cluster_grouping_key`.
+             */
+            category: string;
+            /**
              * @description Cloud region in `provider/region` form, e.g. "aws/us-east-1" (event
              *     property `region`). Lets the frontend qualify each row ("aws/us-east-1 /
              *     Storage"), matching the daily "Spend between …" table.

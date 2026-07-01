@@ -53,14 +53,17 @@ function accountTotal(account: CostBreakdownAccount): number {
 }
 
 /**
- * Region-qualified label for a cluster row, e.g. "aws/us-east-1 / quickstart.r1"
- * or "aws/us-east-1 / Storage" — mirroring the daily "Spend between …" table's
- * `{region} / {resourceType}` format. Compute clusters carry a `cluster.replica`
- * grouping key; storage/egress rows have an empty key (see interface.rs) and are
- * surfaced as "Storage".
+ * Region-qualified label for a cluster row, e.g. "aws/us-east-1 / quickstart.r1",
+ * "aws/us-east-1 / Storage", or "aws/us-east-1 / Egress" — mirroring the daily
+ * "Spend between …" table's `{region} / {resourceType}` format. Compute clusters
+ * carry a `cluster.replica` grouping key; storage/egress rows have an empty key
+ * and instead carry a `category` ("Storage" / "Egress") so the two render as
+ * distinct rows (see interface.rs). The final "Other" is a defensive fallback
+ * for the unexpected case where neither is set.
  */
 function clusterLabel(cluster: CostBreakdownCluster): string {
-  return `${cluster.region} / ${cluster.cluster_grouping_key || "Storage"}`;
+  const label = cluster.cluster_grouping_key || cluster.category || "Other";
+  return `${cluster.region} / ${label}`;
 }
 
 /**
