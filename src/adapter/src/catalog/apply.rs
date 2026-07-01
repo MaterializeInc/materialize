@@ -2542,53 +2542,40 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let temp_item_retractions = sort_temp_item_updates(temp_item_retractions);
     let temp_item_additions = sort_temp_item_updates(temp_item_additions);
 
-    /// Merge sorted temporary and non-temp items.
+    /// Concatenate sorted persistent and temporary item updates, persistent
+    /// first.
+    ///
+    /// Both inputs are already in dependency (type-group) order internally. A
+    /// non-temporary item can never depend on a temporary one (enforced at
+    /// creation, see `ErrorKind::InvalidTemporaryDependency`), so emitting every
+    /// persistent item before every temporary item keeps dependencies ahead of
+    /// dependents for additions. (Retractions reuse this via a reversal by the
+    /// caller, which puts temporary items first. Also, a retraction only drops
+    /// the item and does not re-resolve `create_sql`.)
+    ///
+    /// NOTE: Do not interleave the two by raw id. The inputs are ordered by
+    /// dependency group, which is not id order, so an id merge can place a
+    /// temporary dependent ahead of the persistent item it references and panic
+    /// apply with an unresolvable id.
     fn merge_item_updates(
-        mut item_updates: VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
-        mut temp_item_updates: VecDeque<(TemporaryItem, Timestamp, StateDiff)>,
+        item_updates: VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
+        temp_item_updates: VecDeque<(TemporaryItem, Timestamp, StateDiff)>,
     ) -> Vec<StateUpdate> {
         let mut state_updates = Vec::with_capacity(item_updates.len() + temp_item_updates.len());
-
-        while let (Some((item, _, _)), Some((temp_item, _, _))) =
-            (item_updates.front(), temp_item_updates.front())
-        {
-            if item.id < temp_item.id {
-                let (item, ts, diff) = item_updates.pop_front().expect("non-empty");
-                state_updates.push(StateUpdate {
-                    kind: StateUpdateKind::Item(item),
-                    ts,
-                    diff,
-                });
-            } else if item.id > temp_item.id {
-                let (temp_item, ts, diff) = temp_item_updates.pop_front().expect("non-empty");
-                state_updates.push(StateUpdate {
-                    kind: StateUpdateKind::TemporaryItem(temp_item),
-                    ts,
-                    diff,
-                });
-            } else {
-                unreachable!(
-                    "two items cannot have the same ID: item={item:?}, temp_item={temp_item:?}"
-                );
-            }
-        }
-
-        while let Some((item, ts, diff)) = item_updates.pop_front() {
+        for (item, ts, diff) in item_updates {
             state_updates.push(StateUpdate {
                 kind: StateUpdateKind::Item(item),
                 ts,
                 diff,
             });
         }
-
-        while let Some((temp_item, ts, diff)) = temp_item_updates.pop_front() {
+        for (temp_item, ts, diff) in temp_item_updates {
             state_updates.push(StateUpdate {
                 kind: StateUpdateKind::TemporaryItem(temp_item),
                 ts,
                 diff,
             });
         }
-
         state_updates
     }
     let item_retractions = merge_item_updates(item_retractions, temp_item_retractions);
