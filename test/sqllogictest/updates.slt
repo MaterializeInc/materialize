@@ -142,7 +142,7 @@ SELECT 1;
 INSERT INTO t VALUES (1) RETURNING 0;
 COMMIT;
 ----
-db error: ERROR: INSERT INTO t VALUES (1) RETURNING 0 cannot be run inside a transaction block
+db error: ERROR: INSERT INTO t VALUES ('<REDACTED>') RETURNING '<REDACTED>' cannot be run inside a transaction block
 
 # Regression for non-constant VALUES
 # VALUES cannot contain a query that references a table.
@@ -152,7 +152,7 @@ BEGIN;
 INSERT INTO t1 VALUES((SELECT x FROM t1 LIMIT 1));
 COMMIT;
 ----
-db error: ERROR: INSERT INTO t1 VALUES ((SELECT x FROM t1 LIMIT 1)) cannot be run inside a transaction block
+db error: ERROR: INSERT INTO t1 VALUES ((SELECT x FROM t1 LIMIT '<REDACTED>')) cannot be run inside a transaction block
 
 # VALUES can contain a subselect with no table references.
 simple
@@ -172,7 +172,7 @@ BEGIN;
 INSERT INTO t1 VALUES((SELECT 1 ORDER BY (SELECT x FROM t1 LIMIT 1)));
 COMMIT;
 ----
-db error: ERROR: INSERT INTO t1 VALUES ((SELECT 1 ORDER BY (SELECT x FROM t1 LIMIT 1))) cannot be run inside a transaction block
+db error: ERROR: INSERT INTO t1 VALUES ((SELECT '<REDACTED>' ORDER BY (SELECT x FROM t1 LIMIT '<REDACTED>'))) cannot be run inside a transaction block
 
 statement ok
 ROLLBACK
