@@ -116,12 +116,14 @@ describe("UsagePage", () => {
                 {
                   environment_id: "environment-parent-0",
                   cluster_grouping_key: "quickstart.r1",
+                  category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "10.00" },
                 },
                 {
                   environment_id: "environment-parent-0",
                   cluster_grouping_key: "compute.r1",
+                  category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "4.00" },
                 },
@@ -133,12 +135,14 @@ describe("UsagePage", () => {
                 {
                   environment_id: "environment-child-0",
                   cluster_grouping_key: "prod.r1",
+                  category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "5.00" },
                 },
                 {
                   environment_id: "environment-child-0",
                   cluster_grouping_key: "prod.r2",
+                  category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "2.00" },
                 },
@@ -184,16 +188,26 @@ describe("UsagePage", () => {
                 {
                   environment_id: "environment-standalone-0",
                   cluster_grouping_key: "default.r1",
+                  category: "",
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "3.00" },
                 },
                 {
-                  // Storage/egress rows have an empty cluster_grouping_key and
-                  // render as "<region> / Storage".
+                  // Storage and egress both have an empty cluster_grouping_key;
+                  // their `category` keeps them on separate rows, rendered as
+                  // "<region> / Storage" and "<region> / Egress".
                   environment_id: "environment-standalone-0",
                   cluster_grouping_key: "",
+                  category: "Storage",
                   region: "aws/us-east-1",
                   amounts: { "price-storage": "0.50" },
+                },
+                {
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "",
+                  category: "Egress",
+                  region: "aws/us-east-1",
+                  amounts: { "price-egress": "0.25" },
                 },
               ],
             },
@@ -218,7 +232,44 @@ describe("UsagePage", () => {
     expect(
       await breakdown.findByText("aws/us-east-1 / default.r1"),
     ).toBeVisible();
+    // Storage and egress (both empty cluster_grouping_key) render as separate
+    // rows, distinguished by `category`.
     expect(await breakdown.findByText("aws/us-east-1 / Storage")).toBeVisible();
+    expect(await breakdown.findByText("aws/us-east-1 / Egress")).toBeVisible();
+  });
+
+  it("falls back to 'Other' when a row has neither cluster key nor category", async () => {
+    // Defensive: a non-compute row with an empty cluster_grouping_key and no
+    // category can only occur against a backend that predates the `category`
+    // field. It should render "<region> / Other" rather than mislabel as a
+    // cluster or crash.
+    server.use(buildDailyCostResponse());
+    server.use(
+      buildCostBreakdownResponse({
+        payload: {
+          accounts: [
+            {
+              external_customer_id: "standalone-org",
+              clusters: [
+                {
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-storage": "0.50" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const breakdown = within(
+      await screen.findByTestId("account-cluster-breakdown"),
+    );
+    expect(await breakdown.findByText("aws/us-east-1 / Other")).toBeVisible();
   });
 
   it("changing the region filters the totals", async () => {
