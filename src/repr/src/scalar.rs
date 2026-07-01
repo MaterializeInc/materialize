@@ -3137,7 +3137,7 @@ where
     S: AsRef<str>,
 {
     fn as_column_type() -> SqlColumnType {
-        SqlScalarType::Char { length: None }.nullable(false)
+        SqlScalarType::VarChar { max_length: None }.nullable(false)
     }
 }
 
