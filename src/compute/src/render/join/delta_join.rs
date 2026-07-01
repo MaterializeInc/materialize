@@ -13,8 +13,6 @@
 
 #![allow(clippy::op_ref)]
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use std::rc::Rc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
@@ -57,56 +55,17 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             // Collects error streams for the ambient scope.
             let mut inner_errs = Vec::new();
 
-            // Deduplicate the error streams of multiply used arrangements.
-            let mut err_dedup = BTreeSet::new();
-
             // Our plan is to iterate through each input relation, and attempt
             // to find a plan that maximally uses existing keys (better: uses
             // existing arrangements, to which we have access).
             let mut join_results = Vec::new();
 
-            // First let's prepare the input arrangements we will need.
-            // This reduces redundant imports, and simplifies the dataflow structure.
-            // As the arrangements are all shared, it should not dramatically improve
-            // the efficiency, but the dataflow simplification is worth doing.
-            let mut arrangements = BTreeMap::new();
-            for path_plan in join_plan.path_plans.iter() {
-                for stage_plan in path_plan.stage_plans.iter() {
-                    let lookup_idx = stage_plan.lookup_relation;
-                    let lookup_key = stage_plan.lookup_key.clone();
-                    arrangements
-                        .entry((lookup_idx, lookup_key.clone()))
-                        .or_insert_with(|| {
-                            match inputs[lookup_idx]
-                                .arrangement(&lookup_key)
-                                .unwrap_or_else(|| {
-                                    panic!(
-                                        "Arrangement alarmingly absent!: {}, {:?}",
-                                        lookup_idx, lookup_key,
-                                    )
-                                }) {
-                                ArrangementFlavor::Local(oks, errs) => {
-                                    if err_dedup.insert((lookup_idx, lookup_key)) {
-                                        inner_errs.push(
-                                            errs.enter_region(inner)
-                                                .as_collection(|k, _v| k.clone()),
-                                        );
-                                    }
-                                    Ok(oks.enter_region(inner))
-                                }
-                                ArrangementFlavor::Trace(_gid, oks, errs) => {
-                                    if err_dedup.insert((lookup_idx, lookup_key)) {
-                                        inner_errs.push(
-                                            errs.enter_region(inner)
-                                                .as_collection(|k, _v| k.clone()),
-                                        );
-                                    }
-                                    Err(oks.enter_region(inner))
-                                }
-                            }
-                        });
-                }
-            }
+            // Bring all collection bundles into the `inner` region.
+            // TODO: Prune unused collections and arrangements, for clarity.
+            let inputs = inputs
+                .into_iter()
+                .map(|cb| cb.enter_region(inner))
+                .collect::<Vec<_>>();
 
             for path_plan in join_plan.path_plans {
                 // Deconstruct the stages of the path plan.
@@ -136,40 +95,24 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     // available information to determine the filtering and logic that we can apply, and
                     // introduce that in to the `lookup` logic to cause it to happen in that operator.
 
+                    let bundles = inputs
+                        .iter()
+                        .map(|cb| cb.enter_region(region))
+                        .collect::<Vec<_>>();
+
                     // Collects error streams for the region scope. Concats before leaving.
                     let mut region_errs = Vec::with_capacity(inputs.len());
 
-                    // Ensure this input is rendered, and extract its update stream.
-                    let val = arrangements
-                        .get(&(source_relation, source_key))
-                        .expect("Arrangement promised by the planner is absent!");
-                    let as_of = self.as_of_frontier.clone();
-                    let update_stream = match val {
-                        Ok(local) => {
-                            let arranged = local.clone().enter_region(region);
-                            let (update_stream, err_stream) =
-                                build_update_stream::<_, RowRowAgent<_, _>>(
-                                    arranged,
-                                    as_of,
-                                    source_relation,
-                                    initial_closure,
-                                );
-                            region_errs.push(err_stream);
-                            update_stream
-                        }
-                        Err(trace) => {
-                            let arranged = trace.clone().enter_region(region);
-                            let (update_stream, err_stream) =
-                                build_update_stream::<_, RowRowEnter<_, _, _>>(
-                                    arranged,
-                                    as_of,
-                                    source_relation,
-                                    initial_closure,
-                                );
-                            region_errs.push(err_stream);
-                            update_stream
-                        }
-                    };
+                    // Form the initial stream of updates that will hydrate the delta path.
+                    let (update_stream, err_stream) = build_update_stream(
+                        &bundles[source_relation],
+                        self.as_of_frontier.clone(),
+                        source_key,
+                        source_relation,
+                        initial_closure,
+                    );
+                    region_errs.push(err_stream);
+
                     // Promote `time` to a datum element.
                     //
                     // The `half_join` operator manipulates as "data" a pair `(data, time)`,
@@ -196,57 +139,18 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         // updates with less or equal `time`, and otherwise we present only updates
                         // with strictly less `time`.
                         //
-                        // We need to write the logic twice, as there are two types of arrangement
-                        // we might have: either dataflow-local or an imported trace.
-                        let (oks, errs) =
-                            match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
-                                Ok(local) => {
-                                    if source_relation < lookup_relation {
-                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
-                                            update_stream,
-                                            local.clone().enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.le(t2),
-                                            closure,
-                                            Rc::clone(&self.config_set),
-                                        )
-                                    } else {
-                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
-                                            update_stream,
-                                            local.clone().enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.lt(t2),
-                                            closure,
-                                            Rc::clone(&self.config_set),
-                                        )
-                                    }
-                                }
-                                Err(trace) => {
-                                    if source_relation < lookup_relation {
-                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
-                                            update_stream,
-                                            trace.clone().enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.le(t2),
-                                            closure,
-                                            Rc::clone(&self.config_set),
-                                        )
-                                    } else {
-                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
-                                            update_stream,
-                                            trace.clone().enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.lt(t2),
-                                            closure,
-                                            Rc::clone(&self.config_set),
-                                        )
-                                    }
-                                }
-                            };
+                        // We require demuxing over the two flavors of arrangement and over the
+                        // relative order of the inputs. Both are handled inside `build_halfjoin`.
+                        let (oks, errs) = build_halfjoin(
+                            update_stream,
+                            stream_key,
+                            stream_thinning,
+                            &bundles[lookup_relation],
+                            lookup_key,
+                            source_relation < lookup_relation,
+                            closure,
+                            Rc::clone(&self.config_set),
+                        );
                         update_stream = oks;
                         region_errs.push(errs);
                     }
@@ -311,6 +215,81 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     }
 }
 
+/// Constructs a `half_join` against the arrangement held by a collection bundle.
+///
+/// This wrapper demuxes over the two flavors of arrangement (dataflow-local or imported trace)
+/// that the bundle might hold for `lookup_key`, dispatching to the generic [`build_halfjoin_trace`]
+/// for each. `source_precedes_lookup` selects the tie-breaking comparison: `le` if the source
+/// relation precedes the lookup relation in the total order on relations, otherwise `lt`.
+fn build_halfjoin<'scope, T>(
+    updates: VecCollection<'scope, T, (Row, T), Diff>,
+    prev_key: Vec<MirScalarExpr>,
+    prev_thinning: Vec<usize>,
+    bundle: &CollectionBundle<'scope, T>,
+    lookup_key: Vec<MirScalarExpr>,
+    source_precedes_lookup: bool,
+    closure: JoinClosure,
+    config_set: Rc<ConfigSet>,
+) -> (
+    VecCollection<'scope, T, (Row, T), Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+{
+    match bundle.arrangement(&lookup_key) {
+        Some(ArrangementFlavor::Local(oks, errs)) => {
+            let (oks, errs2) = if source_precedes_lookup {
+                build_halfjoin_trace::<_, RowRowAgent<_, _>, _>(
+                    updates,
+                    oks,
+                    prev_key,
+                    prev_thinning,
+                    |t1, t2| t1.le(t2),
+                    closure,
+                    config_set,
+                )
+            } else {
+                build_halfjoin_trace::<_, RowRowAgent<_, _>, _>(
+                    updates,
+                    oks,
+                    prev_key,
+                    prev_thinning,
+                    |t1, t2| t1.lt(t2),
+                    closure,
+                    config_set,
+                )
+            };
+            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
+        }
+        Some(ArrangementFlavor::Trace(_, oks, errs)) => {
+            let (oks, errs2) = if source_precedes_lookup {
+                build_halfjoin_trace::<_, RowRowEnter<_, _, _>, _>(
+                    updates,
+                    oks,
+                    prev_key,
+                    prev_thinning,
+                    |t1, t2| t1.le(t2),
+                    closure,
+                    config_set,
+                )
+            } else {
+                build_halfjoin_trace::<_, RowRowEnter<_, _, _>, _>(
+                    updates,
+                    oks,
+                    prev_key,
+                    prev_thinning,
+                    |t1, t2| t1.lt(t2),
+                    closure,
+                    config_set,
+                )
+            };
+            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
+        }
+        None => panic!("Arrangement promised by the planner is absent!"),
+    }
+}
+
 /// Constructs a `half_join` from supplied arguments.
 ///
 /// This method exists to factor common logic from four code paths that are generic over the type of trace.
@@ -321,7 +300,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 /// the time of the update. This operator may manipulate `time` as part of this pair, but will not manipulate
 /// the time of the update. This is crucial for correctness, as the total order on times of updates is used
 /// to ensure that any two updates are matched at most once.
-fn build_halfjoin<'scope, T, Tr, CF>(
+fn build_halfjoin_trace<'scope, T, Tr, CF>(
     updates: VecCollection<'scope, T, (Row, T), Diff>,
     trace: Arranged<'scope, Tr>,
     prev_key: Vec<MirScalarExpr>,
@@ -592,12 +571,62 @@ where
     }
 }
 
+/// Builds the initial update stream of a delta path from a collection bundle.
+///
+/// With a `source_key`, demuxes over the two flavors of arrangement the bundle might hold for that
+/// key, dispatching to the generic [`build_update_stream_trace`]. Without a `source_key`, the source
+/// relation is consumed as a raw (unarranged) collection via [`build_update_stream_stream`].
+fn build_update_stream<'scope, T>(
+    bundle: &CollectionBundle<'scope, T>,
+    as_of: Antichain<mz_repr::Timestamp>,
+    source_key: Option<Vec<MirScalarExpr>>,
+    source_relation: usize,
+    initial_closure: JoinClosure,
+) -> (
+    VecCollection<'scope, T, Row, Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+{
+    let Some(source_key) = source_key else {
+        // Build an update stream from the raw (unarranged) collection.
+        let (oks, errs) = bundle
+            .collection
+            .clone()
+            .expect("The unarranged collection doesn't exist.");
+        let (oks, errs2) = build_update_stream_stream(oks, as_of, source_relation, initial_closure);
+        return (oks, errs2.concat(errs));
+    };
+    match bundle.arrangement(&source_key) {
+        Some(ArrangementFlavor::Local(oks, errs)) => {
+            let (oks, errs2) = build_update_stream_trace::<_, RowRowAgent<_, _>>(
+                oks,
+                as_of,
+                source_relation,
+                initial_closure,
+            );
+            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
+        }
+        Some(ArrangementFlavor::Trace(_, oks, errs)) => {
+            let (oks, errs2) = build_update_stream_trace::<_, RowRowEnter<_, _, _>>(
+                oks,
+                as_of,
+                source_relation,
+                initial_closure,
+            );
+            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
+        }
+        None => panic!("Arrangement promised by the planner is absent!"),
+    }
+}
+
 /// Builds the beginning of the update stream of a delta path.
 ///
 /// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
 /// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
 /// updates happening at the same time on different relations.
-fn build_update_stream<'scope, T, Tr>(
+fn build_update_stream_trace<'scope, T, Tr>(
     trace: Arranged<'scope, Tr>,
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
@@ -704,4 +733,42 @@ where
         ok_stream.as_collection(),
         err_stream.as_collection().map(DataflowErrorSer::from),
     )
+}
+
+/// Builds the beginning of the update stream of a delta path from a raw collection.
+///
+/// This is the unarranged counterpart of [`build_update_stream_trace`]. Only the delta path for the
+/// first relation can be seeded from a raw collection, since the as-of filtering that the other
+/// paths rely on is only available from an arrangement's times. We assert that here.
+fn build_update_stream_stream<'scope, T>(
+    stream: VecCollection<'scope, T, Row, Diff>,
+    _as_of: Antichain<mz_repr::Timestamp>,
+    source_relation: usize,
+    initial_closure: JoinClosure,
+) -> (
+    VecCollection<'scope, T, Row, Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
+)
+where
+    T: RenderTimestamp,
+{
+    // The other paths discard updates at the as-of, so only the first relation's path can be seeded
+    // from a raw collection that carries no per-update times to filter on.
+    assert_eq!(source_relation, 0);
+
+    type CB<C> = ConsolidatingContainerBuilder<C>;
+    stream.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("UpdateStream", {
+        // Reuseable allocation for unpacking.
+        let mut datums = DatumVec::new();
+        move |row| {
+            let mut row_builder = SharedRow::get();
+            let temp_storage = RowArena::new();
+            let mut datums_local = datums.borrow_with(&row);
+            initial_closure
+                .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                .map(|row| row.cloned())
+                .map_err(DataflowErrorSer::from)
+                .transpose()
+        }
+    })
 }

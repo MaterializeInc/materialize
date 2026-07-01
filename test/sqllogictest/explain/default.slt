@@ -529,8 +529,8 @@ Explained Query:
           →Arrange (#1{b})
             →Read materialize.public.mv
   →Return
-    →Delta Join [%0:l0[#0] » %1[#0] » %2[#0]] [%1[#0] » %2[#0] » %0:l0[#0]] [%2[#0] » %1[#0] » %0:l0[#0]]
-      →Arrange (#0)
+    →Delta Join [%0:l0 » %1[#0] » %2[#0]]
+      →Unarranged Raw Stream
         →Stream l0
       →Arrange (#0)
         →Union
@@ -594,7 +594,7 @@ Explained Query:
           Project: #1
             →Read l0
     cte l3 =
-      →Delta Join [%0:l1[#1{b}] » %1:l1[#1{b}] » %2:l2[#0{b}]] [%1:l1[#1{b}] » %0:l1[#1{b}] » %2:l2[#0{b}]] [%2:l2[#0{b}] » %0:l1[#1{b}] » %1:l1[#1{b}]]
+      →Delta Join [%0:l1[#1{b}] » %1:l1[#1{b}] » %2:l2[#0{b}]]
         →Arranged l1
         →Arranged l1
         →Arranged l2
@@ -847,7 +847,7 @@ Explained Query:
       →Arrange (#1{b})
         →Stream l0
   →Return
-    →Delta Join [%0:l1[#1{b}] » %1:l1[#1{b}] » %2:l0[#0{b}]] [%1:l1[#1{b}] » %0:l1[#1{b}] » %2:l0[#0{b}]] [%2:l0[#0{b}] » %0:l1[#1{b}] » %1:l1[#1{b}]]
+    →Delta Join [%0:l1[#1{b}] » %1:l1[#1{b}] » %2:l0[#0{b}]]
       →Arranged l1
       →Arranged l1
       →Arrange (#0{b})
@@ -996,22 +996,11 @@ FROM t, u, v
 WHERE b = c and d = e
 ----
 Explained Query:
-  →Delta Join [%0:t[#1{b}] » %1:u[#0{c}] » %2:v[#0{e}]] [%1:u[#0{c}] » %0:t[#1{b}] » %2:v[#0{e}]] [%2:v[#0{e}] » %1:u[#1{d}] » %0:t[#1{b}]]
+  →Delta Join [%0:t[#1{b}] » %1:u[#0{c}] » %2:v[#0{e}]]
     path %0:
       after %1:
         Project: #1, #0, #2
         Filter: (#2{d}) IS NOT NULL
-    path %1:
-      after %0:
-        Project: #2, #0, #1
-        Filter: (#0{b}) IS NOT NULL
-    path %2:
-      after %1:
-        Project: #2, #0, #1
-        Filter: (#0{d}) IS NOT NULL
-      after %0:
-        Project: #3, #0..=#2
-        Filter: (#0{b}) IS NOT NULL
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arranged materialize.public.v
@@ -1034,22 +1023,11 @@ FROM t, u, v
 WHERE b = c and d = e
 ----
 Explained Query:
-  →Delta Join [%0:t[#1{b}] » %1:u[#0{c}] » %2:v[#0{e}]] [%1:u[#0{c}] » %0:t[#1{b}] » %2:v[#0{e}]] [%2:v[#0{e}] » %1:u[#1{d}] » %0:t[#1{b}]]
+  →Delta Join [%0:t[#1{b}] » %1:u[#0{c}] » %2:v[#0{e}]]
     path %0:
       after %1:
         Project: #1, #0, #2
         Filter: (#2{d}) IS NOT NULL
-    path %1:
-      after %0:
-        Project: #2, #0, #1
-        Filter: (#0{b}) IS NOT NULL
-    path %2:
-      after %1:
-        Project: #2, #0, #1
-        Filter: (#0{d}) IS NOT NULL
-      after %0:
-        Project: #3, #0..=#2
-        Filter: (#0{b}) IS NOT NULL
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arranged materialize.public.v
@@ -1072,15 +1050,7 @@ FROM t, u, v
 WHERE a = c and b = e
 ----
 Explained Query:
-  →Delta Join [%0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{e}]] [%1:u[#0{c}] » %0:t[#0{a}] » %2:v[#0{e}]] [%2:v[#0{e}] » %0:t[#1{b}] » %1:u[#0{c}]]
-    path %1:
-      after %0:
-        Project: #0, #2, #1
-        Filter: (#0{a}) IS NOT NULL AND (#2{b}) IS NOT NULL
-    path %2:
-      after %0:
-        Project: #2, #0, #1
-        Filter: (#0{b}) IS NOT NULL AND (#2{a}) IS NOT NULL
+  →Delta Join [%0:t[#0{a}] » %1:u[#0{c}] » %2:v[#0{e}]]
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arranged materialize.public.v
@@ -1437,15 +1407,7 @@ Explained Query:
     cte l0 =
       →Arranged materialize.public.t
   →Return
-    →Delta Join [%0:l0[#0{a}] » %1:l0[#0{a}] » %2:l0[#0{a}]] [%1:l0[#0{a}] » %0:l0[#0{a}] » %2:l0[#0{a}]] [%2:l0[#0{a}] » %0:l0[#0{a}] » %1:l0[#0{a}]]
-      path %1:
-        after %0:
-          Project: #0, #2, #0, #1
-          Filter: (#0{a}) IS NOT NULL
-      path %2:
-        after %0:
-          Project: #0, #2, #0, #1
-          Filter: (#0{a}) IS NOT NULL
+    →Delta Join [%0:l0[#0{a}] » %1:l0[#0{a}] » %2:l0[#0{a}]]
       →Arranged l0
       →Arranged l0
       →Arranged l0
