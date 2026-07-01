@@ -263,12 +263,11 @@ impl Matcher {
                 self.variadic(inputs, c);
             }
             Pat::SUnary { func, input } => {
-                let c = self.fresh.id();
                 let fpat = unary_func_pat(func);
                 self.stmts.push(format!(
                     "let SNode::CallUnary {{ func: {fpat}, expr: e{c} }} = {node} else {{ continue }};"
                 ));
-                self.child(input, &format!("e{c}"));
+                self.child(input, &format!("*e{c}"));
             }
             Pat::RelVar(_) => unreachable!("node() is only called on operators"),
         }
