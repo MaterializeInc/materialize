@@ -207,6 +207,12 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
     /// The arity of a colored-canonical class from the snapshot, falling back to
     /// the base for an id not captured at snapshot time (e.g. a freshly added
     /// colored class). Panics like `EGraph::arity` if no arity is derivable.
+    ///
+    /// NOTE: a scalar class id has no arity and would hit this panic. Sound
+    /// today because no colored rule binds a scalar metavariable to a relation
+    /// arity query. A future slice introducing a `colored: true` scalar rule
+    /// must convert this (and `binding_arities` below) to the non-panicking
+    /// `try_arity` approach, mirroring `EGraph::binding_arities` (slice-1 Task 7).
     fn arity_of(&self, id: Id) -> usize {
         if let Some(&a) = self.arity.get(&id) {
             return a;
@@ -247,6 +253,10 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
     }
 
     /// Arities of the bound relation metavariables (colored-canonical).
+    ///
+    /// NOTE: like `arity_of`, this panics via `arity_of` if a binding resolves
+    /// to a scalar class id. See the forward-guard note on `arity_of` above:
+    /// a future `colored: true` scalar rule must switch both to `try_arity`.
     pub fn binding_arities(&self, b: &crate::eqsat::egraph::EBindings) -> BTreeMap<String, usize> {
         b.rels
             .iter()
@@ -366,6 +376,10 @@ impl<'a, 'b, 'v> MatchGraph for ColoredView<'a, 'b, 'v> {
     // Colored scalar matching is not wired up yet (no colored rule matches
     // scalar patterns until a later task), so these are sound empty stubs: an
     // empty result means "no match", never a false positive.
+    //
+    // NOTE: a future slice introducing a `colored: true` scalar rule must make
+    // these stubs return real results. Until then the emptiness is sound
+    // (no match), but it would silently make such a rule never fire.
     fn scalar_class_nodes(&self, _id: Id) -> Vec<crate::eqsat::scalar::node::SNode> {
         Vec::new()
     }

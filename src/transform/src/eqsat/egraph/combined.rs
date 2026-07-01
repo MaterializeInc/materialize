@@ -184,9 +184,9 @@ pub(crate) type ScalarIndex = std::collections::HashMap<ScalarSym, Vec<(Id, SNod
 impl EGraph {
     /// Bucket every scalar e-node by its `ScalarSym`. One entry per (class, node).
     ///
-    /// Currently unused outside tests: no scalar rule matcher runs yet. A later
-    /// task wires this into the saturation driver alongside
-    /// `MatchGraph::nodes_by_scalar_sym`.
+    /// Used by the test-only scalar saturate driver (`scalar_saturate`). The
+    /// whole scalar canonicalize path is test-only until slice 7 wires it into
+    /// production, hence `#[allow(dead_code)]`.
     #[allow(dead_code)]
     pub(crate) fn scalar_index(&self) -> ScalarIndex {
         let mut idx: ScalarIndex = std::collections::HashMap::new();
