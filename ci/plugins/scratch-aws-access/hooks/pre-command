@@ -15,11 +15,8 @@ set -euo pipefail
 
 ci_unimportant_heading "Assuming scratch AWS role"
 
-# Tag the session with the Buildkite job ID so CloudTrail attributes the
-# session to a specific build step. Falls back to a stable "unknown" so
-# the call still succeeds outside Buildkite (local dev). AWS source-identity
-# regex: [a-zA-Z0-9+=,.@_/-]+, max 64 chars; BUILDKITE_JOB_ID is a UUID.
-source_identity="${BUILDKITE_JOB_ID:-unknown}"
+# Tag the session with the CI job ID so CloudTrail can attribute it.
+source_identity="${BUILDKITE_JOB_ID:-${GITHUB_RUN_ID:-unknown}}"
 
 creds=$(aws sts assume-role --role-arn "$AWS_SCRATCH_ROLE_ARN" --duration-seconds 43200 --role-session-name ci --source-identity "$source_identity")
 
