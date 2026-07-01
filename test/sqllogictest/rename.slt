@@ -855,3 +855,35 @@ query I
 SELECT count(*) FROM tmp_two_tables
 ----
 0
+
+# Regression test for SQL-400: ALTER SCHEMA RENAME must not panic the
+# coordinator when a temporary object depends on an item in the renamed schema
+# that also holds an item from an earlier catalog-apply "type group" with a
+# higher id (here a secret, created after the temp view). Catalog apply used to
+# interleave persistent and temporary item updates by raw id, which could apply
+# the temp view's addition before the table it references was re-added, hitting
+# "invalid persisted SQL" (InvalidId). That aborted the rename with a coordinator
+# panic, so a plain `statement ok` on the ALTER is the regression check.
+
+statement ok
+CREATE SCHEMA sql400
+
+statement ok
+CREATE TABLE sql400.t (a int)
+
+statement ok
+CREATE TEMPORARY VIEW sql400_tv AS SELECT * FROM sql400.t
+
+statement ok
+CREATE SECRET sql400.sec AS 'x'
+
+statement ok
+ALTER SCHEMA sql400 RENAME TO sql400_renamed
+
+# The temporary view still resolves and is queryable after the rename. (Selecting
+# from a temp object is fine here because this file is exempt from
+# --auto-index-selects.)
+query I
+SELECT count(*) FROM sql400_tv
+----
+0
