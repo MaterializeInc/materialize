@@ -415,10 +415,14 @@ fn exp(a: f64) -> Result<f64, EvalError> {
 }
 
 #[sqlfunc(sqlname = "mz_sleep")]
-fn sleep(a: f64) -> Option<CheckedTimestamp<DateTime<Utc>>> {
-    let duration = std::time::Duration::from_secs_f64(a);
+fn sleep(a: f64) -> Result<Option<CheckedTimestamp<DateTime<Utc>>>, EvalError> {
+    let duration = std::time::Duration::try_from_secs_f64(a).map_err(|_| {
+        let mut val = String::new();
+        strconv::format_float64(&mut val, a);
+        EvalError::InvalidParameterValue(format!("cannot sleep for {val} seconds").into())
+    })?;
     std::thread::sleep(duration);
-    None
+    Ok(None)
 }
 
 #[sqlfunc(sqlname = "tots")]
