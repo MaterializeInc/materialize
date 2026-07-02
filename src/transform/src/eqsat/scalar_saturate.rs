@@ -303,4 +303,105 @@ mod tests {
             "corpus must exercise multi-operand de Morgan"
         );
     }
+
+    // Differential parity harness (SP2b Slice 3): extends slices 1-2 to the
+    // analysis-gated If rules (`if_true`, `if_false_or_null`, `if_same_branches`).
+    // This is the first workout of the `could_error` gate axis, not just the
+    // `literal` axis: the positive case proves the gate fires when the condition
+    // cannot error, and the negative control proves it blocks when the condition
+    // can, with parity holding on both sides because `if_same_branches` is the
+    // identical could_error-gated rule in both engines.
+    //
+    // Same corpus-shaping constraint as slices 1-2: every input is built so the
+    // old engine's unported rules (const_fold, if_err_cond, err_prop, ...) have
+    // no literal-only or error-literal subterm to seize on. The could_error
+    // negative control divides two COLUMNS, not literals: `BinaryFunc::could_error`
+    // is a static per-function property independent of operand literalness, so
+    // the gate sees `could_error == true` without ever needing to fold `1/0` into
+    // an error literal, which would let the old engine's const_fold (unported)
+    // collapse the condition to a literal and diverge from the combined engine
+    // for reasons unrelated to the could_error gate under test.
+    #[mz_ore::test]
+    fn scalar_parity_if() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc, VariadicFunc};
+        use mz_repr::{Datum, ReprColumnType, ReprScalarType};
+
+        let not = |e: MirScalarExpr| e.call_unary(UnaryFunc::Not(mz_expr::func::Not));
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let c = MirScalarExpr::column;
+        let if_expr =
+            |cond: MirScalarExpr, then: MirScalarExpr, els: MirScalarExpr| MirScalarExpr::If {
+                cond: Box::new(cond),
+                then: Box::new(then),
+                els: Box::new(els),
+            };
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+        let int_ct = || ReprScalarType::Int64.nullable(false);
+
+        // Literal-bool/null folds (`literal` analysis axis). Typed bool columns
+        // for the branches, and a typed bool literal/null for the condition.
+        let true_fold = if_expr(MirScalarExpr::literal_true(), c(0), c(1));
+        let false_fold = if_expr(MirScalarExpr::literal_false(), c(0), c(1));
+        let null_fold = if_expr(
+            MirScalarExpr::literal_null(ReprScalarType::Bool),
+            c(0),
+            c(1),
+        );
+
+        // could_error gate, POSITIVE: #0 is a bare bool column (cannot error),
+        // so if_same_branches must collapse identical branches.
+        let same_branches_ok = if_expr(c(0), c(1), c(1));
+
+        // could_error gate, NEGATIVE control: the condition divides two columns,
+        // which can error (division by zero), so if_same_branches must NOT
+        // collapse, in either engine.
+        let div_cond = c(0)
+            .call_binary(c(1), BinaryFunc::DivInt64(mz_expr::func::DivInt64))
+            .call_binary(
+                MirScalarExpr::literal_ok(Datum::Int64(0), ReprScalarType::Int64),
+                BinaryFunc::Eq(mz_expr::func::Eq),
+            );
+        let same_branches_errcond = if_expr(div_cond, c(2), c(2));
+
+        let cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (true_fold, vec![bool_ct(), bool_ct()]),
+            (false_fold, vec![bool_ct(), bool_ct()]),
+            (null_fold, vec![bool_ct(), bool_ct()]),
+            (same_branches_ok, vec![bool_ct(), bool_ct()]),
+            (same_branches_errcond, vec![int_ct(), int_ct(), int_ct()]),
+        ];
+        for (e, ct) in cases {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+        }
+
+        // Regression sampling of slice-1/2 shapes: parity still holds for the
+        // not_not/variadic rules under the grown If rule set.
+        let regression = vec![
+            not(not(c(0))),
+            and(vec![c(0)]),
+            not(and(vec![c(0), c(1), c(2)])),
+        ];
+        for e in regression {
+            let new = canonicalize_combined(&e, &[]);
+            let old = crate::eqsat::scalar::canonicalize(&e, &[]);
+            assert_eq!(new, old, "regression parity failed for {e:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_slice3() {
+        assert!(
+            CORPUS.contains("if(true,"),
+            "corpus must exercise the if_true literal-bool fold"
+        );
+        assert!(
+            CORPUS.contains("if(#0, #1, #1)"),
+            "corpus must exercise the if_same_branches could_error gate"
+        );
+    }
 }

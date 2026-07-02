@@ -28,3 +28,29 @@ types: bool,bool,bool,bool
 # de Morgan feeding single-collapse: Not(And(#0)) -> Or(Not #0) -> Not #0
 expr: not(and(#0))
 types: bool
+
+# --- slice 3: If resolution (literal-bool/null fold, could_error gate) ---
+# if_true / if_false_or_null: literal-bool and literal-null conditions
+# (the `literal` analysis axis). Branches are bare columns so nothing else
+# in the old engine's 20-rule set can touch the If.
+expr: if(true, #0, #1)
+types: bool,bool
+
+expr: if(false, #0, #1)
+types: bool,bool
+
+expr: if(null, #0, #1)
+types: bool,bool
+
+# if_same_branches, could_error gate POSITIVE: the condition is a bare bool
+# column, which cannot error, so the gate permits the collapse.
+expr: if(#0, #1, #1)
+types: bool,bool
+
+# if_same_branches, could_error gate NEGATIVE control: the condition CAN
+# error (integer division, #0 / #1 = 0). Both operands of the division are
+# columns, not literals, so the old engine's unported const_fold cannot fold
+# the condition out from under this test; only the could_error gate is under
+# test. The If must survive unresolved in BOTH engines.
+expr: if(#0 / #1 = 0, #2, #2)
+types: int64,int64,int64
