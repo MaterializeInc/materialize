@@ -59,7 +59,7 @@ STEP_START_TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
 
 # Clean up cores here so that just killed processes' core files are ignored
 cores="$HOME"/cores
-rm -rf "$cores" parallel-workload-queries.log parallel-workload-queries.log.zst
+rm -rf "$cores" parallel-workload-queries.log parallel-workload-queries.log.zst invariants-events.log
 mkdir -m 777 "$cores"
 # Max 128 characters, so don't use $PWD which will make it too long
 # Ignore SIGABRT

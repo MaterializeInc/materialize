@@ -2111,6 +2111,126 @@ steps:
             # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
             args: [--replicas=8]
 
+  - group: Invariants
+    key: invariants
+    steps:
+      - id: invariants-table-bank-large
+        label: "Invariants (table-bank, large)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=table-bank, --complexity=large, --runtime=1200]
+
+      - id: invariants-table-bank-upgrade
+        label: "Invariants (table-bank, upgrade under load)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args:
+                [
+                  --scenario=table-bank,
+                  --complexity=high,
+                  --runtime=1200,
+                  --upgrade-from=materialize/materialized:v26.31.1,
+                ]
+
+      - id: invariants-table-bank
+        label: "Invariants (table-bank)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=table-bank, --complexity=high, --runtime=1200]
+
+      - id: invariants-pg-cdc-bank
+        label: "Invariants (pg-cdc-bank)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=pg-cdc-bank, --complexity=high, --runtime=1200]
+
+      - id: invariants-mysql-cdc-bank
+        label: "Invariants (mysql-cdc-bank)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=mysql-cdc-bank, --complexity=high, --runtime=1200]
+
+      - id: invariants-sqlserver-cdc-bank
+        label: "Invariants (sqlserver-cdc-bank)"
+        depends_on: build-x86_64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          # The SQL Server Docker image isn't available on ARM.
+          #
+          # See: <https://github.com/microsoft/mssql-docker/issues/864>
+          queue: hetzner-x86-64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=sqlserver-cdc-bank, --complexity=high, --runtime=1200]
+
+      - id: invariants-kafka-ledger
+        label: "Invariants (kafka-ledger)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=kafka-ledger, --complexity=high, --runtime=1200]
+
+      - id: invariants-kafka-upsert
+        label: "Invariants (kafka-upsert)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=kafka-upsert, --complexity=high, --runtime=1200]
+
+      - id: invariants-sink-roundtrip
+        label: "Invariants (sink-roundtrip)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args: [--scenario=sink-roundtrip, --complexity=high, --runtime=1200]
+
   - group: "Parallel Workload"
     key: parallel-workload
     steps:
