@@ -15,6 +15,42 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.31.0
+*Released to Materialize Cloud: 2026-07-02* <br>
+*Released to Materialize Self-Managed: 2026-07-03* <br>
+
+### AWS Glue Schema Registry Support {#v26.31-aws-glue-schema-registry-support}
+Kafka sources can now use AWS Glue Schema Registry for Avro schema management via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax. This is an alternative to the Confluent Schema Registry, enabling organizations that standardize on AWS Glue to connect their Kafka topics to Materialize without switching schema registries.
+
+### Materialize CRD v1 for Self-Managed {#v26.31-materialize-crd-v1}
+Self-managed Kubernetes deployments can now opt in to the v1 Materialize Custom Resource Definition (`materialize.cloud/v1`). The v1 CRD simplifies rollout behavior: rollouts trigger automatically when spec fields change, so you no longer need to set a new `requestRollout` UUID on every change. Adopting `v1` is opt-in, and existing `v1alpha1` deployments continue to work unchanged.
+
+For more information, see the [Self-Managed upgrade notes](/self-managed-deployments/upgrading/).
+
+### OAuth sign-in for MCP servers {#v26.31-mcp-oauth}
+The `materialize-agent` and `materialize-developer` MCP servers now support OAuth (browser-based) sign-in, so MCP-compatible clients such as Claude Code, Claude Desktop, and Cursor can authenticate through your browser instead of a Base64-encoded token. With OAuth, the client connects as your own user role with your existing privileges.
+
+For more information, see [MCP Server for Agents](/integrations/mcp-server/mcp-agent/) and [MCP Server for Developers](/integrations/mcp-server/mcp-developer/).
+
+### Improvements {#v26.31-improvements}
+- **Faster `count(*)` over `generate_series`**: Queries like `SELECT count(*) FROM generate_series(1, N)` now evaluate in constant time instead of materializing all rows.
+- **Faster arrangement hydration**: Improved dictionary compression build performance and extended compression coverage to additional arrangement paths, reducing hydration time and memory usage.
+- **System parameter override introspection**: Added `mz_internal.mz_overridden_system_parameters`, a catalog view that lists environment-wide system parameter overrides set via `ALTER SYSTEM`, readable by all users.
+- **Kubernetes resource labels for Self-Managed**: Standard `app.kubernetes.io/*` labels are now applied to all Kubernetes resources (pods, services, statefulsets, deployments) managed by the operator.
+
+### Bug Fixes {#v26.31-bug-fixes}
+- Fixed `ALTER CONNECTION ... ROTATE KEYS` silently dropping concurrent `ALTER CONNECTION SET` changes when both commands ran at the same time.
+- Fixed `COPY INTO` not respecting the target table's numeric precision, causing incorrect decimal values in downstream sinks.
+- Fixed the optimizer panicking when a scalar subquery's body was provably empty, producing a count of zero.
+- Fixed an overflow in array cardinality calculation when dimension lengths multiply to exceed the maximum integer value.
+- Fixed multiple panics during proto/Row and persist state decoding when encountering malformed input, improving availability against corrupted data.
+- Fixed Iceberg sinks accumulating the entire source snapshot in memory during hydration instead of flushing incrementally.
+- Fixed the MCP `restrict_to_user_objects` guard being bypassed for deferred plans, allowing restricted MCP connections to access system catalog objects.
+- Fixed Console password authentication breaking when the cached OIDC token expires, causing all subsequent requests to fail with "authentication credentials have expired."
+- Fixed PostgreSQL source creation panicking when excluded columns include primary key columns.
+- Fixed SQL parenthesization errors in `SHOW CREATE` output that could cause the generated SQL to fail to reparse.
+- Fixed replicas doubling in memory during zero-downtime upgrades due to unbounded correction buffer growth in read-only materialized view sinks.
+
 ## v26.30.1
 *Released to Materialize Cloud: 2026-06-25* <br>
 *Released to Materialize Self-Managed: 2026-06-26* <br>
