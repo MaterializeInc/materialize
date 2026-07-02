@@ -2697,14 +2697,21 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         // pg_get_viewdef returns the (query part of) the given view's definition.
         // We currently don't support pretty-printing (the `Bool`/`Int32` parameters).
         "pg_get_viewdef" => Scalar {
+            // The text overloads resolve the name through the search-path-aware
+            // text -> regclass cast, matching PostgreSQL's regclass semantics
+            // (current database, search path, first match). Matching on the bare
+            // `name` instead would resolve across every schema and database, so
+            // any same-named view anywhere would make the lookup ambiguous.
             params!(String) => sql_impl_func(
-                "(SELECT definition FROM mz_catalog.mz_views WHERE name = $1)"
+                "(SELECT definition FROM mz_catalog.mz_views
+                  WHERE oid = CAST(CAST($1 AS pg_catalog.regclass) AS pg_catalog.oid))"
             ) => String, 1640;
             params!(Oid) => sql_impl_func(
                 "(SELECT definition FROM mz_catalog.mz_views WHERE oid = $1)"
             ) => String, 1641;
             params!(String, Bool) => sql_impl_func(
-                "(SELECT definition FROM mz_catalog.mz_views WHERE name = $1)"
+                "(SELECT definition FROM mz_catalog.mz_views
+                  WHERE oid = CAST(CAST($1 AS pg_catalog.regclass) AS pg_catalog.oid))"
             ) => String, 2505;
             params!(Oid, Bool) => sql_impl_func(
                 "(SELECT definition FROM mz_catalog.mz_views WHERE oid = $1)"
@@ -4895,13 +4902,44 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(String) => sql_impl_func("
                 CASE
                 WHEN $1 IS NULL THEN NULL
-                ELSE (
+                ELSE
                     mz_unsafe.mz_error_if_null(
-                        (SELECT oid FROM mz_catalog.mz_objects
-                         WHERE name = $1 AND type = 'connection'),
+                        (
+                            SELECT o.oid
+                            FROM
+                                (
+                                    SELECT
+                                        n,
+                                        CASE
+                                            WHEN n[2] IS NULL
+                                                THEN pg_catalog.current_schemas(true)
+                                            ELSE ARRAY[n[2]]
+                                        END AS schemas
+                                    FROM mz_internal.mz_normalize_object_name($1) AS n
+                                ) AS ctx,
+                                mz_catalog.mz_objects AS o
+                                JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
+                                LEFT JOIN mz_catalog.mz_databases AS d
+                                    ON s.database_id = d.id
+                            WHERE
+                                o.type = 'connection'
+                                AND o.name = ctx.n[3]
+                                -- Only the requested database (defaulting to the
+                                -- current one) or ambient schemas, never another
+                                -- database.
+                                AND (
+                                    d.name = COALESCE(ctx.n[1], pg_catalog.current_database())
+                                    OR s.database_id IS NULL
+                                )
+                                AND s.name = ANY (ctx.schemas)
+                            -- Resolve like a bare name reference: the schema
+                            -- earliest in the search path wins, so a duplicate
+                            -- name elsewhere cannot make this ambiguous.
+                            ORDER BY pg_catalog.array_position(ctx.schemas, s.name)
+                            LIMIT 1
+                        ),
                         'connection \"' || $1 || '\" does not exist'
                     )
-                )
                 END
             ") => Oid, oid::FUNC_CONNECTION_OID_OID;
         },
@@ -5226,12 +5264,44 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(String) => sql_impl_func("
                 CASE
                 WHEN $1 IS NULL THEN NULL
-                ELSE (
+                ELSE
                     mz_unsafe.mz_error_if_null(
-                        (SELECT oid FROM mz_catalog.mz_objects WHERE name = $1 AND type = 'secret'),
+                        (
+                            SELECT o.oid
+                            FROM
+                                (
+                                    SELECT
+                                        n,
+                                        CASE
+                                            WHEN n[2] IS NULL
+                                                THEN pg_catalog.current_schemas(true)
+                                            ELSE ARRAY[n[2]]
+                                        END AS schemas
+                                    FROM mz_internal.mz_normalize_object_name($1) AS n
+                                ) AS ctx,
+                                mz_catalog.mz_objects AS o
+                                JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
+                                LEFT JOIN mz_catalog.mz_databases AS d
+                                    ON s.database_id = d.id
+                            WHERE
+                                o.type = 'secret'
+                                AND o.name = ctx.n[3]
+                                -- Only the requested database (defaulting to the
+                                -- current one) or ambient schemas, never another
+                                -- database.
+                                AND (
+                                    d.name = COALESCE(ctx.n[1], pg_catalog.current_database())
+                                    OR s.database_id IS NULL
+                                )
+                                AND s.name = ANY (ctx.schemas)
+                            -- Resolve like a bare name reference: the schema
+                            -- earliest in the search path wins, so a duplicate
+                            -- name elsewhere cannot make this ambiguous.
+                            ORDER BY pg_catalog.array_position(ctx.schemas, s.name)
+                            LIMIT 1
+                        ),
                         'secret \"' || $1 || '\" does not exist'
                     )
-                )
                 END
             ") => Oid, oid::FUNC_SECRET_OID_OID;
         },

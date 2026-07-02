@@ -20,7 +20,7 @@ use crate::{PostgresError, query, simple_query_opt};
 pub async fn get_schemas(client: &Client) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
     Ok(query(
         client,
-        crate::sql!("SELECT oid, nspname, nspowner FROM pg_namespace"),
+        crate::sql!("SELECT oid, nspname, nspowner FROM pg_catalog.pg_namespace"),
         &[],
     )
     .await?
@@ -78,7 +78,7 @@ pub async fn publication_info(
 
     query(
         client,
-        crate::sql!("SELECT oid FROM pg_publication WHERE pubname = $1"),
+        crate::sql!("SELECT oid FROM pg_catalog.pg_publication WHERE pubname = $1"),
         &[&publication],
     )
     .await?
@@ -93,8 +93,8 @@ pub async fn publication_info(
                     c.oid, p.schemaname, p.tablename
                 FROM
                     pg_catalog.pg_class AS c
-                    JOIN pg_namespace AS n ON c.relnamespace = n.oid
-                    JOIN pg_publication_tables AS p ON
+                    JOIN pg_catalog.pg_namespace AS n ON c.relnamespace = n.oid
+                    JOIN pg_catalog.pg_publication_tables AS p ON
                             c.relname = p.tablename AND n.nspname = p.schemaname
                 WHERE
                     p.pubname = $1
@@ -111,8 +111,8 @@ pub async fn publication_info(
                     c.oid, p.schemaname, p.tablename
                 FROM
                     pg_catalog.pg_class AS c
-                    JOIN pg_namespace AS n ON c.relnamespace = n.oid
-                    JOIN pg_publication_tables AS p ON
+                    JOIN pg_catalog.pg_namespace AS n ON c.relnamespace = n.oid
+                    JOIN pg_catalog.pg_publication_tables AS p ON
                             c.relname = p.tablename AND n.nspname = p.schemaname
                 WHERE
                     p.pubname = $1"
@@ -204,41 +204,41 @@ pub async fn publication_info(
         crate::sql!(
             "
         SELECT
-            pg_constraint.conrelid AS table_oid,
-            pg_constraint.oid,
-            pg_constraint.conkey,
-            pg_constraint.conname,
-            pg_constraint.contype = 'p' AS is_primary,
-            pg_index.indnullsnotdistinct AS nulls_not_distinct
+            pg_catalog.pg_constraint.conrelid AS table_oid,
+            pg_catalog.pg_constraint.oid,
+            pg_catalog.pg_constraint.conkey,
+            pg_catalog.pg_constraint.conname,
+            pg_catalog.pg_constraint.contype = 'p' AS is_primary,
+            pg_catalog.pg_index.indnullsnotdistinct AS nulls_not_distinct
         FROM
-            pg_constraint
+            pg_catalog.pg_constraint
                 JOIN
-                    pg_index
-                    ON pg_index.indexrelid = pg_constraint.conindid
+                    pg_catalog.pg_index
+                    ON pg_catalog.pg_index.indexrelid = pg_catalog.pg_constraint.conindid
         WHERE
-            pg_constraint.conrelid = ANY ($1)
+            pg_catalog.pg_constraint.conrelid = ANY ($1)
                 AND
-            pg_constraint.contype = ANY (ARRAY['p', 'u']);"
+            pg_catalog.pg_constraint.contype = ANY (ARRAY['p', 'u']);"
         )
     } else {
         crate::sql!(
             "
         SELECT
-            pg_constraint.conrelid AS table_oid,
-            pg_constraint.oid,
-            pg_constraint.conkey,
-            pg_constraint.conname,
-            pg_constraint.contype = 'p' AS is_primary,
+            pg_catalog.pg_constraint.conrelid AS table_oid,
+            pg_catalog.pg_constraint.oid,
+            pg_catalog.pg_constraint.conkey,
+            pg_catalog.pg_constraint.conname,
+            pg_catalog.pg_constraint.contype = 'p' AS is_primary,
             false AS nulls_not_distinct
         FROM
-            pg_constraint
+            pg_catalog.pg_constraint
                 JOIN
-                    pg_index
-                    ON pg_index.indexrelid = pg_constraint.conindid
+                    pg_catalog.pg_index
+                    ON pg_catalog.pg_index.indexrelid = pg_catalog.pg_constraint.conindid
         WHERE
-            pg_constraint.conrelid = ANY ($1)
+            pg_catalog.pg_constraint.conrelid = ANY ($1)
                 AND
-            pg_constraint.contype = ANY (ARRAY['p', 'u']);"
+            pg_catalog.pg_constraint.contype = ANY (ARRAY['p', 'u']);"
         )
     };
 
