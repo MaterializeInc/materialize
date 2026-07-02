@@ -60,6 +60,7 @@ fn cond_is_color_exact(c: &Cond) -> bool {
         Cond::ScalarLitTrue { .. } => false,
         Cond::ScalarLitFalseOrNull { .. } => false,
         Cond::ScalarNoError { .. } => false,
+        Cond::ScalarNonNullable { .. } => false,
     }
 }
 
@@ -138,6 +139,9 @@ fn sym_name(p: &Pat) -> &'static str {
             unreachable!("scalar patterns have no relational operator symbol")
         }
         Pat::SIf { .. } => unreachable!("scalar patterns have no relational operator symbol"),
+        Pat::SBinaryVar { .. } => {
+            unreachable!("scalar patterns have no relational operator symbol")
+        }
         Pat::Scalar { .. } => unreachable!("scalar patterns have no relational operator symbol"),
     }
 }
@@ -147,6 +151,7 @@ fn sym_name(p: &Pat) -> &'static str {
 fn unary_func_pat(func: &str) -> String {
     match func {
         "not" => "mz_expr::UnaryFunc::Not(_)".to_string(),
+        "isnull" => "mz_expr::UnaryFunc::IsNull(_)".to_string(),
         other => panic!("unknown scalar unary func keyword: {other}"),
     }
 }
@@ -165,6 +170,7 @@ fn variadic_func_pat(func: &str) -> String {
 fn unary_func_value(func: &str) -> String {
     match func {
         "not" => "mz_expr::UnaryFunc::Not(mz_expr::func::Not)".to_string(),
+        "isnull" => "mz_expr::UnaryFunc::IsNull(mz_expr::func::IsNull)".to_string(),
         other => panic!("unknown scalar unary func keyword: {other}"),
     }
 }
@@ -190,6 +196,9 @@ struct Matcher {
     rels: Vec<(String, String)>,
     payloads: Vec<(String, String)>,
     rests: Vec<(String, String)>,
+    /// Bound func metavariables, e.g. `SBinaryVar`'s `func`: `(dsl name,
+    /// generated local holding a `BinaryFunc`)`.
+    funcs: Vec<(String, String)>,
 }
 
 impl Default for Fresh {
@@ -338,6 +347,14 @@ impl Matcher {
                 self.child(then, &format!("*et{c}"));
                 self.child(els, &format!("*ee{c}"));
             }
+            Pat::SBinaryVar { func, expr1, expr2 } => {
+                self.stmts.push(format!(
+                    "let crate::eqsat::scalar::node::SNode::CallBinary {{ func: bf{c}, expr1: e1{c}, expr2: e2{c} }} = {node} else {{ continue }};"
+                ));
+                self.funcs.push((func.clone(), format!("bf{c}")));
+                self.child(expr1, &format!("*e1{c}"));
+                self.child(expr2, &format!("*e2{c}"));
+            }
             Pat::RelVar(_) => unreachable!("node() is only called on operators"),
             Pat::Scalar { .. } => unreachable!("node() is only called on operators"),
         }
@@ -381,7 +398,10 @@ impl Matcher {
                 // class never matches a relational pattern and vice versa.
                 let scalar = matches!(
                     pat,
-                    Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. }
+                    Pat::SUnary { .. }
+                        | Pat::SVariadic { .. }
+                        | Pat::SIf { .. }
+                        | Pat::SBinaryVar { .. }
                 );
                 if scalar {
                     self.stmts
@@ -514,6 +534,9 @@ fn cond_expr(c: &Cond, m: &Matcher) -> String {
         Cond::ScalarNoError { scalar } => {
             format!("!g.scalar_could_error({})", m.rel_local(scalar))
         }
+        Cond::ScalarNonNullable { scalar } => {
+            format!("!g.scalar_nullable({})", m.rel_local(scalar))
+        }
     }
 }
 
@@ -576,6 +599,9 @@ fn body(rule: &Rule, m: &Matcher, mode: &FindMode) -> String {
         s.push_str(&format!(
             "b.rests.insert({name:?}.to_string(), {local}.clone());\n"
         ));
+    }
+    for (name, local) in &m.funcs {
+        s.push_str(&format!("b.bind_binary_func({name:?}, {local}.clone());\n"));
     }
     match mode {
         FindMode::Base => {
@@ -646,6 +672,23 @@ fn find_stmts(rule: &Rule, mode: &FindMode) -> String {
         Pat::SIf { .. } => {
             s.push_str(
                 "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::If) {\n",
+            );
+            s.push_str("let root_id = root_id;\n");
+            s.push_str("let root_node = &root_node;\n");
+            m.node(&rule.lhs, "root_node");
+            for stmt in &m.stmts {
+                s.push_str(stmt);
+                s.push('\n');
+            }
+            s.push_str(&body(rule, &m, mode));
+            for _ in 0..m.open_braces {
+                s.push_str("}\n");
+            }
+            s.push_str("}\n");
+        }
+        Pat::SBinaryVar { .. } => {
+            s.push_str(
+                "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::Binary) {\n",
             );
             s.push_str("let root_id = root_id;\n");
             s.push_str("let root_node = &root_node;\n");
@@ -979,6 +1022,20 @@ fn tmpl_stmts(t: &Tmpl, hole: Option<&str>, out: &mut String, fresh: &mut Fresh)
             ));
             v
         }
+        Tmpl::SBinaryNegate { func, expr1, expr2 } => {
+            let ve1 = tmpl_stmts(expr1, hole, out, fresh);
+            let ve2 = tmpl_stmts(expr2, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            // Declines (returns Err, the rule's natural no-fire path) when the
+            // bound BinaryFunc has no negation.
+            out.push_str(&format!(
+                "let f{c} = b.binary_func({func:?});\n\
+                 let Some(neg{c}) = f{c}.negate() else {{ return Err(\"SBinaryNegate: `{func}` not negatable\".to_string()); }};\n\
+                 let {v} = g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::CallBinary {{ func: neg{c}, expr1: {ve1}, expr2: {ve2} }}));\n"
+            ));
+            v
+        }
         Tmpl::Builtin { name, args } => {
             let c = fresh.id();
             let v = format!("id{c}");
@@ -1079,7 +1136,11 @@ fn emit_apply(rule: &Rule) -> String {
 fn is_scalar_rule(r: &Rule) -> bool {
     matches!(
         r.lhs,
-        Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. } | Pat::Scalar { .. }
+        Pat::SUnary { .. }
+            | Pat::SVariadic { .. }
+            | Pat::SIf { .. }
+            | Pat::SBinaryVar { .. }
+            | Pat::Scalar { .. }
     )
 }
 
@@ -1329,6 +1390,12 @@ fn pat(p: &Pat) -> String {
             pat(then),
             pat(els)
         ),
+        Pat::SBinaryVar { func, expr1, expr2 } => format!(
+            "{P}::Pat::SBinaryVar {{ func: {}, expr1: Box::new({}), expr2: Box::new({}) }}",
+            s(func),
+            pat(expr1),
+            pat(expr2)
+        ),
         Pat::Scalar { binding } => format!("{P}::Pat::Scalar {{ binding: {} }}", s(binding)),
         Pat::Filter { preds, input } => format!(
             "{P}::Pat::Filter {{ preds: {}, input: Box::new({}) }}",
@@ -1483,6 +1550,12 @@ fn tmpl(t: &Tmpl) -> String {
             args.iter().map(|a| s(a)).collect::<Vec<_>>().join(", ")
         ),
         Tmpl::SBool(b) => format!("{P}::Tmpl::SBool({b})"),
+        Tmpl::SBinaryNegate { func, expr1, expr2 } => format!(
+            "{P}::Tmpl::SBinaryNegate {{ func: {}, expr1: Box::new({}), expr2: Box::new({}) }}",
+            s(func),
+            tmpl(expr1),
+            tmpl(expr2)
+        ),
     }
 }
 
@@ -1553,6 +1626,9 @@ fn cond(c: &Cond) -> String {
         }
         Cond::ScalarNoError { scalar } => {
             format!("{P}::Cond::ScalarNoError {{ scalar: {} }}", s(scalar))
+        }
+        Cond::ScalarNonNullable { scalar } => {
+            format!("{P}::Cond::ScalarNonNullable {{ scalar: {} }}", s(scalar))
         }
     }
 }
