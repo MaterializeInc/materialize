@@ -33,7 +33,7 @@ pub struct EBindings {
     pub rests: HashMap<String, Vec<Id>>,
     /// Func-metavar bindings, e.g. the `BinaryFunc` bound by a `Pat::SBinaryVar`
     /// match. A function symbol has neither an e-class id (like `rels`) nor a
-    /// payload list (like `payloads`), so it gets its own store; see
+    /// payload list (like `payloads`), so it gets its own store. See
     /// `bind_binary_func`/`binary_func`.
     binary_funcs: HashMap<String, BinaryFunc>,
     /// The class at which the pattern's root matched.
