@@ -107,13 +107,10 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    kubectl get nodes --show-labels
    ```
 
-1. Recommended: Install cert-manager
-
-   Cert-manager is used for generating TLS certificates needed by the materialize operator
-   for CRD conversion webhooks. It is currently only required if you enable the v1
-   version of the Materialize CRD by setting `operator.args.installV1CRD=true`
-   when installing the operator, but certificates will become required in a
-   future version of Materialize.
+1. <a name="install-cert-manager" ></a>Install `cert-manager`. `cert-manager` is
+   used for generating TLS certificates needed by the Materialize operator for
+   CRD conversion webhooks if enabling CRD `v1`. To simplify future transition,
+   we recommend installing it even if you are not yet enabling CRD `v1`.
 
    ```shell
    helm install cert-manager oci://quay.io/jetstack/charts/cert-manager \
@@ -280,6 +277,27 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
 1. Install Materialize into a new `materialize-environment` namespace:
 
+   1. If you [enabled the use of `v1` CRD](#step-enable-v1), update
+      `sample-materialize.yaml` to use it.
+      [`v1`](/self-managed-deployments/upgrading/adopting-the-v1-crd/) provides
+      a simplified rollout behavior. In the `Materialize` resource section of
+      the file (`kind: Materialize`):
+      - Change the `apiVersion` from `materialize.cloud/v1alpha1` to
+        `materialize.cloud/v1`.
+      - Remove the `requestRollout` field, if present.
+
+      ```none{hl_lines=2}
+      ---
+      apiVersion: materialize.cloud/v1     # <-- updated to use v1
+      kind: Materialize
+      metadata:
+         name: 12345678-1234-1234-1234-123456789012
+         namespace: materialize-environment
+      ```
+
+      To use the default `v1alpha1` CRD version instead, leave
+      `sample-materialize.yaml` unchanged.
+
    1. Use the `sample-materialize.yaml` file to create the
       `materialize-environment` namespace and install Materialize:
 
@@ -287,7 +305,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
       kubectl apply -f sample-materialize.yaml
       ```
 
-    1. Verify the installation and check the status:
+   1. Verify the installation and check the status:
 
        {{< note >}}
        It may take approximately 1-2 minutes for all resources to appear in the
@@ -335,6 +353,10 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
        If you run into an error during deployment, refer to the
        [Troubleshooting](/self-hosted/troubleshooting) guide.
+
+   1. Optional. Check the CRD version being used:
+
+      {{% include-from-yaml data="self_managed/crd_version_checks" name="check-crd-version-kind" %}}
 
 1. Open the Materialize Console in your browser:
 

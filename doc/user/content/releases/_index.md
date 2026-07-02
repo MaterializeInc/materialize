@@ -1468,8 +1468,8 @@ See also Upgrade Notes for release specific notes.
 
 {{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
 
-See also [Version specific upgrade
-notes](/self-managed-deployments/upgrading/#version-specific-upgrade-notes).
+See also [Version-specific upgrade
+notes](/self-managed-deployments/upgrading/version-notes/).
 
 
 ## See also

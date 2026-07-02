@@ -156,17 +156,24 @@ authentication mechanisms.
 
 1. Create a `terraform.tfvars` file with the following variables:
 
-   - `name_prefix`: Prefix for all resource names (e.g., `simple-demo`)
-   - `aws_region`: AWS region for deployment (e.g., `us-east-1`)
-   - `aws_profile`: AWS CLI profile to use
-   - `license_key`: Materialize license key
-   - `tags`: Map of tags to apply to resources
+   | Variable      | Description                 |
+   | -----------   | ----------------------------|
+   | `name_prefix` | Prefix for all resource names (e.g., `simple-demo`). |
+   | `aws_region`  | AWS region for deployment (e.g., `us-east-1`). |
+   | `aws_profile` | AWS CLI profile to use. |
+   | `license_key` | Materialize license key. |
+   | `crd_version` | CRD API version to use for the Materialize instance: `v1` or `v1alpha1`. |
+   | `tags`        | Map of tags to apply to resources. |
+
+   {{% include-from-yaml data="self_managed/installation"
+   name="installation-tfvars-crd-version-tip" %}}
 
    ```hcl
    name_prefix = "simple-demo"
    aws_region  = "us-east-1"
    aws_profile = "your-aws-profile"
    license_key = "your-materialize-license-key"
+   crd_version = "v1"   # v1 is available for Materialize v26.30+ and TF v3.1.1+.
    tags = {
      environment = "demo"
    }
@@ -243,6 +250,10 @@ authentication mechanisms.
 1. Check the status of your deployment:
    {{% include-from-yaml data="self_managed/installation"
    name="installation-verify-status" %}}
+
+1. Check the CRD version of the Materialize manifest.
+   {{% include-from-yaml data="self_managed/crd_version_checks"
+   name="check-crd-version-tf" %}}
 
 ### Step 5: Connect to Materialize
 
