@@ -21,7 +21,7 @@ use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::Catalog;
-use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::{Coordinator, Message};
 use crate::session::{Session, StateRevision, TransactionStatus};
 use crate::util::describe;
@@ -210,7 +210,7 @@ impl Coordinator {
     pub(crate) async fn clear_transaction(
         &mut self,
         session: &mut Session,
-    ) -> (TransactionStatus, BuiltinTableAppendNotify) {
+    ) -> (TransactionStatus, BuiltinTableAppendCompletion) {
         // This function is *usually* called when transactions end, but it can fail to be called in
         // some cases (for example if the session's role id was dropped, then we return early and
         // don't go through the normal sequence_end_transaction path). The `Command::Commit` handler
@@ -228,7 +228,7 @@ impl Coordinator {
     pub(crate) async fn clear_connection(
         &mut self,
         conn_id: &ConnectionId,
-    ) -> BuiltinTableAppendNotify {
+    ) -> BuiltinTableAppendCompletion {
         self.connection_cancel_watches.remove(conn_id);
         let retire_notify = self
             .retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Finished)

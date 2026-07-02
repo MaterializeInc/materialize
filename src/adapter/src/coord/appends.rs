@@ -737,6 +737,21 @@ pub struct BuiltinTableAppend<'a> {
 /// wait for it to complete, while other long running tasks are concurrently executing.
 pub type BuiltinTableAppendNotify = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
 
+/// Completion handle for a builtin-table append response barrier.
+pub struct BuiltinTableAppendCompletion {
+    notify: BuiltinTableAppendNotify,
+}
+
+impl BuiltinTableAppendCompletion {
+    pub fn new(notify: BuiltinTableAppendNotify) -> Self {
+        Self { notify }
+    }
+
+    pub fn into_notify(self) -> BuiltinTableAppendNotify {
+        self.notify
+    }
+}
+
 impl<'a> BuiltinTableAppend<'a> {
     /// Submit a write to a system table to be executed during the next group commit. This method
     /// __does not__ trigger a group commit.

@@ -189,7 +189,8 @@ use crate::config::{
     SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig,
 };
 use crate::coord::appends::{
-    BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit, PendingWriteTxn,
+    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit,
+    PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
@@ -1721,8 +1722,8 @@ impl ExecuteContext {
     }
 
     /// Delays sending this statement's response until `barrier` resolves.
-    pub(crate) fn delay_response_until(&mut self, barrier: BuiltinTableAppendNotify) {
-        self.response_barriers.push(barrier);
+    pub(crate) fn delay_response_until(&mut self, barrier: BuiltinTableAppendCompletion) {
+        self.response_barriers.push(barrier.into_notify());
     }
 
     pub fn extra(&self) -> &ExecuteContextGuard {

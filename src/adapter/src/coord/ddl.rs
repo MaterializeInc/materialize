@@ -52,7 +52,7 @@ use tracing::{Instrument, Level, event, info_span, warn};
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
 use crate::coord::Coordinator;
-use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::telemetry::{EventDetails, SegmentClientExt};
@@ -701,7 +701,7 @@ impl Coordinator {
     pub async fn retire_compute_sinks(
         &mut self,
         mut reasons: BTreeMap<GlobalId, ActiveComputeSinkRetireReason>,
-    ) -> BuiltinTableAppendNotify {
+    ) -> BuiltinTableAppendCompletion {
         let sink_ids = reasons.keys().cloned();
         let to_retire: Vec<_> = self
             .drop_compute_sinks(sink_ids)
@@ -728,9 +728,9 @@ impl Coordinator {
             }
             let _ = done_tx.send(());
         });
-        Box::pin(async move {
+        BuiltinTableAppendCompletion::new(Box::pin(async move {
             let _ = done_rx.await;
-        })
+        }))
     }
 
     /// Drops all pending replicas for a set of clusters
@@ -775,7 +775,7 @@ impl Coordinator {
     pub(crate) async fn cancel_compute_sinks_for_conn(
         &mut self,
         conn_id: &ConnectionId,
-    ) -> BuiltinTableAppendNotify {
+    ) -> BuiltinTableAppendCompletion {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
     }
@@ -796,7 +796,7 @@ impl Coordinator {
         &mut self,
         conn_id: &ConnectionId,
         reason: ActiveComputeSinkRetireReason,
-    ) -> BuiltinTableAppendNotify {
+    ) -> BuiltinTableAppendCompletion {
         let drop_sinks = self
             .active_conns
             .get_mut(conn_id)
