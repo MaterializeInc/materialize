@@ -136,7 +136,7 @@ pub fn hash_password_with_opts(
 /// The format is SCRAM-SHA-256$<iterations>:<salt>$<stored_key>:<server_key>
 pub fn scram256_hash(password: &Password, iterations: &NonZeroU32) -> Result<String, HashError> {
     let hashed_password = hash_password(password, iterations)?;
-    Ok(scram256_hash_inner(hashed_password).to_string())
+    Ok(scram256_hash_inner(hashed_password)?.to_string())
 }
 
 fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
@@ -147,7 +147,7 @@ fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
 pub fn scram256_verify(password: &Password, hashed_password: &str) -> Result<(), VerifyError> {
     let opts = scram256_parse_opts(hashed_password)?;
     let hashed = hash_password_with_opts(&opts, password).map_err(VerifyError::Hash)?;
-    let scram = scram256_hash_inner(hashed);
+    let scram = scram256_hash_inner(hashed).map_err(VerifyError::Hash)?;
     if constant_time_compare(hashed_password.as_bytes(), scram.to_string().as_bytes()) {
         Ok(())
     } else {
@@ -309,24 +309,30 @@ impl Display for ScramSha256Hash {
     }
 }
 
-fn scram256_hash_inner(hashed_password: PasswordHash) -> ScramSha256Hash {
+fn scram256_hash_inner(hashed_password: PasswordHash) -> Result<ScramSha256Hash, HashError> {
     let signing_key = hmac::Key::new(hmac::HMAC_SHA256, &hashed_password.hash);
-    let client_key_tag = hmac::sign(&signing_key, b"Client Key");
-    let client_key = Zeroizing::new(client_key_tag.as_ref().to_vec());
-    let stored_key_digest = digest::digest(&digest::SHA256, &client_key);
+
+    // Sign into caller-owned zeroizing buffers rather than via `hmac::sign`.
+    // `hmac::sign` returns a `Copy` `Tag` with no `Drop`/`Zeroize`, which would
+    // leave a non-zeroized copy of the password-equivalent SCRAM client key on
+    // the stack after this function returns.
+    let mut client_key = Zeroizing::new([0u8; SHA256_OUTPUT_LEN]);
+    hmac::sign_to_buffer(&signing_key, b"Client Key", &mut *client_key)
+        .map_err(HashError::Crypto)?;
+    let stored_key_digest = digest::digest(&digest::SHA256, &*client_key);
     let mut stored_key = [0u8; SHA256_OUTPUT_LEN];
     stored_key.copy_from_slice(stored_key_digest.as_ref());
 
-    let server_key_tag = hmac::sign(&signing_key, b"Server Key");
     let mut server_key = Zeroizing::new([0u8; SHA256_OUTPUT_LEN]);
-    server_key.copy_from_slice(server_key_tag.as_ref());
+    hmac::sign_to_buffer(&signing_key, b"Server Key", &mut *server_key)
+        .map_err(HashError::Crypto)?;
 
-    ScramSha256Hash {
+    Ok(ScramSha256Hash {
         iterations: hashed_password.iterations,
         salt: hashed_password.salt,
         server_key: *server_key,
         stored_key,
-    }
+    })
 }
 
 fn hash_password_inner(
