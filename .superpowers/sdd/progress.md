@@ -223,10 +223,12 @@ Plan: docs/superpowers/plans/2026-07-02-eqsat-sp2b-slice4-const-eval-builtin.md.
 READ-FIRST verdict: (1) and_or_empty NOT redundant w/ and_single/or_single (arity 0 vs 1); overlaps const_fold (both fold And([])->true) but both in old engine + same literal = harmless, ship both per spec. Splits into and_empty/or_empty (fixed func). (2) Builtin hatch did NOT exist -> slice 4 introduces it. const_fold=builtin (PERMANENT SORRY), and_or_empty=declarative literal (provable). No semantic delta vs old rules.rs.
 DESIGN: Pat::Scalar{binding} matches any scalar CALL node (iterate 4 call syms Unary/Binary/Variadic/If); apply gets b.root=CLASS id (not node) -> const_eval scans class scalar nodes for foldable rep (sound by congruence). apply Err = silently skipped by both saturate loops (mirrors old return vec![]). Tmpl::Builtin{name,args} + Tmpl::SBool(bool). New eqsat/scalar_builtins.rs. Lean: opaque constEval + litB:Bool->ScalarExpr; const_fold thm = permanent sorry (marker `-- PERMANENT SORRY: RHS is a Rust builtin`), and/or_empty proved via simp. Taxonomy after slice: PERMANENT=1, PRE-EXISTING GAP=1 (filter_unionAll), provable-later=26. CI ci/test/lean-mir-rewrite.sh count 0->1.
 ## Tasks
-- [ ] Task 1: AST (Pat::Scalar, Tmpl::Builtin, Tmpl::SBool) + grammar
+- [x] Task 1: AST (Pat::Scalar, Tmpl::Builtin, Tmpl::SBool) + grammar
 - [ ] Task 2: eqsat/scalar_builtins.rs const_eval (class-level port)
 - [ ] Task 3: codegen Scalar-root iteration + Builtin/SBool emission + is_scalar_rule routing
 - [ ] Task 4: port const_fold/and_empty/or_empty to scalar.rewrite
 - [ ] Task 5: Lean opaque constEval+litB + emit arms + permanent sorry marker + CI count 1 (greens crate + AGGREGATE lake)
 - [ ] Task 6: differential corpus + parity (error-eval 1/0 negative control, mutation-tested)
 - [ ] Task 7: slice-4 gate (unit + differential + slt no-rewrite + aggregate lake green + PERMANENT=1)
+
+Task 1: complete (commit 08a6d4387e, review clean — Spec ✅ Quality Approved, 0 findings). Pat::Scalar/Tmpl::Builtin/Tmpl::SBool + grammar; reviewer built standalone chumsky harness, 7/7 tests pass, probed shadowing (truething->RelVar, Empty/Negate not shadowed by builtin catch-all). Build RED = expected 5 E0004 codegen (Task 3).
