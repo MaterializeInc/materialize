@@ -28,11 +28,11 @@ use itertools::Itertools;
 use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
-    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
-    ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
+    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
+    MonotonicPlan, ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
 };
 use mz_compute_types::plan::scalar::LirScalarExpr;
-use mz_expr::{AggregateExpr, AggregateFunc, EvalError, SafeMfpPlan};
+use mz_expr::{AggregateFunc, EvalError, SafeMfpPlan};
 use mz_ore::cast::CastLossy;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
@@ -364,7 +364,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     fn build_basic_aggregates<'s>(
         &self,
         input: VecCollection<'s, T, (Row, Row), Diff>,
-        aggrs: Vec<AggregateExpr>,
+        aggrs: Vec<LirAggregateExpr>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> (
@@ -473,7 +473,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         &self,
         input: VecCollection<'s, T, (Row, Row), Diff>,
         index: usize,
-        aggr: &AggregateExpr,
+        aggr: &LirAggregateExpr,
         validating: bool,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
@@ -482,7 +482,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         RowRowArrangement<'s, T>,
         Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) {
-        let AggregateExpr {
+        let LirAggregateExpr {
             func,
             expr: _,
             distinct,
