@@ -52,7 +52,7 @@ fn cond_is_color_exact(c: &Cond) -> bool {
         Cond::IsUniqueKey { .. } => false,
         // Scalar conds only ever guard scalar rules, which run exclusively in
         // the scalar saturate pass and never in the relational colored pass,
-        // so color-exactness never applies to them; the value is moot but
+        // so color-exactness never applies to them. The value is moot but
         // must be assigned for exhaustiveness.
         Cond::ScalarLitTrue { .. } => true,
         Cond::ScalarLitFalseOrNull { .. } => true,
