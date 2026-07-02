@@ -22,16 +22,14 @@
 <span class="fn-list__label">Function</span>
 <span class="fn-list__label">Description</span>
 </div>
-{{ $accents := slice "violet" "blue" "green" "orange" "pink" }}
-{{ range $i, $fn := .functions }}
-{{ $accent := index $accents (mod $i 5) }}
+{{ range $fn := .functions }}
 {{ $parts := split $fn.signature "(" }}
 {{ $name := index $parts 0 | strings.TrimSpace }}
 {{ $sigBody := "" }}
 {{ if gt (len $parts) 1 }}
   {{ $sigBody = printf "(%s" (index $parts 1) }}
 {{ end }}
-<dl class="fn-entry fn-entry--{{ $accent }}">
+<dl class="fn-entry">
 <dt class="fn-term {{if (not (isset $.Params 0))}}docsearch_l3{{end}}" id="{{ $name | urlize }}">
 <span class="fn-name">{{ $name }}</span>
 {{ if $sigBody }}

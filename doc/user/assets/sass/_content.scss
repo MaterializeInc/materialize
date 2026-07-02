@@ -812,16 +812,34 @@ p+p {
             text-transform: uppercase;
         }
 
-        > ul {
-            align-self: start;
-            display: block;
-            list-style: none;
-            margin: 0;
-            padding: 14px 16px 18px;
-        }
+        &__body {
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            min-height: 0;
+            padding: rem(1) rem(1.6) rem(1.2);
 
-        li {
-            margin: 0;
+            > :first-child {
+                margin-top: 0;
+            }
+
+            > p {
+                margin: 0;
+            }
+
+            ul {
+                list-style: none;
+                margin: 0;
+                padding: 0;
+            }
+
+            li {
+                margin: 0;
+
+                p {
+                    margin: 0;
+                }
+            }
         }
 
         // a:not(a[class]) to outrank the generic underlined content-link rule.
@@ -900,7 +918,7 @@ p+p {
     figure {
         @include docs-feature-card;
 
-        margin: var(--small) 0;
+        margin: var(--small) 0 var(--x-small);
         overflow: hidden;
         padding: var(--nano);
 
@@ -915,12 +933,33 @@ p+p {
     }
 
     figcaption {
-        padding: var(--nano) var(--milli);
-        font-size: var(--xsm);
-        font-weight: var(--weight-body);
+        border-top: 1px solid var(--docs-card-divider);
         color: var(--caption);
-        font-style: italic;
+        font-size: var(--xsm);
+        font-style: normal;
+        font-weight: var(--weight-body);
+        letter-spacing: 0.01em;
         line-height: var(--leading-body);
+        margin-top: rem(0.6);
+        padding: rem(0.7) var(--milli) rem(0.25);
+        text-align: center;
+
+        h4 {
+            color: inherit;
+            font-family: var(--font-body);
+            font-size: inherit;
+            font-weight: var(--weight-body-emphasis);
+            line-height: inherit;
+            margin: 0;
+        }
+
+        p {
+            margin: rem(0.25) 0 0;
+        }
+
+        > :first-child {
+            margin-top: 0;
+        }
     }
 
     .architecture-diagram-figure {
@@ -932,8 +971,7 @@ p+p {
 
         figcaption {
             margin-top: rem(0.6);
-            padding: 0;
-            text-align: center;
+            padding: rem(0.6) 0 0;
         }
     }
 
@@ -1163,10 +1201,10 @@ p+p {
             border-bottom: 1px solid var(--docs-card-divider);
             color: var(--table-text);
             font-family: var(--font-heading);
-            font-size: var(--xsm);
-            font-weight: 600;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+            font-size: var(--sm);
+            font-weight: var(--weight-heading);
+            letter-spacing: 0;
+            text-transform: none;
         }
 
         tbody th {
@@ -1281,10 +1319,10 @@ p+p {
             border-bottom: 1px solid var(--docs-card-divider);
             color: var(--table-text);
             font-family: var(--font-heading);
-            font-size: var(--xsm);
-            font-weight: 600;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+            font-size: var(--sm);
+            font-weight: var(--weight-heading);
+            letter-spacing: 0;
+            text-transform: none;
         }
 
         tbody th {
@@ -2443,6 +2481,9 @@ p+p {
     .tip {
         @include docs-admonition-theme("--sg-violet");
         @include docs-admonition-card;
+
+        --admonition-surface: color-mix(in srgb, var(--callout-accent-soft) 36%, var(--docs-card-inset, var(--card-light)));
+        --admonition-border: color-mix(in srgb, var(--callout-accent-border) 82%, var(--table-border, var(--divider-light)));
     }
 
     .warning,
@@ -2482,18 +2523,43 @@ p+p {
     .public-preview {
         font-size: rem(1.5);
         line-height: var(--leading-body);
+        color: var(--inline-lifted);
 
         .gutter {
+            align-items: center;
             color: var(--admonition-label);
-            display: block;
+            display: flex;
             font-family: var(--font-heading);
             font-size: var(--xsm);
             font-weight: var(--weight-heading);
+            gap: rem(0.75);
             letter-spacing: var(--tracking-eyebrow);
             line-height: 1.3;
-            margin: 0 0 rem(0.6);
+            margin: 0 0 rem(0.8);
             position: static;
             text-transform: uppercase;
+
+            .gutter-tile {
+                align-items: center;
+                background: linear-gradient(
+                    145deg,
+                    color-mix(in srgb, var(--callout-accent) 34%, transparent),
+                    color-mix(in srgb, var(--callout-accent) 14%, transparent)
+                );
+                border: 1px solid color-mix(in srgb, var(--callout-accent) 48%, transparent);
+                border-radius: rem(0.5);
+                box-shadow: 0 0 18px color-mix(in srgb, var(--callout-accent) 24%, transparent);
+                color: var(--admonition-label);
+                display: flex;
+                flex-shrink: 0;
+                height: 30px;
+                justify-content: center;
+                width: 30px;
+
+                svg {
+                    display: block;
+                }
+            }
         }
     }
 
@@ -2691,6 +2757,8 @@ p+p {
     }
 
     .nav-tabs {
+        align-content: flex-start;
+        align-items: flex-end;
         display: flex;
         flex-wrap: wrap;
         gap: rem(0.2);
@@ -2699,6 +2767,7 @@ p+p {
         overflow: visible;
         padding: 0;
         position: relative;
+        width: 100%;
     }
 
     .tab-content {
@@ -2719,9 +2788,15 @@ p+p {
     .nav-tabs li {
         background: transparent;
         border: 1px solid transparent;
+        border-radius: rem(0.5) rem(0.5) 0 0;
         flex-shrink: 0;
         margin: 0;
         padding: 0;
+        transition: background-color 0.15s ease;
+
+        &:hover:not(.active) {
+            background: color-mix(in srgb, var(--code-tabs-accent) 7%, transparent);
+        }
 
         a {
             color: var(--sub);
@@ -2746,13 +2821,29 @@ p+p {
         &.active {
             background: var(--code-tabs-surface);
             border-color: var(--code-tabs-border);
-            border-bottom: none;
-            border-radius: rem(0.5) rem(0.5) 0 0;
+            border-bottom: 1px solid transparent;
             position: relative;
             z-index: 2;
 
+            &.active-tab--join {
+                border-bottom: none;
+            }
+
+            // Accent line along the top edge of the active folder tab.
+            &::before {
+                background: var(--code-tabs-accent);
+                border-radius: 999px;
+                content: "";
+                height: 2px;
+                left: rem(0.5);
+                position: absolute;
+                right: rem(0.5);
+                top: -1px;
+                z-index: 3;
+            }
+
             // Bridges the tab bar divider so the active tab reads as connected to the content.
-            &::after {
+            &.active-tab--join::after {
                 background: var(--code-tabs-surface);
                 content: "";
                 height: var(--tab-join-overlap, 2px);
@@ -2766,6 +2857,28 @@ p+p {
             a {
                 color: color-mix(in srgb, var(--code-tabs-accent) 88%, var(--heading));
             }
+        }
+    }
+
+    .tab-pane > .code-tabs {
+        margin: rem(0.8) 0 0;
+    }
+
+    .code-tabs .code-tabs {
+        box-shadow: none;
+        margin: rem(0.8) 0 0;
+
+        .nav-tabs-bar {
+            padding: rem(0.45) rem(0.45) 0;
+        }
+
+        .nav-tabs li a {
+            font-size: rem(1.25);
+            padding: rem(0.45) rem(0.95);
+        }
+
+        .tab-pane {
+            padding: rem(1);
         }
     }
 
@@ -3157,17 +3270,25 @@ div.footnotes {
 
     font-size: var(--sm);
     margin-top: rem(3);
-    padding: rem(1.2) rem(1.4);
+    padding: rem(1) rem(1.25);
 
+    // Goldmark emits a leading <hr> as a footnotes separator. The card
+    // border already provides the separation, so the rule is just noise.
     hr {
-        border-top-color: var(--docs-card-divider);
-        margin: rem(1.2) 0;
-        width: 100%;
+        display: none;
     }
 
     ol {
         margin: 0;
         padding-left: rem(2);
+    }
+
+    li {
+        margin: 0;
+    }
+
+    p {
+        margin: 0;
     }
 
     li::marker {

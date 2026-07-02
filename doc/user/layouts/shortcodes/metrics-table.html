@@ -46,10 +46,8 @@ so empty groupings don't show up.
 <span class="metrics-list__label">Description</span>
 <span class="metrics-list__label">Labels</span>
 </div>
-{{ $accents := slice "violet" "blue" "green" "orange" "pink" }}
-{{- range $i, $metric := $metrics }}
-{{ $accent := index $accents (mod $i 5) }}
-<dl class="metrics-entry metrics-entry--{{ $accent }}">
+{{- range $metric := $metrics }}
+<dl class="metrics-entry">
 <dt class="metrics-term"><span class="metrics-name-pill"><code>{{ $metric.name }}</code></span></dt>
 <dd class="metrics-desc">{{ $metric.help }}</dd>
 <dd class="metrics-labels">

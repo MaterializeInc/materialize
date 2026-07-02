@@ -5,5 +5,7 @@
     {{ end }}
     <div class="title">{{ .Get "title" }}</div>
   </div>
-  {{ .Inner | $.Page.RenderString }}
+  <div class="linkbox__body">
+    {{ .Inner | $.Page.RenderString }}
+  </div>
 </div>

@@ -122,12 +122,7 @@ body.light .content .fn-list {
 }
 
 .content .fn-entry {
-    --fn-accent: var(--sg-violet);
-    --fn-accent-name: color-mix(in srgb, var(--fn-accent) 72%, var(--heading));
-    --fn-accent-soft: color-mix(in srgb, var(--fn-accent) 10%, var(--bg));
-    --fn-accent-border: color-mix(in srgb, var(--fn-accent) 20%, var(--divider-light));
-    --fn-accent-text: color-mix(in srgb, var(--fn-accent) 65%, var(--heading));
-    --fn-accent-highlight: color-mix(in srgb, var(--fn-accent) 54%, var(--sub));
+    --fn-accent: var(--sg-lavender-2);
 
     border-bottom: 1px solid var(--docs-card-divider);
     display: grid;
@@ -169,25 +164,7 @@ body.light .content .fn-list {
         }
     }
 
-    &--violet {
-        --fn-accent: var(--sg-violet);
-    }
-
-    &--blue {
-        --fn-accent: var(--table-blue);
-    }
-
-    &--green {
-        --fn-accent: var(--table-green);
-    }
-
-    &--orange {
-        --fn-accent: var(--table-orange);
-    }
-
-    &--pink {
-        --fn-accent: var(--orchid);
-    }
+    @include fn-list-accent-muted;
 
     > dt,
     > dd {
@@ -336,6 +313,10 @@ body.light .content .fn-sig-pill {
     );
 }
 
+body.light .content .fn-entry {
+    --fn-accent: var(--sg-lavender-4);
+}
+
 .content .fn-desc {
     code,
     em {
@@ -455,10 +436,7 @@ body.light .content .metrics-list {
 }
 
 .content .metrics-entry {
-    --metrics-accent: var(--sg-violet);
-    --metrics-accent-soft: color-mix(in srgb, var(--metrics-accent) 10%, var(--bg));
-    --metrics-accent-border: color-mix(in srgb, var(--metrics-accent) 20%, var(--divider-light));
-    --metrics-accent-text: color-mix(in srgb, var(--metrics-accent) 65%, var(--heading));
+    --metrics-accent: var(--sg-lavender-2);
 
     border-bottom: 1px solid var(--docs-card-divider);
     display: grid;
@@ -498,25 +476,7 @@ body.light .content .metrics-list {
         }
     }
 
-    &--violet {
-        --metrics-accent: var(--sg-violet);
-    }
-
-    &--blue {
-        --metrics-accent: var(--table-blue);
-    }
-
-    &--green {
-        --metrics-accent: var(--table-green);
-    }
-
-    &--orange {
-        --metrics-accent: var(--table-orange);
-    }
-
-    &--pink {
-        --metrics-accent: var(--orchid);
-    }
+    @include metrics-list-accent-muted;
 
     > dt,
     > dd {
@@ -641,6 +601,10 @@ body.light .content .metrics-name-pill {
 
 body.light .content .metrics-label-pill {
     background: color-mix(in srgb, var(--metrics-accent) 6%, var(--bg));
+}
+
+body.light .content .metrics-entry {
+    --metrics-accent: var(--sg-lavender-4);
 }
 
 .relative {

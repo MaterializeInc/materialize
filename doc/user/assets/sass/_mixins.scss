@@ -85,11 +85,7 @@
     position: relative;
 
     &::before {
-        background: linear-gradient(
-            180deg,
-            var(--callout-accent),
-            color-mix(in srgb, var(--callout-accent) 40%, transparent)
-        );
+        background: var(--callout-accent);
         bottom: 0;
         content: "";
         left: 0;
@@ -188,4 +184,68 @@
         $minor-step $minor-step,
         $minor-step $minor-step,
         $dot-step $dot-step;
+}
+
+// Muted accent treatment for fn-list and metrics-list rows.
+@mixin fn-list-accent-muted {
+    --fn-accent-name: color-mix(in srgb, var(--fn-accent) 52%, var(--heading));
+    --fn-accent-soft: color-mix(in srgb, var(--fn-accent) 5%, var(--bg));
+    --fn-accent-border: color-mix(in srgb, var(--fn-accent) 10%, var(--divider-light));
+    --fn-accent-text: color-mix(in srgb, var(--fn-accent) 42%, var(--heading));
+    --fn-accent-highlight: color-mix(in srgb, var(--fn-accent) 34%, var(--sub));
+
+    &::before {
+        background: color-mix(in srgb, var(--fn-accent) 14%, var(--divider-light));
+    }
+
+    &:hover::before {
+        background: color-mix(in srgb, var(--fn-accent) 26%, var(--divider-light));
+    }
+
+    &:hover .fn-sig-pill {
+        border-color: color-mix(in srgb, var(--fn-accent) 18%, var(--divider-light));
+        box-shadow: 0 2px 8px color-mix(in srgb, var(--fn-accent) 6%, transparent);
+    }
+
+    .fn-sig-pill {
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--fn-accent) 5%, var(--bg-sub)),
+            var(--fn-accent-soft) 58%,
+            color-mix(in srgb, var(--fn-accent) 4%, var(--bg))
+        );
+    }
+}
+
+// Muted accent treatment for metrics-list rows.
+@mixin metrics-list-accent-muted {
+    --metrics-accent-soft: color-mix(in srgb, var(--metrics-accent) 5%, var(--bg));
+    --metrics-accent-border: color-mix(in srgb, var(--metrics-accent) 10%, var(--divider-light));
+    --metrics-accent-text: color-mix(in srgb, var(--metrics-accent) 42%, var(--heading));
+
+    &::before {
+        background: color-mix(in srgb, var(--metrics-accent) 14%, var(--divider-light));
+    }
+
+    &:hover::before {
+        background: color-mix(in srgb, var(--metrics-accent) 26%, var(--divider-light));
+    }
+
+    &:hover .metrics-name-pill,
+    &:hover .metrics-label-pill {
+        border-color: color-mix(in srgb, var(--metrics-accent) 18%, var(--divider-light));
+    }
+
+    .metrics-name-pill {
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--metrics-accent) 5%, var(--bg-sub)),
+            var(--metrics-accent-soft) 58%,
+            color-mix(in srgb, var(--metrics-accent) 4%, var(--bg))
+        );
+    }
+
+    .metrics-label-pill {
+        background: color-mix(in srgb, var(--metrics-accent) 5%, var(--bg));
+    }
 }

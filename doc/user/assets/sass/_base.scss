@@ -714,5 +714,16 @@ select.version-dropdown {
     }
 }
 
-red { color: var(--code-red); }
-blue { color: var(--code-blue); }
+// Semantic prose markers used in the idiomatic-SQL pages: <red> flags
+// anti-pattern warnings, <blue> labels the recommended pattern. Softened
+// toward the text palette so full sentences stay readable, with a weight
+// bump so they read as labels rather than tinted body copy.
+red {
+    color: color-mix(in srgb, var(--code-red) 72%, var(--body));
+    font-weight: var(--weight-body-emphasis);
+}
+
+blue {
+    color: color-mix(in srgb, var(--code-blue) 72%, var(--heading));
+    font-weight: var(--weight-body-emphasis);
+}
