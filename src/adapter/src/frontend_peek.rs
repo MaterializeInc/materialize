@@ -414,13 +414,19 @@ impl PeekClient {
                 }
             }
             Plan::SideEffectingFunc(sef_plan) => {
-                // Fetch the authenticated role for the target connection so
+                // Look up the target connection's authenticated role, so that
                 // check_plan can perform RBAC for side-effecting functions.
-                let active_conns_role = match sef_plan {
+                //
+                // The RBAC check reflects the state at this point in time. A
+                // concurrent change to the issuer's role membership does not
+                // affect the already in-flight execution, similarly to how
+                // privilege changes don't affect other kinds of in-flight
+                // statements.
+                let target_conn = match sef_plan {
                     SideEffectingFunc::PgCancelBackend {
                         connection_id: Some(connection_id),
                     } => {
-                        self.call_coordinator(|tx| Command::GetConnectionAuthenticatedRole {
+                        self.call_coordinator(|tx| Command::LookupConnection {
                             connection_id: *connection_id,
                             tx,
                         })
@@ -430,6 +436,7 @@ impl PeekClient {
                         connection_id: None,
                     } => None,
                 };
+                let active_conns_role = target_conn.as_ref().map(|(_, role)| *role);
 
                 rbac::check_plan(
                     &conn_catalog,
@@ -449,6 +456,14 @@ impl PeekClient {
                         tx,
                     })
                     .await?;
+
+                // We held the target's `ConnectionId` handle from the RBAC
+                // check until the Coordinator executed the function, which
+                // prevented the raw connection ID from being reused by a new
+                // connection. So the connection the Coordinator acted on (if
+                // it found one) is the one whose role we checked above.
+                drop(target_conn);
+
                 return Ok(Some(response));
             }
             Plan::Subscribe(subscribe) => (QueryPlan::Subscribe(subscribe), ExplainContext::None),

@@ -2286,7 +2286,10 @@ impl Coordinator {
     /// Execute a side-effecting function from the frontend peek path.
     /// This is separate from `sequence_side_effecting_func` because it doesn't have an
     /// ExecuteContext. RBAC is checked by the caller via `rbac::check_plan` before
-    /// sending `Command::ExecuteSideEffectingFunc`.
+    /// sending `Command::ExecuteSideEffectingFunc`. The caller must hold the target
+    /// connection's `ConnectionId` handle from its RBAC check until this command
+    /// completes, so that the connection found in `active_conns` here (if any) is
+    /// the same one the check was performed against.
     ///
     /// TODO(peek-seq): Delete `sequence_side_effecting_func` after we delete the old peek
     /// sequencing.
@@ -2310,7 +2313,10 @@ impl Coordinator {
                     return Err(AdapterError::Canceled);
                 }
 
-                // check_plan already verified role membership.
+                // The caller verified role membership via rbac::check_plan and
+                // still holds the target's `ConnectionId` handle, so this entry
+                // (if present) is the same connection the check was performed
+                // against.
                 if let Some((id_handle, _conn_meta)) =
                     self.active_conns.get_key_value(&connection_id)
                 {

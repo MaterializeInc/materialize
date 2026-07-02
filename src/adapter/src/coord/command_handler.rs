@@ -541,12 +541,14 @@ impl Coordinator {
                     let result = self.execute_side_effecting_func(plan, conn_id).await;
                     let _ = tx.send(result);
                 }
-                Command::GetConnectionAuthenticatedRole { connection_id, tx } => {
-                    let role = self
-                        .active_conns
-                        .get_key_value(&connection_id)
-                        .map(|(_, meta)| *meta.authenticated_role_id());
-                    let _ = tx.send(role);
+                Command::LookupConnection { connection_id, tx } => {
+                    let conn =
+                        self.active_conns
+                            .get_key_value(&connection_id)
+                            .map(|(id_handle, meta)| {
+                                (id_handle.clone(), *meta.authenticated_role_id())
+                            });
+                    let _ = tx.send(conn);
                 }
                 Command::RegisterFrontendPeek {
                     uuid,

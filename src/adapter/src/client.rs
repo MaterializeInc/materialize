@@ -1376,7 +1376,7 @@ impl SessionClient {
                 | Command::CopyToPreflight { .. }
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
-                | Command::GetConnectionAuthenticatedRole { .. }
+                | Command::LookupConnection { .. }
                 | Command::RegisterFrontendPeek { .. }
                 | Command::UnregisterFrontendPeek { .. }
                 | Command::ExplainTimestamp { .. }
