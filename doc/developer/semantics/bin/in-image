@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# in-image — run a command inside the `mz-lean-semantics` Docker
+# image with the project's `Mz/` and `Mz.lean` bind-mounted.
+# Surfaces Mathlib's prebuilt oleans under `/workspace/.lake` so
+# probes can read Mathlib sources, the Mz library, or run lake.
+#
+# Examples:
+#   bin/in-image lake build
+#   bin/in-image lake env lean Mz/Collection.lean
+#   bin/in-image bash -c 'grep -n "def append" .lake/packages/mathlib/Mathlib/Data/Vector/Defs.lean'
+#
+# The script assumes the image is already built; run
+# `ci/test/lean-semantics.sh` once to build it.
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+semantics_dir="$(cd "$script_dir/.." && pwd)"
+image_tag="mz-lean-semantics:latest"
+
+if ! docker image inspect "$image_tag" >/dev/null 2>&1; then
+    echo "error: image $image_tag not found — run ci/test/lean-semantics.sh first" >&2
+    exit 1
+fi
+
+exec docker run --rm -i \
+    --user "$(id -u):$(id -g)" \
+    -v "$semantics_dir/Mz:/workspace/Mz" \
+    -v "$semantics_dir/Mz.lean:/workspace/Mz.lean" \
+    -w /workspace \
+    "$image_tag" \
+    "$@"
