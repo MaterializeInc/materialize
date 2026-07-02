@@ -31,3 +31,13 @@ Materialize natively supports the following SQL Server types:
 <li><code>datetimeoffset</code></li>
 <li><code>uniqueidentifier</code></li>
 </ul>
+
+#### `char` and `nchar` columns
+
+`char`, `nchar`, and `sysname` columns are replicated as `text` rather than a
+fixed-length `character(n)`. SQL Server sizes these types in **bytes**, while
+Materialize's `character(n)` type is sized in **characters**. Under a multi-byte
+collation (for example a UTF-8 collation, or a double-byte code page) a single
+character can occupy more than one byte, so the upstream byte length is not a
+usable character count. Materialize therefore preserves the value exactly as
+SQL Server returns it, including SQL Server's trailing space padding.
