@@ -40,3 +40,22 @@ rule not_demorgan_or {
     doc "Not(Or(xs...)) = And(Not(xs)...)"
     Unary[not](Variadic[or](xs...)) => Variadic[and](map(Unary[not](_), xs))
 }
+
+# A constant-true condition selects the then-branch.
+rule if_true {
+    doc "If(true, t, e) = t"
+    If(c, t, e) => t where scalar_lit_true(c)
+}
+
+# A constant-false or null condition selects the else-branch.
+rule if_false_or_null {
+    doc "If(false|null, t, e) = e"
+    If(c, t, e) => e where scalar_lit_false_or_null(c)
+}
+
+# Identical branches collapse when the condition cannot error. The repeated `x`
+# binds then and els to the same e-class (enforced by codegen's guard).
+rule if_same_branches {
+    doc "If(c, x, x) = x  when c cannot error"
+    If(c, x, x) => x where scalar_no_error(c)
+}
