@@ -543,7 +543,8 @@ impl Coordinator {
                 }
                 Plan::DiscardAll => {
                     let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
-                        self.clear_transaction(ctx.session_mut()).await;
+                        let (_, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
+                        ctx.delay_response_until(retire_notify);
                         self.drop_temp_items(ctx.session().conn_id()).await;
                         ctx.session_mut().reset();
                         Ok(ExecuteResponse::DiscardedAll)

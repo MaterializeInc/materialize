@@ -2206,26 +2206,17 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         We explicitly don't check the `GlobalId`, as how that is
         allocated is an implementation detail and might change in the
         future.
-
-        The `mz_subscriptions` row is written in the background (not committed
-        synchronously when the SUBSCRIBE starts or stops), so we let testdrive
-        retry the query until the table reflects the expected state.
         """
-        expected_rows = "".join(
-            f"{role} {cluster} {table}\n" for role, cluster, table in expected
-        )
-        c.testdrive(
-            args=["--no-reset"],
-            input=dedent("""
-                > SELECT r.name, c.name, t.name
-                  FROM mz_internal.mz_subscriptions s
-                    JOIN mz_internal.mz_sessions e ON (e.id = s.session_id)
-                    JOIN mz_roles r ON (r.id = e.role_id)
-                    JOIN mz_clusters c ON (c.id = s.cluster_id)
-                    JOIN mz_tables t ON (t.id = s.referenced_object_ids[1])
-                  ORDER BY s.created_at
-                """) + expected_rows,
-        )
+        output = c.sql_query("""
+            SELECT r.name, c.name, t.name
+            FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_sessions e ON (e.id = s.session_id)
+              JOIN mz_roles r ON (r.id = e.role_id)
+              JOIN mz_clusters c ON (c.id = s.cluster_id)
+              JOIN mz_tables t ON (t.id = s.referenced_object_ids[1])
+            ORDER BY s.created_at
+            """)
+        assert output == expected, f"expected: {expected}, got: {output}"
 
     subscribe1 = start_subscribe("t1", "quickstart")
     check_mz_subscriptions([("materialize", "quickstart", "t1")])

@@ -772,7 +772,10 @@ impl Coordinator {
 
     /// Cancels all active compute sinks for the identified connection.
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn cancel_compute_sinks_for_conn(&mut self, conn_id: &ConnectionId) {
+    pub(crate) async fn cancel_compute_sinks_for_conn(
+        &mut self,
+        conn_id: &ConnectionId,
+    ) -> BuiltinTableAppendNotify {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
     }
@@ -793,7 +796,7 @@ impl Coordinator {
         &mut self,
         conn_id: &ConnectionId,
         reason: ActiveComputeSinkRetireReason,
-    ) {
+    ) -> BuiltinTableAppendNotify {
         let drop_sinks = self
             .active_conns
             .get_mut(conn_id)
@@ -802,8 +805,7 @@ impl Coordinator {
             .iter()
             .map(|sink_id| (*sink_id, reason.clone()))
             .collect();
-        let retire_notify = self.retire_compute_sinks(drop_sinks).await;
-        drop(retire_notify);
+        self.retire_compute_sinks(drop_sinks).await
     }
 
     /// Cleans pending cluster reconfiguraiotns for the identified connection

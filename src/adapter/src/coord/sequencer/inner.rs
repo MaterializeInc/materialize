@@ -2206,7 +2206,8 @@ impl Coordinator {
         ctx: &mut ExecuteContext,
         action: EndTransactionAction,
     ) -> Result<(Option<TransactionOps>, Option<WriteLocks>), AdapterError> {
-        let txn = self.clear_transaction(ctx.session_mut()).await;
+        let (txn, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
+        ctx.delay_response_until(retire_notify);
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guards) = txn.into_ops_and_lock_guard() {

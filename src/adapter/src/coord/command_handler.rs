@@ -345,7 +345,8 @@ impl Coordinator {
                         .await;
                     // Part of the Command::Commit contract is that the Coordinator guarantees that
                     // it has cleared its transaction state for the connection.
-                    self.clear_connection(&conn_id).await;
+                    let retire_notify = self.clear_connection(&conn_id).await;
+                    drop(retire_notify);
                 }
 
                 Command::CatalogSnapshot { tx } => {
@@ -1930,7 +1931,8 @@ impl Coordinator {
 
         self.cancel_pending_peeks(&conn_id);
         self.cancel_pending_watchsets(&conn_id);
-        self.cancel_compute_sinks_for_conn(&conn_id).await;
+        let retire_notify = self.cancel_compute_sinks_for_conn(&conn_id).await;
+        drop(retire_notify);
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
             .await;
         self.cancel_pending_copy(&conn_id);
@@ -1955,7 +1957,8 @@ impl Coordinator {
 
         // We do not need to call clear_transaction here because there are no side effects to run
         // based on any session transaction state.
-        self.clear_connection(&conn_id).await;
+        let retire_notify = self.clear_connection(&conn_id).await;
+        drop(retire_notify);
 
         self.drop_temp_items(&conn_id).await;
         // Only call catalog_mut() if a temporary schema actually exists for this connection.

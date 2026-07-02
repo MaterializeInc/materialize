@@ -204,21 +204,34 @@ impl Coordinator {
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    pub(crate) async fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
+    ///
+    /// Returns a notify that resolves once any `mz_subscriptions` retractions
+    /// caused by cleanup are durable.
+    pub(crate) async fn clear_transaction(
+        &mut self,
+        session: &mut Session,
+    ) -> (TransactionStatus, BuiltinTableAppendNotify) {
         // This function is *usually* called when transactions end, but it can fail to be called in
         // some cases (for example if the session's role id was dropped, then we return early and
         // don't go through the normal sequence_end_transaction path). The `Command::Commit` handler
         // and `AdapterClient::end_transaction` protect against this by each executing their parts
         // of this function. Thus, if this function changes, ensure that the changes are propogated
         // to either of those components.
-        self.clear_connection(session.conn_id()).await;
-        session.clear_transaction()
+        let retire_notify = self.clear_connection(session.conn_id()).await;
+        (session.clear_transaction(), retire_notify)
     }
 
     /// Clears coordinator state for a connection.
-    pub(crate) async fn clear_connection(&mut self, conn_id: &ConnectionId) {
+    ///
+    /// Returns a notify that resolves once any `mz_subscriptions` retractions
+    /// caused by cleanup are durable.
+    pub(crate) async fn clear_connection(
+        &mut self,
+        conn_id: &ConnectionId,
+    ) -> BuiltinTableAppendNotify {
         self.connection_cancel_watches.remove(conn_id);
-        self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Finished)
+        let retire_notify = self
+            .retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Finished)
             .await;
         self.retire_cluster_reconfigurations_for_conn(conn_id).await;
 
@@ -243,6 +256,8 @@ impl Coordinator {
                 let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
             }
         }
+
+        retire_notify
     }
 
     /// Adds coordinator bookkeeping for an active compute sink.
