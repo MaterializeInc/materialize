@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use base64::prelude::*;
 use maplit::btreeset;
@@ -153,6 +154,7 @@ pub(crate) async fn migrate(
         ast_rewrite_create_sink_partition_strategy(stmt)?;
         ast_rewrite_sql_server_constraints(stmt)?;
         ast_rewrite_add_missing_index_ids(tx, stmt)?;
+        ast_rewrite_kafka_metadata_refresh_intervals(stmt)?;
         Ok(())
     })?;
 
@@ -1036,6 +1038,69 @@ fn ast_rewrite_add_missing_index_ids(
     };
 
     stmt.on_name = mz_sql::ast::RawItemName::Id(item_id.to_string(), unresolved_name, None);
+
+    Ok(())
+}
+
+fn ast_rewrite_kafka_metadata_refresh_intervals(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{
+        CreateSinkConnection, CreateSourceConnection, KafkaSinkConfigOptionName,
+        KafkaSourceConfigOptionName, Value, WithOptionValue,
+    };
+    use mz_sql::plan::TryFromValue;
+    // A user can persist the interval either as a string literal
+    // (`WithOptionValue::Value`) or, if they wrote it as a double-quoted
+    // value, as a lexed identifier (`WithOptionValue::UnresolvedItemName`).
+    // Both shapes must be handled here.
+    let interval: Option<&mut WithOptionValue<Raw>> = match stmt {
+        Statement::CreateSource(stmt) => {
+            if let CreateSourceConnection::Kafka { options, .. } = &mut stmt.connection {
+                options.iter_mut().find_map(|option| {
+                    if matches!(
+                        option.name,
+                        KafkaSourceConfigOptionName::TopicMetadataRefreshInterval
+                    ) {
+                        option.value.as_mut()
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        }
+        Statement::CreateSink(stmt) => {
+            if let CreateSinkConnection::Kafka { options, .. } = &mut stmt.connection {
+                options.iter_mut().find_map(|option| {
+                    if matches!(
+                        option.name,
+                        KafkaSinkConfigOptionName::TopicMetadataRefreshInterval
+                    ) {
+                        option.value.as_mut()
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    let Some(interval) = interval else {
+        return Ok(());
+    };
+
+    let interval_dur = Duration::try_from_value(interval.clone()).map_err(|e| {
+        anyhow::anyhow!("invalid value for kafka metadata refresh interval: {interval:?}: {e}")
+    })?;
+
+    if interval_dur < Duration::from_secs(1) {
+        *interval = WithOptionValue::Value(Value::String("1s".to_string()));
+    }
 
     Ok(())
 }
