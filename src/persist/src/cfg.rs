@@ -10,6 +10,8 @@
 //! Configuration for [crate::location] implementations.
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,10 +25,6 @@ use mz_postgres_client::PostgresClientKnobs;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
-/// Minimum DEK rotation interval in seconds. Prevents accidental tight-loop
-/// rotation that would flood KMS with `GenerateDataKey` calls.
-const MIN_DEK_ROTATION_SECS: u64 = 60;
-
 use crate::crypto::{BlobEncryptionConfig, EncryptedBlob, EncryptedConsensus, EncryptionConfig};
 use crate::file::{FileBlob, FileBlobConfig};
 use crate::hedge::HedgeSibling;
@@ -35,6 +33,10 @@ use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3Blob, S3BlobConfig};
+
+/// Minimum DEK rotation interval in seconds. Prevents accidental tight-loop
+/// rotation that would flood KMS with `GenerateDataKey` calls.
+const MIN_DEK_ROTATION_SECS: u64 = 60;
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
@@ -144,12 +146,20 @@ impl BlobConfig {
                 let blob: Arc<dyn Blob> = Arc::new(S3Blob::open(config).await?);
                 match encryption {
                     None => Ok(blob),
+                    // NOTE: The construction future is boxed and type-erased
+                    // because the AWS config loader and KMS client futures it
+                    // awaits have deeply nested types. Inlined, they inflate
+                    // the async state machine layout of every transitive
+                    // caller, overflowing rustc's recursion limit in
+                    // downstream crates.
                     Some(enc_cfg) => {
-                        let kms_client = enc_cfg.build_kms_client().await?;
-                        let customer_kms_client = enc_cfg.build_customer_kms_client().await?;
-                        let customer_kms_key_id = enc_cfg.customer_kms_key_id.clone();
-                        Ok(Arc::new(
-                            EncryptedBlob::new(
+                        let wrap: Pin<
+                            Box<dyn Future<Output = Result<Arc<dyn Blob>, ExternalError>> + Send>,
+                        > = Box::pin(async move {
+                            let kms_client = enc_cfg.build_kms_client().await?;
+                            let customer_kms_client = enc_cfg.build_customer_kms_client().await?;
+                            let customer_kms_key_id = enc_cfg.customer_kms_key_id.clone();
+                            let blob = EncryptedBlob::new(
                                 blob,
                                 kms_client,
                                 enc_cfg.kms_key_id,
@@ -157,8 +167,11 @@ impl BlobConfig {
                                 customer_kms_client,
                                 customer_kms_key_id,
                             )
-                            .await?,
-                        ))
+                            .await?;
+                            let blob: Arc<dyn Blob> = Arc::new(blob);
+                            Ok(blob)
+                        });
+                        wrap.await
                     }
                 }
             }
@@ -361,12 +374,19 @@ impl ConsensusConfig {
                     Arc::new(PostgresConsensus::open(config).await?);
                 match encryption {
                     None => Ok(consensus),
+                    // NOTE: Boxed and type-erased for the same reason as the
+                    // encrypted arm of [BlobConfig::open].
                     Some(enc_cfg) => {
-                        let kms_client = enc_cfg.build_kms_client().await?;
-                        let customer_kms_client = enc_cfg.build_customer_kms_client().await?;
-                        let customer_kms_key_id = enc_cfg.customer_kms_key_id.clone();
-                        Ok(Arc::new(
-                            EncryptedConsensus::new(
+                        let wrap: Pin<
+                            Box<
+                                dyn Future<Output = Result<Arc<dyn Consensus>, ExternalError>>
+                                    + Send,
+                            >,
+                        > = Box::pin(async move {
+                            let kms_client = enc_cfg.build_kms_client().await?;
+                            let customer_kms_client = enc_cfg.build_customer_kms_client().await?;
+                            let customer_kms_key_id = enc_cfg.customer_kms_key_id.clone();
+                            let consensus = EncryptedConsensus::new(
                                 consensus,
                                 kms_client,
                                 enc_cfg.kms_key_id,
@@ -374,8 +394,11 @@ impl ConsensusConfig {
                                 customer_kms_client,
                                 customer_kms_key_id,
                             )
-                            .await?,
-                        ))
+                            .await?;
+                            let consensus: Arc<dyn Consensus> = Arc::new(consensus);
+                            Ok(consensus)
+                        });
+                        wrap.await
                     }
                 }
             }
