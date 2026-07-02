@@ -1,0 +1,154 @@
+# Invariants
+
+A correctness-under-chaos test framework: multi-threaded scenarios whose
+invariants hold no matter which concurrent operations succeed, fail, or end up
+in an unknown state, checked *continuously* while toxiproxy cuts connections and
+processes are killed, and strictly again after healing.
+
+## Why another workload
+
+The trick is picking invariants that are **outcome-independent**. A bank
+transfer debits one account and credits another, so the grand total is
+conserved whether the transfer committed, was rejected, or timed out with an
+unknown outcome. That is what makes it safe to assert exact results *during* a
+disruption, rather than waiting for quiescence and comparing against an oracle
+that chaos has invalidated.
+
+| | catches | verifies results |
+|---|---|---|
+| parallel-workload | panics, unexpected errors | no result oracle |
+| zippy | wrong results, single-threaded | after quiescing |
+| **invariants** | **wrong results, lost/duplicated writes** | **continuously, under disruption** |
+
+## How a run works
+
+1. **setup**: create the objects, record the oracle's starting point.
+2. **chaos** (`--runtime`, default 600s): worker threads issue writes, checker
+   threads verify invariants, the disruptor injects/heals, the agitator flips
+   feature flags and cancels connections. Any checker failure fails the run
+   immediately.
+3. **heal**: every disruption is removed, with retries.
+4. **converge**: wait for all data paths to catch up.
+5. **final check**: strict assertions, plus a vacuity check: every checker and
+   the workers must have made progress in *both halves* of the chaos phase, and
+   the disruptor and agitator must have acted. A thread that wedges midway, or a
+   run where nothing was ever disrupted, fails instead of passing silently.
+
+Each thread draws its own seeded RNG in a fixed order, so `--seed` reproduces
+the whole action/disruption sequence.
+
+## What gets disrupted
+
+Toxiproxy fronts each *leg*: persist consensus (metadata store), persist blob,
+`envd`<->`clusterd` storagectl/computectl, and the source/sink/registry
+connections. Disruptions are `disable`, `latency`, `timeout`, `limit_data` and
+`bandwidth`, applied to one direction only so half are asymmetric. On top of
+that the disruptor SIGKILLs and SIGSTOPs `environmentd` and the `clusterd`
+processes, deliberately overlapping process kills with leg cuts and following
+some heals with an immediate kill, since the post-heal window is where recovery
+bugs live. Outages are capped per leg (a metadata cut must stay well under the
+15-minute persist lease expiry). Coverage is reported at the end, and a
+deterministic first sweep guarantees no leg goes untouched by RNG accident.
+
+`--upgrade-from=<image>` starts on an older release and swaps in the current
+build at the chaos midpoint: an upgrade under concurrent load *and* disruptions,
+with the invariants never pausing.
+
+## Scenarios
+
+| `--scenario` | invariant |
+|---|---|
+| `table-bank` | conserved total across tables, MVs, indexes, temporal filters, `REFRESH EVERY`, a far-future refresh frontier, schema swaps, replacement MVs, `COPY TO`/`FROM` |
+| `pg-cdc-bank`, `mysql-cdc-bank`, `sqlserver-cdc-bank` | the same conserved total, written upstream and replicated in, plus upstream DDL and real-time recency |
+| `kafka-ledger` | append-only Kafka ledger sums to the produced total |
+| `kafka-upsert` | last value per key wins under retractions |
+| `sink-roundtrip` | sink out, source back in, must equal the original |
+| `webhook-set` | every accepted webhook body appears exactly once |
+| `avro-loopback` | Avro/CSR encode-decode preserves every row |
+
+`--complexity=low|medium|high` scales workers, disruption frequency and
+concurrency. `--no-disruptions` runs the same workload and checkers clean, which
+is how you tell a product bug from a chaos artifact.
+
+## Read-path coverage
+
+The same invariant is verified through deliberately different plans and
+protocols, because a wrong answer usually only shows up in one of them: one-shot
+peeks (maintained MV, ad-hoc over base tables, and result-equivalent joins,
+window functions, recursive CTEs and LATERAL subqueries), `SUBSCRIBE` with
+`PROGRESS` (both fresh and resumed from a durable timestamp), read-only
+transaction snapshots, `AS OF` time travel into retained history, `COPY TO`
+export, and a post-run audit that replays the entire retained history and
+validates every progress boundary, retroactively closing the rounds live
+checkers had to skip during outages. Reads rotate over isolation levels, since a
+timestamp-free invariant must hold under all of them.
+
+## What the checkers assert
+
+A conserved total is safe to assert mid-disruption, which is what makes
+continuous checking possible, but on its own it is a one-dimensional projection:
+transfers are balanced pairs, so only a *torn* pair breaks the sum, and that is
+the one thing atomic batch commit already prevents. So the oracles go past it,
+while staying outcome-independent:
+
+- **row-level identity**, continuously. Every op id in a bounded window of the
+  newest ops must have exactly its two rows summing to zero, its derived columns
+  must match its op id, committed ops must be present, ops never issued must not
+  be, and an op observed once must never be absent again. A lost transfer masked
+  by a duplicated one, a rewritten row, or a resurrected retraction all keep the
+  count and the sum intact and are only visible here.
+- **the change stream itself**, via a snapshot-free `SUBSCRIBE` whose cost is
+  independent of table size. The ledger is append-only, so any retraction is a
+  bug outright, even the ones that cancel against their insert and leave the
+  folded state looking correct.
+- **read-your-writes**, on the writer's own session right after a commit. No
+  timestamp-free invariant covers it, and it is what a stale read breaks first.
+- **predicate results, recomputed**. An aggregate with a predicate lets persist
+  skip parts by their statistics, and getting that wrong is silent: the answer is
+  just too small. The same predicate is re-evaluated on the client over the rows
+  the same transaction returns, so the two must agree.
+- **the write timestamp a read-then-write chooses**. A selection over a
+  materialized view whose next refresh is a millennium out reports a frontier
+  that far ahead, while the table being written is near the clock. The timestamp
+  must still come from the oracle, which is clamped to the clock. Taking it from
+  that frontier ratchets the monotone, durable oracle into the future, so every
+  later write and strict-serializable read blocks until the clock catches up,
+  and under `serializable` an acknowledged write is simply invisible. A standing
+  checker compares `mz_now()` against the wall clock, and since that query reads
+  no collection it answers in exactly the state where every other read blocks.
+
+The ledger carries the values those oracles need in order to be able to fail: a
+numeric mirror of each amount (its own encoding and scale handling), a tag
+derived from the op id (so each row is checkable alone), floats covering NaN,
+negative zero, the infinities and a denormal, and a nullable date. Predicates
+over the last two are what pull filter pushdown onto the checked path.
+
+## Findings so far
+
+Each finding has a concentrated reproducer, selectable via `--scenario`:
+
+- [PER-10](https://linear.app/materializeinc/issue/PER-10): persist GC panic,
+  earliest state without rollup (`repro-per10`)
+- [PER-31](https://linear.app/materializeinc/issue/PER-31): unbounded clusterd
+  memory while the blob store is cut (`repro-blob-memory`)
+- [PER-32](https://linear.app/materializeinc/issue/PER-32): writes stalled long
+  after a metadata cut healed (`repro-postheal-stall`)
+- [PER-49](https://linear.app/materializeinc/issue/PER-49): compute halts
+  hydrating a dataflow past its `as_of` (`repro-compute-asof`)
+- [SS-428](https://linear.app/materializeinc/issue/SS-428): adding a table to a
+  running Postgres source pins the source's frontier until the replay that
+  follows has caught up, and the persist sink holds every update of that replay
+  resident because it can commit none of them (`repro-storage-memory`)
+- not yet filed: a resumed `SUBSCRIBE` loses its carried state
+  (`repro-durable-resume`)
+
+## Running it
+
+```shell
+bin/mzcompose --find invariants run default --scenario=table-bank --runtime=120
+bin/mzcompose --find invariants run default --scenario=repro-postheal-stall
+```
+
+Wired into Nightly as 11 steps (one per scenario, plus a large `table-bank` and
+the upgrade-under-load variant). Every failure annotation carries the exact
+reproducer command, and the run log opens with the random seed that replays it.
