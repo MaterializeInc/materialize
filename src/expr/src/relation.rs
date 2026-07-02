@@ -3611,12 +3611,10 @@ impl RowSetFinishing {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
     ) -> Result<(RowCollectionIter, usize), String> {
-        // How much additional memory is required to make a sorted view.
-        let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
-        let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
-
-        // Bail if creating the sorted view would require us to use too much memory.
-        if required_memory > usize::cast_from(max_result_size) {
+        // Bail if the already-materialized collection is larger than the cap.
+        // `byte_len` includes the per-row offset metadata, and finishing does
+        // not allocate any additional per-entry structure.
+        if rows.byte_len() > usize::cast_from(max_result_size) {
             let max_bytes = ByteSize::b(max_result_size);
             return Err(format!("result exceeds max size of {max_bytes}",));
         }
@@ -3724,12 +3722,10 @@ impl RowSetFinishingIncremental {
         rows: RowCollection,
         max_result_size: u64,
     ) -> Result<RowCollectionIter, String> {
-        // How much additional memory is required to make a sorted view.
-        let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
-        let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
-
-        // Bail if creating the sorted view would require us to use too much memory.
-        if required_memory > usize::cast_from(max_result_size) {
+        // Bail if the already-materialized collection is larger than the cap.
+        // `byte_len` includes the per-row offset metadata, and finishing does
+        // not allocate any additional per-entry structure.
+        if rows.byte_len() > usize::cast_from(max_result_size) {
             let max_bytes = ByteSize::b(max_result_size);
             return Err(format!("total result exceeds max size of {max_bytes}",));
         }
