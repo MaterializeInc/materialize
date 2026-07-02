@@ -309,7 +309,7 @@ class AlterIcebergSinkMv(Check):
                   USING AWS CONNECTION aws_conn
                   KEY (a) NOT ENFORCED
                   MODE UPSERT
-                  WITH (COMMIT INTERVAL '1s');
+                  WITH (COMMIT INTERVAL '10s');
                 """))
 
     def manipulate(self) -> list[Testdrive]:
@@ -390,7 +390,7 @@ class AlterIcebergSinkWebhook(Check):
                   USING AWS CONNECTION aws_conn
                   KEY (body) NOT ENFORCED
                   MODE UPSERT
-                  WITH (COMMIT INTERVAL '1s');
+                  WITH (COMMIT INTERVAL '10s');
                 $ webhook-append database=materialize schema=public name=iceberg_webhook_alter1
                 1
                 """))
@@ -468,7 +468,7 @@ class AlterIcebergSinkOrder(Check):
                   USING AWS CONNECTION aws_conn
                   KEY (x, y) NOT ENFORCED
                   MODE UPSERT
-                  WITH (COMMIT INTERVAL '1s');
+                  WITH (COMMIT INTERVAL '10s');
                 > INSERT INTO iceberg_table_alter_order1 VALUES (0, 'a')
                 """))
 
