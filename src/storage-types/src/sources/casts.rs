@@ -20,6 +20,14 @@
 //! to error variants, error messages, or output types are **breaking changes**
 //! for storage and require a migration.
 //!
+//! NOTE: `CastStringToOid` is a deliberate exception. `strconv::parse_oid` was
+//! widened to accept the full `u32` range, so text in `2147483648..=4294967295`
+//! now casts to a value instead of erroring. A source that ingested such a value
+//! as an error under an older release and then retracts it after upgrading will
+//! leave that error unretracted. This was accepted without a migration because
+//! ingesting `oid` columns is rare, and an errored source is recreated (which
+//! resnapshots with the corrected cast) rather than kept around across upgrades.
+//!
 //! The eval implementations delegate to `mz_repr::strconv::parse_*` functions,
 //! which in turn depend on these external crates:
 //!
@@ -1128,11 +1136,13 @@ mod tests {
         #[mz_ore::test]
         fn parity_oid() {
             use mz_expr::func::CastStringToOid;
+            // Cover the full u32 range that both casts accept, including values
+            // above i32::MAX and the negative reinterpretation.
             assert_parity(
                 "Oid",
                 CastFunc::CastStringToOid,
                 UnaryFunc::CastStringToOid(CastStringToOid),
-                &["42", "0", "bad", ""],
+                &["42", "0", "2147483648", "4294967295", "-1", "bad", ""],
             );
         }
 
