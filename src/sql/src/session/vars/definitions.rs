@@ -974,7 +974,8 @@ pub static PG_SOURCE_TCP_KEEPALIVES_INTERVAL: VarDefinition = VarDefinition::new
     "Sets the time interval between TCP keepalive probes when connecting to PG via \
         replication (Materialize).",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// Sets the TCP user timeout when connecting to PG via `mz_postgres_util`.
 pub static PG_SOURCE_TCP_USER_TIMEOUT: VarDefinition = VarDefinition::new(
@@ -1061,7 +1062,8 @@ pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     value!(Duration; mz_ssh_util::tunnel::DEFAULT_CHECK_INTERVAL),
     "Controls the check interval for connections to SSH bastions via `mz_ssh_util`.",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
@@ -1069,7 +1071,8 @@ pub static SSH_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
     value!(Duration; mz_ssh_util::tunnel::DEFAULT_CONNECT_TIMEOUT),
     "Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// Controls the keepalive idle interval for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_KEEPALIVES_IDLE: VarDefinition = VarDefinition::new(
@@ -1193,7 +1196,8 @@ pub static STORAGE_STATISTICS_INTERVAL: VarDefinition = VarDefinition::new(
     "The interval to submit statistics to `mz_source_statistics_per_worker` \
         and `mz_sink_statistics` (Materialize).",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// The interval to collect statistics for `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker` in
 /// clusterd. Controls the accuracy of metrics.
@@ -1204,7 +1208,8 @@ pub static STORAGE_STATISTICS_COLLECTION_INTERVAL: VarDefinition = VarDefinition
         and `mz_sink_statistics_per_worker` in clusterd. Controls the accuracy of metrics \
         (Materialize).",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 pub static STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS: VarDefinition = VarDefinition::new(
     "storage_record_source_sink_namespaced_errors",
@@ -1532,7 +1537,8 @@ pub mod grpc_client {
         value!(Duration; Duration::from_secs(3)),
         "Idle time to wait before sending HTTP/2 PINGs to maintain established gRPC client connections.",
         false,
-    );
+    )
+    .with_constraint(&NON_ZERO_DURATION);
 
     pub static HTTP2_KEEP_ALIVE_TIMEOUT: VarDefinition = VarDefinition::new(
         "grpc_client_http2_keep_alive_timeout",
@@ -1633,7 +1639,8 @@ pub mod cluster_scheduling {
         value!(Duration; DEFAULT_CLUSTER_ALTER_CHECK_READY_INTERVAL),
         "How often to poll readiness checks for cluster alter",
         false,
-    );
+    )
+    .with_constraint(&NON_ZERO_DURATION);
 
     const DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL: Duration = Duration::from_secs(3);
 
