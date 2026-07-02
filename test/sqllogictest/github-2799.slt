@@ -20,7 +20,7 @@ Explained Query:
   Project (#0{f1}, #2{f2}) // { arity: 2 }
     Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
       implementation
-        %1:t1[#0]K » %0[#0]UKA
+        %1:t1[#0{f1}]K » %0[#0{f1}]UKA
       ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
         Distinct project=[#0{f1}] // { arity: 1 }
           Project (#0{f1}) // { arity: 1 }

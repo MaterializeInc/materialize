@@ -237,7 +237,7 @@ Explained Query:
         Filter (#0{r} > coalesce(#4{max}, 0)) // { arity: 5 }
           Join on=(#1 = #3{symb}) type=differential // { arity: 5 }
             implementation
-              %1[#0]UK » %0:l0[#1]K
+              %1[#0{symb}]UK » %0:l0[#1]K
             ArrangeBy keys=[[#1]] // { arity: 3 }
               Project (#0, #3, #4) // { arity: 3 }
                 Map (("-" = substr(#1{string}, char_length(#1{string}))), case when #2 then substr(#1{string}, 1, (char_length(#1{string}) - 1)) else substr(#1{string}, 1, (char_length(#1{string}) - 2)) end, case when #2 then 0 else text_to_integer(substr(#1{string}, char_length(#1{string}))) end) // { arity: 5 }
@@ -284,7 +284,7 @@ Explained Query:
             Map ((#1) IS NULL) // { arity: 6 }
               Join on=(#1 = #3{symb}) type=differential // { arity: 5 }
                 implementation
-                  %1[#0]UK » %0:l4[#1]K
+                  %1[#0{symb}]UK » %0:l4[#1]K
                 ArrangeBy keys=[[#1]] // { arity: 3 }
                   Get l4 // { arity: 3 }
                 ArrangeBy keys=[[#0{symb}]] // { arity: 2 }
@@ -367,7 +367,7 @@ Explained Query:
             Project (#0, #1, #5{count}) // { arity: 3 }
               Join on=(#0 = #3{hash} AND #2{min} = #4{min}) type=differential // { arity: 6 }
                 implementation
-                  %1[#0, #1]UKK » %0:l12[#0, #2]KK
+                  %1[#0{hash}, #1{min}]UKK » %0:l12[#0, #2{min}]KK
                 ArrangeBy keys=[[#0, #2{min}]] // { arity: 3 }
                   Get l12 // { arity: 3 }
                 ArrangeBy keys=[[#0{hash}, #1{min}]] // { arity: 3 }

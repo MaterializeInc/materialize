@@ -277,7 +277,7 @@ Explained Query:
           Project (#2{min}) // { arity: 1 }
             Join on=(#0{c} = #3{max} AND #1{c} = #4{max}) type=differential // { arity: 5 }
               implementation
-                %2[#0{c}]UK » %0:l3[#1]K » %1[#0]UK
+                %2[#0{max}]UK » %0:l3[#1{c}]K » %1[#0{max}]UK
               ArrangeBy keys=[[#1{c}]] // { arity: 3 }
                 Project (#0{c}, #1{c}, #5{min}) // { arity: 3 }
                   Get l3 // { arity: 6 }
@@ -331,7 +331,7 @@ Explained Query:
             Project (#2{min}) // { arity: 1 }
               Join on=(#0{c} = #3{max} AND #1{c} = #4{max}) type=differential // { arity: 5 }
                 implementation
-                  %2[#0{c}]UK » %0:l6[#1]K » %1[#0]UK
+                  %2[#0{max}]UK » %0:l6[#1{c}]K » %1[#0{max}]UK
                 ArrangeBy keys=[[#1{c}]] // { arity: 3 }
                   Project (#0{c}, #1{c}, #5{min}) // { arity: 3 }
                     Filter (#4{steps} >= 4) // { arity: 6 }

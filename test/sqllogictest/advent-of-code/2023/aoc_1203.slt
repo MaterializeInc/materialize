@@ -358,7 +358,7 @@ Explained Query:
           Project (#2{col_idx}..=#5{row_idx}) // { arity: 4 }
             Join on=(#0{col_idx} = #3{col_idx} AND #1{right_col0_4} = #4{right_col0_4}) type=differential // { arity: 6 }
               implementation
-                %1:l9[#1{right_col0_4}, #2{right_col0_4}]KK » %0[#0, #1]KK
+                %1:l9[#1{col_idx}, #2{right_col0_4}]KK » %0[#0{col_idx}, #1{right_col0_4}]KK
               ArrangeBy keys=[[#0{col_idx}, #1{right_col0_4}]] // { arity: 2 }
                 Union // { arity: 2 }
                   Negate // { arity: 2 }
@@ -366,7 +366,7 @@ Explained Query:
                       Project (#2{col_idx}, #3) // { arity: 2 }
                         Join on=(#0{right_col0_4} = #2{col_idx} AND #1{right_col0_4} = (#3{col_idx} - 1)) type=differential // { arity: 4 }
                           implementation
-                            %1:l10[#0{right_col0_4}, (#1{col_idx} - 1)]KK » %0:l11[#0, #1]KK
+                            %1:l10[#0{col_idx}, (#1{col_idx} - 1)]KK » %0:l11[#0, #1]KK
                           Get l11 // { arity: 2 }
                           ArrangeBy keys=[[#0{col_idx}, (#1{col_idx} - 1)]] // { arity: 2 }
                             Get l10 // { arity: 2 }
@@ -382,7 +382,7 @@ Explained Query:
             Map (text_to_integer(#3{col_idx})) // { arity: 8 }
               Join on=(#0{col_idx} = #4{col_idx} AND #1{right_col0_7} = #5{right_col0_7} AND #2{row_idx} = #6{row_idx}) type=differential // { arity: 7 }
                 implementation
-                  %1:l12[#1{right_col0_7}..=#3{right_col0_7}]KKK » %0[#0..=#2]KKK
+                  %1:l12[#1{col_idx}..=#3{row_idx}]KKK » %0[#0{col_idx}..=#2{row_idx}]KKK
                 ArrangeBy keys=[[#0{col_idx}..=#2{row_idx}]] // { arity: 3 }
                   Union // { arity: 3 }
                     Negate // { arity: 3 }
@@ -390,7 +390,7 @@ Explained Query:
                         Project (#2{col_idx}..=#4{row_idx}) // { arity: 3 }
                           Join on=(#0{right_col0_7} = #2{col_idx} AND #1{right_col0_7} = (#3{col_idx} + #4{row_idx})) type=differential // { arity: 5 }
                             implementation
-                              %1:l13[#0{right_col0_7}, (#1{col_idx} + #2{length})]KK » %0:l11[#0, #1]KK
+                              %1:l13[#0{col_idx}, (#1{col_idx} + #2{row_idx})]KK » %0:l11[#0, #1]KK
                             Get l11 // { arity: 2 }
                             ArrangeBy keys=[[#0{col_idx}, (#1{col_idx} + #2{row_idx})]] // { arity: 3 }
                               Get l13 // { arity: 3 }
@@ -439,8 +439,8 @@ Explained Query:
                     Join on=(#0{row_idx} = #3{row_idx} = #8{row_idx} AND #1{col_idx} = #4{col_idx} = #9{col_idx}) type=delta // { arity: 13 }
                       implementation
                         %0 » %1:l18[#0, #1]KK » %2:l18[#0, #1]KK
-                        %1:l18 » %0[#0, #1]UKKA » %2:l18[#0, #1]KK
-                        %2:l18 » %0[#0, #1]UKKA » %1:l18[#0, #1]KK
+                        %1:l18 » %0[#0{row_idx}, #1{col_idx}]UKKAef » %2:l18[#0, #1]KK
+                        %2:l18 » %0[#0{row_idx}, #1{col_idx}]UKKAef » %1:l18[#0, #1]KK
                       ArrangeBy keys=[[#0{row_idx}, #1{col_idx}]] // { arity: 3 }
                         Reduce group_by=[#0{row_idx}, #1{col_idx}] aggregates=[count(*)] // { arity: 3 }
                           Project (#0, #1) // { arity: 2 }

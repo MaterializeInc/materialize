@@ -146,7 +146,7 @@ Explained Query:
             Map (((#4{chars} + #6{len}) + 1), (#5{spring} + 1)) // { arity: 9 }
               Join on=(#0{pos} = #3{pos} AND #1{pos} = #4{pos} AND #2{pos} = #6{pos}) type=differential // { arity: 7 }
                 implementation
-                  %1:l3[#0{pos}, #1{pos}, #3{pos}]KKK » %0[#0..=#2]KKK
+                  %1:l3[#0{pos}, #1{pos}, #3{pos}]KKK » %0[#0{pos}..=#2{pos}]KKK
                 ArrangeBy keys=[[#0{pos}..=#2{pos}]] // { arity: 3 }
                   Union // { arity: 3 }
                     Negate // { arity: 3 }

@@ -83,7 +83,7 @@ Explained Query:
       Project (#1{f4}..=#3{f6}) // { arity: 3 }
         Join on=(#0{f5} = #2{f5}) type=differential // { arity: 4 }
           implementation
-            %1:table_f4_f5_f6[#1{f5}]K » %0:table_f5_f6[#0]K
+            %1:table_f4_f5_f6[#1{f5}]K » %0:table_f5_f6[#0{f5}]K
           ArrangeBy keys=[[#0{f5}]] // { arity: 1 }
             Project (#0{f5}) // { arity: 1 }
               Filter (#0{f5} = #1{f6}) // { arity: 2 }
@@ -104,7 +104,7 @@ Explained Query:
               Project (#1{f4}..=#3{f6}) // { arity: 3 }
                 Join on=(#0{f5} = #1{f4}) type=differential // { arity: 4 }
                   implementation
-                    %1:l0[#0{f5}]K » %0[#0]K
+                    %1:l0[#0{f4}]K » %0[#0{f5}]K
                   ArrangeBy keys=[[#0{f5}]] // { arity: 1 }
                     Project (#0{f5}) // { arity: 1 }
                       Distinct project=[#0{f5}, #1{f6}] // { arity: 2 }

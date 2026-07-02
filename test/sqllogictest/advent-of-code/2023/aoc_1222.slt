@@ -355,7 +355,7 @@ Explained Query:
                         Filter (#3{count} = 1) // { arity: 4 }
                           Join on=(#1{x} = #2{x}) type=differential // { arity: 4 }
                             implementation
-                              %1[#0]UKA » %0:l14[#1]K
+                              %1[#0{x}]UKA » %0:l14[#1{x}]K
                             ArrangeBy keys=[[#1{x}]] // { arity: 2 }
                               Project (#0, #2{x}) // { arity: 2 }
                                 Filter (#0 = #1) // { arity: 3 }
@@ -365,7 +365,7 @@ Explained Query:
                                 Project (#0{x}) // { arity: 1 }
                                   Join on=(#0{x} = #1{x}) type=differential // { arity: 2 }
                                     implementation
-                                      %1:l15[#0]K » %0[#0]UKA
+                                      %1:l15[#0{x}]K » %0[#0{x}]UKA
                                     ArrangeBy keys=[[#0{x}]] // { arity: 1 }
                                       Distinct project=[#0{x}] // { arity: 1 }
                                         Project (#2{x}) // { arity: 1 }
@@ -396,7 +396,7 @@ Explained Query:
           Project (#1{x}) // { arity: 1 }
             Join on=(#0{x} = #1{x}) type=differential // { arity: 2 }
               implementation
-                %1:l20[#0{r2}]UK » %0:l15[#0]K
+                %1:l20[#0{x}]UK » %0:l15[#0{x}]K
               Get l15 // { arity: 1 }
               Get l20 // { arity: 1 }
       cte l22 =
@@ -406,7 +406,7 @@ Explained Query:
             Map (0) // { arity: 3 }
               Join on=(#0{x} = #1{x}) type=differential // { arity: 2 }
                 implementation
-                  %1:l20[#0]UK » %0[#0]K
+                  %1:l20[#0{x}]UK » %0[#0{x}]K
                 ArrangeBy keys=[[#0{x}]] // { arity: 1 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }
@@ -421,7 +421,7 @@ Explained Query:
               Filter (#1{count} = 1) // { arity: 4 }
                 Join on=(#0{x} = #3{x}) type=differential // { arity: 4 }
                   implementation
-                    %1:l11[#1]K » %0[#0]UKA
+                    %1:l11[#1{x}]K » %0[#0{x}]UKA
                   ArrangeBy keys=[[#0{x}]] // { arity: 2 }
                     Reduce group_by=[#0{x}] aggregates=[count(*)] // { arity: 2 }
                       Get l12 // { arity: 1 }
@@ -430,7 +430,7 @@ Explained Query:
             Project (#2{r1}, #0{x}) // { arity: 2 }
               Join on=(#0{x} = #3{x} AND #1{count} = #4{count}) type=differential // { arity: 5 }
                 implementation
-                  %1:l18[#1, #2]KK » %0[#0, #1]KK
+                  %1:l18[#1{x}, #2{count}]KK » %0[#0{x}, #1{count}]KK
                 ArrangeBy keys=[[#0{x}, #1{count}]] // { arity: 2 }
                   Union // { arity: 2 }
                     Get l22 // { arity: 2 }

@@ -217,7 +217,7 @@ Explained Query:
             Map (0) // { arity: 9 }
               Join on=(#0 = #4 AND #1{target} = #5 AND #2 = #6 AND #3{name} = #7) type=differential // { arity: 8 }
                 implementation
-                  %1:l9[#0..=#3]UKKKK » %0[#0..=#3]KKKK
+                  %1:l9[#0..=#3]UKKKK » %0[#0..=#3{name}]KKKK
                 ArrangeBy keys=[[#0..=#3{name}]] // { arity: 4 }
                   Union // { arity: 4 }
                     Negate // { arity: 4 }
@@ -238,7 +238,7 @@ Explained Query:
           Map (case when (0 = (#4{count} % 2)) then "hi" else "lo" end) // { arity: 11 }
             Join on=(#0 = #5 AND #1{target} = #7 AND #2 = #8 AND #3{name} = #6) type=differential // { arity: 10 }
               implementation
-                %1:l6[#0, #2, #3, #1]KKKK » %0[#0..=#3]KKKK
+                %1:l6[#0, #2, #3, #1]KKKK » %0[#0..=#3{name}]KKKK
               ArrangeBy keys=[[#0..=#3{name}]] // { arity: 5 }
                 Union // { arity: 5 }
                   Get l11 // { arity: 5 }
@@ -246,7 +246,7 @@ Explained Query:
                     Map (null) // { arity: 9 }
                       Join on=(#0 = #4 AND #1{target} = #5 AND #2 = #6 AND #3{name} = #7) type=differential // { arity: 8 }
                         implementation
-                          %1:l9[#0..=#3]UKKKK » %0[#0..=#3]KKKK
+                          %1:l9[#0..=#3]UKKKK » %0[#0..=#3{name}]KKKK
                         ArrangeBy keys=[[#0..=#3{name}]] // { arity: 4 }
                           Union // { arity: 4 }
                             Negate // { arity: 4 }
@@ -298,7 +298,7 @@ Explained Query:
             Map (0) // { arity: 3 }
               Join on=(#0{link} = #1) type=differential // { arity: 2 }
                 implementation
-                  %1:l16[#0]UK » %0[#0]K
+                  %1:l16[#0]UK » %0[#0{link}]K
                 ArrangeBy keys=[[#0{link}]] // { arity: 1 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }
@@ -318,7 +318,7 @@ Explained Query:
         Project (#2..=#6, #1{count}) // { arity: 6 }
           Join on=(#0{link} = #3) type=differential // { arity: 7 }
             implementation
-              %1:l14[#1]K » %0[#0]K
+              %1:l14[#1]K » %0[#0{link}]K
             ArrangeBy keys=[[#0{link}]] // { arity: 2 }
               Union // { arity: 2 }
                 Get l19 // { arity: 2 }
@@ -326,7 +326,7 @@ Explained Query:
                   Map (null) // { arity: 3 }
                     Join on=(#0{link} = #1) type=differential // { arity: 2 }
                       implementation
-                        %1:l16[#0]UK » %0[#0]K
+                        %1:l16[#0]UK » %0[#0{link}]K
                       ArrangeBy keys=[[#0{link}]] // { arity: 1 }
                         Union // { arity: 1 }
                           Negate // { arity: 1 }
@@ -365,7 +365,7 @@ Explained Query:
             Map (0) // { arity: 9 }
               Join on=(#0 = #4 AND #1{target} = #5 AND #2 = #6 AND #3{name} = #7) type=differential // { arity: 8 }
                 implementation
-                  %1:l23[#0..=#3]UKKKK » %0[#0..=#3]KKKK
+                  %1:l23[#0..=#3]UKKKK » %0[#0..=#3{name}]KKKK
                 ArrangeBy keys=[[#0..=#3{name}]] // { arity: 4 }
                   Union // { arity: 4 }
                     Negate // { arity: 4 }
@@ -386,7 +386,7 @@ Explained Query:
           Map (case when (#4{count} = #10{count}) then "lo" else "hi" end) // { arity: 12 }
             Join on=(#0 = #5 AND #1{target} = #7 AND #2 = #8 AND #3{name} = #6) type=differential // { arity: 11 }
               implementation
-                %1:l20[#0, #2, #3, #1]KKKK » %0[#0..=#3]KKKK
+                %1:l20[#0, #2, #3, #1]KKKK » %0[#0..=#3{name}]KKKK
               ArrangeBy keys=[[#0..=#3{name}]] // { arity: 5 }
                 Union // { arity: 5 }
                   Get l25 // { arity: 5 }
@@ -394,7 +394,7 @@ Explained Query:
                     Map (null) // { arity: 9 }
                       Join on=(#0 = #4 AND #1{target} = #5 AND #2 = #6 AND #3{name} = #7) type=differential // { arity: 8 }
                         implementation
-                          %1:l23[#0..=#3]UKKKK » %0[#0..=#3]KKKK
+                          %1:l23[#0..=#3]UKKKK » %0[#0..=#3{name}]KKKK
                         ArrangeBy keys=[[#0..=#3{name}]] // { arity: 4 }
                           Union // { arity: 4 }
                             Negate // { arity: 4 }

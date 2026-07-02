@@ -78,7 +78,7 @@ Explained Query:
           Map (case when (#7{step} = "L") then #1{left} else case when (#7{step} = "R") then #2{right} else "???" end end, (#5{steps} + 1)) // { arity: 10 }
             Join on=(#0{state} = #4{state} AND #6{state} = (1 + (#5{steps} % 263))) type=differential // { arity: 8 }
               implementation
-                %1:l0[(1 + (#2{steps} % 263))]K » %2[#0]K » %0:paths[#0]K
+                %1:l0[(1 + (#2{steps} % 263))]K » %2[#0]K » %0:paths[#0{state}]K
               ArrangeBy keys=[[#0{state}]] // { arity: 3 }
                 Filter ("Z" != substr(#0{state}, 3, 1)) // { arity: 3 }
                   ReadStorage materialize.public.paths // { arity: 3 }

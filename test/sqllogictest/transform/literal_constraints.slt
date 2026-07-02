@@ -768,9 +768,9 @@ Explained Query:
       Filter (#0{a}) IS NOT NULL // { arity: 9 }
         Join on=(#0{a} = #3{a} = #6{a}) type=delta // { arity: 9 }
           implementation
-            %0:t1 » %2:l0[#0]KA » %1:l0[#0]KA
-            %1:l0 » %0:t1[#0]KA » %2:l0[#0]KA
-            %2:l0 » %0:t1[#0]KA » %1:l0[#0]KA
+            %0:t1 » %2:l0[#0{a}]KA » %1:l0[#0{a}]KA
+            %1:l0 » %0:t1[#0{a}]KAe » %2:l0[#0{a}]KA
+            %2:l0 » %0:t1[#0{a}]KAe » %1:l0[#0{a}]KA
           ArrangeBy keys=[[#0{a}]] // { arity: 3 }
             ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
           Get l0 // { arity: 3 }
@@ -807,7 +807,7 @@ Explained Query:
     Filter (#0{a}) IS NOT NULL // { arity: 6 }
       Join on=(#0{a} = #3{a}) type=differential // { arity: 6 }
         implementation
-          %1:t1[#0{a}]KA » %0:t2[#0]KA
+          %1:t1[#0{a}]KA » %0:t2[#0{a}]KA
         ArrangeBy keys=[[#0{a}]] // { arity: 3 }
           ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
         ArrangeBy keys=[[#0{a}]] // { arity: 3 }

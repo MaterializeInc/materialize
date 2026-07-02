@@ -558,7 +558,7 @@ Explained Query:
       Project (#3, #2{count}) // { arity: 2 }
         Join on=(#0 = #4 AND #1{have} = #5) type=differential // { arity: 6 }
           implementation
-            %1:l0[#1, #2]KK » %0[#0, #1]UKK
+            %1:l0[#1, #2]KK » %0[#0, #1{have}]UKK
           ArrangeBy keys=[[#0, #1{have}]] // { arity: 3 }
             Union // { arity: 3 }
               Get l4 // { arity: 3 }

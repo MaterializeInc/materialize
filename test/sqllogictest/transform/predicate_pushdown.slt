@@ -169,7 +169,7 @@ Explained Query:
   Project (#0{f1}, #1{f2}, #0{f1}, #1{f2}) // { arity: 4 }
     Join on=(#0{f1} = #2{f1} AND #1{f2} = #3{f2}) type=differential // { arity: 4 }
       implementation
-        %1:t2[#0{f1}, #1{f2}]KK » %0:t1[#0, #1]KK
+        %1:t2[#0{f1}, #1{f2}]KK » %0:t1[#0{f1}, #1{f2}]KK
       ArrangeBy keys=[[#0{f1}, #1{f2}]] // { arity: 2 }
         Filter (#0{f1}) IS NOT NULL AND (#1{f2}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
@@ -194,7 +194,7 @@ select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and t2.f1 is null
 Explained Query:
   Join on=(#0{f1} = (#2{f1} + 1)) type=differential // { arity: 4 }
     implementation
-      %1:t2[(#0{f1} + 1)]K » %0:t1[#0]K
+      %1:t2[(#0{f1} + 1)]K » %0:t1[#0{f1}]K
     ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[(#0{f1} + 1)]] // { arity: 2 }
@@ -214,7 +214,7 @@ select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) i
 Explained Query:
   Join on=(#0{f1} = (#2{f1} + 1)) type=differential // { arity: 4 }
     implementation
-      %1:t2[(#0{f1} + 1)]K » %0:t1[#0]K
+      %1:t2[(#0{f1} + 1)]K » %0:t1[#0{f1}]K
     ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[(#0{f1} + 1)]] // { arity: 2 }
@@ -234,7 +234,7 @@ select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) i
 Explained Query:
   Join on=(#2{f1} = (#0{f1} + 1)) type=differential // { arity: 4 }
     implementation
-      %0:t1[(#0{f1} + 1)]K » %1:t2[#0]K
+      %0:t1[(#0{f1} + 1)]K » %1:t2[#0{f1}]K
     ArrangeBy keys=[[(#0{f1} + 1)]] // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -254,7 +254,7 @@ select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and ((t2.f1 + 1) 
 Explained Query:
   Join on=(#2{f1} = (#0{f1} + 1)) type=differential // { arity: 4 }
     implementation
-      %0:t1[(#0{f1} + 1)]K » %1:t2[#0]K
+      %0:t1[(#0{f1} + 1)]K » %1:t2[#0{f1}]K
     ArrangeBy keys=[[(#0{f1} + 1)]] // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -278,7 +278,7 @@ Explained Query:
     Filter (((#1{f2} = 3) AND (#3{f2} = 4)) OR ((#1{f2} = 5) AND (#3{f2} = 6))) // { arity: 4 }
       Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
-          %1:t2[#0{f1}]K » %0:t1[#0]K
+          %1:t2[#0{f1}]K » %0:t1[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Filter (#0{f1}) IS NOT NULL AND ((#1{f2} = 3) OR (#1{f2} = 5)) // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
@@ -304,7 +304,7 @@ Explained Query:
     Filter ((#1{f2} = 5) OR ((#1{f2} = 3) AND (#3{f2} = 4))) // { arity: 4 }
       Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
-          %1:t2[#0{f1}]K » %0:t1[#0]K
+          %1:t2[#0{f1}]K » %0:t1[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Filter (#0{f1}) IS NOT NULL AND ((#1{f2} = 3) OR (#1{f2} = 5)) // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
@@ -427,7 +427,7 @@ Explained Query:
     Filter ((#8{type} = "materialized-view") OR ((#8{type} = "view") AND (#3{name} != "doesntmatter"))) // { arity: 9 }
       Join on=(#0{id} = #6{schema_id}) type=differential // { arity: 9 }
         implementation
-          %1[#0{id}]K » %0:mz_schemas[#0]UK
+          %1[#0{schema_id}]K » %0:mz_schemas[#0{id}]UK
         ArrangeBy keys=[[#0{id}]] // { arity: 6 }
           ReadIndex on=mz_schemas mz_schemas_ind=[*** full scan ***] // { arity: 6 }
         ArrangeBy keys=[[#0{schema_id}]] // { arity: 3 }
