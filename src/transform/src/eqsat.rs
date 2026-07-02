@@ -40,6 +40,7 @@ pub mod objective;
 pub mod raise;
 pub mod rules;
 pub mod scalar;
+pub mod scalar_builtins;
 pub(crate) mod scalar_extract;
 pub(crate) mod scalar_saturate;
 pub mod transform;
