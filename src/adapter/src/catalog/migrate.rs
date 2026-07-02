@@ -1050,16 +1050,19 @@ fn ast_rewrite_kafka_metadata_refresh_intervals(
         KafkaSourceConfigOptionName, Value, WithOptionValue,
     };
     use mz_sql::plan::TryFromValue;
-    let interval: Option<&mut Value> = match stmt {
+    // A user can persist the interval either as a string literal
+    // (`WithOptionValue::Value`) or, if they wrote it as a double-quoted
+    // value, as a lexed identifier (`WithOptionValue::UnresolvedItemName`).
+    // Both shapes must be handled here.
+    let interval: Option<&mut WithOptionValue<Raw>> = match stmt {
         Statement::CreateSource(stmt) => {
             if let CreateSourceConnection::Kafka { options, .. } = &mut stmt.connection {
                 options.iter_mut().find_map(|option| {
                     if matches!(
                         option.name,
                         KafkaSourceConfigOptionName::TopicMetadataRefreshInterval
-                    ) && let Some(WithOptionValue::Value(ref mut val)) = option.value
-                    {
-                        Some(val)
+                    ) {
+                        option.value.as_mut()
                     } else {
                         None
                     }
@@ -1074,9 +1077,8 @@ fn ast_rewrite_kafka_metadata_refresh_intervals(
                     if matches!(
                         option.name,
                         KafkaSinkConfigOptionName::TopicMetadataRefreshInterval
-                    ) && let Some(WithOptionValue::Value(ref mut val)) = option.value
-                    {
-                        Some(val)
+                    ) {
+                        option.value.as_mut()
                     } else {
                         None
                     }
@@ -1097,7 +1099,7 @@ fn ast_rewrite_kafka_metadata_refresh_intervals(
     })?;
 
     if interval_dur < Duration::from_secs(1) {
-        *interval = Value::String("1s".to_string());
+        *interval = WithOptionValue::Value(Value::String("1s".to_string()));
     }
 
     Ok(())

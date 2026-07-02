@@ -1511,6 +1511,11 @@ class KafkaTopicMetadataRefreshInterval(Check):
     environmentd on upgrade ("invalid persisted SQL") and crash-loops the whole
     environment. We create the objects on the old base version and assert the
     environment still boots and they survive the upgrade.
+
+    The interval is covered in both AST shapes a user can persist it as: a
+    single-quoted string ('999ms', stored as WithOptionValue::Value) and a
+    double-quoted value ("998ms", lexed as an identifier and stored as
+    WithOptionValue::UnresolvedItemName). The migration must rewrite both.
     """
 
     def _can_run(self, e: Executor) -> bool:
@@ -1540,12 +1545,27 @@ class KafkaTopicMetadataRefreshInterval(Check):
                 > CREATE TABLE tmri_source FROM SOURCE tmri_source_src (REFERENCE "testdrive-tmri-source-${testdrive.seed}")
                   KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT
 
+                > CREATE SOURCE tmri_source_src_ident
+                  FROM KAFKA CONNECTION kafka_conn (
+                    TOPIC 'testdrive-tmri-source-${testdrive.seed}',
+                    TOPIC METADATA REFRESH INTERVAL = "998ms"
+                  )
+                > CREATE TABLE tmri_source_ident FROM SOURCE tmri_source_src_ident (REFERENCE "testdrive-tmri-source-${testdrive.seed}")
+                  KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT
+
                 > CREATE TABLE tmri_sink_table (f1 INTEGER)
                 > INSERT INTO tmri_sink_table VALUES (1)
                 > CREATE SINK tmri_sink FROM tmri_sink_table
                   INTO KAFKA CONNECTION kafka_conn (
                     TOPIC 'testdrive-tmri-sink-${testdrive.seed}',
                     TOPIC METADATA REFRESH INTERVAL '500ms'
+                  )
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                > CREATE SINK tmri_sink_ident FROM tmri_sink_table
+                  INTO KAFKA CONNECTION kafka_conn (
+                    TOPIC 'testdrive-tmri-sink-ident-${testdrive.seed}',
+                    TOPIC METADATA REFRESH INTERVAL = "499ms"
                   )
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
@@ -1579,10 +1599,18 @@ class KafkaTopicMetadataRefreshInterval(Check):
                 3
                 > SELECT count(*) FROM tmri_sink_table
                 3
+                > SELECT count(*) FROM tmri_source_ident
+                3
                 > SELECT count(*) FROM mz_sources WHERE name = 'tmri_source_src'
+                1
+                > SELECT count(*) FROM mz_sources WHERE name = 'tmri_source_src_ident'
                 1
                 > SELECT count(*) FROM mz_sinks WHERE name = 'tmri_sink'
                 1
+                > SELECT count(*) FROM mz_sinks WHERE name = 'tmri_sink_ident'
+                1
                 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'tmri_sink'
+                running
+                > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'tmri_sink_ident'
                 running
                 """))
