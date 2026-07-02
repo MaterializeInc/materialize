@@ -147,7 +147,7 @@ class Executor:
         http: Http = Http.NO,
         fetch: bool = False,
         cluster_replica: str | None = None,
-    ) -> None:
+    ) -> None | list[Any]:
         is_http = (
             http == Http.RANDOM and self.rng.choice([True, False])
         ) or http == Http.YES
@@ -223,12 +223,13 @@ class Executor:
 
                 if fetch and not use_ws:
                     try:
-                        self.cur.fetchall()
-                    except psycopg.DataError:
+                        return self.cur.fetchall()
+                    except (psycopg.DataError, OverflowError):
                         # We don't care about psycopg being unable to parse, examples:
                         # date too large (after year 10K): '97940-08-25'
                         # timestamp too large (after year 10K): '10876-06-20 00:00:00'
                         # can't parse interval '-178956970 years -8 months -2147483648 days -2562047788:00:54.775808': days=1252674755; must have magnitude <= 999999999
+                        # a huge interval overflows psycopg's timedelta as OverflowError
                         pass
 
                 return

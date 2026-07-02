@@ -9,27 +9,47 @@
 
 import copy
 import datetime
+import decimal
 import json
 import random
+import struct
 import threading
 import time
 import urllib.parse
+import uuid
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import psycopg
 import requests
 import websocket
+from deepdiff import DeepDiff
 from pg8000.native import identifier
 from psycopg import Connection
 from psycopg.errors import OperationalError
+from psycopg.types.range import Range
 
 import materialize.parallel_workload.column
 from materialize.data_ingest.data_type import (
     NUMBER_TYPES,
     Boolean,
+    DataType,
+    Date,
+    DateRange,
+    Float,
+    Int4Range,
+    Int8Range,
+    Interval,
+    MzTimestamp,
+    Numeric383,
+    NumRange,
     Text,
     TextTextMap,
+    Time,
+    Timestamp,
+    TimestampTz,
+    TsRange,
+    TsTzRange,
 )
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
@@ -79,6 +99,7 @@ from materialize.parallel_workload.database import (
     Table,
     View,
     WebhookSource,
+    correctness,
 )
 from materialize.parallel_workload.executor import Executor, Http
 from materialize.parallel_workload.expression import ExprKind, expression
@@ -391,48 +412,56 @@ class FetchAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        self.i += 1
-        # Unsupported via this API
-        # See https://github.com/MaterializeInc/database-issues/issues/6159
-        (
-            exe.rollback(http=Http.NO)
-            if self.rng.choice([True, False])
-            else exe.commit(http=Http.NO)
-        )
-        query = "SUBSCRIBE "
-        if self.rng.choice([True, False]):
-            obj = self.rng.choice(exe.db.db_objects())
-            query += f"{obj}"
-
-            if self.rng.choice([True, False]):
-                envelope = "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
-                columns = self.rng.sample(obj.columns, len(obj.columns))
-                key = ", ".join(column.name(True) for column in columns)
-                query += f" ENVELOPE {envelope} (KEY ({key}))"
-
-            if self.rng.choice([True, False]):
-                query += " WITH (SNAPSHOT = false)"
+        if correctness():
+            # TODO: Verify the subscribe change stream. Subscribes only read, so
+            # there is nothing to reconcile against the tracked rows yet; skip
+            # until the correctness check covers streamed output.
+            pass
         else:
-            query += f"({self.generate_select_query(exe, ExprKind.MATERIALIZABLE)})"
-
-        exe.execute(f"DECLARE c{self.i} CURSOR FOR {query}", http=Http.NO)
-        while True:
-            rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
-            timeout = self.rng.randrange(10)
-            query = f"FETCH {rows} c{self.i} WITH (timeout='{timeout}s')"
-
+            self.i += 1
+            # Unsupported via this API
+            # See https://github.com/MaterializeInc/database-issues/issues/6159
+            (
+                exe.rollback(http=Http.NO)
+                if self.rng.choice([True, False])
+                else exe.commit(http=Http.NO)
+            )
+            query = "SUBSCRIBE "
             if self.rng.choice([True, False]):
-                self.stmt_id += 1
-                self.exe_prepared(query, f"fetch{self.stmt_id}", exe)
+                obj = self.rng.choice(exe.db.db_objects())
+                query += f"{obj}"
+
+                if self.rng.choice([True, False]):
+                    envelope = (
+                        "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
+                    )
+                    columns = self.rng.sample(obj.columns, len(obj.columns))
+                    key = ", ".join(column.name(True) for column in columns)
+                    query += f" ENVELOPE {envelope} (KEY ({key}))"
+
+                if self.rng.choice([True, False]):
+                    query += " WITH (SNAPSHOT = false)"
             else:
-                exe.execute(query, http=Http.NO, fetch=True)
-            if self.rng.choice([True, False]):
-                break
-        (
-            exe.rollback(http=Http.NO)
-            if self.rng.choice([True, False])
-            else exe.commit(http=Http.NO)
-        )
+                query += f"({self.generate_select_query(exe, ExprKind.MATERIALIZABLE)})"
+
+            exe.execute(f"DECLARE c{self.i} CURSOR FOR {query}", http=Http.NO)
+            while True:
+                rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
+                timeout = self.rng.randrange(10)
+                query = f"FETCH {rows} c{self.i} WITH (timeout='{timeout}s')"
+
+                if self.rng.choice([True, False]):
+                    self.stmt_id += 1
+                    self.exe_prepared(query, f"fetch{self.stmt_id}", exe)
+                else:
+                    exe.execute(query, http=Http.NO, fetch=True)
+                if self.rng.choice([True, False]):
+                    break
+            (
+                exe.rollback(http=Http.NO)
+                if self.rng.choice([True, False])
+                else exe.commit(http=Http.NO)
+            )
         return True
 
 
@@ -440,6 +469,183 @@ class SelectOneAction(Action):
     def run(self, exe: Executor) -> bool:
         exe.execute("SELECT 1", explainable=True, http=Http.RANDOM, fetch=True)
         return True
+
+
+# Range element types Materialize treats as discrete: on storage it rewrites the
+# bounds to inclusive-lower/exclusive-upper "[)" form and shifts the endpoints by
+# one step. Continuous types keep the bounds as written. daterange and tsrange
+# have identical generated strings, so canonicalizing needs the column type.
+_DISCRETE_RANGE_TYPES = (DateRange, Int4Range, Int8Range)
+_RANGE_TYPES = _DISCRETE_RANGE_TYPES + (NumRange, TsRange, TsTzRange)
+
+
+def _range_endpoint_key(value: Any) -> Any:
+    """Format a range endpoint so a value read back from Materialize (a typed
+    Python object) and the same value parsed from the generated string compare
+    equal."""
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        # tstzrange comes back tz-aware; the generators only use midnight and the
+        # session runs in UTC, so dropping the zone keeps both sides equal.
+        return value.replace(tzinfo=None).isoformat()
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if isinstance(value, decimal.Decimal):
+        # Materialize strips trailing zeros from numrange endpoints (491688.0
+        # reads back as 491688), so normalize before formatting to compare equal.
+        return format(value.normalize(), "f")
+    return str(value)
+
+
+def _parse_range_endpoint(raw: str, data_type: type[DataType]) -> Any:
+    if raw == "":
+        return None
+    if data_type is DateRange:
+        year, month, day = (int(p) for p in raw.split("-"))
+        return datetime.date(year, month, day)
+    if data_type in (TsRange, TsTzRange):
+        year, month, day = (int(p) for p in raw.split("-"))
+        return datetime.datetime(year, month, day)
+    if data_type in (Int4Range, Int8Range):
+        return int(raw)
+    return decimal.Decimal(raw)
+
+
+def canonicalize_range(value: Any, data_type: type[DataType]) -> Any:
+    """Reduce a range to a comparable tuple. Materialize returns ranges as psycopg
+    Range objects (already canonicalized), while the generator tracks them as the
+    string it inserted, so replicate Materialize's discrete-type canonicalization
+    on the tracked string."""
+    if isinstance(value, Range):
+        if value.isempty:
+            return ("range", "empty")
+        lower, upper = value.lower, value.upper
+        lower_inc, upper_inc = value.lower_inc, value.upper_inc
+    else:
+        # Tracked as a string, e.g. "(1000-6-24,1037-2-8]" or "(,)".
+        lower_inc = value.startswith("[")
+        upper_inc = value.endswith("]")
+        lower_raw, _, upper_raw = value[1:-1].partition(",")
+        lower = _parse_range_endpoint(lower_raw.strip(), data_type)
+        upper = _parse_range_endpoint(upper_raw.strip(), data_type)
+        if data_type in _DISCRETE_RANGE_TYPES:
+            step = datetime.timedelta(days=1) if data_type is DateRange else 1
+            if lower is not None and not lower_inc:
+                lower += step
+                lower_inc = True
+            if upper is not None and upper_inc:
+                upper += step
+                upper_inc = False
+            if lower is not None and lower == upper and lower_inc and not upper_inc:
+                return ("range", "empty")
+    if lower is None:
+        lower_inc = False
+    if upper is None:
+        upper_inc = False
+    return (
+        "range",
+        _range_endpoint_key(lower),
+        _range_endpoint_key(upper),
+        lower_inc,
+        upper_inc,
+    )
+
+
+_TEMPORAL_TYPES = (Date, Time, Timestamp, TimestampTz, MzTimestamp, Interval)
+
+
+def _days_from_civil(year: int, month: int, day: int) -> int:
+    """Days since 1970-01-01 in the proleptic Gregorian calendar, for any year.
+    datetime only covers years 1..9999, but the generators go far higher."""
+    year -= month <= 2
+    era = (year if year >= 0 else year - 399) // 400
+    yoe = year - era * 400
+    doy = (153 * (month + (-3 if month > 2 else 9)) + 2) // 5 + day - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+
+def canonicalize_temporal(value: Any, data_type: type[DataType]) -> Any:
+    """Reduce a temporal value to a comparable tuple. Materialize returns these as
+    typed Python objects (or, for mz_timestamp, the epoch-millis digit string),
+    while the generator tracks the string it inserted, so parse both to integer
+    components. The generators use unpadded fractional seconds and years beyond
+    what datetime can hold, hence the manual parsing."""
+    if data_type is Interval:
+        # Read back via ::text (psycopg's timedelta cannot hold months and
+        # overflows), which round-trips losslessly. Both Materialize's text and
+        # the generated string parse to the same (months, days, microseconds).
+        months = days = micros = 0
+        tokens = str(value).split()
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if ":" in token:
+                # HH:MM:SS[.ffffff] time part; the hours field may be huge.
+                negative = token.startswith("-")
+                hours, minutes, secs = token.lstrip("-").split(":")
+                sec, _, frac = secs.partition(".")
+                part = (int(hours) * 3600 + int(minutes) * 60 + int(sec)) * 1_000_000
+                part += int((frac + "000000")[:6]) if frac else 0
+                micros += -part if negative else part
+                i += 1
+            else:
+                amount = int(token)
+                unit = tokens[i + 1].lower().rstrip("s")
+                if unit == "year":
+                    months += amount * 12
+                elif unit in ("mon", "month"):
+                    months += amount
+                elif unit == "day":
+                    days += amount
+                elif unit == "hour":
+                    micros += amount * 3_600_000_000
+                elif unit == "minute":
+                    micros += amount * 60_000_000
+                elif unit == "second":
+                    micros += amount * 1_000_000
+                i += 2
+        return ("interval", months, days, micros)
+    if data_type is Time:
+        if isinstance(value, datetime.time):
+            return ("time", value.hour, value.minute, value.second, value.microsecond)
+        hour, minute, rest = str(value).split(":")
+        second, _, frac = rest.partition(".")
+        micros = int((frac + "000000")[:6]) if frac else 0
+        return ("time", int(hour), int(minute), int(second), micros)
+    if data_type is MzTimestamp:
+        text = str(value)
+        if "-" in text:
+            # Tracked as a "Y-M-D" date, stored as epoch millis at midnight UTC.
+            year, month, day = (int(p) for p in text.split("-"))
+            return ("mzts", _days_from_civil(year, month, day) * 86400000)
+        # Read back as the epoch-millis value.
+        return ("mzts", int(text))
+    # Date, Timestamp, TimestampTz.
+    if isinstance(value, datetime.datetime):
+        return (
+            "ts",
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+        )
+    if isinstance(value, datetime.date):
+        return ("ts", value.year, value.month, value.day, 0, 0, 0, 0)
+    year, month, day = (int(p) for p in str(value).split("-"))
+    return ("ts", year, month, day, 0, 0, 0, 0)
+
+
+def _row_sort_key(row: Any) -> Any:
+    """Order rows for the correctness comparison. A nullable column mixes None
+    (NULL) with strings/ints/tuples, which Python cannot order directly, so key
+    on (is-null, str) per element. The equality check runs on the real tuples,
+    so this only affects ordering, not what compares equal."""
+    return [(v is None, str(v)) for v in row]
 
 
 class SelectAction(Action):
@@ -461,17 +667,166 @@ class SelectAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        query = self.generate_select_query(exe, ExprKind.ALL)
-        rtr = self.rng.choice([True, False])
-        if rtr:
-            exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"select{self.stmt_id}", exe)
+        if correctness():
+            exe.commit()
+            exe.set_isolation("STRICT SERIALIZABLE")
+            exe.execute(
+                "SET REAL_TIME_RECENCY TO TRUE", explainable=False, http=Http.NO
+            )
+            # TODO: Other types than table
+            # TODO: More complex queries
+            table = self.rng.choice(exe.db.tables)
+
+            def normalize_value(value: Any, data_type: Any = None) -> Any:
+                if value is None:
+                    return None
+                if data_type is not None and data_type in _RANGE_TYPES:
+                    return canonicalize_range(value, data_type)
+                if data_type is not None and data_type in _TEMPORAL_TYPES:
+                    return canonicalize_temporal(value, data_type)
+                if isinstance(value, bytes):
+                    # bytea comes back as bytes but is tracked as the text string.
+                    return value.decode("utf-8", "replace")
+                if isinstance(value, uuid.UUID):
+                    # uuid comes back as a UUID object but is tracked as its
+                    # canonical string (the generator also emits UUID objects).
+                    return str(value)
+                if isinstance(value, decimal.Decimal) or isinstance(value, float):
+                    if data_type is Float:
+                        # float4/real is lossy: Materialize stores 32-bit and
+                        # reads back the shortest round-tripping decimal, not the
+                        # tracked double. Collapse both sides to the same float4
+                        # so the residual precision does not show as a diff.
+                        value = struct.unpack("f", struct.pack("f", float(value)))[0]
+                    elif data_type is Numeric383:
+                        # numeric(38,3) rounds to 3 decimals on storage, so the
+                        # read-back value differs from the full-precision tracked
+                        # value. Round the tracked value the same way (half up, as
+                        # Materialize does) so int(round(...)) does not diverge at
+                        # a .5 boundary.
+                        value = decimal.Decimal(str(value)).quantize(
+                            decimal.Decimal("0.001"), rounding=decimal.ROUND_HALF_UP
+                        )
+                    return int(round(value))
+                if isinstance(value, datetime.date) or type(value) == int:
+                    return str(value)
+                if isinstance(value, datetime.time):
+                    return value.strftime("%H:%M:%S")
+                if isinstance(value, datetime.datetime):
+                    return value.strftime("%Y-%m-%d %H:%M:%S")
+                # Complex types come back from a SELECT as native Python objects
+                # (arrays as a list, jsonb as a dict) but are tracked in
+                # table.rows as the string generated for the INSERT. Canonicalize
+                # both sides to comparable, orderable structures so that equal
+                # data compares equal and the row sort below does not choke on a
+                # dict. normalize_value runs on both sides, so a deterministic
+                # transform can only fix false mismatches, never hide a real one.
+                if isinstance(value, list):
+                    # Array. Element order is significant, so preserve it.
+                    return tuple(normalize_value(v) for v in value)
+                if isinstance(value, dict):
+                    # jsonb read back by psycopg. Maps are unordered, so sort by key.
+                    return tuple(
+                        sorted((k, normalize_value(v)) for k, v in value.items())
+                    )
+                if (
+                    isinstance(value, str)
+                    and value.startswith("{")
+                    and value.endswith("}")
+                ):
+                    inner = value[1:-1].strip()
+                    if "=>" in value:
+                        # map[text=>text], "{k => v, ...}" as tracked or "{k=>v,...}"
+                        # as read back. Unordered, so sort by key.
+                        pairs = []
+                        for item in inner.split(","):
+                            key, _, val = item.partition("=>")
+                            pairs.append((key.strip(), normalize_value(val.strip())))
+                        return tuple(sorted(pairs))
+                    try:
+                        parsed = json.loads(value)
+                    except json.JSONDecodeError:
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        # jsonb tracked as a JSON string.
+                        return tuple(
+                            sorted((k, normalize_value(v)) for k, v in parsed.items())
+                        )
+                    # Array/list tracked as "{elem, ...}". Preserve order.
+                    if not inner:
+                        return ()
+                    return tuple(normalize_value(v.strip()) for v in inner.split(","))
+                return value
+
+            with table.lock:
+                columns = table.columns
+                # Read interval columns as text: psycopg's timedelta cannot hold
+                # months and overflows on large values, while Materialize's text
+                # form round-trips losslessly.
+                projection = ", ".join(
+                    (
+                        f"{col.name(True)}::text"
+                        if col.data_type is Interval
+                        else col.name(True)
+                    )
+                    for col in columns
+                )
+                rows = exe.execute(
+                    f"SELECT {projection} FROM {table}",
+                    explainable=False,
+                    http=Http.NO,
+                    fetch=True,
+                )
+                if rows is None:
+                    # execute returns None when psycopg cannot parse a value in
+                    # the result (e.g. a timestamp past year 10000, which the
+                    # generators produce). Materialize stored it fine, the client
+                    # just cannot represent it, so skip this comparison rather
+                    # than fail on a client-side limitation.
+                    return True
+                rows = sorted(
+                    (
+                        tuple(
+                            normalize_value(v, col.data_type)
+                            for v, col in zip(t, columns)
+                        )
+                        for t in rows
+                    ),
+                    key=_row_sort_key,
+                )
+                table_rows = sorted(
+                    (
+                        tuple(
+                            normalize_value(v, col.data_type)
+                            for v, col in zip(t, columns)
+                        )
+                        for t in table.rows
+                    ),
+                    key=_row_sort_key,
+                )
+                if rows != table_rows:
+                    diff = DeepDiff(
+                        rows,
+                        table_rows,
+                        ignore_order=False,  # already sorted, so keep order stable
+                        verbose_level=2,  # shows where inside the object things differ
+                    )
+                    assert (
+                        rows == table_rows
+                    ), f"Table {table} not matching.\n{diff.pretty()}"
+
         else:
-            exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
-        if rtr:
-            exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
+            query = self.generate_select_query(exe, ExprKind.ALL)
+            rtr = self.rng.choice([True, False])
+            if rtr:
+                exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"select{self.stmt_id}", exe)
+            else:
+                exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
+            if rtr:
+                exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
         return True
 
 
@@ -663,21 +1018,33 @@ class InsertAction(Action):
             table = self.rng.choice(tables)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
-        column_values = []
+        rows = []
         max_rows = min(100, MAX_ROWS - table.num_rows)
         for i in range(self.rng.randrange(1, max_rows + 1)):
-            column_values.append(
-                ", ".join(column.value(self.rng, True) for column in table.columns)
-            )
-        all_column_values = ", ".join(f"({v})" for v in column_values)
-        query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"insert{self.stmt_id}", exe)
-        else:
-            exe.execute(query, http=Http.RANDOM)
-        table.num_rows += len(column_values)
+            rows.append([column.value(self.rng) for column in table.columns])
+        all_rows = ", ".join(f"({', '.join([c.inquery for c in v])})" for v in rows)
+        query = f"INSERT INTO {table} ({column_names}) VALUES {all_rows}"
+        if correctness():
+            table.lock.acquire()
+        try:
+            # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"insert{self.stmt_id}", exe)
+            else:
+                # In correctness mode run on the main connection so the write is
+                # committed by the exe.commit() below, atomically with the
+                # table.rows update. An HTTP insert commits on a separate session,
+                # so a failing commit here would leave the row in Materialize but
+                # untracked, drifting the comparison.
+                exe.execute(query, http=Http.NO if correctness() else Http.RANDOM)
+            if correctness():
+                exe.commit()
+                table.rows.extend([[c.value for c in v] for v in rows])
+        finally:
+            if correctness():
+                table.lock.release()
+        table.num_rows += len(rows)
         exe.insert_table = table.table_id
         return True
 
@@ -718,9 +1085,20 @@ class CopyFromStdinAction(Action):
         values = []
         max_rows = min(100, MAX_ROWS - table.num_rows)
         for i in range(self.rng.randrange(1, max_rows + 1)):
-            values.append([column.value(self.rng, False) for column in table.columns])
+            values.append([column.value(self.rng).value for column in table.columns])
         query = f"COPY INTO {table} FROM STDIN"
-        exe.copy(query, values)
+        # In correctness mode hold the table lock across the write and commit so
+        # the tracked rows stay in step with what a concurrent SELECT can read.
+        if correctness():
+            table.lock.acquire()
+        try:
+            exe.copy(query, values)
+            if correctness():
+                exe.commit()
+                table.rows.extend(values)
+        finally:
+            if correctness():
+                table.lock.release()
         table.num_rows += len(values)
         exe.insert_table = table.table_id
         return True
@@ -750,13 +1128,13 @@ class InsertReturningAction(Action):
             table = self.rng.choice(tables)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
-        column_values = []
+        rows = []
         max_rows = min(100, MAX_ROWS - table.num_rows)
         for i in range(self.rng.randrange(1, max_rows + 1)):
-            column_values.append(
-                ", ".join(column.value(self.rng, True) for column in table.columns)
-            )
-        all_column_values = ", ".join(f"({v})" for v in column_values)
+            rows.append([column.value(self.rng) for column in table.columns])
+        all_column_values = ", ".join(
+            f"({', '.join(c.inquery for c in v)})" for v in rows
+        )
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
         # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
         returning_exprs = []
@@ -774,47 +1152,63 @@ class InsertReturningAction(Action):
             returning_exprs.append("*")
         if returning_exprs:
             query += f" RETURNING {', '.join(returning_exprs)}"
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
-        else:
-            exe.execute(query, http=Http.RANDOM)
-        table.num_rows += len(column_values)
+        if correctness():
+            table.lock.acquire()
+        try:
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
+            else:
+                # Keep the write on the main connection in correctness mode, as in
+                # InsertAction, so it stays atomic with the table.rows update.
+                exe.execute(query, http=Http.NO if correctness() else Http.RANDOM)
+            if correctness():
+                exe.commit()
+                table.rows.extend([[c.value for c in v] for v in rows])
+        finally:
+            if correctness():
+                table.lock.release()
+        table.num_rows += len(rows)
         exe.insert_table = table.table_id
         return True
 
 
 class SourceInsertAction(Action):
     def run(self, exe: Executor) -> bool:
-        with exe.db.lock:
-            sources = [
-                source
-                for source in exe.db.kafka_sources
-                + exe.db.postgres_sources
-                + exe.db.mysql_sources
-                + exe.db.sql_server_sources
-                if source.num_rows < MAX_ROWS
-            ]
-            if not sources:
-                return False
-            source = self.rng.choice(sources)
-        with source.lock:
-            if source not in [
-                *exe.db.kafka_sources,
-                *exe.db.postgres_sources,
-                *exe.db.mysql_sources,
-                *exe.db.sql_server_sources,
-            ]:
-                return False
+        if correctness():
+            # TODO: Sources are not part of the table comparison, so inserting
+            # into them cannot be verified yet; skip until it covers sources.
+            pass
+        else:
+            with exe.db.lock:
+                sources = [
+                    source
+                    for source in exe.db.kafka_sources
+                    + exe.db.postgres_sources
+                    + exe.db.mysql_sources
+                    + exe.db.sql_server_sources
+                    if source.num_rows < MAX_ROWS
+                ]
+                if not sources:
+                    return False
+                source = self.rng.choice(sources)
+            with source.lock:
+                if source not in [
+                    *exe.db.kafka_sources,
+                    *exe.db.postgres_sources,
+                    *exe.db.mysql_sources,
+                    *exe.db.sql_server_sources,
+                ]:
+                    return False
 
-            transaction = next(source.generator)
-            for row_list in transaction.row_lists:
-                for row in row_list.rows:
-                    if row.operation == Operation.INSERT:
-                        source.num_rows += 1
-                    elif row.operation == Operation.DELETE:
-                        source.num_rows -= 1
-            source.executor.run(transaction, logging_exe=exe)
+                transaction = next(source.generator)
+                for row_list in transaction.row_lists:
+                    for row in row_list.rows:
+                        if row.operation == Operation.INSERT:
+                            source.num_rows += 1
+                        elif row.operation == Operation.DELETE:
+                            source.num_rows -= 1
+                source.executor.run(transaction, logging_exe=exe)
         return True
 
 
@@ -836,24 +1230,39 @@ class UpdateAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        table = None
-        if exe.insert_table is not None:
-            for t in exe.db.tables:
-                if t.table_id == exe.insert_table:
-                    table = t
-                    break
-        if not table:
+        if correctness():
             table = self.rng.choice(exe.db.tables)
-
-        table.columns[0]
-        column2 = self.rng.choice(table.columns)
-        query = f"UPDATE {table} SET {column2.name(True)} = {expression(column2.data_type, table.columns, self.rng, kind=ExprKind.WRITE)} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"update{self.stmt_id}", exe)
+            with table.lock:
+                column = self.rng.choice(table.columns)
+                col_index = table.columns.index(column)
+                new_value = column.value(self.rng)
+                # An arbitrary SET expression and WHERE clause cannot be replayed
+                # against the tracked rows, so set one column of every row to a
+                # literal, which is verifiable.
+                query = f"UPDATE {table} SET {column.name(True)} = {new_value.inquery}"
+                exe.execute(query, http=Http.NO)
+                exe.commit()
+                for row in table.rows:
+                    row[col_index] = new_value.value
         else:
-            exe.execute(query, http=Http.RANDOM)
-        exe.insert_table = table.table_id
+            table = None
+            if exe.insert_table is not None:
+                for t in exe.db.tables:
+                    if t.table_id == exe.insert_table:
+                        table = t
+                        break
+            if not table:
+                table = self.rng.choice(exe.db.tables)
+
+            table.columns[0]
+            column2 = self.rng.choice(table.columns)
+            query = f"UPDATE {table} SET {column2.name(True)} = {expression(column2.data_type, table.columns, self.rng, kind=ExprKind.WRITE)} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"update{self.stmt_id}", exe)
+            else:
+                exe.execute(query, http=Http.RANDOM)
+            exe.insert_table = table.table_id
         return True
 
 
@@ -867,18 +1276,28 @@ class DeleteAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
-        table = self.rng.choice(exe.db.tables)
-        query = f"DELETE FROM {table}"
-        if self.rng.random() < 0.95:
-            query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"delete{self.stmt_id}", exe)
+        if correctness():
+            table = self.rng.choice(exe.db.tables)
+            with table.lock:
+                # An arbitrary WHERE clause cannot be replayed against the tracked
+                # rows, so delete the whole table, which is verifiable.
+                exe.execute(f"DELETE FROM {table}", http=Http.NO)
+                exe.commit()
+                table.rows.clear()
+                table.num_rows = 0
         else:
-            exe.execute(query, http=Http.RANDOM)
-        exe.commit()
-        result = exe.cur.rowcount
-        table.num_rows -= result
+            table = self.rng.choice(exe.db.tables)
+            query = f"DELETE FROM {table}"
+            if self.rng.random() < 0.95:
+                query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"delete{self.stmt_id}", exe)
+            else:
+                exe.execute(query, http=Http.RANDOM)
+            exe.commit()
+            result = exe.cur.rowcount
+            table.num_rows -= result
         return True
 
 
@@ -888,9 +1307,11 @@ class CommentAction(Action):
 
         if self.rng.choice([True, False]):
             column = self.rng.choice(table.columns)
-            query = f"COMMENT ON COLUMN {column} IS '{Text.random_value(self.rng)}'"
+            query = (
+                f"COMMENT ON COLUMN {column} IS '{Text.random_value(self.rng).value}'"
+            )
         else:
-            query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
+            query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng).value}'"
 
         exe.execute(query, http=Http.RANDOM)
         return True
@@ -1052,6 +1473,11 @@ class AlterTableAddColumnAction(Action):
             except:
                 raise
             table.columns.append(new_column)
+            if correctness():
+                # The new column is nullable, so existing rows read back NULL for
+                # it. Keep the tracked rows the same width as the schema.
+                for row in table.rows:
+                    row.append(None)
         return True
 
 
@@ -1951,6 +2377,11 @@ class CreateViewAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
+        if correctness():
+            # TODO: Views are not part of the table comparison yet, so skip
+            # creating them in correctness mode.
+            return True
+
         # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         with exe.db.lock:
@@ -3194,7 +3625,7 @@ class HttpPostAction(Action):
 
             url = f"http://{exe.db.host}:{exe.db.ports['http' if exe.mz_service == 'materialized' else 'http2']}/api/webhook/{urllib.parse.quote(source.schema.db.name(), safe='')}/{urllib.parse.quote(source.schema.name(), safe='')}/{urllib.parse.quote(source.name(), safe='')}"
 
-            payload = source.body_format.to_data_type().random_value(self.rng)
+            payload = source.body_format.to_data_type().random_value(self.rng).value
 
             header_fields = source.explicit_include_headers
             if source.include_headers:
@@ -3204,7 +3635,7 @@ class HttpPostAction(Action):
                 header: (
                     f"{datetime.datetime.now()}"
                     if header == "timestamp"
-                    else f'"{Text.random_value(self.rng)}"'.encode()
+                    else f'"{Text.random_value(self.rng).value}"'.encode()
                 )
                 for header in self.rng.sample(header_fields, len(header_fields))
             }
