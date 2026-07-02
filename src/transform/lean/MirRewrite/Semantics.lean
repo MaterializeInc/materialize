@@ -210,6 +210,8 @@ inductive ScalarExpr where
   | andE : List ScalarExpr → ScalarExpr
   | orE : List ScalarExpr → ScalarExpr
   | ifE : ScalarExpr → ScalarExpr → ScalarExpr → ScalarExpr
+  | litB : Bool → ScalarExpr
+  deriving Inhabited
 
 mutual
 /-- Boolean denotation of a `ScalarExpr` under an environment giving each leaf
@@ -227,6 +229,7 @@ def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | ScalarExpr.andE es => denoteSFold env es true (· && ·)
   | ScalarExpr.orE es => denoteSFold env es false (· || ·)
   | ScalarExpr.ifE c t e => if denoteS env c then denoteS env t else denoteS env e
+  | ScalarExpr.litB b => b
 /-- Explicit list-walker for `denoteS`'s `andE`/`orE` cases, structured so the
     termination checker can see `e` comes from the smaller list `es`. Marked
     `@[simp]` so the emitted `simp [denoteS]` proofs (e.g. `and_single`) unfold
@@ -235,5 +238,11 @@ def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | [], unit, _ => unit
   | e :: es, unit, op => op (denoteS env e) (denoteSFold env es unit op)
 end
+
+/-- The const-eval builtin, opaque: its result is computed by Rust `mz_expr`
+    evaluation, not modeled in Lean. Rules whose RHS is `constEval` carry a
+    permanent `sorry`; the opaque declaration is what makes that `sorry`
+    genuinely required rather than `rfl`-closable. -/
+opaque constEval : ScalarExpr → ScalarExpr
 
 end MirRewrite

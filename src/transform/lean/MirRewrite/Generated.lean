@@ -260,4 +260,20 @@ theorem rule_if_same_branches :
     ∀ (env : Nat → Bool) (c : ScalarExpr) (x : ScalarExpr), denoteS env (ScalarExpr.ifE c x x) = denoteS env x := by
     intro env c x; first | (simp [denoteS]; done) | sorry
 
+-- all-literal scalar call = its evaluated literal
+theorem rule_const_fold :
+    ∀ (env : Nat → Bool) (e : ScalarExpr), denoteS env e = denoteS env (constEval e) := by
+    -- PERMANENT SORRY: RHS is a Rust builtin
+    sorry
+
+-- And() = true
+theorem rule_and_empty :
+    ∀ (env : Nat → Bool), denoteS env (ScalarExpr.andE []) = denoteS env (ScalarExpr.litB true) := by
+    intro env; simp [denoteS]
+
+-- Or() = false
+theorem rule_or_empty :
+    ∀ (env : Nat → Bool), denoteS env (ScalarExpr.orE []) = denoteS env (ScalarExpr.litB false) := by
+    intro env; simp [denoteS]
+
 end MirRewrite

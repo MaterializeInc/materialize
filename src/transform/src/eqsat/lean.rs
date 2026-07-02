@@ -132,6 +132,10 @@ fn emit_rule(rule: &Rule) -> String {
         .conds
         .iter()
         .any(|c| matches!(c, Cond::IsRelEmpty { .. }));
+    // True when the RHS is a builtin applier (e.g. `const_fold`'s
+    // `const_eval`): a Rust evaluation product with no declarative template,
+    // so the theorem is a permanent `sorry`.
+    let is_builtin_rhs = matches!(rule.rhs, Tmpl::Builtin { .. });
 
     let proof = choose_proof(
         &lhs,
@@ -143,6 +147,7 @@ fn emit_rule(rule: &Rule) -> String {
         any_false.as_deref(),
         is_empty_prop,
         is_scalar,
+        is_builtin_rhs,
     );
 
     let quantifier = if binders.is_empty() && hyps.is_empty() {
@@ -183,13 +188,13 @@ fn emit_rule(rule: &Rule) -> String {
 }
 
 /// Whether a rule's left-hand side is a scalar pattern (rooted at
-/// `Pat::SUnary`, `Pat::SVariadic`, or `Pat::SIf`). Its Lean theorem denotes
-/// through `denoteS`, unlike a relational rule whose `Bag` denotation is
-/// direct.
+/// `Pat::SUnary`, `Pat::SVariadic`, `Pat::SIf`, or `Pat::Scalar`). Its Lean
+/// theorem denotes through `denoteS`, unlike a relational rule whose `Bag`
+/// denotation is direct.
 fn is_scalar_rule(pat: &Pat) -> bool {
     matches!(
         pat,
-        Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. }
+        Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. } | Pat::Scalar { .. }
     )
 }
 
@@ -208,6 +213,9 @@ fn collect_binders(
     };
     match pat {
         Pat::RelVar(name) => add(name, "Bag", out, seen),
+        // Matches any scalar call node, binding its whole e-class to
+        // `binding`: a single `ScalarExpr` leaf var, like a scalar `RelVar`.
+        Pat::Scalar { binding } => add(binding, "Bag", out, seen),
         // A scalar-unary pattern binds a fixed function, not a metavariable, so
         // only its input contributes binders.
         Pat::SUnary { input, .. } => collect_binders(input, out, seen),
@@ -300,6 +308,9 @@ fn translate_pat(pat: &Pat) -> String {
         // bound Lean variable's type follows from `emit_rule`'s binder
         // retyping, so the identifier alone is the right translation either way.
         Pat::RelVar(n) => n.clone(),
+        // Matches any scalar call node, binding it to `binding`: like
+        // `Pat::RelVar`, the identifier alone is the translation.
+        Pat::Scalar { binding } => binding.clone(),
         Pat::SUnary { func, input } => match func.as_str() {
             "not" => format!("ScalarExpr.notE {}", arg(translate_pat(input))),
             other => unimplemented!(
@@ -452,6 +463,19 @@ fn translate_tmpl(t: &Tmpl, hole: &str) -> String {
             arg(translate_tmpl(then, hole)),
             arg(translate_tmpl(els, hole))
         ),
+        // A constant boolean literal, e.g. `and_empty`'s `true`.
+        Tmpl::SBool(b) => format!("ScalarExpr.litB {}", if *b { "true" } else { "false" }),
+        // A builtin applier: its result is a Rust evaluation product with no
+        // declarative Lean template, so only the one function this slice ports
+        // (`const_eval`, the only builtin rule so far) is mapped; `choose_proof`
+        // emits a permanent `sorry` for every `Builtin` RHS regardless.
+        Tmpl::Builtin { name, args } => match name.as_str() {
+            "const_eval" => format!("constEval {}", args[0]),
+            other => unimplemented!(
+                "no Lean builtin translation for {other:?}; extend Semantics.lean's opaque \
+                 builtins and this match when a rule needs it"
+            ),
+        },
     }
 }
 
@@ -639,6 +663,7 @@ fn choose_proof(
     any_false: Option<&str>,
     is_empty_prop: bool,
     is_scalar: bool,
+    is_builtin_rhs: bool,
 ) -> String {
     let both = format!("{lhs} {rhs}");
     let mut intros: Vec<&str> = binders.iter().map(|(n, _)| n.as_str()).collect();
@@ -656,12 +681,23 @@ fn choose_proof(
     // falls back to an explicit `sorry` rather than emitting a tactic that
     // might not discharge the goal.
     if is_scalar {
+        // The RHS is computed by a Rust builtin (e.g. `const_eval`), an
+        // evaluation product opaque to Lean (see `constEval` in
+        // Semantics.lean): the equality is not provable here, so the
+        // obligation is a permanent `sorry`, not a provable-later one.
+        if is_builtin_rhs {
+            return "by\n    -- PERMANENT SORRY: RHS is a Rust builtin\n    sorry".to_string();
+        }
         if lhs.contains("ScalarExpr.notE (ScalarExpr.notE") {
             return format!("by\n    {intro}simp [denoteS]");
         }
         // `and_single`/`or_single`: a singleton `andE [x]`/`orE [x]` unfolds
         // (by `foldr`'s definition) to `denoteS x && true`/`denoteS x || false`,
-        // which `simp` closes via `Bool.and_true`/`Bool.or_false`.
+        // which `simp` closes via `Bool.and_true`/`Bool.or_false`. The same
+        // match also catches `and_empty`/`or_empty` (`andE []`/`orE []`,
+        // matched via the shared `[` prefix): `denoteSFold` over `[]` reduces
+        // to the fold's unit (`true`/`false`) definitionally, which `simp`
+        // closes against `denoteS (litB true/false)`.
         if lhs.contains("ScalarExpr.andE [") || lhs.contains("ScalarExpr.orE [") {
             return format!("by\n    {intro}simp [denoteS]");
         }

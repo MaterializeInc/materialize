@@ -12,9 +12,10 @@
 #
 # "Green" means: compiles with zero errors and only the intended, documented
 # `sorry`s (provable-later theorems, one pre-existing infra gap). It does NOT
-# mean zero `sorry`s. The permanent-sorry invariant (builtin-applier RHS, none
-# until slice 4) is enforced separately below: any `-- PERMANENT SORRY` marker
-# in the sources fails the build, since none should exist yet.
+# mean zero `sorry`s. The permanent-sorry invariant (builtin-applier RHS) is
+# enforced separately below: the count of `-- PERMANENT SORRY` markers in the
+# sources must match exactly, so a builtin-applier rule cannot be added (or
+# removed) without a deliberate update to this guard.
 #
 # The image is built locally and reused via Docker's layer cache; there is no
 # registry push. It is Mathlib-free, so a cold build is just apt + elan + one
@@ -45,12 +46,12 @@ docker run --rm \
 
 # Guard the permanent-sorry invariant: builtin-applier obligations (slices 4-6)
 # carry the `-- PERMANENT SORRY` marker and are the only never-provable sorries.
-# None should exist before slice 4; a pre-existing-gap sorry uses a distinct
-# marker and must not be counted here.
+# A pre-existing-gap sorry uses a distinct marker and must not be counted here.
 # `grep` exits non-zero when there are no matches, which is the passing case
 # here, so `|| true` keeps `set -o pipefail` from aborting the script.
+expected_permanent=1  # const_fold (slice 4), the one builtin ported so far. Grows to 6 by slice 6 (spec 2.7).
 permanent=$(grep -rho "PERMANENT SORRY" "$lean_dir/MirRewrite" | wc -l || true)
-if [ "$permanent" -ne 0 ]; then
-    echo "error: found $permanent PERMANENT SORRY marker(s); expected 0 before slice 4" >&2
+if [ "$permanent" -ne "$expected_permanent" ]; then
+    echo "error: found $permanent PERMANENT SORRY marker(s); expected $expected_permanent" >&2
     exit 1
 fi
