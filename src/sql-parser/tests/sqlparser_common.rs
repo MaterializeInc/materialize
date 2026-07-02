@@ -563,6 +563,88 @@ fn test_role_password_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_comment_body_redacted() {
+    // `COMMENT ON ... IS '<text>'` carries arbitrary user free text that flows
+    // into `redacted_sql` and trace spans, so the redacted rendering must not
+    // leak the body. `NULL` carries no data and prints verbatim.
+    let ast = parse_statements("COMMENT ON TABLE customers IS 'ssn 123-45-6789'")
+        .expect("should parse")
+        .into_iter()
+        .next()
+        .expect("one statement")
+        .ast;
+    let redacted = ast.to_ast_string_redacted();
+    assert!(
+        redacted.contains("<REDACTED>"),
+        "comment body should be redacted, got {redacted:?}"
+    );
+    assert!(
+        !redacted.contains("ssn 123-45-6789"),
+        "comment body leaked into redacted output {redacted:?}"
+    );
+    assert!(
+        ast.to_ast_string_simple().contains("ssn 123-45-6789"),
+        "comment body should be preserved in non-redacted output"
+    );
+
+    let null_ast = parse_statements("COMMENT ON TABLE customers IS NULL")
+        .expect("should parse")
+        .into_iter()
+        .next()
+        .expect("one statement")
+        .ast;
+    assert!(
+        null_ast.to_ast_string_redacted().ends_with("IS NULL"),
+        "NULL comment should print verbatim when redacted"
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_partition_by_value_redacted() {
+    // A `PARTITION BY` value can be an arbitrary user literal. It flows into
+    // redacted_sql / trace spans, so it must not render verbatim in redacted
+    // mode. A column-list `PARTITION BY (a, b)` carries only identifiers, which
+    // stay verbatim (they are schema, not data).
+    for sql in [
+        "CREATE TABLE t (a int4) WITH (PARTITION BY = 'sensitive_literal')",
+        "CREATE MATERIALIZED VIEW mv WITH (PARTITION BY = 'sensitive_literal') AS SELECT 1",
+    ] {
+        let ast = parse_statements(sql)
+            .unwrap_or_else(|e| panic!("{sql:?} should parse: {e}"))
+            .into_iter()
+            .next()
+            .expect("one statement")
+            .ast;
+        let redacted = ast.to_ast_string_redacted();
+        assert!(
+            redacted.contains("<REDACTED>") && !redacted.contains("sensitive_literal"),
+            "PARTITION BY literal leaked into redacted output {redacted:?}"
+        );
+        assert!(
+            ast.to_ast_string_simple().contains("sensitive_literal"),
+            "PARTITION BY literal should be preserved in non-redacted output"
+        );
+    }
+
+    // Column-list partitioning must not be over-redacted: the identifiers are
+    // part of the schema and appear verbatim elsewhere in the statement.
+    let cols =
+        parse_statements("CREATE MATERIALIZED VIEW mv WITH (PARTITION BY (a, b)) AS SELECT a, b")
+            .expect("should parse")
+            .into_iter()
+            .next()
+            .expect("one statement")
+            .ast;
+    let redacted = cols.to_ast_string_redacted();
+    assert!(
+        redacted.contains("(a, b)") && !redacted.contains("<REDACTED>"),
+        "PARTITION BY column list should stay verbatim when redacted, got {redacted:?}"
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_collate_low_precedence_display_roundtrip() {
     // `COLLATE` binds very tightly (`PostfixCollateAt`), so a low-precedence
     // operand must print parenthesized — `(a + b) COLLATE c` would otherwise

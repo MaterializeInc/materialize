@@ -209,7 +209,11 @@ pub trait WithOptionName {
     /// # WARNING
     ///
     /// Whenever implementing this trait consider very carefully whether or not
-    /// this value could contain sensitive user data.
+    /// this value could contain sensitive user data. Returning `false` disables
+    /// redaction for the value AND all of its descendants: the macro fully
+    /// un-redacts the formatter before rendering the value, so every nested
+    /// literal, sub-option, and expression underneath it prints verbatim too,
+    /// not just an immediate scalar.
     ///
     /// # Context
     /// Many statements in MZ use the format `WITH (<options>...)` to modify the
