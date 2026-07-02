@@ -28,7 +28,7 @@ rule or_single {
 }
 
 # De Morgan: push a NOT through a variadic AND/OR, flipping the connective and
-# wrapping each operand. Operand order is preserved; the And/Or error is the
+# wrapping each operand. Operand order is preserved. The And/Or error is the
 # order-independent max over operands, so the flip is exact under three-valued
 # logic and errors (no could_error gate).
 rule not_demorgan_and {
