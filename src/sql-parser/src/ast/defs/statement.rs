@@ -5772,9 +5772,15 @@ impl<T: AstInfo> AstDisplay for CommentStatement<T> {
         f.write_str(" IS ");
         match &self.comment {
             Some(s) => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(s));
-                f.write_str("'");
+                if f.redacted() {
+                    // The comment body is arbitrary free text and may contain PII,
+                    // so redact it like every other user-supplied value.
+                    f.write_str("'<REDACTED>'");
+                } else {
+                    f.write_str("'");
+                    f.write_node(&display::escape_single_quote_string(s));
+                    f.write_str("'");
+                }
             }
             None => f.write_str("NULL"),
         }

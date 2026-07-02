@@ -563,6 +563,44 @@ fn test_role_password_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_comment_body_redacted() {
+    // `COMMENT ON ... IS '<text>'` carries arbitrary user free text that flows
+    // into `redacted_sql` and trace spans, so the redacted rendering must not
+    // leak the body. `NULL` carries no data and prints verbatim.
+    let ast = parse_statements("COMMENT ON TABLE customers IS 'ssn 123-45-6789'")
+        .expect("should parse")
+        .into_iter()
+        .next()
+        .expect("one statement")
+        .ast;
+    let redacted = ast.to_ast_string_redacted();
+    assert!(
+        redacted.contains("<REDACTED>"),
+        "comment body should be redacted, got {redacted:?}"
+    );
+    assert!(
+        !redacted.contains("ssn 123-45-6789"),
+        "comment body leaked into redacted output {redacted:?}"
+    );
+    assert!(
+        ast.to_ast_string_simple().contains("ssn 123-45-6789"),
+        "comment body should be preserved in non-redacted output"
+    );
+
+    let null_ast = parse_statements("COMMENT ON TABLE customers IS NULL")
+        .expect("should parse")
+        .into_iter()
+        .next()
+        .expect("one statement")
+        .ast;
+    assert!(
+        null_ast.to_ast_string_redacted().ends_with("IS NULL"),
+        "NULL comment should print verbatim when redacted"
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_collate_low_precedence_display_roundtrip() {
     // `COLLATE` binds very tightly (`PostfixCollateAt`), so a low-precedence
     // operand must print parenthesized — `(a + b) COLLATE c` would otherwise
