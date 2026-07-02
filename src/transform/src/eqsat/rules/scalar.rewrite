@@ -15,3 +15,28 @@ rule not_not {
     doc "Not(Not(x)) = x"
     Unary[not](Unary[not](x)) => x
 }
+
+# A one-argument AND/OR equals its sole argument.
+rule and_single {
+    doc "And(x) = x"
+    Variadic[and](x) => x
+}
+
+rule or_single {
+    doc "Or(x) = x"
+    Variadic[or](x) => x
+}
+
+# De Morgan: push a NOT through a variadic AND/OR, flipping the connective and
+# wrapping each operand. Operand order is preserved; the And/Or error is the
+# order-independent max over operands, so the flip is exact under three-valued
+# logic and errors (no could_error gate).
+rule not_demorgan_and {
+    doc "Not(And(xs...)) = Or(Not(xs)...)"
+    Unary[not](Variadic[and](xs...)) => Variadic[or](map(Unary[not](_), xs))
+}
+
+rule not_demorgan_or {
+    doc "Not(Or(xs...)) = And(Not(xs)...)"
+    Unary[not](Variadic[or](xs...)) => Variadic[and](map(Unary[not](_), xs))
+}
