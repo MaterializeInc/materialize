@@ -46,6 +46,14 @@ pub enum Pat {
         then: Box<Pat>,
         els: Box<Pat>,
     },
+    /// Matches any scalar binary call, binding the `BinaryFunc` symbol to `func`
+    /// (a metavariable, NOT a fixed keyword) and the operands to `expr1`/`expr2`.
+    /// The DSL's first func-metavar binding. Roots `not_binary_negate`.
+    SBinaryVar {
+        func: String,
+        expr1: Box<Pat>,
+        expr2: Box<Pat>,
+    },
     /// Matches any scalar CALL node (unary/binary/variadic/if), binding its
     /// e-class to `binding`. Does not destructure the function or arguments,
     /// so it needs no func-metavar machinery. Roots the `const_fold` builtin,
@@ -241,6 +249,14 @@ pub enum Tmpl {
     /// A constant boolean literal (`true`/`false`) as a scalar node. The
     /// declarative RHS of `and_empty`/`or_empty`.
     SBool(bool),
+    /// Build a binary call whose function is `negate(func)` for the `BinaryFunc`
+    /// bound to metavar `func` by an `SBinaryVar` on the LHS, over `expr1`/`expr2`.
+    /// Declines (rule does not fire) when `BinaryFunc::negate()` is `None`.
+    SBinaryNegate {
+        func: String,
+        expr1: Box<Tmpl>,
+        expr2: Box<Tmpl>,
+    },
 }
 
 /// An element of a template input list. Lists are ordered sequences of these,
@@ -398,6 +414,10 @@ pub enum Cond {
     /// `scalar_no_error(s)`: the class bound to `s` has `could_error == false`
     /// (scalar `could_error` analysis). Gates `if_same_branches`.
     ScalarNoError { scalar: String },
+    /// `scalar_non_nullable(s)`: the class bound to scalar metavar `s` is provably
+    /// non-nullable, via `scalar_extract::raise(g, s).typ(col_types).nullable == false`.
+    /// Computed on demand (no lattice storage). Gates `isnull_fold`.
+    ScalarNonNullable { scalar: String },
 }
 
 /// The eqsat pass a rule is active in.

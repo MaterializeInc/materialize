@@ -390,6 +390,20 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             .ignore_then(bracket_ident())
             .then(listpat.clone())
             .map(|(func, inputs)| Pat::SVariadic { func, inputs });
+        // `Binary[<ident>](a, b)` binds the func symbol itself (a metavariable,
+        // not a fixed keyword text like `Unary`/`Variadic`'s bracket payload).
+        let sbinary_var = kw("Binary")
+            .ignore_then(bracket_ident())
+            .then_ignore(just(Token::LParen))
+            .then(pat.clone())
+            .then_ignore(just(Token::Comma))
+            .then(pat.clone())
+            .then_ignore(just(Token::RParen))
+            .map(|((func, e1), e2)| Pat::SBinaryVar {
+                func,
+                expr1: Box::new(e1),
+                expr2: Box::new(e2),
+            });
         let sif = kw("If")
             .ignore_then(just(Token::LParen))
             .ignore_then(pat.clone())
@@ -409,8 +423,25 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
         let relvar = relvar_ident().map(Pat::RelVar);
 
         choice((
-            paren, filter, map, project, reduce, flatmap, negate, threshold, topk, arrangeby, join,
-            wcojoin, union, sif, svariadic, sunary, scalar_any, relvar,
+            paren,
+            filter,
+            map,
+            project,
+            reduce,
+            flatmap,
+            negate,
+            threshold,
+            topk,
+            arrangeby,
+            join,
+            wcojoin,
+            union,
+            sif,
+            svariadic,
+            sunary,
+            sbinary_var,
+            scalar_any,
+            relvar,
         ))
     });
 
@@ -524,6 +555,28 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             .ignore_then(bracket_ident())
             .then(listtmpl.clone())
             .map(|(func, inputs)| Tmpl::SVariadic { func, inputs });
+        // `Binary[negate(<ident>)](a, b)`: builds a binary call whose function is
+        // `negate(func)` for the `BinaryFunc` metavar `func` bound by an
+        // `SBinaryVar` pattern. The `negate(...)` sub-bracket is fixed syntax
+        // (not a general PExpr), so it is spelled out token-by-token rather than
+        // reusing `bracket_pexpr`.
+        let tsbinary_negate = kw("Binary")
+            .ignore_then(just(Token::LBrack))
+            .ignore_then(kw("negate"))
+            .ignore_then(just(Token::LParen))
+            .ignore_then(ident())
+            .then_ignore(just(Token::RParen))
+            .then_ignore(just(Token::RBrack))
+            .then_ignore(just(Token::LParen))
+            .then(tmpl.clone())
+            .then_ignore(just(Token::Comma))
+            .then(tmpl.clone())
+            .then_ignore(just(Token::RParen))
+            .map(|((func, e1), e2)| Tmpl::SBinaryNegate {
+                func,
+                expr1: Box::new(e1),
+                expr2: Box::new(e2),
+            });
         let tsif = kw("If")
             .ignore_then(just(Token::LParen))
             .ignore_then(tmpl.clone())
@@ -578,6 +631,7 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             tsif,
             tsvariadic,
             tsunary,
+            tsbinary_negate,
             sbool,
             builtin,
             hole_or_relvar,
@@ -646,6 +700,7 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
         one_ident("scalar_lit_true").map(|scalar| Cond::ScalarLitTrue { scalar }),
         one_ident("scalar_lit_false_or_null").map(|scalar| Cond::ScalarLitFalseOrNull { scalar }),
         one_ident("scalar_no_error").map(|scalar| Cond::ScalarNoError { scalar }),
+        one_ident("scalar_non_nullable").map(|scalar| Cond::ScalarNonNullable { scalar }),
     ));
 
     // --- rule ---
@@ -808,5 +863,82 @@ mod tests {
             }
         );
         assert_eq!(rules[0].rhs, crate::dsl::Tmpl::SBool(true));
+    }
+
+    #[test]
+    fn parses_binary_var_and_negate_template() {
+        let src =
+            "rule not_binary_negate { Unary[not](Binary[f](a, b)) => Binary[negate(f)](a, b) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].lhs {
+            crate::dsl::Pat::SUnary { func, input } => {
+                assert_eq!(func, "not");
+                assert_eq!(
+                    **input,
+                    crate::dsl::Pat::SBinaryVar {
+                        func: "f".to_string(),
+                        expr1: Box::new(crate::dsl::Pat::RelVar("a".to_string())),
+                        expr2: Box::new(crate::dsl::Pat::RelVar("b".to_string())),
+                    }
+                );
+            }
+            other => panic!("expected SUnary root, got {other:?}"),
+        }
+        assert_eq!(
+            rules[0].rhs,
+            crate::dsl::Tmpl::SBinaryNegate {
+                func: "f".to_string(),
+                expr1: Box::new(crate::dsl::Tmpl::RelVar("a".to_string())),
+                expr2: Box::new(crate::dsl::Tmpl::RelVar("b".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_isnull_fold_with_scalar_non_nullable_cond() {
+        let src = "rule isnull_fold { Unary[isnull](x) => false \
+            where scalar_no_error(x) where scalar_non_nullable(x) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        assert!(matches!(
+            &rules[0].lhs,
+            crate::dsl::Pat::SUnary { func, .. } if func == "isnull"
+        ));
+        assert_eq!(rules[0].rhs, crate::dsl::Tmpl::SBool(false));
+        assert_eq!(rules[0].conds.len(), 2);
+        assert!(matches!(
+            rules[0].conds[0],
+            crate::dsl::Cond::ScalarNoError { .. }
+        ));
+        assert!(matches!(
+            rules[0].conds[1],
+            crate::dsl::Cond::ScalarNonNullable { .. }
+        ));
+    }
+
+    /// `Binary` is a new leading keyword in both pattern and template position.
+    /// Probes that it neither shadows nor is shadowed by neighboring
+    /// productions: a bare lowercase metavariable named `binary` still parses
+    /// as a plain `RelVar` (the `Binary` keyword match is an exact-string
+    /// `kw()` filter, not a prefix match), and a standalone `Binary[f](a, b)`
+    /// pattern (not nested under `Unary`) parses as a full rule root without
+    /// falling through to `relvar` (which would reject it: `is_operator`
+    /// filters out any identifier starting with an uppercase letter).
+    #[test]
+    fn binary_keyword_does_not_shadow_or_get_shadowed() {
+        let src = "rule binary_metavar_is_plain_relvar { binary => binary }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        assert_eq!(rules[0].lhs, crate::dsl::Pat::RelVar("binary".to_string()));
+        assert_eq!(rules[0].rhs, crate::dsl::Tmpl::RelVar("binary".to_string()));
+
+        let src = "rule binary_var_root { Binary[f](a, b) => a }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        assert_eq!(
+            rules[0].lhs,
+            crate::dsl::Pat::SBinaryVar {
+                func: "f".to_string(),
+                expr1: Box::new(crate::dsl::Pat::RelVar("a".to_string())),
+                expr2: Box::new(crate::dsl::Pat::RelVar("b".to_string())),
+            }
+        );
     }
 }
