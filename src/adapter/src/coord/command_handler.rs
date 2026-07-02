@@ -1072,6 +1072,19 @@ impl Coordinator {
         // outer execute should be considered finished once the inner one is.
         outer_context: Option<ExecuteContextGuard>,
     ) {
+        // A new statement is starting, so discard any cancellation that was signaled while no
+        // statement was running. Such a cancellation targeted an earlier statement and must not
+        // cancel the new one. (Like in PostgreSQL, a cancel request that arrives when nothing is
+        // running has no effect.) The watch would otherwise retain a stale `true` within an
+        // explicit transaction, because it is removed only when the transaction is cleared, not
+        // at statement end.
+        //
+        // Don't do this for nested executes (e.g., FETCH executing its cursor's statement): the
+        // outer statement is still running and a pending cancellation may target it.
+        if outer_context.is_none() {
+            self.connection_cancel_watches.remove(session.conn_id());
+        }
+
         if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
                 .context()
