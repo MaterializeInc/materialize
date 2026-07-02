@@ -30,10 +30,9 @@ use crate::eqsat::cost::{JoinOrder, JoinStep};
 /// from the structurally-known fields. `available` must be the ORIGINAL per-input
 /// arrangement keys (before `implement_arrangements` wraps inputs in ArrangeBy),
 /// matching `JoinImplementation`'s `arranged` computation. `filters` is the
-/// caller-derived filter characteristics for this step (see
-/// [`input_filter_characteristics`] and the cumulative-OR in
-/// [`commit_delta_query`]). `cardinality` is left neutral; the cardinality and
-/// selectivity axes are future work.
+/// caller-derived filter characteristics for this step, computed per-input by
+/// [`input_filter_characteristics`]. `cardinality` is left neutral; the
+/// cardinality and selectivity axes are future work.
 fn step_characteristics(
     input: usize,
     key: &[MirScalarExpr],
@@ -294,16 +293,15 @@ pub(crate) fn commit_delta_query(
     // `paths` is indexed by driver position (cost.rs:1097-1104), so `paths[driver]`
     // is the delta chain when `driver` receives an update.
     //
-    // Inside each chain, each element's filters are OR'd with the running sum of
-    // every earlier element, seeded with the driver's own filters. This mirrors
-    // JoinImplementation's cumulative left-to-right OR (join_implementation.rs:848-854),
-    // whose orders include the driver as element 0. We keep only the lookups, so
-    // we seed the sum with the driver's filters explicitly.
+    // Unlike DIFFERENTIAL's left-to-right cumulative OR (join_implementation.rs:
+    // 843-854), a delta plan runs one differential dataflow per driver, and each
+    // lookup arrangement is keyed on its own input alone. So each lookup's
+    // characteristics carry only that input's own filters, never a driver's or an
+    // earlier lookup's, matching `delta_queries::plan` (join_implementation.rs:
+    // 698-773).
     let mut orders: Vec<Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>> = paths
         .iter()
-        .enumerate()
-        .map(|(driver, path)| {
-            let mut sum = input_filters[driver].clone();
+        .map(|path| {
             path.iter()
                 .map(|step| {
                     let key: Vec<MirScalarExpr> = step
@@ -311,13 +309,12 @@ pub(crate) fn commit_delta_query(
                         .iter()
                         .map(|&c| MirScalarExpr::column(c))
                         .collect();
-                    sum |= input_filters[step.input].clone();
                     let chars = step_characteristics(
                         step.input,
                         &key,
                         available,
                         inputs,
-                        sum.clone(),
+                        input_filters[step.input].clone(),
                         prioritize_arranged,
                     );
                     (step.input, key, Some(chars))
@@ -462,14 +459,18 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn commit_delta_query_propagates_filter_markers() {
+    fn commit_delta_query_per_input_filter_markers() {
         use mz_expr::{BinaryFunc, func};
         use mz_repr::Datum;
 
         // input 0 carries a literal-equality filter `#0 = 5`; inputs 1 and 2 are
-        // bare. The delta commit must surface the `e` marker on the lookup for
-        // input 0 AND, via the cumulative left-to-right OR, on every lookup that
-        // follows input 0 in a chain (including chains driven by input 0).
+        // bare. JI-native DELTA assigns each lookup its own input's filter
+        // characteristics (join_implementation.rs:698-773, `delta_queries::plan`),
+        // unlike DIFFERENTIAL's cumulative left-to-right OR
+        // (join_implementation.rs:843-854). So the lookup for input 0 must carry
+        // the `e` (literal-equality) marker in every chain and position, while
+        // lookups for inputs 1 and 2 must never carry it, even when they
+        // immediately follow input 0's lookup in the same chain.
         let filtered0 = MirRelationExpr::Filter {
             input: Box::new(get(0, 2)),
             predicates: vec![MirScalarExpr::column(0).call_binary(
@@ -485,11 +486,13 @@ mod tests {
                 vec![MirScalarExpr::column(3), MirScalarExpr::column(4)],
             ],
         );
-        // paths[driver]: driver 0 filtered, drivers 1 and 2 bare.
+        // paths[driver]: driver 0 filtered, drivers 1 and 2 bare. Input 0's
+        // lookup sits mid-chain for drivers 1 and 2, so any cumulative
+        // propagation to the lookup that follows it would show up here.
         let paths = vec![
-            vec![step(1, &[0]), step(2, &[0])], // driver 0 (filtered)
-            vec![step(0, &[0]), step(2, &[0])], // driver 1
-            vec![step(0, &[0]), step(1, &[0])], // driver 2
+            vec![step(1, &[0]), step(2, &[0])], // driver 0 (filtered): bare, bare
+            vec![step(0, &[0]), step(2, &[0])], // driver 1: filtered, then bare
+            vec![step(0, &[0]), step(1, &[0])], // driver 2: filtered, then bare
         ];
         let available = vec![Vec::new(); 3];
         let out = commit_delta_query(join, paths, &available, &inputs, false)
@@ -501,22 +504,23 @@ mod tests {
             panic!("expected DeltaQuery, got {implementation:?}");
         };
         let marks = |c: &Option<JoinInputCharacteristics>| c.as_ref().unwrap().explain();
-        // Driver 0 is filtered: its filter seeds the running sum, so both lookups
-        // in its chain carry `e` even though inputs 1 and 2 have no filter.
-        assert!(marks(&orders[0][0].2).contains('e'), "chain 0 lookup 1");
-        assert!(marks(&orders[0][1].2).contains('e'), "chain 0 lookup 2");
-        // Driver 1's chain: lookup on input 0 carries its own `e`; the following
-        // lookup on input 2 inherits it cumulatively.
+        // Driver 0's chain never touches input 0: neither lookup (on inputs 1
+        // and 2) carries `e`.
+        assert!(!marks(&orders[0][0].2).contains('e'), "chain 0 lookup on 1");
+        assert!(!marks(&orders[0][1].2).contains('e'), "chain 0 lookup on 2");
+        // Driver 1's chain: the lookup on input 0 carries its own `e`, but the
+        // following lookup on input 2 does NOT inherit it.
         assert!(marks(&orders[1][0].2).contains('e'), "chain 1 lookup on 0");
         assert!(
-            marks(&orders[1][1].2).contains('e'),
-            "chain 1 lookup after 0 inherits e"
+            !marks(&orders[1][1].2).contains('e'),
+            "chain 1 lookup on 2 must not inherit input 0's filter"
         );
-        // Driver 2's chain: same cumulative propagation after the input-0 lookup.
+        // Driver 2's chain: same per-input isolation, with a different bare
+        // input following the filtered one.
         assert!(marks(&orders[2][0].2).contains('e'), "chain 2 lookup on 0");
         assert!(
-            marks(&orders[2][1].2).contains('e'),
-            "chain 2 lookup after 0 inherits e"
+            !marks(&orders[2][1].2).contains('e'),
+            "chain 2 lookup on 1 must not inherit input 0's filter"
         );
     }
 
