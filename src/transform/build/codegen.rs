@@ -126,6 +126,7 @@ fn sym_name(p: &Pat) -> &'static str {
             unreachable!("scalar patterns have no relational operator symbol")
         }
         Pat::SIf { .. } => unreachable!("scalar patterns have no relational operator symbol"),
+        Pat::Scalar { .. } => unreachable!("scalar patterns have no relational operator symbol"),
     }
 }
 
@@ -326,6 +327,7 @@ impl Matcher {
                 self.child(els, &format!("*ee{c}"));
             }
             Pat::RelVar(_) => unreachable!("node() is only called on operators"),
+            Pat::Scalar { .. } => unreachable!("node() is only called on operators"),
         }
     }
 
@@ -646,6 +648,22 @@ fn find_stmts(rule: &Rule, mode: &FindMode) -> String {
             }
             s.push_str("}\n");
         }
+        Pat::Scalar { binding } => {
+            // Matches any scalar CALL node, so it ranges over all four call
+            // syms (leaves are never matched). Records the class id under
+            // `binding` exactly like a `RelVar` root, so `Tmpl::Builtin`'s
+            // args resolve it via `b.rels`.
+            let local = m.rel(binding);
+            for sym in ["Unary", "Binary", "Variadic", "If"] {
+                s.push_str(&format!(
+                    "for (root_id, _root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::{sym}) {{\n"
+                ));
+                s.push_str("let root_id = root_id;\n");
+                s.push_str(&format!("let {local} = root_id;\n"));
+                s.push_str(&body(rule, &m, mode));
+                s.push_str("}\n");
+            }
+        }
         _ => {
             let sym = sym_name(&rule.lhs);
             s.push_str(&format!(
@@ -949,6 +967,38 @@ fn tmpl_stmts(t: &Tmpl, hole: Option<&str>, out: &mut String, fresh: &mut Fresh)
             ));
             v
         }
+        Tmpl::Builtin { name, args } => {
+            let c = fresh.id();
+            let v = format!("id{c}");
+            // Resolve each arg metavar to its bound class Id.
+            let mut arg_locals = Vec::new();
+            for a in args {
+                let al = format!("ba{}", fresh.id());
+                out.push_str(&format!(
+                    "let {al} = b.rels.get({a:?}).copied().ok_or_else(|| \"unbound scalar metavariable {a}\".to_string())?;\n"
+                ));
+                arg_locals.push(al);
+            }
+            let call_args = std::iter::once("g".to_string())
+                .chain(arg_locals)
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "let {v} = crate::eqsat::scalar_builtins::{name}({call_args})?;\n"
+            ));
+            v
+        }
+        Tmpl::SBool(b) => {
+            let c = fresh.id();
+            let v = format!("id{c}");
+            let ctor = if *b { "literal_true" } else { "literal_false" };
+            out.push_str(&format!(
+                "let {v} = {{ let lit = mz_expr::MirScalarExpr::{ctor}(); \
+                 let mz_expr::MirScalarExpr::Literal(row, ct) = lit else {{ unreachable!() }}; \
+                 g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::Literal(row, ct))) }};\n"
+            ));
+            v
+        }
     }
 }
 
@@ -1017,7 +1067,7 @@ fn emit_apply(rule: &Rule) -> String {
 fn is_scalar_rule(r: &Rule) -> bool {
     matches!(
         r.lhs,
-        Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. }
+        Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. } | Pat::Scalar { .. }
     )
 }
 
@@ -1267,6 +1317,7 @@ fn pat(p: &Pat) -> String {
             pat(then),
             pat(els)
         ),
+        Pat::Scalar { binding } => format!("{P}::Pat::Scalar {{ binding: {} }}", s(binding)),
         Pat::Filter { preds, input } => format!(
             "{P}::Pat::Filter {{ preds: {}, input: Box::new({}) }}",
             s(preds),
@@ -1414,6 +1465,12 @@ fn tmpl(t: &Tmpl) -> String {
             tmpl(then),
             tmpl(els)
         ),
+        Tmpl::Builtin { name, args } => format!(
+            "{P}::Tmpl::Builtin {{ name: {}, args: vec![{}] }}",
+            s(name),
+            args.iter().map(|a| s(a)).collect::<Vec<_>>().join(", ")
+        ),
+        Tmpl::SBool(b) => format!("{P}::Tmpl::SBool({b})"),
     }
 }
 
