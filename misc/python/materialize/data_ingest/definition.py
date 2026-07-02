@@ -63,7 +63,7 @@ class Insert(Definition):
                 (
                     field.data_type.numeric_value(key)
                     if field.is_key
-                    else field.data_type.random_value(rng, self.record_size)
+                    else field.data_type.random_value(rng, self.record_size).value
                 )
                 for field in fields
             ]
@@ -97,11 +97,15 @@ class Upsert(Definition):
             values = []
             for field in fields:
                 if not field.is_key:
-                    values.append(field.data_type.random_value(rng, self.record_size))
+                    values.append(
+                        field.data_type.random_value(rng, self.record_size).value
+                    )
                 elif self.keyspace == Keyspace.SINGLE_VALUE:
                     values.append(field.data_type.numeric_value(0))
                 else:
-                    values.append(field.data_type.random_value(rng, self.record_size))
+                    values.append(
+                        field.data_type.random_value(rng, self.record_size).value
+                    )
 
             yield RowList(
                 [
@@ -126,10 +130,9 @@ class Delete(Definition):
         self.num = num
 
     def generate(self, fields: list[Field]) -> Iterator[RowList]:
-
         if self.number_of_records == Records.ONE:
             values = [
-                field.data_type.random_value(rng, self.record_size)
+                field.data_type.random_value(rng, self.record_size).value
                 for field in fields
                 if field.is_key
             ]
@@ -137,7 +140,7 @@ class Delete(Definition):
         elif self.number_of_records in (Records.SOME, Records.MANY):
             for i in range(self.number_of_records.value):
                 values = [
-                    field.data_type.random_value(rng, self.record_size)
+                    field.data_type.random_value(rng, self.record_size).value
                     for field in fields
                     if field.is_key
                 ]
