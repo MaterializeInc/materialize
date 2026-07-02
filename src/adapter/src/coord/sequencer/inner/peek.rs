@@ -33,7 +33,7 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
-use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices, eval_copy_to_uri};
 use crate::coord::timeline::{TimelineContext, timedomain_for};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
@@ -401,29 +401,11 @@ impl Coordinator {
             explain_ctx,
         };
 
-        match oracle {
-            Some(oracle) => {
-                // We ship the timestamp oracle off to an async task, so that we
-                // don't block the main task while we wait.
-
-                let span = Span::current();
-                Ok(StageResult::Handle(mz_ore::task::spawn(
-                    || "linearize timestamp",
-                    async move {
-                        let oracle_read_ts = oracle.read_ts().await;
-                        let stage = build_stage(Some(oracle_read_ts));
-                        let stage = PeekStage::RealTimeRecency(stage);
-                        Ok(Box::new(stage))
-                    }
-                    .instrument(span),
-                )))
-            }
-            None => {
-                let stage = build_stage(None);
-                let stage = PeekStage::RealTimeRecency(stage);
-                Ok(StageResult::Immediate(Box::new(stage)))
-            }
-        }
+        Ok(spawn_linearized_read_ts(
+            oracle,
+            "linearize timestamp",
+            move |oracle_read_ts| PeekStage::RealTimeRecency(build_stage(oracle_read_ts)),
+        ))
     }
 
     /// Determine a read timestamp and create appropriate read holds.

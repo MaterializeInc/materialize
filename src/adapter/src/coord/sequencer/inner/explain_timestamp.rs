@@ -21,7 +21,7 @@ use mz_sql::plan::{self};
 use mz_sql::session::metadata::SessionMetadata;
 use tracing::{Instrument, Span};
 
-use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
 use crate::coord::{
     Coordinator, ExplainTimestampFinish, ExplainTimestampLinearizeTimestamp,
@@ -268,22 +268,11 @@ impl Coordinator {
             })
         };
 
-        match oracle {
-            Some(oracle) => {
-                // We ship the timestamp oracle off to an async task, so that we
-                // don't block the main task while we wait.
-                let span = Span::current();
-                Ok(StageResult::Handle(mz_ore::task::spawn(
-                    || "explain timestamp linearize timestamp",
-                    async move {
-                        let oracle_read_ts = oracle.read_ts().await;
-                        Ok(Box::new(build_stage(Some(oracle_read_ts))))
-                    }
-                    .instrument(span),
-                )))
-            }
-            None => Ok(StageResult::Immediate(Box::new(build_stage(None)))),
-        }
+        Ok(spawn_linearized_read_ts(
+            oracle,
+            "explain timestamp linearize timestamp",
+            build_stage,
+        ))
     }
 
     pub(crate) fn explain_timestamp(

@@ -30,7 +30,7 @@ use uuid::Uuid;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
-use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
     Coordinator, ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
@@ -360,22 +360,11 @@ impl Coordinator {
             })
         };
 
-        match oracle {
-            Some(oracle) => {
-                // We ship the timestamp oracle off to an async task, so that we
-                // don't block the main task while we wait.
-                let span = Span::current();
-                Ok(StageResult::Handle(mz_ore::task::spawn(
-                    || "subscribe linearize timestamp",
-                    async move {
-                        let oracle_read_ts = oracle.read_ts().await;
-                        Ok(Box::new(build_stage(Some(oracle_read_ts))))
-                    }
-                    .instrument(span),
-                )))
-            }
-            None => Ok(StageResult::Immediate(Box::new(build_stage(None)))),
-        }
+        Ok(spawn_linearized_read_ts(
+            oracle,
+            "subscribe linearize timestamp",
+            build_stage,
+        ))
     }
 
     #[instrument]
