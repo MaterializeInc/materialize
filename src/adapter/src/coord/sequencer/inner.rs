@@ -2824,7 +2824,7 @@ impl Coordinator {
 
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
-        let (tx, _, session, extra) = ctx.into_parts();
+        let (tx, _, session, extra, response_barriers) = ctx.into_parts();
         // We construct a new execute context for the peek, with a trivial (`Default::default()`)
         // execution context, because this peek does not directly correspond to an execute,
         // and so we don't need to take any action on its retirement.
@@ -2877,8 +2877,13 @@ impl Coordinator {
                     session,
                     otel_ctx,
                 }) => {
-                    let ctx =
-                        ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+                    let ctx = ExecuteContext::from_parts_with_response_barriers(
+                        tx,
+                        internal_cmd_tx.clone(),
+                        session,
+                        extra,
+                        response_barriers,
+                    );
                     otel_ctx.attach_as_parent();
                     ctx.retire(Err(e));
                     return;
@@ -2886,7 +2891,13 @@ impl Coordinator {
                 // It is not an error for these results to be ready after `peek_client_tx` has been dropped.
                 Err(e) => return warn!("internal_cmd_rx dropped before we could send: {:?}", e),
             };
-            let mut ctx = ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+            let mut ctx = ExecuteContext::from_parts_with_response_barriers(
+                tx,
+                internal_cmd_tx.clone(),
+                session,
+                extra,
+                response_barriers,
+            );
             let mut timeout_dur = *ctx.session().vars().statement_timeout();
 
             // Timeout of 0 is equivalent to "off", meaning we will wait "forever."

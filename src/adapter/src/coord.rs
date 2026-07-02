@@ -1645,12 +1645,22 @@ impl ExecuteContext {
         session: Session,
         extra: ExecuteContextGuard,
     ) -> Self {
+        Self::from_parts_with_response_barriers(tx, internal_cmd_tx, session, extra, Vec::new())
+    }
+
+    pub fn from_parts_with_response_barriers(
+        tx: ClientTransmitter<ExecuteResponse>,
+        internal_cmd_tx: mpsc::UnboundedSender<Message>,
+        session: Session,
+        extra: ExecuteContextGuard,
+        response_barriers: Vec<BuiltinTableAppendNotify>,
+    ) -> Self {
         Self {
             inner: ExecuteContextInner {
                 tx,
                 session,
                 extra,
-                response_barriers: Vec::new(),
+                response_barriers,
                 internal_cmd_tx,
             }
             .into(),
@@ -1664,7 +1674,8 @@ impl ExecuteContext {
     /// the coordinator and the pgwire layer. As part of any such
     /// protocol, we must ensure that the `ExecuteContextGuard`
     /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
-    /// eventual retirement.
+    /// eventual retirement. The returned response barriers must stay attached
+    /// to the user-visible response path.
     pub fn into_parts(
         self,
     ) -> (
@@ -1672,6 +1683,7 @@ impl ExecuteContext {
         mpsc::UnboundedSender<Message>,
         Session,
         ExecuteContextGuard,
+        Vec<BuiltinTableAppendNotify>,
     ) {
         let ExecuteContextInner {
             tx,
@@ -1680,11 +1692,7 @@ impl ExecuteContext {
             extra,
             response_barriers,
         } = *self.inner;
-        assert!(
-            response_barriers.is_empty(),
-            "cannot split ExecuteContext while response barriers are pending"
-        );
-        (tx, internal_cmd_tx, session, extra)
+        (tx, internal_cmd_tx, session, extra, response_barriers)
     }
 
     /// Retire the execution, by sending a message to the coordinator.
