@@ -393,11 +393,16 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
 ///
 /// Disposition: added 2026-06-09, default off; solicit feedback for one month
 /// and remove in the absence of a positive response.
+///
+/// Declared [`ParameterScope::Replica`] so the value can be overridden per-replica. The replica
+/// captures the first value it observes from a configuration update and holds it fixed for its
+/// lifetime. A later flip only affects replicas that start afterwards.
 pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA: Config<bool> = Config::new(
     "enable_arrangement_dictionary_compression_alpha",
     false,
     "Enable arrangement dictionary compression (alpha; not yet production-ready).",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Whether to enable the peek response stash, for sending back large peek
 /// responses. The response stash will only be used for results that exceed

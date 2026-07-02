@@ -29,8 +29,9 @@ use mz_compute_client::protocol::response::{
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_PEEK_RESPONSE_STASH, PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
-    PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
+    ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA, ENABLE_PEEK_RESPONSE_STASH,
+    PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE,
+    PEEK_STASH_NUM_BATCHES,
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
@@ -171,6 +172,15 @@ pub struct ComputeState {
 
     /// The storage worker forwards its introspection logs to the compute worker.
     pub storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+
+    /// Arrangement dictionary compression, captured from the first configuration update this
+    /// replica observes and then held fixed for its lifetime.
+    ///
+    /// `None` until the first configuration update is applied. The captured value is mirrored into
+    /// the process-global `mz_row_spine::DICTIONARY_COMPRESSION`. Capturing it from configuration
+    /// updates, rather than from `CreateInstance`, keeps it out of the reconciliation-relevant
+    /// `InstanceConfig`, so flipping the flag cannot force a replica restart.
+    arrangement_dictionary_compression: Option<bool>,
 }
 
 impl ComputeState {
@@ -212,6 +222,7 @@ impl ComputeState {
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
             storage_log_reader,
+            arrangement_dictionary_compression: None,
         }
     }
 
@@ -309,9 +320,10 @@ impl ComputeState {
         );
 
         // NB: arrangement dictionary compression is deliberately NOT applied here. Unlike the
-        // settings above, it is captured once at replica creation (see `handle_create_instance`
-        // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that
-        // flipping the flag does not retroactively change arrangements on existing replicas.
+        // settings above, it is captured once from the first configuration update this replica
+        // sees (see `capture_dictionary_compression`, called from `handle_update_configuration`)
+        // and held fixed, so that flipping the flag does not retroactively change arrangements on
+        // existing replicas.
 
         // Apply column-paged-batcher configuration. Routes through
         // `apply_tiered_config`, which reuses a process-wide `TieredPolicy`
@@ -372,6 +384,23 @@ impl ComputeState {
                     overflowing_behavior, "Invalid value for ore_overflowing_behavior"
                 );
             }
+        }
+    }
+
+    /// Capture arrangement dictionary compression from the current `worker_config`, the first
+    /// time this is called. Subsequent calls are no-ops, so the value this replica first observes
+    /// from a configuration update is held fixed for its lifetime.
+    ///
+    /// The captured value is mirrored into the process-global `mz_row_spine::DICTIONARY_COMPRESSION`.
+    /// `DICTIONARY_COMPRESSION` is process-global and a replica process hosts a single instance, so
+    /// this single store covers all of the replica's arrangements.
+    fn capture_dictionary_compression(&mut self) {
+        if self.arrangement_dictionary_compression.is_none() {
+            let enabled = ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA.get(&self.worker_config);
+            self.arrangement_dictionary_compression = Some(enabled);
+            mz_row_spine::DICTIONARY_COMPRESSION
+                .store(enabled, std::sync::atomic::Ordering::Relaxed);
+            info!(enabled, "captured arrangement dictionary compression");
         }
     }
 
@@ -488,16 +517,6 @@ impl<'a> ActiveComputeState<'a> {
         // Ensure the state is consistent with the config before we initialize anything.
         self.compute_state.apply_worker_config();
 
-        // Apply dictionary compression exactly once, here at instance creation, from the value the
-        // controller captured when the replica was created. We deliberately do NOT re-apply it on
-        // `handle_update_configuration`, so flipping the flag does not retroactively change this
-        // replica's arrangements. `DICTIONARY_COMPRESSION` is process-global and a replica process
-        // hosts a single instance, so this single store covers all of the replica's arrangements.
-        mz_row_spine::DICTIONARY_COMPRESSION.store(
-            config.arrangement_dictionary_compression,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-
         if let Some(offset) = config.expiration_offset {
             self.compute_state.apply_expiration_offset(offset);
         }
@@ -538,6 +557,13 @@ impl<'a> ActiveComputeState<'a> {
         // equivalent storage state. This is because they're running on the same process and
         // share the metrics.
         mz_metrics::update_dyncfg(&dyncfg_updates);
+
+        // Capture arrangement dictionary compression from the first configuration update we see
+        // and hold it fixed for the replica's lifetime. Doing this here (rather than in
+        // `apply_worker_config`, which also runs at instance creation before any configuration
+        // update with only default values) ensures we latch the value the controller actually
+        // synced, not the default.
+        self.compute_state.capture_dictionary_compression();
 
         self.compute_state.apply_worker_config();
     }

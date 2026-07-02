@@ -836,13 +836,12 @@ pub(crate) fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize
 ///
 /// The dictionary behavior is controlled by the `DICTIONARY_COMPRESSION` flag, which if disabled
 /// prevents the construction of codecs, which when absent simply cause the wrapper to behave as
-/// a no-op that fails to use any spare tags for common values. The flag is set once, when a
-/// replica is created (from compute's `InstanceConfig::arrangement_dictionary_compression`, itself
-/// captured from the `enable_arrangement_dictionary_compression_alpha` dyncfg at that moment), and is
-/// not changed for the life of the process; flipping the dyncfg only affects replicas created
-/// afterwards. Even with the flag fixed, a single replica can hold a mix of compressed and
-/// uncompressed containers — e.g. containers that never observed enough records to install a
-/// codec, or that were merged from uncompressed inputs.
+/// a no-op that fails to use any spare tags for common values. The flag is set once, when the
+/// replica captures the `enable_arrangement_dictionary_compression_alpha` dyncfg from the first
+/// configuration update it observes, and is not changed for the life of the process. Flipping the
+/// dyncfg only affects replicas created afterwards. Even with the flag fixed, a single replica can
+/// hold a mix of compressed and uncompressed containers, e.g. containers that never observed
+/// enough records to install a codec, or that were merged from uncompressed inputs.
 mod dictionary {
 
     use differential_dataflow::trace::implementations::BatchContainer;

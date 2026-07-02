@@ -989,11 +989,10 @@ impl Instance {
         let instance_config = InstanceConfig {
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
             // The remaining fields are replica-specific and will be set in
-            // `ReplicaTask::specialize_command` (logging, expiration, dictionary compression) and
+            // `ReplicaTask::specialize_command` (logging, expiration) and
             // `Instance::specialize_command_for_replica` (the initial config snapshot).
             logging: Default::default(),
             expiration_offset: Default::default(),
-            arrangement_dictionary_compression: Default::default(),
             initial_config: Default::default(),
         };
 
@@ -3428,7 +3427,6 @@ mod tests {
             logging: Default::default(),
             expiration_offset: None,
             peek_stash_persist_location: PersistLocation::new_in_mem(),
-            arrangement_dictionary_compression: false,
             initial_config: Default::default(),
         }))
     }
