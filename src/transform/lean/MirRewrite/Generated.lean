@@ -237,11 +237,11 @@ theorem rule_or_single :
 -- Not(And(xs...)) = Or(Not(xs)...)
 theorem rule_not_demorgan_and :
     ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.notE (ScalarExpr.andE xs)) = denoteS env (ScalarExpr.orE ((xs.map (fun h => ScalarExpr.notE h)))) := by
-    intro env xs; first | simp [denoteS, List.foldr, List.map] | sorry
+    intro env xs; first | (simp [denoteS, List.foldr, List.map]; done) | sorry
 
 -- Not(Or(xs...)) = And(Not(xs)...)
 theorem rule_not_demorgan_or :
     ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.notE (ScalarExpr.orE xs)) = denoteS env (ScalarExpr.andE ((xs.map (fun h => ScalarExpr.notE h)))) := by
-    intro env xs; first | simp [denoteS, List.foldr, List.map] | sorry
+    intro env xs; first | (simp [denoteS, List.foldr, List.map]; done) | sorry
 
 end MirRewrite

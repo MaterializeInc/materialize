@@ -179,6 +179,7 @@ inductive ScalarExpr where
   | andE : List ScalarExpr → ScalarExpr
   | orE : List ScalarExpr → ScalarExpr
 
+mutual
 /-- Boolean denotation of a `ScalarExpr` under an environment giving each leaf
     index its truth value. `andE`/`orE` fold over their operands with the
     connective's unit (`true` for `and`, `false` for `or`), so an empty list
@@ -186,7 +187,13 @@ inductive ScalarExpr where
 def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | ScalarExpr.var n => env n
   | ScalarExpr.notE e => not (denoteS env e)
-  | ScalarExpr.andE es => es.foldr (fun e acc => denoteS env e && acc) true
-  | ScalarExpr.orE es => es.foldr (fun e acc => denoteS env e || acc) false
+  | ScalarExpr.andE es => denoteSFold env es true (· && ·)
+  | ScalarExpr.orE es => denoteSFold env es false (· || ·)
+/-- Explicit list-walker for `denoteS`'s `andE`/`orE` cases, structured so the
+    termination checker can see `e` comes from the smaller list `es`. -/
+def denoteSFold (env : Nat → Bool) : List ScalarExpr → Bool → (Bool → Bool → Bool) → Bool
+  | [], unit, _ => unit
+  | e :: es, unit, op => op (denoteS env e) (denoteSFold env es unit op)
+end
 
 end MirRewrite

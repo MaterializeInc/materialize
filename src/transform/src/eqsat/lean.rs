@@ -616,10 +616,14 @@ fn choose_proof(
         // `foldr`/`map` induction over an unconstrained list, which plain
         // `simp` cannot discharge without an explicit `induction xs`. Try it
         // anyway (harmless if it doesn't apply) and fall back to a
-        // non-permanent `sorry`, so the obligation stays explicit rather than
-        // emitting a tactic invocation that Lean would reject outright.
+        // non-permanent `sorry`. `simp` "succeeds" as soon as it makes any
+        // progress, so without `; done` a partial rewrite would make `first`
+        // commit to this branch and leave unsolved goals instead of falling
+        // through to `sorry`.
         if lhs.contains("ScalarExpr.andE") || lhs.contains("ScalarExpr.orE") {
-            return format!("by\n    {intro}first | simp [denoteS, List.foldr, List.map] | sorry");
+            return format!(
+                "by\n    {intro}first | (simp [denoteS, List.foldr, List.map]; done) | sorry"
+            );
         }
         return format!(
             "by\n    -- TODO: choose a proof tactic for this scalar rule's shape\n    {intro}sorry"
