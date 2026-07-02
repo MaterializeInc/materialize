@@ -696,11 +696,12 @@ impl Coordinator {
     /// Retires a batch of sinks with disparate reasons for retirement.
     ///
     /// Each sink identified in `reasons` is dropped (see `drop_compute_sinks`),
-    /// then retired with its corresponding reason.
+    /// then retired with its corresponding reason. Returns a notify that resolves
+    /// once all `mz_subscriptions` retractions are durable and the sinks are retired.
     pub async fn retire_compute_sinks(
         &mut self,
         mut reasons: BTreeMap<GlobalId, ActiveComputeSinkRetireReason>,
-    ) {
+    ) -> BuiltinTableAppendNotify {
         let sink_ids = reasons.keys().cloned();
         let to_retire: Vec<_> = self
             .drop_compute_sinks(sink_ids)
@@ -715,17 +716,21 @@ impl Coordinator {
             .collect();
 
         // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
-        // to be durable before telling the client the sink is gone, so a client that
-        // observes the retirement and then queries `mz_subscriptions` does not see the
-        // stale row. The wait must not happen on the loop: that would block every other
-        // session on the group-commit oracle round trip, which is the whole point of
-        // deferring the write.
+        // before telling the subscribing client that the sink is gone. The returned notify
+        // lets statements that caused the retirement also wait before sending their response.
+        // The wait must not happen on the loop, since that would block every other session
+        // on the group-commit oracle round trip.
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         task::spawn(|| "retire_compute_sinks", async move {
             for (sink, write_notify, reason) in to_retire {
                 write_notify.await;
                 sink.retire(reason);
             }
+            let _ = done_tx.send(());
         });
+        Box::pin(async move {
+            let _ = done_rx.await;
+        })
     }
 
     /// Drops all pending replicas for a set of clusters
@@ -797,7 +802,8 @@ impl Coordinator {
             .iter()
             .map(|sink_id| (*sink_id, reason.clone()))
             .collect();
-        self.retire_compute_sinks(drop_sinks).await;
+        let retire_notify = self.retire_compute_sinks(drop_sinks).await;
+        drop(retire_notify);
     }
 
     /// Cleans pending cluster reconfiguraiotns for the identified connection

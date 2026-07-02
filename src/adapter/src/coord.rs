@@ -1611,12 +1611,15 @@ impl std::ops::DerefMut for ExecuteContext {
     }
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct ExecuteContextInner {
     tx: ClientTransmitter<ExecuteResponse>,
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     session: Session,
     extra: ExecuteContextGuard,
+    #[derivative(Debug = "ignore")]
+    response_barriers: Vec<BuiltinTableAppendNotify>,
 }
 
 impl ExecuteContext {
@@ -1647,6 +1650,7 @@ impl ExecuteContext {
                 tx,
                 session,
                 extra,
+                response_barriers: Vec::new(),
                 internal_cmd_tx,
             }
             .into(),
@@ -1674,7 +1678,12 @@ impl ExecuteContext {
             internal_cmd_tx,
             session,
             extra,
+            response_barriers,
         } = *self.inner;
+        assert!(
+            response_barriers.is_empty(),
+            "cannot split ExecuteContext while response barriers are pending"
+        );
         (tx, internal_cmd_tx, session, extra)
     }
 
@@ -1686,24 +1695,23 @@ impl ExecuteContext {
             internal_cmd_tx,
             session,
             extra,
+            response_barriers,
         } = *self.inner;
-        let reason = if extra.is_trivial() {
-            None
+        if response_barriers.is_empty() {
+            retire_execution_context(tx, internal_cmd_tx, session, extra, result);
         } else {
-            Some((&result).into())
-        };
-        tx.send(result, session);
-        if let Some(reason) = reason {
-            // Retire the guard to get the inner ExecuteContextExtra without triggering auto-retire
-            let extra = extra.defuse();
-            if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
-                otel_ctx: OpenTelemetryContext::obtain(),
-                data: extra,
-                reason,
-            }) {
-                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-            }
+            spawn(|| "execute_context::retire_after_response_barriers", async move {
+                for barrier in response_barriers {
+                    barrier.await;
+                }
+                retire_execution_context(tx, internal_cmd_tx, session, extra, result);
+            });
         }
+    }
+
+    /// Delays sending this statement's response until `barrier` resolves.
+    pub(crate) fn delay_response_until(&mut self, barrier: BuiltinTableAppendNotify) {
+        self.response_barriers.push(barrier);
     }
 
     pub fn extra(&self) -> &ExecuteContextGuard {
@@ -1712,6 +1720,31 @@ impl ExecuteContext {
 
     pub fn extra_mut(&mut self) -> &mut ExecuteContextGuard {
         &mut self.extra
+    }
+}
+
+fn retire_execution_context(
+    tx: ClientTransmitter<ExecuteResponse>,
+    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    session: Session,
+    extra: ExecuteContextGuard,
+    result: Result<ExecuteResponse, AdapterError>,
+) {
+    let reason = if extra.is_trivial() {
+        None
+    } else {
+        Some((&result).into())
+    };
+    tx.send(result, session);
+    if let Some(reason) = reason {
+        let extra = extra.defuse();
+        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+            otel_ctx: OpenTelemetryContext::obtain(),
+            data: extra,
+            reason,
+        }) {
+            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        }
     }
 }
 

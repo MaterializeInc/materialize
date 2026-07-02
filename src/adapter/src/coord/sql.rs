@@ -276,9 +276,8 @@ impl Coordinator {
                     // Defer the introspection-row write to a group commit instead of
                     // committing it inline. An inline `execute` would block the coordinator
                     // loop on a timestamp-oracle round trip and stall every other session.
-                    // The caller waits for this write to be durable off the loop (see
-                    // `implement_subscribe`), so `mz_subscriptions` stays synchronously
-                    // consistent without blocking the loop.
+                    // `implement_subscribe` waits for this write before returning the
+                    // `SUBSCRIBE` response to the subscribing session.
                     self.builtin_table_update().defer(vec![update])
                 } else {
                     // Internal subscribes skip the builtin table update.
@@ -309,10 +308,9 @@ impl Coordinator {
     /// Returns the removed sink together with a notify that resolves once the
     /// `mz_subscriptions` retraction is durable. The retraction is deferred to a group
     /// commit rather than committed inline, which would block the coordinator loop on a
-    /// timestamp-oracle round trip. Callers should await the notify off the loop before
-    /// retiring the sink to the client, so a client that observes the retirement does not
-    /// then see a stale `mz_subscriptions` row. The notify is already resolved for sinks
-    /// that write no introspection row (internal subscribes and COPY TO).
+    /// timestamp-oracle round trip. Callers that expose completion of the retirement
+    /// should wait on the notify off the loop before responding. The notify is already
+    /// resolved for sinks that write no introspection row (internal subscribes and COPY TO).
     ///
     /// This is a low-level method. The caller is responsible for dropping the
     /// sink from the controller. Consider calling `drop_compute_sink` or
@@ -344,8 +342,8 @@ impl Coordinator {
                         let update = self.catalog().state().resolve_builtin_table_update(update);
                         // Defer the retraction to a group commit, for the same reason we
                         // defer the insert (see `add_active_compute_sink`): committing inline
-                        // would block the coordinator loop. The caller awaits this off the
-                        // loop before retiring the sink to the client.
+                        // would block the coordinator loop. Callers that expose the
+                        // retirement wait on the notify off the loop before responding.
                         self.builtin_table_update().defer(vec![update])
                     } else {
                         Box::pin(std::future::ready(()))

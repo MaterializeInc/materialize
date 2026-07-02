@@ -87,7 +87,10 @@ impl Staged for SubscribeStage {
     }
 
     fn cancel_enabled(&self) -> bool {
-        true
+        // `Finish` installs the sink before it waits for the builtin-table write
+        // off-loop. If cancellation won during that wait, the active sink would
+        // outlive the canceled execution.
+        !matches!(self, SubscribeStage::Finish(_))
     }
 }
 
@@ -515,9 +518,9 @@ impl Coordinator {
                 plan,
             )
             .await?;
-        // Wait for the `mz_subscriptions` bookkeeping write to be durable off the
-        // coordinator loop, then respond. This keeps the introspection table
-        // synchronously consistent without blocking the loop on a group commit.
+        // Wait for the `mz_subscriptions` bookkeeping write off the coordinator
+        // loop before returning the `SUBSCRIBE` response to the subscribing
+        // session.
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
             || "subscribe_finish::await_bookkeeping",
@@ -574,8 +577,8 @@ impl Coordinator {
         // `mz_subscriptions` write is deferred to a group commit (see
         // `add_active_compute_sink`) rather than committed inline, so it does not block
         // the coordinator loop on a timestamp-oracle round trip. We hand the notify back
-        // so the caller can wait for the write to be durable off the loop before
-        // responding, keeping `mz_subscriptions` synchronously consistent.
+        // so the caller can wait before returning the `SUBSCRIBE` response to the
+        // subscribing session.
         let write_notify =
             self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
         self.ship_dataflow(df_desc, cluster_id, replica_id).await;

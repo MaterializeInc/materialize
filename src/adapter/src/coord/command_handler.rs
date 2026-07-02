@@ -486,9 +486,9 @@ impl Coordinator {
                         .await
                     {
                         Ok((resp, write_notify)) => {
-                            // Wait for the `mz_subscriptions` bookkeeping write to be durable
-                            // off the coordinator loop before responding, so we don't block
-                            // the loop on a group commit.
+                            // Wait for the `mz_subscriptions` bookkeeping write off the
+                            // coordinator loop before returning the `SUBSCRIBE` response to
+                            // the subscribing session.
                             task::spawn(|| "execute_subscribe::await_bookkeeping", async move {
                                 write_notify.await;
                                 let _ = tx.send(Ok(resp));

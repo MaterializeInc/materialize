@@ -727,6 +727,11 @@ pub struct BuiltinTableAppend<'a> {
 
 /// `Future` that notifies when a builtin table write has completed.
 ///
+/// Callers that expose completion of an operation whose builtin-table write is
+/// user-observable should await this future before sending that completion. It
+/// is safe to drop the future only when the caller does not provide such an
+/// ordering guarantee, or when the future is known to resolve immediately.
+///
 /// Note: builtin table writes need to talk to persist, which can take 100s of milliseconds. This
 /// type allows you to execute a builtin table write, e.g. via [`BuiltinTableAppend::execute`], and
 /// wait for it to complete, while other long running tasks are concurrently executing.

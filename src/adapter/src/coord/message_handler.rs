@@ -678,10 +678,11 @@ impl Coordinator {
                 {
                     let finished = active_subscribe.process_response(response);
                     if finished {
-                        self.retire_compute_sinks(btreemap! {
+                        let retire_notify = self.retire_compute_sinks(btreemap! {
                             sink_id => ActiveComputeSinkRetireReason::Finished,
                         })
                         .await;
+                        drop(retire_notify);
                     }
 
                     soft_assert_or_log!(
