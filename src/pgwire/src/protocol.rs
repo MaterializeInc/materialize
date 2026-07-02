@@ -2410,9 +2410,14 @@ where
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
-                        Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
+                        Some(PeekResponseUnary::Error(err)) => {
+                            FetchResult::Error(ErrorResponse::error(SqlState::INTERNAL_ERROR, err))
+                        }
                         Some(PeekResponseUnary::DependencyDropped(dep)) => {
-                            FetchResult::Error(dep.query_terminated_error())
+                            FetchResult::Error(
+                                dep.to_concurrent_dependency_drop()
+                                    .into_response(Severity::Error),
+                            )
                         }
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
@@ -2484,12 +2489,10 @@ where
                     self.send(notice.into_response()).await?;
                     self.conn.flush().await?;
                 }
-                FetchResult::Error(text) => {
+                FetchResult::Error(err) => {
+                    let text = err.message.clone();
                     return self
-                        .send_error_and_get_state(ErrorResponse::error(
-                            SqlState::INTERNAL_ERROR,
-                            text.clone(),
-                        ))
+                        .send_error_and_get_state(err)
                         .await
                         .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                 }
@@ -3243,7 +3246,7 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 enum FetchResult {
     Rows(Option<Box<dyn RowIterator + Send + Sync>>),
     Canceled,
-    Error(String),
+    Error(ErrorResponse),
     Notice(AdapterNotice),
 }
 
