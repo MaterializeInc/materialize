@@ -82,3 +82,58 @@ Target cluster: quickstart
 > SELECT * FROM pk_table_2;
 1
 2
+
+#
+# Regression: excluding a key column then dropping it upstream must not halt the
+# source. Purification prunes the excluded column from the stored descriptor but
+# not the key referencing it, so determine_compatibility's keys check fails once
+# the upstream key is gone. PG/keys analog of MySQL's SS-129. Covers both
+# verify_schema call sites: replication (pk_drop) and snapshot (pk_drop_snapshot).
+#
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+CREATE TABLE pk_drop (id int PRIMARY KEY, val text);
+INSERT INTO pk_drop VALUES (1, 'a'), (2, 'b');
+# REPLICA IDENTITY FULL so dropping the PK column leaves the keys check as the
+# sole reason compatibility could fail.
+ALTER TABLE pk_drop REPLICA IDENTITY FULL;
+
+> CREATE TABLE pk_drop
+  FROM SOURCE mz_source (REFERENCE public.pk_drop)
+  WITH (EXCLUDE COLUMNS (id));
+
+> SELECT * FROM pk_drop;
+a
+b
+
+# Drop replicas so the second table snapshots against the post-drop schema.
+> ALTER CLUSTER storage SET (REPLICATION FACTOR 0)
+
+> CREATE TABLE pk_drop_snapshot
+  FROM SOURCE mz_source (REFERENCE public.pk_drop)
+  WITH (EXCLUDE COLUMNS (id));
+
+# Drop the excluded PK column upstream. Postgres drops the PK constraint with it.
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE pk_drop DROP COLUMN id;
+
+> ALTER CLUSTER storage SET (REPLICATION FACTOR 1)
+
+# Snapshot path: the second table must snapshot against the post-drop schema.
+> SELECT * FROM pk_drop_snapshot;
+a
+b
+
+# Replication path: a write forces a Relation message; both tables must ingest it.
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+INSERT INTO pk_drop VALUES ('c');
+
+> SELECT * FROM pk_drop;
+a
+b
+c
+
+> SELECT * FROM pk_drop_snapshot;
+a
+b
+c
