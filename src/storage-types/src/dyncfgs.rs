@@ -244,6 +244,44 @@ pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::ne
     "Whether to treat a restore history change as a definite error",
 );
 
+// AWS
+
+/// Fraction of prefetched AWS credentials' remaining lifetime at which to
+/// refresh them.
+pub const AWS_CREDENTIAL_PREFETCH_REFRESH_FRACTION: Config<f64> = Config::new(
+    "aws_credential_prefetch_refresh_fraction",
+    0.5,
+    "Fraction of prefetched AWS credentials' remaining lifetime at which to refresh them.",
+);
+
+/// Upper bound on the wait between AWS credential prefetch refreshes.
+pub const AWS_CREDENTIAL_PREFETCH_MAX_REFRESH_INTERVAL: Config<Duration> = Config::new(
+    "aws_credential_prefetch_max_refresh_interval",
+    Duration::from_secs(15 * 60),
+    "Upper bound on the wait between AWS credential prefetch refreshes.",
+);
+
+/// Lower bound on the wait between AWS credential prefetch refreshes.
+pub const AWS_CREDENTIAL_PREFETCH_MIN_REFRESH_INTERVAL: Config<Duration> = Config::new(
+    "aws_credential_prefetch_min_refresh_interval",
+    Duration::from_secs(30),
+    "Lower bound on the wait between AWS credential prefetch refreshes.",
+);
+
+/// Per-attempt timeout for one AWS credential fetch by the prefetcher.
+pub const AWS_CREDENTIAL_PREFETCH_FETCH_TIMEOUT: Config<Duration> = Config::new(
+    "aws_credential_prefetch_fetch_timeout",
+    Duration::from_secs(30),
+    "Per-attempt timeout for one AWS credential fetch by the credential prefetcher.",
+);
+
+/// Attempts per AWS credential prefetch before reporting failure.
+pub const AWS_CREDENTIAL_PREFETCH_FETCH_MAX_TRIES: Config<usize> = Config::new(
+    "aws_credential_prefetch_fetch_max_tries",
+    5,
+    "Attempts per AWS credential fetch by the credential prefetcher before reporting failure.",
+);
+
 // Networking
 
 /// Whether or not to enforce that external connection addresses are global
@@ -383,6 +421,11 @@ pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
+        .add(&AWS_CREDENTIAL_PREFETCH_FETCH_MAX_TRIES)
+        .add(&AWS_CREDENTIAL_PREFETCH_FETCH_TIMEOUT)
+        .add(&AWS_CREDENTIAL_PREFETCH_MAX_REFRESH_INTERVAL)
+        .add(&AWS_CREDENTIAL_PREFETCH_MIN_REFRESH_INTERVAL)
+        .add(&AWS_CREDENTIAL_PREFETCH_REFRESH_FRACTION)
         .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)

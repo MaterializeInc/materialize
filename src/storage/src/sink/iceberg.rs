@@ -2525,58 +2525,34 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             .expect("statistics initialized")
             .clone();
 
-        // For S3 Tables catalogs authenticated via AssumeRole, prefetch and
-        // cache the AWS credentials so the catalog operators below never resolve
-        // credentials on their request path. The prefetcher refreshes ahead of
-        // expiry on a background task that is torn down with the dataflow (its
-        // `SharedCredentialsProvider` is held only by the operators). The first
-        // fetch happens here, synchronously, before the operators are built.
+        // For S3 Tables catalogs authenticated via AssumeRole, hand the catalog
+        // operators a provider that serves cached AWS credentials, kept fresh by
+        // a background task. Catalog requests and data-file IO then never wait
+        // on STS. All fetching (including the first) happens on that task, so
+        // nothing blocks the worker thread here. A fetch failure surfaces when
+        // an operator connects, through its normal error handling. The task
+        // stops when the operators drop their provider clones, i.e. with the
+        // dataflow.
         //
         // `render_sink` runs on every worker, and `write_data_files` connects on
         // every worker (not just the active one), so each worker builds its own
         // prefetcher.
         let prefetched_credentials = match self.catalog_connection.s3tables_catalog() {
-            Some(s3tables)
-                if matches!(
-                    s3tables.aws_connection.connection.auth,
-                    AwsAuth::AssumeRole(_)
-                ) =>
-            {
-                let aws_connection = s3tables.aws_connection.connection.clone();
-                let connection_id = s3tables.aws_connection.connection_id;
-                let connection_context = storage_state
-                    .storage_configuration
-                    .connection_context
-                    .clone();
-                // `render_sink` is synchronous and runs on a timely worker thread
-                // that has the tokio runtime entered, so `block_on` alone would
-                // panic. `block_in_place` hands the thread to the runtime for the
-                // duration of the blocking fetch.
-                let handle = tokio::runtime::Handle::current();
-                let result = tokio::task::block_in_place(|| {
-                    handle.block_on(aws_connection.prefetch_credentials(
-                        &connection_context,
+            Some(s3tables) => match &s3tables.aws_connection.connection.auth {
+                AwsAuth::AssumeRole(assume_role) => {
+                    let connection_id = s3tables.aws_connection.connection_id;
+                    Some(assume_role.prefetch_credentials(
+                        &storage_state.storage_configuration.connection_context,
                         connection_id,
-                        CredentialPrefetchConfig::default(),
+                        CredentialPrefetchConfig::from_dyncfgs(
+                            storage_state.storage_configuration.config_set(),
+                        ),
+                        format!("iceberg-sink-{sink_id}-aws-connection-{connection_id}"),
                     ))
-                });
-                match result {
-                    Ok(provider) => Some(provider),
-                    Err(err) => {
-                        let error_stream = std::iter::once(HealthStatusMessage {
-                            id: None,
-                            update: HealthStatusUpdate::halting(
-                                format!("{}", err.display_with_causes()),
-                                None,
-                            ),
-                            namespace: StatusNamespace::Iceberg,
-                        })
-                        .to_stream(scope);
-                        return (error_stream, vec![]);
-                    }
                 }
-            }
-            _ => None,
+                AwsAuth::Credentials(_) => None,
+            },
+            None => None,
         };
 
         let connection_for_minter = self.clone();

@@ -818,6 +818,12 @@ impl IcebergCatalogConnection<InlinedConnection> {
         // Prefer the caller-supplied prefetched provider so catalog requests
         // never resolve credentials on their own path. Otherwise build one from
         // the connection.
+        //
+        // NOTE: The override arm skips `load_sdk_config`, and with it the
+        // ENFORCE_EXTERNAL_ADDRESSES check of the connection's custom endpoint.
+        // That is safe because nothing in this function uses the endpoint, and
+        // connection validation (which passes no override) still runs the
+        // check.
         let credentials_provider = match credentials_override {
             Some(provider) => provider,
             None => {
