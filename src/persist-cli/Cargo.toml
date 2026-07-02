@@ -39,6 +39,7 @@ mz-txn-wal = { path = "../txn-wal" }
 num_cpus.workspace = true
 num_enum.workspace = true
 prometheus.workspace = true
+rustls.workspace = true
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 timely.workspace = true

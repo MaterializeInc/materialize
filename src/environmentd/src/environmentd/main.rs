@@ -657,6 +657,11 @@ pub fn main() {
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::install_enhanced_handler();
+
+    // Both the aws-lc-rs and ring rustls backends are linked, so rustls can't
+    // auto-select a provider and panics on first TLS use unless one is installed.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let envd_start = Instant::now();
 
     // Configure signal handling as soon as possible. We want signals to be
