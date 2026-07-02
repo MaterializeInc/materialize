@@ -391,6 +391,19 @@ impl<'a, 'b, 'v> MatchGraph for ColoredView<'a, 'b, 'v> {
         Vec::new()
     }
 
+    // Scalar analysis is not surfaced in the colored view: scalar rules run only
+    // in the scalar saturate pass, never colored relational saturation, so these
+    // are never consulted here. The sound default matches the emptiness stubs
+    // above (no analysis known -> no gate satisfied), covered by the same NOTE:
+    // a future `colored: true` scalar rule must make them return real results.
+    fn scalar_could_error(&self, _id: Id) -> bool {
+        false
+    }
+
+    fn scalar_lit_bool_or_null(&self, _id: Id) -> Option<Option<bool>> {
+        None
+    }
+
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {
         let rel_arity = self.arity_of(rel);
         payload_columns(p, |id| self.esc(id))
