@@ -249,3 +249,15 @@ DEFERRED MINORS for final review: M1 (codegen.rs:330 Matcher::node Pat::Scalar u
 
 FINAL WHOLE-SLICE REVIEW (opus): READY TO MERGE. 0 Critical/Important. All 5 cross-cutting properties CONFIRMED (behavior-neutral additive-only shared surface, relational COMPILED_RULES=37 zero scalar leakage; const_eval class-level sound by congruence + error-as-data; permanent-sorry=1 honest opaque constEval [sorryAx] vs and/or_empty [propext]; routing SCALAR_COMPILED_RULES only; differential non-vacuous + mutation-verified). Minor rulings: M1 acceptable (compile-time panic, no slice-4 rule nests Scalar), M3 leave (comment nit). M2 FIXED (52f5ded769): reviewer found the emit() color-assert only iterates conds so a colored+conditionless scalar rule (esp SBool-RHS and_empty/or_empty) would COMPILE into a silent inert dead rule; added direct assert !(colored && is_scalar_rule) in emit(). Verified colored is explicit grammar opt-in (not vacuous), all scalar rules colored:false, assert passes, cargo GREEN.
 SLICE 4 COMPLETE + MERGE-READY. Range 8e169630fb..52f5ded769.
+
+## SDD — SP2b SLICE 5 (type-context builtins + func-metavar binding)
+Plan: docs/superpowers/plans/2026-07-02-eqsat-sp2b-slice5-type-context-builtins.md. BASE (pre-slice-5): bf1f8331bd.
+READ-FIRST verdict: 5 rules confirmed vs scalar/rules.rs. Split: if_err_cond/null_prop_binary/err_prop_binary = BUILTINS on Scalar(e) catch-all (permanent sorry); isnull_fold = DECLARATIVE `=> false` + new scalar_non_nullable cond (PROVED in Lean); not_binary_negate = FUNC-METAVAR declarative (Pat::SBinaryVar + Tmpl::SBinaryNegate, negate() opaque -> permanent sorry). expected_permanent 1->5 (const_fold+3 builtins+not_binary_negate); provable 26->27; pre-existing gap stays 1. NO LATTICE ADD (nullability on-demand raise+typ+col_types). Typing on combined graph DERISKED: scalar_extract::raise + g.data().scalar.col_types. negate = BinaryFunc::negate() (same table both engines). New surfaces: EBindings func-binding, view scalar_nullable (all-impls incl ColoredView), grammar Binary[f]/Binary[negate(f)], isnull unary keyword.
+## Tasks
+- [ ] Task 1: DSL AST (Pat::SBinaryVar, Tmpl::SBinaryNegate, Cond::ScalarNonNullable) + grammar
+- [ ] Task 2: scalar_builtins if_err_cond/null_prop_binary/err_prop_binary (class-level, combined-graph typing)
+- [ ] Task 3: matcher EBindings func-binding + view scalar_nullable (all-impls sweep)
+- [ ] Task 4: codegen isnull keyword + ScalarNonNullable emit + SBinaryVar find + SBinaryNegate apply + exhaustiveness
+- [ ] Task 5: port 5 rules to scalar.rewrite (11->16)
+- [ ] Task 6: Lean isNullE+BinFunc/binaryE/negateFunc opaque + translate arms + proofs + CI count 1->5 + aggregate lake
+- [ ] Task 7: differential corpus + parity (all negation pairs x null, MUTATION test; if-err; null/err-prop; isnull) + slice gate
