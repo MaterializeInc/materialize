@@ -112,6 +112,9 @@ fn sym_name(p: &Pat) -> &'static str {
         Pat::Union { .. } => "Union",
         Pat::RelVar(_) => unreachable!("relvars have no operator symbol"),
         Pat::SUnary { .. } => unreachable!("scalar patterns have no relational operator symbol"),
+        Pat::SVariadic { .. } => {
+            unreachable!("scalar patterns have no relational operator symbol")
+        }
     }
 }
 
@@ -121,6 +124,16 @@ fn unary_func_pat(func: &str) -> String {
     match func {
         "not" => "mz_expr::UnaryFunc::Not(_)".to_string(),
         other => panic!("unknown scalar unary func keyword: {other}"),
+    }
+}
+
+/// The Rust pattern text matching a fixed scalar `VariadicFunc` by keyword.
+/// Extend this table as scalar rules reference more variadic functions.
+fn variadic_func_pat(func: &str) -> String {
+    match func {
+        "and" => "mz_expr::VariadicFunc::And(_)".to_string(),
+        "or" => "mz_expr::VariadicFunc::Or(_)".to_string(),
+        other => panic!("unknown scalar variadic func keyword: {other}"),
     }
 }
 
@@ -269,6 +282,13 @@ impl Matcher {
                 ));
                 self.child(input, &format!("*e{c}"));
             }
+            Pat::SVariadic { func, inputs } => {
+                let fpat = variadic_func_pat(func);
+                self.stmts.push(format!(
+                    "let crate::eqsat::scalar::node::SNode::CallVariadic {{ func: {fpat}, exprs: ins{c} }} = {node} else {{ continue }};"
+                ));
+                self.variadic(inputs, c);
+            }
             Pat::RelVar(_) => unreachable!("node() is only called on operators"),
         }
     }
@@ -309,7 +329,7 @@ impl Matcher {
                 // A scalar operator child scans the scalar e-nodes of the class;
                 // a relational one scans only the relational e-nodes. A scalar
                 // class never matches a relational pattern and vice versa.
-                let scalar = matches!(pat, Pat::SUnary { .. });
+                let scalar = matches!(pat, Pat::SUnary { .. } | Pat::SVariadic { .. });
                 if scalar {
                     self.stmts
                         .push(format!("for n{c} in g.scalar_class_nodes({class}) {{"));
@@ -528,6 +548,23 @@ fn find_stmts(rule: &Rule, mode: &FindMode) -> String {
         Pat::SUnary { .. } => {
             s.push_str(
                 "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::Unary) {\n",
+            );
+            s.push_str("let root_id = root_id;\n");
+            s.push_str("let root_node = &root_node;\n");
+            m.node(&rule.lhs, "root_node");
+            for stmt in &m.stmts {
+                s.push_str(stmt);
+                s.push('\n');
+            }
+            s.push_str(&body(rule, &m, mode));
+            for _ in 0..m.open_braces {
+                s.push_str("}\n");
+            }
+            s.push_str("}\n");
+        }
+        Pat::SVariadic { .. } => {
+            s.push_str(
+                "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::Variadic) {\n",
             );
             s.push_str("let root_id = root_id;\n");
             s.push_str("let root_node = &root_node;\n");
@@ -880,7 +917,7 @@ fn emit_apply(rule: &Rule) -> String {
 /// are compiled into `SCALAR_COMPILED_RULES` so they never run in the relational
 /// saturation pass.
 fn is_scalar_rule(r: &Rule) -> bool {
-    matches!(r.lhs, Pat::SUnary { .. })
+    matches!(r.lhs, Pat::SUnary { .. } | Pat::SVariadic { .. })
 }
 
 /// The `CompiledRule { .. }` table literal for one rule. Identical text for every
@@ -1117,6 +1154,11 @@ fn pat(p: &Pat) -> String {
             "{P}::Pat::SUnary {{ func: {}, input: Box::new({}) }}",
             s(func),
             pat(input)
+        ),
+        Pat::SVariadic { func, inputs } => format!(
+            "{P}::Pat::SVariadic {{ func: {}, inputs: {} }}",
+            s(func),
+            listpat(inputs)
         ),
         Pat::Filter { preds, input } => format!(
             "{P}::Pat::Filter {{ preds: {}, input: Box::new({}) }}",
