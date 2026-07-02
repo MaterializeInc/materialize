@@ -1327,6 +1327,12 @@ metrics:
   - object_type
   source: src/sql/src/optimizer_metrics.rs
   visibility: internal
+- name: mz_optimizer_lowering_literal_constraints_total
+  help: How often the MFP-based literal-constraint detector succeeded, by call site.
+  labels:
+  - case
+  source: src/compute-types/src/plan.rs
+  visibility: internal
 - name: mz_otel_on_close
   help: count of on_close events sent to otel
   source: src/ore/src/tracing.rs

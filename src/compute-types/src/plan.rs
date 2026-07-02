@@ -18,6 +18,9 @@ use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MfpPlan, MirScalarExpr,
     OptimizedMirRelationExpr, SafeMfpPlan, TableFunc,
 };
+use mz_ore::metric;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::raw::IntCounterVec;
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
@@ -44,6 +47,32 @@ pub mod scalar;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;
+
+/// Metrics collected during MIR to LIR lowering.
+#[derive(Debug, Clone)]
+pub struct LoweringMetrics {
+    /// Counts non-`None` results of `MapFilterProject::literal_constraints` during lowering,
+    /// labeled by the call site (`"get"` or `"mfp"`).
+    literal_constraints: IntCounterVec,
+}
+
+impl LoweringMetrics {
+    /// Registers the lowering metrics into `registry`.
+    pub fn register_into(registry: &MetricsRegistry) -> Self {
+        Self {
+            literal_constraints: registry.register(metric!(
+                name: "mz_optimizer_lowering_literal_constraints_total",
+                help: "How often the MFP-based literal-constraint detector succeeded, by call site.",
+                var_labels: ["case"],
+            )),
+        }
+    }
+
+    /// Records that a `literal_constraints` call at `case` produced a usable constraint.
+    pub fn inc_literal_constraints(&self, case: &str) {
+        self.literal_constraints.with_label_values(&[case]).inc();
+    }
+}
 
 /// The forms in which an operator's output is available.
 ///
@@ -547,9 +576,10 @@ impl LirRelationExpr {
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
+        metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
-        let mut dataflow = Self::lower_dataflow(desc, features)?;
+        let mut dataflow = Self::lower_dataflow(desc, features, metrics)?;
 
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
@@ -612,8 +642,9 @@ impl LirRelationExpr {
     fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
+        metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
-        let context = lowering::Context::new(desc.debug_name.clone(), features);
+        let context = lowering::Context::new(desc.debug_name.clone(), features, metrics);
         let dataflow = context.lower(desc)?;
 
         mz_repr::explain::trace_plan(&dataflow);
