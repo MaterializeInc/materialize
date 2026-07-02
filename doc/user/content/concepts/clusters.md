@@ -94,6 +94,10 @@ The following provides some general guidelines for clusters. See also
 
 {{% include-from-yaml data="best_practices_details" name="architecture-three-tier" %}}
 
+{{< architecture-diagram tier="three" caption="3-tier architecture" >}}
+
+{{% include-from-yaml data="best_practices_details" name="architecture-three-tier-details" %}}
+
 See also [Operational guidelines](/manage/operational-guidelines/).
 
 #### Alternatives

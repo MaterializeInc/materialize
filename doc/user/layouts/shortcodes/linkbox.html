@@ -1,6 +1,11 @@
-<div class="linkbox {{ .Get "icon" }}">
-  <div class="title">
-    {{ .Get "title" }}
+<div class="linkbox{{ with .Get "category" }} linkbox--{{ . }}{{ end }}{{ with .Get "icon" }} {{ . }}{{ end }}">
+  <div class="linkbox__header">
+    {{ with .Get "category" }}
+    <span class="linkbox__category-icon linkbox__category-icon--{{ . }}" aria-hidden="true"></span>
+    {{ end }}
+    <div class="title">{{ .Get "title" }}</div>
   </div>
-  {{ .Inner | $.Page.RenderString }}
+  <div class="linkbox__body">
+    {{ .Inner | $.Page.RenderString }}
+  </div>
 </div>

@@ -26,13 +26,13 @@
     text.terminal,
     text.nonterminal,
     text.regexp {
-        font-family: "Inter", sans-serif;
+        fill: var(--body);
+        font-family: var(--font-body);
         font-size: 14px;
-        fill: $black;
     }
 
     text.terminal {
-        font-weight: bold;
+        font-weight: var(--weight-body-emphasis);
     }
 
     rect,
@@ -43,12 +43,12 @@
     }
 
     rect.terminal {
-        fill: #ab96e0;
-        stroke: var(--sub);
+        fill: color-mix(in srgb, var(--sg-lavender-3) 55%, var(--table-surface-raised));
+        stroke: color-mix(in srgb, var(--sg-violet) 35%, var(--sub));
     }
 
     rect.nonterminal {
-        fill: scale-color($purple-20, $saturation: -50%);
+        fill: color-mix(in srgb, var(--sg-lavender-6) 45%, var(--table-surface));
         stroke: var(--sub);
     }
 
@@ -58,7 +58,7 @@
     }
 
     polygon.regexp {
-        fill: scale-color($purple-10, $saturation: -50%);
+        fill: color-mix(in srgb, var(--sg-violet) 18%, var(--table-surface));
         stroke: var(--sub);
     }
 }

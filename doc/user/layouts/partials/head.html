@@ -12,12 +12,9 @@
 {{ end }}
 
 <title>{{ $title }}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
-<link
-  href="https://fonts.googleapis.com/css2?family=Fira+Code&family=Inter:wght@300;500;600&display=swap"
-  rel="stylesheet"
-/>
+<link rel="preload" href="{{ .Site.BaseURL }}fonts/inter/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+<link rel="preload" href="{{ .Site.BaseURL }}fonts/faire-sprig-sans/FAIRE-SprigSans-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+<link rel="stylesheet" href="{{ .Site.BaseURL }}fonts/fonts.css" />
 <meta name="referrer" content="origin" />
 <meta name="HandheldFriendly" content="True" />
 <meta name="msapplication-TileColor" content="#7F4EFF" />
@@ -128,6 +125,38 @@ toCSS | fingerprint }}
 document.addEventListener("DOMContentLoaded", function () {
   let tabGroupCounter = 0;
 
+  function updateCodeTabJoin(tabGroup) {
+    const navTabsBar = tabGroup.querySelector(".nav-tabs-bar");
+    const navTabs = tabGroup.querySelector(".nav-tabs");
+    const activeTab = navTabs ? navTabs.querySelector(".nav-item.active") : null;
+    if (!navTabsBar || !navTabs || !activeTab) return;
+
+    navTabs.querySelectorAll(".nav-item").forEach(function (item) {
+      item.classList.remove("active-tab--join");
+    });
+
+    const tabs = Array.from(navTabs.children);
+    if (tabs.length === 0) return;
+
+    const bottomRowTop = Math.max.apply(
+      null,
+      tabs.map(function (tab) {
+        return tab.getBoundingClientRect().top;
+      })
+    );
+    const activeRect = activeTab.getBoundingClientRect();
+    const barRect = navTabsBar.getBoundingClientRect();
+    const isOnBottomRow = activeRect.top >= bottomRowTop - 1;
+
+    if (isOnBottomRow) {
+      const overlap = Math.max(2, Math.ceil(barRect.bottom - activeRect.bottom + 1));
+      activeTab.style.setProperty("--tab-join-overlap", overlap + "px");
+      activeTab.classList.add("active-tab--join");
+    } else {
+      activeTab.style.setProperty("--tab-join-overlap", "0px");
+    }
+  }
+
   document.querySelectorAll(".code-tabs").forEach(function (tabGroup) {
     const navTabs = tabGroup.querySelector(".nav-tabs");
     const tabContent = tabGroup.querySelector(".tab-content");
@@ -214,20 +243,33 @@ document.addEventListener("DOMContentLoaded", function () {
         targetPane.classList.add("active");
       }
 
+      updateCodeTabJoin(tabGroup);
+
+      // Recompute joins for nested tab groups when this pane becomes visible.
+      window.dispatchEvent(new Event("resize"));
+
       // Trigger scroll event to update TOC highlighting
       $(window).trigger('scroll');
     }
 
-    const updateOverflow = () => {
-      const scrollLeft = navTabs.scrollLeft;
-      const scrollRight = navTabs.scrollWidth - navTabs.clientWidth - scrollLeft;
+    const navTabsScroll = tabGroup.querySelector(".nav-tabs-scroll");
 
-      tabGroup.classList.toggle('has-left-overflow', scrollLeft > 0);
-      tabGroup.classList.toggle('has-right-overflow', scrollRight > 1);
+    const updateOverflow = () => {
+      if (navTabsScroll) {
+        const scrollLeft = navTabsScroll.scrollLeft;
+        const scrollRight = navTabsScroll.scrollWidth - navTabsScroll.clientWidth - scrollLeft;
+
+        tabGroup.classList.toggle('has-left-overflow', scrollLeft > 0);
+        tabGroup.classList.toggle('has-right-overflow', scrollRight > 1);
+      }
+
+      updateCodeTabJoin(tabGroup);
     };
 
     updateOverflow();
-    navTabs.addEventListener('scroll', updateOverflow);
+    if (navTabsScroll) {
+      navTabsScroll.addEventListener('scroll', updateOverflow);
+    }
     window.addEventListener('resize', updateOverflow);
   });
 
@@ -260,10 +302,13 @@ document.addEventListener("DOMContentLoaded", function () {
           if (targetNavItem && targetPane) {
             targetNavItem.classList.add("active");
             targetPane.classList.add("active");
+            updateCodeTabJoin(otherTabGroup);
           }
         }
       });
     });
+
+    window.dispatchEvent(new Event("resize"));
 
     // Trigger scroll event to update TOC highlighting
     $(window).trigger('scroll');

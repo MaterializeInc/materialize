@@ -13,19 +13,7 @@ aliases:
 
 {{% include-headless "/headless/materialize-intro/intro" %}}
 
-{{< callout >}}
-## What's new!
-
-- **MCP servers and Agent skills**:
-  - [MCP server for agents: give your production AI agents fresh context from
-    Materialize](/releases/#mcp-server-for-agents)
-  - [MCP server for developers: give coding agents observability into your
-    Materialize environment](/releases/#mcp-server-for-developers)
-  - [Agent skills](/integrations/coding-agent-skills/)
-
-For more information on these and other changes, see the [Release Notes](/releases/).
-
-{{</ callout >}}
+{{< whats-new-callout >}}
 
 ## Materialize offerings
 

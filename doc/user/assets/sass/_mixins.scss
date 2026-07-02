@@ -5,3 +5,247 @@
 
     box-shadow: var(--shadow-default);
 }
+
+// Homepage promo blocks: What's new callout + offerings table
+@mixin docs-feature-card($top-accent: false) {
+    $glow-foot: var(--docs-card-glow-foot, color-mix(in srgb, var(--docs-card-glow) 45%, transparent));
+    $surface:
+        radial-gradient(120% 90% at 50% -22%, var(--docs-card-glow), transparent 62%),
+        linear-gradient(180deg, transparent 48%, #{$glow-foot} 100%),
+        var(--docs-card-surface, var(--table-surface));
+
+    @if $top-accent {
+        background:
+            linear-gradient(
+                90deg,
+                transparent 0%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 35%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-center-mix, 90%), var(--sg-lavender-2)) 50%,
+                color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 65%,
+                transparent 100%
+            ) 0 0 / 100% 2px no-repeat,
+            $surface;
+    } @else {
+        background: $surface;
+    }
+
+    border: 1px solid var(--docs-card-border, var(--table-border));
+    border-radius: var(--table-radius);
+    box-shadow: var(--docs-card-shadow);
+}
+
+// Brand gradient hairline pinned to the top edge of a docs-feature-card.
+// The host element needs position: relative.
+@mixin docs-card-top-hairline() {
+    &::before {
+        background: linear-gradient(
+            90deg,
+            transparent 0%,
+            color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 35%,
+            color-mix(in srgb, var(--brand) var(--docs-card-top-accent-center-mix, 90%), var(--sg-lavender-2)) 50%,
+            color-mix(in srgb, var(--brand) var(--docs-card-top-accent-mix, 45%), transparent) 65%,
+            transparent 100%
+        );
+        border-radius: var(--table-radius) var(--table-radius) 0 0;
+        content: "";
+        height: 1px;
+        left: 0;
+        pointer-events: none;
+        position: absolute;
+        right: 0;
+        top: 0;
+        z-index: 1;
+    }
+}
+
+@mixin callout-item-accent($token) {
+    --callout-accent: var(#{$token});
+    --callout-accent-soft: color-mix(in srgb, var(#{$token}) var(--callout-accent-soft-mix, 10%), transparent);
+    --callout-accent-border: color-mix(in srgb, var(#{$token}) var(--callout-accent-border-mix, 22%), transparent);
+}
+
+@mixin docs-admonition-theme($token) {
+    @include callout-item-accent($token);
+
+    --admonition-surface: color-mix(in srgb, var(--callout-accent-soft) 42%, var(--docs-card-inset, var(--card-light)));
+    --admonition-border: color-mix(in srgb, var(--callout-accent-border) 85%, var(--table-border, var(--divider-light)));
+    --admonition-label: color-mix(in srgb, var(--callout-accent) 78%, var(--heading));
+}
+
+@mixin docs-admonition-card() {
+    background: var(--admonition-surface);
+    border: 1px solid var(--admonition-border);
+    border-radius: var(--table-radius);
+    box-shadow: var(--docs-card-shadow);
+    box-sizing: border-box;
+    color: var(--body);
+    margin: rem(1.2) 0;
+    overflow: hidden;
+    padding: rem(1.2) rem(1.4) rem(1.2) rem(1.6);
+    position: relative;
+
+    &::before {
+        background: var(--callout-accent);
+        bottom: 0;
+        content: "";
+        left: 0;
+        position: absolute;
+        top: 0;
+        width: 3px;
+    }
+
+    p:first-of-type {
+        margin-top: 0;
+    }
+
+    a:not(a[class]) {
+        color: var(--link);
+
+        &:hover,
+        &:focus {
+            color: var(--link-hover);
+        }
+    }
+}
+
+@mixin docs-nested-code-vars {
+    --code-highlight-font-size: #{rem(1.35)};
+    --code-highlight-padding-top: #{rem(2.2)};
+    --code-highlight-padding-inline: #{rem(1.2)};
+    --code-highlight-padding-bottom: #{rem(1)};
+    --code-pre-font-size: #{rem(1.35)};
+    --code-pre-padding-block: #{rem(1)};
+    --code-pre-padding-inline: #{rem(1.2)};
+}
+
+@mixin offering-row-theme($accent, $cta: null) {
+    $cta-token: if($cta, $cta, $accent);
+
+    --offering-accent: var(#{$accent});
+    --offering-badge-bg: color-mix(in srgb, var(#{$accent}) 12%, transparent);
+    --offering-badge-border: color-mix(in srgb, var(#{$accent}) 24%, transparent);
+    --offering-tile-bg: linear-gradient(
+        145deg,
+        color-mix(in srgb, var(#{$accent}) 22%, transparent),
+        color-mix(in srgb, var(#{$accent}) 7%, transparent)
+    );
+    --offering-tile-glow: 0 0 14px color-mix(in srgb, var(#{$accent}) 14%, transparent);
+    --offering-row-glow: color-mix(in srgb, var(#{$accent}) 4%, transparent);
+    --offering-cta-accent: var(#{$cta-token});
+    --offering-action-bg: color-mix(in srgb, var(#{$cta-token}) 8%, transparent);
+    --offering-action-border: color-mix(in srgb, var(#{$cta-token}) 22%, transparent);
+    --offering-action-hover: color-mix(in srgb, var(#{$cta-token}) 14%, transparent);
+}
+
+@mixin docs-page-mesh-grid-layers() {
+    background-image:
+        var(--docs-mesh-icons),
+        linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
+}
+
+@mixin docs-page-mesh-grid-layers-no-icons() {
+    background-image:
+        linear-gradient(to right, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-major) 1px, transparent 1px),
+        linear-gradient(to right, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--docs-mesh-grid-minor) 1px, transparent 1px),
+        radial-gradient(circle, var(--docs-mesh-dot) var(--docs-mesh-dot-size), transparent var(--docs-mesh-dot-size));
+}
+
+@mixin docs-page-mesh-size($icons-step, $major-step, $minor-step, $dot-step, $accent-cover: null) {
+    @if $accent-cover {
+        background-size:
+            $accent-cover,
+            $icons-step $icons-step,
+            $major-step $major-step,
+            $major-step $major-step,
+            $minor-step $minor-step,
+            $minor-step $minor-step,
+            $dot-step $dot-step;
+    } @else {
+        background-size:
+            $icons-step $icons-step,
+            $major-step $major-step,
+            $major-step $major-step,
+            $minor-step $minor-step,
+            $minor-step $minor-step,
+            $dot-step $dot-step;
+    }
+}
+
+@mixin docs-page-mesh-grid-size($major-step, $minor-step, $dot-step) {
+    background-size:
+        $major-step $major-step,
+        $major-step $major-step,
+        $minor-step $minor-step,
+        $minor-step $minor-step,
+        $dot-step $dot-step;
+}
+
+// Muted accent treatment for fn-list and metrics-list rows.
+@mixin fn-list-accent-muted {
+    --fn-accent-name: color-mix(in srgb, var(--fn-accent) 52%, var(--heading));
+    --fn-accent-soft: color-mix(in srgb, var(--fn-accent) 5%, var(--bg));
+    --fn-accent-border: color-mix(in srgb, var(--fn-accent) 10%, var(--divider-light));
+    --fn-accent-text: color-mix(in srgb, var(--fn-accent) 42%, var(--heading));
+    --fn-accent-highlight: color-mix(in srgb, var(--fn-accent) 34%, var(--sub));
+
+    &::before {
+        background: color-mix(in srgb, var(--fn-accent) 14%, var(--divider-light));
+    }
+
+    &:hover::before {
+        background: color-mix(in srgb, var(--fn-accent) 26%, var(--divider-light));
+    }
+
+    &:hover .fn-sig-pill {
+        border-color: color-mix(in srgb, var(--fn-accent) 18%, var(--divider-light));
+        box-shadow: 0 2px 8px color-mix(in srgb, var(--fn-accent) 6%, transparent);
+    }
+
+    .fn-sig-pill {
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--fn-accent) 5%, var(--bg-sub)),
+            var(--fn-accent-soft) 58%,
+            color-mix(in srgb, var(--fn-accent) 4%, var(--bg))
+        );
+    }
+}
+
+// Muted accent treatment for metrics-list rows.
+@mixin metrics-list-accent-muted {
+    --metrics-accent-soft: color-mix(in srgb, var(--metrics-accent) 5%, var(--bg));
+    --metrics-accent-border: color-mix(in srgb, var(--metrics-accent) 10%, var(--divider-light));
+    --metrics-accent-text: color-mix(in srgb, var(--metrics-accent) 42%, var(--heading));
+
+    &::before {
+        background: color-mix(in srgb, var(--metrics-accent) 14%, var(--divider-light));
+    }
+
+    &:hover::before {
+        background: color-mix(in srgb, var(--metrics-accent) 26%, var(--divider-light));
+    }
+
+    &:hover .metrics-name-pill,
+    &:hover .metrics-label-pill {
+        border-color: color-mix(in srgb, var(--metrics-accent) 18%, var(--divider-light));
+    }
+
+    .metrics-name-pill {
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--metrics-accent) 5%, var(--bg-sub)),
+            var(--metrics-accent-soft) 58%,
+            color-mix(in srgb, var(--metrics-accent) 4%, var(--bg))
+        );
+    }
+
+    .metrics-label-pill {
+        background: color-mix(in srgb, var(--metrics-accent) 5%, var(--bg));
+    }
+}
