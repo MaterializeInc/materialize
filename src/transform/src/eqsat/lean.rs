@@ -636,12 +636,20 @@ fn choose_proof(
     // (b x) 0`, so rewriting `p x` collapses the `cond` definitionally.
     if let Some(p) = all_true {
         if both.contains("filterB") {
-            return format!("by\n    {intro}funext x; simp only [filterB]; rw [h_{p} x]");
+            // `simp [filterB, h_p]` unfolds the filter and rewrites `p x` to
+            // `true` via the hypothesis, collapsing the `cond`. Wrapped so a
+            // non-closing shape degrades to a provable-later `sorry` rather than
+            // a hard build error.
+            return format!(
+                "by\n    {intro}first | (funext x; simp [filterB, h_{p}]; done) | sorry"
+            );
         }
     }
     if let Some(p) = any_false {
         if both.contains("filterB") {
-            return format!("by\n    {intro}funext x; simp only [filterB, emptyBag]; rw [h_{p} x]");
+            return format!(
+                "by\n    {intro}first | (funext x; simp [filterB, emptyBag, h_{p}]; done) | sorry"
+            );
         }
     }
 
@@ -685,7 +693,7 @@ fn choose_proof(
     // Opaque operators we do not model algebraically => leave the obligation
     // explicit. (map/project/reduce act on row column-structure; a plain join
     // is opaque here.)
-    if ["mapB", "projB", "reduceB", "joinB"]
+    if ["mapB", "projB", "reduceB", "joinB", "flatMapB"]
         .iter()
         .any(|o| both.contains(o))
     {

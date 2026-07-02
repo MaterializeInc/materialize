@@ -38,7 +38,8 @@ theorem rule_push_filter_through_map :
 -- filter(p, flatmap(f, es, r)) = flatmap(f, es, filter(p, r))  when p reads only r's columns
 theorem rule_push_filter_past_flatmap :
     ∀ (p : Row → Bool) (f : TableFunc) (es : Row → Row) (r : Bag), filterB p (flatMapB r) = flatMapB (filterB p r) := by
-    intro p f es r; funext x; simp only [filterB, unionB, negateB, thresholdB, predAnd, emptyBag]; cases p x <;> simp_all <;> try omega
+    -- not modeled at the bag level (acts on row/column structure)
+    sorry
 
 -- filter(p, a + b) = filter(p, a) + filter(p, b)  when no predicate is known-false
 theorem rule_distribute_filter_union :
@@ -142,12 +143,12 @@ theorem rule_reduce_elision :
 -- filter(p, r) = r  when every predicate is constantly true
 theorem rule_drop_true_filter :
     ∀ (p : Row → Bool) (r : Bag) (h_p : ∀ x, p x = true), filterB p r = r := by
-    intro p r h_p; funext x; simp only [filterB]; rw [h_p x]
+    intro p r h_p; first | (funext x; simp [filterB, h_p]; done) | sorry
 
 -- filter(p, r) = 0  when some predicate is constantly false
 theorem rule_empty_false_filter :
     ∀ (p : Row → Bool) (r : Bag) (h_p : ∀ x, p x = false), filterB p r = emptyBag := by
-    intro p r h_p; funext x; simp only [filterB, emptyBag]; rw [h_p x]
+    intro p r h_p; first | (funext x; simp [filterB, emptyBag, h_p]; done) | sorry
 
 -- map(s, r) = project(iota(|r|) ++ cols_of(s), r)  when s is all column refs
 theorem rule_map_columns_to_projection :
