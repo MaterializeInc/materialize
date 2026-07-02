@@ -71,6 +71,11 @@ fn emit_rule(rule: &Rule) -> String {
         for (_, ty) in &mut binders {
             *ty = match *ty {
                 "List Bag" => "List ScalarExpr",
+                // A func-metavariable (e.g. `not_binary_negate`'s `f`, bound
+                // by `Pat::SBinaryVar`) is a `BinFunc` symbol, not a scalar
+                // subexpression: leave it untouched rather than retyping it
+                // to `ScalarExpr` like every other scalar binder.
+                "BinFunc" => "BinFunc",
                 _ => "ScalarExpr",
             };
         }
@@ -136,6 +141,12 @@ fn emit_rule(rule: &Rule) -> String {
     // `const_eval`): a Rust evaluation product with no declarative template,
     // so the theorem is a permanent `sorry`.
     let is_builtin_rhs = matches!(rule.rhs, Tmpl::Builtin { .. });
+    // True when the RHS is `Binary[negate(f)](...)` (`not_binary_negate`): the
+    // `BinaryFunc::negate` table it needs is Rust metadata, opaque here
+    // (`negateFunc` in Semantics.lean), so the theorem is a permanent `sorry`
+    // like a builtin RHS, even though it is a declarative `Tmpl` rather than
+    // `Tmpl::Builtin`.
+    let is_opaque_scalar_rhs = matches!(rule.rhs, Tmpl::SBinaryNegate { .. });
 
     let proof = choose_proof(
         &lhs,
@@ -148,6 +159,7 @@ fn emit_rule(rule: &Rule) -> String {
         is_empty_prop,
         is_scalar,
         is_builtin_rhs,
+        is_opaque_scalar_rhs,
     );
 
     let quantifier = if binders.is_empty() && hyps.is_empty() {
@@ -188,13 +200,17 @@ fn emit_rule(rule: &Rule) -> String {
 }
 
 /// Whether a rule's left-hand side is a scalar pattern (rooted at
-/// `Pat::SUnary`, `Pat::SVariadic`, `Pat::SIf`, or `Pat::Scalar`). Its Lean
-/// theorem denotes through `denoteS`, unlike a relational rule whose `Bag`
-/// denotation is direct.
+/// `Pat::SUnary`, `Pat::SVariadic`, `Pat::SIf`, `Pat::SBinaryVar`, or
+/// `Pat::Scalar`). Its Lean theorem denotes through `denoteS`, unlike a
+/// relational rule whose `Bag` denotation is direct.
 fn is_scalar_rule(pat: &Pat) -> bool {
     matches!(
         pat,
-        Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. } | Pat::Scalar { .. }
+        Pat::SUnary { .. }
+            | Pat::SVariadic { .. }
+            | Pat::SIf { .. }
+            | Pat::SBinaryVar { .. }
+            | Pat::Scalar { .. }
     )
 }
 
@@ -219,6 +235,14 @@ fn collect_binders(
         // A scalar-unary pattern binds a fixed function, not a metavariable, so
         // only its input contributes binders.
         Pat::SUnary { input, .. } => collect_binders(input, out, seen),
+        // Unlike `SUnary`, the function symbol here IS a metavariable (the
+        // DSL's first func-metavar binding): bind it as a `BinFunc`, then
+        // recurse into both operands.
+        Pat::SBinaryVar { func, expr1, expr2 } => {
+            add(func, "BinFunc", out, seen);
+            collect_binders(expr1, out, seen);
+            collect_binders(expr2, out, seen);
+        }
         // Mirrors `Union`: fixed function, so only the operand list (items plus
         // an optional spliced `rest...`) contributes binders.
         Pat::SVariadic { inputs, .. } => {
@@ -313,6 +337,7 @@ fn translate_pat(pat: &Pat) -> String {
         Pat::Scalar { binding } => binding.clone(),
         Pat::SUnary { func, input } => match func.as_str() {
             "not" => format!("ScalarExpr.notE {}", arg(translate_pat(input))),
+            "isnull" => format!("ScalarExpr.isNullE {}", arg(translate_pat(input))),
             other => unimplemented!(
                 "no Lean scalar translation for func {other:?}; extend Semantics.lean's \
                  ScalarExpr/denoteS and this match when a rule needs it"
@@ -326,6 +351,15 @@ fn translate_pat(pat: &Pat) -> String {
             arg(translate_pat(cond)),
             arg(translate_pat(then)),
             arg(translate_pat(els))
+        ),
+        // Matches any scalar binary call, binding the func symbol to `func` (a
+        // `BinFunc` metavariable) and the operands to `expr1`/`expr2`. Roots
+        // `not_binary_negate`.
+        Pat::SBinaryVar { func, expr1, expr2 } => format!(
+            "ScalarExpr.binaryE {} {} {}",
+            func,
+            arg(translate_pat(expr1)),
+            arg(translate_pat(expr2))
         ),
         Pat::Filter { preds, input } => format!("filterB {preds} {}", arg(translate_pat(input))),
         Pat::Map { scalars, input } => format!("mapB {scalars} {}", arg(translate_pat(input))),
@@ -465,12 +499,26 @@ fn translate_tmpl(t: &Tmpl, hole: &str) -> String {
         ),
         // A constant boolean literal, e.g. `and_empty`'s `true`.
         Tmpl::SBool(b) => format!("ScalarExpr.litB {}", if *b { "true" } else { "false" }),
+        // Build a binary call whose func is the negation of the `BinFunc`
+        // bound by an `SBinaryVar` pattern on the LHS. Roots
+        // `not_binary_negate`; `choose_proof` emits a permanent `sorry` for
+        // this shape since `negateFunc` is opaque.
+        Tmpl::SBinaryNegate { func, expr1, expr2 } => format!(
+            "ScalarExpr.binaryE (negateFunc {}) {} {}",
+            func,
+            arg(translate_tmpl(expr1, hole)),
+            arg(translate_tmpl(expr2, hole))
+        ),
         // A builtin applier: its result is a Rust evaluation product with no
-        // declarative Lean template, so only the one function this slice ports
-        // (`const_eval`, the only builtin rule so far) is mapped. `choose_proof`
-        // emits a permanent `sorry` for every `Builtin` RHS regardless.
+        // declarative Lean template, so only the functions this slice and its
+        // predecessor port (`const_eval`, `if_err_cond`, `null_prop_binary`,
+        // `err_prop_binary`) are mapped. `choose_proof` emits a permanent
+        // `sorry` for every `Builtin` RHS regardless.
         Tmpl::Builtin { name, args } => match name.as_str() {
             "const_eval" => format!("constEval {}", args[0]),
+            "if_err_cond" => format!("ifErrCond {}", args[0]),
+            "null_prop_binary" => format!("nullPropBinary {}", args[0]),
+            "err_prop_binary" => format!("errPropBinary {}", args[0]),
             other => unimplemented!(
                 "no Lean builtin translation for {other:?}; extend Semantics.lean's opaque \
                  builtins and this match when a rule needs it"
@@ -664,6 +712,7 @@ fn choose_proof(
     is_empty_prop: bool,
     is_scalar: bool,
     is_builtin_rhs: bool,
+    is_opaque_scalar_rhs: bool,
 ) -> String {
     let both = format!("{lhs} {rhs}");
     let mut intros: Vec<&str> = binders.iter().map(|(n, _)| n.as_str()).collect();
@@ -687,6 +736,19 @@ fn choose_proof(
         // obligation is a permanent `sorry`, not a provable-later one.
         if is_builtin_rhs {
             return "by\n    -- PERMANENT SORRY: RHS is a Rust builtin\n    sorry".to_string();
+        }
+        // `not_binary_negate`'s RHS is declarative (not `Tmpl::Builtin`), but
+        // `negateFunc` is opaque (the negation table is Rust metadata), so the
+        // equality is just as unprovable as a builtin RHS.
+        if is_opaque_scalar_rhs {
+            return "by\n    -- PERMANENT SORRY: negate table is Rust metadata\n    sorry"
+                .to_string();
+        }
+        // `isnull_fold`: the two-valued model denotes `isNullE` as `false`
+        // unconditionally (see `Semantics.lean`'s `denoteS`), so the goal
+        // reduces to `false = false` once `denoteS` is unfolded.
+        if lhs.contains("ScalarExpr.isNullE") {
+            return format!("by\n    {intro}simp [denoteS]");
         }
         if lhs.contains("ScalarExpr.notE (ScalarExpr.notE") {
             return format!("by\n    {intro}simp [denoteS]");

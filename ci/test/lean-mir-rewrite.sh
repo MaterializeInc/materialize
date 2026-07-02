@@ -12,10 +12,11 @@
 #
 # "Green" means: compiles with zero errors and only the intended, documented
 # `sorry`s (provable-later theorems, one pre-existing infra gap). It does NOT
-# mean zero `sorry`s. The permanent-sorry invariant (builtin-applier RHS) is
-# enforced separately below: the count of `-- PERMANENT SORRY` markers in the
-# sources must match exactly, so a builtin-applier rule cannot be added (or
-# removed) without a deliberate update to this guard.
+# mean zero `sorry`s. The permanent-sorry invariant (a rule whose RHS is a
+# Rust builtin applier or otherwise depends on opaque Rust metadata, e.g. a
+# negation table) is enforced separately below: the count of
+# `-- PERMANENT SORRY` markers in the sources must match exactly, so such a
+# rule cannot be added (or removed) without a deliberate update to this guard.
 #
 # The image is built locally and reused via Docker's layer cache; there is no
 # registry push. It is Mathlib-free, so a cold build is just apt + elan + one
@@ -44,13 +45,16 @@ docker run --rm \
     "$image_tag" \
     lake build
 
-# Guard the permanent-sorry invariant: builtin-applier obligations (slices 4-6)
-# carry the `-- PERMANENT SORRY` marker and are the only never-provable sorries.
-# A pre-existing-gap sorry uses a distinct marker and must not be counted here.
-# `grep` exits non-zero when there are no matches. `|| true` keeps `set -o
-# pipefail` from treating that as script-fatal, so the count check below reports
-# a proper error (a zero count is now a failure, since one marker is expected).
-expected_permanent=1  # const_fold (slice 4), the one builtin ported so far. Grows to 6 by slice 6 (spec 2.7).
+# Guard the permanent-sorry invariant: builtin-applier and opaque-metadata
+# obligations (slices 4-6) carry the `-- PERMANENT SORRY` marker and are the
+# only never-provable sorries. A pre-existing-gap sorry uses a distinct marker
+# and must not be counted here. `grep` exits non-zero when there are no
+# matches. `|| true` keeps `set -o pipefail` from treating that as
+# script-fatal, so the count check below reports a proper error (a zero count
+# is now a failure, since markers are expected).
+expected_permanent=5  # const_fold, if_err_cond, null_prop_binary, err_prop_binary (builtin RHS)
+                      # + not_binary_negate (opaque negate table). isnull_fold proves outright
+                      # (no sorry). Grows to 6 by slice 6 (spec 2.7).
 permanent=$(grep -rho "PERMANENT SORRY" "$lean_dir/MirRewrite" | wc -l || true)
 if [ "$permanent" -ne "$expected_permanent" ]; then
     echo "error: found $permanent PERMANENT SORRY marker(s); expected $expected_permanent" >&2

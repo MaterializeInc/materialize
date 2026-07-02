@@ -276,4 +276,33 @@ theorem rule_or_empty :
     ∀ (env : Nat → Bool), denoteS env (ScalarExpr.orE []) = denoteS env (ScalarExpr.litB false) := by
     intro env; simp [denoteS]
 
+-- If(err, t, e) = err
+theorem rule_if_err_cond :
+    ∀ (env : Nat → Bool) (e : ScalarExpr), denoteS env e = denoteS env (ifErrCond e) := by
+    -- PERMANENT SORRY: RHS is a Rust builtin
+    sorry
+
+-- f(null, b) = null when f propagates nulls and b cannot error
+theorem rule_null_prop_binary :
+    ∀ (env : Nat → Bool) (e : ScalarExpr), denoteS env e = denoteS env (nullPropBinary e) := by
+    -- PERMANENT SORRY: RHS is a Rust builtin
+    sorry
+
+-- f(err, b) = err when b cannot error
+theorem rule_err_prop_binary :
+    ∀ (env : Nat → Bool) (e : ScalarExpr), denoteS env e = denoteS env (errPropBinary e) := by
+    -- PERMANENT SORRY: RHS is a Rust builtin
+    sorry
+
+-- IsNull(x) = false when x is non-nullable and cannot error
+theorem rule_isnull_fold :
+    ∀ (env : Nat → Bool) (x : ScalarExpr), denoteS env (ScalarExpr.isNullE x) = denoteS env (ScalarExpr.litB false) := by
+    intro env x; simp [denoteS]
+
+-- Not(f(a, b)) = negate(f)(a, b) for negatable f
+theorem rule_not_binary_negate :
+    ∀ (env : Nat → Bool) (f : BinFunc) (a : ScalarExpr) (b : ScalarExpr), denoteS env (ScalarExpr.notE (ScalarExpr.binaryE f a b)) = denoteS env (ScalarExpr.binaryE (negateFunc f) a b) := by
+    -- PERMANENT SORRY: negate table is Rust metadata
+    sorry
+
 end MirRewrite

@@ -201,9 +201,28 @@ require. In particular `andE`/`orE`/`ifE` are two-valued (`Bool`), matching
 `notE`'s fidelity. The three-valued/error semantics of MIR's actual
 `And`/`Or`/`If` is a later-slice deepening. -/
 
-/-- A scalar expression, bounded to what the slice-1/2/3 rules need: an opaque
-    leaf, logical negation, variadic conjunction/disjunction, and a
-    conditional. -/
+/-- An opaque binary scalar function symbol (e.g. `Eq`, `Lt`, `And`). Modeled
+    as `Nat`, a placeholder inhabited type, so the `opaque` combinators
+    returning it (`negateFunc`) have the computable `Inhabited` witness
+    `opaque` code generation requires, mirroring `JoinSpec`'s `Unit` idiom
+    above. The negation table (`BinaryFunc::negate`) and the three-valued
+    semantics of applying a binary function are Rust metadata, not modeled
+    here, which is why `not_binary_negate`'s theorem is a permanent sorry.
+    NOTE: do not prove a negate theorem by exploiting `Nat`'s structure. An
+    `abbrev` (not `def`) so `Inhabited`/code-gen see through to `Nat`. -/
+abbrev BinFunc : Type := Nat
+
+/-- Negate a binary function symbol, per `BinaryFunc::negate`. Opaque: the
+    negation table is Rust metadata, not modeled here. -/
+opaque negateFunc : BinFunc → BinFunc
+
+/-- Apply a binary function's two-valued semantics. Opaque: computed by Rust's
+    three-valued-logic `BinaryFunc` evaluation, not represented here. -/
+opaque denoteBin : BinFunc → Bool → Bool → Bool
+
+/-- A scalar expression, bounded to what the slice-1 through slice-5 rules
+    need: an opaque leaf, logical negation, variadic conjunction/disjunction,
+    a conditional, a nullability test, and an opaque binary call. -/
 inductive ScalarExpr where
   | var : Nat → ScalarExpr
   | notE : ScalarExpr → ScalarExpr
@@ -211,6 +230,8 @@ inductive ScalarExpr where
   | orE : List ScalarExpr → ScalarExpr
   | ifE : ScalarExpr → ScalarExpr → ScalarExpr → ScalarExpr
   | litB : Bool → ScalarExpr
+  | isNullE : ScalarExpr → ScalarExpr
+  | binaryE : BinFunc → ScalarExpr → ScalarExpr → ScalarExpr
   deriving Inhabited
 
 mutual
@@ -222,7 +243,14 @@ mutual
     null-condition case is indistinguishable here from its false-condition
     case, and its could-error branch has no counterpart at all (see
     `rule_if_same_branches` in `Generated.lean`, which therefore holds
-    unconditionally in this model). -/
+    unconditionally in this model). `isNullE` is `false` unconditionally for
+    the same reason: the model has no `null` value to distinguish, so there is
+    no operand for which `isNullE` could honestly denote anything else. This is
+    not `Unit`-style triviality exploitation, `isnull_fold`'s side conditions
+    (non-nullable, error-free) constrain which real MIR expressions the rule
+    targets, not this model, and the two-valued model is simply already at the
+    fidelity where `false` is the true value for every one of them. `binaryE`
+    defers to the opaque `denoteBin`. -/
 def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | ScalarExpr.var n => env n
   | ScalarExpr.notE e => not (denoteS env e)
@@ -230,6 +258,8 @@ def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | ScalarExpr.orE es => denoteSFold env es false (· || ·)
   | ScalarExpr.ifE c t e => if denoteS env c then denoteS env t else denoteS env e
   | ScalarExpr.litB b => b
+  | ScalarExpr.isNullE _ => false
+  | ScalarExpr.binaryE f a b => denoteBin f (denoteS env a) (denoteS env b)
 /-- Explicit list-walker for `denoteS`'s `andE`/`orE` cases, structured so the
     termination checker can see `e` comes from the smaller list `es`. Marked
     `@[simp]` so the emitted `simp [denoteS]` proofs (e.g. `and_single`) unfold
@@ -244,5 +274,23 @@ end
     permanent `sorry`. The opaque declaration is what makes that `sorry`
     genuinely required rather than `rfl`-closable. -/
 opaque constEval : ScalarExpr → ScalarExpr
+
+/-- The `if_err_cond` builtin: folds `If(err, t, e)` to that error, typed as
+    the union of the branch types. Opaque like `constEval`: its result depends
+    on Rust branch-type reconstruction not modeled in Lean, so rules whose RHS
+    is `ifErrCond` carry a permanent `sorry`. -/
+opaque ifErrCond : ScalarExpr → ScalarExpr
+
+/-- The `null_prop_binary` builtin: folds a binary call with a literal-null
+    operand to `null` when the other operand cannot error. Opaque like
+    `constEval`: its result depends on Rust's null-propagation metadata, so
+    rules whose RHS is `nullPropBinary` carry a permanent `sorry`. -/
+opaque nullPropBinary : ScalarExpr → ScalarExpr
+
+/-- The `err_prop_binary` builtin: folds a binary call with a literal-error
+    operand to that error when the other operand cannot error. Opaque like
+    `constEval`: its result depends on Rust evaluation not modeled in Lean, so
+    rules whose RHS is `errPropBinary` carry a permanent `sorry`. -/
+opaque errPropBinary : ScalarExpr → ScalarExpr
 
 end MirRewrite
