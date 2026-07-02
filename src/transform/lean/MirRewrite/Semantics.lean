@@ -191,34 +191,42 @@ theorem letRec_congr (body body' : Bag → Bag) (h : body = body') :
 /-! ### Scalar expressions
 
 A denotation for the subset of `MirScalarExpr` that scalar rewrite rules have
-exercised so far (`not`, and variadic `and`/`or`, for `not_not`, `and_single`,
-`or_single`, and the De Morgan rules). `var` stands for an arbitrary scalar
-leaf the rule does not inspect (a column reference, a literal, or any other
-subexpression); `env` supplies its Boolean value by index. This is
-deliberately not a full `MirScalarExpr` model: later scalar rules grow
-`ScalarExpr`/`denoteS` only as far as their own proofs require. In particular
-`andE`/`orE` are two-valued (`Bool`), matching `notE`'s fidelity. The
-three-valued/error semantics of MIR's actual `And`/`Or` is a later-slice
-deepening. -/
+exercised so far (`not`, variadic `and`/`or`, and `if`, for `not_not`,
+`and_single`, `or_single`, the De Morgan rules, and the `if_*` rules). `var`
+stands for an arbitrary scalar leaf the rule does not inspect (a column
+reference, a literal, or any other subexpression); `env` supplies its Boolean
+value by index. This is deliberately not a full `MirScalarExpr` model: later
+scalar rules grow `ScalarExpr`/`denoteS` only as far as their own proofs
+require. In particular `andE`/`orE`/`ifE` are two-valued (`Bool`), matching
+`notE`'s fidelity. The three-valued/error semantics of MIR's actual
+`And`/`Or`/`If` is a later-slice deepening. -/
 
-/-- A scalar expression, bounded to what the slice-1/2 rules need: an opaque
-    leaf, logical negation, and variadic conjunction/disjunction. -/
+/-- A scalar expression, bounded to what the slice-1/2/3 rules need: an opaque
+    leaf, logical negation, variadic conjunction/disjunction, and a
+    conditional. -/
 inductive ScalarExpr where
   | var : Nat → ScalarExpr
   | notE : ScalarExpr → ScalarExpr
   | andE : List ScalarExpr → ScalarExpr
   | orE : List ScalarExpr → ScalarExpr
+  | ifE : ScalarExpr → ScalarExpr → ScalarExpr → ScalarExpr
 
 mutual
 /-- Boolean denotation of a `ScalarExpr` under an environment giving each leaf
     index its truth value. `andE`/`orE` fold over their operands with the
     connective's unit (`true` for `and`, `false` for `or`), so an empty list
-    denotes the connective's identity element. -/
+    denotes the connective's identity element. `ifE` uses the `Bool` condition
+    directly: the model is two-valued (no `null`/error), so MIR's `If`'s
+    null-condition case is indistinguishable here from its false-condition
+    case, and its could-error branch has no counterpart at all (see
+    `rule_if_same_branches` in `Generated.lean`, which therefore holds
+    unconditionally in this model). -/
 def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | ScalarExpr.var n => env n
   | ScalarExpr.notE e => not (denoteS env e)
   | ScalarExpr.andE es => denoteSFold env es true (· && ·)
   | ScalarExpr.orE es => denoteSFold env es false (· || ·)
+  | ScalarExpr.ifE c t e => if denoteS env c then denoteS env t else denoteS env e
 /-- Explicit list-walker for `denoteS`'s `andE`/`orE` cases, structured so the
     termination checker can see `e` comes from the smaller list `es`. Marked
     `@[simp]` so the emitted `simp [denoteS]` proofs (e.g. `and_single`) unfold

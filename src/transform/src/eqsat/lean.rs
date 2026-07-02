@@ -97,6 +97,17 @@ fn emit_rule(rule: &Rule) -> String {
     // is everywhere false).
     let all_true = first_payload(rule, |c| matches!(c, Cond::AllTrue { .. }));
     let any_false = first_payload(rule, |c| matches!(c, Cond::AnyFalse { .. }));
+    // A scalar `If` condition's literalness becomes a hypothesis on its
+    // `denoteS` value, in the same two-valued model `ScalarExpr` uses
+    // elsewhere: `scalar_lit_true` gives `= true`, and `scalar_lit_false_or_null`
+    // (MIR's condition is a literal `false` *or* `null`) collapses to `= false`,
+    // since the `Bool` model has no `null` to distinguish from `false`.
+    // `scalar_no_error` (guarding `if_same_branches`) gets no hypothesis at
+    // all: the model has no error value, so the condition is vacuously true
+    // and the theorem holds unconditionally (see `Semantics.lean`).
+    let scalar_lit_true = first_scalar_payload(rule, |c| matches!(c, Cond::ScalarLitTrue { .. }));
+    let scalar_lit_false_or_null =
+        first_scalar_payload(rule, |c| matches!(c, Cond::ScalarLitFalseOrNull { .. }));
 
     let mut hyps: Vec<(String, String)> = nonneg
         .iter()
@@ -107,6 +118,12 @@ fn emit_rule(rule: &Rule) -> String {
     }
     if let Some(p) = &any_false {
         hyps.push((format!("h_{p}"), format!("∀ x, {p} x = false")));
+    }
+    if let Some(s) = &scalar_lit_true {
+        hyps.push((format!("h_{s}"), format!("denoteS env {s} = true")));
+    }
+    if let Some(s) = &scalar_lit_false_or_null {
+        hyps.push((format!("h_{s}"), format!("denoteS env {s} = false")));
     }
 
     // True when the rule is guarded by `is_rel_empty`, signalling an
@@ -166,10 +183,14 @@ fn emit_rule(rule: &Rule) -> String {
 }
 
 /// Whether a rule's left-hand side is a scalar pattern (rooted at
-/// `Pat::SUnary` or `Pat::SVariadic`). Its Lean theorem denotes through
-/// `denoteS`, unlike a relational rule whose `Bag` denotation is direct.
+/// `Pat::SUnary`, `Pat::SVariadic`, or `Pat::SIf`). Its Lean theorem denotes
+/// through `denoteS`, unlike a relational rule whose `Bag` denotation is
+/// direct.
 fn is_scalar_rule(pat: &Pat) -> bool {
-    matches!(pat, Pat::SUnary { .. } | Pat::SVariadic { .. })
+    matches!(
+        pat,
+        Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. }
+    )
 }
 
 fn collect_binders(
@@ -199,6 +220,14 @@ fn collect_binders(
             if let Some(rest) = &inputs.rest {
                 add(rest, "List Bag", out, seen);
             }
+        }
+        // `if_same_branches` repeats a metavariable across `then`/`els`; the
+        // `seen` dedup collapses that repetition to a single binder, matching
+        // codegen's `guard()`-enforced same-e-class equality for `If(c, x, x)`.
+        Pat::SIf { cond, then, els } => {
+            collect_binders(cond, out, seen);
+            collect_binders(then, out, seen);
+            collect_binders(els, out, seen);
         }
         Pat::Filter { preds, input } => {
             add(preds, "Row → Bool", out, seen);
@@ -281,6 +310,12 @@ fn translate_pat(pat: &Pat) -> String {
         Pat::SVariadic { func, inputs } => {
             format!("{} {}", scalar_variadic_ctor(func), pat_list(inputs))
         }
+        Pat::SIf { cond, then, els } => format!(
+            "ScalarExpr.ifE {} {} {}",
+            arg(translate_pat(cond)),
+            arg(translate_pat(then)),
+            arg(translate_pat(els))
+        ),
         Pat::Filter { preds, input } => format!("filterB {preds} {}", arg(translate_pat(input))),
         Pat::Map { scalars, input } => format!("mapB {scalars} {}", arg(translate_pat(input))),
         Pat::Project { outputs, input } => {
@@ -410,6 +445,12 @@ fn translate_tmpl(t: &Tmpl, hole: &str) -> String {
             "{} {}",
             scalar_variadic_ctor(func),
             arg(tmpl_list_expr(inputs, hole))
+        ),
+        Tmpl::SIf { cond, then, els } => format!(
+            "ScalarExpr.ifE {} {} {}",
+            arg(translate_tmpl(cond, hole)),
+            arg(translate_tmpl(then, hole)),
+            arg(translate_tmpl(els, hole))
         ),
     }
 }
@@ -576,6 +617,17 @@ fn first_payload(rule: &Rule, pick: impl Fn(&Cond) -> bool) -> Option<String> {
     })
 }
 
+/// Like [`first_payload`], for the scalar `If`-condition variants, whose
+/// bound metavariable field is named `scalar` rather than `payload`.
+fn first_scalar_payload(rule: &Rule, pick: impl Fn(&Cond) -> bool) -> Option<String> {
+    rule.conds.iter().find(|c| pick(c)).and_then(|c| match c {
+        Cond::ScalarLitTrue { scalar } | Cond::ScalarLitFalseOrNull { scalar } => {
+            Some(scalar.clone())
+        }
+        _ => None,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn choose_proof(
     lhs: &str,
@@ -612,6 +664,25 @@ fn choose_proof(
         // which `simp` closes via `Bool.and_true`/`Bool.or_false`.
         if lhs.contains("ScalarExpr.andE [") || lhs.contains("ScalarExpr.orE [") {
             return format!("by\n    {intro}simp [denoteS]");
+        }
+        // `if_true`/`if_false_or_null`: the literal-condition hypothesis
+        // rewrites `denoteS env c` to `true`/`false`, collapsing the `ifE`.
+        // `if_same_branches` (no hypothesis: `scalar_no_error` drops out of
+        // the two-valued model) collapses via the `ite_self` simp lemma once
+        // `denoteS` exposes the shared branch. Hypothesis names are passed to
+        // `simp` explicitly, as the other conded proofs above do: plain `simp`
+        // does not use local hypotheses unless named. `lake build` confirms
+        // all three close outright (no `sorry`); the `first | ... | sorry`
+        // wrapper stays as a safety net for a future `ifE`-shaped rule this
+        // branch also matches but whose goal `simp [denoteS]` cannot close.
+        if lhs.contains("ScalarExpr.ifE") {
+            let hyp_names: Vec<&str> = hyps.iter().map(|(n, _)| n.as_str()).collect();
+            let lemmas = if hyp_names.is_empty() {
+                "denoteS".to_string()
+            } else {
+                format!("denoteS, {}", hyp_names.join(", "))
+            };
+            return format!("by\n    {intro}first | (simp [{lemmas}]; done) | sorry");
         }
         // De Morgan over a list (`not_demorgan_and`/`not_demorgan_or`): a
         // `foldr`/`map` induction over an unconstrained list, which plain

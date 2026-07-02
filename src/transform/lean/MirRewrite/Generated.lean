@@ -245,4 +245,19 @@ theorem rule_not_demorgan_or :
     ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.notE (ScalarExpr.orE xs)) = denoteS env (ScalarExpr.andE ((xs.map (fun h => ScalarExpr.notE h)))) := by
     intro env xs; first | (simp [denoteS, List.foldr, List.map]; done) | sorry
 
+-- If(true, t, e) = t
+theorem rule_if_true :
+    ∀ (env : Nat → Bool) (c : ScalarExpr) (t : ScalarExpr) (e : ScalarExpr) (h_c : denoteS env c = true), denoteS env (ScalarExpr.ifE c t e) = denoteS env t := by
+    intro env c t e h_c; first | (simp [denoteS, h_c]; done) | sorry
+
+-- If(false|null, t, e) = e
+theorem rule_if_false_or_null :
+    ∀ (env : Nat → Bool) (c : ScalarExpr) (t : ScalarExpr) (e : ScalarExpr) (h_c : denoteS env c = false), denoteS env (ScalarExpr.ifE c t e) = denoteS env e := by
+    intro env c t e h_c; first | (simp [denoteS, h_c]; done) | sorry
+
+-- If(c, x, x) = x  when c cannot error
+theorem rule_if_same_branches :
+    ∀ (env : Nat → Bool) (c : ScalarExpr) (x : ScalarExpr), denoteS env (ScalarExpr.ifE c x x) = denoteS env x := by
+    intro env c x; first | (simp [denoteS]; done) | sorry
+
 end MirRewrite
