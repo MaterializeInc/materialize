@@ -170,6 +170,10 @@ pub struct ServiceArgs {
 }
 
 fn main() {
+    // Both the aws-lc-rs and ring rustls backends are linked, so rustls can't
+    // auto-select a provider and panics on first TLS use unless one is installed.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let args: Args = cli::parse_args(CliConfig::default());
 
     // Mirror the tokio Runtime configuration in our production binaries.
