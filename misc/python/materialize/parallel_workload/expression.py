@@ -362,7 +362,8 @@ EDGE_VALUES: dict[type, list[str]] = {
 
 def expression(
     data_type: type[DataType],
-    columns: list[Column] | (
+    columns: list[Column]
+    | (
         list[MySqlColumn]
         | (
             list[PostgresColumn]
@@ -403,4 +404,4 @@ def expression(
     record_size = rng.choice(
         [RecordSize.TINY, RecordSize.SMALL, RecordSize.MEDIUM, RecordSize.LARGE]
     )
-    return str(data_type.random_value(rng, record_size=record_size, in_query=True))
+    return str(data_type.random_value(rng, record_size=record_size).inquery)

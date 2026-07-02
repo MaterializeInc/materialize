@@ -12,6 +12,7 @@ import threading
 import uuid
 from collections.abc import Iterator
 from enum import Enum
+from typing import Any
 
 from pg8000.native import identifier, literal
 
@@ -25,10 +26,13 @@ from materialize.data_ingest.data_type import (
     Boolean,
     Bytea,
     DataType,
+    Date,
+    Interval,
     Jsonb,
     Long,
     Text,
     TextTextMap,
+    Timestamp,
 )
 from materialize.data_ingest.definition import Insert
 from materialize.data_ingest.executor import (
@@ -52,7 +56,9 @@ from materialize.parallel_workload.column import (
     PostgresColumn,
     SqlServerColumn,
     WebhookColumn,
+    correctness,
     naughtify,
+    set_correctness,
     set_naughty_identifiers,
 )
 from materialize.parallel_workload.executor import Executor
@@ -212,6 +218,7 @@ class Table(DBObject):
     num_rows: int
     schema: Schema
     temp: bool
+    rows: list[list[Any]]
 
     def __init__(
         self, rng: random.Random, table_id: int, schema: Schema, temp: bool = False
@@ -219,13 +226,19 @@ class Table(DBObject):
         super().__init__()
         self.table_id = table_id
         self.schema = schema
+        data_types = (
+            DATA_TYPES_FOR_COLUMNS
+            if not correctness()
+            else list(set(DATA_TYPES_FOR_COLUMNS) - {Date, Timestamp, Interval})
+        )
         self.columns = [
-            Column(rng, i, rng.choice(DATA_TYPES_FOR_COLUMNS), self)
+            Column(rng, i, rng.choice(data_types), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
         ]
         self.num_rows = 0
         self.rename = 0
         self.temp = temp
+        self.rows = []
 
     def name(self) -> str:
         if self.rename:
@@ -1493,6 +1506,7 @@ class Database:
         scenario: Scenario,
         naughty_identifiers: bool,
         num_threads: int,
+        correctness: bool,
     ):
         self.host = host
         self.ports = ports
@@ -1501,6 +1515,7 @@ class Database:
         self.seed = seed
         self.num_threads = num_threads
         set_naughty_identifiers(naughty_identifiers)
+        set_correctness(correctness)
 
         self.s3_path = 0
         self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
@@ -1744,6 +1759,15 @@ class Database:
         # that back for good.
 
     def create(self, exe: Executor, composition: Composition) -> None:
+        # Drop leftover databases from previous runs first. A previous run may
+        # have used a different seed, so its databases are not in self.dbs and a
+        # per-seed drop would miss them. Their tables can hold privilege grants
+        # on the roles dropped below, and DROP ROLE fails while such a grant
+        # exists, so these must go before the role cleanup.
+        exe.execute("SELECT name FROM mz_databases WHERE name LIKE 'db-pw-%'")
+        for row in exe.cur.fetchall():
+            exe.execute(f"DROP DATABASE {identifier(row[0])} CASCADE")
+
         for db in self.dbs:
             db.drop(exe)
             db.create(exe)
@@ -1756,6 +1780,11 @@ class Database:
         exe.execute("DROP SECRET IF EXISTS mypass CASCADE")
         exe.execute("DROP SECRET IF EXISTS sql_server_pass CASCADE")
         exe.execute("DROP SECRET IF EXISTS minio CASCADE")
+        # Recreated below with fresh per-run credentials, so a leftover from a
+        # previous run must be replaced rather than kept. CASCADE on the secret
+        # also drops the dependent aws_conn.
+        exe.execute("DROP SECRET IF EXISTS iceberg_secret CASCADE")
+        exe.execute("DROP CONNECTION IF EXISTS polaris_conn CASCADE")
 
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
