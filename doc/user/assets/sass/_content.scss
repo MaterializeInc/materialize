@@ -663,7 +663,6 @@ p+p {
         --linkbox-accent-border: color-mix(in srgb, var(--linkbox-accent) 22%, transparent);
         --linkbox-accent-soft: color-mix(in srgb, var(--linkbox-accent) 10%, transparent);
         --linkbox-divider: var(--docs-card-divider-strong);
-        --linkbox-icon-bg: color-mix(in srgb, var(--linkbox-accent-soft) 70%, var(--docs-card-inset));
         --linkbox-label: color-mix(in srgb, var(--linkbox-accent) 72%, var(--heading));
         --linkbox-link: var(--sg-lavender-2);
         --linkbox-surface: var(--docs-card-surface);
@@ -694,8 +693,6 @@ p+p {
             border-color: var(--linkbox-accent-border);
 
             .linkbox__category-icon {
-                background-color: color-mix(in srgb, var(--linkbox-accent-soft) 55%, var(--linkbox-surface));
-                border-color: var(--linkbox-accent-border);
                 color: var(--heading);
             }
         }
@@ -745,7 +742,7 @@ p+p {
 
         &__header {
             align-items: center;
-            border-bottom: 1px solid var(--linkbox-divider);
+            border-bottom: 1px solid color-mix(in srgb, var(--linkbox-accent) 16%, var(--linkbox-divider));
             display: flex;
             flex-shrink: 0;
             gap: 12px;
@@ -754,18 +751,20 @@ p+p {
 
         &__category-icon {
             align-items: center;
-            background: var(--linkbox-icon-bg);
-            border: 1px solid var(--linkbox-accent-border);
-            border-radius: rem(0.55);
+            background: linear-gradient(
+                145deg,
+                color-mix(in srgb, var(--linkbox-accent) 22%, transparent),
+                color-mix(in srgb, var(--linkbox-accent) 7%, transparent)
+            );
+            border: 1px solid color-mix(in srgb, var(--linkbox-accent) 32%, transparent);
+            border-radius: rem(0.6);
+            box-shadow: 0 0 14px color-mix(in srgb, var(--linkbox-accent) 12%, transparent);
             color: color-mix(in srgb, var(--linkbox-accent) 72%, var(--heading));
             display: flex;
             flex-shrink: 0;
             height: 32px;
             justify-content: center;
-            transition:
-                background-color 0.18s ease,
-                border-color 0.18s ease,
-                color 0.18s ease;
+            transition: color 0.18s ease;
             width: 32px;
 
             &::before {
@@ -825,8 +824,9 @@ p+p {
             margin: 0;
         }
 
-        a,
-        a strong {
+        // a:not(a[class]) to outrank the generic underlined content-link rule.
+        a:not(a[class]),
+        a:not(a[class]) strong {
             border-radius: rem(0.45);
             color: var(--linkbox-link);
             display: block;
@@ -1890,7 +1890,7 @@ p+p {
         }
 
         .copy_button {
-            background: color-mix(in srgb, var(--sg-lavender-1) 65%, var(--white));
+            background: color-mix(in srgb, var(--sg-lavender-1) 55%, transparent);
             border-color: color-mix(in srgb, var(--sg-gray-1) 80%, transparent);
             color: var(--sg-gray-3);
 
@@ -1943,7 +1943,9 @@ p+p {
         background: var(--table-surface-raised);
         border: 1px solid var(--table-border);
         border-radius: var(--table-radius);
-        box-shadow: var(--docs-card-shadow);
+        box-shadow:
+            var(--docs-card-shadow),
+            inset 0 1px 0 color-mix(in srgb, var(--code-foreground) 4%, transparent);
         margin: rem(1.2) 0;
         overflow: hidden;
         position: relative;
@@ -2624,7 +2626,8 @@ body.light .table-scrollable {
 
 .copy_button {
     align-items: center;
-    background: color-mix(in srgb, var(--table-surface-header) 90%, var(--heading));
+    backdrop-filter: blur(8px);
+    background: color-mix(in srgb, var(--table-surface-header) 72%, transparent);
     border: 1px solid var(--table-border);
     border-radius: rem(0.45);
     color: var(--sub);
@@ -2633,6 +2636,7 @@ body.light .table-scrollable {
     font-family: var(--font-mono);
     font-size: rem(1.1);
     font-weight: var(--weight-body-emphasis);
+    gap: rem(0.5);
     height: rem(2.4);
     justify-content: center;
     letter-spacing: var(--tracking-code);
@@ -2648,6 +2652,15 @@ body.light .table-scrollable {
     white-space: nowrap;
     z-index: 2;
 
+    svg {
+        display: block;
+        flex-shrink: 0;
+    }
+
+    .copy_button__icon--check {
+        display: none;
+    }
+
     &:hover,
     &:focus {
         background: color-mix(in srgb, var(--highlight) 14%, var(--table-surface-header));
@@ -2660,6 +2673,14 @@ body.light .table-scrollable {
         border-color: color-mix(in srgb, var(--table-green) 35%, var(--table-border));
         color: color-mix(in srgb, var(--table-green) 88%, var(--heading));
         display: inline-flex;
+
+        .copy_button__icon--copy {
+            display: none;
+        }
+
+        .copy_button__icon--check {
+            display: block;
+        }
     }
 }
 

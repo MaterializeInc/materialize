@@ -185,6 +185,7 @@ body.dark {
     --code-number: #ff9e64;
     --code-comment: #6b7394;
     --code-operator: #89ddff;
+    --code-punctuation: color-mix(in srgb, var(--code-foreground) 48%, var(--code-comment));
     --code-attribute: #ffcb8b;
     --code-variable: #e2e8f0;
     --code-red: #ff6e7a;
@@ -287,6 +288,7 @@ body.light {
     --code-number: #bc4c00;
     --code-comment: #656d76;
     --code-operator: #0550ae;
+    --code-punctuation: color-mix(in srgb, var(--code-comment) 82%, var(--heading));
     --code-attribute: #953800;
     --code-variable: var(--heading);
     --code-red: #cf222e;

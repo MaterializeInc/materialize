@@ -207,9 +207,14 @@
 
 /* Operator */
 .chroma .o,
-.chroma .ow,
-.chroma .p {
+.chroma .ow {
     color: var(--code-operator);
+}
+
+/* Punctuation: muted so brackets, commas, and semicolons recede behind
+   the tokens that carry meaning. */
+.chroma .p {
+    color: var(--code-punctuation, var(--code-operator));
 }
 
 /* Comment */
@@ -219,6 +224,7 @@
 .chroma .c1,
 .chroma .cs {
     color: var(--code-comment);
+    font-style: italic;
 }
 
 /* CommentPreproc */
