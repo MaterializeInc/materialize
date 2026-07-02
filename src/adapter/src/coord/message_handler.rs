@@ -683,6 +683,8 @@ impl Coordinator {
                                 sink_id => ActiveComputeSinkRetireReason::Finished,
                             })
                             .await;
+                        // `retire_compute_sinks` waits before sending the terminal
+                        // SUBSCRIBE response. There is no separate statement response here.
                         drop(retire_notify);
                     }
 

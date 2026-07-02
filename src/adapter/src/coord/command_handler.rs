@@ -346,6 +346,8 @@ impl Coordinator {
                     // Part of the Command::Commit contract is that the Coordinator guarantees that
                     // it has cleared its transaction state for the connection.
                     let retire_notify = self.clear_connection(&conn_id).await;
+                    // `sequence_plan` has already handled the client response.
+                    // This call only satisfies the internal cleanup contract.
                     drop(retire_notify);
                 }
 
@@ -1932,6 +1934,8 @@ impl Coordinator {
         self.cancel_pending_peeks(&conn_id);
         self.cancel_pending_watchsets(&conn_id);
         let retire_notify = self.cancel_compute_sinks_for_conn(&conn_id).await;
+        // SQL cancellation has no success response to delay. Each subscribe
+        // still waits for its own retraction before it observes retirement.
         drop(retire_notify);
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
             .await;
@@ -1958,6 +1962,8 @@ impl Coordinator {
         // We do not need to call clear_transaction here because there are no side effects to run
         // based on any session transaction state.
         let retire_notify = self.clear_connection(&conn_id).await;
+        // Termination has no statement response to delay. Each subscribe still
+        // waits for its own retraction before it observes retirement.
         drop(retire_notify);
 
         self.drop_temp_items(&conn_id).await;
