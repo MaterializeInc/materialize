@@ -50,13 +50,16 @@ fn cond_is_color_exact(c: &Cond) -> bool {
         Cond::NonNegative { .. } => false,
         Cond::Monotonic { .. } => false,
         Cond::IsUniqueKey { .. } => false,
-        // Scalar conds only ever guard scalar rules, which run exclusively in
-        // the scalar saturate pass and never in the relational colored pass,
-        // so color-exactness never applies to them. The value is moot but
-        // must be assigned for exhaustiveness.
-        Cond::ScalarLitTrue { .. } => true,
-        Cond::ScalarLitFalseOrNull { .. } => true,
-        Cond::ScalarNoError { .. } => true,
+        // Analysis-gated like the three above: they read the e-class scalar
+        // analysis. Scalar conds only ever guard scalar rules, which run in the
+        // scalar saturate pass and never in the relational colored pass, so no
+        // scalar rule is `colored` today. Return `false` (not color-exact) so
+        // the build-time assertion in `emit()` fails loudly if a scalar rule is
+        // ever mistakenly marked `colored`, rather than silently admitting it to
+        // the colored pass where the `ColoredView` scalar stubs are inert.
+        Cond::ScalarLitTrue { .. } => false,
+        Cond::ScalarLitFalseOrNull { .. } => false,
+        Cond::ScalarNoError { .. } => false,
     }
 }
 
