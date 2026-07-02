@@ -234,7 +234,24 @@ if nothing else in the spec changed.
 
 {{< /important >}}
 
-### Using kubectl
+{{< tabs >}}
+{{< tab "Supported Terraform" >}}
+
+If you are managing your Materialize instance with the [Materialize Terraform
+modules](https://github.com/MaterializeInc/materialize-terraform-self-managed),
+set:
+
+```hcl
+crd_version     = "v1"
+request_rollout = null
+```
+
+**Once on v1, an unchanged spec will not trigger a rollout.** Reapplying the
+same spec produces the same hash and the same derived `requestRollout`. Changing
+a hashed spec field produces a new value and triggers a rollout automatically.
+{{< /tab >}}
+
+{{< tab "Manual" >}}
 
 To adopt v1 for an existing instance, apply your CR with `apiVersion:
 materialize.cloud/v1` and remove the `requestRollout` field:
@@ -257,20 +274,8 @@ EOF
 same spec produces the same hash and the same derived `requestRollout`. Changing
 a hashed spec field produces a new value and triggers a rollout automatically.
 
-### Using Terraform
-
-If you are managing your Materialize instance with the [Materialize Terraform
-modules](https://github.com/MaterializeInc/materialize-terraform-self-managed),
-set:
-
-```hcl
-crd_version     = "v1"
-request_rollout = null
-```
-
-**Once on v1, an unchanged spec will not trigger a rollout.** Reapplying the
-same spec produces the same hash and the same derived `requestRollout`. Changing
-a hashed spec field produces a new value and triggers a rollout automatically.
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Returning to the v1alpha1 behavior
 
