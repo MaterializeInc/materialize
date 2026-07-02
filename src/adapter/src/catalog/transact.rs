@@ -2390,11 +2390,22 @@ impl Catalog {
                 let database = state.get_database(&database_id);
                 let database_name = &database.name;
 
-                let mut updates = Vec::new();
+                let mut updates: Vec<CatalogItemId> = Vec::new();
                 let mut items_to_update = BTreeMap::new();
+                // Dedup guard covering both persistent and temporary items. An
+                // item can be reached more than once: once as a member of the
+                // schema and again for each object in the schema it depends on.
+                // Persistent items are also tracked in `items_to_update`, but
+                // temporary items only land in `temporary_item_updates` (a Vec
+                // with no dedup), so a temp dependent referencing multiple
+                // objects in the renamed schema would otherwise be enqueued once
+                // per reference. That produces duplicate retraction/addition
+                // updates that consolidate to an invalid diff (e.g. -2) and
+                // panic catalog apply.
+                let mut seen: BTreeSet<CatalogItemId> = BTreeSet::new();
 
-                let mut update_item = |id| {
-                    if items_to_update.contains_key(id) {
+                let mut update_item = |id: &CatalogItemId| {
+                    if !seen.insert(*id) {
                         return Ok(());
                     }
 
@@ -2422,13 +2433,21 @@ impl Catalog {
                         temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
                         temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
                     }
-                    updates.push(id);
+                    updates.push(*id);
 
                     Ok::<_, AdapterError>(())
                 };
 
-                // Update all of the items in the schema.
-                for (_name, item_id) in &schema.items {
+                // Update all of the items in the schema. A schema holds items,
+                // types, and functions in separate maps, and any of them may be
+                // referenced by another object's create_sql via a schema-qualified
+                // name, so all three must be rewritten.
+                for (_name, item_id) in schema
+                    .items
+                    .iter()
+                    .chain(schema.types.iter())
+                    .chain(schema.functions.iter())
+                {
                     // Update the item itself.
                     update_item(item_id)?;
 
@@ -2476,7 +2495,7 @@ impl Catalog {
                 tx.update_schema(schema_id, new_schema.into())?;
 
                 for id in updates {
-                    Self::log_update(state, id);
+                    Self::log_update(state, &id);
                 }
             }
             Op::UpdateOwner { id, new_owner } => {

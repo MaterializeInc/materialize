@@ -941,8 +941,7 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
-        temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
+        temp = self.rng.choice([True, False])
         if (
             not temp
             and len([table for table in exe.db.tables if not table.temp]) >= MAX_TABLES
@@ -1003,6 +1002,12 @@ class DropTableAction(Action):
 
 
 class RenameTableAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        # Renaming a temporary item referenced by another temporary object is
+        # refused as ambiguous: temp references are only 2-part (mz_temp.item),
+        # and the item-rename check treats a non-3-part reference as ambiguous.
+        return ["potentially used ambiguously"] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
@@ -1056,6 +1061,12 @@ class AlterTableAddColumnAction(Action):
 
 
 class RenameViewAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        # Renaming a temporary item referenced by another temporary object is
+        # refused as ambiguous: temp references are only 2-part (mz_temp.item),
+        # and the item-rename check treats a non-3-part reference as ambiguous.
+        return ["potentially used ambiguously"] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
@@ -1951,8 +1962,7 @@ class CreateViewAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
-        temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
+        temp = self.rng.choice([True, False])
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
                 return False
