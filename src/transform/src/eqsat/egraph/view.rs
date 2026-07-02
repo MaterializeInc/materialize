@@ -40,6 +40,12 @@ pub(crate) trait MatchGraph {
     fn scalar_class_nodes(&self, id: Id) -> Vec<SNode>;
     /// Every scalar e-node whose operator symbol is `sym`, as `(class, node)`.
     fn nodes_by_scalar_sym(&self, sym: ScalarSym) -> Vec<(Id, SNode)>;
+    /// Whether the scalar class `id` may produce a runtime error, per the scalar
+    /// `could_error` analysis. `false` if the class carries no scalar analysis.
+    fn scalar_could_error(&self, id: Id) -> bool;
+    /// The boolean-or-null literal of scalar class `id`: `Some(Some(true/false))`
+    /// for a bool literal, `Some(None)` for a null literal, `None` otherwise.
+    fn scalar_lit_bool_or_null(&self, id: Id) -> Option<Option<bool>>;
     // Color-exact conditions (graph/payload/arity only):
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool;
     fn cond_cols_in_range(&self, p: &Payload, lo: i64, hi: i64) -> bool;
@@ -116,6 +122,33 @@ impl<'a> MatchGraph for BaseView<'a> {
 
     fn nodes_by_scalar_sym(&self, sym: ScalarSym) -> Vec<(Id, SNode)> {
         self.scalar_index.get(&sym).cloned().unwrap_or_default()
+    }
+
+    fn scalar_could_error(&self, id: Id) -> bool {
+        self.eg
+            .data()
+            .scalar
+            .analysis
+            .get(&self.eg.find(id))
+            .map_or(false, |a| a.could_error)
+    }
+
+    fn scalar_lit_bool_or_null(&self, id: Id) -> Option<Option<bool>> {
+        let (row, _ty) = self
+            .eg
+            .data()
+            .scalar
+            .analysis
+            .get(&self.eg.find(id))?
+            .literal
+            .as_ref()?;
+        let row = row.as_ref().ok()?;
+        match row.unpack_first() {
+            mz_repr::Datum::True => Some(Some(true)),
+            mz_repr::Datum::False => Some(Some(false)),
+            mz_repr::Datum::Null => Some(None),
+            _ => None,
+        }
     }
 
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {
@@ -250,6 +283,93 @@ mod tests {
         assert_eq!(
             view.rel_class_nodes(filt).len(),
             eg.rel_class_nodes(filt).len()
+        );
+    }
+
+    #[mz_ore::test]
+    fn scalar_could_error_and_lit_bool_or_null() {
+        use crate::eqsat::scalar::analysis::ClassAnalysis;
+        use mz_expr::BinaryFunc;
+        use mz_repr::{Datum, ReprScalarType, Row};
+
+        let mut eg = EGraph::new();
+        let col = eg.add(CNode::Scalar(SNode::Column(
+            0,
+            mz_ore::treat_as_equal::TreatAsEqual(None),
+        )));
+        let lhs = eg.add(CNode::Scalar(SNode::Column(
+            0,
+            mz_ore::treat_as_equal::TreatAsEqual(None),
+        )));
+        let rhs = eg.add(CNode::Scalar(SNode::Column(
+            1,
+            mz_ore::treat_as_equal::TreatAsEqual(None),
+        )));
+        let div = eg.add(CNode::Scalar(SNode::CallBinary {
+            func: BinaryFunc::DivInt64(mz_expr::func::DivInt64),
+            expr1: lhs,
+            expr2: rhs,
+        }));
+        let bool_ty = ReprColumnType {
+            scalar_type: ReprScalarType::Bool,
+            nullable: false,
+        };
+        let lit = eg.add(CNode::Scalar(SNode::Literal(
+            Ok(Row::pack_slice(&[Datum::True])),
+            bool_ty.clone(),
+        )));
+        eg.rebuild();
+
+        // `scalar_saturate::recompute_analysis` is private to its module, so seed
+        // the analysis map directly the way that pass would after a round: this
+        // exercises the same `eg.data().scalar.analysis` lookup the view methods
+        // use without depending on the (still Task-1-red) rest of the crate.
+        eg.data_mut().scalar.analysis.insert(
+            eg.find(col),
+            ClassAnalysis {
+                could_error: false,
+                literal: None,
+            },
+        );
+        eg.data_mut().scalar.analysis.insert(
+            eg.find(div),
+            ClassAnalysis {
+                could_error: true,
+                literal: None,
+            },
+        );
+        eg.data_mut().scalar.analysis.insert(
+            eg.find(lit),
+            ClassAnalysis {
+                could_error: false,
+                literal: Some((Ok(Row::pack_slice(&[Datum::True])), bool_ty)),
+            },
+        );
+
+        let index = eg.rel_index();
+        let scalar_index = eg.scalar_index();
+        let an = Analyses::default();
+        let view = BaseView {
+            eg: &eg,
+            index: &index,
+            scalar_index: &scalar_index,
+            an: &an,
+        };
+
+        assert!(
+            !view.scalar_could_error(col),
+            "bare column must not could_error"
+        );
+        assert!(view.scalar_could_error(div), "division must could_error");
+        assert_eq!(
+            view.scalar_lit_bool_or_null(lit),
+            Some(Some(true)),
+            "true literal must resolve to Some(Some(true))"
+        );
+        assert_eq!(
+            view.scalar_lit_bool_or_null(col),
+            None,
+            "non-literal class must return None"
         );
     }
 }
