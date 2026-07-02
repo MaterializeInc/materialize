@@ -150,7 +150,10 @@ $rem-scale: 0.585;
     --sg-gray-4: #403D4D;
     --sg-gray-5: #201D2C;
     --sg-heading: #F0EEFF;
-    --sg-body: #9B97A3;
+    // Body copy needs to support sustained reading in dark mode, so it sits
+    // well above the muted caption grey (--sg-gray-2) in brightness while
+    // staying below headings and lifted inline text.
+    --sg-body: #CFCBDD;
     --sg-inline-lifted: #E2E0F0;
     --sg-link: #8F76CF;
     --sg-link-hover: #B09EE0;
