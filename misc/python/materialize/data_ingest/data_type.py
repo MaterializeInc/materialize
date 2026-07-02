@@ -11,8 +11,9 @@ import json
 import random
 import string
 import uuid
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from pg8000.native import literal
 
@@ -35,6 +36,15 @@ class Backend(Enum):
     MATERIALIZE = 6
 
 
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class DataValue(Generic[T]):
+    value: T
+    inquery: str
+
+
 class DataType:
     """As supported by Avro: https://avro.apache.org/docs/++version++/specification/_print/"""
 
@@ -42,8 +52,7 @@ class DataType:
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         """Generate a random value, should be possible for all types."""
         raise NotImplementedError
 
@@ -62,9 +71,9 @@ class Boolean(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
-        return rng.choice((True, False))
+    ) -> DataValue:
+        value = rng.choice((True, False))
+        return DataValue(value, str(value))
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -76,8 +85,7 @@ class SmallInt(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             min, max = -127, 128
         elif record_size in (RecordSize.SMALL, RecordSize.MEDIUM, RecordSize.LARGE):
@@ -91,7 +99,7 @@ class SmallInt(DataType):
             value = max
         else:
             value = rng.randint(min, max)
-        return f"{value}::smallint" if in_query else value
+        return DataValue(value, f"{value}::smallint")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -112,8 +120,7 @@ class Int(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             min, max = -127, 128
         elif record_size == RecordSize.SMALL:
@@ -129,7 +136,7 @@ class Int(DataType):
             value = max
         else:
             value = rng.randint(min, max)
-        return f"{value}::int" if in_query else value
+        return DataValue(value, f"{value}::int")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -148,8 +155,7 @@ class Long(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             min, max = -127, 128
         elif record_size == RecordSize.SMALL:
@@ -167,7 +173,7 @@ class Long(DataType):
             value = max
         else:
             value = rng.randint(min, max)
-        return f"{value}::bigint" if in_query else value
+        return DataValue(value, f"{value}::bigint")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -188,8 +194,7 @@ class UInt2(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             min, max = 0, 256
         elif record_size in (RecordSize.SMALL, RecordSize.MEDIUM, RecordSize.LARGE):
@@ -203,7 +208,7 @@ class UInt2(DataType):
             value = max
         else:
             value = rng.randint(min, max)
-        return f"{value}::uint2" if in_query else value
+        return DataValue(value, f"{value}::uint2")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -228,8 +233,7 @@ class UInt4(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             min, max = 0, 256
         elif record_size == RecordSize.SMALL:
@@ -245,7 +249,7 @@ class UInt4(DataType):
             value = max
         else:
             value = rng.randint(min, max)
-        return f"{value}::uint4" if in_query else value
+        return DataValue(value, f"{value}::uint4")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -270,8 +274,7 @@ class UInt8(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             min, max = 0, 256
         elif record_size == RecordSize.SMALL:
@@ -289,7 +292,7 @@ class UInt8(DataType):
             value = max
         else:
             value = rng.randint(min, max)
-        return f"{value}::uint8" if in_query else value
+        return DataValue(value, f"{value}::uint8")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -314,8 +317,7 @@ class Float(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
             value = 1.0
         elif rng.randrange(10) == 0:
@@ -330,7 +332,7 @@ class Float(DataType):
             value = rng.uniform(-1_000_000_000, 1_000_000_000_00)
         else:
             raise ValueError(f"Unexpected record size {record_size}")
-        return f"{value}::float4" if in_query else value
+        return DataValue(value, f"{value}::float4")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -353,8 +355,7 @@ class Double(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
             value = 1.0
         elif rng.randrange(10) == 0:
@@ -369,7 +370,7 @@ class Double(DataType):
             value = rng.uniform(-1_000_000_000, 1_000_000_000_00)
         else:
             raise ValueError(f"Unexpected record size {record_size}")
-        return f"{value}::float8" if in_query else value
+        return DataValue(value, f"{value}::float8")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -392,8 +393,7 @@ class Numeric(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
             value = 1.0
         elif rng.randrange(10) == 0:
@@ -408,7 +408,7 @@ class Numeric(DataType):
             value = rng.uniform(-1_000_000_000, 1_000_000_000_00)
         else:
             raise ValueError(f"Unexpected record size {record_size}")
-        return f"{value}::numeric" if in_query else value
+        return DataValue(value, f"{value}::numeric")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -429,8 +429,7 @@ class Numeric383(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
             value = 1.0
         elif rng.randrange(10) == 0:
@@ -445,7 +444,7 @@ class Numeric383(DataType):
             value = rng.uniform(-1_000_000_000, 1_000_000_000_00)
         else:
             raise ValueError(f"Unexpected record size {record_size}")
-        return f"{value}::numeric(38,3)" if in_query else value
+        return DataValue(value, f"{value}::numeric(38,3)")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -466,8 +465,7 @@ class Text(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
             result = rng.choice(
                 [
@@ -493,7 +491,7 @@ class Text(DataType):
         else:
             raise ValueError(f"Unexpected record size {record_size}")
 
-        return literal(str(result)) if in_query else str(result)
+        return DataValue(result, literal(str(result)))
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -519,12 +517,11 @@ class Char(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         chars = string.ascii_letters + string.digits
         # char(1) pads with spaces, generate single chars
         result = rng.choice(chars)
-        return literal(str(result)) if in_query else str(result)
+        return DataValue(str(result), literal(str(result)))
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -546,8 +543,7 @@ class VarChar(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         chars = string.ascii_letters + string.digits
         if record_size == RecordSize.TINY:
             result = rng.choice(("foo", "bar", "baz"))
@@ -559,7 +555,7 @@ class VarChar(DataType):
             result = "".join(rng.choice(chars) for _ in range(50))
         else:
             raise ValueError(f"Unexpected record size {record_size}")
-        return literal(str(result)) if in_query else str(result)
+        return DataValue(str(result), literal(str(result)))
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -594,8 +590,7 @@ class UUID(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         result = rng.choice(
             [
                 "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
@@ -605,7 +600,7 @@ class UUID(DataType):
                 uuid.UUID(int=rng.getrandbits(128), version=4),
             ]
         )
-        return f"'{result}'::uuid" if in_query else str(result)
+        return DataValue(result, f"'{result}'::uuid")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -631,8 +626,7 @@ class Jsonb(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             key_range = 1
         elif record_size == RecordSize.SMALL:
@@ -643,8 +637,10 @@ class Jsonb(DataType):
             key_range = 20
         else:
             raise ValueError(f"Unexpected record size {record_size}")
-        result = {f"key{key}": str(rng.randint(-100, 100)) for key in range(key_range)}
-        return f"'{json.dumps(result)}'::jsonb" if in_query else json.dumps(result)
+        value = json.dumps(
+            {f"key{key}": str(rng.randint(-100, 100)) for key in range(key_range)}
+        )
+        return DataValue(value, f"'{value}'::jsonb")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -666,8 +662,7 @@ class TextTextMap(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             key_range = 1
         elif record_size == RecordSize.SMALL:
@@ -683,7 +678,7 @@ class TextTextMap(DataType):
             for i in range(0, key_range)
         ]
         values_str = f"{{{', '.join(values)}}}"
-        return f"'{values_str}'::map[text=>text]" if in_query else values_str
+        return DataValue(values_str, f"'{values_str}'::map[text=>text]")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -709,8 +704,7 @@ class IntArray(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             key_range = 1
         elif record_size == RecordSize.SMALL:
@@ -723,7 +717,7 @@ class IntArray(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
         values = [str(rng.randint(-100, 100)) for i in range(0, key_range)]
         values_str = f"{{{', '.join(values)}}}"
-        return f"'{values_str}'::int[]" if in_query else values_str
+        return DataValue(values_str, f"'{values_str}'::int[]")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -746,8 +740,7 @@ class IntList(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if record_size == RecordSize.TINY:
             key_range = 1
         elif record_size == RecordSize.SMALL:
@@ -760,7 +753,7 @@ class IntList(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
         values = [str(rng.randint(-100, 100)) for i in range(0, key_range)]
         values_str = f"{{{', '.join(values)}}}"
-        return f"'{values_str}'::int list" if in_query else values_str
+        return DataValue(values_str, f"'{values_str}'::int list")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -774,15 +767,14 @@ class Timestamp(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(100) == 0:
             result = "1-01-01"
         elif rng.randrange(100) == 0:
             result = "99999-12-31"
         else:
-            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
-        return f"TIMESTAMP '{result}'" if in_query else str(result)
+            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13):02d}-{rng.randrange(1, 29):02d}"
+        return DataValue(result, f"TIMESTAMP '{result}'")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -809,15 +801,14 @@ class TimestampTz(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(100) == 0:
             result = "1-01-01"
         elif rng.randrange(100) == 0:
             result = "99999-12-31"
         else:
             result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
-        return f"TIMESTAMPTZ '{result}'" if in_query else str(result)
+        return DataValue(str(result), f"TIMESTAMPTZ '{result}'")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -844,15 +835,14 @@ class MzTimestamp(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(100) == 0:
             result = "1970-01-01"
         elif rng.randrange(100) == 0:
             result = "99999-12-31"
         else:
-            result = f"{rng.randrange(1970, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
-        return f"MZ_TIMESTAMP '{result}'" if in_query else result
+            result = f"{rng.randrange(1970, 100000)}-{rng.randrange(1, 13):02d}-{rng.randrange(1, 29):02d}"
+        return DataValue(result, f"MZ_TIMESTAMP '{result}'")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -874,15 +864,14 @@ class Date(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(100) == 0:
             result = "1-01-01"
         elif rng.randrange(100) == 0:
             result = "99999-12-31"
         else:
-            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
-        return f"DATE '{result}'" if in_query else result
+            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13):02d}-{rng.randrange(1, 29):02d}"
+        return DataValue(result, f"DATE '{result}'")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -907,15 +896,14 @@ class Time(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(100) == 0:
             result = "00:00:00"
         elif rng.randrange(100) == 0:
             result = "23:59:59.999999"
         else:
-            result = f"{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}.{rng.randrange(0, 1000000)}"
-        return f"TIME '{result}'" if in_query else result
+            result = f"{rng.randrange(0, 24):02d}:{rng.randrange(0, 60):02d}:{rng.randrange(0, 60):02d}.{rng.randrange(0, 1000000)}"
+        return DataValue(result, f"TIME '{result}'")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -940,8 +928,7 @@ class Interval(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(100) == 0:
             result = (
                 "-178956970 years -8 months -2147483648 days -2562047788:00:54.775808"
@@ -958,7 +945,7 @@ class Interval(DataType):
             result = f"{rng.uniform(-178956970, 178956970):.0f} years {rng.uniform(-365, 365):.0f} days {rng.uniform(-1000000000, 1000000000):.0f} seconds"
         else:
             raise ValueError(f"Unexpected record size {record_size}")
-        return f"INTERVAL '{result}'" if in_query else result
+        return DataValue(result, f"INTERVAL '{result}'")
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -984,24 +971,48 @@ class Oid(Int):
         else:
             return "oid"
 
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+    ) -> DataValue:
+        if record_size == RecordSize.TINY:
+            min, max = 0, 256
+        elif record_size == RecordSize.SMALL:
+            min, max = 0, 65535
+        elif record_size in (RecordSize.MEDIUM, RecordSize.LARGE):
+            min, max = 0, 4294967295
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+
+        if rng.randrange(10) == 0:
+            value = min
+        elif rng.randrange(10) == 0:
+            value = max
+        else:
+            value = rng.randint(min, max)
+        return DataValue(value, f"{value}::oid")
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        return f"{num}::oid" if in_query else num
+
 
 class Int4Range(DataType):
     @staticmethod
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
-            if in_query:
-                return "int4range(NULL, NULL)"
-            return "(,)"
+            return DataValue("(,)", "int4range(NULL, NULL)")
         lower = rng.randint(-2147483648, 2147483646)
         upper = rng.randint(lower + 1, 2147483647)
         bounds = rng.choice(["[)", "[]", "()", "(]"])
-        if in_query:
-            return f"int4range({lower}, {upper}, '{bounds}')"
-        return f"{bounds[0]}{lower},{upper}{bounds[1]}"
+        return DataValue(
+            f"{bounds[0]}{lower},{upper}{bounds[1]}",
+            f"int4range({lower}, {upper}, '{bounds}')",
+        )
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -1021,18 +1032,16 @@ class Int8Range(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
-            if in_query:
-                return "int8range(NULL, NULL)"
-            return "(,)"
+            return DataValue("(,)", "int8range(NULL, NULL)")
         lower = rng.randint(-1000000000, 999999999)
         upper = rng.randint(lower + 1, 1000000000)
         bounds = rng.choice(["[)", "[]", "()", "(]"])
-        if in_query:
-            return f"int8range({lower}, {upper}, '{bounds}')"
-        return f"{bounds[0]}{lower},{upper}{bounds[1]}"
+        return DataValue(
+            f"{bounds[0]}{lower},{upper}{bounds[1]}",
+            f"int8range({lower}, {upper}, '{bounds}')",
+        )
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -1052,18 +1061,16 @@ class NumRange(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
-            if in_query:
-                return "numrange(NULL, NULL)"
-            return "(,)"
+            return DataValue("(,)", "numrange(NULL, NULL)")
         lower = round(rng.uniform(-1000000, 1000000), 3)
         upper = round(lower + rng.uniform(0.001, 1000000), 3)
         bounds = rng.choice(["[)", "[]", "()", "(]"])
-        if in_query:
-            return f"numrange({lower}, {upper}, '{bounds}')"
-        return f"{bounds[0]}{lower},{upper}{bounds[1]}"
+        return DataValue(
+            f"{bounds[0]}{lower},{upper}{bounds[1]}",
+            f"numrange({lower}, {upper}, '{bounds}')",
+        )
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -1083,12 +1090,9 @@ class DateRange(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
-            if in_query:
-                return "daterange(NULL, NULL)"
-            return "(,)"
+            return DataValue("(,)", "daterange(NULL, NULL)")
         year1 = rng.randrange(1, 9900)
         month1 = rng.randrange(1, 13)
         day1 = rng.randrange(1, 29)
@@ -1097,9 +1101,10 @@ class DateRange(DataType):
         month2 = rng.randrange(1, 13)
         day2 = rng.randrange(1, 29)
         bounds = rng.choice(["[)", "[]", "()", "(]"])
-        if in_query:
-            return f"daterange('{year1}-{month1}-{day1}'::date, '{year2}-{month2}-{day2}'::date, '{bounds}')"
-        return f"{bounds[0]}{year1}-{month1}-{day1},{year2}-{month2}-{day2}{bounds[1]}"
+        return DataValue(
+            f"{bounds[0]}{year1}-{month1}-{day1},{year2}-{month2}-{day2}{bounds[1]}",
+            f"daterange('{year1}-{month1}-{day1}'::date, '{year2}-{month2}-{day2}'::date, '{bounds}')",
+        )
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -1119,12 +1124,9 @@ class TsRange(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
-            if in_query:
-                return "tsrange(NULL, NULL)"
-            return "(,)"
+            return DataValue("(,)", "tsrange(NULL, NULL)")
         year1 = rng.randrange(1, 9900)
         month1 = rng.randrange(1, 13)
         day1 = rng.randrange(1, 29)
@@ -1132,9 +1134,10 @@ class TsRange(DataType):
         month2 = rng.randrange(1, 13)
         day2 = rng.randrange(1, 29)
         bounds = rng.choice(["[)", "[]", "()", "(]"])
-        if in_query:
-            return f"tsrange('{year1}-{month1}-{day1}'::timestamp, '{year2}-{month2}-{day2}'::timestamp, '{bounds}')"
-        return f"{bounds[0]}{year1}-{month1}-{day1},{year2}-{month2}-{day2}{bounds[1]}"
+        return DataValue(
+            f"{bounds[0]}{year1}-{month1}-{day1},{year2}-{month2}-{day2}{bounds[1]}",
+            f"tsrange('{year1}-{month1}-{day1}'::timestamp, '{year2}-{month2}-{day2}'::timestamp, '{bounds}')",
+        )
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
@@ -1154,12 +1157,9 @@ class TsTzRange(DataType):
     def random_value(
         rng: random.Random,
         record_size: RecordSize = RecordSize.LARGE,
-        in_query: bool = False,
-    ) -> Any:
+    ) -> DataValue:
         if rng.randrange(10) == 0:
-            if in_query:
-                return "tstzrange(NULL, NULL)"
-            return "(,)"
+            return DataValue("(,)", "tstzrange(NULL, NULL)")
         year1 = rng.randrange(1, 9900)
         month1 = rng.randrange(1, 13)
         day1 = rng.randrange(1, 29)
@@ -1167,9 +1167,10 @@ class TsTzRange(DataType):
         month2 = rng.randrange(1, 13)
         day2 = rng.randrange(1, 29)
         bounds = rng.choice(["[)", "[]", "()", "(]"])
-        if in_query:
-            return f"tstzrange('{year1}-{month1}-{day1}'::timestamptz, '{year2}-{month2}-{day2}'::timestamptz, '{bounds}')"
-        return f"{bounds[0]}{year1}-{month1}-{day1},{year2}-{month2}-{day2}{bounds[1]}"
+        return DataValue(
+            f"{bounds[0]}{year1}-{month1}-{day1},{year2}-{month2}-{day2}{bounds[1]}",
+            f"tstzrange('{year1}-{month1}-{day1}'::timestamptz, '{year2}-{month2}-{day2}'::timestamptz, '{bounds}')",
+        )
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:

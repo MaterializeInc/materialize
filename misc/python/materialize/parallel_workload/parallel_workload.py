@@ -76,6 +76,7 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
+    correctness: bool,
     replicas: int,
     composition: Composition | None,
     azurite: bool,
@@ -86,7 +87,7 @@ def run(
     rng = random.Random(random.randrange(SEED_RANGE))
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} --replicas={replicas} (--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--correctness ' if correctness else ''}--replicas={replicas} (--host={host})"
     )
     initialize_logging()
 
@@ -95,7 +96,7 @@ def run(
     ).timestamp()
 
     database = Database(
-        rng, seed, host, ports, complexity, scenario, naughty_identifiers
+        rng, seed, host, ports, complexity, scenario, naughty_identifiers, correctness
     )
 
     system_conn = psycopg.connect(
@@ -624,6 +625,11 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         help="Whether to use naughty strings as identifiers, makes the queries unreadable",
     )
     parser.add_argument(
+        "--correctness",
+        action="store_true",
+        help="Whether to check for correctness, restricts the queries that can run",
+    )
+    parser.add_argument(
         "--fast-startup",
         action="store_true",
         help="Whether to initialize expensive parts like SQLsmith, sources, sinks (for fast local testing, reduces coverage)",
@@ -698,6 +704,7 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.correctness,
         args.replicas,
         composition=None,  # only works in mzcompose
         azurite=args.azurite,
