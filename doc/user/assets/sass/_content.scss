@@ -923,6 +923,212 @@ p+p {
         line-height: var(--leading-body);
     }
 
+    .architecture-diagram-figure {
+        @include docs-feature-card;
+
+        margin: var(--small) 0;
+        overflow: hidden;
+        padding: rem(1.4) rem(1.4) rem(1.2);
+
+        figcaption {
+            margin-top: rem(0.6);
+            padding: 0;
+            text-align: center;
+        }
+    }
+
+    .architecture-diagram {
+        --arch-source-accent: #6d28d9;
+        --arch-source-soft: #f5f0ff;
+        --arch-source-border: #ddd0ff;
+        --arch-compute-accent: #00857a;
+        --arch-compute-soft: #ecfdf9;
+        --arch-compute-border: #9fe8dc;
+        --arch-serving-accent: #0969da;
+        --arch-serving-soft: #eff6ff;
+        --arch-serving-border: #b6d4fe;
+        --arch-code-bg: #ffffff;
+        --arch-stack-opacity: 0.55;
+        --arch-kw: #6d28d9;
+        --arch-fn: #00857a;
+        --arch-var: #374151;
+        --arch-txt: #4b5563;
+        --arch-punct: #6e7781;
+        --arch-shadow-color: rgb(15 23 42 / 12%);
+
+        display: block;
+        aspect-ratio: 1120 / 400;
+        height: auto;
+        width: 100%;
+
+        .arch-tier--source {
+            --arch-tier-accent: var(--arch-source-accent);
+            --arch-tier-soft: var(--arch-source-soft);
+            --arch-tier-border: var(--arch-source-border);
+        }
+
+        .arch-tier--compute {
+            --arch-tier-accent: var(--arch-compute-accent);
+            --arch-tier-soft: var(--arch-compute-soft);
+            --arch-tier-border: var(--arch-compute-border);
+        }
+
+        .arch-tier--serving {
+            --arch-tier-accent: var(--arch-serving-accent);
+            --arch-tier-soft: var(--arch-serving-soft);
+            --arch-tier-border: var(--arch-serving-border);
+        }
+
+        .arch-tier-label {
+            fill: var(--arch-tier-accent);
+            font-family: var(--font-mono);
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+        }
+
+        .arch-tier-card {
+            fill: var(--arch-code-bg);
+            stroke: var(--arch-tier-border);
+            stroke-width: 1.5;
+        }
+
+        .arch-tier-stack {
+            fill: var(--arch-tier-soft);
+            stroke: var(--arch-tier-border);
+            stroke-width: 1;
+        }
+
+        .arch-tier-stack--1 {
+            opacity: calc(var(--arch-stack-opacity) + 0.12);
+        }
+
+        .arch-tier-stack--2 {
+            opacity: var(--arch-stack-opacity);
+        }
+
+        .arch-dot {
+            fill: var(--arch-tier-accent);
+            opacity: 0.4;
+        }
+
+        .arch-card-divider {
+            opacity: 0.7;
+            stroke: var(--arch-tier-border);
+            stroke-width: 1;
+        }
+
+        .arch-code-panel {
+            fill: none;
+        }
+
+        .arch-code-line {
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: 500;
+            letter-spacing: var(--tracking-code);
+        }
+
+        .arch-kw {
+            fill: var(--arch-kw);
+            font-weight: 600;
+        }
+
+        .arch-fn {
+            fill: var(--arch-fn);
+            font-weight: 600;
+        }
+
+        .arch-var {
+            fill: var(--arch-var);
+        }
+
+        .arch-txt {
+            fill: var(--arch-txt);
+        }
+
+        .arch-punct {
+            fill: var(--arch-punct);
+        }
+
+        .arch-stop--source {
+            stop-color: var(--arch-source-accent);
+        }
+
+        .arch-stop--compute {
+            stop-color: var(--arch-compute-accent);
+        }
+
+        .arch-stop--serving {
+            stop-color: var(--arch-serving-accent);
+        }
+
+        .arch-arrowhead--compute {
+            fill: var(--arch-compute-accent);
+        }
+
+        .arch-arrowhead--serving {
+            fill: var(--arch-serving-accent);
+        }
+
+        .arch-flow-base {
+            fill: none;
+            opacity: 0.35;
+            stroke-linecap: round;
+            stroke-width: 2;
+        }
+
+        // Data "packets" flowing along the base line. The dash period (0.1
+        // dot + 10 gap) must match the keyframe offset below for a seamless
+        // loop.
+        .arch-flow-dots {
+            animation: arch-flow-dash 1s linear infinite;
+            fill: none;
+            stroke-dasharray: 0.1 10;
+            stroke-linecap: round;
+            stroke-width: 3;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .arch-flow-dots {
+                animation: none;
+            }
+        }
+
+        .arch-shadow {
+            flood-color: var(--arch-shadow-color);
+            flood-opacity: 1;
+        }
+    }
+
+    @keyframes arch-flow-dash {
+        to {
+            stroke-dashoffset: -10.1;
+        }
+    }
+
+    body.dark & {
+        .architecture-diagram {
+            --arch-source-accent: #c4b5fd;
+            --arch-source-soft: rgb(196 181 253 / 10%);
+            --arch-source-border: rgb(196 181 253 / 28%);
+            --arch-compute-accent: #2bddc2;
+            --arch-compute-soft: rgb(43 221 194 / 10%);
+            --arch-compute-border: rgb(43 221 194 / 28%);
+            --arch-serving-accent: #7dcfff;
+            --arch-serving-soft: rgb(125 207 255 / 10%);
+            --arch-serving-border: rgb(125 207 255 / 28%);
+            --arch-code-bg: color-mix(in srgb, var(--bg) 82%, var(--card-light));
+            --arch-stack-opacity: 0.35;
+            --arch-kw: #c4b5fd;
+            --arch-fn: #2bddc2;
+            --arch-var: #e2e8f0;
+            --arch-txt: #cbd5e1;
+            --arch-punct: #7b839f;
+            --arch-shadow-color: rgb(0 0 0 / 45%);
+        }
+    }
+
     table.syntax-table {
         background:
             linear-gradient(
@@ -1016,6 +1222,12 @@ p+p {
 
             .highlight {
                 margin: rem(0.6) 0;
+                width: 100%;
+
+                pre,
+                .chroma {
+                    overflow-x: auto;
+                }
             }
         }
 
@@ -1149,6 +1361,12 @@ p+p {
 
             .highlight {
                 margin: rem(0.6) 0;
+                width: 100%;
+
+                pre,
+                .chroma {
+                    overflow-x: auto;
+                }
             }
         }
 
@@ -1708,11 +1926,13 @@ p+p {
 
             > li {
                 &:before {
-                    background: color-mix(in srgb, var(--steps-accent) 10%, var(--white));
-                    border-color: color-mix(in srgb, var(--sg-teal-3) 55%, transparent);
-                    box-shadow:
-                        0 0 0 rem(0.35) color-mix(in srgb, var(--sg-teal-3) 12%, transparent),
-                        0 rem(0.35) rem(1) color-mix(in srgb, var(--sg-teal-3) 8%, transparent);
+                    background: linear-gradient(
+                        145deg,
+                        color-mix(in srgb, var(--sg-teal-3) 18%, var(--white)),
+                        color-mix(in srgb, var(--sg-teal-3) 5%, var(--white))
+                    );
+                    border-color: color-mix(in srgb, var(--sg-teal-3) 45%, transparent);
+                    box-shadow: 0 0 12px color-mix(in srgb, var(--sg-teal-3) 14%, transparent);
                     color: var(--sg-teal-5);
                 }
 
@@ -1958,6 +2178,7 @@ p+p {
             box-shadow: none;
             font-size: var(--code-highlight-font-size);
             margin: 0;
+            overflow-x: auto;
             padding:
                 var(--code-highlight-padding-top)
                 var(--code-highlight-padding-inline)
@@ -1967,6 +2188,35 @@ p+p {
         .chroma {
             background-color: transparent;
         }
+
+        .copy_button {
+            display: inline-flex;
+            opacity: 0;
+            pointer-events: none;
+            visibility: hidden;
+        }
+
+        &:hover,
+        &:focus-within {
+            .copy_button {
+                opacity: 1;
+                pointer-events: auto;
+                visibility: visible;
+            }
+        }
+
+        .copy_button.success {
+            opacity: 1;
+            pointer-events: auto;
+            visibility: visible;
+        }
+    }
+
+    // Standalone blocks are full-width, so keep the copy control visible.
+    > .highlight .copy_button {
+        opacity: 1;
+        pointer-events: auto;
+        visibility: visible;
     }
 
     code {
@@ -2031,7 +2281,7 @@ p+p {
     :not(div.footnotes) > ol.has-p:not(ol.has-p ol.has-p) {
         --steps-accent: var(--highlight);
         --steps-badge-size: #{rem(3)};
-        --steps-rail-width: 2px;
+        --steps-rail-width: 1px;
 
         list-style-type: none;
         counter-reset: list-counter;
@@ -2126,12 +2376,14 @@ p+p {
 
             &:before {
                 align-items: center;
-                background: color-mix(in srgb, var(--steps-accent) 18%, var(--card-light));
-                border: 2px solid color-mix(in srgb, var(--steps-accent) 70%, transparent);
+                background: linear-gradient(
+                    145deg,
+                    color-mix(in srgb, var(--steps-accent) 26%, var(--card-light)),
+                    color-mix(in srgb, var(--steps-accent) 8%, var(--card-light))
+                );
+                border: 1px solid color-mix(in srgb, var(--steps-accent) 45%, transparent);
                 border-radius: 50%;
-                box-shadow:
-                    0 0 0 rem(0.35) color-mix(in srgb, var(--steps-accent) 14%, transparent),
-                    0 rem(0.35) rem(1) color-mix(in srgb, var(--steps-accent) 12%, transparent);
+                box-shadow: 0 0 14px color-mix(in srgb, var(--steps-accent) 18%, transparent);
                 color: color-mix(in srgb, var(--steps-accent) 88%, var(--heading));
                 content: counter(list-counter);
                 display: flex;
@@ -2641,14 +2893,19 @@ body.light .table-scrollable {
     justify-content: center;
     letter-spacing: var(--tracking-code);
     line-height: 1;
+    opacity: 0;
     padding: 0 rem(0.9);
+    pointer-events: none;
     position: absolute;
     right: rem(0.8);
     top: rem(0.8);
     transition:
         background-color 0.15s ease,
         border-color 0.15s ease,
-        color 0.15s ease;
+        color 0.15s ease,
+        opacity 0.15s ease,
+        visibility 0.15s ease;
+    visibility: hidden;
     white-space: nowrap;
     z-index: 2;
 
@@ -2672,7 +2929,9 @@ body.light .table-scrollable {
         background: color-mix(in srgb, var(--table-green) 18%, var(--table-surface-header));
         border-color: color-mix(in srgb, var(--table-green) 35%, var(--table-border));
         color: color-mix(in srgb, var(--table-green) 88%, var(--heading));
-        display: inline-flex;
+        opacity: 1;
+        pointer-events: auto;
+        visibility: visible;
 
         .copy_button__icon--copy {
             display: none;

@@ -22,6 +22,10 @@ production cluster(s) to run development workloads or non-production tasks.
 
 {{% include-from-yaml data="best_practices_details" name="architecture-three-tier" %}}
 
+{{< architecture-diagram tier="three" caption="3-tier architecture" >}}
+
+{{% include-from-yaml data="best_practices_details" name="architecture-three-tier-details" %}}
+
 #### Alternatives
 
 If a three-tier architecture is infeasible or unnecessary due to low volume or a

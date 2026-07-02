@@ -6,8 +6,7 @@
     one-tier architecture may suffice for your sources, compute objects,
     and query serving needs.
 
-    ![Image of the 1-cluster-architecture
-    architecture](/images/1-tier-architecture.svg)
+    {{< architecture-diagram tier="one" >}}
 
     {{< yaml-table data="best_practices/one_tier_architecture" >}}
 
@@ -35,8 +34,7 @@
     is infeasible or unnecessary due to low volume or a **non**-production setup, a
     two-tier architecture may suffice. A two-tier architecture consists of:
 
-    ![Image of the 2-cluster architecture: Source cluster, Compute/Transform +
-    Serving cluster](/images/2-tier-architecture.svg)
+    {{< architecture-diagram tier="two" >}}
 
     {{< yaml-table data="best_practices/two_tier_architecture" >}}
 
@@ -58,10 +56,8 @@
   content: |
     In production, use a three-tier architecture, if feasible.
 
-    ![Image of the 3-tier architecture: Source cluster(s), Compute/Transform
-    cluster(s), Serving cluster(s)](/images/3-tier-architecture.svg "3-tier
-    architecture")
-
+- name: architecture-three-tier-details
+  content: |
     A three-tier architecture consists of:
 
     {{< yaml-table data="best_practices/three_tier_architecture" >}}

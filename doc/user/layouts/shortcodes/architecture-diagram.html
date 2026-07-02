@@ -1,0 +1,198 @@
+{{- $tier := .Get "tier" | default "three" -}}
+{{- $caption := .Get "caption" -}}
+{{- $cardW := 324 -}}
+{{- $cardH := 300 -}}
+{{- $cardRx := 16 -}}
+{{- $labelX := 162 -}}
+{{- $cardRight := sub $cardW 1 -}}
+{{- $flowY := 186 -}}
+{{- $viewW := 1120 -}}
+{{- $viewH := 400 -}}
+{{- $contentTop := 12 -}}
+{{- $contentBottom := 354 -}}
+{{- $contentH := sub $contentBottom $contentTop -}}
+{{- $offsetY := div (sub $viewH $contentH) 2 -}}
+{{- $stackExtent := 22 -}}
+{{- $tierExtent := add $cardW $stackExtent -}}
+{{- $twoTierSourceX := 81 -}}
+{{- $twoTierFlowX := 451 -}}
+{{- $twoTierComputeX := 503 -}}
+{{- $oneTierX := 387 -}}
+{{- $threeTierLeft := 24 -}}
+{{- $threeTierRight := add 796 $tierExtent -}}
+{{- $threeOffsetX := sub (div $viewW 2) (div (add $threeTierLeft $threeTierRight) 2) -}}
+{{- $twoTierLeft := $twoTierSourceX -}}
+{{- $twoTierRight := add $twoTierComputeX $tierExtent -}}
+{{- $twoOffsetX := sub (div $viewW 2) (div (add $twoTierLeft $twoTierRight) 2) -}}
+{{- $oneTierLeft := $oneTierX -}}
+{{- $oneTierRight := add $oneTierX $tierExtent -}}
+{{- $oneOffsetX := sub (div $viewW 2) (div (add $oneTierLeft $oneTierRight) 2) -}}
+<figure class="architecture-diagram-figure">
+  <svg
+    class="architecture-diagram architecture-diagram--{{ $tier }}"
+    viewBox="0 0 {{ $viewW }} {{ $viewH }}"
+    preserveAspectRatio="xMidYMid meet"
+    role="img"
+    aria-labelledby="arch-diagram-title arch-diagram-desc"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <title id="arch-diagram-title">
+      {{- if eq $tier "three" -}}
+        Three-tier cluster architecture
+      {{- else if eq $tier "two" -}}
+        Two-tier cluster architecture
+      {{- else -}}
+        Single-tier cluster architecture
+      {{- end -}}
+    </title>
+    <desc id="arch-diagram-desc">
+      {{- if eq $tier "three" -}}
+        Source, compute or transform, and serving clusters arranged left to right with example SQL for each tier.
+      {{- else if eq $tier "two" -}}
+        Source cluster and a combined compute and serving cluster.
+      {{- else -}}
+        A single cluster running sources, transforms, and serving workloads.
+      {{- end -}}
+    </desc>
+    <defs>
+      <linearGradient id="arch-flow-1" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="46" y2="0">
+        <stop offset="0%" class="arch-stop--source" />
+        <stop offset="100%" class="arch-stop--compute" />
+      </linearGradient>
+      <linearGradient id="arch-flow-2" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="46" y2="0">
+        <stop offset="0%" class="arch-stop--compute" />
+        <stop offset="100%" class="arch-stop--serving" />
+      </linearGradient>
+      <marker id="arch-arrow-compute" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0 0 L8 4 L0 8 Z" class="arch-arrowhead--compute" />
+      </marker>
+      <marker id="arch-arrow-serving" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0 0 L8 4 L0 8 Z" class="arch-arrowhead--serving" />
+      </marker>
+      <filter id="arch-card-shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="8" stdDeviation="10" class="arch-shadow" />
+      </filter>
+    </defs>
+    {{- if eq $tier "three" -}}
+    <g transform="translate({{ $threeOffsetX }} {{ $offsetY }})">
+    <g class="arch-tier arch-tier--source" transform="translate(24 0)">
+      <text x="{{ $labelX }}" y="28" text-anchor="middle" class="arch-tier-label">SOURCE CLUSTER(S)</text>
+      <rect x="22" y="54" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--2" />
+      <rect x="11" y="46" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--1" />
+      <rect x="0" y="36" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-card" filter="url(#arch-card-shadow)" />
+      <circle cx="22" cy="58" r="4" class="arch-dot" />
+      <circle cx="38" cy="58" r="4" class="arch-dot" />
+      <circle cx="54" cy="58" r="4" class="arch-dot" />
+      <line x1="1" y1="74" x2="{{ $cardRight }}" y2="74" class="arch-card-divider" />
+      <g transform="translate(22 96)" class="arch-code-panel">
+        <text y="26" class="arch-code-line"><tspan class="arch-kw">SET</tspan><tspan class="arch-txt">&#160;CLUSTER&#160;=&#160;</tspan><tspan class="arch-var">&lt;source_cluster&gt;</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="56" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;SOURCE</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="86" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;SOURCE</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+      </g>
+    </g>
+    <g class="arch-flow" transform="translate(370 {{ $flowY }})">
+      <path d="M0 0 H46" class="arch-flow-base" stroke="url(#arch-flow-1)" marker-end="url(#arch-arrow-compute)" />
+      <path d="M0 0 H46" class="arch-flow-dots" stroke="url(#arch-flow-1)" />
+    </g>
+    <g class="arch-tier arch-tier--compute" transform="translate(422 0)">
+      <text x="{{ $labelX }}" y="28" text-anchor="middle" class="arch-tier-label">COMPUTE / TRANSFORM CLUSTER(S)</text>
+      <rect x="22" y="54" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--2" />
+      <rect x="11" y="46" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--1" />
+      <rect x="0" y="36" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-card" filter="url(#arch-card-shadow)" />
+      <circle cx="22" cy="58" r="4" class="arch-dot" />
+      <circle cx="38" cy="58" r="4" class="arch-dot" />
+      <circle cx="54" cy="58" r="4" class="arch-dot" />
+      <line x1="1" y1="74" x2="{{ $cardRight }}" y2="74" class="arch-card-divider" />
+      <g transform="translate(22 96)" class="arch-code-panel">
+        <text y="26" class="arch-code-line"><tspan class="arch-kw">SET</tspan><tspan class="arch-txt">&#160;CLUSTER&#160;=&#160;</tspan><tspan class="arch-var">&lt;compute_cluster&gt;</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="56" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;MATERIALIZED VIEW</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="86" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;MATERIALIZED VIEW</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+      </g>
+    </g>
+    <g class="arch-flow" transform="translate(768 {{ $flowY }})">
+      <path d="M0 0 H46" class="arch-flow-base" stroke="url(#arch-flow-2)" marker-end="url(#arch-arrow-serving)" />
+      <path d="M0 0 H46" class="arch-flow-dots" stroke="url(#arch-flow-2)" />
+    </g>
+    <g class="arch-tier arch-tier--serving" transform="translate(796 0)">
+      <text x="{{ $labelX }}" y="28" text-anchor="middle" class="arch-tier-label">SERVING CLUSTER(S)</text>
+      <rect x="22" y="54" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--2" />
+      <rect x="11" y="46" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--1" />
+      <rect x="0" y="36" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-card" filter="url(#arch-card-shadow)" />
+      <circle cx="22" cy="58" r="4" class="arch-dot" />
+      <circle cx="38" cy="58" r="4" class="arch-dot" />
+      <circle cx="54" cy="58" r="4" class="arch-dot" />
+      <line x1="1" y1="74" x2="{{ $cardRight }}" y2="74" class="arch-card-divider" />
+      <g transform="translate(22 96)" class="arch-code-panel">
+        <text y="26" class="arch-code-line"><tspan class="arch-kw">SET</tspan><tspan class="arch-txt">&#160;CLUSTER&#160;=&#160;</tspan><tspan class="arch-var">&lt;serving_cluster&gt;</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="56" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;INDEX</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="86" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;INDEX</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+      </g>
+    </g>
+    </g>
+    {{- else if eq $tier "two" -}}
+    <g transform="translate({{ $twoOffsetX }} {{ $offsetY }})">
+    <g class="arch-tier arch-tier--source" transform="translate({{ $twoTierSourceX }} 0)">
+      <text x="{{ $labelX }}" y="28" text-anchor="middle" class="arch-tier-label">SOURCE CLUSTER(S)</text>
+      <rect x="22" y="54" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--2" />
+      <rect x="11" y="46" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--1" />
+      <rect x="0" y="36" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-card" filter="url(#arch-card-shadow)" />
+      <circle cx="22" cy="58" r="4" class="arch-dot" />
+      <circle cx="38" cy="58" r="4" class="arch-dot" />
+      <circle cx="54" cy="58" r="4" class="arch-dot" />
+      <line x1="1" y1="74" x2="{{ $cardRight }}" y2="74" class="arch-card-divider" />
+      <g transform="translate(22 96)" class="arch-code-panel">
+        <text y="26" class="arch-code-line"><tspan class="arch-kw">SET</tspan><tspan class="arch-txt">&#160;CLUSTER&#160;=&#160;</tspan><tspan class="arch-var">&lt;source_cluster&gt;</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="56" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;SOURCE</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="86" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;SOURCE</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+      </g>
+    </g>
+    <g class="arch-flow" transform="translate({{ $twoTierFlowX }} {{ $flowY }})">
+      <path d="M0 0 H46" class="arch-flow-base" stroke="url(#arch-flow-1)" marker-end="url(#arch-arrow-compute)" />
+      <path d="M0 0 H46" class="arch-flow-dots" stroke="url(#arch-flow-1)" />
+    </g>
+    <g class="arch-tier arch-tier--compute" transform="translate({{ $twoTierComputeX }} 0)">
+      <text x="{{ $labelX }}" y="28" text-anchor="middle" class="arch-tier-label">COMPUTE / TRANSFORM + SERVING CLUSTER(S)</text>
+      <rect x="22" y="54" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--2" />
+      <rect x="11" y="46" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--1" />
+      <rect x="0" y="36" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-card" filter="url(#arch-card-shadow)" />
+      <circle cx="22" cy="58" r="4" class="arch-dot" />
+      <circle cx="38" cy="58" r="4" class="arch-dot" />
+      <circle cx="54" cy="58" r="4" class="arch-dot" />
+      <line x1="1" y1="74" x2="{{ $cardRight }}" y2="74" class="arch-card-divider" />
+      <g transform="translate(22 96)" class="arch-code-panel">
+        <text y="26" class="arch-code-line"><tspan class="arch-kw">SET</tspan><tspan class="arch-txt">&#160;CLUSTER&#160;=&#160;</tspan><tspan class="arch-var">&lt;other_cluster&gt;</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="52" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;VIEW</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="78" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;VIEW</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="104" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;INDEX</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="130" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;INDEX</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+      </g>
+    </g>
+    </g>
+    {{- else -}}
+    <g transform="translate({{ $oneOffsetX }} {{ $offsetY }})">
+    <g class="arch-tier arch-tier--compute" transform="translate({{ $oneTierX }} 0)">
+      <text x="{{ $labelX }}" y="28" text-anchor="middle" class="arch-tier-label">ALL-IN-ONE CLUSTER(S)</text>
+      <rect x="22" y="54" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--2" />
+      <rect x="11" y="46" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-stack arch-tier-stack--1" />
+      <rect x="0" y="36" width="{{ $cardW }}" height="{{ $cardH }}" rx="{{ $cardRx }}" class="arch-tier-card" filter="url(#arch-card-shadow)" />
+      <circle cx="22" cy="58" r="4" class="arch-dot" />
+      <circle cx="38" cy="58" r="4" class="arch-dot" />
+      <circle cx="54" cy="58" r="4" class="arch-dot" />
+      <line x1="1" y1="74" x2="{{ $cardRight }}" y2="74" class="arch-card-divider" />
+      <g transform="translate(22 96)" class="arch-code-panel">
+        <text y="26" class="arch-code-line"><tspan class="arch-kw">SET</tspan><tspan class="arch-txt">&#160;CLUSTER&#160;=&#160;</tspan><tspan class="arch-var">&lt;cluster&gt;</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="50" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;SOURCE</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="74" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;SOURCE</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="98" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;VIEW</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="122" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;VIEW</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="146" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;INDEX</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+        <text y="170" class="arch-code-line"><tspan class="arch-kw">CREATE</tspan><tspan class="arch-fn">&#160;INDEX</tspan><tspan class="arch-txt">&#160;...</tspan><tspan class="arch-punct">;</tspan></text>
+      </g>
+    </g>
+    </g>
+    {{- end -}}
+  </svg>
+  {{- with $caption -}}
+  <figcaption>{{ . }}</figcaption>
+  {{- end -}}
+</figure>
