@@ -324,22 +324,25 @@ mod tests {
         // the analysis map directly the way that pass would after a round: this
         // exercises the same `eg.data().scalar.analysis` lookup the view methods
         // use without depending on the (still Task-1-red) rest of the crate.
+        // Canonicalize ids before the mutable `data_mut()` borrow so `eg.find`'s
+        // immutable borrow does not overlap it.
+        let (col_id, div_id, lit_id) = (eg.find(col), eg.find(div), eg.find(lit));
         eg.data_mut().scalar.analysis.insert(
-            eg.find(col),
+            col_id,
             ClassAnalysis {
                 could_error: false,
                 literal: None,
             },
         );
         eg.data_mut().scalar.analysis.insert(
-            eg.find(div),
+            div_id,
             ClassAnalysis {
                 could_error: true,
                 literal: None,
             },
         );
         eg.data_mut().scalar.analysis.insert(
-            eg.find(lit),
+            lit_id,
             ClassAnalysis {
                 could_error: false,
                 literal: Some((Ok(Row::pack_slice(&[Datum::True])), bool_ty)),
