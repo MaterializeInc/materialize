@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import React, { ReactElement } from "react";
 
 import { DailyCosts, Organization } from "~/api/cloudGlobalApi";
 import {
   buildCloudOrganizationsResponse,
   buildCloudRegionsReponse,
+  buildCostBreakdownResponse,
   buildCreditsResponse,
   buildDailyCostResponse,
   buildInvoicesResponse,
@@ -63,6 +64,7 @@ describe("UsagePage", () => {
       buildCloudRegionsReponse(),
       buildInvoicesResponse(),
       buildCreditsResponse(),
+      buildCostBreakdownResponse(),
       buildCloudOrganizationsResponse({
         payload: buildOrganization(),
       }),
@@ -100,6 +102,174 @@ describe("UsagePage", () => {
     await waitFor(async () =>
       expect(await screen.findByTestId("chart")).toBeVisible(),
     );
+  });
+
+  it("renders a per-account, per-cluster breakdown for a parent org", async () => {
+    server.use(buildDailyCostResponse());
+    server.use(
+      buildCostBreakdownResponse({
+        payload: {
+          accounts: [
+            {
+              external_customer_id: "parent-org",
+              clusters: [
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "10.00" },
+                },
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "compute.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "4.00" },
+                },
+              ],
+            },
+            {
+              external_customer_id: "child-org",
+              clusters: [
+                {
+                  environment_id: "environment-child-0",
+                  cluster_grouping_key: "prod.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "5.00" },
+                },
+                {
+                  environment_id: "environment-child-0",
+                  cluster_grouping_key: "prod.r2",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "2.00" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    // Both accounts and all clusters appear, each cluster row region-qualified
+    // ("aws/us-east-1 / <cluster>"), matching the daily "Spend between …" table.
+    expect(
+      await screen.findByText("parent-org", {}, { timeout: 5_000 }),
+    ).toBeVisible();
+    expect(await screen.findByText("child-org")).toBeVisible();
+    for (const cluster of [
+      "quickstart.r1",
+      "compute.r1",
+      "prod.r1",
+      "prod.r2",
+    ]) {
+      expect(
+        await screen.findByText(`aws/us-east-1 / ${cluster}`),
+      ).toBeVisible();
+    }
+    // ...with per-account totals (14 = 10 + 4, 7 = 5 + 2) summed from the
+    // per-cluster amounts.
+    expect(await screen.findByText(formatCurrency(14))).toBeVisible();
+    expect(await screen.findByText(formatCurrency(7))).toBeVisible();
+  });
+
+  it("renders a single account for a standalone org", async () => {
+    server.use(buildDailyCostResponse());
+    server.use(
+      buildCostBreakdownResponse({
+        payload: {
+          accounts: [
+            {
+              external_customer_id: "standalone-org",
+              clusters: [
+                {
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "default.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "3.00" },
+                },
+                {
+                  // Storage and egress both have an empty cluster_grouping_key;
+                  // their `category` keeps them on separate rows, rendered as
+                  // "<region> / Storage" and "<region> / Egress".
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "",
+                  category: "Storage",
+                  region: "aws/us-east-1",
+                  amounts: { "price-storage": "0.50" },
+                },
+                {
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "",
+                  category: "Egress",
+                  region: "aws/us-east-1",
+                  amounts: { "price-egress": "0.25" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const accountRows = await screen.findAllByTestId(
+      "account-row",
+      {},
+      { timeout: 5_000 },
+    );
+    expect(accountRows).toHaveLength(1);
+    expect(await screen.findByText("standalone-org")).toBeVisible();
+    // Scope cluster-label lookups to this table: SpendBreakdown ("Spend between
+    // …") renders the same "<region> / Storage" text from the daily costs.
+    const breakdown = within(
+      await screen.findByTestId("account-cluster-breakdown"),
+    );
+    expect(
+      await breakdown.findByText("aws/us-east-1 / default.r1"),
+    ).toBeVisible();
+    // Storage and egress (both empty cluster_grouping_key) render as separate
+    // rows, distinguished by `category`.
+    expect(await breakdown.findByText("aws/us-east-1 / Storage")).toBeVisible();
+    expect(await breakdown.findByText("aws/us-east-1 / Egress")).toBeVisible();
+  });
+
+  it("falls back to 'Other' when a row has neither cluster key nor category", async () => {
+    // Defensive: a non-compute row with an empty cluster_grouping_key and no
+    // category can only occur against a backend that predates the `category`
+    // field. It should render "<region> / Other" rather than mislabel as a
+    // cluster or crash.
+    server.use(buildDailyCostResponse());
+    server.use(
+      buildCostBreakdownResponse({
+        payload: {
+          accounts: [
+            {
+              external_customer_id: "standalone-org",
+              clusters: [
+                {
+                  environment_id: "environment-standalone-0",
+                  cluster_grouping_key: "",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-storage": "0.50" },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const breakdown = within(
+      await screen.findByTestId("account-cluster-breakdown"),
+    );
+    expect(await breakdown.findByText("aws/us-east-1 / Other")).toBeVisible();
   });
 
   it("changing the region filters the totals", async () => {
