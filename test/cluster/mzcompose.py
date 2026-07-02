@@ -4022,8 +4022,13 @@ def workflow_blue_green_deployment(
             except DatabaseError as e:
                 # Expected
                 msg = str(e)
-                if ("cached plan must not change result type" in msg) or (
-                    "query could not complete because relation" in msg
+                if (
+                    ("cached plan must not change result type" in msg)
+                    or ("query could not complete because relation" in msg)
+                    # The blue/green cleanup can DROP the relation this subscribe
+                    # is bound to while a FETCH is in flight, which surfaces as a
+                    # ConcurrentDependencyDrop rather than the peek-path error above.
+                    or ("was dropped" in msg)
                 ):
                     continue
                 raise e
