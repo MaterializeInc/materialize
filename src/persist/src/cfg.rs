@@ -488,9 +488,100 @@ impl ConsensusConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Formatter;
     use std::str::FromStr;
 
+    use mz_ore::metrics::MetricsRegistry;
+
     use super::*;
+
+    struct TestConsensusKnobs;
+    impl std::fmt::Debug for TestConsensusKnobs {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("TestConsensusKnobs").finish_non_exhaustive()
+        }
+    }
+    impl PostgresClientKnobs for TestConsensusKnobs {
+        fn connection_pool_max_size(&self) -> usize {
+            2
+        }
+        fn connection_pool_max_wait(&self) -> Option<Duration> {
+            Some(Duration::from_secs(1))
+        }
+        fn connection_pool_ttl(&self) -> Duration {
+            Duration::MAX
+        }
+        fn connection_pool_ttl_stagger(&self) -> Duration {
+            Duration::MAX
+        }
+        fn connect_timeout(&self) -> Duration {
+            Duration::MAX
+        }
+        fn tcp_user_timeout(&self) -> Duration {
+            Duration::ZERO
+        }
+        fn keepalives_idle(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+        fn keepalives_interval(&self) -> Duration {
+            Duration::from_secs(5)
+        }
+        fn keepalives_retries(&self) -> u32 {
+            5
+        }
+        fn statement_timeout(&self) -> Duration {
+            Duration::ZERO
+        }
+    }
+
+    fn consensus_config(url: &str) -> ConsensusConfig {
+        ConsensusConfig::try_from(
+            &SensitiveUrl::from_str(url).expect("valid url"),
+            Box::new(TestConsensusKnobs),
+            PostgresClientMetrics::new(&MetricsRegistry::new(), "mz_persist"),
+            Arc::new(ConfigSet::default()),
+        )
+        .expect("valid config")
+    }
+
+    #[mz_ore::test]
+    fn consensus_config_try_from_enables_encryption() {
+        let config = consensus_config(
+            "postgres://user:pw@host:5432/db?sslmode=require&kms_key_id=alias%2Fpersist_key_x&kms_region=us-east-1&dek_rotation_interval_secs=1",
+        );
+        let ConsensusConfig::Postgres(pg, Some(encryption)) = config else {
+            panic!("expected Postgres config with encryption enabled");
+        };
+        assert_eq!(encryption.kms_key_id, "alias/persist_key_x");
+        assert_eq!(encryption.kms_region.as_deref(), Some("us-east-1"));
+        // A below-minimum rotation interval is clamped.
+        assert_eq!(
+            encryption.dek_rotation_interval,
+            Duration::from_secs(MIN_DEK_ROTATION_SECS)
+        );
+        // The KMS params are stripped from the URL handed to the Postgres
+        // driver, while other params survive.
+        let pg_params: Vec<(String, String)> = pg
+            .url()
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(
+            pg_params,
+            vec![("sslmode".to_string(), "require".to_string())]
+        );
+    }
+
+    #[mz_ore::test]
+    fn consensus_config_try_from_no_kms_params_no_encryption() {
+        let config = consensus_config("postgres://host/db?sslmode=require");
+        let ConsensusConfig::Postgres(pg, encryption) = config else {
+            panic!("expected Postgres config");
+        };
+        assert!(encryption.is_none());
+        // The URL is passed through untouched.
+        assert_eq!(pg.url().as_str(), "postgres://host/db?sslmode=require");
+    }
 
     #[mz_ore::test]
     fn strip_kms_query_params_removes_only_kms_params() {

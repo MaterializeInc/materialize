@@ -153,6 +153,12 @@ pub struct PostgresConsensusConfig {
 }
 
 impl PostgresConsensusConfig {
+    /// The connection URL, exposed to verify KMS query param stripping.
+    #[cfg(test)]
+    pub(crate) fn url(&self) -> &SensitiveUrl {
+        &self.url
+    }
+
     const EXTERNAL_TESTS_POSTGRES_URL: &'static str =
         "MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL";
 
