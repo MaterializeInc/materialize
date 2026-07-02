@@ -81,3 +81,40 @@ rule or_empty {
     doc "Or() = false"
     Variadic[or]() => false
 }
+
+# If with a literal-error condition folds to that error, typed as the union of
+# the branch types. Builtin RHS (needs branch typing). If evaluates the
+# condition first, so no could_error gate. The Lean theorem is a permanent sorry.
+rule if_err_cond {
+    doc "If(err, t, e) = err"
+    Scalar(e) => if_err_cond(e)
+}
+
+# A binary call with a literal-null operand folds to null when the OTHER operand
+# cannot error, for a null-propagating func. Builtin. Permanent sorry.
+rule null_prop_binary {
+    doc "f(null, b) = null when f propagates nulls and b cannot error"
+    Scalar(e) => null_prop_binary(e)
+}
+
+# A binary call with a literal-error operand folds to that error when the OTHER
+# operand cannot error. Builtin. Permanent sorry.
+rule err_prop_binary {
+    doc "f(err, b) = err when b cannot error"
+    Scalar(e) => err_prop_binary(e)
+}
+
+# IsNull of a provably non-nullable, error-free operand is false. Declarative
+# constant-literal RHS guarded by the no-error and non-nullable conds.
+rule isnull_fold {
+    doc "IsNull(x) = false when x is non-nullable and cannot error"
+    Unary[isnull](x) => false where scalar_no_error(x) where scalar_non_nullable(x)
+}
+
+# Not of a negatable binary comparison is the negated comparison over the same
+# operands, e.g. Not(a = b) = a != b. Binds the func symbol as a metavar and
+# emits negate(f). Declines when the func has no negation. Permanent sorry.
+rule not_binary_negate {
+    doc "Not(f(a, b)) = negate(f)(a, b) for negatable f"
+    Unary[not](Binary[f](a, b)) => Binary[negate(f)](a, b)
+}
