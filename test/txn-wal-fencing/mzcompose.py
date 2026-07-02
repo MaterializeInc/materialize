@@ -160,6 +160,13 @@ def execute_operation(
             elif "Connection refused" in str_e:
                 # Container died before the SQL connection was established
                 return None
+            elif "Connection reset by peer" in str_e:
+                # Fenced container: the port is still published but environmentd
+                # has already exited, so the connection is accepted and reset.
+                return None
+            elif "Connection timed out" in str_e:
+                # Fenced container that stopped responding mid-connect.
+                return None
             else:
                 raise RuntimeError(f"unexpected exception: {e}")
 

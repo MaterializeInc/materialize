@@ -1213,7 +1213,7 @@ class Composition:
         *services: str | Service,
         detach: bool = True,
         wait: bool = True,
-        max_tries: int = 8,
+        max_tries: int = 14,
     ) -> None:
         """Build, (re)create, and start the named services.
 
