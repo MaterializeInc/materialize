@@ -245,4 +245,54 @@ mod tests {
         // tie / could_error / type-context coverage assertions here.
         assert!(CORPUS.contains("not(not("), "corpus must exercise not_not");
     }
+
+    // Differential parity harness (SP2b Slice 2): extends slice 1 to the
+    // variadic rules (`and_single`, `or_single`, `not_demorgan_and`,
+    // `not_demorgan_or`). Same corpus-shaping constraint as slice 1: distinct
+    // bare boolean columns only, so none of the old engine's unported rules
+    // (const_fold, dedup, flatten_assoc, not_binary_negate, ...) fire and
+    // create a divergence unrelated to the rules under test.
+    #[mz_ore::test]
+    fn scalar_parity_variadic() {
+        use mz_expr::{MirScalarExpr, UnaryFunc, VariadicFunc};
+        let not = |e: MirScalarExpr| e.call_unary(UnaryFunc::Not(mz_expr::func::Not));
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let c = MirScalarExpr::column;
+
+        let cases = vec![
+            and(vec![c(0)]),
+            or(vec![c(0)]),
+            not(and(vec![c(0), c(1), c(2)])),
+            not(or(vec![c(0), c(1), c(2), c(3)])),
+            not(and(vec![c(0)])),
+            // slice-1 shapes still hold under the grown rule set:
+            not(not(c(0))),
+        ];
+        for e in cases {
+            // Boolean, type-agnostic rules: `&[]` col_types is sufficient (the
+            // rules ported here never read a column type).
+            let new = canonicalize_combined(&e, &[]);
+            let old = crate::eqsat::scalar::canonicalize(&e, &[]);
+            assert_eq!(new, old, "parity failed for {e:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_slice2() {
+        assert!(
+            CORPUS.contains("and(#0)"),
+            "corpus must exercise and/or single"
+        );
+        assert!(
+            CORPUS.contains("not(and(#0, #1, #2))"),
+            "corpus must exercise multi-operand de Morgan"
+        );
+    }
 }

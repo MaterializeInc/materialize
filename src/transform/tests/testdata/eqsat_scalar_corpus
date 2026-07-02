@@ -9,3 +9,22 @@ types: bool
 
 expr: #0
 types: bool
+
+# --- slice 2: variadic (and/or single, de Morgan) ---
+# and_single / or_single
+expr: and(#0)
+types: bool
+
+expr: or(#0)
+types: bool
+
+# de Morgan, both directions, >2 operands (multi-operand variadic parity)
+expr: not(and(#0, #1, #2))
+types: bool,bool,bool
+
+expr: not(or(#0, #1, #2, #3))
+types: bool,bool,bool,bool
+
+# de Morgan feeding single-collapse: Not(And(#0)) -> Or(Not #0) -> Not #0
+expr: not(and(#0))
+types: bool
