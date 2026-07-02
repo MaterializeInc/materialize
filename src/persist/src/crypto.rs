@@ -1116,9 +1116,9 @@ mod tests {
         // Initially empty.
         assert_eq!(consensus.head("key").await?, None);
 
-        // Initial CaS (None -> seqno 1).
+        // Initial CaS (empty log -> seqno 0).
         let data1 = VersionedData {
-            seqno: SeqNo(1),
+            seqno: SeqNo(0),
             data: Bytes::from("first"),
         };
         assert_eq!(
@@ -1128,7 +1128,7 @@ mod tests {
 
         // head returns decrypted data.
         let head = consensus.head("key").await?.unwrap();
-        assert_eq!(head.seqno, SeqNo(1));
+        assert_eq!(head.seqno, SeqNo(0));
         assert_eq!(head.data, Bytes::from("first"));
 
         // scan returns decrypted data.
@@ -1136,7 +1136,7 @@ mod tests {
         assert_eq!(scanned.len(), 1);
         assert_eq!(scanned[0].data, Bytes::from("first"));
 
-        // CaS mismatch.
+        // CaS mismatch: skips a seqno.
         let data_bad = VersionedData {
             seqno: SeqNo(2),
             data: Bytes::from("bad"),
@@ -1146,9 +1146,9 @@ mod tests {
             CaSResult::ExpectationMismatch,
         );
 
-        // CaS success (seqno 1 -> 2).
+        // CaS success (seqno 0 -> 1).
         let data2 = VersionedData {
-            seqno: SeqNo(2),
+            seqno: SeqNo(1),
             data: Bytes::from("second"),
         };
         assert_eq!(
@@ -1163,7 +1163,7 @@ mod tests {
         assert_eq!(scanned[1].data, Bytes::from("second"));
 
         // truncate passthrough.
-        let deleted = consensus.truncate("key", SeqNo(2)).await?;
+        let deleted = consensus.truncate("key", SeqNo(1)).await?;
         assert_eq!(deleted, Some(1));
 
         // list_keys passthrough.
@@ -1174,7 +1174,7 @@ mod tests {
 
         // empty data roundtrip.
         let data_empty = VersionedData {
-            seqno: SeqNo(3),
+            seqno: SeqNo(2),
             data: Bytes::new(),
         };
         assert_eq!(
@@ -1182,7 +1182,7 @@ mod tests {
             CaSResult::Committed,
         );
         let head = consensus.head("key").await?.unwrap();
-        assert_eq!(head.seqno, SeqNo(3));
+        assert_eq!(head.seqno, SeqNo(2));
         assert!(head.data.is_empty());
 
         Ok(())
@@ -1198,14 +1198,17 @@ mod tests {
 
         let plaintext = b"super secret consensus state";
         let data = VersionedData {
-            seqno: SeqNo(1),
+            seqno: SeqNo(0),
             data: Bytes::from(&plaintext[..]),
         };
-        consensus.compare_and_set("key", data).await?;
+        assert_eq!(
+            consensus.compare_and_set("key", data).await?,
+            CaSResult::Committed,
+        );
 
         // Read raw from inner — should be encrypted.
         let raw = mem.head("key").await?.unwrap();
-        assert_eq!(raw.seqno, SeqNo(1));
+        assert_eq!(raw.seqno, SeqNo(0));
         // Envelope starts with version byte 0x01.
         assert_eq!(raw.data[0], ENVELOPE_VERSION_V1);
         // Raw data must NOT contain the plaintext.
@@ -1372,7 +1375,7 @@ mod tests {
         let consensus = EncryptedConsensus::new_test_two_party(mem);
 
         let data1 = VersionedData {
-            seqno: SeqNo(1),
+            seqno: SeqNo(0),
             data: Bytes::from("two-party-first"),
         };
         assert_eq!(
@@ -1381,7 +1384,7 @@ mod tests {
         );
 
         let head = consensus.head("key").await?.unwrap();
-        assert_eq!(head.seqno, SeqNo(1));
+        assert_eq!(head.seqno, SeqNo(0));
         assert_eq!(head.data, Bytes::from("two-party-first"));
 
         Ok(())
@@ -1398,7 +1401,7 @@ mod tests {
         let inner_v1: Arc<dyn Consensus> = Arc::clone(&mem) as Arc<dyn Consensus>;
         let consensus_v1 = EncryptedConsensus::new_test(inner_v1);
         let data1 = VersionedData {
-            seqno: SeqNo(1),
+            seqno: SeqNo(0),
             data: Bytes::from("v1-data"),
         };
         assert_eq!(
@@ -1415,7 +1418,7 @@ mod tests {
         let inner_two_party: Arc<dyn Consensus> = Arc::clone(&mem) as Arc<dyn Consensus>;
         let consensus_two_party = EncryptedConsensus::new_test_two_party(inner_two_party);
         let data2 = VersionedData {
-            seqno: SeqNo(2),
+            seqno: SeqNo(1),
             data: Bytes::from("v2-data"),
         };
         assert_eq!(
