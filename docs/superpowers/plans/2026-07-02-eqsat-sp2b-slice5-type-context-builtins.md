@@ -282,7 +282,7 @@ rule err_prop_binary {
 # constant-literal RHS guarded by the no-error and non-nullable conds.
 rule isnull_fold {
     doc "IsNull(x) = false when x is non-nullable and cannot error"
-    Unary[isnull](x) => false where scalar_no_error(x), scalar_non_nullable(x)
+    Unary[isnull](x) => false where scalar_no_error(x) where scalar_non_nullable(x)
 }
 
 # Not of a negatable binary comparison is the negated comparison over the same

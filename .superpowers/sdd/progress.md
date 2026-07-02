@@ -261,3 +261,5 @@ READ-FIRST verdict: 5 rules confirmed vs scalar/rules.rs. Split: if_err_cond/nul
 - [ ] Task 5: port 5 rules to scalar.rewrite (11->16)
 - [ ] Task 6: Lean isNullE+BinFunc/binaryE/negateFunc opaque + translate arms + proofs + CI count 1->5 + aggregate lake
 - [ ] Task 7: differential corpus + parity (all negation pairs x null, MUTATION test; if-err; null/err-prop; isnull) + slice gate
+
+Task 1: complete (commit 1baa15d98d, review clean — Spec ✅ Quality Approved). Pat::SBinaryVar/Tmpl::SBinaryNegate/Cond::ScalarNonNullable + grammar (sbinary_var pat, tsbinary_negate tmpl, scalar_non_nullable cond). Reviewer independently reproduced 10/10 grammar tests + 8 expected E0004 (3 SBinaryVar/3 ScalarNonNullable/2 SBinaryNegate, codegen.rs only) + own negative probes (Binary[f] as Tmpl / Binary[negate(f)] as Pat both correctly rejected -> no real shadow/ambiguity). MINOR (no fix): shadow-test name vacuous (kw() exact-match), real coverage OK. FIX APPLIED to plan: brief/plan example used comma `where c1, c2` but grammar needs repeated `where c1 where c2`; implementer used correct syntax in tests; plan Task-5 isnull_fold rule text corrected.
