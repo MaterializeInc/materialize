@@ -474,6 +474,7 @@ impl Message {
                 Command::CopyToPreflight { .. } => "copy-to-preflight",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
+                Command::LookupConnection { .. } => "lookup-connection",
                 Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
                 Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
