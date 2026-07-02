@@ -7183,6 +7183,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-orchestratord",
  "mz-ore",
+ "mz-persist",
  "mz-persist-client",
  "mz-pgrepr",
  "mz-pgtest",
