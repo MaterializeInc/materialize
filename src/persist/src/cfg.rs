@@ -547,7 +547,7 @@ mod tests {
     #[mz_ore::test]
     fn consensus_config_try_from_enables_encryption() {
         let config = consensus_config(
-            "postgres://user:pw@host:5432/db?sslmode=require&kms_key_id=alias%2Fpersist_key_x&kms_region=us-east-1&dek_rotation_interval_secs=1",
+            "postgres://host:5432/db?sslmode=require&kms_key_id=alias%2Fpersist_key_x&kms_region=us-east-1&dek_rotation_interval_secs=1",
         );
         let ConsensusConfig::Postgres(pg, Some(encryption)) = config else {
             panic!("expected Postgres config with encryption enabled");
@@ -586,7 +586,7 @@ mod tests {
     #[mz_ore::test]
     fn strip_kms_query_params_removes_only_kms_params() {
         let url = SensitiveUrl::from_str(
-            "postgres://user:pw@host:5432/db?sslmode=require&kms_key_id=alias%2Fpersist_key_x&kms_region=us-east-1&dek_rotation_interval_secs=300&customer_kms_key_id=k&customer_kms_region=r&customer_kms_endpoint=e&customer_kms_role_arn=a&options=--search_path%3Dconsensus",
+            "postgres://host:5432/db?sslmode=require&kms_key_id=alias%2Fpersist_key_x&kms_region=us-east-1&dek_rotation_interval_secs=300&customer_kms_key_id=k&customer_kms_region=r&customer_kms_endpoint=e&customer_kms_role_arn=a&options=--search_path%3Dconsensus",
         )
         .expect("valid url");
         let stripped = strip_kms_query_params(&url);
