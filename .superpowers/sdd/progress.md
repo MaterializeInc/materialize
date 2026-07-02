@@ -224,7 +224,7 @@ READ-FIRST verdict: (1) and_or_empty NOT redundant w/ and_single/or_single (arit
 DESIGN: Pat::Scalar{binding} matches any scalar CALL node (iterate 4 call syms Unary/Binary/Variadic/If); apply gets b.root=CLASS id (not node) -> const_eval scans class scalar nodes for foldable rep (sound by congruence). apply Err = silently skipped by both saturate loops (mirrors old return vec![]). Tmpl::Builtin{name,args} + Tmpl::SBool(bool). New eqsat/scalar_builtins.rs. Lean: opaque constEval + litB:Bool->ScalarExpr; const_fold thm = permanent sorry (marker `-- PERMANENT SORRY: RHS is a Rust builtin`), and/or_empty proved via simp. Taxonomy after slice: PERMANENT=1, PRE-EXISTING GAP=1 (filter_unionAll), provable-later=26. CI ci/test/lean-mir-rewrite.sh count 0->1.
 ## Tasks
 - [x] Task 1: AST (Pat::Scalar, Tmpl::Builtin, Tmpl::SBool) + grammar
-- [ ] Task 2: eqsat/scalar_builtins.rs const_eval (class-level port)
+- [x] Task 2: eqsat/scalar_builtins.rs const_eval (class-level port)
 - [ ] Task 3: codegen Scalar-root iteration + Builtin/SBool emission + is_scalar_rule routing
 - [ ] Task 4: port const_fold/and_empty/or_empty to scalar.rewrite
 - [ ] Task 5: Lean opaque constEval+litB + emit arms + permanent sorry marker + CI count 1 (greens crate + AGGREGATE lake)
@@ -232,3 +232,5 @@ DESIGN: Pat::Scalar{binding} matches any scalar CALL node (iterate 4 call syms U
 - [ ] Task 7: slice-4 gate (unit + differential + slt no-rewrite + aggregate lake green + PERMANENT=1)
 
 Task 1: complete (commit 08a6d4387e, review clean — Spec ✅ Quality Approved, 0 findings). Pat::Scalar/Tmpl::Builtin/Tmpl::SBool + grammar; reviewer built standalone chumsky harness, 7/7 tests pass, probed shadowing (truething->RelVar, Empty/Negate not shadowed by builtin catch-all). Build RED = expected 5 E0004 codegen (Task 3).
+
+Task 2: complete (commit d399d70db4, review clean — Spec ✅ Quality Approved). scalar_builtins::const_eval class-level port; 3/3 tests (all-literal, 1/0 error-as-data, non-literal-child Err). Reviewer rebuilt+ran+mutation-tested (non-vacuous)+reverted byte-clean. Class-level scan sound by congruence; no borrow held across g.add. MINOR (route to Task 6): add a nested pre-existing-Err-literal-child case e.g. (1/0)+5 two-step fold. Task-3 note: lean.rs needs 3 more E0004 arms (Pat::Scalar/Tmpl::Builtin/Tmpl::SBool) beyond codegen's 5 — that's Task 5.
