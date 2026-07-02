@@ -390,11 +390,24 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             .ignore_then(bracket_ident())
             .then(listpat.clone())
             .map(|(func, inputs)| Pat::SVariadic { func, inputs });
+        let sif = kw("If")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(pat.clone())
+            .then_ignore(just(Token::Comma))
+            .then(pat.clone())
+            .then_ignore(just(Token::Comma))
+            .then(pat.clone())
+            .then_ignore(just(Token::RParen))
+            .map(|((cond, then), els)| Pat::SIf {
+                cond: Box::new(cond),
+                then: Box::new(then),
+                els: Box::new(els),
+            });
         let relvar = relvar_ident().map(Pat::RelVar);
 
         choice((
             paren, filter, map, project, reduce, flatmap, negate, threshold, topk, arrangeby, join,
-            wcojoin, union, svariadic, sunary, relvar,
+            wcojoin, union, sif, svariadic, sunary, relvar,
         ))
     });
 
@@ -508,6 +521,19 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             .ignore_then(bracket_ident())
             .then(listtmpl.clone())
             .map(|(func, inputs)| Tmpl::SVariadic { func, inputs });
+        let tsif = kw("If")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(tmpl.clone())
+            .then_ignore(just(Token::Comma))
+            .then(tmpl.clone())
+            .then_ignore(just(Token::Comma))
+            .then(tmpl.clone())
+            .then_ignore(just(Token::RParen))
+            .map(|((cond, then), els)| Tmpl::SIf {
+                cond: Box::new(cond),
+                then: Box::new(then),
+                els: Box::new(els),
+            });
         let hole_or_relvar = relvar_ident().map(|name| {
             if name == "_" {
                 Tmpl::Hole
@@ -529,6 +555,7 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             join,
             wcojoin,
             union,
+            tsif,
             tsvariadic,
             tsunary,
             hole_or_relvar,
@@ -594,6 +621,9 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
         two_idents("non_identity_projection")
             .map(|(payload, rel)| Cond::NonIdentityProjection { payload, rel }),
         one_ident("reads_indexed_global").map(|rel| Cond::ReadsIndexedGlobal { rel }),
+        one_ident("scalar_lit_true").map(|scalar| Cond::ScalarLitTrue { scalar }),
+        one_ident("scalar_lit_false_or_null").map(|scalar| Cond::ScalarLitFalseOrNull { scalar }),
+        one_ident("scalar_no_error").map(|scalar| Cond::ScalarNoError { scalar }),
     ));
 
     // --- rule ---
@@ -695,6 +725,30 @@ mod tests {
                 ));
             }
             other => panic!("expected SVariadic template, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_scalar_if_with_cond() {
+        let src = "rule if_true { If(c, t, e) => t where scalar_lit_true(c) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        assert!(matches!(rules[0].lhs, crate::dsl::Pat::SIf { .. }));
+        assert!(matches!(
+            rules[0].conds[0],
+            crate::dsl::Cond::ScalarLitTrue { .. }
+        ));
+    }
+
+    #[test]
+    fn parses_scalar_if_nonlinear() {
+        let src = "rule if_same { If(c, x, x) => x where scalar_no_error(c) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].lhs {
+            crate::dsl::Pat::SIf { then, els, .. } => {
+                assert!(matches!(**then, crate::dsl::Pat::RelVar(ref n) if n == "x"));
+                assert!(matches!(**els, crate::dsl::Pat::RelVar(ref n) if n == "x"));
+            }
+            _ => panic!("expected SIf"),
         }
     }
 }

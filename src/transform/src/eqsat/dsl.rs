@@ -38,6 +38,14 @@ pub enum Pat {
         func: String,
         inputs: ListPat,
     },
+    /// A scalar `If(cond, then, els)`. Non-linear use (the same metavar in
+    /// `then` and `els`) is enforced as a same-e-class equality by codegen's
+    /// `guard()`, which is how `if_same_branches` matches `If(c, x, x)`.
+    SIf {
+        cond: Box<Pat>,
+        then: Box<Pat>,
+        els: Box<Pat>,
+    },
     Filter {
         preds: String,
         input: Box<Pat>,
@@ -208,6 +216,12 @@ pub enum Tmpl {
         func: String,
         inputs: ListTmpl,
     },
+    /// Build a scalar `If(cond, then, els)`.
+    SIf {
+        cond: Box<Tmpl>,
+        then: Box<Tmpl>,
+        els: Box<Tmpl>,
+    },
 }
 
 /// An element of a template input list. Lists are ordered sequences of these,
@@ -356,6 +370,15 @@ pub enum Cond {
     /// to join inputs where pulling the projection up exposes a reusable index,
     /// the only case with a payoff; bounds e-graph blowup elsewhere.
     ReadsIndexedGlobal { rel: String },
+    /// `scalar_lit_true(s)`: the class bound to scalar metavar `s` is a literal
+    /// `true` (via the scalar `literal` analysis). Gates `if_true`.
+    ScalarLitTrue { scalar: String },
+    /// `scalar_lit_false_or_null(s)`: the class bound to `s` is a literal
+    /// `false` or a literal `null`. Gates `if_false_or_null`.
+    ScalarLitFalseOrNull { scalar: String },
+    /// `scalar_no_error(s)`: the class bound to `s` has `could_error == false`
+    /// (scalar `could_error` analysis). Gates `if_same_branches`.
+    ScalarNoError { scalar: String },
 }
 
 /// The eqsat pass a rule is active in.
