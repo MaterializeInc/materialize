@@ -467,7 +467,7 @@ fn translate_tmpl(t: &Tmpl, hole: &str) -> String {
         Tmpl::SBool(b) => format!("ScalarExpr.litB {}", if *b { "true" } else { "false" }),
         // A builtin applier: its result is a Rust evaluation product with no
         // declarative Lean template, so only the one function this slice ports
-        // (`const_eval`, the only builtin rule so far) is mapped; `choose_proof`
+        // (`const_eval`, the only builtin rule so far) is mapped. `choose_proof`
         // emits a permanent `sorry` for every `Builtin` RHS regardless.
         Tmpl::Builtin { name, args } => match name.as_str() {
             "const_eval" => format!("constEval {}", args[0]),

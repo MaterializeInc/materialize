@@ -241,7 +241,7 @@ end
 
 /-- The const-eval builtin, opaque: its result is computed by Rust `mz_expr`
     evaluation, not modeled in Lean. Rules whose RHS is `constEval` carry a
-    permanent `sorry`; the opaque declaration is what makes that `sorry`
+    permanent `sorry`. The opaque declaration is what makes that `sorry`
     genuinely required rather than `rfl`-closable. -/
 opaque constEval : ScalarExpr → ScalarExpr
 

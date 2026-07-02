@@ -47,8 +47,9 @@ docker run --rm \
 # Guard the permanent-sorry invariant: builtin-applier obligations (slices 4-6)
 # carry the `-- PERMANENT SORRY` marker and are the only never-provable sorries.
 # A pre-existing-gap sorry uses a distinct marker and must not be counted here.
-# `grep` exits non-zero when there are no matches, which is the passing case
-# here, so `|| true` keeps `set -o pipefail` from aborting the script.
+# `grep` exits non-zero when there are no matches. `|| true` keeps `set -o
+# pipefail` from treating that as script-fatal, so the count check below reports
+# a proper error (a zero count is now a failure, since one marker is expected).
 expected_permanent=1  # const_fold (slice 4), the one builtin ported so far. Grows to 6 by slice 6 (spec 2.7).
 permanent=$(grep -rho "PERMANENT SORRY" "$lean_dir/MirRewrite" | wc -l || true)
 if [ "$permanent" -ne "$expected_permanent" ]; then
