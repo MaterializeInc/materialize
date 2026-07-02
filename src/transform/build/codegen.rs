@@ -50,6 +50,13 @@ fn cond_is_color_exact(c: &Cond) -> bool {
         Cond::NonNegative { .. } => false,
         Cond::Monotonic { .. } => false,
         Cond::IsUniqueKey { .. } => false,
+        // Scalar conds only ever guard scalar rules, which run exclusively in
+        // the scalar saturate pass and never in the relational colored pass,
+        // so color-exactness never applies to them; the value is moot but
+        // must be assigned for exhaustiveness.
+        Cond::ScalarLitTrue { .. } => true,
+        Cond::ScalarLitFalseOrNull { .. } => true,
+        Cond::ScalarNoError { .. } => true,
     }
 }
 
@@ -115,6 +122,7 @@ fn sym_name(p: &Pat) -> &'static str {
         Pat::SVariadic { .. } => {
             unreachable!("scalar patterns have no relational operator symbol")
         }
+        Pat::SIf { .. } => unreachable!("scalar patterns have no relational operator symbol"),
     }
 }
 
@@ -306,6 +314,14 @@ impl Matcher {
                 ));
                 self.variadic(inputs, c);
             }
+            Pat::SIf { cond, then, els } => {
+                self.stmts.push(format!(
+                    "let crate::eqsat::scalar::node::SNode::If {{ cond: ec{c}, then: et{c}, els: ee{c} }} = {node} else {{ continue }};"
+                ));
+                self.child(cond, &format!("*ec{c}"));
+                self.child(then, &format!("*et{c}"));
+                self.child(els, &format!("*ee{c}"));
+            }
             Pat::RelVar(_) => unreachable!("node() is only called on operators"),
         }
     }
@@ -346,7 +362,10 @@ impl Matcher {
                 // A scalar operator child scans the scalar e-nodes of the class;
                 // a relational one scans only the relational e-nodes. A scalar
                 // class never matches a relational pattern and vice versa.
-                let scalar = matches!(pat, Pat::SUnary { .. } | Pat::SVariadic { .. });
+                let scalar = matches!(
+                    pat,
+                    Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. }
+                );
                 if scalar {
                     self.stmts
                         .push(format!("for n{c} in g.scalar_class_nodes({class}) {{"));
@@ -467,6 +486,17 @@ fn cond_expr(c: &Cond, m: &Matcher) -> String {
         Cond::ReadsIndexedGlobal { rel } => {
             format!("g.cond_reads_indexed_global({})", m.rel_local(rel))
         }
+        Cond::ScalarLitTrue { scalar } => format!(
+            "g.scalar_lit_bool_or_null({}) == Some(Some(true))",
+            m.rel_local(scalar)
+        ),
+        Cond::ScalarLitFalseOrNull { scalar } => format!(
+            "matches!(g.scalar_lit_bool_or_null({}), Some(Some(false)) | Some(None))",
+            m.rel_local(scalar)
+        ),
+        Cond::ScalarNoError { scalar } => {
+            format!("!g.scalar_could_error({})", m.rel_local(scalar))
+        }
     }
 }
 
@@ -582,6 +612,23 @@ fn find_stmts(rule: &Rule, mode: &FindMode) -> String {
         Pat::SVariadic { .. } => {
             s.push_str(
                 "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::Variadic) {\n",
+            );
+            s.push_str("let root_id = root_id;\n");
+            s.push_str("let root_node = &root_node;\n");
+            m.node(&rule.lhs, "root_node");
+            for stmt in &m.stmts {
+                s.push_str(stmt);
+                s.push('\n');
+            }
+            s.push_str(&body(rule, &m, mode));
+            for _ in 0..m.open_braces {
+                s.push_str("}\n");
+            }
+            s.push_str("}\n");
+        }
+        Pat::SIf { .. } => {
+            s.push_str(
+                "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::If) {\n",
             );
             s.push_str("let root_id = root_id;\n");
             s.push_str("let root_node = &root_node;\n");
@@ -888,6 +935,17 @@ fn tmpl_stmts(t: &Tmpl, hole: Option<&str>, out: &mut String, fresh: &mut Fresh)
             ));
             v
         }
+        Tmpl::SIf { cond, then, els } => {
+            let vc = tmpl_stmts(cond, hole, out, fresh);
+            let vt = tmpl_stmts(then, hole, out, fresh);
+            let ve = tmpl_stmts(els, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::If {{ cond: {vc}, then: {vt}, els: {ve} }}));\n"
+            ));
+            v
+        }
     }
 }
 
@@ -954,7 +1012,10 @@ fn emit_apply(rule: &Rule) -> String {
 /// are compiled into `SCALAR_COMPILED_RULES` so they never run in the relational
 /// saturation pass.
 fn is_scalar_rule(r: &Rule) -> bool {
-    matches!(r.lhs, Pat::SUnary { .. } | Pat::SVariadic { .. })
+    matches!(
+        r.lhs,
+        Pat::SUnary { .. } | Pat::SVariadic { .. } | Pat::SIf { .. }
+    )
 }
 
 /// The `CompiledRule { .. }` table literal for one rule. Identical text for every
@@ -1197,6 +1258,12 @@ fn pat(p: &Pat) -> String {
             s(func),
             listpat(inputs)
         ),
+        Pat::SIf { cond, then, els } => format!(
+            "{P}::Pat::SIf {{ cond: Box::new({}), then: Box::new({}), els: Box::new({}) }}",
+            pat(cond),
+            pat(then),
+            pat(els)
+        ),
         Pat::Filter { preds, input } => format!(
             "{P}::Pat::Filter {{ preds: {}, input: Box::new({}) }}",
             s(preds),
@@ -1338,6 +1405,12 @@ fn tmpl(t: &Tmpl) -> String {
             s(func),
             listtmpl(inputs)
         ),
+        Tmpl::SIf { cond, then, els } => format!(
+            "{P}::Tmpl::SIf {{ cond: Box::new({}), then: Box::new({}), els: Box::new({}) }}",
+            tmpl(cond),
+            tmpl(then),
+            tmpl(els)
+        ),
     }
 }
 
@@ -1396,6 +1469,18 @@ fn cond(c: &Cond) -> String {
         ),
         Cond::ReadsIndexedGlobal { rel } => {
             format!("{P}::Cond::ReadsIndexedGlobal {{ rel: {} }}", s(rel))
+        }
+        Cond::ScalarLitTrue { scalar } => {
+            format!("{P}::Cond::ScalarLitTrue {{ scalar: {} }}", s(scalar))
+        }
+        Cond::ScalarLitFalseOrNull { scalar } => {
+            format!(
+                "{P}::Cond::ScalarLitFalseOrNull {{ scalar: {} }}",
+                s(scalar)
+            )
+        }
+        Cond::ScalarNoError { scalar } => {
+            format!("{P}::Cond::ScalarNoError {{ scalar: {} }}", s(scalar))
         }
     }
 }
