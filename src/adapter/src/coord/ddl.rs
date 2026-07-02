@@ -638,7 +638,10 @@ impl Coordinator {
     /// sink was known to the controller. It is the caller's responsibility to
     /// retire the returned sink. Consider using `retire_compute_sinks` instead.
     #[must_use]
-    pub async fn drop_compute_sink(&mut self, sink_id: GlobalId) -> Option<ActiveComputeSink> {
+    pub async fn drop_compute_sink(
+        &mut self,
+        sink_id: GlobalId,
+    ) -> Option<(ActiveComputeSink, BuiltinTableAppendNotify)> {
         self.drop_compute_sinks([sink_id]).await.remove(&sink_id)
     }
 
@@ -647,18 +650,20 @@ impl Coordinator {
     /// For each sink that exists, the coordinator and controller's state
     /// associated with the sink is removed.
     ///
-    /// Returns a map containing the controller's state for each sink that was
-    /// removed. It is the caller's responsibility to retire the returned sinks.
-    /// Consider using `retire_compute_sinks` instead.
+    /// Returns a map from sink id to the controller's state for the sink and a notify that
+    /// resolves once the sink's `mz_subscriptions` retraction is durable (see
+    /// `remove_active_compute_sink`). It is the caller's responsibility to await the notify
+    /// off the coordinator loop and then retire the returned sinks. Consider using
+    /// `retire_compute_sinks` instead.
     #[must_use]
     pub async fn drop_compute_sinks(
         &mut self,
         sink_ids: impl IntoIterator<Item = GlobalId>,
-    ) -> BTreeMap<GlobalId, ActiveComputeSink> {
+    ) -> BTreeMap<GlobalId, (ActiveComputeSink, BuiltinTableAppendNotify)> {
         let mut by_id = BTreeMap::new();
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for sink_id in sink_ids {
-            let sink = match self.remove_active_compute_sink(sink_id).await {
+            let (sink, write_notify) = match self.remove_active_compute_sink(sink_id).await {
                 None => {
                     // This can happen due to a race condition: an internal
                     // subscribe may be cleaned up via its own message while
@@ -667,14 +672,14 @@ impl Coordinator {
                     tracing::debug!(%sink_id, "drop_compute_sinks: sink already removed");
                     continue;
                 }
-                Some(sink) => sink,
+                Some(entry) => entry,
             };
 
             by_cluster
                 .entry(sink.cluster_id())
                 .or_default()
                 .push(sink_id);
-            by_id.insert(sink_id, sink);
+            by_id.insert(sink_id, (sink, write_notify));
         }
         for (cluster_id, ids) in by_cluster {
             let compute = &mut self.controller.compute;
@@ -697,12 +702,30 @@ impl Coordinator {
         mut reasons: BTreeMap<GlobalId, ActiveComputeSinkRetireReason>,
     ) {
         let sink_ids = reasons.keys().cloned();
-        for (id, sink) in self.drop_compute_sinks(sink_ids).await {
-            let reason = reasons
-                .remove(&id)
-                .expect("all returned IDs are in `reasons`");
-            sink.retire(reason);
-        }
+        let to_retire: Vec<_> = self
+            .drop_compute_sinks(sink_ids)
+            .await
+            .into_iter()
+            .map(|(id, (sink, write_notify))| {
+                let reason = reasons
+                    .remove(&id)
+                    .expect("all returned IDs are in `reasons`");
+                (sink, write_notify, reason)
+            })
+            .collect();
+
+        // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
+        // to be durable before telling the client the sink is gone, so a client that
+        // observes the retirement and then queries `mz_subscriptions` does not see the
+        // stale row. The wait must not happen on the loop: that would block every other
+        // session on the group-commit oracle round trip, which is the whole point of
+        // deferring the write.
+        task::spawn(|| "retire_compute_sinks", async move {
+            for (sink, write_notify, reason) in to_retire {
+                write_notify.await;
+                sink.retire(reason);
+            }
+        });
     }
 
     /// Drops all pending replicas for a set of clusters

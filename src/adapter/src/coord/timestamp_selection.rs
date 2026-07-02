@@ -10,6 +10,7 @@
 //! Logic for selecting timestamps for various operations on collections.
 
 use std::fmt;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -22,6 +23,7 @@ use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp as _};
 
@@ -645,26 +647,30 @@ pub trait TimestampProvider {
 }
 
 impl Coordinator {
-    pub(crate) async fn oracle_read_ts(
+    /// Returns the timestamp oracle to obtain a linearized read timestamp from,
+    /// if the given isolation level and `when` require one, and `None`
+    /// otherwise.
+    ///
+    /// The caller must perform the `read_ts()` round-trip off the coordinator
+    /// loop, in a spawned task. The oracle backing store can be slow, so doing
+    /// the read inline would wedge every other session until it returns. See
+    /// `peek_linearize_timestamp` for the canonical use of this helper.
+    pub(crate) fn linearized_read_ts_oracle(
         &self,
         session: &Session,
         timeline_ctx: &TimelineContext,
         when: &QueryWhen,
-    ) -> Option<Timestamp> {
-        let isolation_level = session.vars().transaction_isolation().clone();
+    ) -> Option<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>> {
+        let isolation_level = session.vars().transaction_isolation();
         let timeline = Coordinator::get_timeline(timeline_ctx);
-        let needs_linearized_read_ts =
-            Coordinator::needs_linearized_read_ts(&isolation_level, when);
+        let needs_linearized_read_ts = Coordinator::needs_linearized_read_ts(isolation_level, when);
 
-        let oracle_read_ts = match timeline {
+        match timeline {
             Some(timeline) if needs_linearized_read_ts => {
-                let timestamp_oracle = self.get_timestamp_oracle(&timeline);
-                Some(timestamp_oracle.read_ts().await)
+                Some(self.get_timestamp_oracle(&timeline))
             }
             Some(_) | None => None,
-        };
-
-        oracle_read_ts
+        }
     }
 
     /// Determines the timestamp for a query, acquires read holds that ensure the
