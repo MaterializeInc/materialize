@@ -1700,12 +1700,15 @@ impl ExecuteContext {
         if response_barriers.is_empty() {
             retire_execution_context(tx, internal_cmd_tx, session, extra, result);
         } else {
-            spawn(|| "execute_context::retire_after_response_barriers", async move {
-                for barrier in response_barriers {
-                    barrier.await;
-                }
-                retire_execution_context(tx, internal_cmd_tx, session, extra, result);
-            });
+            spawn(
+                || "execute_context::retire_after_response_barriers",
+                async move {
+                    for barrier in response_barriers {
+                        barrier.await;
+                    }
+                    retire_execution_context(tx, internal_cmd_tx, session, extra, result);
+                },
+            );
         }
     }
 
