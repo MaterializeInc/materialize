@@ -556,4 +556,232 @@ mod tests {
             "corpus must exercise the and_empty/and_single interaction"
         );
     }
+
+    // Differential parity harness (SP2b Slice 5): extends slices 1-4 to the
+    // remaining could_error/literal-gated builtins (`if_err_cond`,
+    // `null_prop_binary`, `err_prop_binary`, `isnull_fold`) and the
+    // metavar-function rule `not_binary_negate`, the last rule ported before
+    // the slice-6 variadic-set batch.
+    //
+    // `not_binary_negate` is the highest-risk axis here: it is the first
+    // ported rule whose right-hand side reconstructs a DIFFERENT function
+    // symbol read off a bound metavariable (`negate(f)`), not a fixed
+    // template. A wrong table entry for even one func would be invisible to a
+    // spot check, so the negation axis below enumerates every `BinaryFunc`
+    // pair `negate()` returns `Some` for (`Eq`/`NotEq`, `Lt`/`Gte`,
+    // `Lte`/`Gt`, confirmed exhaustive against the `#[sqlfunc(negate = ..)]`
+    // attributes in `src/expr/src/scalar/func.rs`) crossed with three
+    // null-operand shapes.
+    //
+    // Same corpus-shaping constraint as slices 1-4: every input keeps the old
+    // engine's still-unported slice-6 variadic-set rules
+    // (`null_prop_variadic`, `err_prop_variadic`, `and_or_dedup`,
+    // `and_or_short_circuit`, `and_or_drop_unit`, `flatten_assoc`,
+    // `factor_and_or`, `absorb_and_or`) from having anything to seize on: no
+    // variadic And/Or of arity > 1 appears anywhere below, so a mismatch here
+    // is a real slice-5 divergence, not a corpus artifact.
+    #[mz_ore::test]
+    fn scalar_parity_slice5() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc};
+        use mz_repr::ReprScalarType;
+
+        let c = MirScalarExpr::column;
+        let not = |e: MirScalarExpr| e.call_unary(UnaryFunc::Not(mz_expr::func::Not));
+        let int_lit =
+            |v: i64| MirScalarExpr::literal_ok(mz_repr::Datum::Int64(v), ReprScalarType::Int64);
+        let null_int = || MirScalarExpr::literal_null(ReprScalarType::Int64);
+        let div64 = || BinaryFunc::DivInt64(mz_expr::func::DivInt64);
+        let add64 = || BinaryFunc::AddInt64(mz_expr::func::AddInt64);
+        let if_expr =
+            |cond: MirScalarExpr, then: MirScalarExpr, els: MirScalarExpr| MirScalarExpr::If {
+                cond: Box::new(cond),
+                then: Box::new(then),
+                els: Box::new(els),
+            };
+        let int_ct = |nullable: bool| ReprScalarType::Int64.nullable(nullable);
+
+        let mut cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
+
+        // --- if_err_cond: a literal-error condition (`1 / 0`, folded by the
+        // already-ported const_fold) folds the whole If to that error. The
+        // branches carry DISTINCT ReprColumnTypes (#0 non-nullable, #1
+        // nullable Int64), so the result exercises the `then.typ.union(els.typ)`
+        // merge path rather than a same-type trivial union.
+        let err_cond_if = if_expr(int_lit(1).call_binary(int_lit(0), div64()), c(0), c(1));
+        cases.push((err_cond_if, vec![int_ct(false), int_ct(true)]));
+
+        // --- null_prop_binary: AddInt64(null, #0) with a bare-column (never
+        // could_error) other operand folds to null. AddInt64(null, #0 / #1)
+        // does NOT fold: the other operand is a division of two columns,
+        // which `could_error` intrinsically, regardless of literalness, so
+        // the gate blocks the rewrite in both engines (parity on the
+        // "no fold" outcome, not just on folds).
+        let null_prop_ok = null_int().call_binary(c(0), add64());
+        cases.push((null_prop_ok, vec![int_ct(false)]));
+
+        let erroring_div = c(0).call_binary(c(1), div64());
+        let null_prop_blocked = null_int().call_binary(erroring_div, add64());
+        cases.push((null_prop_blocked, vec![int_ct(false), int_ct(false)]));
+
+        // --- err_prop_binary: (1 / 0) + #0, other operand a bare column,
+        // folds to the division's error. (1 / 0) + (#0 / #1) does NOT fold:
+        // the other operand can also error, so the gate blocks substituting
+        // one error for another that eval might surface first.
+        let err_expr = int_lit(1).call_binary(int_lit(0), div64());
+        let err_prop_ok = err_expr.clone().call_binary(c(0), add64());
+        cases.push((err_prop_ok, vec![int_ct(false)]));
+
+        let erroring_div2 = c(0).call_binary(c(1), div64());
+        let err_prop_blocked = err_expr.call_binary(erroring_div2, add64());
+        cases.push((err_prop_blocked, vec![int_ct(false), int_ct(false)]));
+
+        // --- isnull_fold: IsNull(#0) folds to false when #0 is non-nullable
+        // (and error-free, trivially true for a bare column). The nullable
+        // control, same shape, must not fold.
+        let isnull_expr = c(0).call_unary(UnaryFunc::IsNull(mz_expr::func::IsNull));
+        cases.push((isnull_expr.clone(), vec![int_ct(false)]));
+        cases.push((isnull_expr, vec![int_ct(true)]));
+
+        // --- not_binary_negate (CRUX 2): every BinaryFunc pair negate()
+        // returns Some for, crossed with three null-operand shapes. Eq/NotEq
+        // are propagates_nulls comparisons over ExcludeNull<Datum> inputs (so
+        // is Lt/Gte/Lte/Gt), so a literal-null operand also engages
+        // null_prop_binary/const_fold in both engines; that interaction is
+        // deliberate; parity must hold whichever rule combination wins the
+        // race to the fixpoint.
+        let negation_pairs: Vec<BinaryFunc> = vec![
+            BinaryFunc::Eq(mz_expr::func::Eq),
+            BinaryFunc::NotEq(mz_expr::func::NotEq),
+            BinaryFunc::Lt(mz_expr::func::Lt),
+            BinaryFunc::Gte(mz_expr::func::Gte),
+            BinaryFunc::Lte(mz_expr::func::Lte),
+            BinaryFunc::Gt(mz_expr::func::Gt),
+        ];
+        for func in &negation_pairs {
+            let both_cols = not(c(0).call_binary(c(1), func.clone()));
+            cases.push((both_cols, vec![int_ct(false), int_ct(false)]));
+
+            let one_null = not(c(0).call_binary(null_int(), func.clone()));
+            cases.push((one_null, vec![int_ct(false)]));
+
+            let both_null = not(null_int().call_binary(null_int(), func.clone()));
+            cases.push((both_null, vec![]));
+        }
+
+        // Nested double-negation over a negatable comparison: not_not (slice
+        // 1) and not_binary_negate must reach the same fixpoint regardless of
+        // which fires first (Not(Not(Lt(a,b))) -> Not(Gte(a,b)) -> Lt(a,b),
+        // or Not(Not(Lt(a,b))) -> Lt(a,b) directly).
+        let nested_not_not = not(not(
+            c(0).call_binary(c(1), BinaryFunc::Lt(mz_expr::func::Lt))
+        ));
+        cases.push((nested_not_not, vec![int_ct(false), int_ct(false)]));
+
+        // Not(f(a, <literal error>)): the error operand is itself folded from
+        // `1 / 0` by const_fold, then err_prop_binary collapses the
+        // comparison to that error before not_binary_negate's choice of
+        // partner could matter. Proves the interaction does not panic or
+        // union mismatched classes.
+        let err_operand = int_lit(1).call_binary(int_lit(0), div64());
+        let not_f_err = not(c(0).call_binary(err_operand, BinaryFunc::Eq(mz_expr::func::Eq)));
+        cases.push((not_f_err, vec![int_ct(false)]));
+
+        // --- Interaction: if_err_cond combined with slice-4 const_fold and
+        // slice-3 if_true on the same If. The inner If's literal-true
+        // condition resolves via if_true to `1 / 0`, which const_fold then
+        // folds to an error literal; that error literal becomes the OUTER
+        // If's condition, so if_err_cond fires on the outer If.
+        let inner_if = if_expr(
+            MirScalarExpr::literal_true(),
+            int_lit(1).call_binary(int_lit(0), div64()),
+            int_lit(2),
+        );
+        let if_interaction = if_expr(inner_if, c(0), c(1));
+        cases.push((if_interaction, vec![int_ct(false), int_ct(false)]));
+
+        // --- Interaction: not_binary_negate under a slice-1 not_not.
+        let not_not_negate = not(not(
+            c(0).call_binary(c(1), BinaryFunc::Eq(mz_expr::func::Eq))
+        ));
+        cases.push((not_not_negate, vec![int_ct(false), int_ct(false)]));
+
+        for (e, ct) in cases {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+        }
+
+        // Regression sampling of slices 1-4 under the grown rule set.
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let regression: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (not(not(c(0))), vec![ReprScalarType::Bool.nullable(false)]),
+            (and(vec![c(0)]), vec![ReprScalarType::Bool.nullable(false)]),
+            (
+                if_expr(c(0), c(1), c(1)),
+                vec![
+                    ReprScalarType::Bool.nullable(false),
+                    ReprScalarType::Bool.nullable(false),
+                ],
+            ),
+        ];
+        for (e, ct) in regression {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "regression parity failed for {e:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_slice5() {
+        assert!(
+            CORPUS.contains("is null"),
+            "corpus must exercise isnull_fold"
+        );
+        assert!(
+            CORPUS.contains("not(#0 = #1)"),
+            "corpus must exercise a not_binary_negate negation pair"
+        );
+        assert!(
+            CORPUS.contains("if(1 / 0"),
+            "corpus must exercise if_err_cond"
+        );
+        assert!(
+            CORPUS.contains("null + #0"),
+            "corpus must exercise null_prop_binary"
+        );
+        assert!(
+            CORPUS.contains("(1 / 0) + #0"),
+            "corpus must exercise err_prop_binary"
+        );
+    }
+
+    // Termination (SP2b Slice 5): `Not(f) -> neg(f)` must reach a fixpoint,
+    // not ping-pong between the comparison and its negation. Lowers
+    // `Not(Lt(#0, #1))` directly, bypassing `canonicalize_combined`, so the
+    // iteration count is visible, mirroring the slice-4
+    // and_empty/and_single termination check.
+    #[mz_ore::test]
+    fn not_binary_negate_terminates() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc};
+        use mz_repr::ReprScalarType;
+
+        let c = MirScalarExpr::column;
+        let not = |e: MirScalarExpr| e.call_unary(UnaryFunc::Not(mz_expr::func::Not));
+        let e = not(c(0).call_binary(c(1), BinaryFunc::Lt(mz_expr::func::Lt)));
+
+        let mut eg = EGraph::new();
+        eg.data_mut().scalar.col_types = vec![
+            ReprScalarType::Int64.nullable(false),
+            ReprScalarType::Int64.nullable(false),
+        ];
+        let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &e);
+        let iters = saturate(&mut eg);
+        assert!(
+            iters <= 10,
+            "Not(f) -> neg(f) must reach a fixpoint quickly; got {iters} iters"
+        );
+    }
 }

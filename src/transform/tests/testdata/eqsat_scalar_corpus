@@ -95,3 +95,39 @@ types:
 # Interaction with slice-2 and_single: And(#0) collapses via and_single
 # (see the and(#0) case above), not and_empty. and() and and(#0) must not
 # fight or fail to reach a fixpoint.
+
+# --- slice 5: if_err_cond, null_prop_binary, err_prop_binary, isnull_fold,
+# not_binary_negate ---
+# if_err_cond: a literal-error condition (`1 / 0`, folded by const_fold)
+# folds the whole If to that error. Branches carry distinct types (#0
+# non-nullable, #1 nullable), exercising the then.typ.union(els.typ) path.
+expr: if(1 / 0, #0, #1)
+types: int64,int64
+
+# null_prop_binary: a null-propagating func with a literal-null operand and a
+# non-erroring other operand folds to null.
+expr: null + #0
+types: int64
+
+# err_prop_binary: a literal-error operand with a non-erroring other operand
+# folds to that error.
+expr: (1 / 0) + #0
+types: int64
+
+# isnull_fold: IsNull of a non-nullable, error-free operand folds to false.
+# The same shape with #0 typed nullable must not fold.
+expr: #0 is null
+types: int64
+
+# not_binary_negate (highest risk: negate(f) must choose the correct partner
+# from BinaryFunc::negate()'s table): exhaustively tested in the differential
+# harness over every negation pair (Eq/NotEq, Lt/Gte, Lte/Gt); representative
+# samples of each pair below.
+expr: not(#0 = #1)
+types: int64,int64
+
+expr: not(#0 < #1)
+types: int64,int64
+
+expr: not(#0 <= #1)
+types: int64,int64
