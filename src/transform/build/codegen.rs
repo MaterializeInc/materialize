@@ -69,6 +69,18 @@ pub fn emit(rules: &[Rule]) -> String {
     // conditions (no analysis-gated conditions).
     for r in rules {
         if r.colored {
+            // A scalar rule must never be colored. The colored pass runs over
+            // `ColoredView`, whose scalar find/apply are inert stubs, so a
+            // colored scalar rule would silently become a dead no-op. Builtin
+            // RHSs additionally pin the concrete `EGraph` and would not compile
+            // under `colored_apply`. The cond-exactness check below cannot catch
+            // this: a conditionless scalar rule passes it vacuously.
+            assert!(
+                !is_scalar_rule(r),
+                "scalar rule `{}` must not be marked colored: the colored pass \
+                 runs over ColoredView's inert scalar stubs",
+                r.name
+            );
             for c in &r.conds {
                 assert!(
                     cond_is_color_exact(c),
