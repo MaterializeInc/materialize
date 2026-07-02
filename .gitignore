@@ -27,6 +27,7 @@ node_modules
 /test/**/tmp_*.toml
 /test/**/fdb_*.cluster
 junit_*.xml
+invariants-events.log
 parallel-workload-queries.log
 perf.data*
 *.rej
