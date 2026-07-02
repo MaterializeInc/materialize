@@ -426,8 +426,9 @@ fn scalar_variadic_ctor(func: &str) -> &'static str {
     }
 }
 
-/// Build a Lean `List Bag` expression from a template input list, concatenating
-/// items, spliced rests, and mapped rests with `++`.
+/// Build a Lean list expression from a template input list, concatenating
+/// items, spliced rests, and mapped rests with `++`. The element type is `Bag`
+/// for relational inputs and `ScalarExpr` for scalar variadic templates.
 fn tmpl_list_expr(list: &ListTmpl, hole: &str) -> String {
     let parts: Vec<String> = list
         .elems

@@ -167,7 +167,7 @@ leaf the rule does not inspect (a column reference, a literal, or any other
 subexpression); `env` supplies its Boolean value by index. This is
 deliberately not a full `MirScalarExpr` model: later scalar rules grow
 `ScalarExpr`/`denoteS` only as far as their own proofs require. In particular
-`andE`/`orE` are two-valued (`Bool`), matching `notE`'s fidelity; the
+`andE`/`orE` are two-valued (`Bool`), matching `notE`'s fidelity. The
 three-valued/error semantics of MIR's actual `And`/`Or` is a later-slice
 deepening. -/
 

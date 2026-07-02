@@ -295,8 +295,9 @@ mod tests {
     fn corpus_covers_slice2() {
         assert!(
             CORPUS.contains("and(#0)"),
-            "corpus must exercise and/or single"
+            "corpus must exercise and_single"
         );
+        assert!(CORPUS.contains("or(#0)"), "corpus must exercise or_single");
         assert!(
             CORPUS.contains("not(and(#0, #1, #2))"),
             "corpus must exercise multi-operand de Morgan"
