@@ -38,6 +38,43 @@ use crate::s3::{S3Blob, S3BlobConfig};
 /// rotation that would flood KMS with `GenerateDataKey` calls.
 const MIN_DEK_ROTATION_SECS: u64 = 60;
 
+/// URL query params that configure KMS envelope encryption.
+///
+/// Must contain every param that [BlobConfig::try_from] and
+/// [ConsensusConfig::try_from] consume for encryption, so that
+/// [strip_kms_query_params] removes exactly the params persist understands.
+pub const KMS_URL_QUERY_PARAMS: &[&str] = &[
+    "kms_key_id",
+    "kms_region",
+    "dek_rotation_interval_secs",
+    "customer_kms_key_id",
+    "customer_kms_region",
+    "customer_kms_endpoint",
+    "customer_kms_role_arn",
+];
+
+/// Returns `url` with all [KMS_URL_QUERY_PARAMS] removed.
+///
+/// For callers that hand a URL carrying persist KMS encryption params to a
+/// consumer that does not understand them, e.g. deriving a timestamp oracle
+/// URL from a shared metadata backend URL.
+pub fn strip_kms_query_params(url: &SensitiveUrl) -> SensitiveUrl {
+    let keep: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| !KMS_URL_QUERY_PARAMS.contains(&k.as_ref()))
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    let mut inner = url.0.clone();
+    inner.set_query(None);
+    if !keep.is_empty() {
+        let mut pairs = inner.query_pairs_mut();
+        for (k, v) in &keep {
+            pairs.append_pair(k, v);
+        }
+    }
+    SensitiveUrl(inner)
+}
+
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
     configs.add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
@@ -446,5 +483,40 @@ impl ConsensusConfig {
             )),
         }?;
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn strip_kms_query_params_removes_only_kms_params() {
+        let url = SensitiveUrl::from_str(
+            "postgres://user:pw@host:5432/db?sslmode=require&kms_key_id=alias%2Fpersist_key_x&kms_region=us-east-1&dek_rotation_interval_secs=300&customer_kms_key_id=k&customer_kms_region=r&customer_kms_endpoint=e&customer_kms_role_arn=a&options=--search_path%3Dconsensus",
+        )
+        .expect("valid url");
+        let stripped = strip_kms_query_params(&url);
+        let params: Vec<(String, String)> = stripped
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(
+            params,
+            vec![
+                ("sslmode".to_string(), "require".to_string()),
+                ("options".to_string(), "--search_path=consensus".to_string()),
+            ]
+        );
+
+        // A URL without KMS params is unchanged.
+        let url = SensitiveUrl::from_str("postgres://host/db?sslmode=require").expect("valid url");
+        assert_eq!(strip_kms_query_params(&url).to_string(), url.to_string());
+
+        // All params stripped leaves no query string.
+        let url = SensitiveUrl::from_str("s3://bucket/prefix?kms_key_id=k").expect("valid url");
+        assert_eq!(strip_kms_query_params(&url).0.query(), None);
     }
 }
