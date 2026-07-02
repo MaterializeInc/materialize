@@ -3575,7 +3575,10 @@ impl mz_sql::catalog::CatalogSchema for Schema {
     }
 
     fn has_items(&self) -> bool {
-        !self.items.is_empty()
+        // A schema holds items, types, and functions in separate maps (see
+        // `item_ids`). All three keep the schema non-empty, so e.g. DROP SCHEMA
+        // without CASCADE must be rejected when only a type or function remains.
+        !self.items.is_empty() || !self.types.is_empty() || !self.functions.is_empty()
     }
 
     fn item_ids(&self) -> Box<dyn Iterator<Item = CatalogItemId> + '_> {
