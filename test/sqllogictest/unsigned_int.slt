@@ -468,6 +468,19 @@ SELECT 18446744073709553664.0::float::uint8
 query error "18446744073709556000" uint8 out of range
 SELECT 18446744073709553664.5::float::uint8
 
+# From real (float4)
+#
+# The "From float32" section above casts through `float` (= float8), so it does
+# not exercise real -> uint4/uint8. 2^32 and 2^64 are exactly representable as
+# f32 and must overflow, but u32::MAX/u64::MAX round up to them as f32, so a
+# `f <= (u32::MAX as f32)` guard lets them through and `as` saturates instead.
+
+query error "4294967300" uint4 out of range
+SELECT 4294967296.0::real::uint4
+
+query error "18446744000000000000" uint8 out of range
+SELECT 18446744073709551616.0::real::uint8
+
 # From float64
 
 query I
