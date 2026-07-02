@@ -917,10 +917,14 @@ impl SqlServerDecodeError {
         }
     }
 
-    fn invalid_char(name: &str, expected_chars: usize, found_chars: usize) -> Self {
+    fn invalid_char(name: &str, max_chars: usize, found_chars: usize) -> Self {
+        // NOTE: This text is persisted verbatim in a row-level `DecodeError`.
+        // Retractions re-decode the before-image, so the string must stay
+        // byte-identical to what older sources persisted, else the `-1` fails
+        // to cancel the stored `+1` on the next UPDATE/DELETE.
         SqlServerDecodeError::InvalidData {
             column_name: name.to_string(),
-            error: format!("expected {expected_chars} chars found {found_chars}"),
+            error: format!("expected {max_chars} chars found {found_chars}"),
         }
     }
 
