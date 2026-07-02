@@ -137,6 +137,23 @@ fn variadic_func_pat(func: &str) -> String {
     }
 }
 
+/// The Rust expression constructing a fixed scalar `UnaryFunc` by keyword.
+fn unary_func_value(func: &str) -> String {
+    match func {
+        "not" => "mz_expr::UnaryFunc::Not(mz_expr::func::Not)".to_string(),
+        other => panic!("unknown scalar unary func keyword: {other}"),
+    }
+}
+
+/// The Rust expression constructing a fixed scalar `VariadicFunc` by keyword.
+fn variadic_func_value(func: &str) -> String {
+    match func {
+        "and" => "mz_expr::VariadicFunc::And(mz_expr::func::variadic::And)".to_string(),
+        "or" => "mz_expr::VariadicFunc::Or(mz_expr::func::variadic::Or)".to_string(),
+        other => panic!("unknown scalar variadic func keyword: {other}"),
+    }
+}
+
 /// Accumulates the matching code for one rule's left-hand side.
 #[derive(Default)]
 struct Matcher {
@@ -851,6 +868,26 @@ fn tmpl_stmts(t: &Tmpl, hole: Option<&str>, out: &mut String, fresh: &mut Fresh)
             ));
             v
         }
+        Tmpl::SUnary { func, input } => {
+            let vin = tmpl_stmts(input, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            let fval = unary_func_value(func);
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::CallUnary {{ func: {fval}, expr: {vin} }}));\n"
+            ));
+            v
+        }
+        Tmpl::SVariadic { func, inputs } => {
+            let vins = listtmpl_stmts(inputs, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            let fval = variadic_func_value(func);
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::CallVariadic {{ func: {fval}, exprs: {vins} }}));\n"
+            ));
+            v
+        }
     }
 }
 
@@ -1291,6 +1328,16 @@ fn tmpl(t: &Tmpl) -> String {
             listtmpl(inputs)
         ),
         Tmpl::Union { inputs } => format!("{P}::Tmpl::Union {{ inputs: {} }}", listtmpl(inputs)),
+        Tmpl::SUnary { func, input } => format!(
+            "{P}::Tmpl::SUnary {{ func: {}, input: Box::new({}) }}",
+            s(func),
+            tmpl(input)
+        ),
+        Tmpl::SVariadic { func, inputs } => format!(
+            "{P}::Tmpl::SVariadic {{ func: {}, inputs: {} }}",
+            s(func),
+            listtmpl(inputs)
+        ),
     }
 }
 
