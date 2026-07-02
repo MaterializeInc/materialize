@@ -25,7 +25,7 @@ Kafka sources can now use AWS Glue Schema Registry for Avro schema management vi
 ### Materialize CRD v1 for Self-Managed {#v26.31-materialize-crd-v1}
 Self-managed Kubernetes deployments can now opt in to the v1 Materialize Custom Resource Definition (`materialize.cloud/v1`). The v1 CRD simplifies rollout behavior: rollouts trigger automatically when spec fields change, so you no longer need to set a new `requestRollout` UUID on every change. Adopting `v1` is opt-in, and existing `v1alpha1` deployments continue to work unchanged.
 
-For more information, see [Adopting the v1 CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/).
+For more information, see the [Self-Managed upgrade notes](/self-managed-deployments/upgrading/).
 
 ### OAuth sign-in for MCP servers {#v26.31-mcp-oauth}
 The `materialize-agent` and `materialize-developer` MCP servers now support OAuth (browser-based) sign-in, so MCP-compatible clients such as Claude Code, Claude Desktop, and Cursor can authenticate through your browser instead of a Base64-encoded token. With OAuth, the client connects as your own user role with your existing privileges.
@@ -37,8 +37,6 @@ For more information, see [MCP Server for Agents](/integrations/mcp-server/mcp-a
 - **Faster arrangement hydration**: Improved dictionary compression build performance and extended compression coverage to additional arrangement paths, reducing hydration time and memory usage.
 - **System parameter override introspection**: Added `mz_internal.mz_overridden_system_parameters`, a catalog view that lists environment-wide system parameter overrides set via `ALTER SYSTEM`, readable by all users.
 - **Kubernetes resource labels for Self-Managed**: Standard `app.kubernetes.io/*` labels are now applied to all Kubernetes resources (pods, services, statefulsets, deployments) managed by the operator.
-- **Reworked Terraform upgrade instructions (Self-Managed)**: The Terraform upgrade instructions for self-managed deployments have been overhauled, with updated guidance for AWS, GCP, and Azure. See [Upgrading](/self-managed-deployments/upgrading/).
-- **Node pool resizing guidance (Self-Managed)**: Added guidance for safely changing the VM type of a Kubernetes node pool by adding a replacement pool, rolling a new generation of pods onto it, then removing the old pool. See [Resize node pools](/self-managed-deployments/deployment-guidelines/resize-node-pools/).
 
 ### Bug Fixes {#v26.31-bug-fixes}
 - Fixed `ALTER CONNECTION ... ROTATE KEYS` silently dropping concurrent `ALTER CONNECTION SET` changes when both commands ran at the same time.
