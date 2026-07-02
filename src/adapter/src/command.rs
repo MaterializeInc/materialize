@@ -331,7 +331,6 @@ pub enum Command {
     ExecuteSideEffectingFunc {
         plan: SideEffectingFunc,
         conn_id: ConnectionId,
-        /// The current role of the session, used for RBAC checks.
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 

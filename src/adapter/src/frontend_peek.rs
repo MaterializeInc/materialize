@@ -24,7 +24,6 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task::JoinHandle;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
@@ -436,11 +435,11 @@ impl PeekClient {
                         connection_id: None,
                     } => None,
                 };
-                let active_conns_role = target_conn.as_ref().map(|(_, role)| *role);
+                let target_conn_role = target_conn.as_ref().map(|(_, role)| *role);
 
                 rbac::check_plan(
                     &conn_catalog,
-                    Some(move |_id: u32| active_conns_role),
+                    target_conn_role,
                     session,
                     &plan,
                     None,
@@ -533,8 +532,8 @@ impl PeekClient {
         rbac::check_plan(
             &conn_catalog,
             // SideEffectingFunc is handled above (with its own check_plan call) and returns
-            // early, so active_conns is not needed for the remaining plan types here.
-            None::<fn(u32) -> Option<RoleId>>,
+            // early, so no target connection role is needed for the remaining plan types here.
+            None,
             session,
             &plan,
             Some(target_cluster_id),

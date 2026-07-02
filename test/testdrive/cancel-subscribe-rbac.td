@@ -29,6 +29,11 @@ SELECT CAST(pid AS text) FROM pid_store;
 ! SELECT pg_cancel_backend(CAST(${owner-backend-pid} AS int4));
 contains:must be a member of "cancel_owner_${testdrive.seed}"
 
+# A superuser can cancel another role's backend without being a member of
+# that role. Regression test for SQL-228 (database-issues#11333).
+$ postgres-execute connection=mz_system
+SELECT pg_cancel_backend(CAST(${owner-backend-pid} AS int4));
+
 $ postgres-execute connection=mz_system
 GRANT cancel_owner_${testdrive.seed} TO materialize;
 
