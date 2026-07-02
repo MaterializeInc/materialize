@@ -152,7 +152,7 @@ Rule set VERIFIED vs rules.rs 20-list: and_single, or_single, not_demorgan_and, 
 ## Tasks
 - [ ] Task 1: scalar variadic/unary AST variants + grammar (dsl.rs + grammar.rs)
 - [ ] Task 2: codegen scalar-variadic match arms + child scalar-detection widen
-- [ ] Task 3: codegen scalar variadic/unary template build arms
+- [x] Task 3: codegen scalar variadic/unary template build arms
 - [ ] Task 4: port 4 rules to scalar.rewrite
 - [ ] Task 5: grow corpus + differential parity (slice-2 + slice-1)
 - [ ] Task 6: Lean And/Or list denotation + 4 theorems (no permanent-sorry regression)
@@ -193,7 +193,7 @@ KEY: guard() (codegen.rs:473-483) auto-enforces repeated relvars as same-e-class
 ## Tasks
 - [ ] Task 1: SIf + scalar Cond AST variants + grammar
 - [ ] Task 2: scalar view methods (scalar_could_error, scalar_lit_bool_or_null)
-- [ ] Task 3: codegen SIf arms + scalar-cond emission + child-widen
+- [x] Task 3: codegen SIf arms + scalar-cond emission + child-widen
 - [ ] Task 4: port 3 If rules to scalar.rewrite
 - [ ] Task 5: Lean If denotation + 3 theorems (greens crate + aggregate lake build)
 - [ ] Task 6: corpus + differential parity (could_error + literal axes)
@@ -225,7 +225,7 @@ DESIGN: Pat::Scalar{binding} matches any scalar CALL node (iterate 4 call syms U
 ## Tasks
 - [x] Task 1: AST (Pat::Scalar, Tmpl::Builtin, Tmpl::SBool) + grammar
 - [x] Task 2: eqsat/scalar_builtins.rs const_eval (class-level port)
-- [ ] Task 3: codegen Scalar-root iteration + Builtin/SBool emission + is_scalar_rule routing
+- [x] Task 3: codegen Scalar-root iteration + Builtin/SBool emission + is_scalar_rule routing
 - [ ] Task 4: port const_fold/and_empty/or_empty to scalar.rewrite
 - [ ] Task 5: Lean opaque constEval+litB + emit arms + permanent sorry marker + CI count 1 (greens crate + AGGREGATE lake)
 - [ ] Task 6: differential corpus + parity (error-eval 1/0 negative control, mutation-tested)
@@ -234,3 +234,5 @@ DESIGN: Pat::Scalar{binding} matches any scalar CALL node (iterate 4 call syms U
 Task 1: complete (commit 08a6d4387e, review clean — Spec ✅ Quality Approved, 0 findings). Pat::Scalar/Tmpl::Builtin/Tmpl::SBool + grammar; reviewer built standalone chumsky harness, 7/7 tests pass, probed shadowing (truething->RelVar, Empty/Negate not shadowed by builtin catch-all). Build RED = expected 5 E0004 codegen (Task 3).
 
 Task 2: complete (commit d399d70db4, review clean — Spec ✅ Quality Approved). scalar_builtins::const_eval class-level port; 3/3 tests (all-literal, 1/0 error-as-data, non-literal-child Err). Reviewer rebuilt+ran+mutation-tested (non-vacuous)+reverted byte-clean. Class-level scan sound by congruence; no borrow held across g.add. MINOR (route to Task 6): add a nested pre-existing-Err-literal-child case e.g. (1/0)+5 two-step fold. Task-3 note: lean.rs needs 3 more E0004 arms (Pat::Scalar/Tmpl::Builtin/Tmpl::SBool) beyond codegen's 5 — that's Task 5.
+
+Task 3: complete (commit 7461b95f5f, review — Spec ✅ Quality Approved, 2 Minor deferred). codegen green; only 3 lean.rs E0004 remain (Task 5). Reviewer inspected generated OUT_DIR: Pat::Scalar iterates 4 call syms + binds e; Builtin emits const_eval(g,ba)? g-first; SBool literal_true/false; is_scalar_rule routes to SCALAR_COMPILED_RULES only. MINOR-1 (final review): Matcher::node Pat::Scalar unreachable! is reachable via nested Scalar(e) child (grammar not root-restricted); no slice-4 rule hits it; improve msg or restrict grammar. MINOR-2 (final review / Task 5 defensive): Tmpl::Builtin pins concrete EGraph -> a colored:true scalar rule wouldn't compile in colored_apply; none colored by design; wants build-time assert.
