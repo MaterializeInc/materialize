@@ -54,3 +54,44 @@ types: bool,bool
 # test. The If must survive unresolved in BOTH engines.
 expr: if(#0 / #1 = 0, #2, #2)
 types: int64,int64,int64
+
+# --- slice 4: const_fold, and_empty, or_empty ---
+# All-literal fold, non-error (the `literal` axis over Unary/Binary/If).
+expr: 1 + 2
+types:
+
+expr: not(true)
+types:
+
+expr: if(true, 1, 2)
+types:
+
+# All-literal fold, error-as-data (highest risk): the fold must reproduce
+# the runtime error AS a literal in both engines, not panic and not
+# silently drop it.
+expr: 1 / 0
+types:
+
+expr: i64::MAX + 1
+types:
+
+# Nested pre-existing error-literal child: the inner div folds to an error
+# literal on one saturation round, then the outer add folds on a later
+# round, propagating the error through eval's child-error short circuit.
+expr: (1 / 0) + 5
+types:
+
+# Partial-literal: a Column child blocks const_fold in both engines.
+expr: #0 + 1
+types: int64
+
+# Empty identities (declarative RHS, distinct from and_single/or_single).
+expr: and()
+types:
+
+expr: or()
+types:
+
+# Interaction with slice-2 and_single: And(#0) collapses via and_single
+# (see the and(#0) case above), not and_empty. and() and and(#0) must not
+# fight or fail to reach a fixpoint.

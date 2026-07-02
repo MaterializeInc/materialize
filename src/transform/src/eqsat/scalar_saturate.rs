@@ -404,4 +404,156 @@ mod tests {
             "corpus must exercise the if_same_branches could_error gate"
         );
     }
+
+    // Differential parity harness (SP2b Slice 4): extends slices 1-3 to
+    // const_fold (class-level literal evaluation via `scalar_builtins::const_eval`)
+    // and the AND/OR empty identities (`and_empty`, `or_empty`).
+    //
+    // const_fold is the highest-risk port so far: it is the first ported rule
+    // whose RHS runs real `mz_expr` evaluation rather than a declarative
+    // template, and the first to touch runtime errors as data. The corpus
+    // below walks every axis: non-error folds over Unary/Binary/If, error-as-
+    // data (division by zero and integer overflow), a nested fold where one
+    // fold's error-literal output becomes another fold's input, a
+    // partial-literal call that must NOT fold, the AND/OR empty identities,
+    // and the interaction between `and_empty` and the slice-2 `and_single`
+    // rule (they must reach a shared fixpoint, not fight).
+    //
+    // Same corpus-shaping constraint as slices 1-3: every input keeps the old
+    // engine's unported rules (and_or_dedup, and_or_short_circuit,
+    // flatten_assoc, factor_and_or, absorb_and_or, not_binary_negate,
+    // if_err_cond, null/err_prop, isnull_fold, ...) from having anything to
+    // seize on, so a mismatch here is a real const_fold/and_empty/or_empty
+    // divergence, not a corpus artifact. const_fold itself is ported to both
+    // engines, so, unlike slice 3's could_error control, a bare `1 / 0` is
+    // safe to use directly: both engines fold it the same way.
+    #[mz_ore::test]
+    fn scalar_parity_const_eval() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc, VariadicFunc};
+        use mz_repr::{Datum, ReprColumnType, ReprScalarType};
+
+        let c = MirScalarExpr::column;
+        let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
+        let add64 = || BinaryFunc::AddInt64(mz_expr::func::AddInt64);
+        let div64 = || BinaryFunc::DivInt64(mz_expr::func::DivInt64);
+        let not = |e: MirScalarExpr| e.call_unary(UnaryFunc::Not(mz_expr::func::Not));
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let if_expr =
+            |cond: MirScalarExpr, then: MirScalarExpr, els: MirScalarExpr| MirScalarExpr::If {
+                cond: Box::new(cond),
+                then: Box::new(then),
+                els: Box::new(els),
+            };
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+        let int_ct = || ReprScalarType::Int64.nullable(false);
+
+        // All-literal fold, non-error.
+        let add_lit = int_lit(1).call_binary(int_lit(2), add64());
+        let not_true = not(MirScalarExpr::literal_true());
+        let if_lit = if_expr(MirScalarExpr::literal_true(), int_lit(1), int_lit(2));
+
+        // All-literal fold, error-as-data (the negative control): division by
+        // zero and integer overflow must fold to the same error literal in
+        // both engines.
+        let div_by_zero = int_lit(1).call_binary(int_lit(0), div64());
+        let overflow = int_lit(i64::MAX).call_binary(int_lit(1), add64());
+
+        // Nested pre-existing error-literal child.
+        let nested_err = div_by_zero.clone().call_binary(int_lit(5), add64());
+
+        // Partial-literal: a Column child blocks the fold.
+        let partial = c(0).call_binary(int_lit(1), add64());
+
+        // Empty identities.
+        let and_empty = and(vec![]);
+        let or_empty = or(vec![]);
+
+        let cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (add_lit, vec![]),
+            (not_true, vec![]),
+            (if_lit, vec![]),
+            (div_by_zero, vec![]),
+            (overflow, vec![]),
+            (nested_err, vec![]),
+            (partial, vec![int_ct()]),
+            (and_empty, vec![]),
+            (or_empty, vec![]),
+        ];
+        for (e, ct) in cases {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+        }
+
+        // Regression sampling of slice-1/2/3 shapes under the grown rule set,
+        // including the and_single/and_empty interaction: And(#0) must still
+        // collapse to #0 via and_single, not and_empty.
+        let regression: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (not(not(c(0))), vec![bool_ct()]),
+            (and(vec![c(0)]), vec![bool_ct()]),
+            (if_expr(c(0), c(1), c(1)), vec![bool_ct(), bool_ct()]),
+        ];
+        for (e, ct) in regression {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "regression parity failed for {e:?}");
+        }
+
+        // and_empty and and_single must not fight: lower `And(#0)` directly
+        // (bypassing `canonicalize_combined`) so the iteration count is
+        // visible, and assert saturation converges well under the 100-round
+        // cap rather than merely not timing out. Mirrors the old engine's
+        // `test_fold_terminates` (`scalar/rules.rs`).
+        let mut eg = EGraph::new();
+        eg.data_mut().scalar.col_types = vec![bool_ct()];
+        let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &and(vec![c(0)]));
+        let iters = saturate(&mut eg);
+        assert!(
+            iters <= 10,
+            "and_empty/and_single must reach a fixpoint quickly; got {iters} iters"
+        );
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_const_eval() {
+        assert!(
+            CORPUS.contains("1 + 2"),
+            "corpus must exercise the non-error literal fold"
+        );
+        assert!(
+            CORPUS.contains("1 / 0"),
+            "corpus must exercise the division-by-zero error-as-data fold"
+        );
+        assert!(
+            CORPUS.contains("i64::MAX + 1"),
+            "corpus must exercise the integer-overflow error-as-data fold"
+        );
+        assert!(
+            CORPUS.contains("(1 / 0) + 5"),
+            "corpus must exercise a nested pre-existing error-literal child"
+        );
+        assert!(
+            CORPUS.contains("#0 + 1"),
+            "corpus must exercise a partial-literal call that must not fold"
+        );
+        assert!(
+            CORPUS.contains("and()"),
+            "corpus must exercise the and_empty identity"
+        );
+        assert!(
+            CORPUS.contains("or()"),
+            "corpus must exercise the or_empty identity"
+        );
+        assert!(
+            CORPUS.contains("and(#0)"),
+            "corpus must exercise the and_empty/and_single interaction"
+        );
+    }
 }
