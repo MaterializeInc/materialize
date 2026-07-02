@@ -244,13 +244,19 @@ mutual
     case, and its could-error branch has no counterpart at all (see
     `rule_if_same_branches` in `Generated.lean`, which therefore holds
     unconditionally in this model). `isNullE` is `false` unconditionally for
-    the same reason: the model has no `null` value to distinguish, so there is
-    no operand for which `isNullE` could honestly denote anything else. This is
-    not `Unit`-style triviality exploitation, `isnull_fold`'s side conditions
-    (non-nullable, error-free) constrain which real MIR expressions the rule
-    targets, not this model, and the two-valued model is simply already at the
-    fidelity where `false` is the true value for every one of them. `binaryE`
-    defers to the opaque `denoteBin`. -/
+    the same reason: the model has no `null` value, so `IsNull` denotes `false`
+    for every operand.
+    NOTE: `rule_isnull_fold` therefore reduces to `false = false`. It confirms
+    the RHS is `false` and that this model denotes `IsNull` to `false`, but it
+    does NOT verify `isnull_fold`'s side conditions (non-nullable, error-free).
+    Those conditions are what make the rule sound on REAL MIR expressions, where
+    a nullable or erroring operand would make `IsNull` observably non-`false`,
+    and their enforcement lives in the Rust guards (`scalar_non_nullable`,
+    `scalar_no_error`) and the differential parity test, not in this Lean layer.
+    A future rule touching `isNullE` must not read this proof as guard
+    verification. This is the same scope limitation as `if_same_branches`
+    dropping its `scalar_no_error` guard, not `Unit`-style triviality
+    exploitation. `binaryE` defers to the opaque `denoteBin`. -/
 def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | ScalarExpr.var n => env n
   | ScalarExpr.notE e => not (denoteS env e)
