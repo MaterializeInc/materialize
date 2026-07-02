@@ -403,11 +403,14 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
                 then: Box::new(then),
                 els: Box::new(els),
             });
+        let scalar_any = kw("Scalar")
+            .ignore_then(relvar_ident().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .map(|binding| Pat::Scalar { binding });
         let relvar = relvar_ident().map(Pat::RelVar);
 
         choice((
             paren, filter, map, project, reduce, flatmap, negate, threshold, topk, arrangeby, join,
-            wcojoin, union, sif, svariadic, sunary, relvar,
+            wcojoin, union, sif, svariadic, sunary, scalar_any, relvar,
         ))
     });
 
@@ -541,6 +544,23 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
                 Tmpl::RelVar(name)
             }
         });
+        let sbool = choice((
+            kw("true").to(Tmpl::SBool(true)),
+            kw("false").to(Tmpl::SBool(false)),
+        ));
+        // `builtin` is `ident "(" args ")"`, the same shape as every keyword-led
+        // template above (e.g. `Empty(r)`). It must come after them in `choice`
+        // so it does not shadow them, and before `hole_or_relvar` (a bare
+        // ident) so it is not shadowed in turn: `hole_or_relvar` would happily
+        // match just the name and leave the trailing `(...)` unparsed.
+        let builtin = ident()
+            .then(
+                relvar_ident()
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|(name, args)| Tmpl::Builtin { name, args });
 
         choice((
             paren,
@@ -558,6 +578,8 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             tsif,
             tsvariadic,
             tsunary,
+            sbool,
+            builtin,
             hole_or_relvar,
         ))
     });
@@ -750,5 +772,41 @@ mod tests {
             }
             _ => panic!("expected SIf"),
         }
+    }
+
+    #[test]
+    fn parses_scalar_builtin() {
+        let src = "rule const_fold { Scalar(e) => const_eval(e) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        assert_eq!(
+            rules[0].lhs,
+            crate::dsl::Pat::Scalar {
+                binding: "e".to_string()
+            }
+        );
+        assert_eq!(
+            rules[0].rhs,
+            crate::dsl::Tmpl::Builtin {
+                name: "const_eval".to_string(),
+                args: vec!["e".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_sbool_and_empty_variadic() {
+        let src = "rule and_empty { Variadic[and]() => true }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        assert_eq!(
+            rules[0].lhs,
+            crate::dsl::Pat::SVariadic {
+                func: "and".to_string(),
+                inputs: crate::dsl::ListPat {
+                    items: vec![],
+                    rest: None,
+                },
+            }
+        );
+        assert_eq!(rules[0].rhs, crate::dsl::Tmpl::SBool(true));
     }
 }

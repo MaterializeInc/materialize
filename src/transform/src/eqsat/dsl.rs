@@ -46,6 +46,14 @@ pub enum Pat {
         then: Box<Pat>,
         els: Box<Pat>,
     },
+    /// Matches any scalar CALL node (unary/binary/variadic/if), binding its
+    /// e-class to `binding`. Does not destructure the function or arguments,
+    /// so it needs no func-metavar machinery. Roots the `const_fold` builtin,
+    /// whose RHS evaluates the class. Leaves (Column/Literal/Unmaterializable)
+    /// are never matched: only call syms are iterated.
+    Scalar {
+        binding: String,
+    },
     Filter {
         preds: String,
         input: Box<Pat>,
@@ -222,6 +230,17 @@ pub enum Tmpl {
         then: Box<Tmpl>,
         els: Box<Tmpl>,
     },
+    /// A builtin applier: the RHS is computed by the named Rust function in
+    /// `crate::eqsat::scalar_builtins`, called with the graph and the class ids
+    /// bound to `args`. Used where the result is an evaluation product that
+    /// cannot be a declarative template. The Lean theorem is a permanent `sorry`.
+    Builtin {
+        name: String,
+        args: Vec<String>,
+    },
+    /// A constant boolean literal (`true`/`false`) as a scalar node. The
+    /// declarative RHS of `and_empty`/`or_empty`.
+    SBool(bool),
 }
 
 /// An element of a template input list. Lists are ordered sequences of these,
