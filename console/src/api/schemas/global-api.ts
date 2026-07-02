@@ -46,15 +46,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/costs/breakdown": {
+    "/api/costs/breakdown/daily": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get per-child per-cluster cost breakdown for an organization */
-        get: operations["get_cost_breakdown"];
+        /** Get per-account per-cluster cost breakdown bucketed by UTC day */
+        get: operations["get_cost_breakdown_daily"];
         put?: never;
         post?: never;
         delete?: never;
@@ -326,14 +326,21 @@ export interface components {
                 [key: string]: string;
             };
         };
-        /**
-         * @description Response for `GET /api/costs/breakdown`.
-         *
-         *     Contains one entry per Orb account (the parent plus any sub-accounts).
-         *     Each account lists per-cluster costs computed via Orb's evaluate-prices API.
-         */
-        CostBreakdownResponse: {
+        /** @description Per-account cost breakdown for a single calendar day. */
+        CostBreakdownDay: {
+            /** @description Start of the day (inclusive). */
+            startDate: string;
+            /** @description End of the day (exclusive). */
+            endDate: string;
             accounts: components["schemas"]["CostBreakdownAccount"][];
+        };
+        /**
+         * @description Response for `GET /api/costs/breakdown/daily` — the per-account,
+         *     per-cluster breakdown bucketed by UTC day. Dense: one entry per UTC day in
+         *     the requested window, with empty `accounts` for days that had no usage.
+         */
+        DailyCostBreakdownResponse: {
+            days: components["schemas"]["CostBreakdownDay"][];
         };
         /** @description The daily costs for a given customer. */
         CostBucket: {
@@ -633,7 +640,7 @@ export interface operations {
             };
         };
     };
-    get_cost_breakdown: {
+    get_cost_breakdown_daily: {
         parameters: {
             query: {
                 startDate: string;
@@ -645,13 +652,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Organization Cost Breakdown */
+            /** @description Organization Daily Cost Breakdown */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CostBreakdownResponse"];
+                    "application/json": components["schemas"]["DailyCostBreakdownResponse"];
                 };
             };
             /** @description Missing or invalid startDate/endDate query params */

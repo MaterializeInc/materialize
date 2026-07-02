@@ -8,14 +8,19 @@
 // by the Apache License, Version 2.0.
 
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React, { ReactElement } from "react";
 
-import { DailyCosts, Organization } from "~/api/cloudGlobalApi";
+import {
+  CostBreakdownAccount,
+  DailyCosts,
+  Organization,
+} from "~/api/cloudGlobalApi";
 import {
   buildCloudOrganizationsResponse,
   buildCloudRegionsReponse,
-  buildCostBreakdownResponse,
   buildCreditsResponse,
+  buildDailyCostBreakdownResponse,
   buildDailyCostResponse,
   buildInvoicesResponse,
   generateDailyCostResponsePayload,
@@ -43,6 +48,17 @@ const renderComponent = (element: ReactElement) => {
   return render(<Wrapper>{element}</Wrapper>);
 };
 
+// Wrap accounts in a single UTC-day bucket — the minimal `/api/costs/breakdown/
+// daily` payload. Per-day cost is additive, so a one-day window reproduces the
+// period totals the breakdown asserts on.
+const oneDay = (accounts: CostBreakdownAccount[]) => [
+  {
+    startDate: "2024-01-15T00:00:00Z",
+    endDate: "2024-01-16T00:00:00Z",
+    accounts,
+  },
+];
+
 const buildOrganization = (overrides: Partial<Organization> = {}) => {
   return {
     id: "00000000-0000-0000-0000-000000000000",
@@ -64,7 +80,7 @@ describe("UsagePage", () => {
       buildCloudRegionsReponse(),
       buildInvoicesResponse(),
       buildCreditsResponse(),
-      buildCostBreakdownResponse(),
+      buildDailyCostBreakdownResponse(),
       buildCloudOrganizationsResponse({
         payload: buildOrganization(),
       }),
@@ -104,12 +120,12 @@ describe("UsagePage", () => {
     );
   });
 
-  it("renders a per-account, per-cluster breakdown for a parent org", async () => {
+  it("renders an all-accounts comparison table for a parent org", async () => {
     server.use(buildDailyCostResponse());
     server.use(
-      buildCostBreakdownResponse({
+      buildDailyCostBreakdownResponse({
         payload: {
-          accounts: [
+          days: oneDay([
             {
               external_customer_id: "parent-org",
               clusters: [
@@ -139,49 +155,37 @@ describe("UsagePage", () => {
                   region: "aws/us-east-1",
                   amounts: { "price-compute": "5.00" },
                 },
-                {
-                  environment_id: "environment-child-0",
-                  cluster_grouping_key: "prod.r2",
-                  category: "",
-                  region: "aws/us-east-1",
-                  amounts: { "price-compute": "2.00" },
-                },
               ],
             },
-          ],
+          ]),
         },
       }),
     );
     renderComponent(<UsagePage />);
 
-    // Both accounts and all clusters appear, each cluster row region-qualified
-    // ("aws/us-east-1 / <cluster>"), matching the daily "Spend between …" table.
-    expect(
-      await screen.findByText("parent-org", {}, { timeout: 5_000 }),
-    ).toBeVisible();
-    expect(await screen.findByText("child-org")).toBeVisible();
-    for (const cluster of [
-      "quickstart.r1",
-      "compute.r1",
-      "prod.r1",
-      "prod.r2",
-    ]) {
-      expect(
-        await screen.findByText(`aws/us-east-1 / ${cluster}`),
-      ).toBeVisible();
-    }
-    // ...with per-account totals (14 = 10 + 4, 7 = 5 + 2) summed from the
-    // per-cluster amounts.
-    expect(await screen.findByText(formatCurrency(14))).toBeVisible();
-    expect(await screen.findByText(formatCurrency(7))).toBeVisible();
+    const breakdown = within(
+      await screen.findByTestId(
+        "account-spend-breakdown",
+        {},
+        { timeout: 5_000 },
+      ),
+    );
+    // Both accounts get a comparison row, ordered biggest-spender first, each
+    // showing that account's period total (14 = 10 + 4, 5).
+    const rows = await breakdown.findAllByTestId("account-comparison-row");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText(formatCurrency(14))).toBeVisible();
+    expect(within(rows[1]).getByText(formatCurrency(5))).toBeVisible();
+    // The roll-up shows the stacked-by-account chart, not per-cluster rows.
+    expect(await breakdown.findByTestId("account-spend-chart")).toBeVisible();
   });
 
-  it("renders a single account for a standalone org", async () => {
+  it("drills into a single account's clusters when selected", async () => {
     server.use(buildDailyCostResponse());
     server.use(
-      buildCostBreakdownResponse({
+      buildDailyCostBreakdownResponse({
         payload: {
-          accounts: [
+          days: oneDay([
             {
               external_customer_id: "standalone-org",
               clusters: [
@@ -211,24 +215,25 @@ describe("UsagePage", () => {
                 },
               ],
             },
-          ],
+          ]),
         },
       }),
     );
     renderComponent(<UsagePage />);
 
-    const accountRows = await screen.findAllByTestId(
-      "account-row",
-      {},
-      { timeout: 5_000 },
+    const breakdown = within(
+      await screen.findByTestId(
+        "account-spend-breakdown",
+        {},
+        { timeout: 5_000 },
+      ),
     );
-    expect(accountRows).toHaveLength(1);
-    expect(await screen.findByText("standalone-org")).toBeVisible();
+    // The all-accounts roll-up lists the one account; clicking its row drills in.
+    const row = await breakdown.findByTestId("account-comparison-row");
+    await userEvent.click(row);
+
     // Scope cluster-label lookups to this table: SpendBreakdown ("Spend between
     // …") renders the same "<region> / Storage" text from the daily costs.
-    const breakdown = within(
-      await screen.findByTestId("account-cluster-breakdown"),
-    );
     expect(
       await breakdown.findByText("aws/us-east-1 / default.r1"),
     ).toBeVisible();
@@ -245,9 +250,9 @@ describe("UsagePage", () => {
     // cluster or crash.
     server.use(buildDailyCostResponse());
     server.use(
-      buildCostBreakdownResponse({
+      buildDailyCostBreakdownResponse({
         payload: {
-          accounts: [
+          days: oneDay([
             {
               external_customer_id: "standalone-org",
               clusters: [
@@ -260,14 +265,21 @@ describe("UsagePage", () => {
                 },
               ],
             },
-          ],
+          ]),
         },
       }),
     );
     renderComponent(<UsagePage />);
 
     const breakdown = within(
-      await screen.findByTestId("account-cluster-breakdown"),
+      await screen.findByTestId(
+        "account-spend-breakdown",
+        {},
+        { timeout: 5_000 },
+      ),
+    );
+    await userEvent.click(
+      await breakdown.findByTestId("account-comparison-row"),
     );
     expect(await breakdown.findByText("aws/us-east-1 / Other")).toBeVisible();
   });

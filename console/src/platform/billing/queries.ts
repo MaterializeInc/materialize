@@ -19,7 +19,7 @@ import {
 import {
   createStripeSetupIntent,
   detachPaymentMethod,
-  getCostsBreakdown,
+  getCostsBreakdownDaily,
   getCredits,
   getDailyCosts,
   Organization,
@@ -50,11 +50,11 @@ export const dailyCostQueryKeys = {
     ] as const,
 };
 
-export const costBreakdownQueryKeys = {
-  all: () => buildGlobalQueryKey("costBreakdown"),
+export const costBreakdownDailyQueryKeys = {
+  all: () => buildGlobalQueryKey("costBreakdownDaily"),
   list: (timeSpan: number, queryTime: Date) =>
     [
-      ...costBreakdownQueryKeys.all(),
+      ...costBreakdownDailyQueryKeys.all(),
       buildQueryKeyPart("list", {
         timeSpan,
         queryTime,
@@ -123,17 +123,23 @@ export function useDailyCosts(timeSpan: number, queryTime: Date) {
   });
 }
 
-export function useCostsBreakdown(timeSpan: number, queryTime: Date) {
+/**
+ * Per-account, per-cluster breakdown bucketed by UTC day (the Direction-B
+ * source). Returns the dense `days` array from `/api/costs/breakdown/daily`;
+ * callers pivot it via `dailyBreakdown.ts` into the roll-up / per-account views.
+ */
+export function useDailyCostsBreakdown(timeSpan: number, queryTime: Date) {
   return useQuery({
-    queryKey: costBreakdownQueryKeys.list(timeSpan, queryTime),
+    queryKey: costBreakdownDailyQueryKeys.list(timeSpan, queryTime),
     queryFn: async ({ queryKey, signal }) => {
       const [_, { timeSpan: queryTimeSpan }] = queryKey;
-      // The breakdown is a single period total (not a sliced daily series), so
-      // query exactly the selected window rather than the rolling-average-
-      // extended range getTimeRange() returns.
+      // Day buckets require a UTC-midnight-aligned window, which
+      // getDayAlignedRange already produces.
       const [startDate, endDate] = getDayAlignedRange(queryTimeSpan);
-      const response = await getCostsBreakdown(startDate, endDate, { signal });
-      return response.data;
+      const response = await getCostsBreakdownDaily(startDate, endDate, {
+        signal,
+      });
+      return response.data.days;
     },
   });
 }

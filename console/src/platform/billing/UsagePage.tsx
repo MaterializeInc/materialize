@@ -29,14 +29,18 @@ import { MaterializeTheme } from "~/theme";
 import { nowUTC } from "~/util";
 import { formatCurrency } from "~/utils/format";
 
-import AccountClusterBreakdown from "./AccountClusterBreakdown";
+import AccountSpendBreakdown from "./AccountSpendBreakdown";
 import DailyUsageChart, {
   chartHeightPx,
   legendHeightPx,
 } from "./DailyUsageChart";
 import InvoiceTable from "./InvoiceTable";
 import { UpgradedPlanDetails } from "./PlanDetails";
-import { useCostsBreakdown, useDailyCosts, useRecentInvoices } from "./queries";
+import {
+  useDailyCosts,
+  useDailyCostsBreakdown,
+  useRecentInvoices,
+} from "./queries";
 import RegionSelect from "./RegionSelect";
 import SpendBreakdown from "./SpendBreakdown";
 import TimeRangeSelect from "./TimeRangeSelect";
@@ -213,11 +217,11 @@ const UsagePage = () => {
     error: dailyCostsError,
   } = useDailyCosts(timeRangeFilter, lastQueryTime);
   const {
-    data: costBreakdown,
+    data: costBreakdownDays,
     isLoading: isCostBreakdownLoading,
     isError: isCostBreakdownError,
     error: costBreakdownError,
-  } = useCostsBreakdown(timeRangeFilter, lastQueryTime);
+  } = useDailyCostsBreakdown(timeRangeFilter, lastQueryTime);
 
   const chartTooltipRef = useRef<HTMLDivElement>(null);
 
@@ -277,8 +281,8 @@ const UsagePage = () => {
             />
           </GridItem>
           <GridItem area="breakdown">
-            <AccountClusterBreakdown
-              breakdown={costBreakdown ?? null}
+            <AccountSpendBreakdown
+              days={costBreakdownDays ?? null}
               isLoading={isCostBreakdownLoading}
               isError={isCostBreakdownError}
               error={costBreakdownError}
