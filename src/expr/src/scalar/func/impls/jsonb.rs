@@ -377,6 +377,192 @@ fn parse_catalog_acl_mode<'a>(a: JsonbRef<'a>) -> Result<String, EvalError> {
         .map_err(|e| EvalError::InvalidCatalogJson(e.into()))
 }
 
+/// Decodes the externally-tagged `proto::audit_log_event_v1::Details` JSON
+/// (e.g. `{"IdFullNameV1": {"id": "u1", "name": {...}}}`) into the audit-log
+/// shape: the format the prior `pack_audit_log_update` populator wrote to
+/// `mz_audit_events`. The helper covers the variants whose only proto/audit-log
+/// divergence is `#[serde(flatten)]` or `StringWrapper`; for variants with
+/// renamed fields (`external_type`/`type`) or enum-with-payload encodings
+/// (`reason`, `scheduling_policies`), the output keeps the proto shape. See
+/// the comment on `mz_audit_events` in `src/catalog/src/builtin/mz_catalog.rs`
+/// for the user-visible consequences.
+///
+/// Specifically the helper applies three normalizations:
+///   1. Strips the externally-tagged variant wrapper (e.g. drops the
+///      `"IdFullNameV1"` key, returning the inner struct).
+///   2. For variants whose `audit_log::*` struct has `#[serde(flatten)]` on
+///      an inner field (the `(variant, field)` pairs in `FLATTENED_FIELDS`),
+///      hoists the inner struct's fields into the outer object.
+///   3. Within any value, collapses `{"inner": <v>}` to `<v>` recursively.
+///      The audit-log crate uses plain `String` where the proto crate uses
+///      `StringWrapper`.
+///
+/// New variants on `audit_log::EventDetails` that add a `#[serde(flatten)]`
+/// field must add an entry to `FLATTENED_FIELDS`; otherwise the MV will
+/// continue to emit the un-flattened shape for that variant.
+#[sqlfunc]
+fn parse_catalog_audit_log_details<'a>(a: JsonbRef<'a>) -> Result<Jsonb, EvalError> {
+    /// `(variant_name, flatten_field_name, sub_variant_name)` triples mirroring
+    /// the `#[serde(flatten)]` attributes on `audit_log::EventDetails` variants.
+    /// `sub_variant_name` is the variant name to apply flattening recursively
+    /// to the flatten target (used when the flattened struct is itself a struct
+    /// with its own `#[serde(flatten)]`). Keep in sync with
+    /// `src/audit-log/src/lib.rs`.
+    const FLATTENED_FIELDS: &[(&str, &str, Option<&str>)] = &[
+        ("IdFullNameV1", "name", None),
+        ("CreateSourceSinkV1", "name", None),
+        ("CreateSourceSinkV2", "name", None),
+        ("CreateSourceSinkV3", "name", None),
+        ("CreateSourceSinkV4", "name", None),
+        ("CreateIndexV1", "name", None),
+        ("CreateMaterializedViewV1", "name", None),
+        ("AlterSourceSinkV1", "name", None),
+        ("AlterSetClusterV1", "name", None),
+        ("UpdateItemV1", "name", None),
+        // `AlterApplyReplacementV1.target: IdFullNameV1`, which itself flattens
+        // `name: FullNameV1`.
+        ("AlterApplyReplacementV1", "target", Some("IdFullNameV1")),
+    ];
+
+    /// Returns true if `dict` structurally matches `audit_log::FullNameV1`:
+    /// exactly three string-valued keys `database`, `schema`, `item`. Used by
+    /// `push_unwrapped` to identify nested `name: FullNameV1` fields that
+    /// `as_json` would have flattened.
+    fn is_full_name_v1(dict: &mz_repr::DatumMap) -> bool {
+        let mut saw_db = false;
+        let mut saw_schema = false;
+        let mut saw_item = false;
+        let mut other = false;
+        for (k, v) in dict.iter() {
+            if !matches!(v, Datum::String(_)) {
+                return false;
+            }
+            match k {
+                "database" => saw_db = true,
+                "schema" => saw_schema = true,
+                "item" => saw_item = true,
+                _ => other = true,
+            }
+        }
+        saw_db && saw_schema && saw_item && !other
+    }
+
+    fn collect_flattened<'a>(
+        dict: &mz_repr::DatumMap<'a>,
+        variant: &str,
+        out: &mut Vec<(&'a str, Datum<'a>)>,
+    ) -> Result<(), String> {
+        let entry = FLATTENED_FIELDS.iter().find(|(v, _, _)| *v == variant);
+        let flatten_field = entry.map(|(_, f, _)| *f);
+        let sub_variant = entry.and_then(|(_, _, s)| *s);
+        let mut sub_target: Option<Datum<'a>> = None;
+        for (k, v) in dict.iter() {
+            if Some(k) == flatten_field {
+                sub_target = Some(v);
+            } else {
+                out.push((k, v));
+            }
+        }
+        if let Some(sub) = sub_target {
+            let Datum::Map(sub_dict) = sub else {
+                // Safe to unwrap: `sub_target` is only set when
+                // `Some(k) == flatten_field`, which requires
+                // `flatten_field.is_some()`.
+                return Err(format!(
+                    "expected '{}' field to be an object",
+                    flatten_field.expect("set whenever sub_target is"),
+                ));
+            };
+            // Recurse only when the flattened type itself has its own
+            // `#[serde(flatten)]` (encoded via `sub_variant_name`). Otherwise
+            // its fields are just merged in flat.
+            collect_flattened(&sub_dict, sub_variant.unwrap_or(""), out)?;
+        }
+        Ok(())
+    }
+
+    /// Push a datum, performing the audit-log shape normalizations:
+    /// * collapses `{"inner": <v>}` to `<v>` (proto `StringWrapper` →
+    ///   plain `String`),
+    /// * hoists the fields of an inner `FullNameV1`-shaped object (detected
+    ///   structurally, see `is_full_name_v1`) into the parent. This mirrors
+    ///   `#[serde(flatten)]` on `audit_log::IdFullNameV1.name`, which appears
+    ///   in nested-by-value positions (e.g. `AlterApplyReplacementV1.replacement`)
+    ///   that `collect_flattened` can't reach from the variant name alone.
+    fn push_unwrapped(row: &mut RowPacker, datum: Datum) {
+        match datum {
+            Datum::Map(dict) => {
+                // `StringWrapper`-shaped object: a single key named `inner`.
+                let mut iter = dict.iter();
+                if let (Some((k, v)), None) = (iter.next(), iter.next()) {
+                    if k == "inner" {
+                        push_unwrapped(row, v);
+                        return;
+                    }
+                }
+                // Gather entries; structurally identify any field whose value
+                // is a `FullNameV1` and hoist its fields.
+                let mut fields: Vec<(&str, Datum)> = Vec::new();
+                for (k, v) in dict.iter() {
+                    match v {
+                        Datum::Map(sub) if is_full_name_v1(&sub) => {
+                            for (sk, sv) in sub.iter() {
+                                fields.push((sk, sv));
+                            }
+                        }
+                        _ => fields.push((k, v)),
+                    }
+                }
+                fields.sort_by_key(|(k, _)| *k);
+                row.push_dict_with(|row| {
+                    for (k, v) in &fields {
+                        row.push(Datum::String(k));
+                        push_unwrapped(row, *v);
+                    }
+                });
+            }
+            Datum::List(list) => {
+                row.push_list_with(|row| {
+                    for v in list.iter() {
+                        push_unwrapped(row, v);
+                    }
+                });
+            }
+            other => row.push(other),
+        }
+    }
+
+    let parse = || -> Result<Jsonb, String> {
+        let Datum::Map(dict) = a.into_datum() else {
+            return Err("expected object".into());
+        };
+        let mut iter = dict.iter();
+        let (variant, inner) = iter
+            .next()
+            .ok_or_else(|| "empty details enum".to_string())?;
+        if iter.next().is_some() {
+            return Err("details enum had multiple keys".into());
+        }
+        let Datum::Map(inner_dict) = inner else {
+            return Err(format!("expected inner object for variant {variant}"));
+        };
+        let mut fields: Vec<(&str, Datum)> = Vec::new();
+        collect_flattened(&inner_dict, variant, &mut fields)?;
+        // Datum::Map requires keys in ascending order.
+        fields.sort_by_key(|(k, _)| *k);
+        let mut row = Row::default();
+        row.packer().push_dict_with(|row| {
+            for (k, v) in &fields {
+                row.push(Datum::String(k));
+                push_unwrapped(row, *v);
+            }
+        });
+        Ok(Jsonb::from_row(row))
+    };
+
+    parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))
+}
+
 /// Parses a catalog `create_sql` string into a JSONB object.
 ///
 /// The returned JSONB does not fully reflect the parsed SQL and instead contains only fields
@@ -556,4 +742,174 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
     let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
     Ok(jsonb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Round-trip a JSON `input` through `parse_catalog_audit_log_details` and
+    /// assert the resulting JSON parses equal to `expected`.
+    fn check(input: &str, expected: &str) {
+        let input: Jsonb = input.parse().expect("valid input JSONB");
+        let actual = parse_catalog_audit_log_details(input.as_ref())
+            .expect("helper succeeded")
+            .to_string();
+        let actual_value: serde_json::Value =
+            serde_json::from_str(&actual).expect("valid output JSON");
+        let expected_value: serde_json::Value =
+            serde_json::from_str(expected).expect("valid expected JSON");
+        assert_eq!(actual_value, expected_value);
+    }
+
+    /// Run `parse_catalog_audit_log_details` on `input` and assert it returns
+    /// a `InvalidCatalogJson` error containing `expected_substr`.
+    fn check_err(input: &str, expected_substr: &str) {
+        let input: Jsonb = input.parse().expect("valid input JSONB");
+        let err = parse_catalog_audit_log_details(input.as_ref()).expect_err("helper should error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains(expected_substr),
+            "error did not contain {expected_substr:?}: {msg}",
+        );
+    }
+
+    /// Variant with no nested struct and no `#[serde(flatten)]`. The helper
+    /// just strips the wrapper.
+    #[mz_ore::test]
+    fn variant_strip() {
+        check(
+            r#"{"IdNameV1": {"id": "u1", "name": "foo"}}"#,
+            r#"{"id": "u1", "name": "foo"}"#,
+        );
+    }
+
+    /// `IdFullNameV1` has `#[serde(flatten)] name: FullNameV1`. The helper
+    /// must hoist `database`/`schema`/`item` to the top level.
+    #[mz_ore::test]
+    fn flatten_name() {
+        check(
+            r#"{"IdFullNameV1": {
+                "id": "u1",
+                "name": {"database": "materialize", "schema": "public", "item": "t"}
+            }}"#,
+            r#"{"id": "u1", "database": "materialize", "schema": "public", "item": "t"}"#,
+        );
+    }
+
+    /// `AlterApplyReplacementV1` flattens `target: IdFullNameV1`, which itself
+    /// flattens `name: FullNameV1`. Exercises the recursive sub-variant lookup.
+    /// The non-flattened `replacement: IdFullNameV1` field still has its inner
+    /// `name` hoisted by the structural `is_full_name_v1` detection in
+    /// `push_unwrapped`.
+    #[mz_ore::test]
+    fn flatten_recursive_and_nested_full_name() {
+        check(
+            r#"{"AlterApplyReplacementV1": {
+                "target": {
+                    "id": "u1",
+                    "name": {"database": "materialize", "schema": "public", "item": "mv"}
+                },
+                "replacement": {
+                    "id": "u2",
+                    "name": {"database": "materialize", "schema": "public", "item": "rp"}
+                }
+            }}"#,
+            r#"{
+                "id": "u1",
+                "database": "materialize",
+                "schema": "public",
+                "item": "mv",
+                "replacement": {
+                    "id": "u2",
+                    "database": "materialize",
+                    "schema": "public",
+                    "item": "rp"
+                }
+            }"#,
+        );
+    }
+
+    /// `Option<StringWrapper>` fields serialize as `{"inner": "..."}` in the
+    /// proto, where the audit-log crate uses a plain `String`. The helper must
+    /// unwrap recursively (including on optional fields nested under flatten).
+    #[mz_ore::test]
+    fn string_wrapper_unwrap() {
+        check(
+            r#"{"AlterDefaultPrivilegeV1": {
+                "role_id": "u1",
+                "database_id": {"inner": "u2"},
+                "schema_id": {"inner": "u3"},
+                "grantee_id": "p",
+                "privileges": "r"
+            }}"#,
+            r#"{
+                "role_id": "u1",
+                "database_id": "u2",
+                "schema_id": "u3",
+                "grantee_id": "p",
+                "privileges": "r"
+            }"#,
+        );
+    }
+
+    /// Null `Option<StringWrapper>` fields are passed through as JSON null.
+    #[mz_ore::test]
+    fn null_option() {
+        check(
+            r#"{"AlterDefaultPrivilegeV1": {
+                "role_id": "u1",
+                "database_id": null,
+                "schema_id": null,
+                "grantee_id": "p",
+                "privileges": "r"
+            }}"#,
+            r#"{
+                "role_id": "u1",
+                "database_id": null,
+                "schema_id": null,
+                "grantee_id": "p",
+                "privileges": "r"
+            }"#,
+        );
+    }
+
+    /// `is_full_name_v1` requires all three of `database`, `schema`, `item` to
+    /// be present; objects that look similar but aren't `FullNameV1` (e.g. an
+    /// extra key, or a missing key) must NOT be flattened.
+    #[mz_ore::test]
+    fn not_full_name_not_flattened() {
+        check(
+            r#"{"IdNameV1": {
+                "id": "u1",
+                "name": {"database": "d", "schema": "s"}
+            }}"#,
+            r#"{
+                "id": "u1",
+                "name": {"database": "d", "schema": "s"}
+            }"#,
+        );
+        check(
+            r#"{"IdNameV1": {
+                "id": "u1",
+                "name": {"database": "d", "schema": "s", "item": "t", "extra": "x"}
+            }}"#,
+            r#"{
+                "id": "u1",
+                "name": {"database": "d", "schema": "s", "item": "t", "extra": "x"}
+            }"#,
+        );
+    }
+
+    /// Bad inputs: empty enum object, multiple keys, non-object.
+    #[mz_ore::test]
+    fn error_cases() {
+        check_err(r#"{}"#, "empty details enum");
+        check_err(
+            r#"{"A": {"x": 1}, "B": {"y": 2}}"#,
+            "details enum had multiple keys",
+        );
+        check_err(r#"["IdNameV1", {"id": "u1"}]"#, "expected object");
+        check_err(r#"{"IdNameV1": "not an object"}"#, "expected inner object");
+    }
 }

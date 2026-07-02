@@ -48,8 +48,7 @@ async fn test_advance_upper_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let ts = state1.current_upper().await.step_forward();
     assert_ok!(state1.advance_upper(ts).await);
 
@@ -58,8 +57,7 @@ async fn test_advance_upper_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let ts = state2.current_upper().await.step_forward();
     assert_ok!(state2.advance_upper(ts).await);
 
@@ -100,8 +98,7 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     let start_id = state.get_next_id(id_type).await.unwrap();
     let commit_ts = state.current_upper().await;
@@ -179,8 +176,7 @@ async fn test_audit_logs(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -242,8 +238,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -300,8 +295,7 @@ async fn test_schemas(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -366,16 +360,14 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let mut savepoint_state = state_builder
         .clone()
         .unwrap_build()
         .await
         .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let mut reader_state = state_builder
         .clone()
         .unwrap_build()
@@ -480,8 +472,7 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -580,8 +571,7 @@ async fn test_persist_sync_consolidation_not_quadratic() {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let _ = writer.sync_to_current_updates().await.unwrap();
 
     // Open a read-only catalog, caught up to the current upper.
@@ -668,8 +658,7 @@ async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let _ = writer.sync_to_current_updates().await.unwrap();
 
     let mut txn = writer.transaction().await.unwrap();

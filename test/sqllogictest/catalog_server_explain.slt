@@ -4031,6 +4031,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_audit_events";
+----
+mz_catalog.mz_audit_events:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2..=#7)
+  filter=(("AuditLog" = (#0{data} ->> "kind")))
+  map=((((#0{data} -> "key") -> "event") -> "V1"), text_to_uint8((#1{e} ->> "id")), case when ("1" = (#1{e} ->> "event_type")) then "create" else case when ("2" = (#1 ->> "event_type")) then "drop" else case when ("3" = (#1 ->> "event_type")) then "alter" else case when ("4" = (#1 ->> "event_type")) then "grant" else case when ("5" = (#1 ->> "event_type")) then "revoke" else case when ("6" = (#1 ->> "event_type")) then "comment" else null end end end end end end, case when ("1" = (#1{e} ->> "object_type")) then "cluster" else case when ("2" = (#1 ->> "object_type")) then "cluster-replica" else case when ("3" = (#1 ->> "object_type")) then "connection" else case when ("4" = (#1 ->> "object_type")) then "database" else case when ("5" = (#1 ->> "object_type")) then "func" else case when ("6" = (#1 ->> "object_type")) then "index" else case when ("7" = (#1 ->> "object_type")) then "materialized-view" else case when ("8" = (#1 ->> "object_type")) then "role" else case when ("9" = (#1 ->> "object_type")) then "secret" else case when ("10" = (#1 ->> "object_type")) then "schema" else case when ("11" = (#1 ->> "object_type")) then "sink" else case when ("12" = (#1 ->> "object_type")) then "source" else case when ("13" = (#1 ->> "object_type")) then "table" else case when ("14" = (#1 ->> "object_type")) then "type" else case when ("15" = (#1 ->> "object_type")) then "view" else case when ("16" = (#1 ->> "object_type")) then "system" else case when ("17" = (#1 ->> "object_type")) then "continual-task" else case when ("18" = (#1 ->> "object_type")) then "network-policy" else null end end end end end end end end end end end end end end end end end end, parse_catalog_audit_log_details((#1{e} -> "details")), ((#1{e} -> "user") ->> "inner"), tots((text_to_double(((#1{e} -> "occurred_at") ->> "millis")) / 1000)))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_cluster_replicas";
 ----
 mz_catalog.mz_cluster_replicas:
@@ -4425,7 +4440,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (24 rows)
+        →Constant (25 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -7124,7 +7139,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (24 rows)
+  →Constant (25 rows)
 
 Target cluster: mz_catalog_server
 

@@ -647,6 +647,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/managed_cluster.slt",
         "test/sqllogictest/map.slt",
         "test/sqllogictest/materialized_views.slt",
+        "test/sqllogictest/mz_audit_events.slt",
         "test/sqllogictest/mz_catalog_server_index_accounting.slt",
         "test/sqllogictest/mztimestamp.slt",
         "test/sqllogictest/name_resolution.slt",
@@ -964,6 +965,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/regtype.slt",
         # different outputs:
         # seems expected for audit log to be different
+        "test/sqllogictest/mz_audit_events.slt",
         "test/sqllogictest/singlereplica_audit_log.slt",
         # different indexes auto-created
         "test/sqllogictest/cluster.slt",

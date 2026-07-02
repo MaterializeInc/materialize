@@ -1464,22 +1464,6 @@ impl CatalogState {
         }
     }
 
-    /// Generate a list of `BuiltinTableUpdate`s that correspond to a list of updates made to the
-    /// durable catalog.
-    #[instrument]
-    pub(crate) fn generate_builtin_table_updates(
-        &self,
-        updates: Vec<StateUpdate>,
-    ) -> Vec<BuiltinTableUpdate> {
-        let mut builtin_table_updates = Vec::new();
-        for StateUpdate { kind, ts: _, diff } in updates {
-            let builtin_table_update = self.generate_builtin_table_update(kind, diff);
-            let builtin_table_update = self.resolve_builtin_table_updates(builtin_table_update);
-            builtin_table_updates.extend(builtin_table_update);
-        }
-        builtin_table_updates
-    }
-
     /// Generate a list of `BuiltinTableUpdate`s that correspond to a single update made to the
     /// durable catalog.
     #[instrument(level = "debug")]
@@ -1536,12 +1520,10 @@ impl CatalogState {
             StateUpdateKind::SourceReferences(source_references) => {
                 self.pack_source_references_update(&source_references, diff)
             }
-            StateUpdateKind::AuditLog(audit_log) => {
-                vec![
-                    self.pack_audit_log_update(&audit_log.event, diff)
-                        .expect("could not pack audit log update"),
-                ]
-            }
+            // mz_audit_events is a MaterializedView backed by
+            // mz_internal.mz_catalog_raw, so audit log rows do not produce
+            // builtin table updates here.
+            StateUpdateKind::AuditLog(_) => Vec::new(),
             StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::NetworkPolicy(_)
