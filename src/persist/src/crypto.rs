@@ -902,7 +902,6 @@ impl Consensus for EncryptedConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         let encrypted = self
@@ -914,9 +913,7 @@ impl Consensus for EncryptedConsensus {
             seqno: new.seqno,
             data: Bytes::from(encrypted),
         };
-        self.inner
-            .compare_and_set(key, expected, encrypted_new)
-            .await
+        self.inner.compare_and_set(key, encrypted_new).await
     }
 
     async fn scan(
@@ -1125,7 +1122,7 @@ mod tests {
             data: Bytes::from("first"),
         };
         assert_eq!(
-            consensus.compare_and_set("key", None, data1).await?,
+            consensus.compare_and_set("key", data1).await?,
             CaSResult::Committed,
         );
 
@@ -1145,7 +1142,7 @@ mod tests {
             data: Bytes::from("bad"),
         };
         assert_eq!(
-            consensus.compare_and_set("key", None, data_bad).await?,
+            consensus.compare_and_set("key", data_bad).await?,
             CaSResult::ExpectationMismatch,
         );
 
@@ -1155,9 +1152,7 @@ mod tests {
             data: Bytes::from("second"),
         };
         assert_eq!(
-            consensus
-                .compare_and_set("key", Some(SeqNo(1)), data2)
-                .await?,
+            consensus.compare_and_set("key", data2).await?,
             CaSResult::Committed,
         );
 
@@ -1183,9 +1178,7 @@ mod tests {
             data: Bytes::new(),
         };
         assert_eq!(
-            consensus
-                .compare_and_set("key", Some(SeqNo(2)), data_empty)
-                .await?,
+            consensus.compare_and_set("key", data_empty).await?,
             CaSResult::Committed,
         );
         let head = consensus.head("key").await?.unwrap();
@@ -1208,7 +1201,7 @@ mod tests {
             seqno: SeqNo(1),
             data: Bytes::from(&plaintext[..]),
         };
-        consensus.compare_and_set("key", None, data).await?;
+        consensus.compare_and_set("key", data).await?;
 
         // Read raw from inner — should be encrypted.
         let raw = mem.head("key").await?.unwrap();
@@ -1383,7 +1376,7 @@ mod tests {
             data: Bytes::from("two-party-first"),
         };
         assert_eq!(
-            consensus.compare_and_set("key", None, data1).await?,
+            consensus.compare_and_set("key", data1).await?,
             CaSResult::Committed,
         );
 
@@ -1409,7 +1402,7 @@ mod tests {
             data: Bytes::from("v1-data"),
         };
         assert_eq!(
-            consensus_v1.compare_and_set("key", None, data1).await?,
+            consensus_v1.compare_and_set("key", data1).await?,
             CaSResult::Committed,
         );
 
@@ -1426,9 +1419,7 @@ mod tests {
             data: Bytes::from("v2-data"),
         };
         assert_eq!(
-            consensus_two_party
-                .compare_and_set("key", Some(SeqNo(1)), data2)
-                .await?,
+            consensus_two_party.compare_and_set("key", data2).await?,
             CaSResult::Committed,
         );
 
