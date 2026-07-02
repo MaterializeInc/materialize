@@ -1676,7 +1676,9 @@ impl WithOptionName for TableOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            TableOptionName::PartitionBy => false,
+            // The value is an arbitrary user expression/literal that may embed
+            // sensitive data, so redact it (mirrors `KafkaSinkConfigOptionName`).
+            TableOptionName::PartitionBy => true,
             TableOptionName::RetainHistory => false,
             TableOptionName::RedactedTest => true,
         }
@@ -1730,8 +1732,10 @@ impl WithOptionName for TableFromSourceOptionName {
             TableFromSourceOptionName::Details
             | TableFromSourceOptionName::TextColumns
             | TableFromSourceOptionName::ExcludeColumns
-            | TableFromSourceOptionName::RetainHistory
-            | TableFromSourceOptionName::PartitionBy => false,
+            | TableFromSourceOptionName::RetainHistory => false,
+            // The value is an arbitrary user expression/literal that may embed
+            // sensitive data, so redact it (mirrors `KafkaSinkConfigOptionName`).
+            TableFromSourceOptionName::PartitionBy => true,
         }
     }
 }
