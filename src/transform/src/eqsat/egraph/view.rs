@@ -46,6 +46,10 @@ pub(crate) trait MatchGraph {
     /// The boolean-or-null literal of scalar class `id`: `Some(Some(true/false))`
     /// for a bool literal, `Some(None)` for a null literal, `None` otherwise.
     fn scalar_lit_bool_or_null(&self, id: Id) -> Option<Option<bool>>;
+    /// Whether scalar class `id`, raised to a `MirScalarExpr` and typed against
+    /// the graph's `col_types`, is nullable. Computed on demand rather than
+    /// stored in an analysis lattice.
+    fn scalar_nullable(&self, id: Id) -> bool;
     // Color-exact conditions (graph/payload/arity only):
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool;
     fn cond_cols_in_range(&self, p: &Payload, lo: i64, hi: i64) -> bool;
@@ -149,6 +153,12 @@ impl<'a> MatchGraph for BaseView<'a> {
             mz_repr::Datum::Null => Some(None),
             _ => None,
         }
+    }
+
+    fn scalar_nullable(&self, id: Id) -> bool {
+        crate::eqsat::scalar_extract::raise(self.eg, id)
+            .typ(&self.eg.data().scalar.col_types)
+            .nullable
     }
 
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {
@@ -373,6 +383,45 @@ mod tests {
             view.scalar_lit_bool_or_null(col),
             None,
             "non-literal class must return None"
+        );
+    }
+
+    #[mz_ore::test]
+    fn scalar_nullable_reads_col_types() {
+        use mz_repr::ReprScalarType;
+
+        let mut eg = EGraph::new();
+        let nullable_col = eg.add(CNode::Scalar(SNode::Column(
+            0,
+            mz_ore::treat_as_equal::TreatAsEqual(None),
+        )));
+        let non_nullable_col = eg.add(CNode::Scalar(SNode::Column(
+            1,
+            mz_ore::treat_as_equal::TreatAsEqual(None),
+        )));
+        eg.rebuild();
+        eg.data_mut().scalar.col_types = vec![
+            ReprScalarType::Int64.nullable(true),
+            ReprScalarType::Int64.nullable(false),
+        ];
+
+        let index = eg.rel_index();
+        let scalar_index = eg.scalar_index();
+        let an = Analyses::default();
+        let view = BaseView {
+            eg: &eg,
+            index: &index,
+            scalar_index: &scalar_index,
+            an: &an,
+        };
+
+        assert!(
+            view.scalar_nullable(nullable_col),
+            "column typed nullable must report nullable"
+        );
+        assert!(
+            !view.scalar_nullable(non_nullable_col),
+            "column typed non-nullable must report non-nullable"
         );
     }
 }

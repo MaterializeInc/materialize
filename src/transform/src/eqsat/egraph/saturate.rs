@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use mz_expr::{Columns, MirScalarExpr};
+use mz_expr::{BinaryFunc, Columns, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 
 use crate::eqsat::analysis::{ConstCols, KeySet, Keys, LocalFacts, Monotonic, NonNeg, is_superkey};
@@ -31,8 +31,32 @@ pub struct EBindings {
     pub rels: HashMap<String, Id>,
     pub payloads: BTreeMap<String, Payload>,
     pub rests: HashMap<String, Vec<Id>>,
+    /// Func-metavar bindings, e.g. the `BinaryFunc` bound by a `Pat::SBinaryVar`
+    /// match. A function symbol has neither an e-class id (like `rels`) nor a
+    /// payload list (like `payloads`), so it gets its own store; see
+    /// `bind_binary_func`/`binary_func`.
+    binary_funcs: HashMap<String, BinaryFunc>,
     /// The class at which the pattern's root matched.
     pub root: Id,
+}
+
+impl EBindings {
+    /// Bind `name` to `func`, called by a compiled `find` when a `Pat::SBinaryVar`
+    /// pattern matches.
+    pub fn bind_binary_func(&mut self, name: &str, func: BinaryFunc) {
+        self.binary_funcs.insert(name.to_string(), func);
+    }
+
+    /// The `BinaryFunc` bound to metavariable `name`.
+    ///
+    /// Panics if unbound: a compiled `apply` only calls this for a name its
+    /// rule's `find` is statically guaranteed to have bound.
+    pub fn binary_func(&self, name: &str) -> BinaryFunc {
+        self.binary_funcs
+            .get(name)
+            .unwrap_or_else(|| panic!("unbound func metavariable `{name}`"))
+            .clone()
+    }
 }
 
 // --- side conditions ------------------------------------------------------
@@ -721,5 +745,21 @@ mod tests {
             result.expr, add_col0_1,
             "add(#1,1) must become add(#0,1), not col(2) and not the original add(#1,1)"
         );
+    }
+
+    // --- EBindings func-metavar binding ---------------------------------------
+
+    #[mz_ore::test]
+    fn ebindings_binary_func_round_trips() {
+        let mut b = super::EBindings::default();
+        b.bind_binary_func("f", BinaryFunc::AddInt64(func::AddInt64));
+        assert_eq!(b.binary_func("f"), BinaryFunc::AddInt64(func::AddInt64));
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "unbound func metavariable `f`")]
+    fn ebindings_binary_func_panics_when_unbound() {
+        let b = super::EBindings::default();
+        b.binary_func("f");
     }
 }

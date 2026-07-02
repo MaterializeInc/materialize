@@ -404,6 +404,13 @@ impl<'a, 'b, 'v> MatchGraph for ColoredView<'a, 'b, 'v> {
         None
     }
 
+    // `scalar_nullable` reads `raise`+`typ` rather than the stored analysis, but
+    // is unreachable here for the same structural reason as the two methods
+    // above (no colored scalar rule exists), so it gets the same inert stub.
+    fn scalar_nullable(&self, _id: Id) -> bool {
+        false
+    }
+
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {
         let rel_arity = self.arity_of(rel);
         payload_columns(p, |id| self.esc(id))
