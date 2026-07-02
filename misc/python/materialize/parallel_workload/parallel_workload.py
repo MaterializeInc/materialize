@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 
 import psycopg
 
@@ -92,6 +93,25 @@ def run_final_sealed_check(
         sealed_check.run(exe)
 
 
+def required_action_lists(
+    rng: random.Random,
+    candidates: Sequence[ActionList],
+    weights: Sequence[float],
+    correctness: bool,
+) -> list[ActionList]:
+    """Assign each enabled list a worker before drawing additional workers."""
+    readers = [read_action_list, fetch_action_list] if correctness else []
+    remaining = [
+        (weight, actions)
+        for actions, weight in zip(candidates, weights)
+        if weight and actions not in readers
+    ]
+    # When threads are scarce, prioritize the heaviest lists and break ties by seed.
+    rng.shuffle(remaining)
+    remaining.sort(key=lambda pair: -pair[0])
+    return readers + [actions for _, actions in remaining]
+
+
 def run(
     host: str,
     ports: dict[str, int],
@@ -101,6 +121,7 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
+    correctness: bool,
     replicas: int,
     composition: Composition | None,
     azurite: bool,
@@ -111,7 +132,7 @@ def run(
     rng = random.Random(random.randrange(SEED_RANGE))
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} --replicas={replicas} (--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--correctness ' if correctness else ''}--replicas={replicas} (--host={host})"
     )
     initialize_logging()
 
@@ -120,7 +141,15 @@ def run(
     ).timestamp()
 
     database = Database(
-        rng, seed, host, ports, complexity, scenario, naughty_identifiers, num_threads
+        rng,
+        seed,
+        host,
+        ports,
+        complexity,
+        scenario,
+        naughty_identifiers,
+        num_threads,
+        correctness,
     )
 
     system_conn = psycopg.connect(
@@ -225,21 +254,7 @@ def run(
         dml_nontrans_action_list,
         ddl_action_list,
     ]
-    # Cover every list the complexity enables before sampling the rest. Drawing
-    # each worker independently leaves a list unmanned surprisingly often: at 8
-    # threads the fetch, write and dml lists each go empty in ~36% of runs and
-    # the DDL list in ~2%, and an unmanned list is silent, the run just reports
-    # zero attempts for its actions. That is how nightly 17774's
-    # `--scenario=rename` run ended up with no DDL worker, so it renamed
-    # nothing, created no source (leaving HttpPostAction and SourceInsertAction
-    # with nothing to write to for 100k attempts each), and never dropped the
-    # initial cross-product view that then OOM-killed its replica.
-    # Heaviest-first so a thread count below the number of enabled lists still
-    # covers the ones the complexity cares about most, with the seed breaking
-    # ties among equal weights.
-    covered = [lst for lst, weight in zip(candidate_lists, weights) if weight]
-    rng.shuffle(covered)
-    covered.sort(key=lambda lst: -weights[candidate_lists.index(lst)])
+    covered = required_action_lists(rng, candidate_lists, weights, correctness)
 
     workers = []
     threads = []
@@ -820,6 +835,11 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         help="Whether to use naughty strings as identifiers, makes the queries unreadable",
     )
     parser.add_argument(
+        "--correctness",
+        action="store_true",
+        help="Whether to check for correctness, restricts the queries that can run",
+    )
+    parser.add_argument(
         "--fast-startup",
         action="store_true",
         help="Whether to initialize expensive parts like SQLsmith, sources, sinks (for fast local testing, reduces coverage)",
@@ -893,6 +913,7 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.correctness,
         args.replicas,
         composition=None,  # only works in mzcompose
         azurite=args.azurite,

@@ -11,7 +11,8 @@ import json
 import random
 import threading
 from enum import Enum
-from typing import TYPE_CHECKING, Any, TextIO
+from typing import TYPE_CHECKING, Any, NamedTuple, TextIO
+from uuid import UUID
 
 import psycopg
 import requests
@@ -37,6 +38,11 @@ class Http(Enum):
     NO = 0
     RANDOM = 1
     YES = 2
+
+
+class WriterSession(NamedTuple):
+    id: UUID
+    generation: int
 
 
 class Executor:
@@ -80,6 +86,7 @@ class Executor:
         # mz_system for the Cancel worker. Reconnects have to restore it.
         self.user = user
         self.pg_pid = -1
+        self.writer_session: WriterSession | None = None
         self.insert_table = None
         self.temp_objects = []
         self.reconnect_next = False
@@ -97,6 +104,49 @@ class Executor:
         self.statement_timeout_set = False
         # Materialize's default, until the worker sets one on connect.
         self.isolation = "STRICT SERIALIZABLE"
+
+    def register_writer(self) -> WriterSession | None:
+        """Identify this pgwire session before submitting a tracked mutation."""
+        generation, leader = self.db.deployment
+        if self.mz_service != leader:
+            return None
+        if self.writer_session is None:
+            # Witness the registration before sending a write. A missing catalog
+            # row during recovery can then only be a retraction or a restart.
+            rows = self.execute(
+                "SELECT id FROM mz_internal.mz_sessions"
+                " WHERE connection_id = pg_backend_pid()",
+                fetch=True,
+            )
+            if not self.autocommit:
+                self.commit(http=Http.NO)
+            if not rows or self.db.deployment != (generation, leader):
+                return None
+            self.writer_session = WriterSession(rows[0][0], generation)
+        if self.writer_session.generation != generation:
+            return None
+        return self.writer_session
+
+    def writer_finished(self, writer: WriterSession) -> bool:
+        """Fence a disconnected writer before resolving its uncertain mutation."""
+        generation, leader = self.db.deployment
+        if self.mz_service != leader:
+            return False
+        if generation > writer.generation:
+            # promote_mz has retired the previous process.
+            return True
+        if not self.autocommit:
+            self.commit(http=Http.NO)
+        self.set_isolation("STRICT SERIALIZABLE")
+        rows = self.execute(
+            "SELECT NOT EXISTS (SELECT FROM mz_internal.mz_sessions"
+            f" WHERE id = '{writer.id}'::uuid)",
+            fetch=True,
+        )
+        if not self.autocommit:
+            # The subsequent table read must acquire a timestamp after this check.
+            self.commit(http=Http.NO)
+        return rows == [(True,)]
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -213,15 +263,16 @@ class Executor:
         finally:
             self.last_status = "finished"
 
-    def copy_to_stdout(self, query: str) -> None:
+    def copy_to_stdout(self, query: str, output: bytearray | None = None) -> None:
         query += ";"
         self.log(query)
         self.last_status = "running"
         try:
             try:
                 with self.cur.copy(query.encode()) as copy:
-                    for _ in copy:
-                        pass
+                    for chunk in copy:
+                        if output is not None:
+                            output.extend(chunk)
             except Exception as e:
                 raise QueryError(str(e), query)
 
@@ -236,7 +287,7 @@ class Executor:
         explainable: bool = False,
         http: Http = Http.NO,
         fetch: bool = False,
-    ) -> None:
+    ) -> None | list[Any]:
         is_http = (
             http == Http.RANDOM and self.rng.choice([True, False])
         ) or http == Http.YES
@@ -292,12 +343,13 @@ class Executor:
 
                 if fetch and not use_ws:
                     try:
-                        self.cur.fetchall()
-                    except psycopg.DataError:
+                        return self.cur.fetchall()
+                    except (psycopg.DataError, OverflowError):
                         # We don't care about psycopg being unable to parse, examples:
                         # date too large (after year 10K): '97940-08-25'
                         # timestamp too large (after year 10K): '10876-06-20 00:00:00'
                         # can't parse interval '-178956970 years -8 months -2147483648 days -2562047788:00:54.775808': days=1252674755; must have magnitude <= 999999999
+                        # a huge interval overflows psycopg's timedelta as OverflowError
                         pass
 
                 return
