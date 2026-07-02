@@ -11,6 +11,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter};
@@ -26,6 +27,7 @@ use arrow::array::ArrayRef;
 use differential_dataflow::Hashable;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
+use futures::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -37,7 +39,7 @@ use mz_timely_util::builder_async::{
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::operators::{Capability, CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
@@ -45,7 +47,7 @@ use timely::progress::{Antichain, Timestamp, timestamp::Refines};
 use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
-use crate::cfg::{RetryParameters, USE_CRITICAL_SINCE_SOURCE};
+use crate::cfg::{RetryParameters, SOURCE_FETCH_CONCURRENCY, USE_CRITICAL_SINCE_SOURCE};
 use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
 use crate::internal::state::BatchPart;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
@@ -615,68 +617,160 @@ where
     let name_owned = name.to_owned();
 
     let shutdown_button = builder.build(move |_capabilities| async move {
-        let mut fetcher = mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
-            let diagnostics = Diagnostics {
-                shard_name: name_owned.clone(),
-                handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
-            };
-            async move {
-                client
-                    .await
-                    .create_batch_fetcher::<K, V, T, D>(
-                        shard_id,
-                        key_schema,
-                        val_schema,
-                        is_transient,
-                        diagnostics,
-                    )
-                    .await
-            }
-        })
-        .await
-        .expect("shard codecs should not change");
-
-        while let Some(event) = descs_input.next().await {
-            if let Event::Data([fetched_cap, _completed_fetches_cap], data) = event {
-                // `LeasedBatchPart`es cannot be dropped at this point w/o
-                // panicking, so swap them to an owned version.
-                for (_idx, part) in data {
-                    let reader_id = part.reader_id().clone();
-                    let fetched = fetcher
-                        .fetch_leased_part(part)
+        // Open the fetcher in a task to defend against an adversarial schedule
+        // delaying its background work, and read the concurrency dyncfg while we
+        // hold the client. See the equivalent reasoning in `shard_source_descs`.
+        let (fetcher, max_concurrency) =
+            mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
+                let diagnostics = Diagnostics {
+                    shard_name: name_owned.clone(),
+                    handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
+                };
+                async move {
+                    let client = client.await;
+                    // Up to this many part fetches run concurrently to amortize
+                    // the blob-store round-trip, which dominates when there are
+                    // many small parts. Results are keyed by time below, so
+                    // completions in any order are fine; total in-flight bytes
+                    // stay bounded by the fetch semaphore inside
+                    // `fetch_leased_part`.
+                    let max_concurrency = SOURCE_FETCH_CONCURRENCY.get(client.dyncfgs()).max(1);
+                    let fetcher = client
+                        .create_batch_fetcher::<K, V, T, D>(
+                            shard_id,
+                            key_schema,
+                            val_schema,
+                            is_transient,
+                            diagnostics,
+                        )
                         .await
-                        .expect("shard_id should match across all workers");
-                    let fetched = match fetched {
-                        Ok(fetched) => fetched,
-                        Err(blob_key) => {
-                            // Ideally, readers should never encounter a missing blob. They place a seqno
-                            // hold as they consume their snapshot/listen, preventing any blobs they need
-                            // from being deleted by garbage collection, and all blob implementations are
-                            // linearizable so there should be no possibility of stale reads.
-                            //
-                            // However, it is possible for a lease to expire given a sustained period of
-                            // downtime, which could allow parts we expect to exist to be deleted...
-                            // at which point our best option is to request a restart. Check the state
-                            // of the minting reader's lease to tell the two cases apart.
-                            let diagnostics = fetcher.missing_blob_diagnostics(&reader_id).await;
-                            error_handler
-                                .report_and_stop(anyhow!(
-                                    "batch fetcher could not fetch batch part {}: {}",
-                                    blob_key,
-                                    diagnostics
-                                ))
-                                .await
+                        .expect("shard codecs should not change");
+                    (fetcher, max_concurrency)
+                }
+            })
+            .await;
+
+        // Fetch one part on a per-call clone of the fetcher (cheap: shares the
+        // schema cache), returning the part's mint time with the result. The
+        // missing-blob diagnostics round-trip happens inside the future, so the
+        // error surfaces only after the fetch has truly failed.
+        let fetch_one = |time: TInner, part: ExchangeableBatchPart<T>| {
+            let mut fetcher = fetcher.clone();
+            async move {
+                let reader_id = part.reader_id().clone();
+                let fetched = fetcher
+                    .fetch_leased_part(part)
+                    .await
+                    .expect("shard_id should match across all workers");
+                let fetched = match fetched {
+                    Ok(fetched) => Ok(fetched),
+                    Err(blob_key) => {
+                        // Ideally, readers should never encounter a missing blob. They place a
+                        // seqno hold as they consume their snapshot/listen, preventing any blobs
+                        // they need from being deleted by garbage collection, and all blob
+                        // implementations are linearizable so there should be no possibility of
+                        // stale reads.
+                        //
+                        // However, it is possible for a lease to expire given a sustained period
+                        // of downtime, which could allow parts we expect to exist to be
+                        // deleted... at which point our best option is to request a restart.
+                        // Check the state of the minting reader's lease to tell the two cases
+                        // apart.
+                        let diagnostics = fetcher.missing_blob_diagnostics(&reader_id).await;
+                        Err(anyhow!(
+                            "batch fetcher could not fetch batch part {}: {}",
+                            blob_key,
+                            diagnostics
+                        ))
+                    }
+                };
+                (time, fetched)
+            }
+        };
+
+        // Outstanding fetches, keyed by the time the part was minted at. For each
+        // time we retain a capability on each output (data + completed-fetches)
+        // and count how many fetches at that time are in flight. When the count
+        // reaches zero we drop both capabilities, advancing the data and
+        // completed-fetches frontiers past that time; the latter releases the
+        // parts' leases on the chosen worker (whose `LeaseManager` is likewise
+        // keyed by time). Keying by time rather than by arrival order makes the
+        // operator robust to the fetches completing in any order.
+        let mut outstanding: BTreeMap<TInner, (Capability<TInner>, Capability<TInner>, usize)> =
+            BTreeMap::new();
+        // Descs accepted from the input but not yet handed to a fetch, FIFO.
+        // Their capabilities are already retained in `outstanding`, so buffering
+        // here holds no progress hostage; it only bounds how many fetches run at
+        // once (and thus how many parts are resident in memory).
+        let mut pending: VecDeque<(TInner, ExchangeableBatchPart<T>)> = VecDeque::new();
+        let mut in_flight = FuturesUnordered::new();
+        let mut input_done = false;
+
+        loop {
+            // Start fetches up to the concurrency cap.
+            while in_flight.len() < max_concurrency {
+                let Some((time, part)) = pending.pop_front() else {
+                    break;
+                };
+                in_flight.push(fetch_one(time, part));
+            }
+
+            tokio::select! {
+                // Emit completed fetches first, so `in_flight` drains and we do
+                // not hold more than `max_concurrency` parts in memory.
+                biased;
+                Some((time, fetched)) = in_flight.next(), if !in_flight.is_empty() => {
+                    match fetched {
+                        Ok(fetched) => {
+                            let entry = outstanding
+                                .get_mut(&time)
+                                .expect("capability for every in-flight fetch time");
+                            // Do very fine-grained output activation/session
+                            // creation to ensure that we don't hold activated
+                            // outputs or sessions across await points, which
+                            // would prevent messages from being flushed from the
+                            // shared timely output buffer.
+                            fetched_output.give(&entry.0, fetched);
+                            entry.2 -= 1;
+                            if entry.2 == 0 {
+                                // Drops both capabilities, advancing the data and
+                                // completed-fetches frontiers past `time`.
+                                outstanding.remove(&time);
+                            }
                         }
-                    };
-                    {
-                        // Do very fine-grained output activation/session
-                        // creation to ensure that we don't hold activated
-                        // outputs or sessions across await points, which
-                        // would prevent messages from being flushed from
-                        // the shared timely output buffer.
-                        fetched_output.give(&fetched_cap, fetched);
+                        Err(e) => {
+                            // Report the missing blob and freeze. `report_and_stop`
+                            // never returns, so we stop draining results and retain
+                            // every outstanding capability, including this failed
+                            // part's. Crucially, a later successfully fetched part
+                            // must NOT be allowed to release a capability and let the
+                            // frontier advance past the part we never emitted.
+                            error_handler.report_and_stop(e).await;
+                        }
                     }
                 }
+                // Accept new descs while the input is live. Their fetches are
+                // throttled by the `pending` queue above, not here.
+                event = descs_input.next(), if !input_done => {
+                    match event {
+                        Some(Event::Data([fetched_cap, completed_cap], data)) => {
+                            // `LeasedBatchPart`es cannot be dropped at this point
+                            // w/o panicking, so swap them to an owned version.
+                            for (_idx, part) in data {
+                                let time = fetched_cap.time().clone();
+                                let entry = outstanding.entry(time.clone()).or_insert_with(|| {
+                                    (fetched_cap.delayed(&time), completed_cap.delayed(&time), 0)
+                                });
+                                entry.2 += 1;
+                                pending.push_back((time, part));
+                            }
+                        }
+                        Some(Event::Progress(_)) => {}
+                        None => input_done = true,
+                    }
+                }
+                // Input is exhausted and no fetches remain: we're done.
+                else => break,
             }
         }
     });
@@ -693,14 +787,19 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use mz_persist::location::SeqNo;
+    use mz_persist::location::{Blob, SeqNo};
+    use mz_persist_types::codec_impls::StringSchema;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
+    use timely::dataflow::operators::capture::{Capture, Event as CaptureEvent};
     use timely::dataflow::operators::probe::Handle as ProbeHandle;
     use timely::progress::Antichain;
 
+    use crate::batch::{INLINE_WRITES_SINGLE_MAX_BYTES, INLINE_WRITES_TOTAL_MAX_BYTES};
+    use crate::cache::PersistClientCache;
+    use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::operators::shard_source::shard_source;
-    use crate::{Diagnostics, ShardId};
+    use crate::{Diagnostics, PersistLocation, ShardId};
 
     #[mz_ore::test]
     fn test_lease_manager() {
@@ -860,6 +959,591 @@ mod tests {
         });
 
         assert_eq!(res, Antichain::from_elem(expected_frontier));
+    }
+
+    /// Verifies that the source fetches and emits actual data: a batch written
+    /// before the dataflow starts comes out as at least one `FetchedBlob`, and
+    /// the output frontier reaches the shard's upper.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_fetches_data() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        let data = [
+            (("k1".to_owned(), "v1".to_owned()), 0u64, 1u64),
+            (("k2".to_owned(), "v2".to_owned()), 1u64, 1u64),
+        ];
+        write.expect_compare_and_append(&data[..], 0, 5).await;
+
+        let expected_frontier = 5;
+        let (blob_count, frontier) = timely::execute::execute_directly(move |worker| {
+            let as_of = Antichain::from_elem(0);
+            let until = Antichain::new();
+
+            let (capture, probe, token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(as_of),
+                        SnapshotMode::Include,
+                        until,
+                        Some(transformer),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        ErrorHandler::Halt("test"),
+                    );
+                    (stream.leave(outer), tokens)
+                });
+
+                let probe = ProbeHandle::new();
+                let stream = stream.probe_with(&probe);
+                (stream.capture(), probe, token)
+            });
+
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while probe.less_than(&expected_frontier) {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for output frontier {expected_frontier}"
+                );
+                worker.step();
+            }
+            drop(token);
+
+            let mut blob_count = 0;
+            while let Ok(event) = capture.try_recv() {
+                if let CaptureEvent::Messages(_, msgs) = event {
+                    blob_count += msgs.len();
+                }
+            }
+            let mut frontier = Antichain::new();
+            probe.with_frontier(|f| frontier.extend(f.iter().cloned()));
+            (blob_count, frontier)
+        });
+
+        assert!(blob_count >= 1, "expected at least one fetched blob");
+        assert_eq!(frontier, Antichain::from_elem(expected_frontier));
+    }
+
+    /// Verifies that dropping the source's tokens while it is running does not
+    /// panic or wedge the worker: capabilities are released so the dataflow can
+    /// shut down to the empty frontier.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_shutdown_mid_stream() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        let data = [(("k1".to_owned(), "v1".to_owned()), 0u64, 1u64)];
+        write.expect_compare_and_append(&data[..], 0, 5).await;
+
+        timely::execute::execute_directly(move |worker| {
+            let as_of = Antichain::from_elem(0);
+            // An empty `until` means the source would run forever if not shut
+            // down by dropping its tokens.
+            let until = Antichain::new();
+
+            let (probe, token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(as_of),
+                        SnapshotMode::Include,
+                        until,
+                        Some(transformer),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        ErrorHandler::Halt("test"),
+                    );
+                    (stream.leave(outer), tokens)
+                });
+
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            // Step until the source has made progress, so shutdown happens while
+            // the fetch machinery is live.
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while probe.less_than(&1) {
+                assert!(Instant::now() < deadline, "timed out waiting for progress");
+                worker.step();
+            }
+
+            // Shut down and confirm the dataflow drains: with all tokens dropped,
+            // the operators must release their capabilities and the frontier must
+            // become empty.
+            drop(token);
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                assert!(Instant::now() < deadline, "timed out waiting for shutdown");
+                worker.step();
+                if probe.with_frontier(|f| f.is_empty()) {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Verifies that an unserveable `as_of` (the listing path) reports an error
+    /// through the `ErrorHandler` and freezes the source: the output frontier
+    /// stays at the requested `as_of` and the worker does not panic.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_error_freeze() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+
+        // Write data so the shard's upper is past the as_of (otherwise
+        // `snapshot` blocks waiting for the upper instead of erroring on the
+        // since), then advance the since past the as_of we'll request.
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        let data = [(("k1".to_owned(), "v1".to_owned()), 0u64, 1u64)];
+        write.expect_compare_and_append(&data[..], 0, 5).await;
+        initialize_shard(&persist_client, shard_id, Antichain::from_elem(3)).await;
+
+        let (errored, frontier) = timely::execute::execute_directly(move |worker| {
+            let as_of = Antichain::from_elem(1);
+            let until = Antichain::new();
+
+            let errored = Rc::new(std::cell::Cell::new(false));
+            let error_handler = ErrorHandler::signal({
+                let errored = Rc::clone(&errored);
+                move |_err| errored.set(true)
+            });
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(as_of),
+                        SnapshotMode::Include,
+                        until,
+                        Some(transformer),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        error_handler,
+                    );
+                    (stream.leave(outer), tokens)
+                });
+
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while !errored.get() {
+                assert!(Instant::now() < deadline, "timed out waiting for error");
+                worker.step();
+            }
+            // Keep stepping; the source must stay frozen at the as_of.
+            for _ in 0..100 {
+                worker.step();
+            }
+
+            let mut frontier = Antichain::new();
+            probe.with_frontier(|f| frontier.extend(f.iter().cloned()));
+            (errored.get(), frontier)
+        });
+
+        assert!(errored);
+        assert_eq!(frontier, Antichain::from_elem(1));
+    }
+
+    /// Regression test for the `shard_source_fetch` freeze path: a blob that
+    /// goes missing while *fetching* (the listing path is covered by
+    /// `test_shard_source_error_freeze`) must freeze the output frontier at the
+    /// missing part and report the error, never advancing past data never
+    /// emitted.
+    ///
+    /// We delete the first batch's blob, which is read by the snapshot at
+    /// `as_of = 0`. Its fetch fails; the later batches (t=1, t=2) fetch fine. We
+    /// step until the dataflow quiesces (with brief parks so the tokio fetch
+    /// task finishes), so the later results are produced, then assert the error
+    /// fired and the frontier stayed at the missing part.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_fetch_error_freeze() {
+        // Force writes to real blobs (inline parts have no blob to delete) and
+        // disable compaction so the three batches stay distinct and deletable.
+        let mut cache = PersistClientCache::new_no_metrics();
+        cache.cfg.compaction_enabled = false;
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let persist_client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("in-mem location is valid");
+        let shard_id = ShardId::new();
+        // Clones of a `PersistClient` share the blob `Arc`, so deleting via this
+        // handle is visible to the reader the source opens.
+        let blob = Arc::clone(&persist_client.blob);
+
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+
+        // The data-part (non-rollup) blob keys currently present.
+        async fn batch_keys(blob: &dyn Blob) -> std::collections::BTreeSet<String> {
+            let mut keys = std::collections::BTreeSet::new();
+            blob.list_keys_and_metadata("", &mut |meta| {
+                if let Ok((_, PartialBlobKey::Batch(..))) = BlobKey::parse_ids(meta.key) {
+                    keys.insert(meta.key.to_owned());
+                }
+            })
+            .await
+            .expect("list keys");
+            keys
+        }
+
+        let row = |t: u64| ((format!("k{t}"), format!("v{t}")), t, 1u64);
+        let before = batch_keys(blob.as_ref()).await;
+        write.expect_compare_and_append(&[row(0)], 0, 1).await;
+        let after = batch_keys(blob.as_ref()).await;
+        write.expect_compare_and_append(&[row(1)], 1, 2).await;
+        write.expect_compare_and_append(&[row(2)], 2, 3).await;
+
+        // Delete exactly the first (t=0) batch's data part(s); the snapshot at
+        // as_of=0 reads it.
+        let missing: Vec<_> = after.difference(&before).cloned().collect();
+        assert!(!missing.is_empty(), "first batch wrote no blob part");
+        for key in &missing {
+            blob.delete(key).await.expect("delete");
+        }
+
+        let frontier = timely::execute::execute_directly(move |worker| {
+            let errored = Rc::new(std::cell::Cell::new(false));
+            let error_handler = ErrorHandler::signal({
+                let errored = Rc::clone(&errored);
+                move |_err| errored.set(true)
+            });
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(Antichain::from_elem(0)),
+                        SnapshotMode::Include,
+                        Antichain::new(),
+                        Some(move |_, descs, _| (descs, vec![])),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        error_handler,
+                    );
+                    (stream.leave(outer), tokens)
+                });
+                let probe = ProbeHandle::new();
+                stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            // Step until the fetch error fires, then step until the dataflow
+            // quiesces, with brief parks so the tokio fetch task can finish.
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while !errored.get() {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for fetch error"
+                );
+                worker.step_or_park(Some(std::time::Duration::from_millis(1)));
+            }
+            let mut last = probe.with_frontier(|f| f.to_owned());
+            let mut stable = 0;
+            while stable < 100 {
+                assert!(Instant::now() < deadline, "timed out waiting for quiesce");
+                worker.step_or_park(Some(std::time::Duration::from_millis(1)));
+                let now = probe.with_frontier(|f| f.to_owned());
+                if now == last {
+                    stable += 1;
+                } else {
+                    stable = 0;
+                    last = now;
+                }
+            }
+            last
+        });
+
+        // Frozen at the missing part (t=0); the bug advanced this past it.
+        assert_eq!(frontier, Antichain::from_elem(0));
+    }
+
+    /// With `persist_source_fetch_concurrency > 1` the source still fetches
+    /// every part and reaches the shard upper. The frontier can only reach the
+    /// upper once every part's fetch has completed, so this proves the
+    /// concurrent path loses nothing even though results complete out of order.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_fetch_concurrent() {
+        const N_BATCHES: u64 = 16;
+
+        let mut cache = PersistClientCache::new_no_metrics();
+        cache.cfg.compaction_enabled = false;
+        cache.cfg.set_config(&SOURCE_FETCH_CONCURRENCY, 8);
+        let persist_client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("in-mem location is valid");
+        let shard_id = ShardId::new();
+
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        for t in 0..N_BATCHES {
+            let row = ((format!("k{t}"), format!("v{t}")), t, 1u64);
+            write.expect_compare_and_append(&[row], t, t + 1).await;
+        }
+
+        let (blob_count, max_time) = timely::execute::execute_directly(move |worker| {
+            let (capture, probe, token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(Antichain::from_elem(0)),
+                        SnapshotMode::Include,
+                        Antichain::from_elem(N_BATCHES),
+                        Some(move |_, descs, _| (descs, vec![])),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        ErrorHandler::Halt("test"),
+                    );
+                    (stream.leave(outer), tokens)
+                });
+                let probe = ProbeHandle::new();
+                let stream = stream.probe_with(&probe);
+                (stream.capture(), probe, token)
+            });
+
+            // The source is bounded at the upper, so its frontier empties only
+            // once every part's fetch has completed; reaching the empty frontier
+            // proves the concurrent path lost nothing.
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while !probe.with_frontier(|f| f.is_empty()) {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for completion"
+                );
+                worker.step_or_park(Some(std::time::Duration::from_millis(1)));
+            }
+            drop(token);
+
+            let mut blob_count = 0;
+            let mut max_time: Option<u64> = None;
+            while let Ok(event) = capture.try_recv() {
+                if let CaptureEvent::Messages(time, msgs) = event {
+                    blob_count += msgs.len();
+                    max_time = max_time.max(Some(time));
+                }
+            }
+            (blob_count, max_time)
+        });
+
+        assert!(blob_count >= 1, "expected at least one fetched blob");
+        // Parts were emitted through the last timestamp.
+        assert_eq!(max_time, Some(N_BATCHES - 1));
+    }
+
+    /// Fetch-path freeze under concurrency: with several fetches in flight, a
+    /// missing *middle* batch must still freeze the frontier at that batch, even
+    /// though later batches fetch fine and may complete before the error is
+    /// observed. This is the out-of-order analogue of
+    /// `test_shard_source_fetch_error_freeze`; it exercises the time-keyed
+    /// capability bookkeeping the concurrent path relies on.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_fetch_concurrent_error_freeze() {
+        const N_BATCHES: u64 = 12;
+        const MISSING_TS: u64 = 5;
+
+        let mut cache = PersistClientCache::new_no_metrics();
+        cache.cfg.compaction_enabled = false;
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        cache.cfg.set_config(&SOURCE_FETCH_CONCURRENCY, 8);
+        let persist_client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("in-mem location is valid");
+        let shard_id = ShardId::new();
+        let blob = Arc::clone(&persist_client.blob);
+
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+
+        async fn batch_keys(blob: &dyn Blob) -> std::collections::BTreeSet<String> {
+            let mut keys = std::collections::BTreeSet::new();
+            blob.list_keys_and_metadata("", &mut |meta| {
+                if let Ok((_, PartialBlobKey::Batch(..))) = BlobKey::parse_ids(meta.key) {
+                    keys.insert(meta.key.to_owned());
+                }
+            })
+            .await
+            .expect("list keys");
+            keys
+        }
+
+        // Write each batch, snapshotting the blob keys around the missing one so
+        // we can delete exactly its part(s).
+        let mut missing = Vec::new();
+        for t in 0..N_BATCHES {
+            let before = batch_keys(blob.as_ref()).await;
+            let row = ((format!("k{t}"), format!("v{t}")), t, 1u64);
+            write.expect_compare_and_append(&[row], t, t + 1).await;
+            if t == MISSING_TS {
+                let after = batch_keys(blob.as_ref()).await;
+                missing = after.difference(&before).cloned().collect();
+            }
+        }
+        assert!(!missing.is_empty(), "missing batch wrote no blob part");
+        for key in &missing {
+            blob.delete(key).await.expect("delete");
+        }
+
+        let frontier = timely::execute::execute_directly(move |worker| {
+            let errored = Rc::new(std::cell::Cell::new(false));
+            let error_handler = ErrorHandler::signal({
+                let errored = Rc::clone(&errored);
+                move |_err| errored.set(true)
+            });
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(Antichain::from_elem(0)),
+                        SnapshotMode::Include,
+                        Antichain::from_elem(N_BATCHES),
+                        Some(move |_, descs, _| (descs, vec![])),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        error_handler,
+                    );
+                    (stream.leave(outer), tokens)
+                });
+                let probe = ProbeHandle::new();
+                stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            let deadline = Instant::now() + std::time::Duration::from_secs(60);
+            while !errored.get() {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for fetch error"
+                );
+                worker.step_or_park(Some(std::time::Duration::from_millis(1)));
+            }
+            let mut last = probe.with_frontier(|f| f.to_owned());
+            let mut stable = 0;
+            while stable < 100 {
+                assert!(Instant::now() < deadline, "timed out waiting for quiesce");
+                worker.step_or_park(Some(std::time::Duration::from_millis(1)));
+                let now = probe.with_frontier(|f| f.to_owned());
+                if now == last {
+                    stable += 1;
+                } else {
+                    stable = 0;
+                    last = now;
+                }
+            }
+            last
+        });
+
+        // Frozen at the missing batch despite later batches fetching fine
+        // concurrently.
+        assert_eq!(frontier, Antichain::from_elem(MISSING_TS));
     }
 
     async fn initialize_shard(
