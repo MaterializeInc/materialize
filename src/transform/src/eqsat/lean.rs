@@ -59,16 +59,20 @@ fn emit_rule(rule: &Rule) -> String {
     let mut seen = BTreeMap::new();
     collect_binders(&rule.lhs, &mut binders, &mut seen);
 
-    // A scalar rule (LHS rooted at `Pat::SUnary`) never mixes relation and
-    // scalar metavariables (slice-1 covers only `SUnary` chains), so every
-    // binder `collect_binders` found is really a `ScalarExpr`, not a `Bag`.
-    // Its Lean theorem also denotes through `denoteS`, which takes an explicit
+    // A scalar rule (LHS rooted at `Pat::SUnary`/`Pat::SVariadic`) never mixes
+    // relation and scalar metavariables, so every binder `collect_binders`
+    // found is really scalar: a lone metavariable is a `ScalarExpr`, and a
+    // spliced `rest...` (from a variadic pattern) is a `List ScalarExpr`. Its
+    // Lean theorem also denotes through `denoteS`, which takes an explicit
     // `env : Nat -> Bool` argument that relational (env-free `Bag`) theorems
     // do not need.
     let is_scalar = is_scalar_rule(&rule.lhs);
     if is_scalar {
         for (_, ty) in &mut binders {
-            *ty = "ScalarExpr";
+            *ty = match *ty {
+                "List Bag" => "List ScalarExpr",
+                _ => "ScalarExpr",
+            };
         }
         binders.insert(0, ("env".to_string(), "Nat → Bool"));
     }
@@ -162,10 +166,10 @@ fn emit_rule(rule: &Rule) -> String {
 }
 
 /// Whether a rule's left-hand side is a scalar pattern (rooted at
-/// `Pat::SUnary`). Its Lean theorem denotes through `denoteS`, unlike a
-/// relational rule whose `Bag` denotation is direct.
+/// `Pat::SUnary` or `Pat::SVariadic`). Its Lean theorem denotes through
+/// `denoteS`, unlike a relational rule whose `Bag` denotation is direct.
 fn is_scalar_rule(pat: &Pat) -> bool {
-    matches!(pat, Pat::SUnary { .. })
+    matches!(pat, Pat::SUnary { .. } | Pat::SVariadic { .. })
 }
 
 fn collect_binders(
@@ -186,6 +190,16 @@ fn collect_binders(
         // A scalar-unary pattern binds a fixed function, not a metavariable, so
         // only its input contributes binders.
         Pat::SUnary { input, .. } => collect_binders(input, out, seen),
+        // Mirrors `Union`: fixed function, so only the operand list (items plus
+        // an optional spliced `rest...`) contributes binders.
+        Pat::SVariadic { inputs, .. } => {
+            for i in &inputs.items {
+                collect_binders(i, out, seen);
+            }
+            if let Some(rest) = &inputs.rest {
+                add(rest, "List Bag", out, seen);
+            }
+        }
         Pat::Filter { preds, input } => {
             add(preds, "Row → Bool", out, seen);
             collect_binders(input, out, seen);
@@ -264,6 +278,9 @@ fn translate_pat(pat: &Pat) -> String {
                  ScalarExpr/denoteS and this match when a rule needs it"
             ),
         },
+        Pat::SVariadic { func, inputs } => {
+            format!("{} {}", scalar_variadic_ctor(func), pat_list(inputs))
+        }
         Pat::Filter { preds, input } => format!("filterB {preds} {}", arg(translate_pat(input))),
         Pat::Map { scalars, input } => format!("mapB {scalars} {}", arg(translate_pat(input))),
         Pat::Project { outputs, input } => {
@@ -382,6 +399,30 @@ fn translate_tmpl(t: &Tmpl, hole: &str) -> String {
                 None => format!("unionAll {}", arg(tmpl_list_expr(inputs, hole))),
             }
         }
+        Tmpl::SUnary { func, input } => match func.as_str() {
+            "not" => format!("ScalarExpr.notE {}", arg(translate_tmpl(input, hole))),
+            other => unimplemented!(
+                "no Lean scalar translation for func {other:?}; extend Semantics.lean's \
+                 ScalarExpr/denoteS and this match when a rule needs it"
+            ),
+        },
+        Tmpl::SVariadic { func, inputs } => format!(
+            "{} {}",
+            scalar_variadic_ctor(func),
+            arg(tmpl_list_expr(inputs, hole))
+        ),
+    }
+}
+
+/// The Lean constructor for a scalar variadic function, e.g. `Variadic[and]`.
+fn scalar_variadic_ctor(func: &str) -> &'static str {
+    match func {
+        "and" => "ScalarExpr.andE",
+        "or" => "ScalarExpr.orE",
+        other => unimplemented!(
+            "no Lean scalar translation for variadic func {other:?}; extend Semantics.lean's \
+             ScalarExpr/denoteS and this match when a rule needs it"
+        ),
     }
 }
 
@@ -564,6 +605,21 @@ fn choose_proof(
     if is_scalar {
         if lhs.contains("ScalarExpr.notE (ScalarExpr.notE") {
             return format!("by\n    {intro}simp [denoteS]");
+        }
+        // `and_single`/`or_single`: a singleton `andE [x]`/`orE [x]` unfolds
+        // (by `foldr`'s definition) to `denoteS x && true`/`denoteS x || false`,
+        // which `simp` closes via `Bool.and_true`/`Bool.or_false`.
+        if lhs.contains("ScalarExpr.andE [") || lhs.contains("ScalarExpr.orE [") {
+            return format!("by\n    {intro}simp [denoteS]");
+        }
+        // De Morgan over a list (`not_demorgan_and`/`not_demorgan_or`): a
+        // `foldr`/`map` induction over an unconstrained list, which plain
+        // `simp` cannot discharge without an explicit `induction xs`. Try it
+        // anyway (harmless if it doesn't apply) and fall back to a
+        // non-permanent `sorry`, so the obligation stays explicit rather than
+        // emitting a tactic invocation that Lean would reject outright.
+        if lhs.contains("ScalarExpr.andE") || lhs.contains("ScalarExpr.orE") {
+            return format!("by\n    {intro}first | simp [denoteS, List.foldr, List.map] | sorry");
         }
         return format!(
             "by\n    -- TODO: choose a proof tactic for this scalar rule's shape\n    {intro}sorry"

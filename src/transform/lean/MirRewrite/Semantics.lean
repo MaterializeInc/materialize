@@ -161,22 +161,32 @@ theorem letRec_congr (body body' : Bag → Bag) (h : body = body') :
 /-! ### Scalar expressions
 
 A denotation for the subset of `MirScalarExpr` that scalar rewrite rules have
-exercised so far (just `not`, for `not_not`). `var` stands for an arbitrary
-scalar leaf the rule does not inspect (a column reference, a literal, or any
-other subexpression); `env` supplies its Boolean value by index. This is
+exercised so far (`not`, and variadic `and`/`or`, for `not_not`, `and_single`,
+`or_single`, and the De Morgan rules). `var` stands for an arbitrary scalar
+leaf the rule does not inspect (a column reference, a literal, or any other
+subexpression); `env` supplies its Boolean value by index. This is
 deliberately not a full `MirScalarExpr` model: later scalar rules grow
-`ScalarExpr`/`denoteS` only as far as their own proofs require. -/
+`ScalarExpr`/`denoteS` only as far as their own proofs require. In particular
+`andE`/`orE` are two-valued (`Bool`), matching `notE`'s fidelity; the
+three-valued/error semantics of MIR's actual `And`/`Or` is a later-slice
+deepening. -/
 
-/-- A scalar expression, bounded to what `not_not` needs: an opaque leaf and
-    logical negation. -/
+/-- A scalar expression, bounded to what the slice-1/2 rules need: an opaque
+    leaf, logical negation, and variadic conjunction/disjunction. -/
 inductive ScalarExpr where
   | var : Nat → ScalarExpr
   | notE : ScalarExpr → ScalarExpr
+  | andE : List ScalarExpr → ScalarExpr
+  | orE : List ScalarExpr → ScalarExpr
 
 /-- Boolean denotation of a `ScalarExpr` under an environment giving each leaf
-    index its truth value. -/
+    index its truth value. `andE`/`orE` fold over their operands with the
+    connective's unit (`true` for `and`, `false` for `or`), so an empty list
+    denotes the connective's identity element. -/
 def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | ScalarExpr.var n => env n
   | ScalarExpr.notE e => not (denoteS env e)
+  | ScalarExpr.andE es => es.foldr (fun e acc => denoteS env e && acc) true
+  | ScalarExpr.orE es => es.foldr (fun e acc => denoteS env e || acc) false
 
 end MirRewrite

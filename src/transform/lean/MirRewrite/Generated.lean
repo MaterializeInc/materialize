@@ -224,4 +224,24 @@ theorem rule_not_not :
     ∀ (env : Nat → Bool) (x : ScalarExpr), denoteS env (ScalarExpr.notE (ScalarExpr.notE x)) = denoteS env x := by
     intro env x; simp [denoteS]
 
+-- And(x) = x
+theorem rule_and_single :
+    ∀ (env : Nat → Bool) (x : ScalarExpr), denoteS env (ScalarExpr.andE [x]) = denoteS env x := by
+    intro env x; simp [denoteS]
+
+-- Or(x) = x
+theorem rule_or_single :
+    ∀ (env : Nat → Bool) (x : ScalarExpr), denoteS env (ScalarExpr.orE [x]) = denoteS env x := by
+    intro env x; simp [denoteS]
+
+-- Not(And(xs...)) = Or(Not(xs)...)
+theorem rule_not_demorgan_and :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.notE (ScalarExpr.andE xs)) = denoteS env (ScalarExpr.orE ((xs.map (fun h => ScalarExpr.notE h)))) := by
+    intro env xs; first | simp [denoteS, List.foldr, List.map] | sorry
+
+-- Not(Or(xs...)) = And(Not(xs)...)
+theorem rule_not_demorgan_or :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.notE (ScalarExpr.orE xs)) = denoteS env (ScalarExpr.andE ((xs.map (fun h => ScalarExpr.notE h)))) := by
+    intro env xs; first | simp [denoteS, List.foldr, List.map] | sorry
+
 end MirRewrite
