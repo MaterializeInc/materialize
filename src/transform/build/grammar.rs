@@ -386,11 +386,15 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
                 func,
                 input: Box::new(input),
             });
+        let svariadic = kw("Variadic")
+            .ignore_then(bracket_ident())
+            .then(listpat.clone())
+            .map(|(func, inputs)| Pat::SVariadic { func, inputs });
         let relvar = relvar_ident().map(Pat::RelVar);
 
         choice((
             paren, filter, map, project, reduce, flatmap, negate, threshold, topk, arrangeby, join,
-            wcojoin, union, sunary, relvar,
+            wcojoin, union, svariadic, sunary, relvar,
         ))
     });
 
@@ -493,6 +497,17 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
         let union = kw("Union")
             .ignore_then(listtmpl.clone())
             .map(|inputs| Tmpl::Union { inputs });
+        let tsunary = kw("Unary")
+            .ignore_then(bracket_ident())
+            .then(tmpl.clone())
+            .map(|(func, input)| Tmpl::SUnary {
+                func,
+                input: Box::new(input),
+            });
+        let tsvariadic = kw("Variadic")
+            .ignore_then(bracket_ident())
+            .then(listtmpl.clone())
+            .map(|(func, inputs)| Tmpl::SVariadic { func, inputs });
         let hole_or_relvar = relvar_ident().map(|name| {
             if name == "_" {
                 Tmpl::Hole
@@ -514,6 +529,8 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             join,
             wcojoin,
             union,
+            tsvariadic,
+            tsunary,
             hole_or_relvar,
         ))
     });
@@ -634,6 +651,50 @@ mod tests {
                 assert!(matches!(**input, crate::dsl::Pat::SUnary { .. }));
             }
             other => panic!("expected SUnary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_scalar_variadic_single() {
+        let src = "rule and_single { Variadic[and](x) => x }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].lhs {
+            crate::dsl::Pat::SVariadic { func, inputs } => {
+                assert_eq!(func, "and");
+                assert_eq!(inputs.items.len(), 1);
+                assert!(inputs.rest.is_none());
+            }
+            other => panic!("expected SVariadic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_scalar_demorgan_mapsplice() {
+        let src = "rule not_demorgan_and { Unary[not](Variadic[and](xs...)) => Variadic[or](map(Unary[not](_), xs)) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        // LHS: Not(And(xs...))
+        match &rules[0].lhs {
+            crate::dsl::Pat::SUnary { input, .. } => match &**input {
+                crate::dsl::Pat::SVariadic { func, inputs } => {
+                    assert_eq!(func, "and");
+                    assert!(inputs.items.is_empty());
+                    assert_eq!(inputs.rest.as_deref(), Some("xs"));
+                }
+                other => panic!("expected SVariadic input, got {other:?}"),
+            },
+            other => panic!("expected SUnary root, got {other:?}"),
+        }
+        // RHS: Or(map(Not(_), xs))
+        match &rules[0].rhs {
+            crate::dsl::Tmpl::SVariadic { func, inputs } => {
+                assert_eq!(func, "or");
+                assert_eq!(inputs.elems.len(), 1);
+                assert!(matches!(
+                    inputs.elems[0],
+                    crate::dsl::TElem::MapSplice { .. }
+                ));
+            }
+            other => panic!("expected SVariadic template, got {other:?}"),
         }
     }
 }

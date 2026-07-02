@@ -29,6 +29,15 @@ pub enum Pat {
         func: String,
         input: Box<Pat>,
     },
+    /// A scalar variadic call with a FIXED function, e.g. `Variadic[and](x)` or
+    /// `Variadic[or](xs...)`. `func` is the scalar-func keyword text, resolved to
+    /// a concrete `VariadicFunc` by codegen. Operands are captured via `ListPat`
+    /// (`items` plus an optional trailing `rest`), mirroring `Union`. Func-metavar
+    /// binding and func-switching are later-slice capabilities.
+    SVariadic {
+        func: String,
+        inputs: ListPat,
+    },
     Filter {
         preds: String,
         input: Box<Pat>,
@@ -184,6 +193,19 @@ pub enum Tmpl {
         inputs: ListTmpl,
     },
     Union {
+        inputs: ListTmpl,
+    },
+    /// Build a scalar unary call with a FIXED function, e.g. `Unary[not](_)`
+    /// inside a `map(...)`. `func` is the scalar-func keyword text.
+    SUnary {
+        func: String,
+        input: Box<Tmpl>,
+    },
+    /// Build a scalar variadic call with a FIXED function, e.g.
+    /// `Variadic[or](map(Unary[not](_), xs))`. `inputs` is an ordered `ListTmpl`
+    /// (supports `Item`, `Splice`, and `MapSplice`), mirroring `Union`.
+    SVariadic {
+        func: String,
         inputs: ListTmpl,
     },
 }
