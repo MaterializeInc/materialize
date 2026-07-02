@@ -28,8 +28,11 @@ mysql_conn mysql
 >[version<2600700] SHOW CREATE CONNECTION mysql_conn
 materialize.public.mysql_conn "CREATE CONNECTION materialize.public.mysql_conn TO MYSQL (AWS CONNECTION = materialize.public.aws_conn, HOST = mysql, SSL MODE = required, USER = root);"
 
->[version>=2600700] SHOW CREATE CONNECTION mysql_conn
+>[2600700<=version<2603200] SHOW CREATE CONNECTION mysql_conn
 materialize.public.mysql_conn "CREATE CONNECTION materialize.public.mysql_conn\nTO MYSQL\n    (AWS CONNECTION = materialize.public.aws_conn, HOST = mysql, SSL MODE = required, USER = root);"
+
+>[version>=2603200] SHOW CREATE CONNECTION mysql_conn
+materialize.public.mysql_conn "CREATE CONNECTION materialize.public.mysql_conn\nTO MYSQL\n    (AWS CONNECTION = materialize.public.aws_conn, HOST = mysql, SSL MODE = required, USER = 'root');"
 
 
 ! ALTER CONNECTION mysql_conn SET (PASSWORD SECRET mysqlpass);

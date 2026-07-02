@@ -3068,6 +3068,9 @@ impl<'a> Parser<'a> {
             )),
             ConnectionOptionName::GcpConnection => Some(self.parse_object_option_value()?),
             ConnectionOptionName::SshTunnel => Some(self.parse_object_option_value()?),
+            _ if name.value_contains_sensitive_data() => {
+                self.parse_optional_connection_credential_option_value()?
+            }
             _ => self.parse_optional_option_value()?,
         };
         Ok(ConnectionOption { name, value })
@@ -5521,6 +5524,40 @@ impl<'a> Parser<'a> {
     fn parse_object_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         Ok(WithOptionValue::Item(self.parse_raw_name()?))
+    }
+
+    fn parse_optional_connection_credential_option_value(
+        &mut self,
+    ) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
+        match self.peek_token() {
+            Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None => Ok(None),
+            _ => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(Some(self.parse_connection_credential_option_value()?))
+            }
+        }
+    }
+
+    fn parse_connection_credential_option_value(
+        &mut self,
+    ) -> Result<WithOptionValue<Raw>, ParserError> {
+        if self.parse_keyword(SECRET) {
+            if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
+                Ok(WithOptionValue::Secret(secret))
+            } else {
+                Ok(WithOptionValue::Value(Value::String("secret".to_string())))
+            }
+        } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
+            Ok(WithOptionValue::Value(value))
+        } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
+            Ok(WithOptionValue::Value(Value::String(ident.into_string())))
+        } else {
+            self.expected(
+                self.peek_pos(),
+                "connection credential value",
+                self.peek_token(),
+            )
+        }
     }
 
     fn parse_optional_option_value(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
