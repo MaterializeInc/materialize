@@ -18,9 +18,10 @@
 //! beyond what differential would (delta is free), the same reuse-aware rule as
 //! production's eager delta path.
 
+use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{
     Columns, FilterCharacteristics, JoinImplementation, JoinInputCharacteristics, JoinInputMapper,
-    MirRelationExpr, MirScalarExpr,
+    MapFilterProject, MirRelationExpr, MirScalarExpr,
 };
 
 use crate::eqsat::cost::{JoinOrder, JoinStep};
@@ -28,14 +29,17 @@ use crate::eqsat::cost::{JoinOrder, JoinStep};
 /// Build the `JoinInputCharacteristics` for one order step (start or lookup)
 /// from the structurally-known fields. `available` must be the ORIGINAL per-input
 /// arrangement keys (before `implement_arrangements` wraps inputs in ArrangeBy),
-/// matching `JoinImplementation`'s `arranged` computation. `cardinality` and
-/// `filters` are left at their neutral values; the cardinality and selectivity
-/// axes are future work.
+/// matching `JoinImplementation`'s `arranged` computation. `filters` is the
+/// caller-derived filter characteristics for this step (see
+/// [`input_filter_characteristics`] and the cumulative-OR in
+/// [`commit_delta_query`]). `cardinality` is left neutral; the cardinality and
+/// selectivity axes are future work.
 fn step_characteristics(
     input: usize,
     key: &[MirScalarExpr],
     available: &[Vec<Vec<MirScalarExpr>>],
     inputs: &[MirRelationExpr],
+    filters: FilterCharacteristics,
     enable_join_prioritize_arranged: bool,
 ) -> JoinInputCharacteristics {
     let arranged = available[input].iter().any(|k| k.as_slice() == key);
@@ -52,10 +56,56 @@ fn step_characteristics(
         key.len(),
         arranged,
         None,
-        FilterCharacteristics::none(),
+        filters,
         input,
         enable_join_prioritize_arranged,
     )
+}
+
+/// Derive the `FilterCharacteristics` that a single raised join input contributes,
+/// mirroring the per-input half of `JoinImplementation`
+/// (join_implementation.rs:233-296): the filter at the input's top MFP, plus the
+/// literal-equality flag for an `IndexedFilter` input, plus the same two sources
+/// behind a user-provided `ArrangeBy`.
+///
+/// JI additionally folds in predicates that could be pushed down from *above* the
+/// join (`mfp_above`). That source is not reachable here: the eqsat raise commits
+/// a join bottom-up with no visibility of the expression above it, so only the
+/// per-input predicates carried on `input` contribute.
+fn input_filter_characteristics(
+    input: &MirRelationExpr,
+) -> Result<FilterCharacteristics, mz_ore::stack::RecursionLimitError> {
+    let (mfp, inner) = MapFilterProject::extract_non_errors_from_expr(input);
+    let (_, filter, _) = mfp.as_map_filter_project();
+    let mut characteristics = FilterCharacteristics::filter_characteristics(&filter)?;
+    if matches!(
+        inner,
+        MirRelationExpr::Join {
+            implementation: IndexedFilter(..),
+            ..
+        }
+    ) {
+        characteristics.add_literal_equality();
+    }
+    if let MirRelationExpr::ArrangeBy {
+        input: arrange_by_input,
+        ..
+    } = inner
+    {
+        let (mfp, inner) = MapFilterProject::extract_non_errors_from_expr(arrange_by_input);
+        let (_, filter, _) = mfp.as_map_filter_project();
+        characteristics |= FilterCharacteristics::filter_characteristics(&filter)?;
+        if matches!(
+            inner,
+            MirRelationExpr::Join {
+                implementation: IndexedFilter(..),
+                ..
+            }
+        ) {
+            characteristics.add_literal_equality();
+        }
+    }
+    Ok(characteristics)
 }
 
 /// Commit `join` (a bare, `Unimplemented` `Join`) to a `Differential` plan that
@@ -99,8 +149,16 @@ pub(crate) fn commit_differential(
                     .iter()
                     .map(|&c| MirScalarExpr::column(c))
                     .collect();
-                let chars =
-                    step_characteristics(s.input, &key, available, inputs, prioritize_arranged);
+                // Differential commit is out of scope for filter markers: pass
+                // neutral filters so its EXPLAIN markers stay unchanged.
+                let chars = step_characteristics(
+                    s.input,
+                    &key,
+                    available,
+                    inputs,
+                    FilterCharacteristics::none(),
+                    prioritize_arranged,
+                );
                 (s.input, key, Some(chars))
             })
             .collect();
@@ -141,6 +199,7 @@ pub(crate) fn commit_differential(
             &aligned,
             available,
             inputs,
+            FilterCharacteristics::none(),
             prioritize_arranged,
         ));
     }
@@ -220,11 +279,31 @@ pub(crate) fn commit_delta_query(
     inputs: &[MirRelationExpr],
     prioritize_arranged: bool,
 ) -> Option<MirRelationExpr> {
+    // Per-input filter characteristics, derived from the raised inputs the same
+    // way `JoinImplementation` derives them (minus the unreachable push-down from
+    // above the join, see `input_filter_characteristics`). On a recursion-limit
+    // error, fall back to the bare join.
+    let input_filters: Vec<FilterCharacteristics> = inputs
+        .iter()
+        .map(input_filter_characteristics)
+        .collect::<Result<_, _>>()
+        .ok()?;
+
     // Build the (input, key, characteristics) lookup tuples per path (lookups only,
     // no start element; the driver is excluded from each path by the cost model).
+    // `paths` is indexed by driver position (cost.rs:1097-1104), so `paths[driver]`
+    // is the delta chain when `driver` receives an update.
+    //
+    // Inside each chain, each element's filters are OR'd with the running sum of
+    // every earlier element, seeded with the driver's own filters. This mirrors
+    // JoinImplementation's cumulative left-to-right OR (join_implementation.rs:848-854),
+    // whose orders include the driver as element 0. We keep only the lookups, so
+    // we seed the sum with the driver's filters explicitly.
     let mut orders: Vec<Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>> = paths
         .iter()
-        .map(|path| {
+        .enumerate()
+        .map(|(driver, path)| {
+            let mut sum = input_filters[driver].clone();
             path.iter()
                 .map(|step| {
                     let key: Vec<MirScalarExpr> = step
@@ -232,11 +311,13 @@ pub(crate) fn commit_delta_query(
                         .iter()
                         .map(|&c| MirScalarExpr::column(c))
                         .collect();
+                    sum |= input_filters[step.input].clone();
                     let chars = step_characteristics(
                         step.input,
                         &key,
                         available,
                         inputs,
+                        sum.clone(),
                         prioritize_arranged,
                     );
                     (step.input, key, Some(chars))
@@ -296,7 +377,14 @@ mod tests {
         let available = vec![vec![vec![MirScalarExpr::column(0)]], Vec::new()];
 
         // Lookup on input 0, key [#0]: arranged + unique + len 1.
-        let c0 = step_characteristics(0, &[MirScalarExpr::column(0)], &available, &inputs, false);
+        let c0 = step_characteristics(
+            0,
+            &[MirScalarExpr::column(0)],
+            &available,
+            &inputs,
+            FilterCharacteristics::none(),
+            false,
+        );
         assert!(
             format!("{c0:?}").contains("key_length: 1"),
             "expected key_length 1, got {c0:?}"
@@ -307,7 +395,14 @@ mod tests {
             "input 0 key [#0] covers the unique key {{0}}, got {c0:?}"
         );
         // Lookup on input 1, key [#0]: not arranged, not unique.
-        let c1 = step_characteristics(1, &[MirScalarExpr::column(0)], &available, &inputs, false);
+        let c1 = step_characteristics(
+            1,
+            &[MirScalarExpr::column(0)],
+            &available,
+            &inputs,
+            FilterCharacteristics::none(),
+            false,
+        );
         assert!(!c1.arranged(), "input 1 has no arrangement");
     }
 
@@ -363,6 +458,102 @@ mod tests {
                 }
             }
             other => panic!("expected DeltaQuery, got {other:?}"),
+        }
+    }
+
+    #[mz_ore::test]
+    fn commit_delta_query_propagates_filter_markers() {
+        use mz_expr::{BinaryFunc, func};
+        use mz_repr::Datum;
+
+        // input 0 carries a literal-equality filter `#0 = 5`; inputs 1 and 2 are
+        // bare. The delta commit must surface the `e` marker on the lookup for
+        // input 0 AND, via the cumulative left-to-right OR, on every lookup that
+        // follows input 0 in a chain (including chains driven by input 0).
+        let filtered0 = MirRelationExpr::Filter {
+            input: Box::new(get(0, 2)),
+            predicates: vec![MirScalarExpr::column(0).call_binary(
+                MirScalarExpr::literal_ok(Datum::Int32(5), ReprScalarType::Int32),
+                BinaryFunc::Eq(func::Eq),
+            )],
+        };
+        let inputs = vec![filtered0, get(1, 2), get(2, 2)];
+        let join = MirRelationExpr::join_scalars(
+            inputs.clone(),
+            vec![
+                vec![MirScalarExpr::column(0), MirScalarExpr::column(2)],
+                vec![MirScalarExpr::column(3), MirScalarExpr::column(4)],
+            ],
+        );
+        // paths[driver]: driver 0 filtered, drivers 1 and 2 bare.
+        let paths = vec![
+            vec![step(1, &[0]), step(2, &[0])], // driver 0 (filtered)
+            vec![step(0, &[0]), step(2, &[0])], // driver 1
+            vec![step(0, &[0]), step(1, &[0])], // driver 2
+        ];
+        let available = vec![Vec::new(); 3];
+        let out = commit_delta_query(join, paths, &available, &inputs, false)
+            .expect("commit must succeed");
+        let MirRelationExpr::Join { implementation, .. } = &out else {
+            panic!("expected a Join");
+        };
+        let JoinImplementation::DeltaQuery(orders) = implementation else {
+            panic!("expected DeltaQuery, got {implementation:?}");
+        };
+        let marks = |c: &Option<JoinInputCharacteristics>| c.as_ref().unwrap().explain();
+        // Driver 0 is filtered: its filter seeds the running sum, so both lookups
+        // in its chain carry `e` even though inputs 1 and 2 have no filter.
+        assert!(marks(&orders[0][0].2).contains('e'), "chain 0 lookup 1");
+        assert!(marks(&orders[0][1].2).contains('e'), "chain 0 lookup 2");
+        // Driver 1's chain: lookup on input 0 carries its own `e`; the following
+        // lookup on input 2 inherits it cumulatively.
+        assert!(marks(&orders[1][0].2).contains('e'), "chain 1 lookup on 0");
+        assert!(
+            marks(&orders[1][1].2).contains('e'),
+            "chain 1 lookup after 0 inherits e"
+        );
+        // Driver 2's chain: same cumulative propagation after the input-0 lookup.
+        assert!(marks(&orders[2][0].2).contains('e'), "chain 2 lookup on 0");
+        assert!(
+            marks(&orders[2][1].2).contains('e'),
+            "chain 2 lookup after 0 inherits e"
+        );
+    }
+
+    #[mz_ore::test]
+    fn commit_delta_query_no_filters_no_markers() {
+        // Sanity: with no per-input filters, no filter letters appear (regression
+        // guard that we did not start fabricating markers).
+        let inputs = vec![get(0, 2), get(1, 2), get(2, 2)];
+        let join = MirRelationExpr::join_scalars(
+            inputs.clone(),
+            vec![
+                vec![MirScalarExpr::column(0), MirScalarExpr::column(2)],
+                vec![MirScalarExpr::column(3), MirScalarExpr::column(4)],
+            ],
+        );
+        let paths = vec![
+            vec![step(1, &[0]), step(2, &[0])],
+            vec![step(0, &[0]), step(2, &[0])],
+            vec![step(0, &[0]), step(1, &[0])],
+        ];
+        let available = vec![Vec::new(); 3];
+        let out = commit_delta_query(join, paths, &available, &inputs, false)
+            .expect("commit must succeed");
+        let MirRelationExpr::Join { implementation, .. } = &out else {
+            panic!("expected a Join");
+        };
+        let JoinImplementation::DeltaQuery(orders) = implementation else {
+            panic!("expected DeltaQuery");
+        };
+        for order in orders {
+            for (_, _, c) in order {
+                let e = c.as_ref().unwrap().explain();
+                assert!(
+                    !e.contains('e') && !e.contains('l') && !e.contains('n') && !e.contains('f'),
+                    "no filter markers expected, got {e:?}"
+                );
+            }
         }
     }
 
