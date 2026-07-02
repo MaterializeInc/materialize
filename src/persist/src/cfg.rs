@@ -58,18 +58,26 @@ pub const KMS_URL_QUERY_PARAMS: &[&str] = &[
 /// For callers that hand a URL carrying persist KMS encryption params to a
 /// consumer that does not understand them, e.g. deriving a timestamp oracle
 /// URL from a shared metadata backend URL.
+///
+/// NOTE: Surviving query segments are preserved byte-identically. Decoding and
+/// re-encoding them is not an option: `append_pair` form-encodes spaces as
+/// `+`, while libpq-style URL parsers (e.g. tokio-postgres) percent-decode
+/// strictly and keep `+` literal, which corrupts values like the PEM in
+/// `sslrootcert_inline`.
 pub fn strip_kms_query_params(url: &SensitiveUrl) -> SensitiveUrl {
-    let keep: Vec<(String, String)> = url
-        .query_pairs()
-        .filter(|(k, _)| !KMS_URL_QUERY_PARAMS.contains(&k.as_ref()))
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
     let mut inner = url.0.clone();
-    inner.set_query(None);
-    if !keep.is_empty() {
-        let mut pairs = inner.query_pairs_mut();
-        for (k, v) in &keep {
-            pairs.append_pair(k, v);
+    if let Some(query) = url.0.query() {
+        let keep: Vec<&str> = query
+            .split('&')
+            .filter(|segment| {
+                let key = segment.split('=').next().unwrap_or(segment);
+                !KMS_URL_QUERY_PARAMS.contains(&key)
+            })
+            .collect();
+        if keep.is_empty() {
+            inner.set_query(None);
+        } else {
+            inner.set_query(Some(&keep.join("&")));
         }
     }
     SensitiveUrl(inner)
@@ -450,12 +458,7 @@ impl ConsensusConfig {
 
                 // Strip KMS params from URL before passing to Postgres driver.
                 let clean_url = if encryption.is_some() {
-                    let mut inner = url.0.clone();
-                    inner.set_query(None);
-                    for (k, v) in &query_params {
-                        inner.query_pairs_mut().append_pair(k, v);
-                    }
-                    SensitiveUrl(inner)
+                    strip_kms_query_params(url)
                 } else {
                     url.clone()
                 };
@@ -609,5 +612,24 @@ mod tests {
         // All params stripped leaves no query string.
         let url = SensitiveUrl::from_str("s3://bucket/prefix?kms_key_id=k").expect("valid url");
         assert_eq!(strip_kms_query_params(&url).0.query(), None);
+    }
+
+    #[mz_ore::test]
+    fn strip_kms_query_params_preserves_raw_encoding() {
+        // Surviving params must not be decoded and re-encoded. The metadata
+        // backend URL carries a strictly percent-encoded PEM in
+        // sslrootcert_inline; form-re-encoding would turn its spaces into `+`,
+        // which libpq-style parsers keep literal, corrupting the PEM.
+        let pem_encoded =
+            "-----BEGIN%20CERTIFICATE-----%0AMIIB%2Bw%3D%3D%0A-----END%20CERTIFICATE-----";
+        let url = SensitiveUrl::from_str(&format!(
+            "postgres://host:5432/db?sslmode=verify-full&sslrootcert_inline={pem_encoded}&kms_key_id=k&kms_region=r",
+        ))
+        .expect("valid url");
+        let stripped = strip_kms_query_params(&url);
+        assert_eq!(
+            stripped.0.query(),
+            Some(format!("sslmode=verify-full&sslrootcert_inline={pem_encoded}").as_str())
+        );
     }
 }
