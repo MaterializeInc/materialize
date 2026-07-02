@@ -103,8 +103,8 @@ fn emit_rule(rule: &Rule) -> String {
     // (MIR's condition is a literal `false` *or* `null`) collapses to `= false`,
     // since the `Bool` model has no `null` to distinguish from `false`.
     // `scalar_no_error` (guarding `if_same_branches`) gets no hypothesis at
-    // all: the model has no error value, so the condition is vacuously true
-    // and the theorem holds unconditionally (see `Semantics.lean`).
+    // all: the model has no error value to gate on, so the theorem holds
+    // unconditionally (see `Semantics.lean`).
     let scalar_lit_true = first_scalar_payload(rule, |c| matches!(c, Cond::ScalarLitTrue { .. }));
     let scalar_lit_false_or_null =
         first_scalar_payload(rule, |c| matches!(c, Cond::ScalarLitFalseOrNull { .. }));
@@ -221,7 +221,7 @@ fn collect_binders(
                 add(rest, "List Bag", out, seen);
             }
         }
-        // `if_same_branches` repeats a metavariable across `then`/`els`; the
+        // `if_same_branches` repeats a metavariable across `then`/`els`. The
         // `seen` dedup collapses that repetition to a single binder, matching
         // codegen's `guard()`-enforced same-e-class equality for `If(c, x, x)`.
         Pat::SIf { cond, then, els } => {
