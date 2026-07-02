@@ -195,7 +195,7 @@ KEY: guard() (codegen.rs:473-483) auto-enforces repeated relvars as same-e-class
 - [ ] Task 2: scalar view methods (scalar_could_error, scalar_lit_bool_or_null)
 - [x] Task 3: codegen SIf arms + scalar-cond emission + child-widen
 - [x] Task 4: port 3 If rules to scalar.rewrite
-- [ ] Task 5: Lean If denotation + 3 theorems (greens crate + aggregate lake build)
+- [x] Task 5: Lean If denotation + 3 theorems (greens crate + aggregate lake build)
 - [ ] Task 6: corpus + differential parity (could_error + literal axes)
 - [ ] Task 7: slice-3 gate (unit + differential + slt no-rewrite + aggregate lake build)
 
@@ -227,7 +227,7 @@ DESIGN: Pat::Scalar{binding} matches any scalar CALL node (iterate 4 call syms U
 - [x] Task 2: eqsat/scalar_builtins.rs const_eval (class-level port)
 - [x] Task 3: codegen Scalar-root iteration + Builtin/SBool emission + is_scalar_rule routing
 - [x] Task 4: port const_fold/and_empty/or_empty to scalar.rewrite
-- [ ] Task 5: Lean opaque constEval+litB + emit arms + permanent sorry marker + CI count 1 (greens crate + AGGREGATE lake)
+- [x] Task 5: Lean opaque constEval+litB + emit arms + permanent sorry marker + CI count 1 (greens crate + AGGREGATE lake)
 - [ ] Task 6: differential corpus + parity (error-eval 1/0 negative control, mutation-tested)
 - [ ] Task 7: slice-4 gate (unit + differential + slt no-rewrite + aggregate lake green + PERMANENT=1)
 
@@ -238,3 +238,5 @@ Task 2: complete (commit d399d70db4, review clean — Spec ✅ Quality Approved)
 Task 3: complete (commit 7461b95f5f, review — Spec ✅ Quality Approved, 2 Minor deferred). codegen green; only 3 lean.rs E0004 remain (Task 5). Reviewer inspected generated OUT_DIR: Pat::Scalar iterates 4 call syms + binds e; Builtin emits const_eval(g,ba)? g-first; SBool literal_true/false; is_scalar_rule routes to SCALAR_COMPILED_RULES only. MINOR-1 (final review): Matcher::node Pat::Scalar unreachable! is reachable via nested Scalar(e) child (grammar not root-restricted); no slice-4 rule hits it; improve msg or restrict grammar. MINOR-2 (final review / Task 5 defensive): Tmpl::Builtin pins concrete EGraph -> a colored:true scalar rule wouldn't compile in colored_apply; none colored by design; wants build-time assert.
 
 Task 4: complete (commit 7ed151d606 + comment-style fix). SCALAR_COMPILED_RULES 8->11 (const_fold, and_empty, or_empty). Review Spec ✅; directions verified vs unit_of_and_or (And->literal_true, Or->literal_false); generated find_const_fold iterates 4 syms + apply const_eval; and_empty/or_empty gate len==0 -> literal_true/false; none in relational COMPILED_RULES. 1 Minor (semicolons in comments, from brief text) FIXED directly. Build RED = 3 lean.rs E0004 (Task 5).
+
+Task 5: complete (commit f5890c9997 + comment-style fix). cargo GREEN + AGGREGATE lake GREEN (local + Docker CI script) + PERMANENT SORRY=1. Reviewer kernel-verified via #print axioms: and_empty/or_empty -> [propext] (genuinely proved), const_fold -> [sorryAx] (genuinely permanent). Regeneration parity empty (Generated.lean == emitter output). Inhabited via `deriving Inhabited` on ScalarExpr (minimal, sound). denoteSFold needed no litB arm (matches on List structure not ScalarExpr ctors). CI expected_permanent=1 trip-wire fires on 0 and 2. 3 Minor (semicolons in lean.rs/Semantics.lean comments + stale CI comment) FIXED directly. Taxonomy now: PERMANENT=1, PRE-EXISTING GAP=1, provable-later=26.
