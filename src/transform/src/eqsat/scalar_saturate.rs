@@ -272,6 +272,13 @@ mod tests {
             not(and(vec![c(0), c(1), c(2)])),
             not(or(vec![c(0), c(1), c(2), c(3)])),
             not(and(vec![c(0)])),
+            // Multi-operand de Morgan that OBSERVABLY changes the extracted
+            // output: Not(And(Not #0, Not #1)) de-Morgans to
+            // Or(Not Not #0, Not Not #1), then not_not collapses to Or(#0, #1)
+            // (cost 3), beating the original (cost 6), so extraction picks the
+            // pushed form. Uses only ported rules (not_demorgan_and, not_not)
+            // over distinct bare columns.
+            not(and(vec![not(c(0)), not(c(1))])),
             // slice-1 shapes still hold under the grown rule set:
             not(not(c(0))),
         ];
