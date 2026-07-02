@@ -59,3 +59,25 @@ rule if_same_branches {
     doc "If(c, x, x) = x  when c cannot error"
     If(c, x, x) => x where scalar_no_error(c)
 }
+
+# All-literal scalar calls fold to their evaluated literal. RHS is the Rust
+# builtin `const_eval` (reconstruct + mz_expr eval); the Lean theorem is a
+# permanent sorry. Matches any scalar call node; the builtin declines (no-op)
+# on non-literal args, on `mz_panic`, and on unmaterializable calls.
+rule const_fold {
+    doc "all-literal scalar call = its evaluated literal"
+    Scalar(e) => const_eval(e)
+}
+
+# An empty AND is the unit `true`; an empty OR is the unit `false`. Declarative
+# constant-literal RHS (not a builtin). Distinct from `and_single`/`or_single`,
+# which fire only at arity one.
+rule and_empty {
+    doc "And() = true"
+    Variadic[and]() => true
+}
+
+rule or_empty {
+    doc "Or() = false"
+    Variadic[or]() => false
+}
