@@ -35,7 +35,7 @@ import DailyUsageChart, {
   legendHeightPx,
 } from "./DailyUsageChart";
 import InvoiceTable from "./InvoiceTable";
-import { UpgradedPlanDetails } from "./PlanDetails";
+import { AccountSpendPlanDetails, UpgradedPlanDetails } from "./PlanDetails";
 import {
   useDailyCosts,
   useDailyCostsBreakdown,
@@ -47,6 +47,9 @@ import TimeRangeSelect from "./TimeRangeSelect";
 import { getTimeRangeSlice } from "./utils";
 
 const DEFAULT_TIME_RANGE_LOOKBACK_DAYS = 7;
+// Fixed window behind the account plan-details box's "Last 30 days" row,
+// independent of the time-range selector.
+const LAST_30_DAYS_LOOKBACK = 30;
 
 const InvoiceTableWrapper = ({ planType }: { planType: PlanType }) => {
   const { data: invoices, isLoading, isError, error } = useRecentInvoices();
@@ -222,6 +225,12 @@ const UsagePage = () => {
     isError: isCostBreakdownError,
     error: costBreakdownError,
   } = useDailyCostsBreakdown(timeRangeFilter, lastQueryTime);
+  // A separate fixed 30-day breakdown feeds the plan-details "Last 30 days" row.
+  // When the selected range is also 30 days this shares the query cache.
+  const { data: last30BreakdownDays } = useDailyCostsBreakdown(
+    LAST_30_DAYS_LOOKBACK,
+    lastQueryTime,
+  );
 
   const chartTooltipRef = useRef<HTMLDivElement>(null);
 
@@ -237,7 +246,7 @@ const UsagePage = () => {
             "selects details"
             "chart details"
             "spend details"
-            "breakdown details"
+            "breakdown breakdownDetails"
             "invoices ."`}
           gridTemplateColumns="minmax(500px, 70%) minmax(300px, 3fr)"
           gridColumnGap={12}
@@ -286,6 +295,12 @@ const UsagePage = () => {
               isLoading={isCostBreakdownLoading}
               isError={isCostBreakdownError}
               error={costBreakdownError}
+            />
+          </GridItem>
+          <GridItem area="breakdownDetails">
+            <AccountSpendPlanDetails
+              days={costBreakdownDays ?? null}
+              last30Days={last30BreakdownDays ?? null}
             />
           </GridItem>
           <GridItem area="invoices">

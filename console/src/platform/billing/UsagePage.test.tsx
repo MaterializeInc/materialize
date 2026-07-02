@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 import { render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import React, { ReactElement } from "react";
 
 import {
@@ -120,7 +119,7 @@ describe("UsagePage", () => {
     );
   });
 
-  it("renders an all-accounts comparison table for a parent org", async () => {
+  it("renders a unified account & cluster ledger for a parent org", async () => {
     server.use(buildDailyCostResponse());
     server.use(
       buildDailyCostBreakdownResponse({
@@ -170,17 +169,102 @@ describe("UsagePage", () => {
         { timeout: 5_000 },
       ),
     );
-    // Both accounts get a comparison row, ordered biggest-spender first, each
-    // showing that account's period total (14 = 10 + 4, 5).
-    const rows = await breakdown.findAllByTestId("account-comparison-row");
-    expect(rows).toHaveLength(2);
-    expect(within(rows[0]).getByText(formatCurrency(14))).toBeVisible();
-    expect(within(rows[1]).getByText(formatCurrency(5))).toBeVisible();
-    // The roll-up shows the stacked-by-account chart, not per-cluster rows.
+    // One expandable row per account, biggest spender first, each showing that
+    // account's period total (parent 14 = 10 + 4, child 5).
+    const accountRows = await breakdown.findAllByTestId("account-row");
+    expect(accountRows).toHaveLength(2);
+    expect(within(accountRows[0]).getByText(formatCurrency(14))).toBeVisible();
+    expect(within(accountRows[1]).getByText(formatCurrency(5))).toBeVisible();
+    // Accounts render expanded, so every cluster row is visible inline,
+    // region-qualified ("aws/us-east-1 / <cluster>").
+    for (const cluster of ["quickstart.r1", "compute.r1", "prod.r1"]) {
+      expect(
+        await breakdown.findByText(`aws/us-east-1 / ${cluster}`),
+      ).toBeVisible();
+    }
+    // The segmented-by-account chart and the grand-total row (19 = 14 + 5) are
+    // present.
     expect(await breakdown.findByTestId("account-spend-chart")).toBeVisible();
+    const totalRow = within(await breakdown.findByTestId("account-total-row"));
+    expect(totalRow.getByText(formatCurrency(19))).toBeVisible();
+    // A Usage column sits between "Account / cluster" and "Share of total"
+    // (SAS-145): the endpoint doesn't carry usage quantities yet, so each of
+    // the 3 cluster rows shows a placeholder rather than a number.
+    expect(await breakdown.findByText("Usage")).toBeVisible();
+    expect(breakdown.getAllByText("—")).toHaveLength(3);
+    // The section leads with the period total (19 = 14 + 5), mirroring the
+    // legacy chart panel, and a "Spend between …" range above the table,
+    // mirroring the legacy "Spend between …" breakdown. oneDay()'s single
+    // bucket is 2024-01-15, so the range collapses to that one date.
+    expect(
+      within(await breakdown.findByTestId("account-spend-total")).getByText(
+        formatCurrency(19),
+      ),
+    ).toBeVisible();
+    const range = within(await breakdown.findByTestId("account-spend-range"));
+    expect(range.getByText("Spend between", { exact: false })).toBeVisible();
+    expect(range.getAllByText("01-15-24")).toHaveLength(2);
   });
 
-  it("drills into a single account's clusters when selected", async () => {
+  it("shows a plan-details box beside the breakdown, itemizing last 30 days by account", async () => {
+    server.use(buildDailyCostResponse());
+    server.use(
+      buildDailyCostBreakdownResponse({
+        payload: {
+          days: oneDay([
+            {
+              external_customer_id: "parent-org",
+              clusters: [
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "10.00" },
+                },
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "compute.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "4.00" },
+                },
+              ],
+            },
+            {
+              external_customer_id: "child-org",
+              clusters: [
+                {
+                  environment_id: "environment-child-0",
+                  cluster_grouping_key: "prod.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "5.00" },
+                },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const planDetails = within(
+      await screen.findByTestId("account-plan-details", {}, { timeout: 5_000 }),
+    );
+    // The box renders before the breakdown resolves, so await the spend rows.
+    // Every figure is derived from /api/costs/breakdown/daily, not
+    // /api/costs/daily.
+    expect(await planDetails.findByText("Total spend")).toBeVisible();
+    expect(await planDetails.findByText("Last 30 days")).toBeVisible();
+    expect(await planDetails.findByText("Daily average")).toBeVisible();
+    // "Last 30 days" is itemized by account (parent 14 = 10 + 4, child 5),
+    // biggest spender first, under the window total.
+    expect(await planDetails.findByText(formatCurrency(14))).toBeVisible();
+    expect(await planDetails.findByText(formatCurrency(5))).toBeVisible();
+  });
+
+  it("renders storage and egress as distinct region-qualified rows", async () => {
     server.use(buildDailyCostResponse());
     server.use(
       buildDailyCostBreakdownResponse({
@@ -228,17 +312,13 @@ describe("UsagePage", () => {
         { timeout: 5_000 },
       ),
     );
-    // The all-accounts roll-up lists the one account; clicking its row drills in.
-    const row = await breakdown.findByTestId("account-comparison-row");
-    await userEvent.click(row);
-
-    // Scope cluster-label lookups to this table: SpendBreakdown ("Spend between
-    // …") renders the same "<region> / Storage" text from the daily costs.
+    // The account renders expanded, so its clusters are visible inline. Scope
+    // lookups to this table: SpendBreakdown ("Spend between …") renders the same
+    // "<region> / Storage" text from the daily costs. Storage and egress (both
+    // empty cluster_grouping_key) stay on separate rows via `category`.
     expect(
       await breakdown.findByText("aws/us-east-1 / default.r1"),
     ).toBeVisible();
-    // Storage and egress (both empty cluster_grouping_key) render as separate
-    // rows, distinguished by `category`.
     expect(await breakdown.findByText("aws/us-east-1 / Storage")).toBeVisible();
     expect(await breakdown.findByText("aws/us-east-1 / Egress")).toBeVisible();
   });
@@ -278,9 +358,7 @@ describe("UsagePage", () => {
         { timeout: 5_000 },
       ),
     );
-    await userEvent.click(
-      await breakdown.findByTestId("account-comparison-row"),
-    );
+    // The account renders expanded, so its one cluster row is visible inline.
     expect(await breakdown.findByText("aws/us-east-1 / Other")).toBeVisible();
   });
 

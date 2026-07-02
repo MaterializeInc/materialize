@@ -9,12 +9,14 @@
 
 import {
   Box,
-  Button,
+  chakra,
+  Divider,
   Grid,
   HStack,
   Spinner,
   Text,
   Tooltip,
+  useDisclosure,
   useTheme,
 } from "@chakra-ui/react";
 import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
@@ -28,33 +30,37 @@ import { BarStack, LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { parseISO } from "date-fns";
 import { motion } from "framer-motion";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
-import { CostBreakdownCluster, CostBreakdownDay } from "~/api/cloudGlobalApi";
+import {
+  CostBreakdownAccount,
+  CostBreakdownCluster,
+  CostBreakdownDay,
+} from "~/api/cloudGlobalApi";
 import ErrorBox from "~/components/ErrorBox";
 import { GraphTooltip } from "~/components/graphComponents";
+import ChevronRightIcon from "~/svg/ChevronRightIcon";
 import { MaterializeTheme } from "~/theme";
-import { formatDateInUtc } from "~/utils/dateFormat";
+import { DATE_FORMAT_SHORT, formatDateInUtc } from "~/utils/dateFormat";
 import { formatCurrency } from "~/utils/format";
 import {
   buildXYGraphLayoutProps,
   calculateTooltipPosition,
 } from "~/utils/graph";
 
-import { baseCellStyles } from "./constants";
+import { baseCellStyles, resourceTypePaddingLeft } from "./constants";
 import {
   accountDailyTotals,
   accountIdsByTotal,
+  accountTotal,
   aggregateDays,
   clusterTotal,
   StackedDailyRow,
   stackedDailyRows,
 } from "./dailyBreakdown";
-
-const ALL_ACCOUNTS = "all";
+import { SafariSafeCollapse } from "./SpendBreakdown";
 
 const margin = { top: 10, right: 0, bottom: 36, left: 50 };
-const legendHeightPx = 18;
 const chartHeightPx = 245;
 const TOOLTIP_DISMISS_TIMEOUT_MS = 300;
 const SPARKLINE_STROKE_WIDTH = 2;
@@ -86,6 +92,12 @@ function clusterLabel(cluster: CostBreakdownCluster): string {
   const label = cluster.cluster_grouping_key || cluster.category || "Other";
   return `${cluster.region} / ${label}`;
 }
+
+// TODO(SAS-145): `/api/costs/breakdown/daily` returns dollar amounts only, no
+// usage quantities (Orb's per-price `quantity` is discarded server-side). Until
+// SAS-145 threads it through, the Usage column renders this placeholder rather
+// than a number.
+const USAGE_PLACEHOLDER = "—";
 
 // Cycled through, in order, to color account layers/legend/table swatches. Kept
 // visually distinct; wraps if an org has more accounts than colors.
@@ -379,34 +391,137 @@ const TrendSparkline = ({
 };
 
 /**
- * The all-accounts comparison table: one row per account, biggest spender
- * first, showing its share of the period total, a daily-total trend, and its
- * total cost. Clicking a row selects that account (drilldown).
+ * One account rendered as an expandable ledger group: the account is the
+ * always-visible parent row (caret + color swatch + label, its share of the
+ * period total, a daily-total trend, and its total cost) and its clusters are
+ * indented, region-qualified child rows revealed by the disclosure. Groups
+ * default open so the whole ledger is visible without interaction.
  */
-const ComparisonTable = ({
-  days,
-  accountIds,
-  colorFor,
-  onSelect,
+const AccountLedgerGroup = ({
+  account,
+  total,
+  share,
+  trend,
+  color,
 }: {
-  days: CostBreakdownDay[];
-  accountIds: string[];
-  colorFor: Map<string, string>;
-  onSelect: (accountId: string) => void;
+  account: CostBreakdownAccount;
+  total: number;
+  share: number;
+  trend: number[];
+  color: string;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const series = useMemo(() => accountDailyTotals(days), [days]);
-  const totals = useMemo(
-    () =>
-      new Map(
-        accountIds.map((id) => [
-          id,
-          (series.get(id) ?? []).reduce((sum, amount) => sum + amount, 0),
-        ]),
-      ),
-    [accountIds, series],
+  const { isOpen, onToggle } = useDisclosure({ defaultIsOpen: true });
+
+  const groupHeaderStyles = {
+    ...baseCellStyles,
+    height: 16,
+    textStyle: "heading-xs",
+    borderBottom: 0,
+    borderTop: "1px solid",
+    borderColor: colors.border.secondary,
+  };
+
+  return (
+    <>
+      <Box
+        display="contents"
+        role="row"
+        onClick={onToggle}
+        cursor="pointer"
+        data-testid="account-row"
+      >
+        <Box {...groupHeaderStyles} role="cell">
+          <ChevronRightIcon
+            width="4"
+            height="4"
+            transform={`rotate(${isOpen ? 90 : 0}deg)`}
+            transition="all 0.1s"
+            marginRight="2"
+          />
+          <Box
+            width="2"
+            height="2"
+            borderRadius="sm"
+            backgroundColor={color}
+            marginRight="2"
+            flexShrink={0}
+          />
+          <Tooltip label={account.external_customer_id}>
+            <Text whiteSpace="nowrap">
+              {shortId(account.external_customer_id)}
+            </Text>
+          </Tooltip>
+        </Box>
+        <Box {...groupHeaderStyles} role="cell" />
+        <Box {...groupHeaderStyles} role="cell" justifyContent="end">
+          {share.toFixed(1)}%
+        </Box>
+        <Box {...groupHeaderStyles} role="cell">
+          <TrendSparkline points={trend} color={color} />
+        </Box>
+        <Box {...groupHeaderStyles} role="cell" justifyContent="end">
+          {formatCurrency(total)}
+        </Box>
+      </Box>
+      <SafariSafeCollapse
+        isCollapsed={!isOpen}
+        rowCount={account.clusters.length}
+      >
+        {account.clusters.map((cluster, ix) => {
+          const isLastElement = ix === account.clusters.length - 1;
+          const cellStyles = {
+            ...baseCellStyles,
+            borderColor: "transparent",
+            height: isLastElement ? 10 : baseCellStyles.height,
+            paddingBottom: isLastElement ? "8px" : "unset",
+          };
+          return (
+            <React.Fragment
+              key={`${cluster.environment_id}/${cluster.cluster_grouping_key}/${cluster.category}/${ix}`}
+            >
+              <Box
+                {...cellStyles}
+                paddingLeft={resourceTypePaddingLeft}
+                whiteSpace="nowrap"
+                role="cell"
+              >
+                {clusterLabel(cluster)}
+              </Box>
+              <Box {...cellStyles} role="cell" justifyContent="end">
+                {USAGE_PLACEHOLDER}
+              </Box>
+              <Box {...cellStyles} role="cell" />
+              <Box {...cellStyles} role="cell" />
+              <Box {...cellStyles} role="cell" justifyContent="end">
+                {formatCurrency(clusterTotal(cluster.amounts))}
+              </Box>
+            </React.Fragment>
+          );
+        })}
+      </SafariSafeCollapse>
+    </>
   );
-  const grandTotal = Array.from(totals.values()).reduce((a, b) => a + b, 0);
+};
+
+/**
+ * Direction-A unified ledger (SAS-128): one table listing every account
+ * (biggest spender first) as an expandable row — its share of the period total,
+ * a daily-total trend, and its cost — expanding to its region-qualified
+ * per-cluster costs. A final Total row sums every account.
+ */
+const UnifiedLedger = ({
+  accounts,
+  series,
+  colorFor,
+}: {
+  accounts: CostBreakdownAccount[];
+  series: Map<string, number[]>;
+  colorFor: Map<string, string>;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const totals = accounts.map((account) => accountTotal(account));
+  const grandTotal = totals.reduce((sum, total) => sum + total, 0);
 
   const headerStyles = {
     ...baseCellStyles,
@@ -415,24 +530,31 @@ const ComparisonTable = ({
     color: colors.foreground.secondary,
     borderColor: colors.border.secondary,
   };
-  const cellStyles = {
+  const totalStyles = {
     ...baseCellStyles,
+    height: 12,
+    textStyle: "text-ui-med",
+    borderBottom: 0,
+    borderTop: "1px solid",
     borderColor: colors.border.secondary,
   };
 
   return (
     <Grid
       mt="6"
-      gridTemplateColumns="minmax(200px, 1fr) minmax(90px, auto) minmax(120px, 1fr) minmax(90px, auto)"
+      gridTemplateColumns="minmax(200px, 1fr) minmax(90px, auto) minmax(90px, auto) minmax(120px, 1fr) minmax(90px, auto)"
       role="table"
-      borderTop="1px solid"
-      borderTopColor={colors.border.secondary}
+      borderBottom="1px solid"
+      borderBottomColor={colors.border.secondary}
     >
       <Box {...headerStyles} role="columnheader">
-        Account
+        Account / cluster
       </Box>
       <Box {...headerStyles} role="columnheader" justifyContent="end">
-        Share
+        Usage
+      </Box>
+      <Box {...headerStyles} role="columnheader" justifyContent="end">
+        Share of total
       </Box>
       <Box {...headerStyles} role="columnheader">
         Trend
@@ -440,140 +562,47 @@ const ComparisonTable = ({
       <Box {...headerStyles} role="columnheader" justifyContent="end">
         Cost
       </Box>
-      {accountIds.map((id) => {
-        const total = totals.get(id) ?? 0;
+      {accounts.map((account, ix) => {
+        const total = totals[ix];
         const share = grandTotal > 0 ? (total / grandTotal) * 100 : 0;
         return (
-          <Box
-            key={id}
-            display="contents"
-            role="row"
-            cursor="pointer"
-            data-testid="account-comparison-row"
-            onClick={() => onSelect(id)}
-          >
-            <Box {...cellStyles} role="cell">
-              <Box
-                width="2"
-                height="2"
-                borderRadius="sm"
-                backgroundColor={colorFor.get(id)}
-                marginRight="2"
-                flexShrink={0}
-              />
-              <Tooltip label={id}>
-                <Text whiteSpace="nowrap">{shortId(id)}</Text>
-              </Tooltip>
-            </Box>
-            <Box {...cellStyles} role="cell" justifyContent="end">
-              {share.toFixed(1)}%
-            </Box>
-            <Box {...cellStyles} role="cell">
-              <TrendSparkline
-                points={series.get(id) ?? []}
-                color={colorFor.get(id) ?? colors.accent.purple}
-              />
-            </Box>
-            <Box {...cellStyles} role="cell" justifyContent="end">
-              {formatCurrency(total)}
-            </Box>
-          </Box>
+          <AccountLedgerGroup
+            key={account.external_customer_id}
+            account={account}
+            total={total}
+            share={share}
+            trend={series.get(account.external_customer_id) ?? []}
+            color={
+              colorFor.get(account.external_customer_id) ?? colors.accent.purple
+            }
+          />
         );
       })}
-    </Grid>
-  );
-};
-
-/**
- * Single-account drilldown: the account's clusters as a flat region-qualified
- * cost list, preserving the detail the previous "Spend by account & cluster"
- * table showed. The mock's richer resource-type drilldown (compute/storage
- * grouping, per-cluster Usage, replica size badges) is deferred: it needs
- * per-cluster usage quantities and replica sizes that `/api/costs/breakdown/
- * daily` does not carry (it returns dollar amounts per price id only). Building
- * it is blocked on that endpoint gaining those fields.
- */
-const AccountClusterList = ({
-  clusters,
-}: {
-  clusters: CostBreakdownCluster[];
-}) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  const headerStyles = {
-    ...baseCellStyles,
-    height: 10,
-    textStyle: "text-ui-med",
-    color: colors.foreground.secondary,
-    borderColor: colors.border.secondary,
-  };
-  const cellStyles = {
-    ...baseCellStyles,
-    borderColor: colors.border.secondary,
-  };
-  return (
-    <Grid
-      mt="6"
-      gridTemplateColumns="minmax(250px, 1fr) minmax(120px, auto)"
-      role="table"
-      borderTop="1px solid"
-      borderTopColor={colors.border.secondary}
-    >
-      <Box {...headerStyles} role="columnheader">
-        Cluster
-      </Box>
-      <Box {...headerStyles} role="columnheader" justifyContent="end">
-        Total cost
-      </Box>
-      {clusters.map((cluster, ix) => (
-        <Box key={ix} display="contents" role="row">
-          <Box {...cellStyles} role="cell" whiteSpace="nowrap">
-            {clusterLabel(cluster)}
-          </Box>
-          <Box {...cellStyles} role="cell" justifyContent="end">
-            {formatCurrency(clusterTotal(cluster.amounts))}
-          </Box>
+      <Box display="contents" role="row" data-testid="account-total-row">
+        <Box {...totalStyles} role="cell">
+          Total
         </Box>
-      ))}
+        <Box {...totalStyles} role="cell" />
+        <Box {...totalStyles} role="cell" />
+        <Box {...totalStyles} role="cell" />
+        <Box {...totalStyles} role="cell" justifyContent="end">
+          {formatCurrency(grandTotal)}
+        </Box>
+      </Box>
     </Grid>
   );
 };
 
-const AccountSwitcher = ({
-  accountIds,
-  selected,
-  onSelect,
-}: {
-  accountIds: string[];
-  selected: string;
-  onSelect: (value: string) => void;
-}) => (
-  <HStack gap="2" flexWrap="wrap" data-testid="account-switcher">
-    <Button
-      size="sm"
-      variant={selected === ALL_ACCOUNTS ? "primary" : "secondary"}
-      onClick={() => onSelect(ALL_ACCOUNTS)}
-    >
-      All accounts
-    </Button>
-    {accountIds.map((id) => (
-      <Tooltip key={id} label={id}>
-        <Button
-          size="sm"
-          variant={selected === id ? "primary" : "secondary"}
-          onClick={() => onSelect(id)}
-        >
-          {shortId(id)}
-        </Button>
-      </Tooltip>
-    ))}
-  </HStack>
-);
-
 /**
- * Per-account spend, bucketed by UTC day (Direction-B / SAS-128). An account
- * switcher toggles between the all-accounts roll-up (stacked-by-account daily
- * chart + comparison table) and a single account's drilldown. Sourced from
- * `/api/costs/breakdown/daily` via `useDailyCostsBreakdown`.
+ * Per-account spend (Direction A / SAS-128). A stacked-by-account daily chart
+ * over a single unified ledger: every account is an expandable row (share,
+ * trend, cost) that opens to its region-qualified per-cluster costs. Sourced
+ * from `/api/costs/breakdown/daily` via `useDailyCostsBreakdown`.
+ *
+ * The per-cluster Usage column is a placeholder (SAS-145) until the endpoint
+ * carries usage quantities; the mock's Compute/Storage resource drilldown
+ * (replica size) needs per-cluster replica sizes the endpoint does not yet
+ * carry either, so that remains a separate follow-up.
  */
 const AccountSpendBreakdown = ({
   days,
@@ -582,7 +611,6 @@ const AccountSpendBreakdown = ({
   error,
 }: AccountSpendBreakdownProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const [selected, setSelected] = useState<string>(ALL_ACCOUNTS);
 
   const accountIds = useMemo(
     () => (days ? accountIdsByTotal(days) : []),
@@ -594,34 +622,45 @@ const AccountSpendBreakdown = ({
   );
   const colorFor = useAccountColors(accountIds);
   const aggregate = useMemo(() => (days ? aggregateDays(days) : null), [days]);
-
-  // An account can vanish between renders (time-range change); fall back to the
-  // roll-up rather than showing an empty drilldown.
-  const activeAccount =
-    selected === ALL_ACCOUNTS
-      ? null
-      : accountIds.includes(selected)
-        ? selected
-        : null;
-
-  const legend = (
-    <HStack height={legendHeightPx} spacing={4} mb="2" flexWrap="wrap">
-      {accountIds.map((id) => (
-        <HStack key={id} gap="2">
-          <Box
-            width="2"
-            height="2"
-            borderRadius="sm"
-            backgroundColor={colorFor.get(id)}
-          />
-          <Text textStyle="text-small">{shortId(id)}</Text>
-        </HStack>
-      ))}
-    </HStack>
+  const series = useMemo(
+    () => (days ? accountDailyTotals(days) : new Map<string, number[]>()),
+    [days],
   );
+
+  // Order the aggregated accounts biggest-spender first, matching the chart's
+  // stack order.
+  const orderedAccounts = useMemo(
+    () =>
+      accountIds
+        .map((id) =>
+          aggregate?.accounts.find((a) => a.external_customer_id === id),
+        )
+        .filter((a): a is CostBreakdownAccount => a !== undefined),
+    [accountIds, aggregate],
+  );
+
+  const totalSpend = useMemo(
+    () =>
+      orderedAccounts.reduce((sum, account) => sum + accountTotal(account), 0),
+    [orderedAccounts],
+  );
+
+  const rangeStart = days?.length
+    ? formatDateInUtc(parseISO(days[0].startDate), DATE_FORMAT_SHORT)
+    : null;
+  const rangeEnd = days?.length
+    ? formatDateInUtc(
+        parseISO(days[days.length - 1].startDate),
+        DATE_FORMAT_SHORT,
+      )
+    : null;
 
   return (
     <Box data-testid="account-spend-breakdown">
+      {/* Temporary boundary lines while this section runs alongside the
+          legacy chart/breakdown above and below it; drop once this section
+          replaces the top of the page. */}
+      <Divider mb={4} />
       <Text textStyle="heading-sm" mb={4}>
         Spend by account &amp; cluster
       </Text>
@@ -640,45 +679,42 @@ const AccountSpendBreakdown = ({
           No usage to break down for the selected period.
         </Text>
       ) : (
-        <>
-          <AccountSwitcher
+        <Box mt="4">
+          <Text
+            as="h4"
+            textStyle="heading-md"
+            mb={3}
+            data-testid="account-spend-total"
+          >
+            {formatCurrency(totalSpend)}
+          </Text>
+          <AccountSpendChart
+            rows={rows}
             accountIds={accountIds}
-            selected={selected}
-            onSelect={setSelected}
+            colorFor={colorFor}
           />
-          {activeAccount === null ? (
-            <Box mt="4">
-              {legend}
-              <AccountSpendChart
-                rows={rows}
-                accountIds={accountIds}
-                colorFor={colorFor}
-              />
-              <ComparisonTable
-                days={days}
-                accountIds={accountIds}
-                colorFor={colorFor}
-                onSelect={setSelected}
-              />
-            </Box>
-          ) : (
-            <Box mt="4">
-              <AccountSpendChart
-                rows={rows}
-                accountIds={[activeAccount]}
-                colorFor={colorFor}
-              />
-              <AccountClusterList
-                clusters={
-                  aggregate?.accounts.find(
-                    (a) => a.external_customer_id === activeAccount,
-                  )?.clusters ?? []
-                }
-              />
-            </Box>
-          )}
-        </>
+          <Text textStyle="heading-sm" mt={6} data-testid="account-spend-range">
+            Spend between{" "}
+            {rangeStart && rangeEnd && (
+              <>
+                <chakra.time dateTime={rangeStart} color={colors.accent.green}>
+                  {rangeStart}
+                </chakra.time>{" "}
+                and{" "}
+                <chakra.time dateTime={rangeEnd} color={colors.accent.green}>
+                  {rangeEnd}
+                </chakra.time>
+              </>
+            )}
+          </Text>
+          <UnifiedLedger
+            accounts={orderedAccounts}
+            series={series}
+            colorFor={colorFor}
+          />
+        </Box>
       )}
+      <Divider mt={4} />
     </Box>
   );
 };
