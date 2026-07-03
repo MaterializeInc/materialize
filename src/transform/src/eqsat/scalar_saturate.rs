@@ -23,7 +23,7 @@ use crate::eqsat::core::Id;
 use crate::eqsat::egraph::view::BaseView;
 use crate::eqsat::egraph::{Analyses, CNode, EBindings, EGraph, Index};
 use crate::eqsat::rules;
-use crate::eqsat::scalar::analysis::{make, merge, ClassAnalysis};
+use crate::eqsat::scalar::analysis::{ClassAnalysis, make, merge};
 use crate::eqsat::scalar_extract;
 
 /// E-node budget for the saturation loop. Copied from `scalar/egraph.rs` so the
