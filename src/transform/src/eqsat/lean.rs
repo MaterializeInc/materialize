@@ -840,6 +840,11 @@ fn choose_proof(
         // differs in length from the nested one, so no equality is provable here.
         // Keyed on the opaque LHS constructor, before the flatten/andE/orE arms
         // below (which target the Bool `flatten_and`/`_or`).
+        // NOTE: this sorries EVERY rule whose LHS is a `variadicOpaqueE`, which is
+        // correct only while every such rule is genuinely unprovable in the
+        // two-valued model. A future rule over `variadicOpaqueE` that IS provable
+        // would be silently sorried here. Tighten the key (e.g. on the rule name
+        // or RHS shape) before adding such a rule.
         if lhs.contains("ScalarExpr.variadicOpaqueE") {
             return "by\n    -- PERMANENT SORRY: non-Bool variadic outside the two-valued model\n    sorry"
                 .to_string();

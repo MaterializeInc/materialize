@@ -1806,8 +1806,8 @@ mod tests {
     // Same corpus-shaping discipline as slices 1-6e: every case must keep the
     // old engine's one still-unported rule (`factor_and_or`) from seizing on
     // anything a real flatten case wouldn't. `factor_and_or` needs two
-    // same-connective operands sharing a common factor, which none of these
-    // have.
+    // dual-connective sub-calls (the opposite connective from the outer)
+    // sharing a common factor, which none of these have.
     //
     // And/Or error operands are Bool-typed `(1 / 0) = (1 / 0)`, never a bare
     // Int64 `1 / 0`: flatten-then-collapse is exactly the slice-6c type trap.
@@ -2023,7 +2023,10 @@ mod tests {
                 vec![ReprScalarType::Bool.nullable(true), bool_ct()],
             ),
             (
-                and(vec![MirScalarExpr::literal_false(), and(vec![err_bool(), c(0)])]),
+                and(vec![
+                    MirScalarExpr::literal_false(),
+                    and(vec![err_bool(), c(0)]),
+                ]),
                 vec![bool_ct()],
             ),
         ];
