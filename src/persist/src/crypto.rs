@@ -948,6 +948,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn roundtrip() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
@@ -965,6 +966,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn roundtrip_empty_plaintext() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
@@ -976,6 +978,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn tamper_detection() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
@@ -994,6 +997,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn wrong_key_fails() {
         let key = test_key();
         let wrong_key = [0x99u8; 32];
@@ -1023,6 +1027,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn envelope_format_parsing() {
         let key = test_key();
         let wrapped = vec![1, 2, 3, 4, 5];
@@ -1243,6 +1248,7 @@ mod tests {
     // --- Two-party encryption tests ---
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn two_party_roundtrip() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
@@ -1263,6 +1269,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn two_party_v1_backward_compat() {
         // Create V1 data (single-key mode).
         let key = test_key();
@@ -1280,6 +1287,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn two_party_v2_requires_customer_key() {
         // Create V2 data.
         let key = test_key();
@@ -1304,6 +1312,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn two_party_envelope_format() {
         let key = test_key();
         let wrapped = vec![1, 2, 3, 4, 5, 6, 7, 8];
@@ -1328,6 +1337,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn two_party_customer_key_revocation() {
         // If customer KMS Decrypt fails, the whole decrypt should fail.
         // We simulate this by verifying that V2 data cannot be decrypted
@@ -1507,6 +1517,7 @@ mod tests {
     /// QA §4.4: Nonce uniqueness — encrypting the same plaintext twice must
     /// produce different ciphertexts with different nonces.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn nonce_uniqueness() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
@@ -1534,6 +1545,7 @@ mod tests {
     /// AAD binding: ciphertext encrypted with one storage key cannot be
     /// decrypted with a different storage key.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // aws-lc-rs AEAD is FFI; Miri cannot call foreign functions
     fn aad_binding() {
         let key = test_key();
         let wrapped = test_wrapped_dek();
