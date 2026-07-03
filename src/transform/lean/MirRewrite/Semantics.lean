@@ -275,6 +275,42 @@ def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | e :: es, unit, op => op (denoteS env e) (denoteSFold env es unit op)
 end
 
+/-! ### Evidence for the AND/OR short-circuit rules
+
+`and_short_circuit`/`or_short_circuit` fold a variadic AND/OR to `false`/`true`
+given a witness operand that already is that value. The witness is the
+*precondition* that makes the fold collapse (not a soundness guard dropped for
+convenience): the lemmas below are proved by induction on the operand list,
+peeling off the witness's position. -/
+
+theorem denoteSFold_and_false (env : Nat → Bool) (xs : List ScalarExpr)
+    (h : ∃ x ∈ xs, denoteS env x = false) :
+    denoteSFold env xs true (· && ·) = false := by
+  induction xs with
+  | nil => simp at h
+  | cons a as ih =>
+    obtain ⟨x, hmem, hx⟩ := h
+    rcases List.mem_cons.mp hmem with h' | h'
+    · subst h'
+      simp [denoteSFold, hx]
+    · simp only [denoteSFold]
+      rw [ih ⟨x, h', hx⟩]
+      simp
+
+theorem denoteSFold_or_true (env : Nat → Bool) (xs : List ScalarExpr)
+    (h : ∃ x ∈ xs, denoteS env x = true) :
+    denoteSFold env xs false (· || ·) = true := by
+  induction xs with
+  | nil => simp at h
+  | cons a as ih =>
+    obtain ⟨x, hmem, hx⟩ := h
+    rcases List.mem_cons.mp hmem with h' | h'
+    · subst h'
+      simp [denoteSFold, hx]
+    · simp only [denoteSFold]
+      rw [ih ⟨x, h', hx⟩]
+      simp
+
 /-- The const-eval builtin, opaque: its result is computed by Rust `mz_expr`
     evaluation, not modeled in Lean. Rules whose RHS is `constEval` carry a
     permanent `sorry`. The opaque declaration is what makes that `sorry`

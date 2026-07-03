@@ -305,4 +305,14 @@ theorem rule_not_binary_negate :
     -- PERMANENT SORRY: negate table is Rust metadata
     sorry
 
+-- And([.., false, ..]) = false
+theorem rule_and_short_circuit :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr) (h_xs : ∃ x ∈ xs, denoteS env x = false), denoteS env (ScalarExpr.andE xs) = denoteS env (ScalarExpr.litB false) := by
+    intro env xs h_xs; first | (simp only [denoteS]; exact denoteSFold_and_false env xs h_xs) | sorry
+
+-- Or([.., true, ..]) = true
+theorem rule_or_short_circuit :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr) (h_xs : ∃ x ∈ xs, denoteS env x = true), denoteS env (ScalarExpr.orE xs) = denoteS env (ScalarExpr.litB true) := by
+    intro env xs h_xs; first | (simp only [denoteS]; exact denoteSFold_or_true env xs h_xs) | sorry
+
 end MirRewrite

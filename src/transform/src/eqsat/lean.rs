@@ -113,6 +113,13 @@ fn emit_rule(rule: &Rule) -> String {
     let scalar_lit_true = first_scalar_payload(rule, |c| matches!(c, Cond::ScalarLitTrue { .. }));
     let scalar_lit_false_or_null =
         first_scalar_payload(rule, |c| matches!(c, Cond::ScalarLitFalseOrNull { .. }));
+    // `any_scalar_lit(xs, v)` (`and_short_circuit`/`or_short_circuit`) is the
+    // PRECONDITION that makes the fold collapse to `v`'s connective unit, not a
+    // soundness guard: dropping it would make the generated theorem claim
+    // `andE`/`orE` always collapses, which is false for an operand list with no
+    // literal. So it becomes a hypothesis on the already-bound `List ScalarExpr`
+    // rest-metavariable, existentially asserting a witness operand.
+    let any_scalar_lit = any_scalar_lit_payload(rule);
 
     let mut hyps: Vec<(String, String)> = nonneg
         .iter()
@@ -129,6 +136,12 @@ fn emit_rule(rule: &Rule) -> String {
     }
     if let Some(s) = &scalar_lit_false_or_null {
         hyps.push((format!("h_{s}"), format!("denoteS env {s} = false")));
+    }
+    if let Some((list, value)) = &any_scalar_lit {
+        hyps.push((
+            format!("h_{list}"),
+            format!("∃ x ∈ {list}, denoteS env x = {value}"),
+        ));
     }
 
     // True when the rule is guarded by `is_rel_empty`, signalling an
@@ -156,6 +169,9 @@ fn emit_rule(rule: &Rule) -> String {
         nonneg.first().copied(),
         all_true.as_deref(),
         any_false.as_deref(),
+        any_scalar_lit
+            .as_ref()
+            .map(|(list, value)| (list.as_str(), *value)),
         is_empty_prop,
         is_scalar,
         is_builtin_rhs,
@@ -700,6 +716,17 @@ fn first_scalar_payload(rule: &Rule, pick: impl Fn(&Cond) -> bool) -> Option<Str
     })
 }
 
+/// The `(list, value)` payload of a rule's `Cond::AnyScalarLit`, if present:
+/// the rest-metavariable name and the literal boolean value some operand must
+/// equal. Unlike [`first_payload`]/[`first_scalar_payload`] this cond carries
+/// two fields, both needed by `choose_proof`'s short-circuit arm.
+fn any_scalar_lit_payload(rule: &Rule) -> Option<(String, bool)> {
+    rule.conds.iter().find_map(|c| match c {
+        Cond::AnyScalarLit { list, value } => Some((list.clone(), *value)),
+        _ => None,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn choose_proof(
     lhs: &str,
@@ -709,6 +736,7 @@ fn choose_proof(
     nonneg_rel: Option<&str>,
     all_true: Option<&str>,
     any_false: Option<&str>,
+    any_scalar_lit: Option<(&str, bool)>,
     is_empty_prop: bool,
     is_scalar: bool,
     is_builtin_rhs: bool,
@@ -781,6 +809,30 @@ fn choose_proof(
                 format!("denoteS, {}", hyp_names.join(", "))
             };
             return format!("by\n    {intro}first | (simp [{lemmas}]; done) | sorry");
+        }
+        // `and_short_circuit`/`or_short_circuit`: the `AnyScalarLit` hypothesis
+        // is exactly the precondition `denoteSFold_and_false`/`_or_true` (in
+        // Semantics.lean) need -- some operand already denotes the
+        // connective's absorbing element -- so the goal, once `denoteS` is
+        // unfolded to expose the fold, is a direct application of the lemma.
+        // Gated on the LHS/value combination the two rules actually use (and
+        // with false, or with true), the only combinations `scalar_any_lit_*`
+        // produces, so this never misfires onto an unrelated andE/orE shape.
+        // Checked before the generic De Morgan arm below, which would
+        // otherwise also match this LHS but cannot discharge the existential.
+        if let Some((list, value)) = any_scalar_lit {
+            let lemma = if lhs.contains("ScalarExpr.andE") && !value {
+                Some("denoteSFold_and_false")
+            } else if lhs.contains("ScalarExpr.orE") && value {
+                Some("denoteSFold_or_true")
+            } else {
+                None
+            };
+            if let Some(lemma) = lemma {
+                return format!(
+                    "by\n    {intro}first | (simp only [denoteS]; exact {lemma} env {list} h_{list}) | sorry"
+                );
+            }
         }
         // De Morgan over a list (`not_demorgan_and`/`not_demorgan_or`): a
         // `foldr`/`map` induction over an unconstrained list, which plain
