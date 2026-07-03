@@ -418,7 +418,7 @@ pub enum Cond {
     /// rest-captured list `xs` (a variadic operator's operands, `Vec<Id>`) is a scalar
     /// literal equal to `value`. List-quantified: the per-element check is the scalar
     /// `literal` analysis. Grammar-general over CombinedLang (the rest is `Vec<Id>` for
-    /// any variadic, scalar or relational); only the per-element predicate is scalar.
+    /// any variadic, scalar or relational). Only the per-element predicate is scalar.
     /// Gates `and_or_short_circuit`.
     AnyScalarLit { list: String, value: bool },
     /// `scalar_non_nullable(s)`: the class bound to scalar metavar `s` is provably
