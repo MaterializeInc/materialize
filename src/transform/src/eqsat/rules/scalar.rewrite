@@ -118,3 +118,18 @@ rule not_binary_negate {
     doc "Not(f(a, b)) = negate(f)(a, b) for negatable f"
     Unary[not](Binary[f](a, b)) => Binary[negate(f)](a, b)
 }
+
+# A variadic AND with a literal-false operand is false, regardless of the other
+# operands or whether they could error. MZ's And short-circuits on false (an
+# unconditional early return that discards any accumulated error, see
+# func/variadic.rs), so this is sound with no could_error gate. Mirrors
+# scalar/rules.rs::and_or_short_circuit. Or is dual (true dominates).
+rule and_short_circuit {
+    doc "And([.., false, ..]) = false"
+    Variadic[and](xs...) => false where scalar_any_lit_false(xs)
+}
+
+rule or_short_circuit {
+    doc "Or([.., true, ..]) = true"
+    Variadic[or](xs...) => true where scalar_any_lit_true(xs)
+}
