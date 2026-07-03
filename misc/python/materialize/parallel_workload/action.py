@@ -1893,6 +1893,7 @@ class FlipFlagsAction(Action):
             "persist_fast_path_order",
             "enable_mcp_agent",
             "enable_mcp_agent_query_tool",
+            "enable_mcp_agent_read_data_product_tool",
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
             "mcp_max_response_size",
