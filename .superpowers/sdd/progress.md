@@ -344,8 +344,10 @@ KEY READ FINDING: old-engine absorb_and_or (rules.rs:601) is INNER-SET PROPER-SU
 USER DECISION (AskUserQuestion): FULL SUBSUMPTION via Rust host (behavior-neutral, unblocks slice-7 retirement), NOT simple-pair-search-only. Machinery: Rust helper rest_filters::{absorb_drop_index(shared core: inner_sets+subsumption+could_error gate), rest_absorb} on 6c FilterSplice scaffold; RestFilter::AbsorbSubsumed{inner} + Cond::AbsorbApplies{list,inner} carry inner func kw (FilterSplice can't see enclosing SVariadic func). SURFACE #2 answer (report at end): the SCAFFOLD/host generalizes to union-cancel, but the SEARCH LOGIC is per-rule Rust (subsumption ≠ inverse-cancel), NOT a shared declarative matcher. union-cancel later plugs a 2nd helper (CancelInverse) into same host.
 LEAN: two-valued absorption law (P∧Q=P when inner-set(P)⊆inner-set(Q)); guard-vacuous (denoteS 2-valued, could_error invisible); prove OUTRIGHT, permanent stays 5; FALLBACK if intractable = flag-before-sorry (5->6 is overseer decision, never silent).
 ## Tasks
-- [ ] Task 1: DSL AbsorbSubsumed filter + AbsorbApplies cond + grammar (absorb(xs,and|or) / absorb_applies(xs,and|or))
+- [x] Task 1: DSL AbsorbSubsumed filter + AbsorbApplies cond + grammar (absorb(xs,and|or) / absorb_applies(xs,and|or))
 - [ ] Task 2: rest_filters absorb helper (inner_set+absorb_drop_index+rest_absorb) + cond_absorb_applies (MatchGraph/BaseView/ColoredView sweep) + codegen emit (pass variadic_func_value inner)
 - [ ] Task 3: port absorb_and/absorb_or to scalar.rewrite (22->24)
 - [ ] Task 4: Lean render AbsorbSubsumed + prove absorption law outright (flag-before-sorry); permanent 5
 - [ ] Task 5: differential corpus + parity slice6e + GUARD MUTATION-TEST (null a + erroring extra must-not-fire) + slice gate
+
+[6e] Task 1: complete (commit cd806ba132, review clean — Spec ✅ Approved). RestFilter::AbsorbSubsumed{inner}+Cond::AbsorbApplies{list,inner}+grammar absorb(xs,and|or)/absorb_applies(xs,and|or). variadic_func_kw NEWLY added (top-level fn, choice(kw and/or), no reusable parser existed; bracket_ident wrong shape). Arities: listtmpl choice 6, scalar-cond sub-choice 8 (<26). Reviewer reproduced: cargo check 5 E0004 (codegen.rs:29/486/1127/1501/1606), 14/14 parser tests, ordering proven (absorb before item). Only dsl.rs+grammar.rs.
