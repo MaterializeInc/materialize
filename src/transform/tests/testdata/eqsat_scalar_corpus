@@ -359,3 +359,83 @@ types: int64
 # with a null operand.
 expr: coalesce(null, #0)
 types: int64
+
+# --- slice 6d: flatten_assoc (all five associative variadics) ---
+# `flatten_{and,or,coalesce,greatest,least}` splice a nested same-func operand
+# up one level, porting `scalar/rules.rs::flatten_assoc`. UNCONDITIONAL (no
+# could_error gate): associativity is order-independent over each func's
+# semilattice, errors included. Saturation re-applies for deeper nesting.
+
+# Pure flatten on And / Or: a nested same-connective operand at leading /
+# middle / trailing position; four distinct columns land as a flat 4-ary call.
+expr: and(and(#1, #2), #0, #3)
+types: bool, bool, bool, bool
+
+expr: and(#0, and(#1, #2), #3)
+types: bool, bool, bool, bool
+
+expr: and(#0, #3, and(#1, #2))
+types: bool, bool, bool, bool
+
+expr: or(or(#1, #2), #0, #3)
+types: bool, bool, bool, bool
+
+expr: or(#0, or(#1, #2), #3)
+types: bool, bool, bool, bool
+
+expr: or(#0, #3, or(#1, #2))
+types: bool, bool, bool, bool
+
+# New-domain proof: flatten on the three non-boolean associative variadics.
+# The oracle flattens these too, so parity holds beyond And/Or.
+expr: coalesce(#0, coalesce(#1, #2))
+types: int64, int64, int64
+
+expr: greatest(greatest(#0, #1), #2)
+types: int64, int64, int64
+
+expr: least(#0, least(#1, #2))
+types: int64, int64, int64
+
+# Deep nesting: three levels flatten fully to a 4-ary And.
+expr: and(#0, and(#1, and(#2, #3)))
+types: bool, bool, bool, bool
+
+# Flatten feeding a cascade: the splice exposes a short-circuit literal, a
+# duplicate, an empty inner set, or the and_or_single self-loop, which a
+# downstream rule then folds. Parity holds through the cascade.
+expr: and(#0, and(false, #1))
+types: bool, bool
+
+expr: or(#0, or(true, #1))
+types: bool, bool
+
+expr: and(#0, and(true, #1))
+types: bool, bool
+
+expr: and(#0, and(#0, #1))
+types: bool, bool
+
+# and_or_single self-loop shape: the inner Or([c0]) collapses into c0's class,
+# the circular-ref skip keeps the subsequent flatten from splicing forever.
+expr: or(#0, or(#0))
+types: bool
+
+expr: and(#0, and())
+types: bool
+
+# Mixed-op negative control: an Or operand inside an And is not a same-func
+# nesting, so flatten never fires and the shape stays intact in both engines.
+expr: and(or(#0, #1), #2)
+types: bool, bool, bool
+
+# Error operand Bool-typed inside And nesting. Flatten splices the erroring
+# operand up (unconditional). `err` is `1 / 0 = 1 / 0`, not a bare Int64 `1 / 0`,
+# for the slice-6c type-agreement reason: a variadic collapse can expose an
+# operand's class as the connective's value, and a bare Int64 under a Bool
+# connective trips the shared analysis's merge assertion.
+expr: and(#0, and(1 / 0 = 1 / 0, #1))
+types: bool, bool
+
+expr: and(false, and(1 / 0 = 1 / 0, #0))
+types: bool

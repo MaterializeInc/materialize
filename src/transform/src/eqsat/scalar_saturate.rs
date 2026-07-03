@@ -1788,4 +1788,347 @@ mod tests {
             );
         }
     }
+
+    // Differential parity harness (SP2b Slice 6d): the associative-variadic
+    // flattening rules (`flatten_{and,or,coalesce,greatest,least}`), one per
+    // `is_associative` variadic, porting `scalar/rules.rs::flatten_assoc`. A
+    // nested same-func operand is spliced up one level; saturation re-applies
+    // for deeper nesting. The rule is UNCONDITIONAL (no `could_error` gate):
+    // associativity is order-independent over each func's semilattice, error
+    // handling included, so `f(a, f(b, c))` and `f(a, b, c)` evaluate
+    // identically for all inputs.
+    //
+    // CRITICAL new-domain proof: flatten fires on ALL five associative
+    // variadics, not just And/Or. The Coalesce/Greatest/Least cases below are
+    // the beyond-boolean evidence, and the old-engine oracle flattens them too,
+    // so parity must hold there.
+    //
+    // Same corpus-shaping discipline as slices 1-6e: every case must keep the
+    // old engine's one still-unported rule (`factor_and_or`) from seizing on
+    // anything a real flatten case wouldn't. `factor_and_or` needs two
+    // same-connective operands sharing a common factor, which none of these
+    // have.
+    //
+    // And/Or error operands are Bool-typed `(1 / 0) = (1 / 0)`, never a bare
+    // Int64 `1 / 0`: flatten-then-collapse is exactly the slice-6c type trap.
+    // A variadic collapse that exposes an operand's own class as the
+    // connective's value trips `scalar/analysis.rs::merge`'s conflicting-literal
+    // debug_assert on a bare Int64 under a Bool connective. Coalesce/Greatest/
+    // Least operands are well-typed Int64 columns.
+    #[mz_ore::test]
+    fn scalar_parity_slice6d() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_repr::{Datum, ReprScalarType};
+
+        let c = MirScalarExpr::column;
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let coalesce = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Coalesce(mz_expr::func::variadic::Coalesce),
+            exprs: es,
+        };
+        let greatest = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Greatest(mz_expr::func::variadic::Greatest),
+            exprs: es,
+        };
+        let least = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Least(mz_expr::func::variadic::Least),
+            exprs: es,
+        };
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+        let int_ct = || ReprScalarType::Int64.nullable(false);
+        let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
+        let div64 = || BinaryFunc::DivInt64(mz_expr::func::DivInt64);
+        // Bool-typed error `(1 / 0) = (1 / 0)` (see the header note on the type
+        // trap). A bare Int64 `1 / 0` under a Bool connective would panic the
+        // shared analysis's merge assertion once a collapse exposes its class.
+        let err_bool = || {
+            let d = int_lit(1).call_binary(int_lit(0), div64());
+            d.clone().call_binary(d, BinaryFunc::Eq(mz_expr::func::Eq))
+        };
+
+        // The result of a pure flatten is a same-func variadic with `want_len`
+        // operands, none of which is itself a nested same-func call.
+        let assert_flat = |got: &MirScalarExpr, want_len: usize| {
+            let MirScalarExpr::CallVariadic { func, exprs } = got else {
+                panic!("expected a flat CallVariadic, got {got:?}");
+            };
+            assert_eq!(
+                exprs.len(),
+                want_len,
+                "flat operand count mismatch in {got:?}"
+            );
+            let outer = std::mem::discriminant(func);
+            for e in exprs {
+                if let MirScalarExpr::CallVariadic { func: inner, .. } = e {
+                    assert_ne!(
+                        std::mem::discriminant(inner),
+                        outer,
+                        "flat result must not contain a nested same-func operand: {got:?}"
+                    );
+                }
+            }
+        };
+
+        // --- Pure-flatten And/Or with a nested same-op operand at leading /
+        // middle / trailing position. Four distinct bool columns never dedup or
+        // collapse, so each lands as a flat 4-ary call.
+        let flat_bool: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (
+                and(vec![and(vec![c(1), c(2)]), c(0), c(3)]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            (
+                and(vec![c(0), and(vec![c(1), c(2)]), c(3)]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            (
+                and(vec![c(0), c(3), and(vec![c(1), c(2)])]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            (
+                or(vec![or(vec![c(1), c(2)]), c(0), c(3)]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            (
+                or(vec![c(0), or(vec![c(1), c(2)]), c(3)]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            (
+                or(vec![c(0), c(3), or(vec![c(1), c(2)])]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+        ];
+        for (e, ct) in flat_bool {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_flat(&new, 4);
+        }
+
+        // --- New-domain proof: flatten on Coalesce / Greatest / Least, the
+        // three non-boolean associative variadics. Distinct Int64 columns, so
+        // the only rewrite is the splice and the result is a flat 3-ary call.
+        let flat_nonbool: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (
+                coalesce(vec![c(0), coalesce(vec![c(1), c(2)])]),
+                vec![int_ct(), int_ct(), int_ct()],
+            ),
+            (
+                greatest(vec![greatest(vec![c(0), c(1)]), c(2)]),
+                vec![int_ct(), int_ct(), int_ct()],
+            ),
+            (
+                least(vec![c(0), least(vec![c(1), c(2)])]),
+                vec![int_ct(), int_ct(), int_ct()],
+            ),
+        ];
+        for (e, ct) in flat_nonbool {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_flat(&new, 3);
+        }
+
+        // --- Deep nesting: three nested levels collapse to a flat 4-ary And
+        // via saturation re-applying the rule on each newly flat intermediate.
+        {
+            let e = and(vec![c(0), and(vec![c(1), and(vec![c(2), c(3)])])]);
+            let ct = vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()];
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "deep-nesting parity failed for {e:?}");
+            assert_flat(&new, 4);
+        }
+
+        // --- Flatten feeding a cascade: the splice exposes a literal, a
+        // duplicate, or an empty inner set that a downstream rule then folds.
+        // Parity must hold THROUGH the cascade, so these assert `new == old`
+        // only (the result is no longer a flat variadic).
+        let cascade: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            // Short-circuit: the spliced `false` dominates the flat And.
+            (
+                and(vec![c(0), and(vec![MirScalarExpr::literal_false(), c(1)])]),
+                vec![bool_ct(), bool_ct()],
+            ),
+            // Short-circuit (dual): the spliced `true` dominates the flat Or.
+            (
+                or(vec![c(0), or(vec![MirScalarExpr::literal_true(), c(1)])]),
+                vec![bool_ct(), bool_ct()],
+            ),
+            // drop_unit: the spliced `true` is the And unit and drops out.
+            (
+                and(vec![c(0), and(vec![MirScalarExpr::literal_true(), c(1)])]),
+                vec![bool_ct(), bool_ct()],
+            ),
+            // Cross-boundary dedup: `a` appears both outside and inside; after
+            // the splice the duplicate collapses.
+            (
+                and(vec![c(0), and(vec![c(0), c(1)])]),
+                vec![bool_ct(), bool_ct()],
+            ),
+            // Collapse to a single operand via the `and_or_single` self-loop
+            // shape: the inner `Or([c0])` collapses into `c0`'s class, the outer
+            // `Or([c0, c0])` dedups then collapses to `c0`.
+            (or(vec![c(0), or(vec![c(0)])]), vec![bool_ct()]),
+            // Collapse to empty: the spliced-away empty inner And leaves a
+            // single-operand And that collapses to `a`.
+            (and(vec![c(0), and(vec![])]), vec![bool_ct()]),
+        ];
+        for (e, ct) in cascade {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "cascade parity failed for {e:?}");
+        }
+
+        // --- Mixed-op negative control: an Or operand inside an And is NOT a
+        // same-func nesting, so flatten never fires. Both engines leave the
+        // shape intact (the Or survives as a distinct operand).
+        {
+            let e = and(vec![or(vec![c(0), c(1)]), c(2)]);
+            let ct = vec![bool_ct(), bool_ct(), bool_ct()];
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "mixed-op control parity failed for {e:?}");
+            let MirScalarExpr::CallVariadic { func, exprs } = &new else {
+                panic!("mixed-op control must stay a CallVariadic And, got {new:?}");
+            };
+            assert!(
+                matches!(func, VariadicFunc::And(_)),
+                "mixed-op control outer connective must stay And, got {func:?}"
+            );
+            assert!(
+                exprs.iter().any(|e| matches!(
+                    e,
+                    MirScalarExpr::CallVariadic { func, .. } if matches!(func, VariadicFunc::Or(_))
+                )),
+                "mixed-op control must keep its nested Or unflattened, got {new:?}"
+            );
+        }
+
+        // --- Error operands Bool-typed inside And/Or nesting (the collapse
+        // trap). Flatten splices the erroring operand up; the first case keeps
+        // it live, the second folds it away under a short-circuit. Parity must
+        // hold in both, and neither may panic the shared analysis's merge
+        // assertion (which is exactly why the error is Bool-typed).
+        let errors: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (
+                and(vec![c(0), and(vec![err_bool(), c(1)])]),
+                vec![ReprScalarType::Bool.nullable(true), bool_ct()],
+            ),
+            (
+                and(vec![MirScalarExpr::literal_false(), and(vec![err_bool(), c(0)])]),
+                vec![bool_ct()],
+            ),
+        ];
+        for (e, ct) in errors {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "error-operand parity failed for {e:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_slice6d() {
+        assert!(
+            CORPUS.contains("and(#0, and(#1, #2), #3)"),
+            "corpus must exercise flatten on And with a nested And operand"
+        );
+        assert!(
+            CORPUS.contains("or(#0, or(#1, #2), #3)"),
+            "corpus must exercise flatten on Or with a nested Or operand"
+        );
+        assert!(
+            CORPUS.contains("coalesce(#0, coalesce(#1, #2))"),
+            "corpus must exercise flatten on the non-boolean Coalesce"
+        );
+        assert!(
+            CORPUS.contains("greatest(greatest(#0, #1), #2)"),
+            "corpus must exercise flatten on the non-boolean Greatest"
+        );
+        assert!(
+            CORPUS.contains("least(#0, least(#1, #2))"),
+            "corpus must exercise flatten on the non-boolean Least"
+        );
+        assert!(
+            CORPUS.contains("and(#0, and(#1, and(#2, #3)))"),
+            "corpus must exercise deep multi-level flattening"
+        );
+        assert!(
+            CORPUS.contains("and(#0, and(false, #1))"),
+            "corpus must exercise flatten feeding a short-circuit"
+        );
+        assert!(
+            CORPUS.contains("and(#0, and(#0, #1))"),
+            "corpus must exercise flatten feeding a cross-boundary dedup"
+        );
+        assert!(
+            CORPUS.contains("or(#0, or(#0))"),
+            "corpus must exercise the and_or_single self-loop flatten shape"
+        );
+        assert!(
+            CORPUS.contains("and(#0, and(1 / 0 = 1 / 0, #1))"),
+            "corpus must exercise flatten preserving a Bool-typed erroring operand"
+        );
+    }
+
+    // Termination (SP2b Slice 6d): flattening must reach a fixpoint quickly.
+    // Each fire strictly folds one level of nesting into the flat operand list,
+    // and the two guards keep it finite: the circular-ref skip in
+    // `flatten_inner` refuses to splice a same-func node whose canonical
+    // children already contain the operand's own class (the `and_or_single`
+    // self-loop, where collapsing `f(x)` into `x`'s class leaves an `f`-node
+    // pointing back), and `FLATTEN_MAX_OPERANDS` caps the produced vector. So
+    // there is no operand explosion to churn against. Lowers each expr directly,
+    // bypassing `canonicalize_combined`, so the iteration count is visible,
+    // mirroring the slice-6b/6c/6e termination checks.
+    #[mz_ore::test]
+    fn flatten_terminates() {
+        use mz_expr::{MirScalarExpr, VariadicFunc};
+        use mz_repr::ReprScalarType;
+
+        let c = MirScalarExpr::column;
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+
+        // (expr, col_types). The self-loop case is the guard's coverage: the
+        // inner `Or([c0])` collapses into `c0`'s class via `and_or_single`,
+        // after which `c0`'s class holds an `Or`-node whose child is `c0`
+        // itself. Without the circular-ref skip, flatten would keep splicing
+        // that node back in and grow the operand list without bound.
+        let cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (
+                and(vec![c(0), and(vec![c(1), and(vec![c(2), c(3)])])]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            (
+                and(vec![c(0), and(vec![c(0), c(1)])]),
+                vec![bool_ct(), bool_ct()],
+            ),
+            (or(vec![c(0), or(vec![c(0)])]), vec![bool_ct()]),
+        ];
+        for (e, ct) in cases {
+            let mut eg = EGraph::new();
+            eg.data_mut().scalar.col_types = ct;
+            let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &e);
+            let iters = saturate(&mut eg);
+            assert!(
+                iters <= 10,
+                "flatten must reach a fixpoint quickly for {e:?}; got {iters} iters"
+            );
+        }
+    }
 }
