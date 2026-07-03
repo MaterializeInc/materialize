@@ -1760,7 +1760,7 @@ enum Execution {
     },
     Subscribe {
         subscribe_plan: SubscribePlan,
-        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         df_meta: DataflowMetainfo,
         optimization_finished_at: EpochMillis,
     },

@@ -212,6 +212,11 @@ following fields:
 The following example Kubernetes manifest includes configuration for OIDC
 authentication:
 
+{{< tabs >}}
+{{< tab "v1alpha1" >}}
+
+{{< self-managed/crd-version-note "v1alpha1" >}}
+
 ```yaml {hl_lines="6-15 26 36-38"}
 apiVersion: v1
 kind: Namespace
@@ -246,7 +251,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.26.0 # Use v26.26.0 or later
+  environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}}
   backendSecretName: materialize-backend
   authenticatorKind: Oidc
   requestRollout: 00000000-0000-0000-0000-000000000003 # Switching to Oidc requires a rollout
@@ -256,6 +261,60 @@ spec:
 Apply the updated manifest to your Kubernetes cluster. See
 [Upgrading](/self-managed-deployments/upgrading/#rollout-configuration) for
 details on rollout configuration.
+
+{{< /tab >}}
+{{< tab "v1" >}}
+
+{{< self-managed/crd-version-note "v1" >}}
+
+```yaml {hl_lines="6-15 26 36-37"}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mz-system-params
+  namespace: materialize-environment
+data:
+  # Create an empty system parameter configmap for later steps
+  system-params.json: |
+    {
+    }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "..."
+  persist_backend_url: "..."
+  license_key: "..."
+  external_login_password_mz_system: "enter_mz_system_password"
+---
+apiVersion: materialize.cloud/v1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}}
+  backendSecretName: materialize-backend
+  authenticatorKind: Oidc
+  systemParameterConfigmapName: mz-system-params
+```
+
+Apply the updated manifest to your Kubernetes cluster. With the `v1` CRD,
+rollouts trigger automatically when spec fields change, so no `requestRollout`
+is needed. See
+[Upgrading](/self-managed-deployments/upgrading/#rollout-configuration)
+for details on rollout configuration.
+
+{{< /tab >}}
+{{< /tabs >}}
 
 {{% include-headless
 "/headless/self-managed-deployments/enabled-auth-setting-warning" %}}

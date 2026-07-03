@@ -364,7 +364,8 @@ mz_catalog.mz_recent_storage_usage:
 
 Source mz_internal.mz_storage_usage_by_shard
   project=(#1..=#3)
-  filter=((#1{shard_id}) IS NOT NULL AND (mz_now() <= timestamp_tz_to_mz_timestamp((#3{collection_timestamp} + 06:00:00))))
+  filter=((#1{shard_id}) IS NOT NULL AND (mz_now() <= #4) AND (mz_now() < step_mz_timestamp(#4)))
+  map=(timestamp_tz_to_mz_timestamp((#3{collection_timestamp} + 06:00:00)))
 Source mz_internal.mz_storage_shards
 
 Target cluster: mz_catalog_server
@@ -524,12 +525,14 @@ mz_internal.mz_cluster_deployment_lineage:
                       →Arrange (#1{cluster_id}, #2{cluster_name})
                         →Fused with Child Map/Filter/Project
                           Project: #3..=#5
-                          Filter: (#0{event_type} != "drop") AND (#1{object_type} = "cluster") AND ((#0{event_type} = "create") OR ((#0{event_type} = "alter") AND (#2{details} ? "new_name"))) AND (mz_now() < timestamp_tz_to_mz_timestamp((#3{occurred_at} + 30 days))) AND (#4) IS NOT NULL AND (#5) IS NOT NULL
+                          Filter: (#0{event_type} != "drop") AND (#1{object_type} = "cluster") AND ((#0{event_type} = "create") OR ((#0{event_type} = "alter") AND (#2{details} ? "new_name"))) AND (#4) IS NOT NULL AND (#5) IS NOT NULL
+                          TemporalFilter: mz_now() < timestamp_tz_to_mz_timestamp((#3{occurred_at} + 30 days))
                             →Read l0
                 →Arrange (empty key)
                   →Fused with Child Map/Filter/Project
                     Project: #3..=#5
-                    Filter: (#0{event_type} = "drop") AND (#1{object_type} = "cluster") AND (mz_now() < timestamp_tz_to_mz_timestamp((#3{occurred_at} + 30 days)))
+                    Filter: (#0{event_type} = "drop") AND (#1{object_type} = "cluster")
+                    TemporalFilter: mz_now() < timestamp_tz_to_mz_timestamp((#3{occurred_at} + 30 days))
                       →Read l0
     →Return
       →Stream l1
@@ -813,6 +816,273 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN INDEX "mz_internal"."mz_console_cluster_utilization_overview_24h_ind";
+----
+mz_internal.mz_console_cluster_utilization_overview_24h_ind:
+  →Arrange (#17{cluster_id})
+    →Stream mz_internal.mz_console_cluster_utilization_overview_24h
+
+mz_internal.mz_console_cluster_utilization_overview_24h:
+  →With
+    cte l0 =
+      →Distinct GroupAggregate
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #1..=#3
+            Filter: (#1) IS NOT NULL
+              →Arranged mz_internal.mz_cluster_replica_history
+                Key: (#6{dropped_at})
+          →Fused with Child Map/Filter/Project
+            Project: #0, #3, #2
+              →Arranged mz_catalog.mz_cluster_replicas
+                Key: (#0{id})
+    cte l1 =
+      →Map/Filter/Project
+        TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((timestamptz_bin(00:05:00, #9, 1970-01-01 00:00:00 UTC) + 24:00:00)))
+          →Delta Join [%0:l0[#0{replica_id}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]] [%1:mz_cluster_replica_sizes[#0{size}] » %0:l0[#1{size}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}]] [%2:mz_cluster_replica_metrics_history[#0{replica_id}] » %0:l0[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]]
+            →Arrange (#0{replica_id}) (#1{size})
+              →Fused with Child Map/Filter/Project
+                Project: #0, #1
+                Filter: (#1{size}) IS NOT NULL
+                  →Arranged l0
+                    Key: (#0..=#2)
+            →Arranged mz_catalog.mz_cluster_replica_sizes
+            →Arranged mz_internal.mz_cluster_replica_metrics_history
+    cte l2 =
+      →Differential Join %0[#0..=#6] » %1[#0..=#6]
+        after %1:
+          Project: #0, #1, #7, #10, #11, #13..=#15, #17..=#20
+          Map: uint8_to_double(case when (0 = uint8_to_numeric(#6{processes})) then null else #6{processes} end), ((#9 / uint8_to_double(case when (0 = uint8_to_numeric(#3{cpu_nano_cores})) then null else #3{cpu_nano_cores} end)) / #12), ((#10 / uint8_to_double(case when (0 = uint8_to_numeric(#4{memory_bytes})) then null else #4{memory_bytes} end)) / #12), ((#11 / uint8_to_double(case when (0 = uint8_to_numeric(#5{disk_bytes})) then null else #5{disk_bytes} end)) / #12), uint8_to_double(#6{processes}), (uint8_to_double(#5{disk_bytes}) * #16), (uint8_to_double(#4{memory_bytes}) * #16), coalesce(#8, #14), timestamptz_bin(00:05:00, #0{occurred_at}, 1970-01-01 00:00:00 UTC)
+        →Temporally-Bucketed Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
+          Aggregations: max, max
+          Key:
+            Project: #6, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#5, #9..=#11
+              →Read l1
+        →Temporally-Bucketed Accumulable GroupAggregate
+          Simple aggregates: sum(uint8_to_double(#6{cpu_nano_cores})), sum(uint8_to_double(#7{memory_bytes})), sum(uint8_to_double(#8{disk_bytes}))
+          Key:
+            Project: #9, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#9
+              →Read l1
+    cte l3 =
+      →Delta Join [%0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%1[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%2[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%3[#1{replica_id}, #4{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%4[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %5:l0[#0{replica_id}]] [%5:l0[#0{replica_id}] » %0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}]]
+        →Arrange (#1{replica_id}) (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #6, #11, #12
+                  Map: coalesce(#3{memory_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #7, #11, #12
+                  Map: coalesce(#4{disk_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #5, #11, #12
+                  Map: coalesce(#5{cpu_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #4{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#5
+              →Non-monotonic TopK
+                Group By #4, #1
+                Order By #6 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #6, #7, #11..=#13
+                  Map: case when ((#3{memory_bytes}) IS NULL AND (#4{disk_bytes}) IS NULL) then null else ((coalesce(#3{memory_bytes}, 0) + coalesce(#4{disk_bytes}, 0)) / case when (0 = (#9{total_memory_bytes} + #8{total_disk_bytes})) then null else (#9{total_memory_bytes} + #8{total_disk_bytes}) end) end, coalesce(#12{memory_and_disk_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Map/Filter/Project
+            Project: #0..=#3
+              →Non-monotonic TopK
+                Group By #3, #1
+                Order By #4 desc nulls_first
+                Limit 1
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #1, #10..=#12
+                  Map: coalesce(#2{heap_bytes}, 0)
+                    →Read l2
+        →Arrange (#0{replica_id})
+          →Arranged l0
+    cte l4 =
+      →Differential Join %1[#0, #1] » %0:l3[#1, #3]
+        →Arrange (#1, #3)
+          →Stream l3
+        →Arrange (#0, #1)
+          →Map/Filter/Project
+            Project: #0, #1, #3
+              →Non-monotonic TopK
+                Group By #0, #1
+                Order By #2 desc nulls_first
+                Limit 1
+                →Differential Join %1:mz_cluster_replica_name_history[#1{id}] » %0[#0{replica_id}]
+                  after %0:
+                    Project: #0, #4, #1, #3
+                    Filter: ((#4{bucket_start} + 00:05:00) >= coalesce(#1{occurred_at}, 1970-01-01 00:00:00 UTC))
+                  →Arrange (#0{replica_id})
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #1, #3
+                          →Read l3
+                  →Arranged mz_internal.mz_cluster_replica_name_history
+    cte l5 =
+      →Differential Join %1[#1, #0] » %0:l4[#1{replica_id}, #3{bucket_start}]
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Stream l4
+        →Arrange (#1, #0)
+          →Temporally-Bucketed Non-incremental GroupAggregate
+            Aggregation: jsonb_agg[order_by=[]](row(coalesce(jsonbable_to_jsonb(jsonb_build_object("replicaId", jsonbable_to_jsonb(#0{replica_id}), "occurredAt", jsonbable_to_jsonb(timestamp_with_time_zone_to_text(#2{occurred_at})), "status", "offline", "reason", jsonbable_to_jsonb(#1{reason}))), json_null)))
+            Key:
+              Project: #3, #0
+              Map: timestamptz_bin(00:05:00, #2{occurred_at}, 1970-01-01 00:00:00 UTC)
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #4
+              Filter: (#1{process_id} = 0) AND (#2{status} = "offline")
+              TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((timestamptz_bin(00:05:00, #4{occurred_at}, 1970-01-01 00:00:00 UTC) + 24:00:00)))
+                →Arranged mz_internal.mz_cluster_replica_status_history
+                  Key: (#0{replica_id})
+  →Return
+    →Map/Filter/Project
+      Project: #1, #0, #2..=#5, #10, #8, #9, #11..=#13, #6, #7, #17, #18, #16, #15, #14
+      Map: (#1{bucket_start} + 00:05:00)
+        →Union
+          →Map/Filter/Project
+            Project: #0..=#17
+            Map: null
+              →Consolidating Union
+                →Negate Diffs
+                  →Fused with Child Map/Filter/Project
+                    Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                      →Read l5
+                →Fused with Child Map/Filter/Project
+                  Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                    →Read l4
+          →Fused with Child Map/Filter/Project
+            Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#17
+              →Read l5
+
+Used Indexes:
+  - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_status_history_ind (*** full scan ***)
+  - mz_internal.mz_cluster_replica_metrics_history_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_history_ind (*** full scan ***)
+  - mz_internal.mz_cluster_replica_name_history_ind (differential join)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN INDEX "mz_internal"."mz_console_cluster_utilization_overview_3h_ind";
+----
+mz_internal.mz_console_cluster_utilization_overview_3h_ind:
+  →Arrange (#1{cluster_id})
+    →Stream mz_internal.mz_console_cluster_utilization_overview_3h
+
+mz_internal.mz_console_cluster_utilization_overview_3h:
+  →With
+    cte l0 =
+      →Map/Filter/Project
+        TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#10{occurred_at} + 03:00:00)))
+          →Delta Join [%0[#0{replica_id}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]] [%1:mz_cluster_replica_sizes[#0{size}] » %0[#1{size}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}]] [%2:mz_cluster_replica_metrics_history[#0{replica_id}] » %0[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]]
+            →Arrange (#0{replica_id}) (#1{size})
+              →Map/Filter/Project
+                Project: #0..=#2
+                Filter: (#1{size}) IS NOT NULL
+                  →Non-monotonic TopK
+                    Group By #0
+                    Order By #3 asc nulls_last
+                    Limit 1
+                    →Union
+                      →Fused with Child Map/Filter/Project
+                        Project: #0, #3, #2, #7
+                        Map: 0
+                          →Arranged mz_catalog.mz_cluster_replicas
+                            Key: (#0{id})
+                      →Fused with Child Map/Filter/Project
+                        Project: #1..=#3, #8
+                        Filter: (#1{replica_id}) IS NOT NULL
+                        Map: 1
+                          →Arranged mz_internal.mz_cluster_replica_history
+                            Key: (#6{dropped_at})
+            →Arranged mz_catalog.mz_cluster_replica_sizes
+            →Arranged mz_internal.mz_cluster_replica_metrics_history
+    cte l1 =
+      →Differential Join %0[#0..=#7] » %1[#0..=#7]
+        after %1:
+          Project: #0..=#3, #13..=#17
+          Map: uint8_to_double(case when (0 = uint8_to_numeric(#7{processes})) then null else #7{processes} end), ((#9 / uint8_to_double(case when (0 = uint8_to_numeric(#4{cpu_nano_cores})) then null else #4{cpu_nano_cores} end)) / #12), ((#10 / uint8_to_double(case when (0 = uint8_to_numeric(#5{memory_bytes})) then null else #5{memory_bytes} end)) / #12), ((#11 / uint8_to_double(case when (0 = uint8_to_numeric(#6{disk_bytes})) then null else #6{disk_bytes} end)) / #12), coalesce(#8, #14), case when ((#10) IS NULL AND (#11) IS NULL) then null else ((coalesce(#10, 0) + coalesce(#11, 0)) / case when (0 = ((uint8_to_double(#5{memory_bytes}) + uint8_to_double(#6{disk_bytes})) * uint8_to_double(#7{processes}))) then null else ((uint8_to_double(#5{memory_bytes}) + uint8_to_double(#6{disk_bytes})) * uint8_to_double(#7{processes})) end) end
+        →Temporally-Bucketed Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
+          Aggregations: max
+          Key:
+            Project: #7, #0, #2, #1, #4..=#6, #3
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#6, #10..=#12
+              →Read l0
+        →Temporally-Bucketed Accumulable GroupAggregate
+          Simple aggregates: sum(uint8_to_double(#7{cpu_nano_cores})), sum(uint8_to_double(#8{memory_bytes})), sum(uint8_to_double(#9{disk_bytes}))
+          Key:
+            Project: #10, #0, #2, #1, #4..=#6, #3
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#10
+              →Read l0
+  →Return
+    →Differential Join %1[#0, #1] » %0:l1[#0, #1]
+      →Arrange (#0, #1)
+        →Stream l1
+      →Arrange (#0, #1)
+        →Map/Filter/Project
+          Project: #0, #1, #3
+            →Non-monotonic TopK
+              Group By #0, #1
+              Order By #2 desc nulls_first
+              Limit 1
+              →Differential Join %1:mz_cluster_replica_name_history[#1{id}] » %0[#1{replica_id}]
+                after %0:
+                  Project: #4, #0, #1, #3
+                  Filter: (#4{occurred_at} >= coalesce(#1{occurred_at}, 1970-01-01 00:00:00 UTC))
+                →Arrange (#1{replica_id})
+                  →Distinct GroupAggregate
+                    →Fused with Child Map/Filter/Project
+                      Project: #0, #1
+                        →Read l1
+                →Arranged mz_internal.mz_cluster_replica_name_history
+
+Used Indexes:
+  - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replica_sizes_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_metrics_history_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_history_ind (*** full scan ***)
+  - mz_internal.mz_cluster_replica_name_history_ind (differential join)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN INDEX "mz_internal"."mz_console_cluster_utilization_overview_ind";
 ----
 mz_internal.mz_console_cluster_utilization_overview_ind:
@@ -834,97 +1104,99 @@ mz_internal.mz_console_cluster_utilization_overview:
               →Arranged mz_catalog.mz_cluster_replicas
                 Key: (#0{id})
     cte l1 =
-      →Differential Join %0:l0[#0{replica_id}] » %1[#1{replica_id}]
-        after %1:
-          Project: #0..=#10
-          Map: timestamptz_bin(08:00:00, #1{occurred_at}, 1970-01-01 00:00:00 UTC)
-        →Arrange (#0{replica_id})
-          →Fused with Child Map/Filter/Project
-            Project: #0
-              →Arranged l0
-                Key: (#0..=#2)
-        →Arrange (#1{replica_id})
-          →Map/Filter/Project
-            Project: #0, #1, #9, #10, #14, #16, #18..=#21
-            Map: uint8_to_numeric(#7{processes}), uint8_to_double(case when (#12 = 0) then null else #7{processes} end), ((#8 / uint8_to_double(case when (0 = uint8_to_numeric(#3{cpu_nano_cores})) then null else #3{cpu_nano_cores} end)) / #13), uint8_to_numeric(#4{memory_bytes}), ((#9 / uint8_to_double(case when (#15 = 0) then null else #4{memory_bytes} end)) / #13), uint8_to_numeric(#5{disk_bytes}), ((#10 / uint8_to_double(case when (#17 = 0) then null else #5{disk_bytes} end)) / #13), ((#11 / uint8_to_double(case when (0 = uint8_to_numeric(#6{heap_limit})) then null else #6{heap_limit} end)) / #13), (#17 * #12), (#15 * #12)
-              →Temporally-Bucketed Accumulable GroupAggregate
-                Simple aggregates: sum(uint8_to_double(#6{cpu_nano_cores})), sum(uint8_to_double(#7{memory_bytes})), sum(uint8_to_double(#8{disk_bytes})), sum(uint8_to_double(#10{heap_bytes}))
-                Key:
-                  Project: #9, #0, #1, #3..=#5, #11, #2
-                →Map/Filter/Project
-                  Filter: (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(08:00:00, #9, 1970-01-01 00:00:00 UTC) + 14 days)))
-                    →Delta Join [%0:l0[#0{replica_id}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]] [%1:mz_cluster_replica_sizes[#0{size}] » %0:l0[#1{size}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}]] [%2:mz_cluster_replica_metrics_history[#0{replica_id}] » %0:l0[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]]
-                      →Arrange (#0{replica_id}) (#1{size})
-                        →Fused with Child Map/Filter/Project
-                          Project: #0, #1
-                          Filter: (#1{size}) IS NOT NULL
-                            →Arranged l0
-                              Key: (#0..=#2)
-                      →Arranged mz_catalog.mz_cluster_replica_sizes
-                      →Arranged mz_internal.mz_cluster_replica_metrics_history
+      →Map/Filter/Project
+        TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((timestamptz_bin(01:00:00, #9, 1970-01-01 00:00:00 UTC) + 14 days)))
+          →Delta Join [%0:l0[#0{replica_id}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]] [%1:mz_cluster_replica_sizes[#0{size}] » %0:l0[#1{size}] » %2:mz_cluster_replica_metrics_history[#0{replica_id}]] [%2:mz_cluster_replica_metrics_history[#0{replica_id}] » %0:l0[#0{replica_id}] » %1:mz_cluster_replica_sizes[#0{size}]]
+            →Arrange (#0{replica_id}) (#1{size})
+              →Fused with Child Map/Filter/Project
+                Project: #0, #1
+                Filter: (#1{size}) IS NOT NULL
+                  →Arranged l0
+                    Key: (#0..=#2)
+            →Arranged mz_catalog.mz_cluster_replica_sizes
+            →Arranged mz_internal.mz_cluster_replica_metrics_history
     cte l2 =
-      →Delta Join [%0[#0{replica_id}] » %1[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%1[#0{replica_id}, #3{bucket_start}] » %0[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%2[#0{replica_id}, #3{bucket_start}] » %0[#0{replica_id}, #3{bucket_start}] » %1[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%3[#0{replica_id}, #4{bucket_start}] » %0[#0{replica_id}, #3{bucket_start}] » %1[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%4[#0{replica_id}, #3{bucket_start}] » %0[#0{replica_id}, #3{bucket_start}] » %1[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %5:l0[#0{replica_id}]] [%5:l0[#0{replica_id}] » %0[#0{replica_id}] » %1[#0{replica_id}, #3{bucket_start}] » %2[#0{replica_id}, #3{bucket_start}] » %3[#0{replica_id}, #4{bucket_start}] » %4[#0{replica_id}, #3{bucket_start}]]
-        →Arrange (#0{replica_id}) (#0{replica_id}, #3{bucket_start})
+      →Differential Join %0[#0..=#6] » %1[#0..=#6]
+        after %1:
+          Project: #0, #1, #7, #10, #11, #13..=#15, #17..=#20
+          Map: uint8_to_double(case when (0 = uint8_to_numeric(#6{processes})) then null else #6{processes} end), ((#9 / uint8_to_double(case when (0 = uint8_to_numeric(#3{cpu_nano_cores})) then null else #3{cpu_nano_cores} end)) / #12), ((#10 / uint8_to_double(case when (0 = uint8_to_numeric(#4{memory_bytes})) then null else #4{memory_bytes} end)) / #12), ((#11 / uint8_to_double(case when (0 = uint8_to_numeric(#5{disk_bytes})) then null else #5{disk_bytes} end)) / #12), uint8_to_double(#6{processes}), (uint8_to_double(#5{disk_bytes}) * #16), (uint8_to_double(#4{memory_bytes}) * #16), coalesce(#8, #14), timestamptz_bin(01:00:00, #0{occurred_at}, 1970-01-01 00:00:00 UTC)
+        →Temporally-Bucketed Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)
+          Aggregations: max, max
+          Key:
+            Project: #6, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#5, #9..=#11
+              →Read l1
+        →Temporally-Bucketed Accumulable GroupAggregate
+          Simple aggregates: sum(uint8_to_double(#6{cpu_nano_cores})), sum(uint8_to_double(#7{memory_bytes})), sum(uint8_to_double(#8{disk_bytes}))
+          Key:
+            Project: #9, #0, #1, #3..=#5, #2
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#9
+              →Read l1
+    cte l3 =
+      →Delta Join [%0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%1[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%2[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%3[#1{replica_id}, #4{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}] » %5:l0[#0{replica_id}]] [%4[#1{replica_id}, #3{bucket_start}] » %0[#1{replica_id}, #3{bucket_start}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %5:l0[#0{replica_id}]] [%5:l0[#0{replica_id}] » %0[#1{replica_id}] » %1[#1{replica_id}, #3{bucket_start}] » %2[#1{replica_id}, #3{bucket_start}] » %3[#1{replica_id}, #4{bucket_start}] » %4[#1{replica_id}, #3{bucket_start}]]
+        →Arrange (#1{replica_id}) (#1{replica_id}, #3{bucket_start})
           →Map/Filter/Project
             Project: #0..=#3
               →Non-monotonic TopK
-                Group By #3, #0
+                Group By #3, #1
                 Order By #4 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #5, #10, #11
-                  Map: coalesce(#2{memory_bytes}, 0)
-                    →Read l1
-        →Arrange (#0{replica_id}, #3{bucket_start})
+                  Project: #0, #1, #6, #11, #12
+                  Map: coalesce(#3{memory_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
           →Map/Filter/Project
             Project: #0..=#3
               →Non-monotonic TopK
-                Group By #3, #0
+                Group By #3, #1
                 Order By #4 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #6, #10, #11
-                  Map: coalesce(#3{disk_bytes}, 0)
-                    →Read l1
-        →Arrange (#0{replica_id}, #3{bucket_start})
+                  Project: #0, #1, #7, #11, #12
+                  Map: coalesce(#4{disk_bytes}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
           →Map/Filter/Project
             Project: #0..=#3
               →Non-monotonic TopK
-                Group By #3, #0
+                Group By #3, #1
                 Order By #4 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #4, #10, #11
-                  Map: coalesce(#4{cpu_percent}, 0)
-                    →Read l1
-        →Arrange (#0{replica_id}, #4{bucket_start})
+                  Project: #0, #1, #5, #11, #12
+                  Map: coalesce(#5{cpu_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #4{bucket_start})
           →Map/Filter/Project
             Project: #0..=#5
               →Non-monotonic TopK
-                Group By #4, #0
+                Group By #4, #1
                 Order By #6 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #5, #6, #10..=#12
-                  Map: case when ((#2{memory_bytes}) IS NULL AND (#3{disk_bytes}) IS NULL) then null else ((coalesce(#3{disk_bytes}, 0) + coalesce(#2{memory_bytes}, 0)) / numeric_to_double((#8{total_disk_bytes} + #9{total_memory_bytes}))) end, coalesce(#11{memory_and_disk_percent}, 0)
-                    →Read l1
-        →Arrange (#0{replica_id}, #3{bucket_start})
+                  Project: #0, #1, #6, #7, #11..=#13
+                  Map: case when ((#3{memory_bytes}) IS NULL AND (#4{disk_bytes}) IS NULL) then null else ((coalesce(#3{memory_bytes}, 0) + coalesce(#4{disk_bytes}, 0)) / case when (0 = (#9{total_memory_bytes} + #8{total_disk_bytes})) then null else (#9{total_memory_bytes} + #8{total_disk_bytes}) end) end, coalesce(#12{memory_and_disk_percent}, 0)
+                    →Read l2
+        →Arrange (#1{replica_id}, #3{bucket_start})
           →Map/Filter/Project
             Project: #0..=#3
               →Non-monotonic TopK
-                Group By #3, #0
+                Group By #3, #1
                 Order By #4 desc nulls_first
                 Limit 1
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #1, #7, #10, #11
-                  Map: coalesce(#7{heap_percent}, 0)
-                    →Read l1
+                  Project: #0, #1, #10..=#12
+                  Map: coalesce(#2{heap_bytes}, 0)
+                    →Read l2
         →Arrange (#0{replica_id})
           →Arranged l0
-    cte l3 =
-      →Differential Join %1[#0, #1] » %0:l2[#0, #3]
-        →Arrange (#0, #3)
-          →Stream l2
+    cte l4 =
+      →Differential Join %1[#0, #1] » %0:l3[#1, #3]
+        →Arrange (#1, #3)
+          →Stream l3
         →Arrange (#0, #1)
           →Map/Filter/Project
             Project: #0, #1, #3
@@ -935,32 +1207,33 @@ mz_internal.mz_console_cluster_utilization_overview:
                 →Differential Join %1:mz_cluster_replica_name_history[#1{id}] » %0[#0{replica_id}]
                   after %0:
                     Project: #0, #4, #1, #3
-                    Filter: ((#4{bucket_start} + 08:00:00) >= coalesce(#1{occurred_at}, 1970-01-01 00:00:00 UTC))
+                    Filter: ((#4{bucket_start} + 01:00:00) >= coalesce(#1{occurred_at}, 1970-01-01 00:00:00 UTC))
                   →Arrange (#0{replica_id})
                     →Distinct GroupAggregate
                       →Fused with Child Map/Filter/Project
-                        Project: #0, #3
-                          →Read l2
+                        Project: #1, #3
+                          →Read l3
                   →Arranged mz_internal.mz_cluster_replica_name_history
-    cte l4 =
-      →Differential Join %1[#1, #0] » %0:l3[#0{replica_id}, #3{bucket_start}]
-        →Arrange (#0{replica_id}, #3{bucket_start})
-          →Stream l3
+    cte l5 =
+      →Differential Join %1[#1, #0] » %0:l4[#1{replica_id}, #3{bucket_start}]
+        →Arrange (#1{replica_id}, #3{bucket_start})
+          →Stream l4
         →Arrange (#1, #0)
           →Temporally-Bucketed Non-incremental GroupAggregate
             Aggregation: jsonb_agg[order_by=[]](row(coalesce(jsonbable_to_jsonb(jsonb_build_object("replicaId", jsonbable_to_jsonb(#0{replica_id}), "occurredAt", jsonbable_to_jsonb(timestamp_with_time_zone_to_text(#2{occurred_at})), "status", "offline", "reason", jsonbable_to_jsonb(#1{reason}))), json_null)))
             Key:
               Project: #3, #0
-              Map: timestamptz_bin(08:00:00, #2{occurred_at}, 1970-01-01 00:00:00 UTC)
+              Map: timestamptz_bin(01:00:00, #2{occurred_at}, 1970-01-01 00:00:00 UTC)
             →Fused with Child Map/Filter/Project
               Project: #0, #3, #4
-              Filter: (#1{process_id} = 0) AND (#2{status} = "offline") AND (mz_now() <= timestamp_tz_to_mz_timestamp((timestamptz_bin(08:00:00, #4{occurred_at}, 1970-01-01 00:00:00 UTC) + 14 days)))
+              Filter: (#1{process_id} = 0) AND (#2{status} = "offline")
+              TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((timestamptz_bin(01:00:00, #4{occurred_at}, 1970-01-01 00:00:00 UTC) + 14 days)))
                 →Arranged mz_internal.mz_cluster_replica_status_history
                   Key: (#0{replica_id})
   →Return
     →Map/Filter/Project
       Project: #1, #0, #2..=#5, #10, #8, #9, #11..=#13, #6, #7, #17, #18, #16, #15, #14
-      Map: (#1{bucket_start} + 08:00:00)
+      Map: (#1{bucket_start} + 01:00:00)
         →Union
           →Map/Filter/Project
             Project: #0..=#17
@@ -968,14 +1241,14 @@ mz_internal.mz_console_cluster_utilization_overview:
               →Consolidating Union
                 →Negate Diffs
                   →Fused with Child Map/Filter/Project
-                    Project: #0, #3, #2, #1, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
-                      →Read l4
+                    Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                      →Read l5
                 →Fused with Child Map/Filter/Project
-                  Project: #0, #3, #2, #1, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
-                    →Read l3
+                  Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#16
+                    →Read l4
           →Fused with Child Map/Filter/Project
-            Project: #0, #3, #2, #1, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#17
-              →Read l4
+            Project: #1, #3, #2, #0, #5, #4, #7, #6, #9..=#11, #8, #13, #12, #14..=#17
+              →Read l5
 
 Used Indexes:
   - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
@@ -1448,7 +1721,8 @@ mz_internal.mz_recent_sql_text:
 
 Source mz_internal.mz_sql_text
   project=(#1..=#3)
-  filter=((mz_now() <= timestamp_tz_to_mz_timestamp((#0{prepared_day} + 4 days))))
+  filter=((mz_now() <= #4) AND (mz_now() < step_mz_timestamp(#4)))
+  map=(timestamp_tz_to_mz_timestamp((#0{prepared_day} + 4 days)))
 
 Target cluster: mz_catalog_server
 
@@ -3443,12 +3717,14 @@ mz_internal.pg_description_all_databases:
         →Arrange (#0)
           →Union
             →Stream l0
-            →Table Function guard_subquery_size(#0)
-              →Accumulable GroupAggregate
-                Simple aggregates: count(*)
-                →Fused with Child Map/Filter/Project
-                  Project: ()
-                    →Read l0
+            →Fused with Child Map/Filter/Project
+              Project: #1
+                →Table Function guard_subquery_size(#0)
+                  →Accumulable GroupAggregate
+                    Simple aggregates: count(*)
+                    →Fused with Child Map/Filter/Project
+                      Project: ()
+                        →Read l0
     cte l2 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2
@@ -3465,15 +3741,19 @@ mz_internal.pg_description_all_databases:
         →Fused with Child Map/Filter/Project
           Project: #0
             →Read l2
-        →Table Function guard_subquery_size(#0)
-          →Arranged l3
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Arranged l3
     cte l5 =
       →Union
         →Fused with Child Map/Filter/Project
           Project: #1
             →Read l2
-        →Table Function guard_subquery_size(#0)
-          →Arranged l3
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Arranged l3
     cte l6 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2
@@ -3490,15 +3770,19 @@ mz_internal.pg_description_all_databases:
         →Fused with Child Map/Filter/Project
           Project: #0
             →Read l6
-        →Table Function guard_subquery_size(#0)
-          →Arranged l7
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Arranged l7
     cte l9 =
       →Union
         →Fused with Child Map/Filter/Project
           Project: #1
             →Read l6
-        →Table Function guard_subquery_size(#0)
-          →Arranged l7
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Arranged l7
     cte l10 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2
@@ -3515,15 +3799,19 @@ mz_internal.pg_description_all_databases:
         →Fused with Child Map/Filter/Project
           Project: #0
             →Read l10
-        →Table Function guard_subquery_size(#0)
-          →Arranged l11
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Arranged l11
     cte l13 =
       →Union
         →Fused with Child Map/Filter/Project
           Project: #1
             →Read l10
-        →Table Function guard_subquery_size(#0)
-          →Arranged l11
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Arranged l11
   →Return
     →Delta Join [%0[#0{oid}] » %1[#1{oid}] » %2:mz_comments[#0{id}, lower(#1{object_type})]] [%1[#0{id}, lower(#2{type})] » %2:mz_comments[#0{id}, lower(#1{object_type})] » %0[#0{oid}]] [%2:mz_comments[#0{id}, lower(#1{object_type})] » %1[#0{id}, lower(#2{type})] » %0[#0{oid}]]
       path %0:
@@ -3827,12 +4115,14 @@ mz_internal.pg_type_all_databases:
     cte l11 =
       →Union
         →Stream l10
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l10
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l10
     cte l12 =
       →Delta Join [%0:l7[#0] » %1:mz_list_types[#0{id}] » %2:l9[#0{id}]] [%1:mz_list_types[#0{id}] » %0:l7[#0] » %2:l9[#0{id}]] [%2:l9[#0{id}] » %1:mz_list_types[#1{element_id}] » %0:l7[#0]]
         →Arranged l7
@@ -3842,12 +4132,14 @@ mz_internal.pg_type_all_databases:
     cte l13 =
       →Union
         →Stream l12
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l12
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l12
     cte l14 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
@@ -3861,12 +4153,14 @@ mz_internal.pg_type_all_databases:
     cte l16 =
       →Union
         →Stream l15
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l15
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l15
   →Return
     →Delta Join [%0:l4[#0..=#29] » %1:l5[#0..=#29] » %2[#0] » %3[#0] » %4[#0]] [%1:l5[#0] » %0:l4[#0..=#29] » %2[#0] » %3[#0] » %4[#0]] [%2[#0] » %1:l5[#0] » %0:l4[#0..=#29] » %3[#0] » %4[#0]] [%3[#0] » %1:l5[#0] » %0:l4[#0..=#29] » %2[#0] » %4[#0]] [%4[#0] » %1:l5[#0] » %0:l4[#0..=#29] » %2[#0] » %3[#0]]
       path %0:
@@ -4294,7 +4588,7 @@ mz_catalog.mz_indexes:
           Project: #2, #0, #1, #3, #4, #7, #5, #6
           Map: "s1"
       →Arrange (#1{name}) (#2{on_schema}, #3{on_name})
-        →Constant (76 rows)
+        →Constant (78 rows)
       →Arrange (empty key) (#1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3
@@ -4602,12 +4896,14 @@ mz_catalog.mz_sources:
     cte l3 =
       →Union
         →Stream l2
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l2
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l2
   →Return
     →Union
       →Differential Join %0:l0[#1] » %1[#0]
@@ -4677,8 +4973,10 @@ query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_system_privileges";
 ----
 mz_catalog.mz_system_privileges:
-  →Table Function unnest_array(parse_catalog_privileges(jsonb_build_array(jsonbable_to_jsonb(jsonb_build_object("grantee", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantee")), "grantor", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantor")), "acl_mode", jsonbable_to_jsonb(((#0{data} -> "value") -> "acl_mode")))))))
-    →Read mz_internal.mz_catalog_raw
+  →Fused with Child Map/Filter/Project
+    Project: #1
+      →Table Function unnest_array(parse_catalog_privileges(jsonb_build_array(jsonbable_to_jsonb(jsonb_build_object("grantee", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantee")), "grantor", jsonbable_to_jsonb(((#0{data} -> "key") -> "grantor")), "acl_mode", jsonbable_to_jsonb(((#0{data} -> "value") -> "acl_mode")))))))
+        →Read mz_internal.mz_catalog_raw
 
 Source mz_internal.mz_catalog_raw
   filter=(("SystemPrivileges" = (#0{data} ->> "kind")))
@@ -4795,6 +5093,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_overridden_system_parameters";
+----
+mz_internal.mz_overridden_system_parameters:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#1, #2)
+  filter=(("ServerConfiguration" = (#0{data} ->> "kind")))
+  map=(((#0{data} -> "key") ->> "name"), ((#0{data} -> "value") ->> "value"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_pending_cluster_replicas";
 ----
 mz_internal.mz_pending_cluster_replicas:
@@ -4825,21 +5138,6 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_overridden_system_parameters";
-----
-mz_internal.mz_overridden_system_parameters:
-  →Read mz_internal.mz_catalog_raw
-
-Source mz_internal.mz_catalog_raw
-  project=(#1, #2)
-  filter=(("ServerConfiguration" = (#0{data} ->> "kind")))
-  map=(((#0{data} -> "key") ->> "name"), ((#0{data} -> "value") ->> "value"))
-
-Target cluster: mz_catalog_server
-
-EOF
-
-query T multiline
 EXPLAIN SELECT * FROM "information_schema"."applicable_roles";
 ----
 Explained Query:
@@ -4853,12 +5151,14 @@ Explained Query:
     cte l1 =
       →Union
         →Stream l0
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l0
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l0
     cte l2 =
       →Union
         →Stream l1
@@ -5046,12 +5346,14 @@ Explained Query:
     cte l1 =
       →Union
         →Stream l0
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l0
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l0
     cte l2 =
       →Union
         →Stream l1
@@ -5190,12 +5492,14 @@ Explained Query:
     cte l1 =
       →Union
         →Stream l0
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l0
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l0
     cte l2 =
       →Union
         →Stream l1
@@ -5408,12 +5712,14 @@ Explained Query:
     cte l24 =
       →Union
         →Stream l23
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l23
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l23
     cte l25 =
       →Union
         →Fused with Child Map/Filter/Project
@@ -5479,12 +5785,14 @@ Explained Query:
     cte l32 =
       →Union
         →Stream l31
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l31
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l31
     cte l33 =
       →Accumulable GroupAggregate
         Simple aggregates: all((#1{right_col0_2} != #2))
@@ -5561,14 +5869,16 @@ Explained Query:
           Project: #1
             →Read l36
     cte l38 =
-      →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
-        →Differential Cross Join %0:l37[×] » %1:l4[×]
-          after %1:
-            Project: #0, #2
-            Map: error_if_null(#1, "role \"materialize\" does not exist")
-          →Arrange (empty key)
-            →Arranged l37
-          →Arranged l4
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+          →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
+            →Differential Cross Join %0:l37[×] » %1:l4[×]
+              after %1:
+                Project: #0, #2
+                Map: error_if_null(#1, "role \"materialize\" does not exist")
+              →Arrange (empty key)
+                →Arranged l37
+              →Arranged l4
     cte l39 =
       →Fused with Child Map/Filter/Project
         Filter: (false = (#0{grantee}) IS NULL)
@@ -5585,12 +5895,14 @@ Explained Query:
     cte l42 =
       →Union
         →Stream l41
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l41
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l41
     cte l43 =
       →Accumulable GroupAggregate
         Simple aggregates: any((#1{right_col0_4} = oid_to_text(#2)))
@@ -5685,10 +5997,12 @@ Explained Query:
     cte l48 =
       →Union
         →Stream l47
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Stream l47
+        →Fused with Child Map/Filter/Project
+          Project: #0
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Stream l47
     cte l49 =
       →Delta Cross Join [%0:l45[×] » %2:l9[×] » %1[#0]] [%1[#0] » %2:l9[×] » %0:l45[#0]] [%2:l9[×] » %0:l45[×] » %1[#0]]
         →Arrange (empty key) (#0)
@@ -5725,12 +6039,14 @@ Explained Query:
     cte l54 =
       →Union
         →Stream l53
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l53
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l53
     cte l55 =
       →Accumulable GroupAggregate
         Simple aggregates: all((#1{right_col0_2} != error_if_null(#2, (("role \"" || #0{grantor}) || "\" does not exist"))))
@@ -5798,14 +6114,16 @@ Explained Query:
           Project: #0
             →Read l58
     cte l60 =
-      →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
-        →Differential Cross Join %0:l59[×] » %1:l4[×]
-          after %1:
-            Project: #0, #2
-            Map: error_if_null(#1, "role \"materialize\" does not exist")
-          →Arrange (empty key)
-            →Arranged l59
-          →Arranged l4
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+          →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
+            →Differential Cross Join %0:l59[×] » %1:l4[×]
+              after %1:
+                Project: #0, #2
+                Map: error_if_null(#1, "role \"materialize\" does not exist")
+              →Arrange (empty key)
+                →Arranged l59
+              →Arranged l4
     cte l61 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
@@ -5818,12 +6136,14 @@ Explained Query:
     cte l63 =
       →Union
         →Stream l62
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l62
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l62
     cte l64 =
       →Accumulable GroupAggregate
         Simple aggregates: any((#1{right_col0_4} = oid_to_text(error_if_null(#2, (("role \"" || #0{grantor}) || "\" does not exist")))))
@@ -6167,12 +6487,14 @@ Explained Query:
     cte l7 =
       →Union
         →Stream l6
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l6
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l6
     cte l8 =
       →Union
         →Stream l7
@@ -6221,12 +6543,14 @@ Explained Query:
     cte l15 =
       →Union
         →Stream l14
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l14
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l14
     cte l16 =
       →Union
         →Fused with Child Map/Filter/Project
@@ -6336,12 +6660,14 @@ Explained Query:
     cte l28 =
       →Union
         →Stream l27
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l27
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l27
     cte l29 =
       →Accumulable GroupAggregate
         Simple aggregates: all((#1{right_col0_2} != #2))
@@ -6418,14 +6744,16 @@ Explained Query:
           Project: #1
             →Read l32
     cte l34 =
-      →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
-        →Differential Cross Join %0:l33[×] » %1:l18[×]
-          after %1:
-            Project: #0, #2
-            Map: error_if_null(#1, "role \"materialize\" does not exist")
-          →Arrange (empty key)
-            →Arranged l33
-          →Arranged l18
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+          →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
+            →Differential Cross Join %0:l33[×] » %1:l18[×]
+              after %1:
+                Project: #0, #2
+                Map: error_if_null(#1, "role \"materialize\" does not exist")
+              →Arrange (empty key)
+                →Arranged l33
+              →Arranged l18
     cte l35 =
       →Fused with Child Map/Filter/Project
         Filter: (false = (#0{grantee}) IS NULL)
@@ -6442,12 +6770,14 @@ Explained Query:
     cte l38 =
       →Union
         →Stream l37
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l37
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l37
     cte l39 =
       →Accumulable GroupAggregate
         Simple aggregates: any((#1{right_col0_4} = oid_to_text(#2)))
@@ -6542,10 +6872,12 @@ Explained Query:
     cte l44 =
       →Union
         →Stream l43
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Stream l43
+        →Fused with Child Map/Filter/Project
+          Project: #0
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Stream l43
     cte l45 =
       →Delta Cross Join [%0:l41[×] » %2:l21[×] » %1[#0]] [%1[#0] » %2:l21[×] » %0:l41[#0]] [%2:l21[×] » %0:l41[×] » %1[#0]]
         →Arrange (empty key) (#0)
@@ -6582,12 +6914,14 @@ Explained Query:
     cte l50 =
       →Union
         →Stream l49
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l49
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l49
     cte l51 =
       →Accumulable GroupAggregate
         Simple aggregates: all((#1{right_col0_2} != error_if_null(#2, (("role \"" || #0{grantor}) || "\" does not exist"))))
@@ -6655,14 +6989,16 @@ Explained Query:
           Project: #0
             →Read l54
     cte l56 =
-      →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
-        →Differential Cross Join %0:l55[×] » %1:l18[×]
-          after %1:
-            Project: #0, #2
-            Map: error_if_null(#1, "role \"materialize\" does not exist")
-          →Arrange (empty key)
-            →Arranged l55
-          →Arranged l18
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+          →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
+            →Differential Cross Join %0:l55[×] » %1:l18[×]
+              after %1:
+                Project: #0, #2
+                Map: error_if_null(#1, "role \"materialize\" does not exist")
+              →Arrange (empty key)
+                →Arranged l55
+              →Arranged l18
     cte l57 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
@@ -6675,12 +7011,14 @@ Explained Query:
     cte l59 =
       →Union
         →Stream l58
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l58
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l58
     cte l60 =
       →Accumulable GroupAggregate
         Simple aggregates: any((#1{right_col0_4} = oid_to_text(error_if_null(#2, (("role \"" || #0{grantor}) || "\" does not exist")))))
@@ -7258,6 +7596,36 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_console_cluster_utilization_overview_24h";
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #1..=#17, #0, #18
+    →Indexed mz_internal.mz_console_cluster_utilization_overview_24h (using mz_internal.mz_console_cluster_utilization_overview_24h_ind)
+
+Used Indexes:
+  - mz_internal.mz_console_cluster_utilization_overview_24h_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_console_cluster_utilization_overview_3h";
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #1, #0, #2..=#9
+    →Indexed mz_internal.mz_console_cluster_utilization_overview_3h (using mz_internal.mz_console_cluster_utilization_overview_3h_ind)
+
+Used Indexes:
+  - mz_internal.mz_console_cluster_utilization_overview_3h_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_global_frontiers";
 ----
 Explained Query (fast path):
@@ -7381,10 +7749,12 @@ Explained Query:
             Key:
               Project: #0
             →Distinct GroupAggregate
-              →Table Function unnest_list(#0{maintained_children})
-                →Differential Join %1:l2[#0{object_id}] » %0:l9[#0{id}]
-                  →Arranged l9
-                  →Arranged l2
+              →Fused with Child Map/Filter/Project
+                Project: #1, #2
+                  →Table Function unnest_list(#0{maintained_children})
+                    →Differential Join %1:l2[#0{object_id}] » %0:l9[#0{id}]
+                      →Arranged l9
+                      →Arranged l2
       cte l11 =
         →Unarranged Raw Stream
           →Distinct GroupAggregate
@@ -7410,33 +7780,35 @@ Explained Query:
                             Filter: (#4{type} = "sink")
                               →Arranged mz_catalog.mz_objects
                                 Key: (#2{schema_id})
-                      →Table Function unnest_list(#1{indexes})
-                        →Differential Join %0:l5[#0..=#2] » %1[#0..=#2]
-                          →Arrange (#0..=#2)
-                            →Stream l5
-                          →Arrange (#0..=#2)
-                            →Consolidating Union
-                              →Negate Diffs
-                                →Unarranged Raw Stream
-                                  →Distinct GroupAggregate
-                                    →Differential Join %1:mz_object_transitive_dependencies[#0{object_id}] » %2:mz_objects[#0{id}] » %0:l6[#0{id}, #1]
-                                      after %0:
-                                        Project: #0, #1, #3
-                                        Filter: NOT((#3{indexes} @> list[#2{object_id}]))
-                                      →Arrange (#0{id}, #1)
-                                        →Fused with Child Map/Filter/Project
-                                          Filter: (#1) IS NOT NULL
-                                            →Arranged l6
-                                              Key: (#0..=#2)
-                                      →Arranged mz_internal.mz_object_transitive_dependencies
-                                      →Arrange (#0{id})
-                                        →Fused with Child Map/Filter/Project
-                                          Project: #1, #6
-                                          Filter: ((#4{type} = "index") OR (#4{type} = "materialized-view")) AND (#6{cluster_id}) IS NOT NULL
-                                            →Arranged mz_catalog.mz_objects
-                                              Key: (#2{schema_id})
-                              →Unarranged Raw Stream
-                                →Arranged l6
+                      →Fused with Child Map/Filter/Project
+                        Project: #0, #2
+                          →Table Function unnest_list(#1{indexes})
+                            →Differential Join %0:l5[#0..=#2] » %1[#0..=#2]
+                              →Arrange (#0..=#2)
+                                →Stream l5
+                              →Arrange (#0..=#2)
+                                →Consolidating Union
+                                  →Negate Diffs
+                                    →Unarranged Raw Stream
+                                      →Distinct GroupAggregate
+                                        →Differential Join %1:mz_object_transitive_dependencies[#0{object_id}] » %2:mz_objects[#0{id}] » %0:l6[#0{id}, #1]
+                                          after %0:
+                                            Project: #0, #1, #3
+                                            Filter: NOT((#3{indexes} @> list[#2{object_id}]))
+                                          →Arrange (#0{id}, #1)
+                                            →Fused with Child Map/Filter/Project
+                                              Filter: (#1) IS NOT NULL
+                                                →Arranged l6
+                                                  Key: (#0..=#2)
+                                          →Arranged mz_internal.mz_object_transitive_dependencies
+                                          →Arrange (#0{id})
+                                            →Fused with Child Map/Filter/Project
+                                              Project: #1, #6
+                                              Filter: ((#4{type} = "index") OR (#4{type} = "materialized-view")) AND (#6{cluster_id}) IS NOT NULL
+                                                →Arranged mz_catalog.mz_objects
+                                                  Key: (#2{schema_id})
+                                  →Unarranged Raw Stream
+                                    →Arranged l6
               →Delta Join [%0:l10[#0{id}] » %1:l7[#1{referenced_object_id}] » %2:l8[#0{id}, #1{maintained_children}]] [%1:l7[#0{object_id}] » %0:l10[#0{id}] » %2:l8[#0{id}, #1{maintained_children}]] [%2:l8[#0{id}, #1{maintained_children}] » %1:l7[#0{object_id}] » %0:l10[#0{id}, #1{maintained_children}]]
                 path %0:
                   Final closure:
@@ -7884,12 +8256,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_mcp_data_product_details";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#3{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #4, #7
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_objects
-              Key: (#2{schema_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0..=#2, #4..=#6
+          →Table Function mz_aclexplode(#3{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #4, #7
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_objects
+                  Key: (#2{schema_id})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#4{grantee}))
@@ -8468,12 +8842,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_mcp_data_products";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#3{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #4, #7
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_objects
-              Key: (#2{schema_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0..=#2, #4..=#6
+          →Table Function mz_aclexplode(#3{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #4, #7
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_objects
+                  Key: (#2{schema_id})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#4{grantee}))
@@ -9117,36 +9493,46 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_all_my_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(array[#0{privileges}])
-        →Stream mz_catalog.mz_system_privileges
+      →Fused with Child Map/Filter/Project
+        Project: #1..=#3
+          →Table Function mz_aclexplode(array[#0{privileges}])
+            →Stream mz_catalog.mz_system_privileges
     cte l1 =
-      →Table Function mz_aclexplode(#1{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #1, #3
-          Filter: NOT(like["s%"](#0{id}))
-            →Arranged mz_catalog.mz_clusters
-              Key: (#0{id})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #1, #3
+              Filter: NOT(like["s%"](#0{id}))
+                →Arranged mz_catalog.mz_clusters
+                  Key: (#0{id})
     cte l2 =
-      →Table Function mz_aclexplode(#1{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #4
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_databases
-              Key: (#2{name})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #4
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_databases
+                  Key: (#2{name})
     cte l3 =
-      →Table Function mz_aclexplode(#2{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #5
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_schemas
-              Key: (#2{database_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #1, #3..=#5
+          →Table Function mz_aclexplode(#2{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #5
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_schemas
+                  Key: (#2{database_id})
     cte l4 =
-      →Table Function mz_aclexplode(#3{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #4, #7
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_objects
-              Key: (#2{schema_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0..=#2, #4..=#6
+          →Table Function mz_aclexplode(#3{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #4, #7
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_objects
+                  Key: (#2{schema_id})
     cte l5 =
       →Negate Diffs
         →Fused with Child Map/Filter/Project
@@ -9652,36 +10038,46 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_all_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(array[#0{privileges}])
-        →Stream mz_catalog.mz_system_privileges
+      →Fused with Child Map/Filter/Project
+        Project: #1..=#3
+          →Table Function mz_aclexplode(array[#0{privileges}])
+            →Stream mz_catalog.mz_system_privileges
     cte l1 =
-      →Table Function mz_aclexplode(#1{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #1, #3
-          Filter: NOT(like["s%"](#0{id}))
-            →Arranged mz_catalog.mz_clusters
-              Key: (#0{id})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #1, #3
+              Filter: NOT(like["s%"](#0{id}))
+                →Arranged mz_catalog.mz_clusters
+                  Key: (#0{id})
     cte l2 =
-      →Table Function mz_aclexplode(#1{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #4
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_databases
-              Key: (#2{name})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #4
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_databases
+                  Key: (#2{name})
     cte l3 =
-      →Table Function mz_aclexplode(#2{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #5
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_schemas
-              Key: (#2{database_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #1, #3..=#5
+          →Table Function mz_aclexplode(#2{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #5
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_schemas
+                  Key: (#2{database_id})
     cte l4 =
-      →Table Function mz_aclexplode(#3{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #4, #7
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_objects
-              Key: (#2{schema_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0..=#2, #4..=#6
+          →Table Function mz_aclexplode(#3{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #4, #7
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_objects
+                  Key: (#2{schema_id})
     cte l5 =
       →Negate Diffs
         →Fused with Child Map/Filter/Project
@@ -10165,12 +10561,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_cluster_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#1{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #1, #3
-          Filter: NOT(like["s%"](#0{id}))
-            →Arranged mz_catalog.mz_clusters
-              Key: (#0{id})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #1, #3
+              Filter: NOT(like["s%"](#0{id}))
+                →Arranged mz_catalog.mz_clusters
+                  Key: (#0{id})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#2{grantee}))
@@ -10315,12 +10713,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_database_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#1{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #4
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_databases
-              Key: (#2{name})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #4
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_databases
+                  Key: (#2{name})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#2{grantee}))
@@ -10625,12 +11025,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_my_cluster_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#1{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #1, #3
-          Filter: NOT(like["s%"](#0{id}))
-            →Arranged mz_catalog.mz_clusters
-              Key: (#0{id})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #1, #3
+              Filter: NOT(like["s%"](#0{id}))
+                →Arranged mz_catalog.mz_clusters
+                  Key: (#0{id})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#2{grantee}))
@@ -10729,12 +11131,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_my_database_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#1{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #4
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_databases
-              Key: (#2{name})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #4
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_databases
+                  Key: (#2{name})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#2{grantee}))
@@ -11015,12 +11419,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_my_object_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#3{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #4, #7
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_objects
-              Key: (#2{schema_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0..=#2, #4..=#6
+          →Table Function mz_aclexplode(#3{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #4, #7
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_objects
+                  Key: (#2{schema_id})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#4{grantee}))
@@ -11216,12 +11622,14 @@ Explained Query:
     cte l1 =
       →Union
         →Stream l0
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l0
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l0
     cte l2 =
       →Union
         →Stream l1
@@ -11265,10 +11673,12 @@ Explained Query:
     cte l7 =
       →Union
         →Stream l6
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Stream l6
+        →Fused with Child Map/Filter/Project
+          Project: #0
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Stream l6
     cte l8 =
       →Arrange (empty key)
         →Fused with Child Map/Filter/Project
@@ -11353,12 +11763,14 @@ Explained Query:
     cte l18 =
       →Union
         →Stream l17
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l17
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l17
     cte l19 =
       →Accumulable GroupAggregate
         Simple aggregates: all((#1{right_col0_2} != error_if_null(#2, (("role \"" || #0{member}) || "\" does not exist"))))
@@ -11419,17 +11831,19 @@ Explained Query:
                   →Unarranged Raw Stream
                     →Arranged l13
     cte l22 =
-      →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
-        →Differential Cross Join %0[×] » %1:l9[×]
-          after %1:
-            Project: #0, #2
-            Map: error_if_null(#1, "role \"materialize\" does not exist")
-          →Arrange (empty key)
-            →Distinct GroupAggregate
-              →Fused with Child Map/Filter/Project
-                Project: #1
-                  →Read l21
-          →Arranged l9
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+          →Table Function unnest_array(({16661: {"16661"}, 16662: {"16662"}, 16663: {"16663"}, 16664: {"16664"}, 16944: {"16944"}, 16984: {"16984"}, 17076: {"17076"}, 20000: {"20000"}} -> oid_to_text(#1)))
+            →Differential Cross Join %0[×] » %1:l9[×]
+              after %1:
+                Project: #0, #2
+                Map: error_if_null(#1, "role \"materialize\" does not exist")
+              →Arrange (empty key)
+                →Distinct GroupAggregate
+                  →Fused with Child Map/Filter/Project
+                    Project: #1
+                      →Read l21
+              →Arranged l9
     cte l23 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
@@ -11442,12 +11856,14 @@ Explained Query:
     cte l25 =
       →Union
         →Stream l24
-        →Table Function guard_subquery_size(#1)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0
-                →Read l24
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l24
   →Return
     →Differential Join %1[#0] » %0:l21[#1]
       →Arrange (#1)
@@ -11492,12 +11908,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_my_schema_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#2{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #5
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_schemas
-              Key: (#2{database_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #1, #3..=#5
+          →Table Function mz_aclexplode(#2{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #5
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_schemas
+                  Key: (#2{database_id})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#3{grantee}))
@@ -11638,8 +12056,10 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_my_system_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(array[#0{privileges}])
-        →Stream mz_catalog.mz_system_privileges
+      →Fused with Child Map/Filter/Project
+        Project: #1..=#3
+          →Table Function mz_aclexplode(array[#0{privileges}])
+            →Stream mz_catalog.mz_system_privileges
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#1{grantee}))
@@ -11815,12 +12235,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_object_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#3{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #4, #7
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_objects
-              Key: (#2{schema_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0..=#2, #4..=#6
+          →Table Function mz_aclexplode(#3{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #4, #7
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_objects
+                  Key: (#2{schema_id})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#4{grantee}))
@@ -12036,12 +12458,14 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_schema_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(#2{privileges})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #3, #5
-          Filter: NOT(like["s%"](#1{id}))
-            →Arranged mz_catalog.mz_schemas
-              Key: (#2{database_id})
+      →Fused with Child Map/Filter/Project
+        Project: #0, #1, #3..=#5
+          →Table Function mz_aclexplode(#2{privileges})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #3, #5
+              Filter: NOT(like["s%"](#1{id}))
+                →Arranged mz_catalog.mz_schemas
+                  Key: (#2{database_id})
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#3{grantee}))
@@ -12230,8 +12654,10 @@ EXPLAIN SELECT * FROM "mz_internal"."mz_show_system_privileges";
 Explained Query:
   →With
     cte l0 =
-      →Table Function mz_aclexplode(array[#0{privileges}])
-        →Stream mz_catalog.mz_system_privileges
+      →Fused with Child Map/Filter/Project
+        Project: #1..=#3
+          →Table Function mz_aclexplode(array[#0{privileges}])
+            →Stream mz_catalog.mz_system_privileges
     cte l1 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#1{grantee}))
@@ -18409,27 +18835,31 @@ Explained Query:
     cte l8 =
       →Union
         →Stream l7
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l7
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l7
     cte l9 =
-      →Table Function mz_error_if_null(error_if_null(#0, "relation \"pg_tables\" does not exist"))
-        →Union
-          →Stream l8
-          →Map/Filter/Project
-            Project: #0
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Unarranged Raw Stream
-                    →Distinct GroupAggregate
-                      →Fused with Child Map/Filter/Project
-                        Project: ()
-                          →Read l8
-                →Constant (1 row)
+      →Fused with Child Map/Filter/Project
+        Project: #1
+          →Table Function mz_error_if_null(error_if_null(#0, "relation \"pg_tables\" does not exist"))
+            →Union
+              →Stream l8
+              →Map/Filter/Project
+                Project: #0
+                Map: null
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
+                            Project: ()
+                              →Read l8
+                    →Constant (1 row)
     cte l10 =
       →Arrange (#0{id})
         →Fused with Child Map/Filter/Project
@@ -18454,12 +18884,14 @@ Explained Query:
     cte l12 =
       →Union
         →Stream l11
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l11
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l11
     cte l13 =
       →Union
         →Stream l12
@@ -18477,12 +18909,14 @@ Explained Query:
     cte l14 =
       →Union
         →Stream l13
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l13
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l13
     cte l15 =
       →Differential Join %0[#0] » %1:l6[#0]
         →Distinct GroupAggregate
@@ -18536,27 +18970,31 @@ Explained Query:
     cte l16 =
       →Union
         →Stream l15
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l15
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l15
     cte l17 =
-      →Table Function mz_error_if_null(error_if_null(#0, "relation \"pg_views\" does not exist"))
-        →Union
-          →Stream l16
-          →Map/Filter/Project
-            Project: #0
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Unarranged Raw Stream
-                    →Distinct GroupAggregate
-                      →Fused with Child Map/Filter/Project
-                        Project: ()
-                          →Read l16
-                →Constant (1 row)
+      →Fused with Child Map/Filter/Project
+        Project: #1
+          →Table Function mz_error_if_null(error_if_null(#0, "relation \"pg_views\" does not exist"))
+            →Union
+              →Stream l16
+              →Map/Filter/Project
+                Project: #0
+                Map: null
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
+                            Project: ()
+                              →Read l16
+                    →Constant (1 row)
     cte l18 =
       →Differential Join %1[#0] » %0:l17[#0]
         after %0:
@@ -18575,12 +19013,14 @@ Explained Query:
     cte l19 =
       →Union
         →Stream l18
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l18
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l18
     cte l20 =
       →Union
         →Stream l19
@@ -18598,12 +19038,14 @@ Explained Query:
     cte l21 =
       →Union
         →Stream l20
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l20
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l20
     cte l22 =
       →Differential Join %0[#0] » %1:l6[#0]
         →Distinct GroupAggregate
@@ -18657,27 +19099,31 @@ Explained Query:
     cte l23 =
       →Union
         →Stream l22
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l22
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l22
     cte l24 =
-      →Table Function mz_error_if_null(error_if_null(#0, "relation \"pg_matviews\" does not exist"))
-        →Union
-          →Stream l23
-          →Map/Filter/Project
-            Project: #0
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Unarranged Raw Stream
-                    →Distinct GroupAggregate
-                      →Fused with Child Map/Filter/Project
-                        Project: ()
-                          →Read l23
-                →Constant (1 row)
+      →Fused with Child Map/Filter/Project
+        Project: #1
+          →Table Function mz_error_if_null(error_if_null(#0, "relation \"pg_matviews\" does not exist"))
+            →Union
+              →Stream l23
+              →Map/Filter/Project
+                Project: #0
+                Map: null
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
+                            Project: ()
+                              →Read l23
+                    →Constant (1 row)
     cte l25 =
       →Differential Join %1[#0] » %0:l24[#0]
         after %0:
@@ -18696,12 +19142,14 @@ Explained Query:
     cte l26 =
       →Union
         →Stream l25
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l25
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l25
     cte l27 =
       →Union
         →Stream l26
@@ -18719,12 +19167,14 @@ Explained Query:
     cte l28 =
       →Union
         →Stream l27
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l27
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l27
     cte l29 =
       →Differential Join %0:mz_indexes[#3{on_id}] » %1:l0[#0{id}]
         →Arrange (#3{on_id})
@@ -18789,27 +19239,31 @@ Explained Query:
     cte l32 =
       →Union
         →Stream l31
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l31
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l31
     cte l33 =
-      →Table Function mz_error_if_null(error_if_null(#0, "relation \"pg_index\" does not exist"))
-        →Union
-          →Stream l32
-          →Map/Filter/Project
-            Project: #0
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Unarranged Raw Stream
-                    →Distinct GroupAggregate
-                      →Fused with Child Map/Filter/Project
-                        Project: ()
-                          →Read l32
-                →Constant (1 row)
+      →Fused with Child Map/Filter/Project
+        Project: #1
+          →Table Function mz_error_if_null(error_if_null(#0, "relation \"pg_index\" does not exist"))
+            →Union
+              →Stream l32
+              →Map/Filter/Project
+                Project: #0
+                Map: null
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
+                            Project: ()
+                              →Read l32
+                    →Constant (1 row)
     cte l34 =
       →Differential Join %1[#0] » %0:l33[#0]
         after %0:
@@ -18828,12 +19282,14 @@ Explained Query:
     cte l35 =
       →Union
         →Stream l34
-        →Table Function guard_subquery_size(#0)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: ()
-                →Read l34
+        →Fused with Child Map/Filter/Project
+          Project: #1
+            →Table Function guard_subquery_size(#0)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: ()
+                    →Read l34
     cte l36 =
       →Differential Cross Join %0:l30[×] » %1[×]
         →Arrange (empty key)
@@ -18857,12 +19313,14 @@ Explained Query:
         →Fused with Child Map/Filter/Project
           Project: #0..=#7, #3, #8..=#15
             →Read l36
-        →Table Function guard_subquery_size(#15)
-          →Accumulable GroupAggregate
-            Simple aggregates: count(*)
-            →Fused with Child Map/Filter/Project
-              Project: #0..=#14
-                →Read l36
+        →Fused with Child Map/Filter/Project
+          Project: #0..=#7, #3, #8..=#14, #16
+            →Table Function guard_subquery_size(#15)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#14
+                    →Read l36
     cte l38 =
       →Arrange (empty key)
         →Union

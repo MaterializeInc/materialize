@@ -150,8 +150,21 @@ impl Coordinator {
             session,
             catalog_state: self.catalog().state(),
         };
-        style.prep_scalar_expr(secret_as)?;
-        let evaled = secret_as.eval(&[], &temp_storage)?;
+        // Preparing and evaluating the secret expression can fail with an error
+        // that embeds the value being evaluated (e.g. a `bytea` parse error quotes
+        // its input). That value is the secret itself, so we discard the underlying
+        // error and surface a vague message, to avoid including the secret in the
+        // statement log (or some other log file somewhere). We wrap both calls,
+        // rather than just the ones that leak today, so a future error added to
+        // either is covered by default.
+        let secret_eval_err =
+            || AdapterError::Unstructured(anyhow::anyhow!("could not evaluate secret value"));
+        style
+            .prep_scalar_expr(secret_as)
+            .map_err(|_| secret_eval_err())?;
+        let evaled = secret_as
+            .eval(&[], &temp_storage)
+            .map_err(|_| secret_eval_err())?;
 
         if evaled == Datum::Null {
             coord_bail!("secret value can not be null");
@@ -177,10 +190,9 @@ impl Coordinator {
         // `SecretsReader::read_string` will panic if the secret contains
         // invalid UTF-8.
         if std::str::from_utf8(payload).is_err() {
-            // Intentionally produce a vague error message (rather than
-            // including the invalid bytes, for example), to avoid including
-            // secret material in the error message, which might end up in a log
-            // file somewhere.
+            // Similarly to above, intentionally produce a vague error message
+            // (rather than  including the invalid bytes, for example), to avoid
+            // including secret material in the error message.
             coord_bail!("secret value must be valid UTF-8");
         }
 

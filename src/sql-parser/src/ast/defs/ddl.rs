@@ -58,9 +58,11 @@ impl WithOptionName for MaterializedViewOptionName {
     fn redact_value(&self) -> bool {
         match self {
             MaterializedViewOptionName::AssertNotNull
-            | MaterializedViewOptionName::PartitionBy
             | MaterializedViewOptionName::RetainHistory
             | MaterializedViewOptionName::Refresh => false,
+            // The value is an arbitrary user expression/literal that may embed
+            // sensitive data, so redact it (mirrors `KafkaSinkConfigOptionName`).
+            MaterializedViewOptionName::PartitionBy => true,
         }
     }
 }

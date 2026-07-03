@@ -149,55 +149,39 @@ const PasswordLoginForm = () => {
   );
 };
 
-const SsoLoginLink = () => {
+const SsoSignInButton = ({ onClick }: { onClick: () => void }) => (
+  <Button variant="primary" size="lg" width="100%" onClick={onClick}>
+    Sign in with SSO
+  </Button>
+);
+
+const AuthModeToggleLink = ({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const [error, setError] = useState<string | null>(null);
-  const auth = useAuth();
-
-  // For internal errors, react-oidc-context won't throw an error in auth.signinRedirect,
-  // but will save it in its error object. So we need to check the error state
-  const oidcError = auth.error?.message ?? null;
-
-  const oidcDisplayError =
-    error ||
-    (oidcError &&
-      `${oidcError}. It looks like there may be an issue with the sign-in configuration. Please review your OIDC settings or check the console logs for more information.`) ||
-    null;
-
-  const handleSsoLogin = () => {
-    setError(null);
-    auth.signinRedirect().catch((err: unknown) => {
-      setError(
-        err instanceof Error ? err.message : "Failed to initiate SSO login",
-      );
-    });
-  };
-
-  if (!auth) {
-    return null;
-  }
-
   return (
-    <VStack spacing="2" alignItems="center">
-      {oidcDisplayError && (
-        <Alert variant="error" minWidth="100%" message={oidcDisplayError} />
-      )}
-      <Link
-        color={colors.accent.brightPurple}
-        fontSize="sm"
-        onClick={handleSsoLogin}
-        cursor="pointer"
-        textDecoration="none"
-        _hover={{ textDecoration: "underline" }}
-      >
-        Use single sign-on
-      </Link>
-    </VStack>
+    <Link
+      alignSelf="center"
+      color={colors.accent.brightPurple}
+      fontSize="sm"
+      onClick={onClick}
+      cursor="pointer"
+      textDecoration="none"
+      _hover={{ textDecoration: "underline" }}
+    >
+      {label}
+    </Link>
   );
 };
 
 export const Login = () => {
-  const { data: auth, error: oidcInitializationError } = useOidcManagerQuery();
+  const { data: oidcManager, error: oidcInitializationError } =
+    useOidcManagerQuery();
+  const auth = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Surface the one-shot auth error from the redirect, then strip it from the
@@ -212,6 +196,29 @@ export const Login = () => {
     nextParams.delete(LOGIN_ERROR_PARAM);
     setSearchParams(nextParams, { replace: true });
   }, [searchParams, setSearchParams]);
+
+  const isOidcAvailable = Boolean(oidcManager && auth);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [ssoError, setSsoError] = useState<string | null>(null);
+
+  // `react-oidc-context` swallows some redirect failures into `auth.error`
+  // instead of rejecting the promise, so surface that too.
+  const ssoAuthError = auth?.error?.message ?? null;
+  const ssoDisplayError =
+    ssoError ||
+    (ssoAuthError &&
+      `${ssoAuthError}. It looks like there may be an issue with the sign-in configuration. Please review your OIDC settings or check the console logs for more information.`) ||
+    null;
+
+  const handleSsoLogin = () => {
+    if (!auth) return;
+    setSsoError(null);
+    auth.signinRedirect().catch((err: unknown) => {
+      setSsoError(
+        err instanceof Error ? err.message : "Failed to initiate SSO login",
+      );
+    });
+  };
 
   return (
     <AuthLayout>
@@ -237,8 +244,37 @@ export const Login = () => {
               mb="4"
             />
           )}
-          <PasswordLoginForm />
-          {!!auth && <SsoLoginLink />}
+          {isOidcAvailable && ssoDisplayError && (
+            <Alert
+              variant="error"
+              minWidth="100%"
+              message={ssoDisplayError}
+              mb="4"
+            />
+          )}
+          {isOidcAvailable ? (
+            <VStack alignItems="stretch" spacing="4">
+              {showPasswordForm ? (
+                <>
+                  <PasswordLoginForm />
+                  <AuthModeToggleLink
+                    label="Sign in with SSO"
+                    onClick={handleSsoLogin}
+                  />
+                </>
+              ) : (
+                <>
+                  <SsoSignInButton onClick={handleSsoLogin} />
+                  <AuthModeToggleLink
+                    label="Sign in with SQL password authentication"
+                    onClick={() => setShowPasswordForm(true)}
+                  />
+                </>
+              )}
+            </VStack>
+          ) : (
+            <PasswordLoginForm />
+          )}
         </VStack>
       </AuthContentContainer>
     </AuthLayout>

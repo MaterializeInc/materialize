@@ -53,7 +53,11 @@ fn cast_uint32_to_float64(a: u32) -> f64 {
 
 #[sqlfunc(
     sqlname = "uint4_to_uint2",
-    preserves_uniqueness = true,
+    // Partial: errors for `u32` values above `u16::MAX`. Marking this as
+    // uniqueness-preserving would let cast inversion rewrite `col::uint2 = lit`
+    // into an index lookup on `col`, skipping the cast and dropping its
+    // out-of-range error.
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint16ToUint32),
     is_monotone = true
 )]
@@ -73,7 +77,8 @@ fn cast_uint32_to_uint64(a: u32) -> u64 {
 
 #[sqlfunc(
     sqlname = "uint4_to_smallint",
-    preserves_uniqueness = true,
+    // Partial: errors for `u32` values above `i16::MAX`. See `uint4_to_uint2`.
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt16ToUint32),
     is_monotone = true
 )]
@@ -83,7 +88,8 @@ fn cast_uint32_to_int16(a: u32) -> Result<i16, EvalError> {
 
 #[sqlfunc(
     sqlname = "uint4_to_integer",
-    preserves_uniqueness = true,
+    // Partial: errors for `u32` values above `i32::MAX`. See `uint4_to_uint2`.
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastInt32ToUint32),
     is_monotone = true
 )]

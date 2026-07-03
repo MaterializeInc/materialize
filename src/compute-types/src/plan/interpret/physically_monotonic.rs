@@ -14,13 +14,14 @@ use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
 use differential_dataflow::lattice::Lattice;
-use mz_expr::{EvalError, Id, MapFilterProject, MirScalarExpr, TableFunc};
+use mz_expr::{EvalError, Id, MfpPlan, SafeMfpPlan, TableFunc};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use timely::PartialOrder;
 
 use crate::plan::interpret::{BoundedLattice, Context, Interpreter};
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::{AvailableCollections, GetPlan};
@@ -60,7 +61,7 @@ impl PartialOrder for PhysicallyMonotonic {
 }
 
 /// Provides a concrete implementation of an interpreter that determines if
-/// the output of `Plan` expressions is physically monotonic in a single-time
+/// the output of `LirRelationExpr` expressions is physically monotonic in a single-time
 /// dataflow, potentially taking into account judgments about its inputs. We
 /// note that in a single-time dataflow, expressions in non-recursive contexts
 /// (i.e., outside of `LetRec` values) process streams that are at a minimum
@@ -104,7 +105,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _plan: &GetPlan,
     ) -> Self::Domain {
         // A get operator yields physically monotonic output iff the corresponding
-        // `Plan::Get` is on a local or global ID that is known to provide physically
+        // `LirRelationExpr::Get` is on a local or global ID that is known to provide physically
         // monotonic input. The way this becomes know is through the interpreter itself
         // for non-recursive local IDs or through configuration for the global IDs of
         // monotonic sources and indexes. Recursive local IDs are always assumed to
@@ -125,8 +126,8 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         &self,
         _ctx: &Context<Self::Domain>,
         input: Self::Domain,
-        mfp: &MapFilterProject,
-        _input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        mfp: &MfpPlan<LirScalarExpr>,
+        _input_key_val: &Option<(Vec<LirScalarExpr>, Option<Row>)>,
     ) -> Self::Domain {
         // In a single-time context, we propagate the monotonicity status of the
         // input, conservatively treating an MFP with temporal predicates as
@@ -137,17 +138,17 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         // one-shot dataflow runs at a single time. We keep the check anyway as
         // defense-in-depth and to mirror the judgment made for
         // `MirRelationExpr::Filter` in the MIR monotonicity analysis.
-        PhysicallyMonotonic(input.0 && !mfp.has_temporal_predicates())
+        PhysicallyMonotonic(input.0 && !mfp.has_temporal_bounds())
     }
 
     fn flat_map(
         &self,
         _ctx: &Context<Self::Domain>,
-        _input_key: &Option<Vec<MirScalarExpr>>,
+        _input_key: &Option<Vec<LirScalarExpr>>,
         input: Self::Domain,
-        _exprs: &Vec<MirScalarExpr>,
+        _exprs: &Vec<LirScalarExpr>,
         func: &TableFunc,
-        mfp: &MapFilterProject,
+        mfp: &MfpPlan<LirScalarExpr>,
     ) -> Self::Domain {
         // In a single-time context, we propagate the monotonicity status of the
         // input, but only if the table function preserves the append-only
@@ -159,9 +160,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         // a single time. Together this mirrors the judgment made for
         // `MirRelationExpr::FlatMap` (combined with `MirRelationExpr::Filter`) in
         // the MIR monotonicity analysis.
-        PhysicallyMonotonic(
-            input.0 && func.preserves_monotonicity() && !mfp.has_temporal_predicates(),
-        )
+        PhysicallyMonotonic(input.0 && func.preserves_monotonicity() && !mfp.has_temporal_bounds())
     }
 
     fn join(
@@ -171,7 +170,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _plan: &JoinPlan,
     ) -> Self::Domain {
         // When we see a join, we must consider that the inputs could have
-        // been `Plan::Get`s on arrangements. These are not in general safe
+        // been `LirRelationExpr::Get`s on arrangements. These are not in general safe
         // wrt. producing physically monotonic data. So here, we conservatively
         // judge that output of a join to be physically monotonic iff all
         // inputs are physically monotonic.
@@ -181,11 +180,11 @@ impl Interpreter for SingleTimeMonotonic<'_> {
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
-        _input_key: &Option<Vec<MirScalarExpr>>,
+        _input_key: &Option<Vec<LirScalarExpr>>,
         _input: Self::Domain,
         _key_val_plan: &KeyValPlan,
         _plan: &ReducePlan,
-        _mfp_after: &MapFilterProject,
+        _mfp_after: &SafeMfpPlan<LirScalarExpr>,
     ) -> Self::Domain {
         // In a recursive context, reduce will advance across timestamps
         // and may need to retract. Outside of a recursive context, the
@@ -244,10 +243,10 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _ctx: &Context<Self::Domain>,
         input: Self::Domain,
         _forms: &AvailableCollections,
-        _input_key: &Option<Vec<MirScalarExpr>>,
-        _input_mfp: &MapFilterProject,
+        _input_key: &Option<Vec<LirScalarExpr>>,
+        _input_mfp: &MfpPlan<LirScalarExpr>,
     ) -> Self::Domain {
-        // `Plan::ArrangeBy` is better thought of as `ensure_collections`, i.e., it
+        // `LirRelationExpr::ArrangeBy` is better thought of as `ensure_collections`, i.e., it
         // makes sure that the requested `forms` are present and builds them only
         // if not already available. Many `forms` may be requested, as the downstream
         // consumers of this operator may be many different ones (as we support plan graphs,
@@ -269,15 +268,20 @@ impl Interpreter for SingleTimeMonotonic<'_> {
 
 #[cfg(test)]
 mod tests {
-    use mz_expr::UnmaterializableFunc;
+    use mz_expr::{MapFilterProject, MirScalarExpr, UnmaterializableFunc};
+    use mz_repr::Datum;
+
+    use crate::plan::scalar::mfp_mir_to_lir_plan;
 
     use super::*;
 
     /// A `MapFilterProject` over `arity` columns that contains a temporal
     /// predicate (i.e., a predicate referencing `mz_now()`).
     fn temporal_mfp(arity: usize) -> MapFilterProject {
-        MapFilterProject::new(arity).filter([MirScalarExpr::CallUnmaterializable(
-            UnmaterializableFunc::MzNow,
+        MapFilterProject::new(arity).filter([MirScalarExpr::call_binary(
+            MirScalarExpr::literal(Ok(Datum::UInt64(0)), mz_repr::ReprScalarType::UInt64),
+            MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow),
+            mz_expr::func::Lte,
         )])
     }
 
@@ -286,7 +290,7 @@ mod tests {
         let monotonic_ids = BTreeSet::new();
         let interpreter = SingleTimeMonotonic::new(&monotonic_ids);
         let ctx = Context::default();
-        let mfp = MapFilterProject::new(1);
+        let mfp = MapFilterProject::new(1).into_plan().unwrap();
 
         // A monotonicity-preserving table function (e.g., `generate_series`)
         // propagates the input's monotonicity.
@@ -317,7 +321,7 @@ mod tests {
         let monotonic_ids = BTreeSet::new();
         let interpreter = SingleTimeMonotonic::new(&monotonic_ids);
         let ctx = Context::default();
-        let mfp = MapFilterProject::new(1);
+        let mfp = MapFilterProject::new(1).into_plan().unwrap();
 
         // `repeat_row` does not preserve monotonicity (it can emit retractions),
         // so even a physically monotonic input yields a non-monotonic output.
@@ -339,6 +343,7 @@ mod tests {
         let monotonic_ids = BTreeSet::new();
         let interpreter = SingleTimeMonotonic::new(&monotonic_ids);
         let ctx = Context::default();
+        let mfp = mfp_mir_to_lir_plan(temporal_mfp(1));
 
         // Even with a monotonicity-preserving table function and a monotonic
         // input, a temporal predicate in the after-MFP breaks monotonicity, as
@@ -349,7 +354,7 @@ mod tests {
             PhysicallyMonotonic(true),
             &vec![],
             &TableFunc::GenerateSeriesInt64,
-            &temporal_mfp(1),
+            &mfp,
         );
         assert_eq!(result, PhysicallyMonotonic(false));
     }
@@ -359,7 +364,7 @@ mod tests {
         let monotonic_ids = BTreeSet::new();
         let interpreter = SingleTimeMonotonic::new(&monotonic_ids);
         let ctx = Context::default();
-        let mfp = MapFilterProject::new(1);
+        let mfp = mfp_mir_to_lir_plan(MapFilterProject::new(1));
 
         // Without temporal predicates, the MFP just propagates its input's
         // monotonicity.
@@ -375,9 +380,10 @@ mod tests {
         let monotonic_ids = BTreeSet::new();
         let interpreter = SingleTimeMonotonic::new(&monotonic_ids);
         let ctx = Context::default();
+        let mfp = mfp_mir_to_lir_plan(temporal_mfp(1));
 
         // A temporal predicate breaks monotonicity even for a monotonic input.
-        let result = interpreter.mfp(&ctx, PhysicallyMonotonic(true), &temporal_mfp(1), &None);
+        let result = interpreter.mfp(&ctx, PhysicallyMonotonic(true), &mfp, &None);
         assert_eq!(result, PhysicallyMonotonic(false));
     }
 }

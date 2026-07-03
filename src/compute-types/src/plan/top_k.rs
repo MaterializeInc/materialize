@@ -21,6 +21,7 @@ use mz_expr::ColumnOrder;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::bucketing_of_expected_group_size;
+use crate::plan::scalar::LirScalarExpr;
 
 /// A plan encapsulating different variants to compute a TopK operation.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
@@ -48,7 +49,7 @@ impl TopKPlan {
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
         offset: usize,
-        limit: Option<mz_expr::MirScalarExpr>,
+        limit: Option<LirScalarExpr>,
         arity: usize,
         monotonic: bool,
         expected_group_size: Option<u64>,
@@ -124,7 +125,7 @@ impl TopKPlan {
     }
 
     /// Return the limit of the TopK, if any.
-    pub fn limit(&self) -> Option<&mz_expr::MirScalarExpr> {
+    pub fn limit(&self) -> Option<&LirScalarExpr> {
         match self {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                 group_key: _,
@@ -190,7 +191,7 @@ pub struct MonotonicTopKPlan {
     pub order_key: Vec<mz_expr::ColumnOrder>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
-    pub limit: Option<mz_expr::MirScalarExpr>,
+    pub limit: Option<LirScalarExpr>,
     /// The number of columns in the input and output.
     pub arity: usize,
     /// True if the input is not physically monotonic, and the operator must perform
@@ -212,7 +213,7 @@ pub struct BasicTopKPlan {
     pub order_key: Vec<mz_expr::ColumnOrder>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
-    pub limit: Option<mz_expr::MirScalarExpr>,
+    pub limit: Option<LirScalarExpr>,
     /// A lower bound on the per-group ordinal position of the records to
     /// produce from each group.
     ///

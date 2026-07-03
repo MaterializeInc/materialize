@@ -7,14 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Utilities for transformation of [crate::plan::Plan] structures.
+//! Utilities for transformation of [crate::plan::LirRelationExpr] structures.
 
 use std::collections::BTreeSet;
 
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::GlobalId;
 
-use crate::plan::Plan;
+use crate::plan::LirRelationExpr;
 use crate::plan::interpret::{BoundedLattice, FoldMut, Interpreter};
 
 /// The type of configuration options passed to all [Transform::transform] calls
@@ -25,12 +25,12 @@ pub struct TransformConfig {
     pub monotonic_ids: BTreeSet<GlobalId>,
 }
 
-/// A transform for [crate::plan::Plan] nodes.
+/// A transform for [crate::plan::LirRelationExpr] nodes.
 pub trait Transform {
     /// TODO(database-issues#7533): Add documentation.
     fn name(&self) -> &'static str;
 
-    /// Transform a [Plan] using the given [TransformConfig].
+    /// Transform a [LirRelationExpr] using the given [TransformConfig].
     ///
     /// The default implementation of method just handles plan tracing and
     /// delegates to the [Transform::do_transform] method. Clients should
@@ -39,7 +39,7 @@ pub trait Transform {
     fn transform(
         &self,
         config: &TransformConfig,
-        plan: &mut Plan,
+        plan: &mut LirRelationExpr,
     ) -> Result<(), RecursionLimitError> {
         let _span = tracing::span!(target: "optimizer",
             tracing::Level::TRACE,
@@ -54,7 +54,7 @@ pub trait Transform {
     fn do_transform(
         &self,
         config: &TransformConfig,
-        plan: &mut Plan,
+        plan: &mut LirRelationExpr,
     ) -> Result<(), RecursionLimitError>;
 }
 
@@ -74,9 +74,9 @@ pub trait BottomUpTransform {
     /// Derive a [Self::Interpreter] instance from the [TransformConfig].
     fn interpreter(config: &TransformConfig) -> Self::Interpreter<'_>;
 
-    /// A callback for manipulating the root of the given [Plan] using the
+    /// A callback for manipulating the root of the given [LirRelationExpr] using the
     /// [Self::Info] derived for itself and its children.
-    fn action(plan: &mut Plan, plan_info: &Self::Info, input_infos: &[Self::Info]);
+    fn action(plan: &mut LirRelationExpr, plan_info: &Self::Info, input_infos: &[Self::Info]);
 }
 
 impl<A> Transform for A
@@ -90,7 +90,7 @@ where
     fn do_transform(
         &self,
         config: &TransformConfig,
-        plan: &mut Plan,
+        plan: &mut LirRelationExpr,
     ) -> Result<(), RecursionLimitError> {
         let mut fold = FoldMut::new(Self::interpreter(config), Self::action);
         fold.apply(plan).map(|_| ())

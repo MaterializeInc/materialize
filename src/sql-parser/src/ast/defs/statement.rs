@@ -199,6 +199,31 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
 }
 impl_display_t!(Statement);
 
+impl StatementKind {
+    /// Whether this kind of statement can carry secret values, i.e. `CREATE
+    /// SECRET` or `ALTER SECRET`. Such secret material must never be persisted
+    /// verbatim (e.g. in `mz_statement_execution_history`), not even in error
+    /// messages.
+    pub fn is_secret(&self) -> bool {
+        matches!(
+            self,
+            StatementKind::CreateSecret | StatementKind::AlterSecret
+        )
+    }
+
+    /// Whether this kind of statement can carry sensitive material that we
+    /// redact from logged SQL text (and error messages): secret values, or
+    /// bulk/PII user data in `INSERT`/`UPDATE`/`EXECUTE`. A superset of
+    /// [`Self::is_secret`].
+    pub fn is_sensitive(&self) -> bool {
+        self.is_secret()
+            || matches!(
+                self,
+                StatementKind::Insert | StatementKind::Update | StatementKind::Execute
+            )
+    }
+}
+
 /// A static str for each statement kind
 pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
     match kind {
@@ -1651,7 +1676,9 @@ impl WithOptionName for TableOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            TableOptionName::PartitionBy => false,
+            // The value is an arbitrary user expression/literal that may embed
+            // sensitive data, so redact it (mirrors `KafkaSinkConfigOptionName`).
+            TableOptionName::PartitionBy => true,
             TableOptionName::RetainHistory => false,
             TableOptionName::RedactedTest => true,
         }
@@ -1705,8 +1732,10 @@ impl WithOptionName for TableFromSourceOptionName {
             TableFromSourceOptionName::Details
             | TableFromSourceOptionName::TextColumns
             | TableFromSourceOptionName::ExcludeColumns
-            | TableFromSourceOptionName::RetainHistory
-            | TableFromSourceOptionName::PartitionBy => false,
+            | TableFromSourceOptionName::RetainHistory => false,
+            // The value is an arbitrary user expression/literal that may embed
+            // sensitive data, so redact it (mirrors `KafkaSinkConfigOptionName`).
+            TableFromSourceOptionName::PartitionBy => true,
         }
     }
 }
@@ -5747,9 +5776,15 @@ impl<T: AstInfo> AstDisplay for CommentStatement<T> {
         f.write_str(" IS ");
         match &self.comment {
             Some(s) => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(s));
-                f.write_str("'");
+                if f.redacted() {
+                    // The comment body is arbitrary free text and may contain PII,
+                    // so redact it like every other user-supplied value.
+                    f.write_str("'<REDACTED>'");
+                } else {
+                    f.write_str("'");
+                    f.write_node(&display::escape_single_quote_string(s));
+                    f.write_str("'");
+                }
             }
             None => f.write_str("NULL"),
         }

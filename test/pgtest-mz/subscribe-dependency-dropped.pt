@@ -1,0 +1,93 @@
+# Regression test for the pgwire SQLSTATE reported when a query's dependency is
+# concurrently dropped while the query is streaming results.
+#
+# `DROP`-ing a relation that a streaming query reads surfaces the same logical
+# event ("relation X was dropped mid-flight") on two different pgwire code
+# paths:
+#
+#   * SUBSCRIBE streamed directly            -> src/pgwire/src/protocol.rs send_rows
+#   * COPY (SUBSCRIBE ...) TO STDOUT         -> src/pgwire/src/protocol.rs copy_rows
+#
+# `copy_rows` converts the drop via `DroppedDependency::to_concurrent_dependency_drop()`
+# into `AdapterError::ConcurrentDependencyDrop`, which maps to SQLSTATE 42704
+# (UNDEFINED_OBJECT). `send_rows` instead flattens the drop into a plain string
+# via `DroppedDependency::query_terminated_error()` and reuses the generic error
+# sink, which hard-codes SQLSTATE XX000 (INTERNAL_ERROR).
+#
+# Case 1: SUBSCRIBE streamed directly (send_rows).
+#
+
+send
+Query {"query": "CREATE TABLE t (a int)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send conn=sub
+Query {"query": "SUBSCRIBE t"}
+----
+
+until conn=sub ignore=RowDescription
+NoticeResponse
+----
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"streaming SUBSCRIBE rows directly requires a client that does not buffer output"}]}
+
+send
+Query {"query": "DROP TABLE t"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+# Desired behavior, matching the COPY path in Case 2.
+# reports
+#   ErrorResponse {"fields":[..,{"typ":"C","value":"XX000"},{"typ":"M","value":"query could not complete because relation \"materialize.public.t\" was dropped"}]}
+until conn=sub ignore=DataRow
+ErrorResponse
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"42704"},{"typ":"M","value":"relation 'materialize.public.t' was dropped"}]}
+
+#
+# Case 2: COPY (SUBSCRIBE ...) TO STDOUT (copy_rows).
+#
+
+send
+Query {"query": "CREATE TABLE t (a int)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send conn=copy
+Query {"query": "COPY (SUBSCRIBE t) TO STDOUT"}
+----
+
+until conn=copy
+CopyOut
+----
+CopyOut {"format":"text","column_formats":["text","text","text"]}
+
+send
+Query {"query": "DROP TABLE t"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+until conn=copy ignore=CopyData
+ErrorResponse
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"42704"},{"typ":"M","value":"relation 'materialize.public.t' was dropped"}]}

@@ -1074,8 +1074,14 @@ class ResolvedImage:
                 str(self.image.path),
             ]
         else:
-            docker_tag = f"docker.io/{self.spec()}"
-            ghcr_tag = f"ghcr.io/materializeinc/{self.spec()}"
+            # `self.spec()` may already be ghcr-qualified (MZ_GHCR), so strip the
+            # prefix before re-deriving each tag. Otherwise they double-prefix and
+            # a dependent image's `FROM self.spec()` can't resolve the local build.
+            spec = self.spec()
+            if spec.startswith(GHCR_PREFIX):
+                spec = spec.removeprefix(GHCR_PREFIX)
+            docker_tag = f"docker.io/{spec}"
+            ghcr_tag = f"{GHCR_PREFIX}{spec}"
             cmd: Sequence[str] = [
                 "docker",
                 "buildx",

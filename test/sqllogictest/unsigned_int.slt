@@ -461,13 +461,25 @@ SELECT -12.0::float::uint8
 query error "18446744073709556000" uint8 out of range
 SELECT 18446744073709553665::float::uint8
 
-query I
+# This literal rounds to 2^64 in f64, which is out of range for uint8.
+query error "18446744073709552000" uint8 out of range
 SELECT 18446744073709553664.0::float::uint8
-----
-18446744073709551615
 
 query error "18446744073709556000" uint8 out of range
 SELECT 18446744073709553664.5::float::uint8
+
+# From real (float4)
+#
+# The "From float32" section above casts through `float` (= float8), so it does
+# not exercise real -> uint4/uint8. 2^32 and 2^64 are exactly representable as
+# f32 and must overflow, but u32::MAX/u64::MAX round up to them as f32, so a
+# `f <= (u32::MAX as f32)` guard lets them through and `as` saturates instead.
+
+query error "4294967300" uint4 out of range
+SELECT 4294967296.0::real::uint4
+
+query error "18446744000000000000" uint8 out of range
+SELECT 18446744073709551616.0::real::uint8
 
 # From float64
 
@@ -565,13 +577,20 @@ SELECT -12.0::double::uint8
 query error "18446744073709556000" uint8 out of range
 SELECT 18446744073709553665::double::uint8
 
-query I
+# This literal rounds to 2^64 in f64, which is out of range for uint8 (see the note below).
+query error "18446744073709552000" uint8 out of range
 SELECT 18446744073709553664.0::double::uint8
-----
-18446744073709551615
 
 query error "18446744073709556000" uint8 out of range
 SELECT 18446744073709553664.5::double::uint8
+
+# double_to_uint8 (src/expr/src/scalar/func/impls/float64.rs): 2^64 = 18446744073709551616 is
+# out of range for uint8 and must be rejected. `u64::MAX as f64` is not representable and
+# rounds up to exactly 2^64, so the range check compares against that bound with a strict `<`.
+# A `<=` bound would let 2^64 pass, and the following `as u64` cast would saturate it to
+# u64::MAX, silently returning 18446744073709551615.
+query error "18446744073709552000" uint8 out of range
+SELECT 18446744073709551616::float8::uint8
 
 # From text
 

@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use mz_compute_types::dataflows::{
     BuildDesc, DataflowDescription, IndexDesc, IndexImport, SourceImport,
 };
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection, SubscribeSinkConnection,
@@ -162,10 +162,10 @@ impl Input {
 ///  1. Accumulate a MIR-level [`DataflowDescription<OptimizedMirRelationExpr, ()>`]
 ///     using the same [`import_source`] / [`insert_plan`] / [`export_index`] helpers
 ///     the optimizer uses.
-///  2. Lower it to LIR via [`Plan::finalize_dataflow`], yielding
-///     [`DataflowDescription<Plan, ()>`].
+///  2. Lower it to LIR via [`LirRelationExpr::finalize_dataflow`], yielding
+///     [`DataflowDescription<LirRelationExpr, ()>`].
 ///  3. Augment it into [`DataflowDescription<RenderPlan, CollectionMetadata>`] by
-///     converting each object's [`Plan`] via [`RenderPlan::try_from`] and attaching
+///     converting each object's [`LirRelationExpr`] via [`RenderPlan::try_from`] and attaching
 ///     the storage [`CollectionMetadata`] to each source import — the same step
 ///     performed in `compute-client`'s `Instance::create_dataflow`.
 ///
@@ -439,8 +439,8 @@ impl DataflowBuilder {
                 .map_err(|e| anyhow::anyhow!("optimizing dataflow failed: {e}"))?;
         }
         // Lower MIR -> LIR. Deterministic and self-contained.
-        let lowered: DataflowDescription<Plan, ()> =
-            Plan::finalize_dataflow(self.mir, &features)
+        let lowered: DataflowDescription<LirRelationExpr, ()> =
+            LirRelationExpr::finalize_dataflow(self.mir, &features)
                 .map_err(|e| anyhow::anyhow!("lowering dataflow failed: {e}"))?;
         augment(lowered, &self.sources, &self.sinks)
     }
@@ -528,13 +528,13 @@ pub fn count_over_index(
 /// Convert a lowered `DataflowDescription<Plan, ()>` into the
 /// `<RenderPlan, CollectionMetadata>` form expected by the compute protocol.
 ///
-/// Mirrors `compute-client`'s `Instance::create_dataflow`: each object's [`Plan`]
+/// Mirrors `compute-client`'s `Instance::create_dataflow`: each object's [`LirRelationExpr`]
 /// is flattened into a [`RenderPlan`], and every source import is augmented with the
 /// storage [`CollectionMetadata`] needed by the compute instance to read it. The
 /// per-id [`PersistSource`] supplies the metadata and the exclusive `upper` telling
 /// the compute instance up to which timestamp the shard's data is available.
 fn augment(
-    lowered: DataflowDescription<Plan, ()>,
+    lowered: DataflowDescription<LirRelationExpr, ()>,
     sources: &BTreeMap<GlobalId, PersistSource>,
     sinks: &BTreeMap<GlobalId, CollectionMetadata>,
 ) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
@@ -640,6 +640,7 @@ mod tests {
 
     use mz_compute_types::plan::GetPlan;
     use mz_compute_types::plan::render_plan::Expr;
+    use mz_compute_types::plan::scalar::LirScalarExpr;
     use mz_expr::Id;
 
     /// Assert the assembled dataflow matches the verified structure: a single
@@ -702,7 +703,7 @@ mod tests {
             panic!("expected root ArrangeBy, got {:?}", root_node.expr);
         };
         assert_eq!(forms.arranged.len(), 1);
-        assert_eq!(forms.arranged[0].0, vec![MirScalarExpr::column(0)]);
+        assert_eq!(forms.arranged[0].0, vec![LirScalarExpr::column(0)]);
         assert_eq!(
             *strategy,
             mz_compute_types::plan::ArrangementStrategy::Direct

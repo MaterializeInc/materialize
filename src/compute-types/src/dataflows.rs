@@ -21,8 +21,9 @@ use mz_storage_types::time_dependence::TimeDependence;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use crate::plan::Plan;
+use crate::plan::LirRelationExpr;
 use crate::plan::render_plan::RenderPlan;
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
@@ -40,7 +41,7 @@ pub struct DataflowDescription<P, S: 'static = ()> {
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view/table)
-    pub index_exports: BTreeMap<GlobalId, (IndexDesc, ReprRelationType)>,
+    pub index_exports: BTreeMap<GlobalId, (IndexDesc<MirScalarExpr>, ReprRelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
     pub sink_exports: BTreeMap<GlobalId, ComputeSinkDesc<S>>,
@@ -103,7 +104,7 @@ impl<P, S> DataflowDescription<P, S> {
     }
 }
 
-impl DataflowDescription<Plan, ()> {
+impl DataflowDescription<LirRelationExpr, ()> {
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
@@ -132,7 +133,7 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     pub fn import_index(
         &mut self,
         id: GlobalId,
-        desc: IndexDesc,
+        desc: IndexDesc<MirScalarExpr>,
         typ: ReprRelationType,
         monotonic: bool,
     ) {
@@ -179,7 +180,7 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     pub fn export_index(
         &mut self,
         id: GlobalId,
-        description: IndexDesc,
+        description: IndexDesc<MirScalarExpr>,
         on_type: ReprRelationType,
     ) {
         // We first create a "view" named `id` that ensures that the
@@ -577,18 +578,28 @@ pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct IndexDesc {
+pub struct IndexDesc<E> {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
-    pub key: Vec<MirScalarExpr>,
+    pub key: Vec<E>,
+}
+
+impl IndexDesc<MirScalarExpr> {
+    /// Translate an index description from MIR to LIR.
+    pub fn as_lir(&self) -> IndexDesc<LirScalarExpr> {
+        let on_id = self.on_id.clone();
+        let key = lses_from_mses(&self.key);
+
+        IndexDesc { on_id, key }
+    }
 }
 
 /// Information about an imported index, and how it will be used by the dataflow.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct IndexImport {
     /// Description of index.
-    pub desc: IndexDesc,
+    pub desc: IndexDesc<MirScalarExpr>,
     /// Schema and keys of the object the index is on.
     pub typ: ReprRelationType,
     /// Whether the index will supply monotonic data.
