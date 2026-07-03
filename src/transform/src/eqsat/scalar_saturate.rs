@@ -23,7 +23,7 @@ use crate::eqsat::core::Id;
 use crate::eqsat::egraph::view::BaseView;
 use crate::eqsat::egraph::{Analyses, CNode, EBindings, EGraph, Index};
 use crate::eqsat::rules;
-use crate::eqsat::scalar::analysis::{ClassAnalysis, make, merge};
+use crate::eqsat::scalar::analysis::{make, merge, ClassAnalysis};
 use crate::eqsat::scalar_extract;
 
 /// E-node budget for the saturation loop. Copied from `scalar/egraph.rs` so the
@@ -2131,6 +2131,381 @@ mod tests {
             assert!(
                 iters <= 10,
                 "flatten must reach a fixpoint quickly for {e:?}; got {iters} iters"
+            );
+        }
+    }
+
+    // Differential parity harness (SP2b Slice 6f): dual-connective distributive
+    // factoring (`factor_and_or`, the last ported scalar rule). Full-intersection
+    // factoring pulls the operands common to every inner And/Or branch out to the
+    // dual connective, gated so a factored-away RESIDUAL that could error blocks
+    // the rewrite (a common FACTOR that errors is fine, it stays in the result:
+    // the CLU-137 property). Each case runs both engines and asserts parity; the
+    // parity assertion IS the fork-5 (neutral-portability) proof, so any
+    // combined != oracle here is a canonical-form divergence and a slice-7
+    // blocker, not something to paper over.
+    //
+    // Error operands are Bool-typed non-literal predicates (`1 / #c = k`), never a
+    // bare Int64 `1 / #c`: a variadic collapse can expose an operand's class as
+    // the connective's value, and a bare Int64 error under a Bool connective trips
+    // the shared analysis's merge-conflict assertion (the slice-6c type trap).
+    #[mz_ore::test]
+    fn scalar_parity_slice6f() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_repr::{Datum, ReprScalarType};
+
+        let c = MirScalarExpr::column;
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+        let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
+        let div64 = || BinaryFunc::DivInt64(mz_expr::func::DivInt64);
+        let eq = || BinaryFunc::Eq(mz_expr::func::Eq);
+
+        let is_and = |e: &MirScalarExpr| {
+            matches!(
+                e,
+                MirScalarExpr::CallVariadic { func, .. } if matches!(func, VariadicFunc::And(_))
+            )
+        };
+        let is_or = |e: &MirScalarExpr| {
+            matches!(
+                e,
+                MirScalarExpr::CallVariadic { func, .. } if matches!(func, VariadicFunc::Or(_))
+            )
+        };
+
+        // --- FIRES: factoring rewrites the outer connective to its dual. Both
+        // engines must agree AND the shared result must show the flip, proving the
+        // rule fired (not merely that both engines left it alone). Or-of-Ands
+        // factors to an outer And; And-of-Ors to an outer Or.
+        let fires_to_and: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            // Or(And(c0,c1), And(c0,c2)) -> And(c0, Or(c1,c2)).
+            (
+                or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(2)])]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // n-ary: three branches sharing c0 -> And(c0, Or(c1,c2,c3)).
+            (
+                or(vec![
+                    and(vec![c(0), c(1)]),
+                    and(vec![c(0), c(2)]),
+                    and(vec![c(0), c(3)]),
+                ]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // Common factor at a non-leading position inside each inner And.
+            // Or(And(c1,c0), And(c2,c0)) -> And(c0, Or(c1,c2)).
+            (
+                or(vec![and(vec![c(1), c(0)]), and(vec![c(2), c(0)])]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+        ];
+        for (e, ct) in fires_to_and {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert!(
+                is_and(&new),
+                "factoring must flip the outer Or to And: {new:?}"
+            );
+        }
+
+        // Dual: And(Or(c0,c1), Or(c0,c2)) -> Or(c0, And(c1,c2)).
+        {
+            let e = and(vec![or(vec![c(0), c(1)]), or(vec![c(0), c(2)])]);
+            let ct = vec![bool_ct(), bool_ct(), bool_ct()];
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "dual parity failed for {e:?}");
+            assert!(
+                is_or(&new),
+                "dual factoring must flip the outer And to Or: {new:?}"
+            );
+        }
+
+        // --- DOES NOT FIRE: factoring leaves the outer connective intact. Parity
+        // must hold and the outer Or must survive (nothing flipped it to And).
+        let no_fire: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            // No common factor: disjoint inner sets.
+            (
+                or(vec![and(vec![c(0), c(1)]), and(vec![c(2), c(3)])]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // Partial share: c0 is in two branches but not the third, so the
+            // full intersection across every branch is empty.
+            (
+                or(vec![
+                    and(vec![c(0), c(1)]),
+                    and(vec![c(0), c(2)]),
+                    and(vec![c(3), c(4)]),
+                ]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // Mixed: one branch is a bare column, not an inner And, so there is
+            // no uniform inner connective to factor over.
+            (
+                or(vec![and(vec![c(0), c(1)]), c(2)]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+        ];
+        for (e, ct) in no_fire {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(
+                new, old,
+                "no-fire parity failed for {e:?} with col_types {ct:?}"
+            );
+            assert!(
+                is_or(&new),
+                "factoring must not fire; outer Or must survive: {new:?}"
+            );
+        }
+
+        // Single branch: Or with one operand collapses via or_single, so factor
+        // never applies. Both engines yield the bare inner And.
+        {
+            let e = or(vec![and(vec![c(0), c(1)])]);
+            let ct = vec![bool_ct(), bool_ct()];
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "single-branch parity failed for {e:?}");
+        }
+
+        // --- RESIDUAL-ERROR GATE (the correctness core, mirroring
+        // `scalar/rules.rs::test_factor_and_or_gate_blocks_erroring_residual`).
+        // r = (1 / #1 = 5) errors at #1 == 0. Intersection {c0}, residuals {r}
+        // and {c2}. r can error, so factoring must be blocked: the outer Or must
+        // stay intact and the result must NOT be the unsound factored form. The
+        // witness for why the gate is load-bearing (c0=null, #1=0, c2=true: the
+        // input errors, the unsound form would mask it to null) is proven in the
+        // standalone-engine test; here we assert the parity and the block.
+        {
+            let r = int_lit(1)
+                .call_binary(c(1), div64())
+                .call_binary(int_lit(5), eq());
+            let e = or(vec![and(vec![c(0), r.clone()]), and(vec![c(0), c(2)])]);
+            let ct = vec![
+                ReprScalarType::Bool.nullable(true),
+                ReprScalarType::Int64.nullable(true),
+                ReprScalarType::Bool.nullable(true),
+            ];
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "erroring-residual gate parity failed for {e:?}");
+            assert!(
+                is_or(&new),
+                "blocked factoring must leave the outer Or intact, got {new:?}"
+            );
+            let unsound = and(vec![c(0), or(vec![r, c(2)])]);
+            assert_ne!(
+                new, unsound,
+                "gate must block factoring an erroring residual; got the unsound form {new:?}"
+            );
+        }
+
+        // Erroring COMMON FACTOR still fires (the CLU-137 property, mirroring
+        // `test_factor_and_or_erroring_common_factor`). g = (1 / #0 = 0) errors at
+        // #0 == 0; the residuals c2, c3 are error-free, so the gate permits the
+        // rewrite and the erroring factor g is pulled out. Or-of-Ands -> outer And.
+        {
+            let g = int_lit(1)
+                .call_binary(c(0), div64())
+                .call_binary(int_lit(0), eq());
+            let e = or(vec![and(vec![g.clone(), c(2)]), and(vec![g.clone(), c(3)])]);
+            let ct = vec![
+                ReprScalarType::Int64.nullable(true),
+                ReprScalarType::Int64.nullable(true),
+                ReprScalarType::Bool.nullable(true),
+                ReprScalarType::Bool.nullable(true),
+            ];
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "erroring-common-factor parity failed for {e:?}");
+            assert!(
+                is_and(&new),
+                "erroring common factor must still factor (CLU-137): {new:?}"
+            );
+        }
+
+        // --- CASCADE: factor feeding, or fed by, the neighbouring rules. The
+        // final form is whatever both engines fold to; parity must hold through
+        // the cascade, so these assert `new == old` only.
+        let cascade: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            // Factor feeding flatten: the factored And(c0, Or(c1,c2)) lands
+            // inside an outer And and flattens up one level.
+            (
+                and(vec![
+                    c(3),
+                    or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(2)])]),
+                ]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // Fed-by flatten: the single-operand inner Or collapses, exposing a
+            // clean Or-of-Ands that then factors.
+            (
+                or(vec![and(vec![c(0), c(1)]), or(vec![and(vec![c(0), c(2)])])]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // Short-circuit: a `true` operand dominates the outer Or, so factoring
+            // is moot and the whole thing folds to `true`.
+            (
+                or(vec![
+                    and(vec![c(0), c(1)]),
+                    and(vec![c(0), c(2)]),
+                    MirScalarExpr::literal_true(),
+                ]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // drop_unit feeding factor: the `true` drops from the outer And,
+            // exposing And-of-Ors that then factors.
+            (
+                and(vec![
+                    or(vec![c(0), c(1)]),
+                    or(vec![c(0), c(2)]),
+                    MirScalarExpr::literal_true(),
+                ]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // dedup feeding factor: the duplicate branch collapses, leaving a
+            // two-branch Or-of-Ands that factors.
+            (
+                or(vec![
+                    and(vec![c(0), c(1)]),
+                    and(vec![c(0), c(2)]),
+                    and(vec![c(0), c(1)]),
+                ]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // Absorb boundary: an empty residual makes factor decline; absorb is
+            // the rule that handles it (the inner set {c0,c1} subsumes {c0,c1,c2}
+            // -> the superset branch absorbs to c0 AND c1). Parity holds across
+            // the factor/absorb handoff.
+            (
+                or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(1), c(2)])]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // Empty inner And: and_empty folds And([]) to `true`, which then
+            // short-circuits the outer Or to `true`.
+            (
+                or(vec![and(vec![c(0), c(1)]), and(vec![])]),
+                vec![bool_ct(), bool_ct()],
+            ),
+        ];
+        for (e, ct) in cascade {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "cascade parity failed for {e:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_slice6f() {
+        assert!(
+            CORPUS.contains("or(and(#0, #1), and(#0, #2))"),
+            "corpus must exercise factor_and_or firing on Or-of-Ands"
+        );
+        assert!(
+            CORPUS.contains("and(or(#0, #1), or(#0, #2))"),
+            "corpus must exercise the dual factor on And-of-Ors"
+        );
+        assert!(
+            CORPUS.contains("or(and(#0, #1), and(#0, #2), and(#0, #3))"),
+            "corpus must exercise n-ary factoring across three branches"
+        );
+        assert!(
+            CORPUS.contains("or(and(#1, #0), and(#2, #0))"),
+            "corpus must exercise a common factor at a non-leading position"
+        );
+        assert!(
+            CORPUS.contains("or(and(#0, #1), and(#2, #3))"),
+            "corpus must exercise the no-common-factor negative control"
+        );
+        assert!(
+            CORPUS.contains("or(and(#0, #1), and(#0, #1, #2))"),
+            "corpus must exercise the empty-residual factor/absorb boundary"
+        );
+        assert!(
+            CORPUS.contains("or(and(#0, 1 / #1 = 5), and(#0, #2))"),
+            "corpus must exercise the residual-error gate blocking a factor"
+        );
+        assert!(
+            CORPUS.contains("or(and(1 / #0 = 0, #2), and(1 / #0 = 0, #3))"),
+            "corpus must exercise an erroring common factor still firing (CLU-137)"
+        );
+    }
+
+    // Termination (SP2b Slice 6f, fork 4): factoring must reach a fixpoint
+    // quickly. Each fire replaces an Or-of-Ands (or And-of-Ors) with the dual
+    // form, which is not itself an Or-of-Ands, so factor cannot re-fire on its
+    // own output. The only downstream interaction is flatten splicing the
+    // factored inner node up one level, which strictly reduces nesting and does
+    // not reconstruct a factorable shape, so there is no ping-pong. Lowers each
+    // expr directly, bypassing `canonicalize_combined`, so the iteration count is
+    // visible, mirroring the slice-6d/6e termination checks. A non-converging
+    // case here would be the slice-7 blocker the recon judged absent.
+    #[mz_ore::test]
+    fn factor_terminates() {
+        use mz_expr::{MirScalarExpr, VariadicFunc};
+        use mz_repr::ReprScalarType;
+
+        let c = MirScalarExpr::column;
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+
+        let cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            // Single factor, fire-once: the result And(c0, Or(c1,c2)) is not
+            // factorable again.
+            (
+                or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(2)])]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // Dual.
+            (
+                and(vec![or(vec![c(0), c(1)]), or(vec![c(0), c(2)])]),
+                vec![bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // n-ary, one fire.
+            (
+                or(vec![
+                    and(vec![c(0), c(1)]),
+                    and(vec![c(0), c(2)]),
+                    and(vec![c(0), c(3)]),
+                ]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+            // Factor feeding flatten: exercises the no-ping-pong claim. Factoring
+            // produces And(c0, Or(c1,c2)) inside the outer And, flatten splices it
+            // up, and neither step reconstructs a factorable shape.
+            (
+                and(vec![
+                    c(3),
+                    or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(2)])]),
+                ]),
+                vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
+            ),
+        ];
+        for (e, ct) in cases {
+            let mut eg = EGraph::new();
+            eg.data_mut().scalar.col_types = ct;
+            let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &e);
+            let iters = saturate(&mut eg);
+            assert!(
+                iters <= 10,
+                "factoring must reach a fixpoint quickly for {e:?}; got {iters} iters"
             );
         }
     }

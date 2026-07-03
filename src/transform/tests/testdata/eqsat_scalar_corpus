@@ -439,3 +439,46 @@ types: bool, bool
 
 expr: and(false, and(1 / 0 = 1 / 0, #0))
 types: bool
+
+# --- slice 6f: factor_and_or (dual-connective distributive factoring) ---
+# `factor_and_or` pulls the operands common to every inner And/Or branch out to
+# the dual connective, porting `scalar/rules.rs::factor_and_or`. Full-intersection
+# only: it fires when a common factor exists across ALL branches and each
+# residual is non-empty. A residual that could error blocks the rewrite; a common
+# FACTOR that errors is exempt (it stays in the result, the CLU-137 property).
+
+# Fires: Or-of-Ands factors to an outer And; the dual And-of-Ors to an outer Or.
+expr: or(and(#0, #1), and(#0, #2))
+types: bool, bool, bool
+
+expr: and(or(#0, #1), or(#0, #2))
+types: bool, bool, bool
+
+# n-ary: three branches sharing #0 factor to And(#0, Or(#1, #2, #3)).
+expr: or(and(#0, #1), and(#0, #2), and(#0, #3))
+types: bool, bool, bool, bool
+
+# Common factor at a non-leading position inside each inner And.
+expr: or(and(#1, #0), and(#2, #0))
+types: bool, bool, bool
+
+# No common factor: disjoint inner sets, so factoring never fires.
+expr: or(and(#0, #1), and(#2, #3))
+types: bool, bool, bool, bool
+
+# Empty-residual factor/absorb boundary: the intersection {#0, #1} leaves one
+# empty residual, so factor declines and absorption handles it instead.
+expr: or(and(#0, #1), and(#0, #1, #2))
+types: bool, bool, bool
+
+# Residual-error gate: r = `1 / #1 = 5` errors at #1 == 0 and is a residual, so
+# the gate blocks factoring and the outer Or survives. `r` is Bool-typed (the
+# comparison), not a bare Int64, for the slice-6c type-agreement reason.
+expr: or(and(#0, 1 / #1 = 5), and(#0, #2))
+types: bool, int64, bool
+
+# Erroring common factor still fires (CLU-137): g = `1 / #0 = 0` errors at
+# #0 == 0 but is the shared factor, so it is pulled out; the residuals #2, #3 are
+# error-free, so the gate permits the rewrite.
+expr: or(and(1 / #0 = 0, #2), and(1 / #0 = 0, #3))
+types: int64, int64, bool, bool
