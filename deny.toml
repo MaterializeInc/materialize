@@ -284,6 +284,11 @@ ignore = [
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
+    # `quick-xml` pulled in as transitive dependency: Quadratic run time when
+    # checking a start tag for duplicate attribute names. Not used to parse
+    # untrusted XML.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 # Must be manually kept in sync with about.toml.
