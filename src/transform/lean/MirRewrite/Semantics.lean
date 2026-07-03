@@ -321,14 +321,14 @@ only on which operands are present, not on their multiplicity, and dropping a
 unit operand (a `true` conjunct or a `false` disjunct) is the fold's identity.
 
 NOTE: Lean models the SYNTACTIC filter here. `keepDropUnit` drops the literal
-`litB unit`, and `dedupById` drops later membership-duplicates. The Rust rules
-use the strictly stronger SEMANTIC predicate (an operand whose scalar-literal
-analysis is the unit, or whose canonical e-class id repeats). What Lean proves
-is the ALGEBRA: unit is the And/Or identity and And/Or is idempotent over the
-`Bool` fold. The soundness of lifting that algebra to the semantic predicate
-rests on the Rust analysis plus the differential parity oracle, not on this
-Lean layer. This is the same scope stance as `isnull_fold` in an earlier
-slice. -/
+`litB unit`, and `dedupById` collapses repeated operands to one occurrence (the
+proofs use only membership, so which occurrence survives is immaterial). The
+Rust rules use the strictly stronger SEMANTIC predicate (an operand whose
+scalar-literal analysis is the unit, or whose canonical e-class id repeats).
+What Lean proves is the ALGEBRA: unit is the And/Or identity and And/Or is
+idempotent over the `Bool` fold. The soundness of lifting that algebra to the
+semantic predicate rests on the Rust analysis plus the differential parity
+oracle, not on this Lean layer. This is the same scope stance as `isnull_fold`. -/
 
 theorem denoteSFold_and_eq_all (env : Nat → Bool) (xs : List ScalarExpr) :
     denoteSFold env xs true (· && ·) = xs.all (fun x => denoteS env x) := by

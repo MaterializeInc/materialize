@@ -7,10 +7,6 @@
 //! base `EGraph` during apply. Scalar rules are `colored: false`, so their apply
 //! bodies only ever compile against the base graph.
 
-// No `.rewrite` rule emits `FilterSplice` yet, so these are unreachable until a
-// later slice wires them into `and_or_drop_unit` / `and_or_dedup`.
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 
 use crate::eqsat::egraph::{EGraph, Id};
