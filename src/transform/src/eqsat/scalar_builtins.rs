@@ -302,9 +302,89 @@ pub fn err_prop_binary(g: &mut EGraph, class: Id) -> Result<Id, String> {
     Ok(g.add(CNode::Scalar(SNode::Literal(row, col_type))))
 }
 
+/// `f(.., null, ..) -> null` for a variadic `f` that propagates nulls, GATED on
+/// every non-null-literal operand being error-free. The Rust RHS of the
+/// `null_prop_variadic` declarative rule.
+///
+/// Mirrors `scalar/rules.rs::null_prop_variadic` exactly, including its
+/// deliberate deviation from `reduce`: reduce's variadic null-prop is ungated on
+/// the other operands, but eval surfaces an operand's error over null
+/// (`eval(makets(null, 1/0))` is `Err`, not `Null`). Rewriting `f(.., null, ..)`
+/// to null when another operand can error would turn an error into null. The gate
+/// blocks that. This rule never fires on `And`/`Or`, which do not propagate nulls.
+pub fn null_prop_variadic(g: &mut EGraph, class: Id) -> Result<Id, String> {
+    let target = scalar_class_nodes(g, class).into_iter().find_map(|node| {
+        let SNode::CallVariadic { func, exprs } = &node else {
+            return None;
+        };
+        if !func.propagates_nulls() {
+            return None;
+        }
+        if !exprs.iter().any(|&e| is_literal_null(g, e)) {
+            return None;
+        }
+        // Every operand that is not itself a literal null must be error-free, else
+        // that operand's error would surface instead of the propagated null.
+        let other_can_error = exprs
+            .iter()
+            .any(|&e| !is_literal_null(g, e) && scalar_could_error(g, e));
+        if other_can_error {
+            return None;
+        }
+        Some(node.clone())
+    });
+    let Some(node) = target else {
+        return Err("null_prop_variadic: no eligible CallVariadic node".to_string());
+    };
+    let ty = call_scalar_type(g, &node);
+    let MirScalarExpr::Literal(row, col_type) = MirScalarExpr::literal_null(ty) else {
+        unreachable!("MirScalarExpr::literal_null always builds a Literal variant")
+    };
+    Ok(g.add(CNode::Scalar(SNode::Literal(row, col_type))))
+}
+
+/// `f(.., err_lit, ..) -> err_lit` for a variadic `f` that propagates nulls,
+/// GATED on every other operand being error-free. The Rust RHS of the
+/// `err_prop_variadic` declarative rule.
+///
+/// Mirrors `scalar/rules.rs::err_prop_variadic` exactly. Takes the FIRST literal
+/// error by iteration order. A second literal-error operand is excluded from the
+/// "other" set (via `literal_err(..).is_none()`), so it does not block the fire.
+/// That is sound: eval is left-to-right via `?`, so the first error is the one a
+/// full evaluation surfaces, and `const_fold` agrees on the all-literal case. The
+/// `propagates_nulls` gate mirrors reduce's variadic err-prop, so this never fires
+/// on `And`/`Or`.
+pub fn err_prop_variadic(g: &mut EGraph, class: Id) -> Result<Id, String> {
+    let target = scalar_class_nodes(g, class).into_iter().find_map(|node| {
+        let SNode::CallVariadic { func, exprs } = &node else {
+            return None;
+        };
+        if !func.propagates_nulls() {
+            return None;
+        }
+        let err = exprs.iter().find_map(|&e| literal_err(g, e))?;
+        // Every operand that is not itself a literal error must be error-free.
+        let other_can_error = exprs
+            .iter()
+            .any(|&e| literal_err(g, e).is_none() && scalar_could_error(g, e));
+        if other_can_error {
+            return None;
+        }
+        Some((err, node.clone()))
+    });
+    let Some((err, node)) = target else {
+        return Err("err_prop_variadic: no eligible CallVariadic node".to_string());
+    };
+    let ty = call_scalar_type(g, &node);
+    let MirScalarExpr::Literal(row, col_type) = MirScalarExpr::literal(Err(err), ty) else {
+        unreachable!("MirScalarExpr::literal always builds a Literal variant")
+    };
+    Ok(g.add(CNode::Scalar(SNode::Literal(row, col_type))))
+}
+
 #[cfg(test)]
 mod tests {
-    use mz_expr::{BinaryFunc, EvalError};
+    use mz_expr::{BinaryFunc, EvalError, VariadicFunc};
     use mz_repr::{Datum, ReprScalarType, Row};
 
     use super::*;
@@ -446,6 +526,39 @@ mod tests {
     /// irrelevant here; only the `propagates_nulls` value matters.
     fn array_remove_func() -> BinaryFunc {
         BinaryFunc::ArrayRemove(mz_expr::func::ArrayRemove)
+    }
+
+    /// A `propagates_nulls` variadic over numeric inputs: `makets` takes five
+    /// `i64` and one `f64`, all non-nullable, so `propagates_nulls()` is true.
+    fn make_timestamp() -> VariadicFunc {
+        VariadicFunc::MakeTimestamp(mz_expr::func::variadic::MakeTimestamp)
+    }
+
+    /// A production variadic with `propagates_nulls() == false`: `Coalesce`
+    /// short-circuits on the first non-null operand rather than propagating a
+    /// null operand, so the func-level gate must block null/err-prop on it.
+    fn coalesce_func() -> VariadicFunc {
+        VariadicFunc::Coalesce(mz_expr::func::variadic::Coalesce)
+    }
+
+    fn float_ty() -> ReprColumnType {
+        ReprColumnType {
+            scalar_type: ReprScalarType::Float64,
+            nullable: false,
+        }
+    }
+
+    fn lit_f64(g: &mut EGraph, v: f64) -> Id {
+        g.add(CNode::Scalar(SNode::Literal(
+            Ok(Row::pack_slice(&[Datum::Float64(
+                ordered_float::OrderedFloat(v),
+            )])),
+            float_ty(),
+        )))
+    }
+
+    fn variadic(g: &mut EGraph, func: VariadicFunc, exprs: Vec<Id>) -> Id {
+        g.add(CNode::Scalar(SNode::CallVariadic { func, exprs }))
     }
 
     // --- if_err_cond ---
@@ -688,6 +801,190 @@ mod tests {
         assert!(
             err_prop_binary(&mut g, lit).is_err(),
             "a class with no CallBinary node must not fire"
+        );
+    }
+
+    // --- null_prop_variadic ---
+
+    /// `makets(null, c0, 1, 0, 0, 0.0)`: the null year propagates, and every
+    /// other operand (a bare column or a safe literal) never `could_error`, so
+    /// the gate permits null-prop and the call collapses to a typed null.
+    #[mz_ore::test]
+    fn null_prop_variadic_folds_null_operand_with_safe_others() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![int_ty()];
+        assert!(
+            make_timestamp().propagates_nulls(),
+            "makets must propagate nulls for this test to be meaningful"
+        );
+        let null = lit_null_int(&mut g);
+        let c0 = col(&mut g, 0);
+        let one = lit_int(&mut g, 1);
+        let zero_a = lit_int(&mut g, 0);
+        let zero_b = lit_int(&mut g, 0);
+        let second = lit_f64(&mut g, 0.0);
+        let call = variadic(
+            &mut g,
+            make_timestamp(),
+            vec![null, c0, one, zero_a, zero_b, second],
+        );
+
+        let folded = null_prop_variadic(&mut g, call).expect("safe other operands must fire");
+        let (row, _ty) = scalar_literal(&g, folded).expect("result must be a literal class");
+        assert_eq!(
+            row.expect("null-prop result must not itself be an error")
+                .unpack_first(),
+            Datum::Null
+        );
+    }
+
+    /// `makets(null, 1 / c0, 1, 0, 0, 0.0)`: the `1 / c0` operand can error
+    /// (`DivInt64` always `could_error`), so the gate BLOCKS null-prop. Eval of
+    /// the input at `c0 == 0` is `Err`, never `Null`, so folding to null would be
+    /// unsound.
+    #[mz_ore::test]
+    fn null_prop_variadic_blocked_when_other_can_error() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![int_ty()];
+        let null = lit_null_int(&mut g);
+        let c0 = col(&mut g, 0);
+        let one = lit_int(&mut g, 1);
+        let dividing = g.add(CNode::Scalar(SNode::CallBinary {
+            func: div64(),
+            expr1: one,
+            expr2: c0,
+        }));
+        let month = lit_int(&mut g, 1);
+        let hour = lit_int(&mut g, 0);
+        let minute = lit_int(&mut g, 0);
+        let second = lit_f64(&mut g, 0.0);
+        let call = variadic(
+            &mut g,
+            make_timestamp(),
+            vec![null, dividing, month, hour, minute, second],
+        );
+
+        assert!(
+            null_prop_variadic(&mut g, call).is_err(),
+            "null-prop must not fire when another operand can error"
+        );
+    }
+
+    /// `Coalesce(null, c0)`: `Coalesce.propagates_nulls() == false`, so the
+    /// func-level gate blocks null-prop before the could_error check is reached.
+    #[mz_ore::test]
+    fn null_prop_variadic_blocked_for_non_null_propagating_func() {
+        let mut g = EGraph::new();
+        assert!(
+            !coalesce_func().propagates_nulls(),
+            "Coalesce must not propagate nulls for this test to be meaningful"
+        );
+        let null = lit_null_int(&mut g);
+        let c0 = col(&mut g, 0);
+        let call = variadic(&mut g, coalesce_func(), vec![null, c0]);
+
+        assert!(
+            null_prop_variadic(&mut g, call).is_err(),
+            "a non-null-propagating func must not fire"
+        );
+    }
+
+    /// A class with no `CallVariadic` node at all has no target shape.
+    #[mz_ore::test]
+    fn null_prop_variadic_errs_on_inapplicable_shape() {
+        let mut g = EGraph::new();
+        let col_id = col(&mut g, 0);
+        assert!(
+            null_prop_variadic(&mut g, col_id).is_err(),
+            "a class with no CallVariadic node must not fire"
+        );
+    }
+
+    // --- err_prop_variadic ---
+
+    /// `makets(1 / 0, c0, 1, 0, 0, 0.0)`: the literal-error year propagates, and
+    /// every other operand is safe, so the gate permits err-prop. The result must
+    /// reproduce the EXACT error.
+    #[mz_ore::test]
+    fn err_prop_variadic_folds_error_operand_with_safe_others() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![int_ty()];
+        let err = err_lit(&mut g, EvalError::DivisionByZero, int_ty());
+        let c0 = col(&mut g, 0);
+        let one = lit_int(&mut g, 1);
+        let zero_a = lit_int(&mut g, 0);
+        let zero_b = lit_int(&mut g, 0);
+        let second = lit_f64(&mut g, 0.0);
+        let call = variadic(
+            &mut g,
+            make_timestamp(),
+            vec![err, c0, one, zero_a, zero_b, second],
+        );
+
+        let folded = err_prop_variadic(&mut g, call).expect("safe other operands must fire");
+        let (row, _ty) = scalar_literal(&g, folded).expect("result must be a literal class");
+        assert_eq!(row, Err(EvalError::DivisionByZero));
+    }
+
+    /// `makets(1 / 0, 1 / c0, 1, 0, 0, 0.0)`: the `1 / c0` operand can also
+    /// error, so the gate BLOCKS err-prop (substituting the literal error for
+    /// whichever operand errors first at eval time would be unsound).
+    #[mz_ore::test]
+    fn err_prop_variadic_blocked_when_other_can_error() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![int_ty()];
+        let err = err_lit(&mut g, EvalError::DivisionByZero, int_ty());
+        let c0 = col(&mut g, 0);
+        let one = lit_int(&mut g, 1);
+        let dividing = g.add(CNode::Scalar(SNode::CallBinary {
+            func: div64(),
+            expr1: one,
+            expr2: c0,
+        }));
+        let month = lit_int(&mut g, 1);
+        let hour = lit_int(&mut g, 0);
+        let minute = lit_int(&mut g, 0);
+        let second = lit_f64(&mut g, 0.0);
+        let call = variadic(
+            &mut g,
+            make_timestamp(),
+            vec![err, dividing, month, hour, minute, second],
+        );
+
+        assert!(
+            err_prop_variadic(&mut g, call).is_err(),
+            "err-prop must not fire when another operand can also error"
+        );
+    }
+
+    /// `Coalesce(1 / 0, c0)`: `Coalesce.propagates_nulls() == false`, so the
+    /// func-level gate blocks err-prop even though a literal-error operand is
+    /// present.
+    #[mz_ore::test]
+    fn err_prop_variadic_blocked_for_non_null_propagating_func() {
+        let mut g = EGraph::new();
+        assert!(
+            !coalesce_func().propagates_nulls(),
+            "Coalesce must not propagate nulls for this test to be meaningful"
+        );
+        let err = err_lit(&mut g, EvalError::DivisionByZero, int_ty());
+        let c0 = col(&mut g, 0);
+        let call = variadic(&mut g, coalesce_func(), vec![err, c0]);
+
+        assert!(
+            err_prop_variadic(&mut g, call).is_err(),
+            "a non-null-propagating func must not fire"
+        );
+    }
+
+    /// A class with no `CallVariadic` node at all has no target shape.
+    #[mz_ore::test]
+    fn err_prop_variadic_errs_on_inapplicable_shape() {
+        let mut g = EGraph::new();
+        let lit = lit_int(&mut g, 1);
+        assert!(
+            err_prop_variadic(&mut g, lit).is_err(),
+            "a class with no CallVariadic node must not fire"
         );
     }
 }
