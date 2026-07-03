@@ -753,6 +753,15 @@ statement ok
 CREATE TYPE ty_outer AS LIST (ELEMENT TYPE = ty1.mylist)
 
 statement ok
+CREATE TYPE ty_map_outer AS MAP (KEY TYPE = text, VALUE TYPE = ty1.mylist)
+
+# An anonymous map type spells out its key and value types inline, so the
+# rewrite has to descend through the map's structure to reach the reference.
+
+statement ok
+CREATE VIEW ty_map_view AS SELECT NULL::map[text => ty1.mylist] AS c
+
+statement ok
 ALTER SCHEMA ty1 RENAME TO ty2
 
 # Everything still resolves and is queryable after the rename.
@@ -772,17 +781,22 @@ SELECT count(*) FROM ty_table
 ----
 0
 
+query I
+SELECT count(*) FROM ty_map_view
+----
+1
+
 # The type's own raw create_sql, and every dependent's, must reference the new
 # schema name and never the old one. Each row appears only if its create_sql was
 # correctly rewritten, so a missing row signals a stale reference.
 
 query T rowsort
 SELECT name FROM mz_types
-WHERE name IN ('mylist', 'ty_outer')
+WHERE name IN ('mylist', 'ty_outer', 'ty_map_outer')
   AND create_sql LIKE '%ty2%' AND create_sql NOT LIKE '%ty1%'
 UNION ALL
 SELECT name FROM mz_views
-WHERE name = 'ty_view'
+WHERE name IN ('ty_view', 'ty_map_view')
   AND create_sql LIKE '%ty2%' AND create_sql NOT LIKE '%ty1%'
 UNION ALL
 SELECT name FROM mz_materialized_views
@@ -794,6 +808,8 @@ WHERE name = 'ty_table'
   AND create_sql LIKE '%ty2%' AND create_sql NOT LIKE '%ty1%'
 ----
 mylist
+ty_map_outer
+ty_map_view
 ty_mv
 ty_outer
 ty_table
