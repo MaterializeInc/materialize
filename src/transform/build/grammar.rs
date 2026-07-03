@@ -149,6 +149,18 @@ fn bool_lit<'a>() -> impl Parser<'a, &'a [Token], bool, TokErr<'a>> + Clone {
     choice((kw("true").to(true), kw("false").to(false)))
 }
 
+/// A dual variadic-func keyword, `and` or `or`, as a raw `String`. Shared by
+/// any grammar production taking the connective as a comma-separated argument
+/// (e.g. `absorb(xs, or)`, `absorb_applies(xs, or)`), as opposed to
+/// `Variadic[and]`'s bracket-delimited func metavariable (`bracket_ident`,
+/// which accepts any identifier, not just `and`/`or`).
+fn variadic_func_kw<'a>() -> impl Parser<'a, &'a [Token], String, TokErr<'a>> + Clone {
+    choice((
+        kw("and").to("and".to_string()),
+        kw("or").to("or".to_string()),
+    ))
+}
+
 fn relvar_ident<'a>() -> impl Parser<'a, &'a [Token], String, TokErr<'a>> + Clone {
     ident().filter(|s: &String| !is_operator(s))
 }
@@ -484,13 +496,23 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
                     list,
                     filter: RestFilter::DropScalarLit(value),
                 });
+            let absorb = kw("absorb")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(ident())
+                .then_ignore(just(Token::Comma))
+                .then(variadic_func_kw())
+                .then_ignore(just(Token::RParen))
+                .map(|(list, inner)| TElem::FilterSplice {
+                    list,
+                    filter: RestFilter::AbsorbSubsumed { inner },
+                });
             let splice = relvar_ident()
                 .then_ignore(just(Token::Ellipsis))
                 .map(TElem::Splice);
             let item = tmpl.clone().map(TElem::Item);
-            // `dedup` / `drop_scalar_lit` must come before `item` so their
-            // keywords are not swallowed as a bare `RelVar` template.
-            choice((mapsplice, dedup, drop_scalar_lit, splice, item))
+            // `dedup` / `drop_scalar_lit` / `absorb` must come before `item` so
+            // their keywords are not swallowed as a bare `RelVar` template.
+            choice((mapsplice, dedup, drop_scalar_lit, absorb, splice, item))
                 .separated_by(just(Token::Comma))
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
@@ -728,6 +750,13 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             one_ident("scalar_any_lit_true").map(|list| Cond::AnyScalarLit { list, value: true }),
             one_ident("scalar_non_nullable").map(|scalar| Cond::ScalarNonNullable { scalar }),
             one_ident("has_duplicate_id").map(|list| Cond::HasDuplicateId { list }),
+            kw("absorb_applies")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(ident())
+                .then_ignore(just(Token::Comma))
+                .then(variadic_func_kw())
+                .then_ignore(just(Token::RParen))
+                .map(|(list, inner)| Cond::AbsorbApplies { list, inner }),
         )),
     ));
 
@@ -1060,6 +1089,38 @@ mod tests {
             rules[0].conds[0],
             crate::dsl::Cond::HasDuplicateId {
                 list: "xs".to_string(),
+            }
+        );
+    }
+
+    /// `absorb(xs, <inner>)` inside a template list parses to a
+    /// `TElem::FilterSplice { filter: RestFilter::AbsorbSubsumed { .. }, .. }`,
+    /// guarded by `absorb_applies(xs, <inner>)`.
+    #[test]
+    fn parses_absorb_splice_with_absorb_applies_cond() {
+        let src = "rule r { Variadic[and](xs...) => Variadic[and](absorb(xs, or)) where absorb_applies(xs, or) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].rhs {
+            crate::dsl::Tmpl::SVariadic { func, inputs } => {
+                assert_eq!(func, "and");
+                assert_eq!(
+                    inputs.elems,
+                    vec![crate::dsl::TElem::FilterSplice {
+                        list: "xs".to_string(),
+                        filter: crate::dsl::RestFilter::AbsorbSubsumed {
+                            inner: "or".to_string(),
+                        },
+                    }]
+                );
+            }
+            other => panic!("expected SVariadic, got {other:?}"),
+        }
+        assert_eq!(rules[0].conds.len(), 1);
+        assert_eq!(
+            rules[0].conds[0],
+            crate::dsl::Cond::AbsorbApplies {
+                list: "xs".to_string(),
+                inner: "or".to_string(),
             }
         );
     }

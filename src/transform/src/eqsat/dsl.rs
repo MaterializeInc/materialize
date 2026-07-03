@@ -287,6 +287,10 @@ pub enum RestFilter {
     /// Keep the first operand of each canonical e-class id, dropping later
     /// duplicates. Sort-agnostic (canonical id only), so grammar-general.
     DedupById,
+    /// Drop an outer operand whose inner-set (under the dual connective `inner`)
+    /// is a proper superset of another operand's, when the dropped extras cannot
+    /// error. Inner-set subsumption absorption. Backed by `rest_filters::rest_absorb`.
+    AbsorbSubsumed { inner: String },
 }
 
 /// A template input list: an ordered sequence of [`TElem`]s.
@@ -446,6 +450,10 @@ pub enum Cond {
     /// canonical e-class id. The fire-guard for `and_or_dedup`, so the rule
     /// never rebuilds an unchanged operand list. Grammar-general (canonical id).
     HasDuplicateId { list: String },
+    /// `absorb_applies(list, inner)`: some outer operand in `list` is
+    /// subsumption-droppable under dual connective `inner` with error-free dropped
+    /// extras. The fire-guard for `absorb_and_or`.
+    AbsorbApplies { list: String, inner: String },
 }
 
 /// The eqsat pass a rule is active in.
