@@ -35,14 +35,20 @@
     display: block;
 }
 
-/* LineHighlight */
+/* LineHighlight (hl_lines). The band bleeds across the pre's inline padding
+   so it spans the full block width, with an accent bar on the left edge.
+   Tokens keep their regular syntax colors. */
 .chroma .hl {
-    background-color: transparent;
+    background-color: color-mix(in srgb, var(--highlight) 12%, transparent);
+    box-shadow: inset 2px 0 0 var(--highlight);
     display: block;
-    width: 100%;
+    margin: 0 calc(-1 * var(--code-highlight-padding-inline, #{rem(1.6)}));
+    padding: 0 var(--code-highlight-padding-inline, #{rem(1.6)});
 }
 
-.chroma .line,
+/* Highlighted lines carry both classes (line hl), so exclude them here or
+   this later rule clobbers the .hl band. */
+.chroma .line:not(.hl),
 .chroma .cl {
     background: transparent;
 }
@@ -122,11 +128,6 @@
 /* NameLabel */
 .chroma .nl {
     color: var(--code-variable);
-}
-
-/* highlighted code line */
-.hl .cl * {
-    color: var(--code-highlight);
 }
 
 /* NameNamespace */
