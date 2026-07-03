@@ -296,6 +296,13 @@ class Table(DBObject):
         wrong-multiplicity bugs are observable."""
         return f"{self.schema}.{identifier(naughtify(f'mv-nokey-{self.table_id}'))}"
 
+    def shadow_agg_mv(self) -> str:
+        """Correctness mode: materialized view aggregating the key column
+        (count/min/max/sum), exercising the reduce operator. The key is a
+        unique bigint, so the aggregates are exact integers verifiable against
+        the table read at the same timestamp."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-agg-{self.table_id}'))}"
+
     def create(self, exe: Executor) -> None:
         query = "CREATE "
         if self.temp:
@@ -324,6 +331,12 @@ class Table(DBObject):
             exe.execute(
                 f"CREATE MATERIALIZED VIEW {self.shadow_nokey_mv()} IN CLUSTER"
                 f" quickstart AS SELECT {nokey} FROM {self}"
+            )
+            key = self.columns[0].name(True)
+            exe.execute(
+                f"CREATE MATERIALIZED VIEW {self.shadow_agg_mv()} IN CLUSTER"
+                f" quickstart AS SELECT count(*) AS cnt, min({key}) AS mn,"
+                f" max({key}) AS mx, sum({key}) AS sm FROM {self}"
             )
 
 
