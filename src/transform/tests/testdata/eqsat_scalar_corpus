@@ -183,3 +183,87 @@ types:
 
 expr: and(false, false)
 types:
+
+# --- slice 6c: and_or_drop_unit (and_drop_unit / or_drop_unit), and_or_dedup
+# (and_dedup / or_dedup) ---
+# Positions: leading / middle / trailing unit operand (true for And, false for
+# Or), all drop the unit and leave the rest untouched.
+expr: and(true, #0, #1)
+types: bool,bool
+
+expr: and(#0, true, #1)
+types: bool,bool
+
+expr: and(#0, #1, true)
+types: bool,bool
+
+expr: or(false, #0, #1)
+types: bool,bool
+
+expr: or(#0, false, #1)
+types: bool,bool
+
+expr: or(#0, #1, false)
+types: bool,bool
+
+# Duplicates: adjacent, non-adjacent, and more than two copies, all dedup to
+# one occurrence (first-occurrence, canonical-id dedup).
+expr: and(#0, #0, #1)
+types: bool,bool
+
+expr: and(#0, #1, #0)
+types: bool,bool
+
+expr: and(#0, #0, #0, #1)
+types: bool,bool
+
+expr: or(#0, #0, #1)
+types: bool,bool
+
+expr: or(#0, #1, #0)
+types: bool,bool
+
+expr: or(#0, #0, #0, #1)
+types: bool,bool
+
+# Errors: both rules are unconditional (no could_error gate). The error is
+# boolean-typed (`(1/0) = (1/0)`), not the bare Int64 `1 / 0`: and_dedup and
+# and_drop_unit dedup/drop down to arity 1, and and_single/or_single then
+# expose this operand's own class directly as the AND/OR's value, which must
+# agree in type with the connective's own Bool-typed const_fold result. A
+# duplicate error operand dedups to the single error; a unit operand next to
+# an error drops the unit and keeps the error.
+expr: and(1 / 0 = 1 / 0, 1 / 0 = 1 / 0)
+types:
+
+expr: and(1 / 0 = 1 / 0, true)
+types:
+
+expr: or(1 / 0 = 1 / 0, 1 / 0 = 1 / 0)
+types:
+
+expr: or(1 / 0 = 1 / 0, false)
+types:
+
+# 3VL: a null operand is not the connective's unit (its literal analysis is
+# `Some(None)`, not `Some(Some(unit))`), so drop_unit must drop only the true
+# operand and leave the null in place. Dual for Or/false.
+expr: and(#0, true, null)
+types: bool
+
+expr: or(#0, false, null)
+types: bool
+
+# Interaction cascades: drop_unit / dedup feeding and_single / and_empty on a
+# later saturation round.
+# And(#0, true) -> And(#0) (drop_unit) -> #0 (and_single).
+expr: and(#0, true)
+types: bool
+
+# And(true) -> And() (drop_unit) -> true (and_empty).
+expr: and(true)
+types:
+
+# And(#0, #0) -> And(#0) (and_dedup) -> #0 (and_single).
+expr: and(#0, #0)
+types: bool

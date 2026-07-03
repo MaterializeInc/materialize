@@ -964,4 +964,232 @@ mod tests {
             "And(false, ..) -> false must reach a fixpoint quickly; got {iters} iters"
         );
     }
+
+    // Differential parity harness (SP2b Slice 6c): extends slices 1-6a to the
+    // declarative `and_drop_unit`/`or_drop_unit` and `and_dedup`/`or_dedup` DSL
+    // rules (`scalar.rewrite`), which mirror the imperative
+    // `and_or_drop_unit`/`and_or_dedup` (`scalar/rules.rs`, lines 270 and 181):
+    // a variadic AND/OR drops operands equal to the connective's unit (`true`
+    // for And, `false` for Or), and collapses operands that share a canonical
+    // e-class id to their first occurrence.
+    //
+    // Both rules are UNCONDITIONAL (no could_error gate), by design: dropping a
+    // unit operand or a syntactic duplicate never changes the AND/OR's value or
+    // error behavior (the e-graph already canonicalizes children to class ids,
+    // so a duplicate is provably the same value including its error behavior).
+    // The error cases below are the correctness check for that design: a
+    // duplicate error operand dedups to the single error, and a unit operand
+    // next to an error drops the unit while the error survives (through
+    // and_single, since dropping the sole remaining unit leaves an arity-1 AND).
+    //
+    // The null cases are the 3VL correctness check for drop_unit specifically:
+    // a null operand's `literal` analysis is `Some(None)` (a literal, but not
+    // the bool `Some(Some(unit))`), so it must never be dropped, only the true
+    // (or false, for Or) operand is.
+    //
+    // Same corpus-shaping constraint as slices 1-6a: every input keeps the old
+    // engine's still-unported rules (`null_prop_variadic`, `err_prop_variadic`,
+    // `flatten_assoc`, `factor_and_or`, `absorb_and_or`) from seizing on
+    // anything a real slice-6c case wouldn't also trigger. As in slice 6a,
+    // `null_prop_variadic`/`err_prop_variadic` are moot regardless of shape
+    // (`And`/`Or::propagates_nulls()` is `false`).
+    #[mz_ore::test]
+    fn scalar_parity_slice6c() {
+        use mz_expr::{MirScalarExpr, VariadicFunc};
+        use mz_repr::{Datum, ReprScalarType};
+
+        let c = MirScalarExpr::column;
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let not = |e: MirScalarExpr| e.call_unary(mz_expr::UnaryFunc::Not(mz_expr::func::Not));
+        let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
+        let div64 = || mz_expr::BinaryFunc::DivInt64(mz_expr::func::DivInt64);
+        let null_bool = || MirScalarExpr::literal_null(ReprScalarType::Bool);
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+
+        let mut cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
+
+        // --- drop_unit positions: leading / middle / trailing unit operand.
+        cases.push((
+            and(vec![MirScalarExpr::literal_true(), c(0), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            and(vec![c(0), MirScalarExpr::literal_true(), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            and(vec![c(0), c(1), MirScalarExpr::literal_true()]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            or(vec![MirScalarExpr::literal_false(), c(0), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            or(vec![c(0), MirScalarExpr::literal_false(), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            or(vec![c(0), c(1), MirScalarExpr::literal_false()]),
+            vec![bool_ct(), bool_ct()],
+        ));
+
+        // --- dedup: adjacent, non-adjacent, and more than two copies.
+        cases.push((and(vec![c(0), c(0), c(1)]), vec![bool_ct(), bool_ct()]));
+        cases.push((and(vec![c(0), c(1), c(0)]), vec![bool_ct(), bool_ct()]));
+        cases.push((
+            and(vec![c(0), c(0), c(0), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((or(vec![c(0), c(0), c(1)]), vec![bool_ct(), bool_ct()]));
+        cases.push((or(vec![c(0), c(1), c(0)]), vec![bool_ct(), bool_ct()]));
+        cases.push((or(vec![c(0), c(0), c(0), c(1)]), vec![bool_ct(), bool_ct()]));
+
+        // --- E-err envelope: a literal-error operand dedups with its
+        // duplicate to the single error, and survives drop_unit dropping an
+        // adjacent unit operand. The error is boolean-typed (`(1/0) = (1/0)`,
+        // both sides folded by const_fold, then Eq folds the erroring
+        // comparison), NOT the bare Int64 `1 / 0`: and_dedup/and_single
+        // eventually expose this operand's OWN class as the AND/OR's value
+        // (dedup to arity 1, then and_single/or_single unwraps it), which
+        // unions it with the connective's own const_fold result. Both must
+        // agree on the literal's `ReprColumnType`, not just its `EvalError`
+        // payload, or the shared scalar analysis's merge-conflict assertion
+        // fires; an Int64-typed error exposed through a Bool AND/OR would be
+        // exactly such a conflict, an artifact of malformed (not boolean-typed)
+        // input rather than a real and_dedup/and_drop_unit divergence.
+        let err = || {
+            let d = int_lit(1).call_binary(int_lit(0), div64());
+            d.clone()
+                .call_binary(d, mz_expr::BinaryFunc::Eq(mz_expr::func::Eq))
+        };
+        cases.push((and(vec![err(), err()]), vec![]));
+        cases.push((and(vec![err(), MirScalarExpr::literal_true()]), vec![]));
+        cases.push((or(vec![err(), err()]), vec![]));
+        cases.push((or(vec![err(), MirScalarExpr::literal_false()]), vec![]));
+
+        // --- Nulls (3VL): a null operand is not the unit, so drop_unit must
+        // drop only the true/false operand and leave the null in place.
+        cases.push((
+            and(vec![c(0), MirScalarExpr::literal_true(), null_bool()]),
+            vec![bool_ct()],
+        ));
+        cases.push((
+            or(vec![c(0), MirScalarExpr::literal_false(), null_bool()]),
+            vec![bool_ct()],
+        ));
+
+        // --- Interaction cascades: drop_unit / dedup feeding and_single /
+        // and_empty on a later saturation round.
+        // And(#0, true) -> And(#0) (drop_unit) -> #0 (and_single).
+        cases.push((
+            and(vec![c(0), MirScalarExpr::literal_true()]),
+            vec![bool_ct()],
+        ));
+        // And(true) -> And() (drop_unit) -> true (and_empty).
+        cases.push((and(vec![MirScalarExpr::literal_true()]), vec![]));
+        // And(#0, #0) -> And(#0) (and_dedup) -> #0 (and_single).
+        cases.push((and(vec![c(0), c(0)]), vec![bool_ct()]));
+
+        for (e, ct) in cases {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+        }
+
+        // Regression sampling of slice-1..6a shapes under the grown rule set.
+        let regression: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (not(not(c(0))), vec![bool_ct()]),
+            (and(vec![c(0)]), vec![bool_ct()]),
+            (
+                and(vec![MirScalarExpr::literal_false(), c(0), c(1)]),
+                vec![bool_ct(), bool_ct()],
+            ),
+            (
+                MirScalarExpr::If {
+                    cond: Box::new(c(0)),
+                    then: Box::new(c(1)),
+                    els: Box::new(c(1)),
+                },
+                vec![bool_ct(), bool_ct()],
+            ),
+        ];
+        for (e, ct) in regression {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "regression parity failed for {e:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_slice6c() {
+        assert!(
+            CORPUS.contains("and(true,"),
+            "corpus must exercise and_drop_unit with a leading true operand"
+        );
+        assert!(
+            CORPUS.contains("or(false,"),
+            "corpus must exercise or_drop_unit with a leading false operand"
+        );
+        assert!(
+            CORPUS.contains("and(#0, #0,"),
+            "corpus must exercise and_dedup"
+        );
+        assert!(
+            CORPUS.contains("or(#0, #0,"),
+            "corpus must exercise or_dedup"
+        );
+        assert!(
+            CORPUS.contains("and(1 / 0 = 1 / 0, 1 / 0 = 1 / 0)"),
+            "corpus must exercise and_dedup on a duplicate error operand"
+        );
+        assert!(
+            CORPUS.contains("and(1 / 0 = 1 / 0, true)"),
+            "corpus must exercise and_drop_unit preserving an adjacent error operand"
+        );
+        assert!(
+            CORPUS.contains("and(#0, true, null)"),
+            "corpus must exercise drop_unit NOT dropping a null operand"
+        );
+        assert!(
+            CORPUS.contains("or(#0, false, null)"),
+            "corpus must exercise the dual drop_unit-vs-null case for Or"
+        );
+    }
+
+    // Termination (SP2b Slice 6c): a term with BOTH a unit literal and a
+    // duplicate operand must reach a fixpoint quickly, whichever of
+    // and_drop_unit / and_dedup fires first. Each fire strictly shrinks the
+    // operand list (the fire-guards `scalar_any_lit_true`/`has_duplicate_id`
+    // make a no-op fire impossible), so the two rules cannot ping-pong: they
+    // only ever converge toward the single remaining operand. Lowers
+    // `And([x, x, true])` directly, bypassing `canonicalize_combined`, so the
+    // iteration count is visible, mirroring the slice-4/5/6a termination checks.
+    #[mz_ore::test]
+    fn drop_unit_dedup_terminates() {
+        use mz_expr::{MirScalarExpr, VariadicFunc};
+        use mz_repr::ReprScalarType;
+
+        let c = MirScalarExpr::column;
+        let e = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: vec![c(0), c(0), MirScalarExpr::literal_true()],
+        };
+
+        let mut eg = EGraph::new();
+        eg.data_mut().scalar.col_types = vec![ReprScalarType::Bool.nullable(false)];
+        let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &e);
+        let iters = saturate(&mut eg);
+        assert!(
+            iters <= 10,
+            "And(x, x, true) must reach a fixpoint quickly regardless of fire order; got {iters} iters"
+        );
+    }
 }
