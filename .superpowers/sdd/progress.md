@@ -282,3 +282,14 @@ FINAL WHOLE-SLICE REVIEW (opus): READY TO MERGE. 0 Critical/Important. All 7 cro
 1 MINOR (SLICE-6 PREREQUISITE, inert now): codegen.rs:592 body() funcs loop has NO repeated-metavar equality guard (unlike rels in guard()). Slice 5 OK (1 SBinaryVar/rule). Slice 6: if a rule binds two same-named func metavars (Binary[f](a,b)...Binary[f](c,d) = "same func"), MUST add equality guard or 2nd bind silently overwrites 1st -> fires on mismatched funcs. DO NOT FORGET.
 SLICE 5 COMPLETE + MERGE-READY. Range bf1f8331bd..c2148eff3b (17 commits: plan+7 tasks+fixes).
 OPEN (re-raise before slice 6): ci/test/lean-mir-rewrite.sh still hand-run/Docker-local, NOT wired into Buildkite; permanent count now 5, hand-grepped. User flagged CI-wiring for before-slice-5; still deferred.
+
+## SDD — SP2b SLICE 6a (and_or_short_circuit, list-quantified cond)
+Plan: docs/superpowers/plans/2026-07-03-eqsat-sp2b-slice6a-and-or-short-circuit.md. BASE (pre-6a): fe04413e31.
+READ-FIRST verdict: (crux) and_or_short_circuit is UNCONDITIONAL, NO could_error guard — verified from func/variadic.rs:85 And eval `Ok(Datum::False) => return Ok(Datum::False)` is an unconditional early return that discards accumulated err; And([1/0,false]) AND And([false,1/0]) both => false; Or dual (line 1159 true dominates). Matches old scalar/rules.rs:245-260 (unguarded, property-tested with 1/0). GRAMMAR-GENERAL is free: operands of Variadic[and](xs...) bind as rest Vec<Id>, same repr as relational Union(xs...); rest-quantified cond naturally general, only per-element scalar-lit predicate is scalar-specific. New Cond::AnyScalarLit{list,value}; DEFAULT view method cond_any_scalar_lit (reuses scalar_lit_bool_or_null -> ColoredView inherits inert, NO all-impls sweep); m.rest_local accessor; Tmpl::SBool RHS (slice 4). Permanent sorry STAYS 5 (declarative, no builtin). No lattice add.
+## Tasks
+- [ ] Task 1: DSL AST Cond::AnyScalarLit + grammar (scalar_any_lit_false/true)
+- [ ] Task 2: cond machinery — default view cond_any_scalar_lit + m.rest_local + codegen emit/is_color_exact/serialize
+- [ ] Task 3: port and_short_circuit/or_short_circuit to scalar.rewrite (16->18)
+- [ ] Task 4: Lean — denoteSFold_and_false/or_true helper lemmas + cond->exists-hypothesis + proof; permanent stays 5; aggregate lake
+- [ ] Task 5: differential corpus + parity (positions, nulls-3VL, E-err envelope BOTH orders, empty/single interactions) + slice gate
+QUEUED (flag): post-slice-6 relational union-cancel re-test reuses this rest-quantified cond machinery (carries batch-1 Stage-2a finding — union-cancel blocked on cross-element+rest-splice; 6a is the grammar-general foundation).
