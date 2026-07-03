@@ -204,3 +204,10 @@ rule flatten_greatest { doc "Greatest(.., Greatest(inner..), ..) = Greatest(.., 
     Variadic[greatest](xs...) => Variadic[greatest](flatten(xs, greatest)) where flatten_applies(xs, greatest) }
 rule flatten_least { doc "Least(.., Least(inner..), ..) = Least(.., inner.., ..) (associativity)"
     Variadic[least](xs...) => Variadic[least](flatten(xs, least)) where flatten_applies(xs, least) }
+
+# Undistribute a common factor from an And/Or: (a∧b)∨(a∧c) = a∧(b∨c) and dual.
+# Full-intersection factoring, residual-error gated. Builtin. Permanent sorry.
+rule factor_and_or {
+    doc "(a∧b)∨(a∧c) = a∧(b∨c) and dual: undistribute a common factor, residual-error gated"
+    Scalar(e) => factor_and_or(e)
+}
