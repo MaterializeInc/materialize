@@ -1192,4 +1192,259 @@ mod tests {
             "And(x, x, true) must reach a fixpoint quickly regardless of fire order; got {iters} iters"
         );
     }
+
+    // Differential parity harness (SP2b Slice 6e): extends slices 1-6c to the
+    // declarative `absorb_and`/`absorb_or` DSL rules (`scalar.rewrite`), which
+    // mirror the imperative `absorb_and_or` (`scalar/rules.rs`, line 601): an
+    // outer AND/OR operand whose dual-connective inner set is a proper
+    // superset of another operand's inner set is redundant and is dropped,
+    // provided every dropped extra has `could_error == false`. The retained
+    // subsuming operand is deliberately NOT gated (its own error still
+    // surfaces after absorption); only the DROPPED extras are.
+    //
+    // Same corpus-shaping constraint as slices 1-6c: every input keeps the
+    // old engine's still-unported rules (`null_prop_variadic`,
+    // `err_prop_variadic`, `flatten_assoc`, `factor_and_or`) from seizing on
+    // anything a real slice-6e case wouldn't also trigger.
+    //
+    // The guard case (the correctness core of this rule) has its own
+    // dedicated test, `absorb_guard_blocks_dropped_extra_error`, so the
+    // mutation-test target is a single, isolated assertion.
+    #[mz_ore::test]
+    fn scalar_parity_slice6e() {
+        use mz_expr::{MirScalarExpr, VariadicFunc};
+        use mz_repr::ReprScalarType;
+
+        let c = MirScalarExpr::column;
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let not = |e: MirScalarExpr| e.call_unary(mz_expr::UnaryFunc::Not(mz_expr::func::Not));
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+
+        let mut cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
+
+        // --- absorb_and: a (#0) inside the inner Or at leading / middle /
+        // trailing position. All three absorb to a bare `#0`.
+        cases.push((
+            and(vec![c(0), or(vec![c(0), c(1), c(2)])]),
+            vec![bool_ct(), bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            and(vec![c(0), or(vec![c(1), c(0), c(2)])]),
+            vec![bool_ct(), bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            and(vec![c(0), or(vec![c(1), c(2), c(0)])]),
+            vec![bool_ct(), bool_ct(), bool_ct()],
+        ));
+
+        // --- absorb_or (dual): a inside the inner And at leading / middle /
+        // trailing position.
+        cases.push((
+            or(vec![c(0), and(vec![c(0), c(1), c(2)])]),
+            vec![bool_ct(), bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            or(vec![c(0), and(vec![c(1), c(0), c(2)])]),
+            vec![bool_ct(), bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            or(vec![c(0), and(vec![c(1), c(2), c(0)])]),
+            vec![bool_ct(), bool_ct(), bool_ct()],
+        ));
+
+        // --- Extra operands: absorption drops only the subsumed operand; an
+        // unrelated outer sibling `c` survives untouched.
+        // And(a, Or(a, b), c) -> And(a, c).
+        cases.push((
+            and(vec![c(0), or(vec![c(0), c(1)]), c(2)]),
+            vec![bool_ct(), bool_ct(), bool_ct()],
+        ));
+
+        // --- General subset, beyond the simple "operand present" framing:
+        // neither And operand IS `a`; one's inner-set {a, b} is a proper
+        // subset of the other's {a, b, c}. AND(a,b) v AND(a,b,c) -> AND(a,b).
+        cases.push((
+            or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(1), c(2)])]),
+            vec![bool_ct(), bool_ct(), bool_ct()],
+        ));
+
+        // --- Nested absorption: the inner And(a, Or(a, b)) absorbs to `a` on
+        // one saturation round; the outer Or(a, a) then dedups to `a` too.
+        cases.push((
+            or(vec![c(0), and(vec![c(0), or(vec![c(0), c(1)])])]),
+            vec![bool_ct(), bool_ct()],
+        ));
+
+        // --- Interaction: absorb feeding and_drop_unit. The leading `true`
+        // drops first (and_drop_unit), exposing And(a, Or(a, b)), which then
+        // absorbs to `a` (the remaining arity-1 And then collapses via
+        // and_single).
+        cases.push((
+            and(vec![
+                MirScalarExpr::literal_true(),
+                c(0),
+                or(vec![c(0), c(1)]),
+            ]),
+            vec![bool_ct(), bool_ct()],
+        ));
+
+        for (e, ct) in cases {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+        }
+
+        // Regression sampling of slice-1..6c shapes under the grown rule set.
+        let regression: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (not(not(c(0))), vec![bool_ct()]),
+            (and(vec![c(0)]), vec![bool_ct()]),
+            (
+                and(vec![c(0), MirScalarExpr::literal_true(), c(1)]),
+                vec![bool_ct(), bool_ct()],
+            ),
+            (and(vec![c(0), c(0)]), vec![bool_ct()]),
+        ];
+        for (e, ct) in regression {
+            let new = canonicalize_combined(&e, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
+            assert_eq!(new, old, "regression parity failed for {e:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_slice6e() {
+        assert!(
+            CORPUS.contains("and(#0, or(#0, #1, #2))"),
+            "corpus must exercise absorb_and with a leading in the inner Or"
+        );
+        assert!(
+            CORPUS.contains("and(#0, or(#1, #0, #2))"),
+            "corpus must exercise absorb_and with a in the middle of the inner Or"
+        );
+        assert!(
+            CORPUS.contains("and(#0, or(#1, #2, #0))"),
+            "corpus must exercise absorb_and with a trailing in the inner Or"
+        );
+        assert!(
+            CORPUS.contains("or(#0, and(#0, #1, #2))"),
+            "corpus must exercise absorb_or (dual)"
+        );
+        assert!(
+            CORPUS.contains("and(#0, or(#0, #1), #2)"),
+            "corpus must exercise absorption alongside an unrelated outer operand"
+        );
+        assert!(
+            CORPUS.contains("or(and(#0, #1), and(#0, #1, #2))"),
+            "corpus must exercise the general-subset case beyond simple operand presence"
+        );
+        assert!(
+            CORPUS.contains("or(#0, and(#0, or(#0, #1)))"),
+            "corpus must exercise nested absorption"
+        );
+        assert!(
+            CORPUS.contains("and(true, #0, or(#0, #1))"),
+            "corpus must exercise absorb feeding and_drop_unit"
+        );
+        assert!(
+            CORPUS.contains("and(#0, or(#0, 1 / 0 = 1 / 0))"),
+            "corpus must exercise the could_error guard blocking a dropped erroring extra"
+        );
+    }
+
+    // GUARD (SP2b Slice 6e, the correctness core): the could_error gate on
+    // ABSORBED extras (`rest_filters::absorb_drop_index`) must block
+    // absorption when a dropped extra could error, even though the outer form
+    // is otherwise ripe for the rewrite. This is the single test the
+    // mutation-test evidence in the Task-5 report is built on: disabling the
+    // gate (forcing `extras_can_error = false` in `absorb_drop_index`) makes
+    // this assertion fail, and only this one, proving the gate is
+    // load-bearing.
+    //
+    // `err` is boolean-typed (`(1 / 0) = (1 / 0)`), not a bare Int64 `1 / 0`:
+    // the slice-6c type trap (`scalar/analysis.rs::merge`'s
+    // conflicting-literal debug_assert, tripped when a variadic collapse
+    // exposes an operand's own class directly as the connective's value)
+    // applies here too, since a fully-permitted sibling absorption elsewhere
+    // in this corpus does expose a bare column's class this way. `a` is
+    // nullable so the unsoundness the gate prevents is a live counterexample:
+    // at a = null, err = Err, the correct result is Err (null and err = err),
+    // but the wrongly-absorbed `a` alone would be null.
+    #[mz_ore::test]
+    fn absorb_guard_blocks_dropped_extra_error() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_repr::{Datum, ReprScalarType};
+
+        let c = MirScalarExpr::column;
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
+        let div64 = || BinaryFunc::DivInt64(mz_expr::func::DivInt64);
+        let err = || {
+            let d = int_lit(1).call_binary(int_lit(0), div64());
+            d.clone().call_binary(d, BinaryFunc::Eq(mz_expr::func::Eq))
+        };
+        let ct = vec![ReprScalarType::Bool.nullable(true)];
+
+        let guard_case = and(vec![c(0), or(vec![c(0), err()])]);
+
+        let new = canonicalize_combined(&guard_case, &ct);
+        let old = crate::eqsat::scalar::canonicalize(&guard_case, &ct);
+        assert_eq!(
+            new, old,
+            "guard-case parity failed for {guard_case:?}: combined={new:?} oracle={old:?}"
+        );
+        assert_ne!(
+            new,
+            c(0),
+            "guard must block absorption of the erroring extra; got the unsound {new:?}"
+        );
+    }
+
+    // Termination (SP2b Slice 6e): absorption must reach a fixpoint quickly.
+    // Each fire strictly shrinks the outer operand list (drops `Q`), and the
+    // could_error guard only ever suppresses a fire, never turns a blocked
+    // case into a churning one, so there is nothing to ping-pong against.
+    // Lowers `And([a, Or(a, b)])` directly, bypassing `canonicalize_combined`,
+    // so the iteration count is visible, mirroring the slice-4/5/6a/6c
+    // termination checks.
+    #[mz_ore::test]
+    fn absorb_terminates() {
+        use mz_expr::{MirScalarExpr, VariadicFunc};
+        use mz_repr::ReprScalarType;
+
+        let c = MirScalarExpr::column;
+        let or_ab = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: vec![c(0), c(1)],
+        };
+        let e = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: vec![c(0), or_ab],
+        };
+
+        let mut eg = EGraph::new();
+        eg.data_mut().scalar.col_types = vec![
+            ReprScalarType::Bool.nullable(false),
+            ReprScalarType::Bool.nullable(false),
+        ];
+        let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &e);
+        let iters = saturate(&mut eg);
+        assert!(
+            iters <= 10,
+            "And(a, Or(a, b)) must reach a fixpoint quickly; got {iters} iters"
+        );
+    }
 }

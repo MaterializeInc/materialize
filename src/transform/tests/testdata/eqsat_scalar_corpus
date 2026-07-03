@@ -267,3 +267,61 @@ types:
 # And(#0, #0) -> And(#0) (and_dedup) -> #0 (and_single).
 expr: and(#0, #0)
 types: bool
+
+# --- slice 6e: absorb_and_or (absorb_and / absorb_or) ---
+# Inner-set subsumption absorption: an outer AND/OR operand whose dual-
+# connective inner set is a proper superset of another operand's inner set is
+# dropped, provided every dropped extra is error-free.
+
+# absorb_and: a (#0) inside the inner Or at leading / middle / trailing.
+expr: and(#0, or(#0, #1, #2))
+types: bool,bool,bool
+
+expr: and(#0, or(#1, #0, #2))
+types: bool,bool,bool
+
+expr: and(#0, or(#1, #2, #0))
+types: bool,bool,bool
+
+# absorb_or (dual): a inside the inner And at leading / middle / trailing.
+expr: or(#0, and(#0, #1, #2))
+types: bool,bool,bool
+
+expr: or(#0, and(#1, #0, #2))
+types: bool,bool,bool
+
+expr: or(#0, and(#1, #2, #0))
+types: bool,bool,bool
+
+# Extra operands: absorption drops only the subsumed operand; an unrelated
+# outer sibling survives untouched. And(a, Or(a, b), c) -> And(a, c).
+expr: and(#0, or(#0, #1), #2)
+types: bool,bool,bool
+
+# General subset, beyond the simple "operand present" framing: neither And
+# operand IS `a`; one's inner-set is a proper subset of the other's.
+# AND(a,b) v AND(a,b,c) -> AND(a,b).
+expr: or(and(#0, #1), and(#0, #1, #2))
+types: bool,bool,bool
+
+# Nested absorption: the inner And(a, Or(a, b)) absorbs to `a` on one
+# saturation round; the outer Or(a, a) then dedups to `a` too.
+expr: or(#0, and(#0, or(#0, #1)))
+types: bool,bool
+
+# Absorb feeding and_drop_unit: the leading `true` drops first, exposing
+# And(a, Or(a, b)), which then absorbs to `a`.
+expr: and(true, #0, or(#0, #1))
+types: bool,bool
+
+# GUARD (the correctness core): the Or operand's inner-set {a, err} properly
+# contains {a}, so absorption would drop the erroring extra `err` and
+# collapse to the bare `a` if the could_error gate did not block it. `a` is
+# nullable so the counterexample is live: at a = null, err = Err, And(a,
+# Or(a, err)) evaluates to Err, but the wrongly-absorbed `a` alone would be
+# null. `err` is boolean-typed (`1 / 0 = 1 / 0`), not a bare Int64 `1 / 0`,
+# for the same type-agreement reason slice 6c's E-err cases require it (see
+# `test_absorb_and_or_gate_blocks_dropped_extra_error` in `scalar/rules.rs`
+# for the standalone-engine analogue).
+expr: and(#0, or(#0, 1 / 0 = 1 / 0))
+types: bool
