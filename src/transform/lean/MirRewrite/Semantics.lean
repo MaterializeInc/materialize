@@ -500,6 +500,18 @@ opaque nullPropBinary : ScalarExpr → ScalarExpr
     rules whose RHS is `errPropBinary` carry a permanent `sorry`. -/
 opaque errPropBinary : ScalarExpr → ScalarExpr
 
+/-- The `null_prop_variadic` builtin: folds a variadic call with a literal-null
+    operand to `null` when every other operand cannot error. Opaque like
+    `constEval`: its result depends on Rust's null-propagation metadata, so
+    rules whose RHS is `nullPropVariadic` carry a permanent `sorry`. -/
+opaque nullPropVariadic : ScalarExpr → ScalarExpr
+
+/-- The `err_prop_variadic` builtin: folds a variadic call with a literal-error
+    operand to that error when every other operand cannot error. Opaque like
+    `constEval`: its result depends on Rust evaluation not modeled in Lean, so
+    rules whose RHS is `errPropVariadic` carry a permanent `sorry`. -/
+opaque errPropVariadic : ScalarExpr → ScalarExpr
+
 /-! ### Evidence for the inner-set subsumption absorption rules
 
 `absorb_and`/`absorb_or` (the DSL's `absorb(xs, or)` / `absorb(xs, and)`) drop an

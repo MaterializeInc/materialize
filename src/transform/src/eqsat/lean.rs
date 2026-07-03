@@ -528,13 +528,16 @@ fn translate_tmpl(t: &Tmpl, hole: &str) -> String {
         // A builtin applier: its result is a Rust evaluation product with no
         // declarative Lean template, so only the functions this slice and its
         // predecessor port (`const_eval`, `if_err_cond`, `null_prop_binary`,
-        // `err_prop_binary`) are mapped. `choose_proof` emits a permanent
-        // `sorry` for every `Builtin` RHS regardless.
+        // `err_prop_binary`, `null_prop_variadic`, `err_prop_variadic`) are
+        // mapped. `choose_proof` emits a permanent `sorry` for every `Builtin`
+        // RHS regardless.
         Tmpl::Builtin { name, args } => match name.as_str() {
             "const_eval" => format!("constEval {}", args[0]),
             "if_err_cond" => format!("ifErrCond {}", args[0]),
             "null_prop_binary" => format!("nullPropBinary {}", args[0]),
             "err_prop_binary" => format!("errPropBinary {}", args[0]),
+            "null_prop_variadic" => format!("nullPropVariadic {}", args[0]),
+            "err_prop_variadic" => format!("errPropVariadic {}", args[0]),
             other => unimplemented!(
                 "no Lean builtin translation for {other:?}; extend Semantics.lean's opaque \
                  builtins and this match when a rule needs it"

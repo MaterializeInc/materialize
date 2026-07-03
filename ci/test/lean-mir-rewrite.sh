@@ -52,7 +52,8 @@ docker run --rm \
 # matches. `|| true` keeps `set -o pipefail` from treating that as
 # script-fatal, so the count check below reports a proper error (a zero count
 # is now a failure, since markers are expected).
-expected_permanent=5  # const_fold, if_err_cond, null_prop_binary, err_prop_binary (builtin RHS)
+expected_permanent=7  # const_fold, if_err_cond, null_prop_binary, err_prop_binary,
+                      # null_prop_variadic, err_prop_variadic (builtin RHS)
                       # + not_binary_negate (opaque negate table). isnull_fold proves outright
                       # (no sorry). Grows to 6 by slice 6 (spec 2.7).
 permanent=$(grep -rho "PERMANENT SORRY" "$lean_dir/MirRewrite" | wc -l || true)

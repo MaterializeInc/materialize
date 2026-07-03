@@ -294,6 +294,18 @@ theorem rule_err_prop_binary :
     -- PERMANENT SORRY: RHS is a Rust builtin
     sorry
 
+-- f(.., null, ..) = null when f propagates nulls and every other operand cannot error
+theorem rule_null_prop_variadic :
+    ∀ (env : Nat → Bool) (e : ScalarExpr), denoteS env e = denoteS env (nullPropVariadic e) := by
+    -- PERMANENT SORRY: RHS is a Rust builtin
+    sorry
+
+-- f(.., err, ..) = err when f propagates nulls and every other operand cannot error
+theorem rule_err_prop_variadic :
+    ∀ (env : Nat → Bool) (e : ScalarExpr), denoteS env e = denoteS env (errPropVariadic e) := by
+    -- PERMANENT SORRY: RHS is a Rust builtin
+    sorry
+
 -- IsNull(x) = false when x is non-nullable and cannot error
 theorem rule_isnull_fold :
     ∀ (env : Nat → Bool) (x : ScalarExpr), denoteS env (ScalarExpr.isNullE x) = denoteS env (ScalarExpr.litB false) := by
