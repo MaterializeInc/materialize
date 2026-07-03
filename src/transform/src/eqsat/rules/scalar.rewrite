@@ -104,6 +104,20 @@ rule err_prop_binary {
     Scalar(e) => err_prop_binary(e)
 }
 
+# A null-propagating variadic call with a literal-null operand folds to null when
+# every other operand cannot error. Builtin. Permanent sorry.
+rule null_prop_variadic {
+    doc "f(.., null, ..) = null when f propagates nulls and every other operand cannot error"
+    Scalar(e) => null_prop_variadic(e)
+}
+
+# A null-propagating variadic call with a literal-error operand folds to that error
+# when every other operand cannot error. Builtin. Permanent sorry.
+rule err_prop_variadic {
+    doc "f(.., err, ..) = err when f propagates nulls and every other operand cannot error"
+    Scalar(e) => err_prop_variadic(e)
+}
+
 # IsNull of a provably non-nullable, error-free operand is false. Declarative
 # constant-literal RHS guarded by the no-error and non-nullable conds.
 rule isnull_fold {
