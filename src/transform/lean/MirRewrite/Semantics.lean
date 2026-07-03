@@ -500,4 +500,214 @@ opaque nullPropBinary : ScalarExpr → ScalarExpr
     rules whose RHS is `errPropBinary` carry a permanent `sorry`. -/
 opaque errPropBinary : ScalarExpr → ScalarExpr
 
+/-! ### Evidence for the inner-set subsumption absorption rules
+
+`absorb_and`/`absorb_or` (the DSL's `absorb(xs, or)` / `absorb(xs, and)`) drop an
+outer operand `Q` that another operand `P` subsumes through the dual connective's
+inner set: for outer `And` / inner `Or`, `Q = orE S_Q` is dropped when some `P =
+orE S_P` has `S_P ⊊ S_Q`, because `orE S_P ⟹ orE S_Q` makes `Q` redundant under
+`And`. For outer `Or` / inner `And` it is dual (`S_P ⊊ S_Q` gives `andE S_Q ⟹
+andE S_P`, so `Q` is redundant under `Or`).
+
+The two-valued `denoteS` model has no error value, so the `could_error` gate the
+Rust rule applies to the dropped extras is invisible here (the same
+guard-vacuous stance as `isnull_fold` and the dedup rules): Lean proves the
+two-valued absorption ALGEBRA, and lifting it to the error-gated, e-class-id
+based `rest_filters::rest_absorb` rests on the Rust analysis plus the
+differential parity oracle, not on this layer. `absorbInner*` below is likewise a
+proof-only spec: it is `noncomputable` and drops every operand equal to the first
+subsumed value, whereas `rest_absorb` drops one operand then re-fires. Both are
+denotation-preserving (this is what the theorems certify); the exact operand
+multiset is a fidelity gap the oracle covers, exactly as for `dedupById`. -/
+
+-- Classical decidability of the subsumption predicate (`absorbCand`) and of
+-- operand equality drives the `noncomputable` `absorbInner` spec and its proofs.
+section AbsorbSubsumption
+open Classical
+
+/-- One outer operand's inner list under the dual connective `Or`: the operand's
+    `orE` arguments if it is an `orE`, else the singleton `[x]`. -/
+def innerOr : ScalarExpr → List ScalarExpr
+  | ScalarExpr.orE es => es
+  | x => [x]
+
+/-- One outer operand's inner list under the dual connective `And`. -/
+def innerAnd : ScalarExpr → List ScalarExpr
+  | ScalarExpr.andE es => es
+  | x => [x]
+
+/-- Every operand denotes the `Or`-fold (`any`) of its `innerOr` list: an `orE`
+    by `denoteSFold_or_eq_any`, any other operand because `[x].any = denoteS x`. -/
+theorem denoteS_eq_any_innerOr (env : Nat → Bool) (x : ScalarExpr) :
+    denoteS env x = (innerOr x).any (fun a => denoteS env a) := by
+  cases x with
+  | orE es => simp only [innerOr, denoteS]; exact denoteSFold_or_eq_any env es
+  | var n => simp [innerOr]
+  | notE e => simp [innerOr]
+  | andE es => simp [innerOr]
+  | ifE c t e => simp [innerOr]
+  | litB b => simp [innerOr]
+  | isNullE e => simp [innerOr]
+  | binaryE f a b => simp [innerOr]
+
+/-- Dual of `denoteS_eq_any_innerOr`: every operand denotes the `And`-fold
+    (`all`) of its `innerAnd` list. -/
+theorem denoteS_eq_all_innerAnd (env : Nat → Bool) (x : ScalarExpr) :
+    denoteS env x = (innerAnd x).all (fun a => denoteS env a) := by
+  cases x with
+  | andE es => simp only [innerAnd, denoteS]; exact denoteSFold_and_eq_all env es
+  | var n => simp [innerAnd]
+  | notE e => simp [innerAnd]
+  | orE es => simp [innerAnd]
+  | ifE c t e => simp [innerAnd]
+  | litB b => simp [innerAnd]
+  | isNullE e => simp [innerAnd]
+  | binaryE f a b => simp [innerAnd]
+
+/-- `innerOr`-subset lifts to implication: if every `innerOr` operand of `p` is
+    an `innerOr` operand of `q`, then `p ⟹ q` (the `Or`-fold is monotone under
+    superset). -/
+theorem orImplies_of_innerOr_subset (env : Nat → Bool) (p q : ScalarExpr)
+    (h : ∀ a ∈ innerOr p, a ∈ innerOr q) :
+    denoteS env p = true → denoteS env q = true := by
+  rw [denoteS_eq_any_innerOr env p, denoteS_eq_any_innerOr env q]
+  intro hp
+  rw [List.any_eq_true] at hp ⊢
+  obtain ⟨a, ha, hva⟩ := hp
+  exact ⟨a, h a ha, hva⟩
+
+/-- Dual: `innerAnd`-subset lifts to the reverse implication `q ⟹ p` (the
+    `And`-fold is antitone under superset: more conjuncts is a stronger term). -/
+theorem andImplies_of_innerAnd_subset (env : Nat → Bool) (p q : ScalarExpr)
+    (h : ∀ a ∈ innerAnd p, a ∈ innerAnd q) :
+    denoteS env q = true → denoteS env p = true := by
+  rw [denoteS_eq_all_innerAnd env p, denoteS_eq_all_innerAnd env q]
+  intro hq
+  rw [List.all_eq_true] at hq ⊢
+  intro a ha
+  exact hq a (h a ha)
+
+/-- `p` properly inner-subsumes `q` under `inner`: `inner p ⊆ inner q` and the
+    inclusion is strict (some `inner q` element is outside `inner p`). Strictness
+    forces `p ≠ q`, so a proper subsumer is always a distinct operand. -/
+def properInner (inner : ScalarExpr → List ScalarExpr) (p q : ScalarExpr) : Prop :=
+  (∀ a ∈ inner p, a ∈ inner q) ∧ (∃ b ∈ inner q, b ∉ inner p)
+
+/-- One outer operand `q` is subsumed if some operand of `xs` properly
+    inner-subsumes it. -/
+def absorbCand (inner : ScalarExpr → List ScalarExpr) (xs : List ScalarExpr)
+    (q : ScalarExpr) : Prop :=
+  ∃ p ∈ xs, properInner inner p q
+
+/-- The kept operands after inner-set subsumption absorption: find the first
+    outer operand `q` some other operand properly inner-subsumes, then drop every
+    operand equal to `q`. Noncomputable proof-only spec (classical decidability
+    of the subsumption predicate), mirroring `dedupById`. The RUNNING absorption
+    is `rest_filters::rest_absorb`; see the section header for the fidelity gap. -/
+noncomputable def absorbInner (inner : ScalarExpr → List ScalarExpr)
+    (xs : List ScalarExpr) : List ScalarExpr :=
+  match xs.find? (fun q => decide (absorbCand inner xs q)) with
+  | some q => xs.filter (fun x => decide (x ≠ q))
+  | none => xs
+
+/-- Outer `And` / inner `Or` absorption spec (`absorb(xs, or)`). -/
+noncomputable def absorbInnerOr (xs : List ScalarExpr) : List ScalarExpr :=
+  absorbInner innerOr xs
+
+/-- Outer `Or` / inner `And` absorption spec (`absorb(xs, and)`). -/
+noncomputable def absorbInnerAnd (xs : List ScalarExpr) : List ScalarExpr :=
+  absorbInner innerAnd xs
+
+/-- Two `Bool`s that imply each other (both directions) are equal. Discharges the
+    final combine of the `all`/`any` absorption proofs from their two inclusions. -/
+theorem bool_eq_of_imp {a b : Bool} (h1 : b = true → a = true)
+    (h2 : a = true → b = true) : a = b := by
+  cases a <;> cases b <;> simp_all
+
+/-- Absorbing the outer `And`'s operand list preserves the `And`-fold (`all`):
+    the dropped value is implied by a surviving proper-subsumer, so removing it
+    changes no `all`. -/
+theorem all_absorbInnerOr (env : Nat → Bool) (xs : List ScalarExpr) :
+    (absorbInnerOr xs).all (fun a => denoteS env a)
+      = xs.all (fun a => denoteS env a) := by
+  unfold absorbInnerOr absorbInner
+  cases hf : xs.find? (fun q => decide (absorbCand innerOr xs q)) with
+  | none => rfl
+  | some q =>
+    have hcand : absorbCand innerOr xs q := by
+      have hb := List.find?_some hf
+      exact of_decide_eq_true hb
+    obtain ⟨p, hp_mem, hprop⟩ := hcand
+    unfold properInner at hprop
+    obtain ⟨hsub, b, hb_in, hb_out⟩ := hprop
+    have hpq : p ≠ q := by intro h; subst h; exact hb_out hb_in
+    have hp_filt : p ∈ xs.filter (fun x => decide (x ≠ q)) :=
+      List.mem_filter.mpr ⟨hp_mem, by rw [decide_eq_true_eq]; exact hpq⟩
+    have himp : denoteS env p = true → denoteS env q = true :=
+      orImplies_of_innerOr_subset env p q hsub
+    have fwd : xs.all (fun a => denoteS env a) = true →
+        (xs.filter (fun x => decide (x ≠ q))).all (fun a => denoteS env a) = true := by
+      intro h; rw [List.all_eq_true] at h ⊢
+      intro x hx; exact h x (List.mem_filter.mp hx).1
+    have bwd : (xs.filter (fun x => decide (x ≠ q))).all (fun a => denoteS env a) = true →
+        xs.all (fun a => denoteS env a) = true := by
+      intro h; rw [List.all_eq_true] at h ⊢
+      intro x hx
+      by_cases hxq : x = q
+      · subst hxq; exact himp (h p hp_filt)
+      · exact h x (List.mem_filter.mpr ⟨hx, by rw [decide_eq_true_eq]; exact hxq⟩)
+    exact bool_eq_of_imp fwd bwd
+
+/-- Dual of `all_absorbInnerOr`: absorbing the outer `Or`'s operand list
+    preserves the `Or`-fold (`any`). The dropped value implies its surviving
+    proper-subsumer, so removing it changes no `any`. -/
+theorem any_absorbInnerAnd (env : Nat → Bool) (xs : List ScalarExpr) :
+    (absorbInnerAnd xs).any (fun a => denoteS env a)
+      = xs.any (fun a => denoteS env a) := by
+  unfold absorbInnerAnd absorbInner
+  cases hf : xs.find? (fun q => decide (absorbCand innerAnd xs q)) with
+  | none => rfl
+  | some q =>
+    have hcand : absorbCand innerAnd xs q := by
+      have hb := List.find?_some hf
+      exact of_decide_eq_true hb
+    obtain ⟨p, hp_mem, hprop⟩ := hcand
+    unfold properInner at hprop
+    obtain ⟨hsub, b, hb_in, hb_out⟩ := hprop
+    have hpq : p ≠ q := by intro h; subst h; exact hb_out hb_in
+    have hp_filt : p ∈ xs.filter (fun x => decide (x ≠ q)) :=
+      List.mem_filter.mpr ⟨hp_mem, by rw [decide_eq_true_eq]; exact hpq⟩
+    have himp : denoteS env q = true → denoteS env p = true :=
+      andImplies_of_innerAnd_subset env p q hsub
+    have fwd : (xs.filter (fun x => decide (x ≠ q))).any (fun a => denoteS env a) = true →
+        xs.any (fun a => denoteS env a) = true := by
+      intro h; rw [List.any_eq_true] at h ⊢
+      obtain ⟨x, hx, hfx⟩ := h
+      exact ⟨x, (List.mem_filter.mp hx).1, hfx⟩
+    have bwd : xs.any (fun a => denoteS env a) = true →
+        (xs.filter (fun x => decide (x ≠ q))).any (fun a => denoteS env a) = true := by
+      intro h; rw [List.any_eq_true] at h ⊢
+      obtain ⟨x, hx, hfx⟩ := h
+      by_cases hxq : x = q
+      · subst hxq; exact ⟨p, hp_filt, himp hfx⟩
+      · exact ⟨x, List.mem_filter.mpr ⟨hx, by rw [decide_eq_true_eq]; exact hxq⟩, hfx⟩
+    exact bool_eq_of_imp bwd fwd
+
+/-- The fold-level absorption law the emitter's `absorb_and` theorem reduces to
+    after unfolding `denoteS`: the `And`-fold is invariant under `absorbInnerOr`. -/
+theorem denoteSFold_and_absorb (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env (absorbInnerOr xs) true (· && ·)
+      = denoteSFold env xs true (· && ·) := by
+  rw [denoteSFold_and_eq_all, denoteSFold_and_eq_all]
+  exact all_absorbInnerOr env xs
+
+/-- Dual for `absorb_or`: the `Or`-fold is invariant under `absorbInnerAnd`. -/
+theorem denoteSFold_or_absorb (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env (absorbInnerAnd xs) false (· || ·)
+      = denoteSFold env xs false (· || ·) := by
+  rw [denoteSFold_or_eq_any, denoteSFold_or_eq_any]
+  exact any_absorbInnerAnd env xs
+
+end AbsorbSubsumption
+
 end MirRewrite

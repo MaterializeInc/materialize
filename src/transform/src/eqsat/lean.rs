@@ -583,15 +583,22 @@ fn tmpl_list_expr(list: &ListTmpl, hole: &str) -> String {
                 ),
                 // Drop later duplicates by membership.
                 RestFilter::DedupById => format!("(dedupById {list})"),
-                // TODO(SP2b Slice 6e Task 4): renders as a plain splice,
-                // ignoring the absorption filter, mirroring the compile-only
-                // placeholder `and_or_dedup` got in 6c Task 2 before its Task 4
-                // proof landed. Correct only by accident; a rule whose proof
-                // depends on the dropped operand being absent needs a real Lean
-                // rendering (a `List`-level counterpart of
-                // `rest_filters::rest_absorb`) before its `choose_proof` arm can
-                // be trusted.
-                RestFilter::AbsorbSubsumed { .. } => list.clone(),
+                // Inner-set subsumption absorption. `absorbInnerOr` /
+                // `absorbInnerAnd` (Semantics.lean) are the `List`-level
+                // counterparts of `rest_filters::rest_absorb`: they drop an outer
+                // operand a distinct operand proper-inner-subsumes under the dual
+                // connective `inner`. The fold-invariance lemmas
+                // `denoteSFold_{and,or}_absorb` are stated over these terms, so
+                // `choose_proof`'s absorb arm discharges the theorem against this
+                // rendering.
+                RestFilter::AbsorbSubsumed { inner } => match inner.as_str() {
+                    "or" => format!("(absorbInnerOr {list})"),
+                    "and" => format!("(absorbInnerAnd {list})"),
+                    other => unimplemented!(
+                        "no Lean absorption render for inner connective {other:?}; extend \
+                         Semantics.lean and this match when a rule needs it"
+                    ),
+                },
             },
         })
         .collect();
@@ -888,6 +895,25 @@ fn choose_proof(
                 "denoteSFold_and_dedup"
             } else {
                 "denoteSFold_or_dedup"
+            };
+            return format!(
+                "by\n    {intro}simp only [denoteS]; exact ({lemma} env {list_binder}).symm"
+            );
+        }
+        // `absorb_and`/`absorb_or`: the RHS is an `andE`/`orE` over the absorbed
+        // operand list (`absorbInnerOr`/`absorbInnerAnd`). Keyed on that rendered
+        // RHS *shape*, not on the `AbsorbApplies` guard (which the fold-invariance
+        // proof does not need: `denoteSFold_{and,or}_absorb` hold unconditionally
+        // over the fold). Placed before the generic De Morgan arm below, whose
+        // andE/orE match would otherwise swallow this LHS. `simp only [denoteS]`
+        // exposes the fold on both sides, then the matching `denoteSFold_*_absorb`
+        // lemma (Semantics.lean), stated over the same rendered term, closes it
+        // (`.symm`: the lemma orients absorbed = original, the goal the reverse).
+        if rhs.contains("absorbInner") {
+            let lemma = if lhs.contains("ScalarExpr.andE") {
+                "denoteSFold_and_absorb"
+            } else {
+                "denoteSFold_or_absorb"
             };
             return format!(
                 "by\n    {intro}simp only [denoteS]; exact ({lemma} env {list_binder}).symm"

@@ -335,4 +335,14 @@ theorem rule_or_dedup :
     ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.orE xs) = denoteS env (ScalarExpr.orE ((dedupById xs))) := by
     intro env xs; simp only [denoteS]; exact (denoteSFold_or_dedup env xs).symm
 
+-- And(.., a, .., Or(.., a, ..)) = And(.., a, ..), dropped extras error-free
+theorem rule_absorb_and :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.andE xs) = denoteS env (ScalarExpr.andE ((absorbInnerOr xs))) := by
+    intro env xs; simp only [denoteS]; exact (denoteSFold_and_absorb env xs).symm
+
+-- Or(.., a, .., And(.., a, ..)) = Or(.., a, ..), dropped extras error-free
+theorem rule_absorb_or :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.orE xs) = denoteS env (ScalarExpr.orE ((absorbInnerAnd xs))) := by
+    intro env xs; simp only [denoteS]; exact (denoteSFold_or_absorb env xs).symm
+
 end MirRewrite
