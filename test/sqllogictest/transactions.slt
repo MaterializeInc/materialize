@@ -818,6 +818,39 @@ RESET TRANSACTION_ISOLATION
 statement ok
 ROLLBACK
 
+# Regression: a `SET TRANSACTION` / `SET SESSION CHARACTERISTICS` whose mode
+# list mixes a (supported) isolation level with an (unsupported) access mode
+# must be rejected atomically. Previously the sequencer applied each mode in
+# order, so an isolation level listed before an access mode was applied to the
+# session before the statement then errored on the access mode, leaving the
+# session silently pinned to a different isolation level despite the error.
+
+statement ok
+RESET transaction_isolation
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement error SET TRANSACTION <access-mode>
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE
+
+# The failed statement must not have changed the isolation level.
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+# Access mode alone is likewise rejected, with no isolation change.
+statement error SET TRANSACTION <access-mode>
+SET TRANSACTION READ ONLY
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
 # Test explicit single statement transactions.
 
 reset-server
