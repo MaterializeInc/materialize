@@ -191,6 +191,20 @@ impl Config {
         let mut postgres_config = self.inner.clone();
         configure(&mut postgres_config);
 
+        // Pin the search path to `pg_catalog` for every upstream connection. Our catalog queries
+        // reference `pg_catalog` relations and functions by unqualified name (and user tables by a
+        // fully-qualified name), so an upstream role default such as
+        // `ALTER ROLE mz_user SET search_path = attacker, pg_catalog` must not be able to shadow
+        // them with attacker-owned relations or functions. The `options` startup parameter carries
+        // GUC source `PGC_S_CLIENT`, which outranks the `PGC_S_USER`/`PGC_S_DATABASE` defaults set
+        // by `ALTER ROLE`/`ALTER DATABASE`, so this holds even against a hostile per-role default.
+        let search_path_option = "-c search_path=pg_catalog";
+        let options = match postgres_config.get_options() {
+            Some(existing) => format!("{existing} {search_path_option}"),
+            None => search_path_option.to_string(),
+        };
+        postgres_config.options(options);
+
         let mut tls = mz_tls_util::make_tls(&postgres_config).map_err(|tls_err| match tls_err {
             mz_tls_util::TlsError::Generic(e) => PostgresError::Generic(e),
             mz_tls_util::TlsError::OpenSsl(e) => PostgresError::PostgresSsl(e),
