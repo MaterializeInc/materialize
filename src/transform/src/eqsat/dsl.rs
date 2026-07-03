@@ -270,6 +270,23 @@ pub enum TElem {
     /// `map(func, list)`: apply `func` (which contains the `_` [`Tmpl::Hole`])
     /// to each element of the captured `list`, splicing the results.
     MapSplice { func: Box<Tmpl>, list: String },
+    /// Splice a rest list after filtering it. `RestFilter` chooses the filter.
+    /// Backs `and_or_drop_unit` (drop unit literals) and `and_or_dedup`
+    /// (drop later duplicates by canonical id). Grammar-general: `ListTmpl`
+    /// backs both `Tmpl::Union` and `Tmpl::SVariadic`.
+    FilterSplice { list: String, filter: RestFilter },
+}
+
+/// The filter a [`TElem::FilterSplice`] applies to a rest list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RestFilter {
+    /// Keep operands whose scalar-literal analysis is not `Some(Some(bool))`.
+    /// The per-element predicate is scalar-specific. Backs `and_or_drop_unit`,
+    /// where the boolean is the connective unit (`true` for And, `false` for Or).
+    DropScalarLit(bool),
+    /// Keep the first operand of each canonical e-class id, dropping later
+    /// duplicates. Sort-agnostic (canonical id only), so grammar-general.
+    DedupById,
 }
 
 /// A template input list: an ordered sequence of [`TElem`]s.
@@ -425,6 +442,10 @@ pub enum Cond {
     /// non-nullable, via `scalar_extract::raise(g, s).typ(col_types).nullable == false`.
     /// Computed on demand (no lattice storage). Gates `isnull_fold`.
     ScalarNonNullable { scalar: String },
+    /// `has_duplicate_id(list)`: two or more operands in the rest list share a
+    /// canonical e-class id. The fire-guard for `and_or_dedup`, so the rule
+    /// never rebuilds an unchanged operand list. Grammar-general (canonical id).
+    HasDuplicateId { list: String },
 }
 
 /// The eqsat pass a rule is active in.

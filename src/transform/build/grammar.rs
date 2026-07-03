@@ -143,6 +143,12 @@ fn kw<'a>(word: &'static str) -> impl Parser<'a, &'a [Token], (), TokErr<'a>> + 
     ident().filter(move |s: &String| s == word).ignored()
 }
 
+/// A bare `true`/`false` literal. Shared by `Tmpl::SBool` and any grammar
+/// production taking a raw bool argument (e.g. `drop_scalar_lit(xs, true)`).
+fn bool_lit<'a>() -> impl Parser<'a, &'a [Token], bool, TokErr<'a>> + Clone {
+    choice((kw("true").to(true), kw("false").to(false)))
+}
+
 fn relvar_ident<'a>() -> impl Parser<'a, &'a [Token], String, TokErr<'a>> + Clone {
     ident().filter(|s: &String| !is_operator(s))
 }
@@ -462,11 +468,29 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
                     func: Box::new(func),
                     list,
                 });
+            let dedup = kw("dedup")
+                .ignore_then(ident().delimited_by(just(Token::LParen), just(Token::RParen)))
+                .map(|list| TElem::FilterSplice {
+                    list,
+                    filter: RestFilter::DedupById,
+                });
+            let drop_scalar_lit = kw("drop_scalar_lit")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(ident())
+                .then_ignore(just(Token::Comma))
+                .then(bool_lit())
+                .then_ignore(just(Token::RParen))
+                .map(|(list, value)| TElem::FilterSplice {
+                    list,
+                    filter: RestFilter::DropScalarLit(value),
+                });
             let splice = relvar_ident()
                 .then_ignore(just(Token::Ellipsis))
                 .map(TElem::Splice);
             let item = tmpl.clone().map(TElem::Item);
-            choice((mapsplice, splice, item))
+            // `dedup` / `drop_scalar_lit` must come before `item` so their
+            // keywords are not swallowed as a bare `RelVar` template.
+            choice((mapsplice, dedup, drop_scalar_lit, splice, item))
                 .separated_by(just(Token::Comma))
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
@@ -597,10 +621,7 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
                 Tmpl::RelVar(name)
             }
         });
-        let sbool = choice((
-            kw("true").to(Tmpl::SBool(true)),
-            kw("false").to(Tmpl::SBool(false)),
-        ));
+        let sbool = bool_lit().map(Tmpl::SBool);
         // `builtin` is `ident "(" args ")"`, the same shape as every keyword-led
         // template above (e.g. `Empty(r)`). It must come after them in `choice`
         // so it does not shadow them, and before `hole_or_relvar` (a bare
@@ -706,6 +727,7 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
             one_ident("scalar_any_lit_false").map(|list| Cond::AnyScalarLit { list, value: false }),
             one_ident("scalar_any_lit_true").map(|list| Cond::AnyScalarLit { list, value: true }),
             one_ident("scalar_non_nullable").map(|scalar| Cond::ScalarNonNullable { scalar }),
+            one_ident("has_duplicate_id").map(|list| Cond::HasDuplicateId { list }),
         )),
     ));
 
@@ -979,6 +1001,65 @@ mod tests {
             crate::dsl::Cond::AnyScalarLit {
                 list: "xs".to_string(),
                 value: true,
+            }
+        );
+    }
+
+    /// `drop_scalar_lit(xs, <bool>)` inside a template list parses to a
+    /// `TElem::FilterSplice { filter: RestFilter::DropScalarLit(_), .. }`,
+    /// naming the same rest metavar the LHS `Variadic` pattern binds.
+    #[test]
+    fn parses_drop_scalar_lit_splice() {
+        let src = "rule r { Variadic[and](xs...) => Variadic[and](drop_scalar_lit(xs, true)) where scalar_any_lit_true(xs) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].rhs {
+            crate::dsl::Tmpl::SVariadic { func, inputs } => {
+                assert_eq!(func, "and");
+                assert_eq!(
+                    inputs.elems,
+                    vec![crate::dsl::TElem::FilterSplice {
+                        list: "xs".to_string(),
+                        filter: crate::dsl::RestFilter::DropScalarLit(true),
+                    }]
+                );
+            }
+            other => panic!("expected SVariadic, got {other:?}"),
+        }
+        assert_eq!(rules[0].conds.len(), 1);
+        assert_eq!(
+            rules[0].conds[0],
+            crate::dsl::Cond::AnyScalarLit {
+                list: "xs".to_string(),
+                value: true,
+            }
+        );
+    }
+
+    /// `dedup(xs)` inside a template list parses to a `TElem::FilterSplice {
+    /// filter: RestFilter::DedupById, .. }`, guarded by `has_duplicate_id(xs)`.
+    #[test]
+    fn parses_dedup_splice_with_has_duplicate_id_cond() {
+        let src =
+            "rule r { Variadic[or](xs...) => Variadic[or](dedup(xs)) where has_duplicate_id(xs) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].rhs {
+            crate::dsl::Tmpl::SVariadic { func, inputs } => {
+                assert_eq!(func, "or");
+                assert_eq!(
+                    inputs.elems,
+                    vec![crate::dsl::TElem::FilterSplice {
+                        list: "xs".to_string(),
+                        filter: crate::dsl::RestFilter::DedupById,
+                    }]
+                );
+            }
+            other => panic!("expected SVariadic, got {other:?}"),
+        }
+        assert_eq!(rules[0].conds.len(), 1);
+        assert_eq!(
+            rules[0].conds[0],
+            crate::dsl::Cond::HasDuplicateId {
+                list: "xs".to_string(),
             }
         );
     }
