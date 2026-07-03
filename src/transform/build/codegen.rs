@@ -62,6 +62,11 @@ fn cond_is_color_exact(c: &Cond) -> bool {
         Cond::ScalarNoError { .. } => false,
         Cond::ScalarNonNullable { .. } => false,
         Cond::AnyScalarLit { .. } => false,
+        // Not analysis-gated (reads canonical ids via `find`, not an e-class
+        // Analysis), but grouped with the scalar conds above for the same
+        // reason: it only ever guards a scalar rule (`and_or_dedup`), and the
+        // `ColoredView` impl is unconditionally inert.
+        Cond::HasDuplicateId { .. } => false,
     }
 }
 
@@ -549,6 +554,9 @@ fn cond_expr(c: &Cond, m: &Matcher) -> String {
         }
         Cond::AnyScalarLit { list, value } => {
             format!("g.cond_any_scalar_lit(&{}, {})", m.rest_local(list), value)
+        }
+        Cond::HasDuplicateId { list } => {
+            format!("g.cond_has_duplicate_id(&{})", m.rest_local(list))
         }
     }
 }
@@ -1115,6 +1123,17 @@ fn listtmpl_stmts(
                     "for {hv} in b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?.clone() {{\n{body}{v}.push({vt});\n}}\n"
                 ));
             }
+            TElem::FilterSplice { list, filter } => {
+                let call = match filter {
+                    RestFilter::DedupById => format!(
+                        "crate::eqsat::rest_filters::rest_dedup_by_id(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?)"
+                    ),
+                    RestFilter::DropScalarLit(value) => format!(
+                        "crate::eqsat::rest_filters::rest_drop_scalar_lit(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?, {value})"
+                    ),
+                };
+                out.push_str(&format!("{v}.extend({call});\n"));
+            }
         }
     }
     v
@@ -1478,6 +1497,17 @@ fn telem(e: &TElem) -> String {
             tmpl(func),
             s(list)
         ),
+        TElem::FilterSplice { list, filter } => {
+            let f = match filter {
+                RestFilter::DedupById => format!("{P}::RestFilter::DedupById"),
+                RestFilter::DropScalarLit(v) => format!("{P}::RestFilter::DropScalarLit({v})"),
+            };
+            format!(
+                "{P}::TElem::FilterSplice {{ list: {}, filter: {} }}",
+                s(list),
+                f
+            )
+        }
     }
 }
 
@@ -1648,6 +1678,9 @@ fn cond(c: &Cond) -> String {
             s(list),
             value
         ),
+        Cond::HasDuplicateId { list } => {
+            format!("{P}::Cond::HasDuplicateId {{ list: {} }}", s(list))
+        }
     }
 }
 

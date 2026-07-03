@@ -570,6 +570,14 @@ fn tmpl_list_expr(list: &ListTmpl, hole: &str) -> String {
             TElem::MapSplice { func, list } => {
                 format!("({list}.map (fun h => {}))", translate_tmpl(func, "h"))
             }
+            // TODO(SP2b Slice 6c Task 4): renders as a plain splice, ignoring
+            // `filter`. Correct only by accident (e.g. when the filter is a
+            // no-op on the modeled inputs); a rule whose proof depends on the
+            // filtered-out elements being absent needs a real Lean rendering
+            // (a `List.dedup`/`List.filter` counterpart of `rest_filters`)
+            // before its `choose_proof` arm can be trusted. Added to unblock
+            // compilation, not to model `FilterSplice` semantics.
+            TElem::FilterSplice { list, .. } => list.clone(),
         })
         .collect();
     if parts.len() == 1 {

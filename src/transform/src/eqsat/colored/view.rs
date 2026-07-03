@@ -411,6 +411,13 @@ impl<'a, 'b, 'v> MatchGraph for ColoredView<'a, 'b, 'v> {
         false
     }
 
+    fn cond_has_duplicate_id(&self, _ids: &[Id]) -> bool {
+        // Colored saturation never runs scalar rules (they are `colored: false`),
+        // so this is unreachable in practice. Inert `false` keeps the rule from
+        // firing if ever reached, matching the analysis-gated conds.
+        false
+    }
+
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {
         let rel_arity = self.arity_of(rel);
         payload_columns(p, |id| self.esc(id))

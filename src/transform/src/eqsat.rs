@@ -38,6 +38,7 @@ pub mod lower;
 pub mod matcher;
 pub mod objective;
 pub mod raise;
+pub(crate) mod rest_filters;
 pub mod rules;
 pub mod scalar;
 pub mod scalar_builtins;
