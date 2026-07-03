@@ -55,7 +55,7 @@ docker run --rm \
 expected_permanent=7  # const_fold, if_err_cond, null_prop_binary, err_prop_binary,
                       # null_prop_variadic, err_prop_variadic (builtin RHS)
                       # + not_binary_negate (opaque negate table). isnull_fold proves outright
-                      # (no sorry). Grows to 6 by slice 6 (spec 2.7).
+                      # (no sorry).
 permanent=$(grep -rho "PERMANENT SORRY" "$lean_dir/MirRewrite" | wc -l || true)
 if [ "$permanent" -ne "$expected_permanent" ]; then
     echo "error: found $permanent PERMANENT SORRY marker(s); expected $expected_permanent" >&2
