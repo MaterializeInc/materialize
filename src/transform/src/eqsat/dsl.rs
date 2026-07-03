@@ -291,6 +291,10 @@ pub enum RestFilter {
     /// is a proper superset of another operand's, when the dropped extras cannot
     /// error. Inner-set subsumption absorption. Backed by `rest_filters::rest_absorb`.
     AbsorbSubsumed { inner: String },
+    /// Splice each operand that is a non-circular same-`func` variadic node
+    /// (replacing it with that node's inner operands), leaving other operands.
+    /// `func` is the parent variadic keyword. Backs `flatten_assoc`.
+    FlattenSameFunc { func: String },
 }
 
 /// A template input list: an ordered sequence of [`TElem`]s.
@@ -454,6 +458,10 @@ pub enum Cond {
     /// subsumption-droppable under dual connective `inner` with error-free dropped
     /// extras. The fire-guard for `absorb_and_or`.
     AbsorbApplies { list: String, inner: String },
+    /// `flatten_applies(list, func)`: some operand of `list` is a non-circular
+    /// same-`func` variadic node, so `flatten` would change the list. The fire
+    /// guard for `flatten_assoc`, sharing `rest_filters`' flatten core.
+    FlattenApplies { list: String, func: String },
 }
 
 /// The eqsat pass a rule is active in.

@@ -149,15 +149,18 @@ fn bool_lit<'a>() -> impl Parser<'a, &'a [Token], bool, TokErr<'a>> + Clone {
     choice((kw("true").to(true), kw("false").to(false)))
 }
 
-/// A dual variadic-func keyword, `and` or `or`, as a raw `String`. Shared by
-/// any grammar production taking the connective as a comma-separated argument
-/// (e.g. `absorb(xs, or)`, `absorb_applies(xs, or)`), as opposed to
-/// `Variadic[and]`'s bracket-delimited func metavariable (`bracket_ident`,
-/// which accepts any identifier, not just `and`/`or`).
+/// An associative-variadic-func keyword, as a raw `String`. Shared by any
+/// grammar production taking the connective as a comma-separated argument
+/// (e.g. `absorb(xs, or)`, `absorb_applies(xs, or)`, `flatten(xs, and)`), as
+/// opposed to `Variadic[and]`'s bracket-delimited func metavariable
+/// (`bracket_ident`, which accepts any identifier, not just these keywords).
 fn variadic_func_kw<'a>() -> impl Parser<'a, &'a [Token], String, TokErr<'a>> + Clone {
     choice((
         kw("and").to("and".to_string()),
         kw("or").to("or".to_string()),
+        kw("coalesce").to("coalesce".to_string()),
+        kw("greatest").to("greatest".to_string()),
+        kw("least").to("least".to_string()),
     ))
 }
 
@@ -506,17 +509,35 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
                     list,
                     filter: RestFilter::AbsorbSubsumed { inner },
                 });
+            let flatten = kw("flatten")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(ident())
+                .then_ignore(just(Token::Comma))
+                .then(variadic_func_kw())
+                .then_ignore(just(Token::RParen))
+                .map(|(list, func)| TElem::FilterSplice {
+                    list,
+                    filter: RestFilter::FlattenSameFunc { func },
+                });
             let splice = relvar_ident()
                 .then_ignore(just(Token::Ellipsis))
                 .map(TElem::Splice);
             let item = tmpl.clone().map(TElem::Item);
-            // `dedup` / `drop_scalar_lit` / `absorb` must come before `item` so
-            // their keywords are not swallowed as a bare `RelVar` template.
-            choice((mapsplice, dedup, drop_scalar_lit, absorb, splice, item))
-                .separated_by(just(Token::Comma))
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LParen), just(Token::RParen))
-                .map(|elems| ListTmpl { elems })
+            // `dedup` / `drop_scalar_lit` / `absorb` / `flatten` must come before
+            // `item` so their keywords are not swallowed as a bare `RelVar` template.
+            choice((
+                mapsplice,
+                dedup,
+                drop_scalar_lit,
+                absorb,
+                flatten,
+                splice,
+                item,
+            ))
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(|elems| ListTmpl { elems })
         };
 
         let empty = kw("Empty")
@@ -757,6 +778,13 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
                 .then(variadic_func_kw())
                 .then_ignore(just(Token::RParen))
                 .map(|(list, inner)| Cond::AbsorbApplies { list, inner }),
+            kw("flatten_applies")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(ident())
+                .then_ignore(just(Token::Comma))
+                .then(variadic_func_kw())
+                .then_ignore(just(Token::RParen))
+                .map(|(list, func)| Cond::FlattenApplies { list, func }),
         )),
     ));
 
@@ -1123,5 +1151,106 @@ mod tests {
                 inner: "or".to_string(),
             }
         );
+    }
+
+    /// `flatten(xs, <func>)` inside a template list parses to a
+    /// `TElem::FilterSplice { filter: RestFilter::FlattenSameFunc { .. }, .. }`,
+    /// guarded by `flatten_applies(xs, <func>)`.
+    #[test]
+    fn parses_flatten_splice_with_flatten_applies_cond() {
+        let src = "rule r { Variadic[and](xs...) => Variadic[and](flatten(xs, and)) where flatten_applies(xs, and) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].rhs {
+            crate::dsl::Tmpl::SVariadic { func, inputs } => {
+                assert_eq!(func, "and");
+                assert_eq!(
+                    inputs.elems,
+                    vec![crate::dsl::TElem::FilterSplice {
+                        list: "xs".to_string(),
+                        filter: crate::dsl::RestFilter::FlattenSameFunc {
+                            func: "and".to_string(),
+                        },
+                    }]
+                );
+            }
+            other => panic!("expected SVariadic, got {other:?}"),
+        }
+        assert_eq!(rules[0].conds.len(), 1);
+        assert_eq!(
+            rules[0].conds[0],
+            crate::dsl::Cond::FlattenApplies {
+                list: "xs".to_string(),
+                func: "and".to_string(),
+            }
+        );
+    }
+
+    /// `variadic_func_kw` was extended beyond `and`/`or` to cover all five
+    /// associative variadics; `flatten(xs, coalesce)` exercises that
+    /// extension inside the `flatten` splice.
+    #[test]
+    fn parses_flatten_splice_accepts_coalesce_func() {
+        let src =
+            "rule r { Variadic[coalesce](xs...) => Variadic[coalesce](flatten(xs, coalesce)) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].rhs {
+            crate::dsl::Tmpl::SVariadic { func, inputs } => {
+                assert_eq!(func, "coalesce");
+                assert_eq!(
+                    inputs.elems,
+                    vec![crate::dsl::TElem::FilterSplice {
+                        list: "xs".to_string(),
+                        filter: crate::dsl::RestFilter::FlattenSameFunc {
+                            func: "coalesce".to_string(),
+                        },
+                    }]
+                );
+            }
+            other => panic!("expected SVariadic, got {other:?}"),
+        }
+    }
+
+    /// `flatten_applies(xs, or)` parses standalone (without a matching
+    /// `flatten` splice on the RHS) to confirm the cond parser is independent
+    /// of the splice parser.
+    #[test]
+    fn parses_flatten_applies_cond_standalone() {
+        let src = "rule r { Variadic[or](xs...) => false where flatten_applies(xs, or) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        assert_eq!(rules[0].conds.len(), 1);
+        assert_eq!(
+            rules[0].conds[0],
+            crate::dsl::Cond::FlattenApplies {
+                list: "xs".to_string(),
+                func: "or".to_string(),
+            }
+        );
+    }
+
+    /// A `flatten` element followed by a plain item in the same list parses
+    /// to two ordered `TElem`s: the `FilterSplice` first, then `Item` for the
+    /// trailing `RelVar`, confirming `flatten`'s keyword is consumed before
+    /// `item` would otherwise swallow it as a bare relation variable.
+    #[test]
+    fn parses_flatten_element_ordering() {
+        let src = "rule r { Union(xs...) => Union(flatten(xs, and), y) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].rhs {
+            crate::dsl::Tmpl::Union { inputs } => {
+                assert_eq!(
+                    inputs.elems,
+                    vec![
+                        crate::dsl::TElem::FilterSplice {
+                            list: "xs".to_string(),
+                            filter: crate::dsl::RestFilter::FlattenSameFunc {
+                                func: "and".to_string(),
+                            },
+                        },
+                        crate::dsl::TElem::Item(crate::dsl::Tmpl::RelVar("y".to_string())),
+                    ]
+                );
+            }
+            other => panic!("expected Union, got {other:?}"),
+        }
     }
 }
