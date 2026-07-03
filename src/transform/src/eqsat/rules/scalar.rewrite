@@ -162,3 +162,17 @@ rule or_dedup {
     doc "Or([a, a, b]) = Or([a, b])"
     Variadic[or](xs...) => Variadic[or](dedup(xs)) where has_duplicate_id(xs)
 }
+
+# Inner-set subsumption absorption: an outer AND/OR operand whose dual-connective
+# inner set is a proper superset of another operand's inner set is redundant and
+# is dropped, provided every dropped extra could not error. Mirrors
+# scalar/rules.rs::absorb_and_or.
+rule absorb_and {
+    doc "And(.., a, .., Or(.., a, ..)) = And(.., a, ..), dropped extras error-free"
+    Variadic[and](xs...) => Variadic[and](absorb(xs, or)) where absorb_applies(xs, or)
+}
+
+rule absorb_or {
+    doc "Or(.., a, .., And(.., a, ..)) = Or(.., a, ..), dropped extras error-free"
+    Variadic[or](xs...) => Variadic[or](absorb(xs, and)) where absorb_applies(xs, and)
+}

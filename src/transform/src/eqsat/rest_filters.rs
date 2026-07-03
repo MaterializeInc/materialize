@@ -105,9 +105,6 @@ pub(crate) fn absorb_drop_index(g: &EGraph, ids: &[Id], inner: &VariadicFunc) ->
 /// The kept operands after absorption, sorted by id (matching the old engine's
 /// `kept.sort()` so extraction order agrees with the oracle). A single
 /// remaining operand is left to `and_single`/`or_single` downstream.
-// No `.rewrite` rule emits `AbsorbSubsumed` yet, so this is unreachable until a
-// later task wires it into `absorb_and_or`.
-#[allow(dead_code)]
 pub(crate) fn rest_absorb(g: &EGraph, ids: &[Id], inner: &VariadicFunc) -> Vec<Id> {
     match absorb_drop_index(g, ids, inner) {
         Some(q) => {
