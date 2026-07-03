@@ -25,13 +25,19 @@ CREATE VIEW t_view AS SELECT t.a, b FROM t
 
 # Test pg_get_viewdef(view_name)
 
-query T
+# The text overload resolves through regclass, so an unknown name errors
+# (matching PostgreSQL) rather than returning NULL.
+query error relation "doesnotexist" does not exist
 SELECT pg_get_viewdef('doesnotexist')
-----
-NULL
 
 query T
 SELECT pg_get_viewdef('t_view')
+----
+SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+
+# Schema-qualified names resolve (previously returned NULL).
+query T
+SELECT pg_get_viewdef('public.t_view')
 ----
 SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
 
@@ -49,15 +55,11 @@ SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
 
 # Test pg_get_viewdef(view_name, pretty)
 
-query T
+query error relation "doesnotexist" does not exist
 SELECT pg_get_viewdef('doesnotexist', true)
-----
-NULL
 
-query T
+query error relation "doesnotexist" does not exist
 SELECT pg_get_viewdef('doesnotexist', false)
-----
-NULL
 
 query T
 SELECT pg_get_viewdef('t_view', true)
@@ -112,3 +114,33 @@ query T
 SELECT pg_get_viewdef('t_view'::regclass::oid)
 ----
 SELECT "t2"."a", "b" FROM [u1 AS "materialize"."public"."t2"];
+
+# A same-named view in another schema must not make the text overload ambiguous.
+# The name resolves via the search path, not by matching the bare name globally.
+
+statement ok
+CREATE SCHEMA other
+
+statement ok
+CREATE VIEW other.t_view AS SELECT c FROM t2
+
+query T
+SELECT pg_get_viewdef('t_view')
+----
+SELECT "t2"."a", "b" FROM [u1 AS "materialize"."public"."t2"];
+
+query T
+SELECT pg_get_viewdef('other.t_view')
+----
+SELECT "c" FROM [u1 AS "materialize"."public"."t2"];
+
+statement ok
+SET search_path = other
+
+query T
+SELECT pg_get_viewdef('t_view')
+----
+SELECT "c" FROM [u1 AS "materialize"."public"."t2"];
+
+statement ok
+RESET search_path

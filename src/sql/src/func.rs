@@ -2697,14 +2697,21 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         // pg_get_viewdef returns the (query part of) the given view's definition.
         // We currently don't support pretty-printing (the `Bool`/`Int32` parameters).
         "pg_get_viewdef" => Scalar {
+            // The text overloads resolve the name through the search-path-aware
+            // text -> regclass cast, matching PostgreSQL's regclass semantics
+            // (current database, search path, first match). Matching on the bare
+            // `name` instead would resolve across every schema and database, so
+            // any same-named view anywhere would make the lookup ambiguous.
             params!(String) => sql_impl_func(
-                "(SELECT definition FROM mz_catalog.mz_views WHERE name = $1)"
+                "(SELECT definition FROM mz_catalog.mz_views
+                  WHERE oid = CAST(CAST($1 AS pg_catalog.regclass) AS pg_catalog.oid))"
             ) => String, 1640;
             params!(Oid) => sql_impl_func(
                 "(SELECT definition FROM mz_catalog.mz_views WHERE oid = $1)"
             ) => String, 1641;
             params!(String, Bool) => sql_impl_func(
-                "(SELECT definition FROM mz_catalog.mz_views WHERE name = $1)"
+                "(SELECT definition FROM mz_catalog.mz_views
+                  WHERE oid = CAST(CAST($1 AS pg_catalog.regclass) AS pg_catalog.oid))"
             ) => String, 2505;
             params!(Oid, Bool) => sql_impl_func(
                 "(SELECT definition FROM mz_catalog.mz_views WHERE oid = $1)"

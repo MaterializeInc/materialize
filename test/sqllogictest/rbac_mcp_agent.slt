@@ -765,7 +765,7 @@ DETAIL: Access to system catalog objects is restricted for this role. Contact yo
 simple conn=agent_restricted,user=agent
 SELECT pg_get_viewdef('next_arrivals');
 ----
-db error: ERROR: access to system object mz_views is restricted
+db error: ERROR: access to system object mz_databases is restricted
 DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
 
 # obj_description queries system tables; pg_class is the first blocked ID encountered
