@@ -208,6 +208,15 @@ def run(
             ],
             weights,
         )[0]
+        if correctness:
+            # The verifying readers must always exist, no matter what the
+            # other threads get assigned: SelectAction compares tables and
+            # their shadow objects against the tracked states, FetchAction
+            # verifies the subscribe change stream.
+            if i == 0:
+                action_list = read_action_list
+            elif i == 1:
+                action_list = fetch_action_list
         actions = [
             action_class(worker_rng, composition)
             for action_class in action_list.action_classes

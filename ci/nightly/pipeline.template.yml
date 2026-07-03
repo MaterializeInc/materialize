@@ -2334,7 +2334,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --correctness, --threads=8]
+              args: [--runtime=1500, --correctness, --threads=16]
         skip: "Too unstable at the moment"
 
       - id: parallel-correctness-rename

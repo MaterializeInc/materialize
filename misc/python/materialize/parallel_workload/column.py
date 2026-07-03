@@ -100,6 +100,20 @@ class Column:
         return result
 
 
+class KeyColumn(Column):
+    """Correctness mode: harness-managed unique row key. The insert actions
+    assign strictly increasing values per table, so UPDATE and DELETE
+    predicates over this column can be replayed against the tracked states."""
+
+    def __init__(self, data_type: type[DataType], db_object: "DBObject"):
+        self.column_id = 0
+        self.data_type = data_type
+        self.db_object = db_object
+        self.nullable = False
+        self.default = None
+        self.raw_name = "pw-key"
+
+
 class WebhookColumn(Column):
     def __init__(
         self,

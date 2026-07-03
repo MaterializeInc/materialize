@@ -10,7 +10,8 @@
 import random
 import threading
 import uuid
-from collections.abc import Iterator
+from collections import deque
+from collections.abc import Callable, Iterator
 from enum import Enum
 from typing import Any
 
@@ -26,13 +27,10 @@ from materialize.data_ingest.data_type import (
     Boolean,
     Bytea,
     DataType,
-    Date,
-    Interval,
     Jsonb,
     Long,
     Text,
     TextTextMap,
-    Timestamp,
 )
 from materialize.data_ingest.definition import Insert
 from materialize.data_ingest.executor import (
@@ -51,6 +49,7 @@ from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
+    KeyColumn,
     LoadGeneratorColumn,
     MySqlColumn,
     PostgresColumn,
@@ -92,6 +91,12 @@ MAX_KAFKA_SINKS = 50
 MAX_ICEBERG_SINKS = 50
 MAX_TYPES = 50
 MAX_NETWORK_POLICIES = 30
+
+# How many committed table states correctness mode keeps per table. A
+# concurrent read must match one of the states between the versions before
+# and after the read. If more commits than this land during a single read,
+# the window has been evicted and that comparison is skipped.
+MAX_TABLE_HISTORY = 40
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
@@ -199,7 +204,17 @@ class Table(DBObject):
     num_rows: int
     schema: Schema
     temp: bool
-    rows: list[list[Any]]
+    # Correctness tracking, all guarded by self.lock: `version` counts
+    # committed writes, `history` keeps the last MAX_TABLE_HISTORY entries of
+    # (version, candidate states). An entry usually has a single candidate
+    # state (a list of rows). After a write whose outcome is unknown (e.g. the
+    # connection died during the commit) an entry holds both the state with
+    # and without that write, until a quiesced verification resolves which one
+    # is real. States are never mutated once recorded, readers may hold
+    # references to them without the lock.
+    version: int
+    history: "deque[tuple[int, list[list[list[Any]]]]]"
+    next_key: int
 
     def __init__(
         self, rng: random.Random, table_id: int, schema: Schema, temp: bool = False
@@ -207,20 +222,57 @@ class Table(DBObject):
         super().__init__()
         self.table_id = table_id
         self.schema = schema
-        data_types = (
-            DATA_TYPES
-            if not correctness()
-            else list(set(DATA_TYPES) - {Date, Timestamp, Interval})
-            # else [Int]
-        )
         self.columns = [
-            Column(rng, i, rng.choice(data_types), self)
+            Column(rng, i, rng.choice(DATA_TYPES), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
         ]
+        if correctness():
+            # Leading harness-managed key column, see KeyColumn. next_key is
+            # guarded by self.lock like the rest of the tracking state.
+            self.columns.insert(0, KeyColumn(Long, self))
+        self.next_key = 0
         self.num_rows = 0
         self.rename = 0
         self.temp = temp
-        self.rows = []
+        self.version = 0
+        self.history = deque([(0, [[]])], maxlen=MAX_TABLE_HISTORY)
+
+    def current_states(self) -> list[list[list[Any]]]:
+        """The tracked candidate states after the last committed write. Caller
+        must hold self.lock."""
+        return self.history[-1][1]
+
+    def commit_write(
+        self,
+        transform: Callable[[list[list[Any]]], list[list[Any]]],
+        uncertain: bool,
+    ) -> None:
+        """Record a committed write as a new version. `transform` maps a state
+        to the state after the write and may mutate the passed copy. With
+        `uncertain` the write may or may not have been applied, so both
+        outcomes are kept as candidates. Caller must hold self.lock."""
+        old = self.current_states()
+        new = [transform([list(row) for row in state]) for state in old]
+        if uncertain:
+            new = [[list(row) for row in state] for state in old] + new
+        # Deduplicate candidates, e.g. a whole-table DELETE maps every
+        # candidate to the same empty state, resolving accumulated forks.
+        deduped: list[list[list[Any]]] = []
+        seen = set()
+        for state in new:
+            key = repr(state)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(state)
+        self.version += 1
+        self.history.append((self.version, deduped))
+
+    def collapse_to(self, state: list[list[Any]]) -> None:
+        """Reset tracking to a single state that a quiesced read proved to be
+        the table's actual contents. Caller must hold self.lock."""
+        self.version += 1
+        self.history.clear()
+        self.history.append((self.version, [state]))
 
     def name(self) -> str:
         if self.rename:
@@ -230,6 +282,20 @@ class Table(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
+    def shadow_mv(self) -> str:
+        """Correctness mode: materialized view mirroring this table's contents."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-{self.table_id}'))}"
+
+    def shadow_cnt_mv(self) -> str:
+        """Correctness mode: materialized view counting this table's rows."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-cnt-{self.table_id}'))}"
+
+    def shadow_nokey_mv(self) -> str:
+        """Correctness mode: materialized view projecting away the key column.
+        Rows that differ only in the key become true duplicates here, so
+        wrong-multiplicity bugs are observable."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-nokey-{self.table_id}'))}"
+
     def create(self, exe: Executor) -> None:
         query = "CREATE "
         if self.temp:
@@ -238,6 +304,27 @@ class Table(DBObject):
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
         exe.execute(query)
+        if correctness() and not self.temp:
+            # Shadow objects that must always contain the same data as the
+            # table, verified by SelectAction: an index (arrangement read
+            # path) and materialized views (dataflow producing a persist
+            # shard, must be rehydrated correctly after restarts). Pinned to
+            # the quickstart cluster because the workload never drops it, so
+            # the shadow objects live exactly as long as the table.
+            exe.execute(f"CREATE DEFAULT INDEX IN CLUSTER quickstart ON {self}")
+            exe.execute(
+                f"CREATE MATERIALIZED VIEW {self.shadow_mv()} IN CLUSTER quickstart"
+                f" AS SELECT * FROM {self}"
+            )
+            exe.execute(
+                f"CREATE MATERIALIZED VIEW {self.shadow_cnt_mv()} IN CLUSTER quickstart"
+                f" AS SELECT count(*) AS cnt FROM {self}"
+            )
+            nokey = ", ".join(column.name(True) for column in self.columns[1:])
+            exe.execute(
+                f"CREATE MATERIALIZED VIEW {self.shadow_nokey_mv()} IN CLUSTER"
+                f" quickstart AS SELECT {nokey} FROM {self}"
+            )
 
 
 class View(DBObject):
@@ -1306,7 +1393,12 @@ class Database:
         ]
         self.table_id = len(self.tables)
         self.views = []
-        for i in range(rng.randint(2, MAX_INITIAL_VIEWS)):
+        # Correctness mode creates no views: their random expressions cannot be
+        # verified against the tracked rows, and a view depending on a table
+        # would be silently CASCADE-dropped with it, leaving a stale entry.
+        # NOTE: `correctness` here is the constructor argument, the module
+        # function of the same name is shadowed in this scope.
+        for i in range(0 if correctness else rng.randint(2, MAX_INITIAL_VIEWS)):
             # Only use tables for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
             base_object = rng.choice(self.tables)

@@ -18,6 +18,7 @@ import time
 import urllib.parse
 import uuid
 import zlib
+from collections import Counter
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -39,8 +40,10 @@ from materialize.data_ingest.data_type import (
     Bytea,
     Char,
     DataType,
+    DataValue,
     Date,
     DateRange,
+    Double,
     Float,
     Int4Range,
     Int8Range,
@@ -733,15 +736,144 @@ class FetchAction(Action):
                     "does not exist",
                     "query could not complete because relation",
                     "query could not complete because cluster",
+                    "subscribe has been terminated because underlying relation",
                 ]
             )
         return result
 
+    def match_history(
+        self,
+        exe: Executor,
+        table: Table,
+        state: "Counter[tuple[Any, ...]]",
+        floor: int,
+    ) -> int | None:
+        """Find the tracked version >= floor whose state equals the multiset
+        the subscribe stream has accumulated. Returns the matched version to
+        use as the next floor, or None when eviction made verification
+        impossible (the caller stops verifying this stream)."""
+        columns = table.columns
+        actual = sorted(state.elements(), key=_row_sort_key)
+        with table.lock:
+            oldest = table.history[0][0]
+            entries = [
+                (version, states)
+                for version, states in table.history
+                if version >= floor
+            ]
+        for version, states in entries:
+            for tracked in states:
+                if normalize_rows(tracked, columns) == actual:
+                    return version
+        if oldest > floor:
+            # Versions between floor and the oldest retained entry were
+            # evicted, the matching state may have been among them.
+            exe.log(f"subscribe verify on {table}: history evicted, stopping")
+            return None
+        # No exact match in the window. Report the closest retained version
+        # (minimal symmetric difference of the row multisets) across the whole
+        # history, so the failure names the exact rows the stream got wrong. A
+        # closest version below floor would mean the oracle advanced floor too
+        # far; no exact match anywhere means the subscribe delivered a state
+        # that was never committed (extra rows = missed retraction).
+        with table.lock:
+            full = list(table.history)
+        actual_ms = Counter(actual)
+        best: tuple[int, int, list[Any], list[Any]] | None = None
+        for version, states in full:
+            for s in states:
+                sms = Counter(normalize_rows(s, columns))
+                extra = actual_ms - sms  # in subscribe, not in this version
+                missing = sms - actual_ms  # in this version, not in subscribe
+                dist = sum(extra.values()) + sum(missing.values())
+                if best is None or dist < best[0]:
+                    best = (
+                        dist,
+                        version,
+                        list(extra.elements()),
+                        list(missing.elements()),
+                    )
+        assert best is not None
+        _dist, _bver, _extra, _missing = best
+        raise AssertionError(
+            f"SUBSCRIBE on {table} accumulated a state matching no tracked"
+            f" version >= {floor}; closest is v{_bver} (symdiff={_dist}),"
+            f" extra_in_subscribe={_extra} missing_from_subscribe={_missing}"
+        )
+
+    def run_subscribe_verify(self, exe: Executor) -> None:
+        """SUBSCRIBE a table WITH (PROGRESS) and walk the change stream
+        against the tracked history: after every timestamp completed by a
+        progress message, the accumulated state must equal a tracked state at
+        or after the previously matched version. Catches missed, duplicated
+        and negative-multiplicity updates in the subscribe path."""
+        # Close any open transaction first, SET TRANSACTION_ISOLATION must be
+        # the first statement of its transaction.
+        exe.commit(http=Http.NO)
+        # The snapshot must then reflect at least the version sampled below.
+        exe.set_isolation("STRICT SERIALIZABLE")
+        # Close the transaction the SET opened, the SUBSCRIBE must be the
+        # first statement of its transaction.
+        exe.commit(http=Http.NO)
+        tables = [table for table in exe.db.tables if not table.temp]
+        if not tables:
+            return
+        table = self.rng.choice(tables)
+        columns = table.columns
+        projection = correctness_projection(columns)
+        with table.lock:
+            floor = table.version
+        self.i += 1
+        cursor = f"c{self.i}"
+        exe.execute(
+            f"DECLARE {cursor} CURSOR FOR SUBSCRIBE"
+            f" (SELECT {projection} FROM {table}) WITH (PROGRESS)",
+            http=Http.NO,
+        )
+        # Multiset of normalized rows the stream has accumulated, plus the
+        # per-timestamp batches that no progress message has completed yet.
+        state: Counter[tuple[Any, ...]] = Counter()
+        pending: dict[Any, Counter[tuple[Any, ...]]] = {}
+        for _ in range(self.rng.randint(2, 5)):
+            rows = exe.execute(
+                f"FETCH ALL {cursor} WITH (timeout='2s')", http=Http.NO, fetch=True
+            )
+            if rows is None:
+                # psycopg could not parse a value, give up on this stream.
+                break
+            for row in rows:
+                ts, progressed, diff = row[0], row[1], row[2]
+                if not progressed:
+                    key = tuple(
+                        normalize_value(v, col.data_type)
+                        for v, col in zip(row[3:], columns)
+                    )
+                    pending.setdefault(ts, Counter())[key] += int(diff)
+                    continue
+                # A progress message: everything below its timestamp is final.
+                # NOTE: The state is only checked after applying a data batch.
+                # Progress messages alone say nothing about the snapshot: they
+                # can arrive before the snapshot's data (their timestamp is
+                # then at or below the as-of), so an empty stream state cannot
+                # be verified against anything.
+                for batch_ts in sorted(t for t in pending.keys() if t < ts):
+                    batch = pending.pop(batch_ts)
+                    for key, delta in batch.items():
+                        state[key] += delta
+                        assert (
+                            state[key] >= 0
+                        ), f"SUBSCRIBE on {table} produced multiplicity {state[key]} for row {key} at {batch_ts}"
+                    state = +state  # drop rows that consolidated away
+                    matched = self.match_history(exe, table, state, floor)
+                    if matched is None:
+                        return
+                    floor = matched
+        exe.execute(f"CLOSE {cursor}", http=Http.NO)
+        exe.commit(http=Http.NO)
+
     def run(self, exe: Executor) -> bool:
         if correctness():
-            # TODO: Verify the subscribe change stream. Subscribes only read, so
-            # there is nothing to reconcile against the tracked rows yet; skip
-            # until the correctness check covers streamed output.
+            self.run_subscribe_verify(exe)
             return True
         self.i += 1
         # Unsupported via this API
@@ -973,8 +1105,21 @@ def canonicalize_temporal(value: Any, data_type: type[DataType]) -> Any:
         )
     if isinstance(value, datetime.date):
         return ("ts", value.year, value.month, value.day, 0, 0, 0, 0)
-    year, month, day = (int(p) for p in str(value).split("-"))
-    return ("ts", year, month, day, 0, 0, 0, 0)
+    # Strings: tracked values are date-only "Y-M-D" (the generators only emit
+    # midnight), read-back values come in as ::text (psycopg cannot represent
+    # years past 9999) in the form "Y-M-D[ H:M:S[.f]][+00]".
+    text = str(value)
+    date_part, _, time_part = text.partition(" ")
+    year, month, day = (int(p) for p in date_part.split("-"))
+    hour = minute = second = micros = 0
+    if time_part:
+        # The session runs in UTC, so a timestamptz offset is always "+00".
+        time_part = time_part.split("+")[0]
+        hour_str, minute_str, rest = time_part.split(":")
+        sec_str, _, frac = rest.partition(".")
+        hour, minute, second = int(hour_str), int(minute_str), int(sec_str)
+        micros = int((frac + "000000")[:6]) if frac else 0
+    return ("ts", year, month, day, hour, minute, second, micros)
 
 
 def _row_sort_key(row: Any) -> Any:
@@ -983,6 +1128,207 @@ def _row_sort_key(row: Any) -> Any:
     on (is-null, str) per element. The equality check runs on the real tuples,
     so this only affects ordering, not what compares equal."""
     return [(v is None, str(v)) for v in row]
+
+
+# Types read back as ::text in correctness mode: psycopg cannot represent
+# their full value range (years past 9999, intervals with months), while
+# Materialize's text form round-trips losslessly.
+_TEXT_READBACK_TYPES = (Interval, Date, Timestamp, TimestampTz)
+
+
+def correctness_projection(columns: list[Column]) -> str:
+    return ", ".join(
+        (
+            f"{col.name(True)}::text"
+            if col.data_type in _TEXT_READBACK_TYPES
+            else col.name(True)
+        )
+        for col in columns
+    )
+
+
+def normalize_value(value: Any, data_type: Any = None) -> Any:
+    if value is None:
+        return None
+    if data_type is not None and data_type in _RANGE_TYPES:
+        return canonicalize_range(value, data_type)
+    if data_type is not None and data_type in _TEMPORAL_TYPES:
+        return canonicalize_temporal(value, data_type)
+    if isinstance(value, bytes):
+        # bytea comes back as bytes but is tracked as the text string.
+        return value.decode("utf-8", "replace")
+    if isinstance(value, uuid.UUID):
+        # uuid comes back as a UUID object but is tracked as its
+        # canonical string (the generator also emits UUID objects).
+        return str(value)
+    if isinstance(value, decimal.Decimal) or isinstance(value, float):
+        if data_type is Float:
+            # float4/real is lossy: Materialize stores 32 bits and reads back
+            # the shortest round-tripping decimal, while the tracked value is
+            # the generator's double. Collapse both sides to the same float4,
+            # which then compares exactly.
+            return struct.unpack("f", struct.pack("f", float(value)))[0]
+        if data_type is Double:
+            # float8 round-trips exactly: the INSERT sends repr() of the
+            # tracked double and the read-back parses to the same double.
+            return float(value)
+        # numeric: compare at full precision. The tracked value is a Python
+        # float whose str() is exactly what the INSERT sent, the read-back is
+        # a Decimal of Materialize's text output.
+        dec = (
+            value if isinstance(value, decimal.Decimal) else decimal.Decimal(str(value))
+        )
+        if data_type is Numeric383:
+            # numeric(38,3) rounds to 3 decimals on storage (half up, as
+            # Materialize does), so round the tracked value the same way.
+            dec = dec.quantize(decimal.Decimal("0.001"), rounding=decimal.ROUND_HALF_UP)
+        if dec == 0:
+            # Avoid Decimal("-0") comparing unequal to Decimal("0") in the
+            # formatted output.
+            return "0"
+        # normalize() strips trailing zeros, which Materialize's text output
+        # also does. Format without exponent so equal values format equally.
+        return format(dec.normalize(), "f")
+    if isinstance(value, datetime.date) or type(value) == int:
+        return str(value)
+    if isinstance(value, datetime.time):
+        return value.strftime("%H:%M:%S")
+    if isinstance(value, datetime.datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    # Complex types come back from a SELECT as native Python objects
+    # (arrays as a list, jsonb as a dict) but are tracked in the table
+    # states as the string generated for the INSERT. Canonicalize
+    # both sides to comparable, orderable structures so that equal
+    # data compares equal and the row sort below does not choke on a
+    # dict. normalize_value runs on both sides, so a deterministic
+    # transform can only fix false mismatches, never hide a real one.
+    if isinstance(value, list):
+        # Array. Element order is significant, so preserve it.
+        return tuple(normalize_value(v) for v in value)
+    if isinstance(value, dict):
+        # jsonb read back by psycopg. Maps are unordered, so sort by key.
+        return tuple(sorted((k, normalize_value(v)) for k, v in value.items()))
+    if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
+        inner = value[1:-1].strip()
+        if "=>" in value:
+            # map[text=>text], "{k => v, ...}" as tracked or "{k=>v,...}"
+            # as read back. Unordered, so sort by key.
+            pairs = []
+            for item in inner.split(","):
+                key, _, val = item.partition("=>")
+                pairs.append((key.strip(), normalize_value(val.strip())))
+            return tuple(sorted(pairs))
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            # jsonb tracked as a JSON string.
+            return tuple(sorted((k, normalize_value(v)) for k, v in parsed.items()))
+        # Array/list tracked as "{elem, ...}". Preserve order.
+        if not inner:
+            return ()
+        return tuple(normalize_value(v.strip()) for v in inner.split(","))
+    return value
+
+
+def normalize_rows(rows: list[Any], columns: list[Column]) -> list[tuple[Any, ...]]:
+    """Bring query results or tracked rows into a canonical, comparable form."""
+    return sorted(
+        (
+            tuple(normalize_value(v, col.data_type) for v, col in zip(row, columns))
+            for row in rows
+        ),
+        key=_row_sort_key,
+    )
+
+
+# Errors after which a write has definitely not been applied, so the tracked
+# state must not fork into an "applied" candidate. Anything else failing in
+# the phase where the server may already have committed (the commit itself,
+# or the statement on an autocommit connection) leaves the outcome unknown.
+_WRITE_DEFINITELY_FAILED = [
+    "does not exist",
+    "unknown catalog item",
+    "unknown schema",
+    "unknown database",
+    # FlipFlagsAction poisons sessions with SET cluster = dont_exist.
+    "unknown cluster",
+    "cannot write in read-only mode",
+    "500: internal storage failure! ReadOnly",
+    "violates not-null constraint",
+    # Evaluation errors abort the transaction, sometimes only at COMMIT.
+    "out of range",
+    "invalid input syntax",
+    "division by zero",
+    "numeric field overflow",
+    "is only defined for finite arguments",
+    "permission denied for",
+    "must be owner of",
+]
+
+
+def _write_definitely_failed(e: QueryError) -> bool:
+    return any(f in e.msg for f in _WRITE_DEFINITELY_FAILED)
+
+
+def key_predicate(
+    rng: random.Random, table: Table
+) -> tuple[str, Callable[[int], bool]]:
+    """A random predicate over the harness-managed key column, as SQL and as
+    an equivalent Python function to replay it against the tracked states.
+    Caller must hold table.lock, this samples the currently tracked keys."""
+    key = table.columns[0].name(True)
+    kind = rng.randrange(3)
+    if kind == 0:
+        modulus = rng.randint(1, 5)
+        rest = rng.randrange(modulus)
+        return f"{key} % {modulus} = {rest}", lambda k: k % modulus == rest
+    if kind == 1:
+        existing = [row[0] for row in table.current_states()[0]]
+        chosen = set(rng.sample(existing, min(len(existing), rng.randint(1, 5))))
+        # Also target a key that may not exist (yet).
+        chosen.add(table.next_key + rng.randrange(5))
+        keys = ", ".join(str(k) for k in sorted(chosen))
+        return f"{key} IN ({keys})", lambda k: k in chosen
+    lower = rng.randrange(max(table.next_key, 1))
+    upper = lower + rng.randrange(11)
+    return f"{key} BETWEEN {lower} AND {upper}", lambda k: lower <= k <= upper
+
+
+def run_tracked_write(
+    exe: Executor,
+    table: Table,
+    transform: Callable[[list[list[Any]]], list[list[Any]]],
+    run_write: Callable[[], Any],
+) -> None:
+    """Execute a write against `table` and record it in the tracked history.
+
+    Caller must hold table.lock. On success the write is recorded as the next
+    version. On failure the outcome is classified: a failed statement on a
+    non-autocommit connection means the transaction aborts (nothing to
+    record), while a failure during the commit, or of the statement itself on
+    an autocommit connection, may have been applied anyway (e.g. a connection
+    that dies while the commit is in flight), so both outcomes are recorded
+    as candidates of the next version. The QueryError is re-raised either way
+    so the worker's error handling sees it.
+    """
+    try:
+        run_write()
+    except QueryError as e:
+        if exe.autocommit and not _write_definitely_failed(e):
+            exe.log(f"ambiguous write outcome on {table}, tracking both: {e.msg}")
+            table.commit_write(transform, uncertain=True)
+        raise
+    if not exe.autocommit:
+        try:
+            exe.commit()
+        except QueryError as e:
+            if not _write_definitely_failed(e):
+                exe.log(f"ambiguous commit outcome on {table}, tracking both: {e.msg}")
+                table.commit_write(transform, uncertain=True)
+            raise
+    table.commit_write(transform, uncertain=False)
 
 
 class SelectAction(Action):
@@ -1003,6 +1349,140 @@ class SelectAction(Action):
             )
         return result
 
+    def verify_table(self, exe: Executor, table: Table, quiesced: bool) -> None:
+        """Read the table and its shadow objects and compare against the
+        tracked states.
+
+        With `quiesced` the caller holds table.lock, so there is exactly one
+        correct answer, one of the candidates of the current version, and the
+        matching candidate becomes the new single tracked state. Without it,
+        writes race the read and the result must equal one of the states
+        committed between the versions sampled before and after the read.
+        That window is sound because writers hold table.lock from before they
+        send the statement until after they record the commit: STRICT
+        SERIALIZABLE guarantees the read includes every write whose commit
+        returned before the read started (>= lo), and any write the read can
+        observe was in flight while holding the lock, so sampling hi blocks
+        until its version is recorded (<= hi)."""
+        columns = table.columns
+        projection = correctness_projection(columns)
+        if quiesced:
+            lo = table.version
+        else:
+            with table.lock:
+                lo = table.version
+
+        # All reads run in one transaction, so they share a timestamp: the
+        # shadow objects must agree with the table exactly, no matter what
+        # commits concurrently. The table read is served from the default
+        # index on the quickstart cluster or from persist depending on the
+        # session's cluster, the view reads exercise dataflow-maintained
+        # persist shards.
+        table_rows = exe.execute(
+            f"SELECT {projection} FROM {table}",
+            explainable=False,
+            http=Http.NO,
+            fetch=True,
+        )
+        mv_rows = cnt_rows = nokey_rows = None
+        if not table.temp:
+            # Temp tables have no shadow objects, materialized views cannot
+            # depend on temporary items.
+            mv_rows = exe.execute(
+                f"SELECT {projection} FROM {table.shadow_mv()}",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+            cnt_rows = exe.execute(
+                f"SELECT cnt FROM {table.shadow_cnt_mv()}",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+            nokey_rows = exe.execute(
+                f"SELECT {correctness_projection(columns[1:])} FROM {table.shadow_nokey_mv()}",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+
+        if quiesced:
+            window = [table.history[-1]]
+        else:
+            with table.lock:
+                hi = table.version
+                evicted = table.history[0][0] > lo
+                window = [
+                    (version, states)
+                    for version, states in table.history
+                    if lo <= version <= hi
+                ]
+            if evicted:
+                # More commits than the history holds landed while the read
+                # ran, so the observable states are no longer known.
+                exe.log(f"history of {table} evicted during read, skipping check")
+                return
+
+        if table_rows is None:
+            # execute returns None when psycopg cannot parse a value in the
+            # result. Materialize stored it fine, the client just cannot
+            # represent it, so skip the comparison rather than fail on a
+            # client-side limitation.
+            return
+        actual = normalize_rows(table_rows, columns)
+
+        matched_state = None
+        for version, states in reversed(window):
+            for state in states:
+                if normalize_rows(state, columns) == actual:
+                    matched_state = state
+                    break
+            if matched_state is not None:
+                break
+        if matched_state is None:
+            newest = normalize_rows(window[-1][1][-1], columns)
+            diff = DeepDiff(
+                actual,
+                newest,
+                ignore_order=False,  # already sorted, so keep order stable
+                verbose_level=2,  # shows where inside the object things differ
+            )
+            versions = [version for version, _ in window]
+            raise AssertionError(
+                f"{table} matches none of the tracked states of versions"
+                f" {versions}, diff against the newest one:\n{diff.pretty()}"
+            )
+
+        if mv_rows is not None:
+            actual_mv = normalize_rows(mv_rows, columns)
+            if actual_mv != actual:
+                diff = DeepDiff(actual_mv, actual, ignore_order=False, verbose_level=2)
+                raise AssertionError(
+                    f"{table.shadow_mv()} disagrees with {table} at the same"
+                    f" timestamp:\n{diff.pretty()}"
+                )
+        if cnt_rows is not None:
+            assert len(cnt_rows) == 1 and cnt_rows[0][0] == len(
+                table_rows
+            ), f"{table.shadow_cnt_mv()} returned {cnt_rows}, expected {len(table_rows)} for {table} at the same timestamp"
+        if nokey_rows is not None:
+            actual_nokey = normalize_rows(nokey_rows, columns[1:])
+            expected_nokey = normalize_rows(
+                [row[1:] for row in table_rows], columns[1:]
+            )
+            if actual_nokey != expected_nokey:
+                diff = DeepDiff(
+                    actual_nokey, expected_nokey, ignore_order=False, verbose_level=2
+                )
+                raise AssertionError(
+                    f"{table.shadow_nokey_mv()} disagrees with {table} at the"
+                    f" same timestamp:\n{diff.pretty()}"
+                )
+
+        if quiesced:
+            table.collapse_to(matched_state)
+
     def run(self, exe: Executor) -> bool:
         if correctness():
             exe.commit()
@@ -1010,148 +1490,19 @@ class SelectAction(Action):
             exe.execute(
                 "SET REAL_TIME_RECENCY TO TRUE", explainable=False, http=Http.NO
             )
-            # TODO: Other types than table
-            # TODO: More complex queries
             table = self.rng.choice(exe.db.tables)
 
-            def normalize_value(value: Any, data_type: Any = None) -> Any:
-                if value is None:
-                    return None
-                if data_type is not None and data_type in _RANGE_TYPES:
-                    return canonicalize_range(value, data_type)
-                if data_type is not None and data_type in _TEMPORAL_TYPES:
-                    return canonicalize_temporal(value, data_type)
-                if isinstance(value, bytes):
-                    # bytea comes back as bytes but is tracked as the text string.
-                    return value.decode("utf-8", "replace")
-                if isinstance(value, uuid.UUID):
-                    # uuid comes back as a UUID object but is tracked as its
-                    # canonical string (the generator also emits UUID objects).
-                    return str(value)
-                if isinstance(value, decimal.Decimal) or isinstance(value, float):
-                    if data_type is Float:
-                        # float4/real is lossy: Materialize stores 32-bit and
-                        # reads back the shortest round-tripping decimal, not the
-                        # tracked double. Collapse both sides to the same float4
-                        # so the residual precision does not show as a diff.
-                        value = struct.unpack("f", struct.pack("f", float(value)))[0]
-                    elif data_type is Numeric383:
-                        # numeric(38,3) rounds to 3 decimals on storage, so the
-                        # read-back value differs from the full-precision tracked
-                        # value. Round the tracked value the same way (half up, as
-                        # Materialize does) so int(round(...)) does not diverge at
-                        # a .5 boundary.
-                        value = decimal.Decimal(str(value)).quantize(
-                            decimal.Decimal("0.001"), rounding=decimal.ROUND_HALF_UP
-                        )
-                    return int(round(value))
-                if isinstance(value, datetime.date) or type(value) == int:
-                    return str(value)
-                if isinstance(value, datetime.time):
-                    return value.strftime("%H:%M:%S")
-                if isinstance(value, datetime.datetime):
-                    return value.strftime("%Y-%m-%d %H:%M:%S")
-                # Complex types come back from a SELECT as native Python objects
-                # (arrays as a list, jsonb as a dict) but are tracked in
-                # table.rows as the string generated for the INSERT. Canonicalize
-                # both sides to comparable, orderable structures so that equal
-                # data compares equal and the row sort below does not choke on a
-                # dict. normalize_value runs on both sides, so a deterministic
-                # transform can only fix false mismatches, never hide a real one.
-                if isinstance(value, list):
-                    # Array. Element order is significant, so preserve it.
-                    return tuple(normalize_value(v) for v in value)
-                if isinstance(value, dict):
-                    # jsonb read back by psycopg. Maps are unordered, so sort by key.
-                    return tuple(
-                        sorted((k, normalize_value(v)) for k, v in value.items())
-                    )
-                if (
-                    isinstance(value, str)
-                    and value.startswith("{")
-                    and value.endswith("}")
-                ):
-                    inner = value[1:-1].strip()
-                    if "=>" in value:
-                        # map[text=>text], "{k => v, ...}" as tracked or "{k=>v,...}"
-                        # as read back. Unordered, so sort by key.
-                        pairs = []
-                        for item in inner.split(","):
-                            key, _, val = item.partition("=>")
-                            pairs.append((key.strip(), normalize_value(val.strip())))
-                        return tuple(sorted(pairs))
-                    try:
-                        parsed = json.loads(value)
-                    except json.JSONDecodeError:
-                        parsed = None
-                    if isinstance(parsed, dict):
-                        # jsonb tracked as a JSON string.
-                        return tuple(
-                            sorted((k, normalize_value(v)) for k, v in parsed.items())
-                        )
-                    # Array/list tracked as "{elem, ...}". Preserve order.
-                    if not inner:
-                        return ()
-                    return tuple(normalize_value(v.strip()) for v in inner.split(","))
-                return value
-
             with table.lock:
-                columns = table.columns
-                # Read interval columns as text: psycopg's timedelta cannot hold
-                # months and overflows on large values, while Materialize's text
-                # form round-trips losslessly.
-                projection = ", ".join(
-                    (
-                        f"{col.name(True)}::text"
-                        if col.data_type is Interval
-                        else col.name(True)
-                    )
-                    for col in columns
-                )
-                rows = exe.execute(
-                    f"SELECT {projection} FROM {table}",
-                    explainable=False,
-                    http=Http.NO,
-                    fetch=True,
-                )
-                if rows is None:
-                    # execute returns None when psycopg cannot parse a value in
-                    # the result (e.g. a timestamp past year 10000, which the
-                    # generators produce). Materialize stored it fine, the client
-                    # just cannot represent it, so skip this comparison rather
-                    # than fail on a client-side limitation.
-                    return True
-                rows = sorted(
-                    (
-                        tuple(
-                            normalize_value(v, col.data_type)
-                            for v, col in zip(t, columns)
-                        )
-                        for t in rows
-                    ),
-                    key=_row_sort_key,
-                )
-                table_rows = sorted(
-                    (
-                        tuple(
-                            normalize_value(v, col.data_type)
-                            for v, col in zip(t, columns)
-                        )
-                        for t in table.rows
-                    ),
-                    key=_row_sort_key,
-                )
-                if rows != table_rows:
-                    diff = DeepDiff(
-                        rows,
-                        table_rows,
-                        ignore_order=False,  # already sorted, so keep order stable
-                        verbose_level=2,  # shows where inside the object things differ
-                    )
-                    assert (
-                        rows == table_rows
-                    ), f"Table {table} not matching.\n{diff.pretty()}"
-
+                quiesce = len(table.current_states()) > 1
+            if quiesce:
+                # A previous write left an ambiguous outcome. Hold the write
+                # lock so nothing commits during the read, then the read
+                # determines which candidate is the table's real state.
+                with table.lock:
+                    self.verify_table(exe, table, quiesced=True)
+            else:
+                # Read without the lock so verification races the writers.
+                self.verify_table(exe, table, quiesced=False)
         else:
             query = self.generate_select_query(exe, ExprKind.ALL)
             rtr = self.rng.choice([True, False])
@@ -1405,33 +1756,64 @@ class InsertAction(Action):
             table = self.rng.choice(tables)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
-        rows = []
         max_rows = min(100, MAX_ROWS - table.num_rows)
-        for i in range(self.rng.randrange(1, max_rows + 1)):
-            rows.append([column.value(self.rng) for column in table.columns])
-        all_rows = ", ".join(f"({', '.join([c.inquery for c in v])})" for v in rows)
-        query = f"INSERT INTO {table} ({column_names}) VALUES {all_rows}"
+        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
+        prepared = self.rng.choice([True, False])
+        if prepared:
+            self.stmt_id += 1
         if correctness():
-            table.lock.acquire()
-        try:
-            # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
-            if self.rng.choice([True, False]):
-                self.stmt_id += 1
+            # Value columns only, the key is assigned under the lock.
+            # Sometimes repeat an earlier row of this statement, so the table
+            # holds rows that differ only in the key: projected through the
+            # nokey shadow view they become true duplicates.
+            value_rows: list[list[DataValue]] = []
+            for _ in range(self.rng.randrange(1, max_rows + 1)):
+                if value_rows and self.rng.random() < 0.25:
+                    value_rows.append(list(self.rng.choice(value_rows)))
+                else:
+                    value_rows.append(
+                        [column.value(self.rng) for column in table.columns[1:]]
+                    )
+            num_new_rows = len(value_rows)
+
+            def run_write() -> None:
+                if prepared:
+                    self.exe_prepared(query, f"insert{self.stmt_id}", exe)
+                else:
+                    # Stay on the main connection so the commit inside
+                    # run_tracked_write decides the write's outcome atomically
+                    # with the tracking update. An HTTP insert commits on a
+                    # separate session.
+                    exe.execute(query, http=Http.NO)
+
+            with table.lock:
+                rows = []
+                for v in value_rows:
+                    rows.append([DataValue(table.next_key, str(table.next_key))] + v)
+                    table.next_key += 1
+                all_rows = ", ".join(
+                    f"({', '.join(c.inquery for c in v)})" for v in rows
+                )
+                query = f"INSERT INTO {table} ({column_names}) VALUES {all_rows}"
+                values = [[c.value for c in v] for v in rows]
+                run_tracked_write(
+                    exe,
+                    table,
+                    lambda state: state + [list(v) for v in values],
+                    run_write,
+                )
+            table.num_rows += num_new_rows
+        else:
+            rows = []
+            for i in range(self.rng.randrange(1, max_rows + 1)):
+                rows.append([column.value(self.rng) for column in table.columns])
+            all_rows = ", ".join(f"({', '.join([c.inquery for c in v])})" for v in rows)
+            query = f"INSERT INTO {table} ({column_names}) VALUES {all_rows}"
+            if prepared:
                 self.exe_prepared(query, f"insert{self.stmt_id}", exe)
             else:
-                # In correctness mode run on the main connection so the write is
-                # committed by the exe.commit() below, atomically with the
-                # table.rows update. An HTTP insert commits on a separate session,
-                # so a failing commit here would leave the row in Materialize but
-                # untracked, drifting the comparison.
-                exe.execute(query, http=Http.NO if correctness() else Http.RANDOM)
-            if correctness():
-                exe.commit()
-                table.rows.extend([[c.value for c in v] for v in rows])
-        finally:
-            if correctness():
-                table.lock.release()
-        table.num_rows += len(rows)
+                exe.execute(query, http=Http.RANDOM)
+            table.num_rows += len(rows)
         exe.insert_table = table.table_id
         return True
 
@@ -1475,24 +1857,37 @@ class CopyFromStdinAction(Action):
                 return False
             table = self.rng.choice(tables)
 
-        values = []
         max_rows = min(100, MAX_ROWS - table.num_rows)
-        for i in range(self.rng.randrange(1, max_rows + 1)):
-            values.append([column.value(self.rng).value for column in table.columns])
         query = f"COPY INTO {table} FROM STDIN"
-        # In correctness mode hold the table lock across the write and commit so
-        # the tracked rows stay in step with what a concurrent SELECT can read.
         if correctness():
-            table.lock.acquire()
-        try:
+            value_rows = []
+            for _ in range(self.rng.randrange(1, max_rows + 1)):
+                if value_rows and self.rng.random() < 0.25:
+                    value_rows.append(list(self.rng.choice(value_rows)))
+                else:
+                    value_rows.append(
+                        [column.value(self.rng).value for column in table.columns[1:]]
+                    )
+            with table.lock:
+                values = []
+                for v in value_rows:
+                    values.append([table.next_key] + v)
+                    table.next_key += 1
+                run_tracked_write(
+                    exe,
+                    table,
+                    lambda state: state + [list(v) for v in values],
+                    lambda: exe.copy(query, values),
+                )
+            table.num_rows += len(value_rows)
+        else:
+            values = []
+            for i in range(self.rng.randrange(1, max_rows + 1)):
+                values.append(
+                    [column.value(self.rng).value for column in table.columns]
+                )
             exe.copy(query, values)
-            if correctness():
-                exe.commit()
-                table.rows.extend(values)
-        finally:
-            if correctness():
-                table.lock.release()
-        table.num_rows += len(values)
+            table.num_rows += len(values)
         exe.insert_table = table.table_id
         return True
 
@@ -1538,14 +1933,7 @@ class InsertReturningAction(Action):
             table = self.rng.choice(tables)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
-        rows = []
         max_rows = min(100, MAX_ROWS - table.num_rows)
-        for i in range(self.rng.randrange(1, max_rows + 1)):
-            rows.append([column.value(self.rng) for column in table.columns])
-        all_column_values = ", ".join(
-            f"({', '.join(c.inquery for c in v)})" for v in rows
-        )
-        query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
         # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
         returning_exprs = []
         if self.rng.random() < 0.5:
@@ -1560,25 +1948,66 @@ class InsertReturningAction(Action):
             ]
         elif self.rng.choice([True, False]):
             returning_exprs.append("*")
-        if returning_exprs:
-            query += f" RETURNING {', '.join(returning_exprs)}"
+        returning = (
+            f" RETURNING {', '.join(returning_exprs)}" if returning_exprs else ""
+        )
+        prepared = self.rng.choice([True, False])
+        if prepared:
+            self.stmt_id += 1
         if correctness():
-            table.lock.acquire()
-        try:
-            if self.rng.choice([True, False]):
-                self.stmt_id += 1
+            value_rows: list[list[DataValue]] = []
+            for _ in range(self.rng.randrange(1, max_rows + 1)):
+                if value_rows and self.rng.random() < 0.25:
+                    value_rows.append(list(self.rng.choice(value_rows)))
+                else:
+                    value_rows.append(
+                        [column.value(self.rng) for column in table.columns[1:]]
+                    )
+            num_new_rows = len(value_rows)
+
+            def run_write() -> None:
+                if prepared:
+                    self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
+                else:
+                    # Keep the write on the main connection, as in InsertAction.
+                    exe.execute(query, http=Http.NO)
+
+            with table.lock:
+                rows = []
+                for v in value_rows:
+                    rows.append([DataValue(table.next_key, str(table.next_key))] + v)
+                    table.next_key += 1
+                all_column_values = ", ".join(
+                    f"({', '.join(c.inquery for c in v)})" for v in rows
+                )
+                query = (
+                    f"INSERT INTO {table} ({column_names})"
+                    f" VALUES {all_column_values}{returning}"
+                )
+                values = [[c.value for c in v] for v in rows]
+                run_tracked_write(
+                    exe,
+                    table,
+                    lambda state: state + [list(v) for v in values],
+                    run_write,
+                )
+            table.num_rows += num_new_rows
+        else:
+            rows = []
+            for i in range(self.rng.randrange(1, max_rows + 1)):
+                rows.append([column.value(self.rng) for column in table.columns])
+            all_column_values = ", ".join(
+                f"({', '.join(c.inquery for c in v)})" for v in rows
+            )
+            query = (
+                f"INSERT INTO {table} ({column_names})"
+                f" VALUES {all_column_values}{returning}"
+            )
+            if prepared:
                 self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
             else:
-                # Keep the write on the main connection in correctness mode, as in
-                # InsertAction, so it stays atomic with the table.rows update.
-                exe.execute(query, http=Http.NO if correctness() else Http.RANDOM)
-            if correctness():
-                exe.commit()
-                table.rows.extend([[c.value for c in v] for v in rows])
-        finally:
-            if correctness():
-                table.lock.release()
-        table.num_rows += len(rows)
+                exe.execute(query, http=Http.RANDOM)
+            table.num_rows += len(rows)
         exe.insert_table = table.table_id
         return True
 
@@ -1741,18 +2170,30 @@ class UpdateAction(Action):
     def run(self, exe: Executor) -> bool:
         if correctness():
             table = self.rng.choice(exe.db.tables)
+            # Never SET the key column, the tracking relies on its uniqueness.
+            col_index = self.rng.randrange(1, len(table.columns))
+            column = table.columns[col_index]
+            new_value = column.value(self.rng)
             with table.lock:
-                column = self.rng.choice(table.columns)
-                col_index = table.columns.index(column)
-                new_value = column.value(self.rng)
-                # An arbitrary SET expression and WHERE clause cannot be replayed
-                # against the tracked rows, so set one column of every row to a
-                # literal, which is verifiable.
+                # An arbitrary SET expression or WHERE clause cannot be
+                # replayed against the tracked rows, so set one column to a
+                # literal for the rows matching a replayable key predicate.
                 query = f"UPDATE {table} SET {column.name(True)} = {new_value.inquery}"
-                exe.execute(query, http=Http.NO)
-                exe.commit()
-                for row in table.rows:
-                    row[col_index] = new_value.value
+                if self.rng.random() < 0.8:
+                    pred_sql, pred_fn = key_predicate(self.rng, table)
+                    query += f" WHERE {pred_sql}"
+                else:
+                    pred_fn = lambda k: True
+
+                def transform(state: list[list[Any]]) -> list[list[Any]]:
+                    for row in state:
+                        if pred_fn(row[0]):
+                            row[col_index] = new_value.value
+                    return state
+
+                run_tracked_write(
+                    exe, table, transform, lambda: exe.execute(query, http=Http.NO)
+                )
         else:
             table = None
             if exe.insert_table is not None:
@@ -1810,12 +2251,26 @@ class DeleteAction(Action):
         if correctness():
             table = self.rng.choice(exe.db.tables)
             with table.lock:
-                # An arbitrary WHERE clause cannot be replayed against the tracked
-                # rows, so delete the whole table, which is verifiable.
-                exe.execute(f"DELETE FROM {table}", http=Http.NO)
-                exe.commit()
-                table.rows.clear()
-                table.num_rows = 0
+                # An arbitrary WHERE clause cannot be replayed against the
+                # tracked rows, so delete either everything or the rows
+                # matching a replayable key predicate.
+                query = f"DELETE FROM {table}"
+                if self.rng.random() < 0.8:
+                    pred_sql, pred_fn = key_predicate(self.rng, table)
+                    query += f" WHERE {pred_sql}"
+
+                    def transform(state: list[list[Any]]) -> list[list[Any]]:
+                        return [row for row in state if not pred_fn(row[0])]
+
+                else:
+                    transform = lambda state: []
+                run_tracked_write(
+                    exe,
+                    table,
+                    transform,
+                    lambda: exe.execute(query, http=Http.NO),
+                )
+                table.num_rows = max(len(s) for s in table.current_states())
         else:
             # Temp tables can only be written by their creating session
             tables = [
@@ -2037,6 +2492,9 @@ class DropTableAction(Action):
                 return False
 
             query = f"DROP TABLE {table}"
+            if correctness():
+                # The shadow objects depend on the table and must go with it.
+                query += " CASCADE"
             exe.execute(query, http=Http.RANDOM)
             # A concurrent CASCADE drop's untrack_objects_in_schemas may have
             # already filtered this table out of the list; tolerate that.
@@ -2078,6 +2536,12 @@ class RenameTableAction(Action):
 
 class AlterTableAddColumnAction(Action):
     def run(self, exe: Executor) -> bool:
+        if correctness():
+            # NOTE: The shadow materialized view pins SELECT * at creation, so
+            # it would not contain the added column and the comparison against
+            # the table would break. Skip until the shadow objects are
+            # recreated on schema changes.
+            return False
         with exe.db.lock:
             if not exe.db.tables:
                 return False
@@ -2104,11 +2568,6 @@ class AlterTableAddColumnAction(Action):
             except:
                 raise
             table.columns.append(new_column)
-            if correctness():
-                # The new column is nullable, so existing rows read back NULL for
-                # it. Keep the tracked rows the same width as the schema.
-                for row in table.rows:
-                    row.append(None)
         return True
 
 
