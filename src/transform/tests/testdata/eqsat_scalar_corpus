@@ -131,3 +131,55 @@ types: int64,int64
 
 expr: not(#0 <= #1)
 types: int64,int64
+
+# --- slice 6a: and_or_short_circuit (and_short_circuit / or_short_circuit) ---
+# Positions: leading / middle / trailing false operand, all collapse to false.
+expr: and(false, #0, #1)
+types: bool,bool
+
+expr: and(#0, false, #1)
+types: bool,bool
+
+expr: and(#0, #1, false)
+types: bool,bool
+
+# Dual: leading / middle / trailing true operand, all collapse to true.
+expr: or(true, #0, #1)
+types: bool,bool
+
+expr: or(#0, true, #1)
+types: bool,bool
+
+expr: or(#0, #1, true)
+types: bool,bool
+
+# 3VL: false dominates a null operand regardless of position.
+expr: and(#0, false, null)
+types: bool
+
+expr: or(#0, true, null)
+types: bool
+
+# E-err envelope: the fold is UNCONDITIONAL, no could_error guard. And
+# returns false as soon as it sees a false operand even if another operand
+# errors (func/variadic.rs's eval loop discards any accumulated error on the
+# early return); both operand orders below must fold to false/true.
+expr: and(false, 1 / 0)
+types:
+
+expr: and(1 / 0, false)
+types:
+
+expr: or(true, 1 / 0)
+types:
+
+expr: or(1 / 0, true)
+types:
+
+# Interactions: single-operand and duplicate-false operands must not fight
+# and_single / and_or_dedup.
+expr: and(false)
+types:
+
+expr: and(false, false)
+types:
