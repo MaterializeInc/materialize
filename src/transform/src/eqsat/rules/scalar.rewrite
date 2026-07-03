@@ -133,3 +133,32 @@ rule or_short_circuit {
     doc "Or([.., true, ..]) = true"
     Variadic[or](xs...) => true where scalar_any_lit_true(xs)
 }
+
+# A variadic AND with a literal-true operand drops that operand (true is And's
+# unit); OR dually drops literal-false (its unit). Mirrors
+# scalar/rules.rs::and_or_drop_unit, which is unconditional (no could_error
+# gate): dropping a unit operand never changes the AND/OR's value or error
+# behavior.
+rule and_drop_unit {
+    doc "And([.., true, ..]) = And([.. without true])"
+    Variadic[and](xs...) => Variadic[and](drop_scalar_lit(xs, true)) where scalar_any_lit_true(xs)
+}
+
+rule or_drop_unit {
+    doc "Or([.., false, ..]) = Or([.. without false])"
+    Variadic[or](xs...) => Variadic[or](drop_scalar_lit(xs, false)) where scalar_any_lit_false(xs)
+}
+
+# Duplicate operands of an AND/OR collapse to one. Mirrors
+# scalar/rules.rs::and_or_dedup, which is unconditional (no could_error gate):
+# the e-graph already canonicalizes children to class ids, so a syntactic
+# duplicate is provably the same value including its error behavior.
+rule and_dedup {
+    doc "And([a, a, b]) = And([a, b])"
+    Variadic[and](xs...) => Variadic[and](dedup(xs)) where has_duplicate_id(xs)
+}
+
+rule or_dedup {
+    doc "Or([a, a, b]) = Or([a, b])"
+    Variadic[or](xs...) => Variadic[or](dedup(xs)) where has_duplicate_id(xs)
+}
