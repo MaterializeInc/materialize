@@ -34,7 +34,6 @@ For more information, see [MCP Server for Agents](/integrations/mcp-server/mcp-a
 
 ### Improvements {#v26.31-improvements}
 - **Faster `count(*)` over `generate_series`**: Queries like `SELECT count(*) FROM generate_series(1, N)` now evaluate in constant time instead of materializing all rows.
-- **Faster arrangement hydration**: Improved dictionary compression build performance and extended compression coverage to additional arrangement paths, reducing hydration time and memory usage.
 - **System parameter override introspection**: Added `mz_internal.mz_overridden_system_parameters`, a catalog view that lists environment-wide system parameter overrides set via `ALTER SYSTEM`, readable by all users.
 - **Kubernetes resource labels for Self-Managed**: Standard `app.kubernetes.io/*` labels are now applied to all Kubernetes resources (pods, services, statefulsets, deployments) managed by the operator.
 
