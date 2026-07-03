@@ -325,3 +325,37 @@ types: bool,bool
 # for the standalone-engine analogue).
 expr: and(#0, or(#0, 1 / 0 = 1 / 0))
 types: bool
+
+# --- slice 6b: null_prop_variadic / err_prop_variadic ---
+# Both rules gate on `func.propagates_nulls()`, which is FALSE for And/Or, so
+# they never fire on the boolean connectives. Their domain is a null-
+# propagating variadic like MakeTimestamp (`makets(year, month, day, hour,
+# minute, second)`: five Int64 operands and a trailing Float64). Error
+# operands are Int64-typed bare `1 / 0`, valid for a MakeTimestamp position.
+
+# null_prop fires: a literal null (year), every other operand error-free, folds
+# to a typed null.
+expr: makets(null, #0, 1, 0, 0, 0)
+types: int64
+
+# err_prop fires: a literal Int64 error (year), safe others, folds to the error.
+expr: makets(1 / 0, #0, 1, 0, 0, 0)
+types: int64
+
+# null-vs-error priority (the envelope crux): both a literal null and a literal
+# error. null_prop is BLOCKED (the error operand can error), so err_prop wins:
+# the result is the error, NOT null. eval agrees (an operand error surfaces over
+# the propagated null).
+expr: makets(null, 1 / 0, 1, 0, 0, 0)
+types: int64
+
+# could_error guard: `1 / #0` can error but is not a LITERAL error, so null_prop
+# is gated off and err_prop cannot fire. The call survives in both engines.
+expr: makets(null, 1 / #0, 1, 0, 0, 0)
+types: int64
+
+# Non-null-propagating variadic: Coalesce returns the first non-null, so
+# `propagates_nulls()` is false and neither rule considers it. It survives even
+# with a null operand.
+expr: coalesce(null, #0)
+types: int64

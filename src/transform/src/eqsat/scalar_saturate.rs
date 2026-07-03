@@ -1447,4 +1447,345 @@ mod tests {
             "And(a, Or(a, b)) must reach a fixpoint quickly; got {iters} iters"
         );
     }
+
+    // Differential parity harness (SP2b Slice 6b): the variadic null/error
+    // propagation rules (`null_prop_variadic`, `err_prop_variadic`). Both gate
+    // on `func.propagates_nulls()`, which is FALSE for `And`/`Or`, so the rules
+    // never fire on the boolean connectives. Their real domain is a
+    // null-propagating variadic like `MakeTimestamp`, so the positive cases use
+    // it (mirroring `scalar/rules.rs::test_null_prop_variadic_*`). The And/Or
+    // cases are negative controls: neither engine 6b-folds them, they route
+    // through short-circuit / drop_unit / single, and parity must still hold.
+    //
+    // Error operands are kept well-typed for their position. `MakeTimestamp`
+    // operands are Int64/Float64, so a bare `1 / 0` (Int64) is a valid year
+    // operand. The And/Or controls need a Bool-typed error, built with the
+    // `(1 / 0) = (1 / 0)` idiom, for the same type-agreement reason slice 6c's
+    // E-err cases require it (a variadic collapse can expose an operand's own
+    // class as the connective's value, and the shared scalar analysis's
+    // merge-conflict assertion fires on an Int64 error under a Bool connective).
+    #[mz_ore::test]
+    fn scalar_parity_slice6b() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_repr::{Datum, ReprScalarType};
+
+        let c = MirScalarExpr::column;
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let makets = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::MakeTimestamp(mz_expr::func::variadic::MakeTimestamp),
+            exprs: es,
+        };
+        let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
+        let f64_lit = |v: f64| {
+            MirScalarExpr::literal_ok(
+                Datum::Float64(ordered_float::OrderedFloat(v)),
+                ReprScalarType::Float64,
+            )
+        };
+        let null_int = || MirScalarExpr::literal_null(ReprScalarType::Int64);
+        let null_f64 = || MirScalarExpr::literal_null(ReprScalarType::Float64);
+        let div64 = || BinaryFunc::DivInt64(mz_expr::func::DivInt64);
+        // A bare Int64 DivisionByZero error literal: valid for a MakeTimestamp
+        // Int64 operand.
+        let int_err = || int_lit(1).call_binary(int_lit(0), div64());
+        // A nullable Int64 column (`c0`) for the c0-based positions.
+        let int_ct = || vec![ReprScalarType::Int64.nullable(true)];
+
+        // --- null_prop fires: a literal null in the leading / middle /
+        // trailing operand, with every other operand error-free, folds the
+        // whole call to a typed null.
+        for (case, ct) in [
+            // null year (leading), c0 in the month position.
+            (
+                makets(vec![
+                    null_int(),
+                    c(0),
+                    int_lit(1),
+                    int_lit(0),
+                    int_lit(0),
+                    f64_lit(0.0),
+                ]),
+                int_ct(),
+            ),
+            // null month (middle), c0 in the hour position.
+            (
+                makets(vec![
+                    int_lit(2024),
+                    null_int(),
+                    int_lit(1),
+                    c(0),
+                    int_lit(0),
+                    f64_lit(0.0),
+                ]),
+                int_ct(),
+            ),
+            // null second (trailing, the Float64 operand), c0 in the month
+            // position.
+            (
+                makets(vec![
+                    int_lit(2024),
+                    c(0),
+                    int_lit(1),
+                    int_lit(0),
+                    int_lit(0),
+                    null_f64(),
+                ]),
+                int_ct(),
+            ),
+        ] {
+            let new = canonicalize_combined(&case, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
+            assert_eq!(new, old, "null_prop parity failed for {case:?}");
+            assert!(
+                matches!(new, MirScalarExpr::Literal(Ok(ref row), _) if row.unpack_first() == Datum::Null),
+                "null_prop must fold to a typed null literal, got {new:?}"
+            );
+        }
+
+        // --- err_prop fires: a literal Int64 error (`1 / 0`) in the year
+        // operand, with safe others, folds the call to that error literal.
+        {
+            let case = makets(vec![
+                int_err(),
+                c(0),
+                int_lit(1),
+                int_lit(0),
+                int_lit(0),
+                f64_lit(0.0),
+            ]);
+            let ct = int_ct();
+            let new = canonicalize_combined(&case, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
+            assert_eq!(new, old, "err_prop parity failed for {case:?}");
+            assert!(
+                matches!(new, MirScalarExpr::Literal(Err(_), _)),
+                "err_prop must fold to an error literal, got {new:?}"
+            );
+        }
+
+        // --- null-vs-error priority (the envelope crux): both a literal null
+        // (year) and a literal error (`1 / 0`, month). null_prop is BLOCKED
+        // because the error operand can error, so err_prop wins: the result is
+        // the error, NOT null. eval agrees: `eval(makets(null, 1/0, ..))` is
+        // Err (an operand error surfaces over the propagated null).
+        {
+            let case = makets(vec![
+                null_int(),
+                int_err(),
+                int_lit(1),
+                int_lit(0),
+                int_lit(0),
+                f64_lit(0.0),
+            ]);
+            let ct = int_ct();
+            let new = canonicalize_combined(&case, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
+            assert_eq!(new, old, "null-vs-error parity failed for {case:?}");
+            assert!(
+                matches!(new, MirScalarExpr::Literal(Err(_), _)),
+                "null-vs-error priority must yield the error, not null, got {new:?}"
+            );
+        }
+
+        // --- Cases where neither 6b rule fires; the call is left intact and
+        // both engines agree. Plain parity assertion only.
+        let unchanged: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            // Blocked: `1 / c0` can error, so null_prop is gated off, and no
+            // operand is a LITERAL error, so err_prop cannot fire either.
+            (
+                makets(vec![
+                    null_int(),
+                    int_lit(1).call_binary(c(0), div64()),
+                    int_lit(1),
+                    int_lit(0),
+                    int_lit(0),
+                    f64_lit(0.0),
+                ]),
+                int_ct(),
+            ),
+            // A non-null-propagating variadic (`Coalesce`) with a null and an
+            // error operand: `propagates_nulls()` is false, so neither rule
+            // considers it. Coalesce is the whole point of not propagating
+            // nulls (it returns the first non-null), so it must survive.
+            (
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce(mz_expr::func::variadic::Coalesce),
+                    exprs: vec![null_int(), c(0)],
+                },
+                int_ct(),
+            ),
+        ];
+        for (case, ct) in unchanged {
+            let new = canonicalize_combined(&case, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
+            assert_eq!(new, old, "unchanged-case parity failed for {case:?}");
+            assert!(
+                matches!(new, MirScalarExpr::CallVariadic { .. }),
+                "neither 6b rule may fire here; call must survive, got {new:?}"
+            );
+        }
+
+        // --- And/Or NEGATIVE CONTROLS: both propagate_nulls == false, so 6b
+        // never touches them. They fold through short-circuit / drop_unit /
+        // single instead, and parity must hold. `err_bool` is the Bool-typed
+        // `(1 / 0) = (1 / 0)` error.
+        let err_bool = || {
+            let d = int_err();
+            d.clone().call_binary(d, BinaryFunc::Eq(mz_expr::func::Eq))
+        };
+        let controls: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (
+                and(vec![
+                    MirScalarExpr::literal_null(ReprScalarType::Bool),
+                    MirScalarExpr::literal_true(),
+                ]),
+                vec![],
+            ),
+            (or(vec![MirScalarExpr::literal_false(), err_bool()]), vec![]),
+        ];
+        for (case, ct) in controls {
+            let new = canonicalize_combined(&case, &ct);
+            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
+            assert_eq!(
+                new, old,
+                "And/Or negative-control parity failed for {case:?}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn corpus_covers_slice6b() {
+        assert!(
+            CORPUS.contains("makets(null, #0, 1, 0, 0, 0)"),
+            "corpus must exercise null_prop_variadic firing on a leading null"
+        );
+        assert!(
+            CORPUS.contains("makets(1 / 0, #0, 1, 0, 0, 0)"),
+            "corpus must exercise err_prop_variadic firing on a literal error"
+        );
+        assert!(
+            CORPUS.contains("makets(null, 1 / 0, 1, 0, 0, 0)"),
+            "corpus must exercise the null-vs-error priority (error wins)"
+        );
+        assert!(
+            CORPUS.contains("makets(null, 1 / #0, 1, 0, 0, 0)"),
+            "corpus must exercise the could_error guard blocking null_prop"
+        );
+        assert!(
+            CORPUS.contains("coalesce(null, #0)"),
+            "corpus must exercise a non-null-propagating variadic left untouched"
+        );
+    }
+
+    // GUARD (SP2b Slice 6b, the correctness core): the `other_can_error` gate
+    // in `scalar_builtins::null_prop_variadic` must block null propagation when
+    // another operand can error, so the error surfaces instead of a wrong null.
+    // `makets(null, 1 / 0, ..)` is the live counterexample: eval yields Err
+    // (the `1 / 0` operand errors), so the only sound fold is that error.
+    // null_prop must stay blocked and err_prop must win.
+    //
+    // Mutation-test evidence: deleting the `if other_can_error { return None; }`
+    // block in `null_prop_variadic` makes THIS test and the slice-6b
+    // null-vs-error parity case fail (the combined engine wrongly folds to
+    // null), and only those, proving the gate is load-bearing.
+    #[mz_ore::test]
+    fn null_prop_variadic_guard_blocks_erroring_operand() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_repr::{Datum, ReprScalarType};
+
+        let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
+        let f64_lit = |v: f64| {
+            MirScalarExpr::literal_ok(
+                Datum::Float64(ordered_float::OrderedFloat(v)),
+                ReprScalarType::Float64,
+            )
+        };
+        let div64 = || BinaryFunc::DivInt64(mz_expr::func::DivInt64);
+        let case = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::MakeTimestamp(mz_expr::func::variadic::MakeTimestamp),
+            exprs: vec![
+                MirScalarExpr::literal_null(ReprScalarType::Int64),
+                int_lit(1).call_binary(int_lit(0), div64()),
+                int_lit(1),
+                int_lit(0),
+                int_lit(0),
+                f64_lit(0.0),
+            ],
+        };
+        let ct = vec![ReprScalarType::Int64.nullable(true)];
+
+        let new = canonicalize_combined(&case, &ct);
+        let old = crate::eqsat::scalar::canonicalize(&case, &ct);
+        assert_eq!(
+            new, old,
+            "guard-case parity failed for {case:?}: combined={new:?} oracle={old:?}"
+        );
+        assert!(
+            matches!(new, MirScalarExpr::Literal(Err(_), _)),
+            "guard must keep null_prop blocked so err_prop yields the error; got {new:?}"
+        );
+    }
+
+    // Termination (SP2b Slice 6b): the null/error propagation rules must reach a
+    // fixpoint quickly. Each fires at most once per class (it folds the call to
+    // a single literal), and the `other_can_error` / literal-error gates only
+    // ever suppress a fire, so there is nothing to ping-pong against. Lowers the
+    // exprs directly, bypassing `canonicalize_combined`, so the iteration count
+    // is visible, mirroring the slice-6c/6e termination checks.
+    #[mz_ore::test]
+    fn null_err_prop_variadic_terminates() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_repr::{Datum, ReprScalarType};
+
+        let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
+        let f64_lit = |v: f64| {
+            MirScalarExpr::literal_ok(
+                Datum::Float64(ordered_float::OrderedFloat(v)),
+                ReprScalarType::Float64,
+            )
+        };
+        let div64 = || BinaryFunc::DivInt64(mz_expr::func::DivInt64);
+        let makets = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::MakeTimestamp(mz_expr::func::variadic::MakeTimestamp),
+            exprs: es,
+        };
+
+        // A safe null (null_prop fires) and a null-vs-error mix (err_prop fires,
+        // null_prop stays gated). Both must converge.
+        let cases = vec![
+            makets(vec![
+                MirScalarExpr::literal_null(ReprScalarType::Int64),
+                MirScalarExpr::column(0),
+                int_lit(1),
+                int_lit(0),
+                int_lit(0),
+                f64_lit(0.0),
+            ]),
+            makets(vec![
+                MirScalarExpr::literal_null(ReprScalarType::Int64),
+                int_lit(1).call_binary(int_lit(0), div64()),
+                int_lit(1),
+                int_lit(0),
+                int_lit(0),
+                f64_lit(0.0),
+            ]),
+        ];
+        for case in cases {
+            let mut eg = EGraph::new();
+            eg.data_mut().scalar.col_types = vec![ReprScalarType::Int64.nullable(true)];
+            let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &case);
+            let iters = saturate(&mut eg);
+            assert!(
+                iters <= 10,
+                "null/err_prop_variadic must reach a fixpoint quickly for {case:?}; got {iters} iters"
+            );
+        }
+    }
 }
