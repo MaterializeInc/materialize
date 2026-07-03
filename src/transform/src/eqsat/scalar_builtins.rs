@@ -390,22 +390,54 @@ pub fn err_prop_variadic(g: &mut EGraph, class: Id) -> Result<Id, String> {
 /// non-empty-residual condition (an empty residual is the absorption case, left to
 /// `absorb`) and the residual-error gate (every residual operand must be error-free;
 /// the common factor MAY error and is deliberately exempt, the CLU-137 narrowing).
-/// Non-destructive: builds and returns the factored form for the caller to union in,
-/// so extraction picks the cheaper form. Fires only when the factored form is
-/// well-formed; otherwise `Err` (no union), mirroring the old engine's `vec![]`.
+/// Non-destructive: builds the factored form for the caller to union in, so
+/// extraction picks the cheaper form. `Err` only when no And/Or node in the class
+/// factors at all.
+///
+/// EVERY eligible And/Or node in the class is tried, and every successful
+/// factoring is unioned in. The standalone engine achieved this by invoking the
+/// rule once per node. Trying only the first node (in hash order) would make
+/// firing nondeterministic: a class can hold several And/Or nodes at once (a
+/// `drop_unit` rewrite sits in the same class as its pre-drop form, and only the
+/// dropped form factors), so a hash-order pick would fire or not depending on
+/// iteration order, and the extracted plan would vary run to run. Unioning every
+/// factoring leaves the same e-class regardless of node order, so extraction is
+/// reproducible.
 pub fn factor_and_or(g: &mut EGraph, class: Id) -> Result<Id, String> {
-    let target = scalar_class_nodes(g, class).into_iter().find_map(|node| {
-        let SNode::CallVariadic { func, exprs } = &node else {
-            return None;
-        };
-        if !is_and_or(func) || exprs.len() < 2 {
-            return None;
+    let candidates: Vec<(mz_expr::VariadicFunc, Vec<Id>)> = scalar_class_nodes(g, class)
+        .into_iter()
+        .filter_map(|node| {
+            let SNode::CallVariadic { func, exprs } = node else {
+                return None;
+            };
+            (is_and_or(&func) && exprs.len() >= 2).then_some((func, exprs))
+        })
+        .collect();
+
+    let mut factored: Option<Id> = None;
+    for (outer_func, outer_operands) in candidates {
+        if let Some(id) = try_factor_one(g, outer_func, outer_operands) {
+            match factored {
+                None => factored = Some(id),
+                Some(prev) => {
+                    g.union(prev, id);
+                }
+            }
         }
-        Some((func.clone(), exprs.clone()))
-    });
-    let Some((outer_func, outer_operands)) = target else {
-        return Err("factor_and_or: no eligible And/Or node".to_string());
-    };
+    }
+    factored.ok_or_else(|| "factor_and_or: no eligible factoring".to_string())
+}
+
+/// Undistribute one And/Or node `outer_func(outer_operands)`, returning the
+/// factored form's class id. `None` if this node does not factor: no common
+/// factor, an empty residual (the absorption case, left to `absorb`), or a
+/// residual operand that can error. Mutates `g` only on success, since every
+/// rejection precedes the first `add`.
+fn try_factor_one(
+    g: &mut EGraph,
+    outer_func: mz_expr::VariadicFunc,
+    outer_operands: Vec<Id>,
+) -> Option<Id> {
     let inner_func = outer_func.switch_and_or();
 
     // Each outer operand's inner-operand set under `inner_func` (canonical, sorted,
@@ -434,7 +466,7 @@ pub fn factor_and_or(g: &mut EGraph, class: Id) -> Result<Id, String> {
         intersection.retain(|id| set.contains(id));
     }
     if intersection.is_empty() {
-        return Err("factor_and_or: no common factor".to_string());
+        return None;
     }
 
     // Each branch's residual; an empty residual is the absorption case (deferred).
@@ -446,7 +478,7 @@ pub fn factor_and_or(g: &mut EGraph, class: Id) -> Result<Id, String> {
             .filter(|id| !intersection.contains(id))
             .collect();
         if residual.is_empty() {
-            return Err("factor_and_or: empty residual (absorption case)".to_string());
+            return None;
         }
         residuals.push(residual);
     }
@@ -455,7 +487,7 @@ pub fn factor_and_or(g: &mut EGraph, class: Id) -> Result<Id, String> {
     // common factor is intentionally exempt (never moved past a masking value).
     for residual in &residuals {
         if residual.iter().any(|&id| scalar_could_error(g, id)) {
-            return Err("factor_and_or: residual can error".to_string());
+            return None;
         }
     }
 
@@ -481,7 +513,7 @@ pub fn factor_and_or(g: &mut EGraph, class: Id) -> Result<Id, String> {
     }));
     let mut factored_exprs = intersection;
     factored_exprs.push(residual_combination);
-    Ok(g.add(CNode::Scalar(SNode::CallVariadic {
+    Some(g.add(CNode::Scalar(SNode::CallVariadic {
         func: inner_func,
         exprs: factored_exprs,
     })))
