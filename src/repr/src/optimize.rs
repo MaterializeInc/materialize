@@ -154,7 +154,7 @@ optimizer_feature_flags!({
     // Bound from `SystemVars::enable_eqsat_wmr_lift`.
     enable_eqsat_wmr_lift: bool,
     // Use the equality-saturation scalar canonicalizer in place of `reduce`
-    // inside `canonicalize_predicates`. Default off.
+    // inside `canonicalize_predicates`. Default on.
     // Bound from `SystemVars::enable_eqsat_scalar_canonicalize`.
     enable_eqsat_scalar_canonicalize: bool,
     // Bound from `SystemVars::enable_eqsat_delta_join_cost`. Gates the

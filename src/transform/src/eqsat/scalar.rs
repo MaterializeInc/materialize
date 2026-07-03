@@ -25,6 +25,7 @@ use mz_expr::MirScalarExpr;
 use mz_repr::ReprColumnType;
 
 use crate::eqsat::scalar::egraph::ScalarEGraph;
+use crate::eqsat::scalar_saturate::canonicalize_combined;
 
 /// Canonicalize a scalar expression by equality saturation.
 ///
@@ -45,10 +46,11 @@ pub fn canonicalize(expr: &MirScalarExpr, col_types: &[ReprColumnType]) -> MirSc
 /// canonicalizer with `enable_eqsat_scalar`.
 ///
 /// When set, step 1 of [`mz_expr::canonicalize::canonicalize_predicates`] is
-/// performed by the equality-saturation scalar canonicalizer ([`canonicalize`])
-/// instead of `MirScalarExpr::reduce`. When clear, this delegates to the
-/// unmodified [`mz_expr::canonicalize::canonicalize_predicates`], so the
-/// flag-off path is byte-identical to calling that function directly.
+/// performed by the equality-saturation scalar canonicalizer
+/// ([`canonicalize_combined`]) instead of `MirScalarExpr::reduce`. When clear,
+/// this delegates to the unmodified
+/// [`mz_expr::canonicalize::canonicalize_predicates`], so the flag-off path is
+/// byte-identical to calling that function directly.
 ///
 /// This is the single injection point through which the `mz-transform` callers
 /// reach the `mz-expr` predicate canonicalizer, since `mz-expr` cannot depend on
@@ -63,7 +65,7 @@ pub(crate) fn canonicalize_predicates(
             predicates,
             col_types,
             Some(&|e: &mut MirScalarExpr, ct: &[ReprColumnType]| {
-                *e = canonicalize(e, ct);
+                *e = canonicalize_combined(e, ct);
             }),
         );
     } else {

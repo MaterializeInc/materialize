@@ -11,10 +11,10 @@
 //! engine's, which the differential test gates on. Scalar rules run only here,
 //! never in the relational `EGraph::saturate` pass.
 
-// The driver and its `canonicalize_combined` entry are the SP2b end-state scalar
-// path; production still routes through the old engine until a later slice wires
-// this in, so the items are exercised only by the inline test until then.
-#![allow(dead_code)]
+// `canonicalize_combined` is the production scalar canonicalizer, reached
+// through `scalar::canonicalize_predicates` when `enable_eqsat_scalar_canonicalize`
+// is set. The standalone engine in `scalar/egraph.rs` remains only as the parity
+// oracle exercised by this module's differential tests.
 
 use mz_expr::MirScalarExpr;
 use mz_repr::ReprColumnType;
