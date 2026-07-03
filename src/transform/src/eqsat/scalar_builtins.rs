@@ -45,14 +45,12 @@ fn scalar_literal(g: &EGraph, id: Id) -> Option<(Result<Row, EvalError>, ReprCol
 /// and return the folded-literal id. `Err` when no representative folds, which
 /// the saturation loop treats as "rule did not fire".
 ///
-/// Class-level, unlike the old per-node `const_fold`: `apply` receives the class
-/// id, not the matched node. Sound by congruence: a foldable representative's
-/// value is the value of the whole class, and unioning that literal into the
-/// class is exactly what the old rule did per node. Panic exclusion and the
-/// eval itself mirror `scalar/rules.rs::const_fold` verbatim, including
-/// reproducing an `Err` child literal as data by reconstructing it as a
-/// `MirScalarExpr::Literal(Err(e), ty)` and re-evaluating, rather than dropping
-/// or special-casing it.
+/// Class-level: `apply` receives the class id, not the matched node. Sound by
+/// congruence: a foldable representative's value is the value of the whole
+/// class, so unioning that literal into the class is valid no matter which
+/// node in the class supplied it. Evaluation reproduces an `Err` child literal
+/// as data by reconstructing it as a `MirScalarExpr::Literal(Err(e), ty)` and
+/// re-evaluating, rather than dropping or special-casing it.
 pub fn const_eval(g: &mut EGraph, class: Id) -> Result<Id, String> {
     // Find a foldable representative. Collect the needed owned data before any
     // mutation so no borrow of `g` is held across `g.add`.
@@ -83,7 +81,7 @@ pub fn const_eval(g: &mut EGraph, class: Id) -> Result<Id, String> {
                 child_exprs.push(MirScalarExpr::Literal(row, col_type));
             }
             // Reassemble the call with literal children (no Column refs, so
-            // empty datums/col_types are sound), matching old const_fold.
+            // empty datums/col_types are sound).
             let call = match &node {
                 SNode::CallUnary { func, .. } => MirScalarExpr::CallUnary {
                     func: func.clone(),
@@ -124,10 +122,9 @@ pub fn const_eval(g: &mut EGraph, class: Id) -> Result<Id, String> {
 
 /// The result scalar type of the call node `node` in the combined graph.
 ///
-/// The combined-graph analog of `scalar/rules.rs::call_scalar_type`: raise
-/// each child to its cheapest `MirScalarExpr`, reassemble the call, and type
-/// it against the stored `col_types`. The raised children may carry `Column`s,
-/// so `col_types` is required to type them.
+/// Raises each child to its cheapest `MirScalarExpr`, reassembles the call,
+/// and types it against the stored `col_types`. The raised children may carry
+/// `Column`s, so `col_types` is required to type them.
 fn call_scalar_type(g: &EGraph, node: &SNode) -> ReprScalarType {
     let col_types = g.data().scalar.col_types.clone();
     let raised: Vec<MirScalarExpr> = node
@@ -177,14 +174,12 @@ fn scalar_could_error(g: &EGraph, id: Id) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether scalar class `id` is a literal `null`. Mirrors
-/// `scalar/rules.rs::is_literal_null`.
+/// Whether scalar class `id` is a literal `null`.
 fn is_literal_null(g: &EGraph, id: Id) -> bool {
     matches!(scalar_literal(g, id), Some((Ok(row), _)) if row.unpack_first() == Datum::Null)
 }
 
-/// The `EvalError` when class `id` is a literal error, else `None`. Mirrors
-/// `scalar/rules.rs::literal_err`.
+/// The `EvalError` when class `id` is a literal error, else `None`.
 fn literal_err(g: &EGraph, id: Id) -> Option<EvalError> {
     match scalar_literal(g, id)? {
         (Err(e), _) => Some(e),
@@ -195,13 +190,12 @@ fn literal_err(g: &EGraph, id: Id) -> Option<EvalError> {
 /// `if(err_cond, then, els) -> err_cond` when the condition class is a
 /// literal error. The Rust RHS of the `if_err_cond` declarative rule.
 ///
-/// Mirrors `scalar/rules.rs::if_err_cond` exactly: no `could_error` gate, since
-/// `If` evaluates `cond` first and short-circuits on its error before `then`
-/// or `els` are ever touched, so the rewrite is sound regardless of what the
-/// branches are. The result type is the union of the two branch types; if the
-/// union fails (incompatible scalar types, which should not occur in
-/// well-typed input), the rule conservatively does not fire rather than
-/// unwrap-panic, matching `reduce_if`'s `Err(err)` arm.
+/// No `could_error` gate, since `If` evaluates `cond` first and short-circuits
+/// on its error before `then` or `els` are ever touched, so the rewrite is
+/// sound regardless of what the branches are. The result type is the union of
+/// the two branch types. If the union fails (incompatible scalar types, which
+/// should not occur in well-typed input), the rule conservatively does not
+/// fire rather than unwrap-panic, matching `reduce_if`'s `Err(err)` arm.
 pub fn if_err_cond(g: &mut EGraph, class: Id) -> Result<Id, String> {
     let target = scalar_class_nodes(g, class).into_iter().find_map(|node| {
         let SNode::If { cond, then, els } = node else {
@@ -225,8 +219,7 @@ pub fn if_err_cond(g: &mut EGraph, class: Id) -> Result<Id, String> {
 /// propagates nulls, GATED on the other operand being error-free. The Rust RHS
 /// of the `null_prop_binary` declarative rule.
 ///
-/// Mirrors `scalar/rules.rs::null_prop_binary` exactly, including its
-/// deliberate deviation from `reduce`: reduce's binary null-prop is ungated on
+/// Deliberately deviates from `reduce`: reduce's binary null-prop is ungated on
 /// the other operand, but eval returns the OTHER operand's error, not null,
 /// when that operand errors (`eval(AddInt64(null, 1/0))` is `Err`, not
 /// `Null`). Rewriting `f(null, x)` to null when `x` can error would turn an
@@ -266,8 +259,7 @@ pub fn null_prop_binary(g: &mut EGraph, class: Id) -> Result<Id, String> {
 /// GATED on the other operand being error-free. The Rust RHS of the
 /// `err_prop_binary` declarative rule.
 ///
-/// Mirrors `scalar/rules.rs::err_prop_binary` exactly, including its
-/// deliberate deviation from `reduce`: reduce's binary err-prop is ungated on
+/// Deliberately deviates from `reduce`: reduce's binary err-prop is ungated on
 /// the other operand, but eval is left-to-right via `?`, so
 /// `eval(f(x, err_lit))` returns `x`'s error when `x` errors first, not the
 /// literal error. Rewriting without a gate would substitute one error class
@@ -306,9 +298,8 @@ pub fn err_prop_binary(g: &mut EGraph, class: Id) -> Result<Id, String> {
 /// every non-null-literal operand being error-free. The Rust RHS of the
 /// `null_prop_variadic` declarative rule.
 ///
-/// Mirrors `scalar/rules.rs::null_prop_variadic` exactly, including its
-/// deliberate deviation from `reduce`: reduce's variadic null-prop is ungated on
-/// the other operands, but eval surfaces an operand's error over null
+/// Deliberately deviates from `reduce`: reduce's variadic null-prop is ungated
+/// on the other operands, but eval surfaces an operand's error over null
 /// (`eval(makets(null, 1/0))` is `Err`, not `Null`). Rewriting `f(.., null, ..)`
 /// to null when another operand can error would turn an error into null. The gate
 /// blocks that. This rule never fires on `And`/`Or`, which do not propagate nulls.
@@ -347,9 +338,9 @@ pub fn null_prop_variadic(g: &mut EGraph, class: Id) -> Result<Id, String> {
 /// GATED on every other operand being error-free. The Rust RHS of the
 /// `err_prop_variadic` declarative rule.
 ///
-/// Mirrors `scalar/rules.rs::err_prop_variadic` exactly. Takes the FIRST literal
-/// error by iteration order. A second literal-error operand is excluded from the
-/// "other" set (via `literal_err(..).is_none()`), so it does not block the fire.
+/// Takes the FIRST literal error by iteration order. A second literal-error
+/// operand is excluded from the "other" set (via `literal_err(..).is_none()`),
+/// so it does not block the fire.
 /// That is sound: eval is left-to-right via `?`, so the first error is the one a
 /// full evaluation surfaces, and `const_fold` agrees on the all-literal case. The
 /// `propagates_nulls` gate mirrors reduce's variadic err-prop, so this never fires
@@ -385,24 +376,23 @@ pub fn err_prop_variadic(g: &mut EGraph, class: Id) -> Result<Id, String> {
 /// `(a∧b)∨(a∧c) -> a∧(b∨c)` and the dual: undistribute a common factor out of an
 /// AND/OR, residual-error gated. The Rust RHS of the `factor_and_or` builtin rule.
 ///
-/// Mirrors `scalar/rules.rs::factor_and_or` exactly: full-intersection factoring
-/// (the factor is the inner-set intersection common to EVERY branch), with the
-/// non-empty-residual condition (an empty residual is the absorption case, left to
-/// `absorb`) and the residual-error gate (every residual operand must be error-free;
-/// the common factor MAY error and is deliberately exempt, the CLU-137 narrowing).
-/// Non-destructive: builds the factored form for the caller to union in, so
-/// extraction picks the cheaper form. `Err` only when no And/Or node in the class
-/// factors at all.
+/// Full-intersection factoring (the factor is the inner-set intersection
+/// common to EVERY branch), with the non-empty-residual condition (an empty
+/// residual is the absorption case, left to `absorb`) and the residual-error
+/// gate. Every residual operand must be error-free. The common factor MAY
+/// error and is deliberately exempt, the CLU-137 narrowing. Non-destructive:
+/// builds the factored form for the caller to union in, so extraction picks
+/// the cheaper form. `Err` only when no And/Or node in the class factors at
+/// all.
 ///
 /// EVERY eligible And/Or node in the class is tried, and every successful
-/// factoring is unioned in. The standalone engine achieved this by invoking the
-/// rule once per node. Trying only the first node (in hash order) would make
-/// firing nondeterministic: a class can hold several And/Or nodes at once (a
-/// `drop_unit` rewrite sits in the same class as its pre-drop form, and only the
-/// dropped form factors), so a hash-order pick would fire or not depending on
-/// iteration order, and the extracted plan would vary run to run. Unioning every
-/// factoring leaves the same e-class regardless of node order, so extraction is
-/// reproducible.
+/// factoring is unioned in, rather than stopping at the first match. Trying
+/// only the first node (in hash order) would make firing nondeterministic: a
+/// class can hold several And/Or nodes at once (a `drop_unit` rewrite sits in
+/// the same class as its pre-drop form, and only the dropped form factors),
+/// so a hash-order pick would fire or not depending on iteration order, and
+/// the extracted plan would vary run to run. Unioning every factoring leaves
+/// the same e-class regardless of node order, so extraction is reproducible.
 pub fn factor_and_or(g: &mut EGraph, class: Id) -> Result<Id, String> {
     let candidates: Vec<(mz_expr::VariadicFunc, Vec<Id>)> = scalar_class_nodes(g, class)
         .into_iter()

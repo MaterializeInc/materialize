@@ -3,14 +3,12 @@
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 
-//! Determinism-parity scalar extractor over the combined e-graph.
+//! Deterministic scalar extractor over the combined e-graph.
 //!
-//! A verbatim port of `scalar/raise.rs`'s bottom-up tree-size extraction, reading
-//! `CNode::Scalar` nodes from `EGraph<CombinedLang>`. The tie-break
-//! (`cost` then `SNode::Ord`) and the And/Or operand `sort()` are copied exactly
-//! so extraction is byte-identical to the standalone scalar engine. The
-//! rationale comments below are ported from `scalar/raise.rs` as well. See
-//! there for the original write-up.
+//! Bottom-up min-cost tree-size extraction, reading `CNode::Scalar` nodes from
+//! `EGraph<CombinedLang>`. Ties are broken by cost, then by `SNode::Ord`, and
+//! And/Or operands are sorted, so the same e-graph always yields the same
+//! extracted expression regardless of node or iteration order.
 
 // `raise` is a pinned public API that later slices wire into production use.
 // Until then, only the round-trip test below exercises it.

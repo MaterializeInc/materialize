@@ -6,15 +6,14 @@
 //! Scalar equality-saturation over the combined e-graph.
 //!
 //! The scalar canonicalizer runs its rules through the one CombinedLang
-//! machinery. The bounds are copied from the standalone `scalar/egraph.rs`
-//! (600 / 1_000 / 100) so the fixpoint reached here is identical to the old
-//! engine's, which the differential test gates on. Scalar rules run only here,
-//! never in the relational `EGraph::saturate` pass.
+//! machinery. Scalar rules run only here, never in the relational
+//! `EGraph::saturate` pass.
 
 // `canonicalize_combined` is the production scalar canonicalizer, reached
 // through `scalar::canonicalize_predicates` when `enable_eqsat_scalar_canonicalize`
-// is set. The standalone engine in `scalar/egraph.rs` remains only as the parity
-// oracle exercised by this module's differential tests.
+// is set. This module's tests are frozen differential-parity snapshots: fixed
+// expected outputs recorded once, not a live comparison against a second
+// implementation.
 
 use mz_expr::MirScalarExpr;
 use mz_repr::ReprColumnType;
@@ -26,18 +25,18 @@ use crate::eqsat::rules;
 use crate::eqsat::scalar::analysis::{ClassAnalysis, make, merge};
 use crate::eqsat::scalar_extract;
 
-/// E-node budget for the saturation loop. Copied from `scalar/egraph.rs` so the
-/// scalar fixpoint matches the standalone engine's (parity).
+/// E-node budget for the saturation loop. Bounds runaway e-node growth if the
+/// scalar rules fail to converge.
 const MAX_ENODES: usize = 600;
 
-/// Per-round match cap per rule. Copied from `scalar/egraph.rs`.
+/// Per-round match cap per rule.
 const MATCH_LIMIT: usize = 1_000;
 
-/// Maximum saturation iterations. Copied from `scalar/egraph.rs`.
+/// Maximum saturation iterations.
 const MAX_ITERS: usize = 100;
 
 /// Recompute the scalar per-class analysis as a monotone least-fixpoint over the
-/// current class layout. The CombinedLang port of `scalar/egraph.rs::recompute_analysis`.
+/// current class layout.
 ///
 /// Operates only on scalar classes (a class holding at least one `CNode::Scalar`).
 /// A purely relational class carries no scalar analysis entry, and a scalar
@@ -119,9 +118,9 @@ fn recompute_analysis(eg: &mut EGraph) {
 /// Saturate the scalar rules over `eg`, returning the iteration count.
 ///
 /// The relational `EGraph::saturate` must NOT be reused: it recomputes the
-/// relational analyses and reads relational bounds, which would break scalar
-/// parity. This loop mirrors the standalone scalar driver instead. Unlike the
-/// relational loop it has no per-rule backoff (the old scalar driver had none).
+/// relational analyses and applies the relational bounds, neither of which
+/// apply to scalar saturation. This is a dedicated scalar-only loop instead,
+/// with no per-rule backoff unlike the relational loop.
 pub(crate) fn saturate(eg: &mut EGraph) -> usize {
     let ruleset = rules::scalar_all();
     let compiled = ruleset.rules();
@@ -214,15 +213,16 @@ mod tests {
     // Frozen differential-parity snapshot (SP2b Slice 1): asserts the combined
     // path produces the documented rewrite for the expressions the ported
     // rules cover. `canonicalize_combined` is `pub(crate)`, so this lives
-    // in-crate rather than as an external integration test; the committed
+    // in-crate rather than as an external integration test. The committed
     // corpus fixture is read via `include_str!` relative to this file. These
-    // snapshots were originally differential (checked against a standalone
-    // scalar engine, since deleted once the combined path became production);
-    // the frozen `expected` values are that oracle's last-agreed output.
+    // snapshots are frozen: the `expected` values were fixed once and are no
+    // longer checked against a second implementation, so a failure here means
+    // `canonicalize_combined`'s output actually changed, not that a comparison
+    // target drifted.
     //
     // Slice 1 ports only `not_not`, so the corpus is restricted to
     // `not(not(...))`-shaped expressions over a bare column: no literals, no
-    // type context, nothing that would trigger an unported rule. A failure
+    // type context, nothing that would trigger any other rule. A failure
     // here is the slice-1 go/no-go trigger, not something to paper over by
     // adjusting the assertion.
 
@@ -256,9 +256,9 @@ mod tests {
     // Differential parity harness (SP2b Slice 2): extends slice 1 to the
     // variadic rules (`and_single`, `or_single`, `not_demorgan_and`,
     // `not_demorgan_or`). Same corpus-shaping constraint as slice 1: distinct
-    // bare boolean columns only, so none of the old engine's unported rules
+    // bare boolean columns only, so none of the ruleset's other rules
     // (const_fold, dedup, flatten_assoc, not_binary_negate, ...) fire and
-    // create a divergence unrelated to the rules under test.
+    // change the output for reasons unrelated to the rules under test.
     #[mz_ore::test]
     fn scalar_parity_variadic() {
         use mz_expr::{MirScalarExpr, UnaryFunc, VariadicFunc};
@@ -321,18 +321,18 @@ mod tests {
     // This is the first workout of the `could_error` gate axis, not just the
     // `literal` axis: the positive case proves the gate fires when the condition
     // cannot error, and the negative control proves it blocks when the condition
-    // can, with parity holding on both sides because `if_same_branches` is the
-    // identical could_error-gated rule in both engines.
+    // can, and the assertion checks both since `if_same_branches` is exactly
+    // the could_error-gated rule under test.
     //
-    // Same corpus-shaping constraint as slices 1-2: every input is built so the
-    // old engine's unported rules (const_fold, if_err_cond, err_prop, ...) have
-    // no literal-only or error-literal subterm to seize on. The could_error
-    // negative control divides two COLUMNS, not literals: `BinaryFunc::could_error`
-    // is a static per-function property independent of operand literalness, so
-    // the gate sees `could_error == true` without ever needing to fold `1/0` into
-    // an error literal, which would let the old engine's const_fold (unported)
-    // collapse the condition to a literal and diverge from the combined engine
-    // for reasons unrelated to the could_error gate under test.
+    // Same corpus-shaping constraint as slices 1-2: every input is built so
+    // that none of the ruleset's other rules (const_fold, if_err_cond,
+    // err_prop, ...) have a literal-only or error-literal subterm to seize on.
+    // The could_error negative control divides two COLUMNS, not literals:
+    // `BinaryFunc::could_error` is a static per-function property independent
+    // of operand literalness, so the gate sees `could_error == true` without
+    // ever needing to fold `1/0` into an error literal, which would let
+    // `const_fold` collapse the condition to a literal and produce output
+    // unrelated to the could_error gate under test.
     #[mz_ore::test]
     fn scalar_parity_if() {
         use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc, VariadicFunc};
@@ -440,14 +440,14 @@ mod tests {
     // and the interaction between `and_empty` and the slice-2 `and_single`
     // rule (they must reach a shared fixpoint, not fight).
     //
-    // Same corpus-shaping constraint as slices 1-3: every input keeps the old
-    // engine's unported rules (and_or_dedup, and_or_short_circuit,
+    // Same corpus-shaping constraint as slices 1-3: every input keeps the
+    // ruleset's other rules (and_or_dedup, and_or_short_circuit,
     // flatten_assoc, factor_and_or, absorb_and_or, not_binary_negate,
     // if_err_cond, null/err_prop, isnull_fold, ...) from having anything to
     // seize on, so a mismatch here is a real const_fold/and_empty/or_empty
-    // divergence, not a corpus artifact. const_fold itself is ported to both
-    // engines, so, unlike slice 3's could_error control, a bare `1 / 0` is
-    // safe to use directly: both engines fold it the same way.
+    // issue, not a corpus artifact. Unlike slice 3's could_error control, a
+    // bare `1 / 0` is safe to use directly here: `const_fold` folds it
+    // deterministically.
     #[mz_ore::test]
     fn scalar_parity_const_eval() {
         use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, VariadicFunc};
@@ -490,8 +490,8 @@ mod tests {
         let if_lit = if_expr(MirScalarExpr::literal_true(), int_lit(1), int_lit(2));
 
         // All-literal fold, error-as-data (the negative control): division by
-        // zero and integer overflow must fold to the same error literal in
-        // both engines.
+        // zero and integer overflow must fold to their error literal
+        // deterministically.
         let div_by_zero = int_lit(1).call_binary(int_lit(0), div64());
         let overflow = int_lit(i64::MAX).call_binary(int_lit(1), add64());
 
@@ -558,8 +558,7 @@ mod tests {
         // and_empty and and_single must not fight: lower `And(#0)` directly
         // (bypassing `canonicalize_combined`) so the iteration count is
         // visible, and assert saturation converges well under the 100-round
-        // cap rather than merely not timing out. Mirrors the old engine's
-        // `test_fold_terminates` (`scalar/rules.rs`).
+        // cap rather than merely not timing out.
         let mut eg = EGraph::new();
         eg.data_mut().scalar.col_types = vec![bool_ct()];
         let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &and(vec![c(0)]));
@@ -622,13 +621,12 @@ mod tests {
     // attributes in `src/expr/src/scalar/func.rs`) crossed with three
     // null-operand shapes.
     //
-    // Same corpus-shaping constraint as slices 1-4: every input keeps the old
-    // engine's still-unported slice-6 variadic-set rules
-    // (`null_prop_variadic`, `err_prop_variadic`, `and_or_dedup`,
-    // `and_or_short_circuit`, `and_or_drop_unit`, `flatten_assoc`,
-    // `factor_and_or`, `absorb_and_or`) from having anything to seize on: no
-    // variadic And/Or of arity > 1 appears anywhere below, so a mismatch here
-    // is a real slice-5 divergence, not a corpus artifact.
+    // Same corpus-shaping constraint as slices 1-4: every input keeps the
+    // slice-6 variadic-set rules (`null_prop_variadic`, `err_prop_variadic`,
+    // `and_or_dedup`, `and_or_short_circuit`, `and_or_drop_unit`,
+    // `flatten_assoc`, `factor_and_or`, `absorb_and_or`) from having anything
+    // to seize on: no variadic And/Or of arity > 1 appears anywhere below, so
+    // a mismatch here is a real slice-5 issue, not a corpus artifact.
     #[mz_ore::test]
     fn scalar_parity_slice5() {
         use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc};
@@ -677,8 +675,8 @@ mod tests {
         // could_error) other operand folds to null. AddInt64(null, #0 / #1)
         // does NOT fold: the other operand is a division of two columns,
         // which `could_error` intrinsically, regardless of literalness, so
-        // the gate blocks the rewrite in both engines (parity on the
-        // "no fold" outcome, not just on folds).
+        // the gate blocks the rewrite (asserting the "no fold" outcome, not
+        // just the fold cases).
         let null_prop_ok = null_int().call_binary(c(0), add64());
         cases.push((null_prop_ok, null_int(), vec![int_ct(false)]));
 
@@ -729,10 +727,10 @@ mod tests {
         // with its dual so the expected rewrite target is explicit. Eq/NotEq
         // are propagates_nulls comparisons over ExcludeNull<Datum> inputs (so
         // is Lt/Gte/Lte/Gt), so a literal-null operand also engages
-        // null_prop_binary/const_fold in both engines: both null-operand
-        // shapes fold to a typed null regardless of which function is under
-        // test, not to the dual comparison; that interaction is deliberate,
-        // parity must hold whichever rule combination wins the race to the
+        // null_prop_binary/const_fold: both null-operand shapes fold to a
+        // typed null regardless of which function is under test, not to the
+        // dual comparison. That interaction is deliberate: the expected
+        // output must hold whichever rule fires first on the way to the
         // fixpoint.
         let negation_pairs: Vec<(BinaryFunc, BinaryFunc)> = vec![
             (
@@ -921,34 +919,32 @@ mod tests {
 
     // Differential parity harness (SP2b Slice 6a): extends slices 1-5 to the
     // declarative `and_short_circuit`/`or_short_circuit` DSL rules
-    // (`scalar.rewrite`), which mirror the imperative `and_or_short_circuit`
-    // (`scalar/rules.rs`, line 245): a variadic AND/OR collapses to the
-    // connective's zero (`false` for And, `true` for Or) as soon as any
-    // operand's literal analysis equals that zero.
+    // (`scalar.rewrite`): a variadic AND/OR collapses to the connective's zero
+    // (`false` for And, `true` for Or) as soon as any operand's literal
+    // analysis equals that zero.
     //
     // The rule carries NO could_error guard, by design: `And`/`Or` short-
     // circuit unconditionally in eval (`func/variadic.rs`), returning the
     // zero as soon as it is seen and discarding any error accumulated from
     // an earlier operand. The "E-err envelope" cases below are the
     // correctness check for that design, not a guard to mutation-test: they
-    // assert the combined engine's unconditional fold agrees with the old
-    // engine on an erroring operand in BOTH operand orders (error-before-zero
-    // and zero-before-error), which is exactly the early-return-discards-err
-    // semantics the rule relies on.
+    // assert the unconditional fold produces the connective's zero for an
+    // erroring operand in BOTH operand orders (error-before-zero and
+    // zero-before-error), exactly the early-return-discards-err semantics the
+    // rule relies on.
     //
-    // Same corpus-shaping constraint as slices 1-5: every input keeps the old
-    // engine's still-unported rules (`null_prop_variadic`, `err_prop_variadic`,
+    // Same corpus-shaping constraint as slices 1-5: every input keeps the
+    // ruleset's other rules (`null_prop_variadic`, `err_prop_variadic`,
     // `and_or_drop_unit`, `and_or_dedup`, `flatten_assoc`, `factor_and_or`,
     // `absorb_and_or`) from seizing on anything a real slice-6a case wouldn't
     // also trigger. `null_prop_variadic`/`err_prop_variadic` are moot here
     // regardless of shape (`And`/`Or::propagates_nulls()` is `false`, so
     // those rules never match a variadic And/Or node at all). The
-    // `and(false, false)` duplicate-operand case is deliberately included
-    // despite `and_or_dedup` being unported: dedup would collapse it to
-    // `and(false)` in the old engine, which `and_single` then folds to
-    // `false`, the same answer `and_short_circuit` reaches directly in the
-    // new engine, so the extra old-engine path is a convergent no-op, not a
-    // divergence.
+    // `and(false, false)` duplicate-operand case is deliberately included even
+    // though `and_dedup` also applies to it: whichever rule fires first,
+    // `and_dedup` collapsing to `and(false)` then folded by `and_single`, or
+    // `and_short_circuit` firing directly, the fixpoint is the same `false`,
+    // so the case does not depend on rule-application order.
     #[mz_ore::test]
     fn scalar_parity_slice6a() {
         use mz_expr::{MirScalarExpr, VariadicFunc};
@@ -998,7 +994,8 @@ mod tests {
 
         // --- Interactions: single-operand (and_single vs. short_circuit),
         // empty (and_empty; short_circuit does NOT fire, no zero operand),
-        // and duplicate-false (and_or_dedup, unported, must not diverge).
+        // and duplicate-false (and_dedup and and_short_circuit both apply
+        // and must agree).
         cases.push((and(vec![f()]), f(), vec![]));
         cases.push((and(vec![]), t(), vec![]));
         cases.push((and(vec![f(), f()]), f(), vec![]));
@@ -1075,11 +1072,9 @@ mod tests {
 
     // Differential parity harness (SP2b Slice 6c): extends slices 1-6a to the
     // declarative `and_drop_unit`/`or_drop_unit` and `and_dedup`/`or_dedup` DSL
-    // rules (`scalar.rewrite`), which mirror the imperative
-    // `and_or_drop_unit`/`and_or_dedup` (`scalar/rules.rs`, lines 270 and 181):
-    // a variadic AND/OR drops operands equal to the connective's unit (`true`
-    // for And, `false` for Or), and collapses operands that share a canonical
-    // e-class id to their first occurrence.
+    // rules (`scalar.rewrite`): a variadic AND/OR drops operands equal to the
+    // connective's unit (`true` for And, `false` for Or), and collapses
+    // operands that share a canonical e-class id to their first occurrence.
     //
     // Both rules are UNCONDITIONAL (no could_error gate), by design: dropping a
     // unit operand or a syntactic duplicate never changes the AND/OR's value or
@@ -1095,8 +1090,8 @@ mod tests {
     // the bool `Some(Some(unit))`), so it must never be dropped, only the true
     // (or false, for Or) operand is.
     //
-    // Same corpus-shaping constraint as slices 1-6a: every input keeps the old
-    // engine's still-unported rules (`null_prop_variadic`, `err_prop_variadic`,
+    // Same corpus-shaping constraint as slices 1-6a: every input keeps the
+    // ruleset's other rules (`null_prop_variadic`, `err_prop_variadic`,
     // `flatten_assoc`, `factor_and_or`, `absorb_and_or`) from seizing on
     // anything a real slice-6c case wouldn't also trigger. As in slice 6a,
     // `null_prop_variadic`/`err_prop_variadic` are moot regardless of shape
@@ -1356,8 +1351,7 @@ mod tests {
     }
 
     // Differential parity harness (SP2b Slice 6e): extends slices 1-6c to the
-    // declarative `absorb_and`/`absorb_or` DSL rules (`scalar.rewrite`), which
-    // mirror the imperative `absorb_and_or` (`scalar/rules.rs`, line 601): an
+    // declarative `absorb_and`/`absorb_or` DSL rules (`scalar.rewrite`): an
     // outer AND/OR operand whose dual-connective inner set is a proper
     // superset of another operand's inner set is redundant and is dropped,
     // provided every dropped extra has `could_error == false`. The retained
@@ -1365,9 +1359,9 @@ mod tests {
     // surfaces after absorption); only the DROPPED extras are.
     //
     // Same corpus-shaping constraint as slices 1-6c: every input keeps the
-    // old engine's still-unported rules (`null_prop_variadic`,
-    // `err_prop_variadic`, `flatten_assoc`, `factor_and_or`) from seizing on
-    // anything a real slice-6e case wouldn't also trigger.
+    // ruleset's other rules (`null_prop_variadic`, `err_prop_variadic`,
+    // `flatten_assoc`, `factor_and_or`) from seizing on anything a real
+    // slice-6e case wouldn't also trigger.
     //
     // The guard case (the correctness core of this rule) has its own
     // dedicated test, `absorb_guard_blocks_dropped_extra_error`, so the
@@ -1638,9 +1632,9 @@ mod tests {
     // on `func.propagates_nulls()`, which is FALSE for `And`/`Or`, so the rules
     // never fire on the boolean connectives. Their real domain is a
     // null-propagating variadic like `MakeTimestamp`, so the positive cases use
-    // it (mirroring `scalar/rules.rs::test_null_prop_variadic_*`). The And/Or
-    // cases are negative controls: neither engine 6b-folds them, they route
-    // through short-circuit / drop_unit / single, and parity must still hold.
+    // it. The And/Or cases are negative controls: they are never folded by
+    // these rules, they route through short-circuit / drop_unit / single
+    // instead, and the expected output must still hold.
     //
     // Error operands are kept well-typed for their position. `MakeTimestamp`
     // operands are Int64/Float64, so a bare `1 / 0` (Int64) is a valid year
@@ -1794,8 +1788,8 @@ mod tests {
             );
         }
 
-        // --- Cases where neither 6b rule fires; the call is left intact and
-        // both engines agree. Plain parity assertion only.
+        // --- Cases where neither 6b rule fires: the call is left intact.
+        // Plain assertion that the output is unchanged.
         let unchanged: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
             // Blocked: `1 / c0` can error, so null_prop is gated off, and no
             // operand is a LITERAL error, so err_prop cannot fire either.
@@ -2008,23 +2002,22 @@ mod tests {
 
     // Differential parity harness (SP2b Slice 6d): the associative-variadic
     // flattening rules (`flatten_{and,or,coalesce,greatest,least}`), one per
-    // `is_associative` variadic, porting `scalar/rules.rs::flatten_assoc`. A
-    // nested same-func operand is spliced up one level; saturation re-applies
-    // for deeper nesting. The rule is UNCONDITIONAL (no `could_error` gate):
-    // associativity is order-independent over each func's semilattice, error
-    // handling included, so `f(a, f(b, c))` and `f(a, b, c)` evaluate
-    // identically for all inputs.
+    // `is_associative` variadic. A nested same-func operand is spliced up one
+    // level; saturation re-applies for deeper nesting. The rule is
+    // UNCONDITIONAL (no `could_error` gate): associativity is order-independent
+    // over each func's semilattice, error handling included, so `f(a, f(b, c))`
+    // and `f(a, b, c)` evaluate identically for all inputs.
     //
     // CRITICAL new-domain proof: flatten fires on ALL five associative
     // variadics, not just And/Or. The Coalesce/Greatest/Least cases below are
-    // the beyond-boolean evidence, and the old-engine oracle flattens them too,
-    // so parity must hold there.
+    // the beyond-boolean evidence that the rule fires uniformly across all
+    // five variadics.
     //
-    // Same corpus-shaping discipline as slices 1-6e: every case must keep the
-    // old engine's one still-unported rule (`factor_and_or`) from seizing on
-    // anything a real flatten case wouldn't. `factor_and_or` needs two
-    // dual-connective sub-calls (the opposite connective from the outer)
-    // sharing a common factor, which none of these have.
+    // Same corpus-shaping discipline as slices 1-6e: every case must keep
+    // `factor_and_or` from seizing on anything a real flatten case wouldn't.
+    // `factor_and_or` needs two dual-connective sub-calls (the opposite
+    // connective from the outer) sharing a common factor, which none of these
+    // have.
     //
     // And/Or error operands are Bool-typed `(1 / 0) = (1 / 0)`, never a bare
     // Int64 `1 / 0`: flatten-then-collapse is exactly the slice-6c type trap.
@@ -2386,10 +2379,9 @@ mod tests {
     // factoring pulls the operands common to every inner And/Or branch out to the
     // dual connective, gated so a factored-away RESIDUAL that could error blocks
     // the rewrite (a common FACTOR that errors is fine, it stays in the result:
-    // the CLU-137 property). Each case runs both engines and asserts parity; the
-    // parity assertion IS the fork-5 (neutral-portability) proof, so any
-    // combined != oracle here is a canonical-form divergence and a slice-7
-    // blocker, not something to paper over.
+    // the CLU-137 property). Each case asserts the frozen expected output, so
+    // any mismatch here is a canonical-form regression and a slice-7 blocker,
+    // not something to paper over.
     //
     // Error operands are Bool-typed non-literal predicates (`1 / #c = k`), never a
     // bare Int64 `1 / #c`: a variadic collapse can expose an operand's class as
@@ -2534,14 +2526,14 @@ mod tests {
             assert_eq!(new, expected, "single-branch parity failed for {e:?}");
         }
 
-        // --- RESIDUAL-ERROR GATE (the correctness core, mirroring
-        // `scalar/rules.rs::test_factor_and_or_gate_blocks_erroring_residual`).
+        // --- RESIDUAL-ERROR GATE (the correctness core).
         // r = (1 / #1 = 5) errors at #1 == 0. Intersection {c0}, residuals {r}
         // and {c2}. r can error, so factoring must be blocked: the outer Or must
         // stay intact and the result must NOT be the unsound factored form. The
         // witness for why the gate is load-bearing (c0=null, #1=0, c2=true: the
-        // input errors, the unsound form would mask it to null) is proven in the
-        // standalone-engine test; here we assert the parity and the block.
+        // input errors, the unsound form would mask it to null) motivates the
+        // gate. This test only checks that factoring is blocked and the result
+        // matches the intact Or.
         {
             let r = int_lit(1)
                 .call_binary(c(1), div64())
@@ -2571,10 +2563,10 @@ mod tests {
             );
         }
 
-        // Erroring COMMON FACTOR still fires (the CLU-137 property, mirroring
-        // `test_factor_and_or_erroring_common_factor`). g = (1 / #0 = 0) errors at
-        // #0 == 0; the residuals c2, c3 are error-free, so the gate permits the
-        // rewrite and the erroring factor g is pulled out. Or-of-Ands -> outer And.
+        // Erroring COMMON FACTOR still fires (the CLU-137 property). g = (1 /
+        // #0 = 0) errors at #0 == 0. The residuals c2, c3 are error-free, so
+        // the gate permits the rewrite and the erroring factor g is pulled
+        // out. Or-of-Ands -> outer And.
         {
             let g = int_lit(1)
                 .call_binary(c(0), div64())

@@ -35,9 +35,9 @@ pub enum ScalarSym {
     If,
 }
 
-/// Language-owned state on the scalar e-graph: the relation's column types (read
-/// by the typed-literal rules) and the per-class analyses (maintained by the
-/// hooks). Both were fields of the old `ScalarEGraph` struct.
+/// Language-owned state on the scalar e-graph: the relation's column types
+/// (read by the typed-literal rules) and the per-class analyses (maintained by
+/// the hooks).
 #[derive(Debug, Default)]
 pub struct ScalarGraphData {
     /// Column types of the relation the expression is evaluated against, indexed
@@ -83,10 +83,10 @@ impl Language for ScalarLang {
     }
 
     fn on_union(data: &mut ScalarGraphData, winner: Id, loser: Id) {
-        // Fold loser into winner, mirroring the old ScalarEGraph::union: both
-        // classes must already carry an analysis (a missing one is a bug, not a
-        // recoverable state — the safe `could_error` default would be `true`,
-        // and silently inventing it would corrupt a rule guard).
+        // Fold loser into winner. Both classes must already carry an analysis
+        // (a missing one is a bug, not a recoverable state: the safe
+        // `could_error` default would be `true`, and silently inventing it
+        // would corrupt a rule guard).
         let lo = data
             .analysis
             .remove(&loser)
