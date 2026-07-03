@@ -27,7 +27,7 @@
 {{ $name := index $parts 0 | strings.TrimSpace }}
 {{ $sigBody := "" }}
 {{ if gt (len $parts) 1 }}
-  {{ $sigBody = printf "(%s" (index $parts 1) }}
+  {{ $sigBody = printf "(%s" (delimit (after 1 $parts) "(") }}
 {{ end }}
 <dl class="fn-entry">
 <dt class="fn-term {{if (not (isset $.Params 0))}}docsearch_l3{{end}}" id="{{ $name | urlize }}">
