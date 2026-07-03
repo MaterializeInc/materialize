@@ -1221,7 +1221,9 @@ p+p {
             }
         }
 
-        tr:last-child {
+        // tbody-scoped: a bare tr:last-child would also match the header row
+        // (it is the last child of its thead) and strip its divider.
+        tbody tr:last-child {
             > th,
             > td {
                 border-bottom: none;
@@ -1339,7 +1341,9 @@ p+p {
             }
         }
 
-        tr:last-child {
+        // tbody-scoped: a bare tr:last-child would also match the header row
+        // (it is the last child of its thead) and strip its divider.
+        tbody tr:last-child {
             > th,
             > td {
                 border-bottom: none;
