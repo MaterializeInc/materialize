@@ -220,9 +220,31 @@ opaque negateFunc : BinFunc → BinFunc
     three-valued-logic `BinaryFunc` evaluation, not represented here. -/
 opaque denoteBin : BinFunc → Bool → Bool → Bool
 
-/-- A scalar expression, bounded to what the slice-1 through slice-5 rules
+/-- The three non-Bool associative variadics (`Coalesce`, `Greatest`, `Least`).
+    Their results (first-non-null, max, min) live outside the two-valued `Bool`
+    model, so the model carries them only as an opaque tag on
+    `ScalarExpr.variadicOpaqueE`. `DecidableEq` drives the tag comparison in
+    `flattenVariadicOpaque`. -/
+inductive VFunc where
+  | coalesce : VFunc
+  | greatest : VFunc
+  | least : VFunc
+  deriving Inhabited, DecidableEq
+
+/-- Denote a non-Bool variadic call, opaquely. It is a `List Bool → Bool`
+    stand-in for a genuinely non-Bool value (first-non-null / max / min), which
+    the two-valued model cannot represent. Because it is opaque, an equation
+    between two *different* operand lists (as `flatten` produces: the flattened
+    list has a different length than the nested one) is not provable, so the
+    `flatten_coalesce`/`_greatest`/`_least` obligations are permanent `sorry`s.
+    NOTE: do not read a `flatten` proof over this as verifying the non-Bool
+    associativity. It cannot: the value domain is not modeled here. -/
+opaque denoteVariadicOpaque : VFunc → List Bool → Bool
+
+/-- A scalar expression, bounded to what the slice-1 through slice-6 rules
     need: an opaque leaf, logical negation, variadic conjunction/disjunction,
-    a conditional, a nullability test, and an opaque binary call. -/
+    a conditional, a nullability test, an opaque binary call, and an opaque
+    non-Bool variadic (`Coalesce`/`Greatest`/`Least`). -/
 inductive ScalarExpr where
   | var : Nat → ScalarExpr
   | notE : ScalarExpr → ScalarExpr
@@ -232,6 +254,7 @@ inductive ScalarExpr where
   | litB : Bool → ScalarExpr
   | isNullE : ScalarExpr → ScalarExpr
   | binaryE : BinFunc → ScalarExpr → ScalarExpr → ScalarExpr
+  | variadicOpaqueE : VFunc → List ScalarExpr → ScalarExpr
   deriving Inhabited
 
 mutual
@@ -266,6 +289,7 @@ def denoteS (env : Nat → Bool) : ScalarExpr → Bool
   | ScalarExpr.litB b => b
   | ScalarExpr.isNullE _ => false
   | ScalarExpr.binaryE f a b => denoteBin f (denoteS env a) (denoteS env b)
+  | ScalarExpr.variadicOpaqueE f es => denoteVariadicOpaque f (denoteSMap env es)
 /-- Explicit list-walker for `denoteS`'s `andE`/`orE` cases, structured so the
     termination checker can see `e` comes from the smaller list `es`. Marked
     `@[simp]` so the emitted `simp [denoteS]` proofs (e.g. `and_single`) unfold
@@ -273,6 +297,13 @@ def denoteS (env : Nat → Bool) : ScalarExpr → Bool
 @[simp] def denoteSFold (env : Nat → Bool) : List ScalarExpr → Bool → (Bool → Bool → Bool) → Bool
   | [], unit, _ => unit
   | e :: es, unit, op => op (denoteS env e) (denoteSFold env es unit op)
+/-- Explicit list-walker for `denoteS`'s `variadicOpaqueE` case, structured (like
+    `denoteSFold`) so the termination checker sees `e` comes from the smaller
+    list `es`. Maps each operand to its `Bool` denotation for the opaque
+    `denoteVariadicOpaque`. -/
+def denoteSMap (env : Nat → Bool) : List ScalarExpr → List Bool
+  | [] => []
+  | e :: es => denoteS env e :: denoteSMap env es
 end
 
 /-! ### Evidence for the AND/OR short-circuit rules
@@ -363,6 +394,7 @@ theorem denoteS_of_keepDropUnit_false (env : Nat → Bool) (unit : Bool)
   | ifE c t e => simp [keepDropUnit] at hx
   | isNullE e => simp [keepDropUnit] at hx
   | binaryE f a b => simp [keepDropUnit] at hx
+  | variadicOpaqueE f es => simp [keepDropUnit] at hx
 
 /-- Filtering out operands that all denote `true` leaves `List.all` unchanged:
     a `true` conjunct is the identity of the AND fold. -/
@@ -561,6 +593,7 @@ theorem denoteS_eq_any_innerOr (env : Nat → Bool) (x : ScalarExpr) :
   | litB b => simp [innerOr]
   | isNullE e => simp [innerOr]
   | binaryE f a b => simp [innerOr]
+  | variadicOpaqueE f es => simp [innerOr]
 
 /-- Dual of `denoteS_eq_any_innerOr`: every operand denotes the `And`-fold
     (`all`) of its `innerAnd` list. -/
@@ -575,6 +608,7 @@ theorem denoteS_eq_all_innerAnd (env : Nat → Bool) (x : ScalarExpr) :
   | litB b => simp [innerAnd]
   | isNullE e => simp [innerAnd]
   | binaryE f a b => simp [innerAnd]
+  | variadicOpaqueE f es => simp [innerAnd]
 
 /-- `innerOr`-subset lifts to implication: if every `innerOr` operand of `p` is
     an `innerOr` operand of `q`, then `p ⟹ q` (the `Or`-fold is monotone under
@@ -721,5 +755,91 @@ theorem denoteSFold_or_absorb (env : Nat → Bool) (xs : List ScalarExpr) :
   exact any_absorbInnerAnd env xs
 
 end AbsorbSubsumption
+
+/-! ### Evidence for the nested same-function flattening rules
+
+`flatten_and`/`flatten_or` (the DSL's `flatten(xs, and)` / `flatten(xs, or)`)
+splice a nested same-connective operand's arguments into the outer operand list:
+`And(.., And(inner..), ..) = And(.., inner.., ..)`, one level per fire. This
+preserves the `all`/`any` fold because an inner `andE ys` already denotes
+`ys.all` (resp. `orE ys` denotes `ys.any`), so replacing the operand with its
+arguments leaves the fold value unchanged. `flattenSameFuncAnd`/`_Or` reuse
+`innerAnd`/`innerOr` (an operand's inner argument list, or the singleton `[x]`
+for a non-matching operand), so one cons step splices exactly the nested
+operands and keeps every other operand as-is.
+
+NOTE: as with `dedupById`/`absorbInner*`, this is the SYNTACTIC flatten over the
+two-valued fold. Lean proves the associativity ALGEBRA; lifting it to the
+e-class-id based `rest_filters::rest_flatten` (with its circular-ref and
+operand-cap termination guards) rests on the Rust side plus the differential
+parity oracle, not on this layer. -/
+
+/-- Splice each `andE` operand's arguments into the list (one flatten level).
+    A non-`andE` operand is kept, since `innerAnd` maps it to the singleton
+    `[x]`. -/
+def flattenSameFuncAnd : List ScalarExpr → List ScalarExpr
+  | [] => []
+  | x :: xs => innerAnd x ++ flattenSameFuncAnd xs
+
+/-- Dual of `flattenSameFuncAnd`: splice each `orE` operand's arguments. -/
+def flattenSameFuncOr : List ScalarExpr → List ScalarExpr
+  | [] => []
+  | x :: xs => innerOr x ++ flattenSameFuncOr xs
+
+/-- Flattening preserves the `And`-fold's `all`: each spliced operand's inner
+    list has the same `all` as the operand's own denotation
+    (`denoteS_eq_all_innerAnd`), and `all` distributes over the splice's `++`. -/
+theorem all_flattenSameFuncAnd (env : Nat → Bool) (xs : List ScalarExpr) :
+    (flattenSameFuncAnd xs).all (fun x => denoteS env x)
+      = xs.all (fun x => denoteS env x) := by
+  induction xs with
+  | nil => rfl
+  | cons a as ih =>
+    simp only [flattenSameFuncAnd, List.all_append, List.all_cons]
+    rw [ih, ← denoteS_eq_all_innerAnd]
+
+/-- Dual of `all_flattenSameFuncAnd`: flattening preserves the `Or`-fold's
+    `any`. -/
+theorem any_flattenSameFuncOr (env : Nat → Bool) (xs : List ScalarExpr) :
+    (flattenSameFuncOr xs).any (fun x => denoteS env x)
+      = xs.any (fun x => denoteS env x) := by
+  induction xs with
+  | nil => rfl
+  | cons a as ih =>
+    simp only [flattenSameFuncOr, List.any_append, List.any_cons]
+    rw [ih, ← denoteS_eq_any_innerOr]
+
+/-- The fold-level flatten law the emitter's `flatten_and` theorem reduces to
+    after unfolding `denoteS`: the `And`-fold is invariant under
+    `flattenSameFuncAnd`. -/
+theorem denoteSFold_and_flatten (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env (flattenSameFuncAnd xs) true (· && ·)
+      = denoteSFold env xs true (· && ·) := by
+  rw [denoteSFold_and_eq_all, denoteSFold_and_eq_all]
+  exact all_flattenSameFuncAnd env xs
+
+/-- Dual for `flatten_or`: the `Or`-fold is invariant under
+    `flattenSameFuncOr`. -/
+theorem denoteSFold_or_flatten (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env (flattenSameFuncOr xs) false (· || ·)
+      = denoteSFold env xs false (· || ·) := by
+  rw [denoteSFold_or_eq_any, denoteSFold_or_eq_any]
+  exact any_flattenSameFuncOr env xs
+
+/-- Nested same-function flattening for the non-Bool variadics
+    (`Coalesce`/`Greatest`/`Least`), the `List`-level counterpart of
+    `rest_filters::rest_flatten` for those funcs. Splices the arguments of any
+    inner `variadicOpaqueE` operand tagged with the same `VFunc`, keeping every
+    other operand. Type-correct so the emitted `flatten_{coalesce,greatest,least}`
+    theorems are well-formed, but their denotation is opaque
+    (`denoteVariadicOpaque`), so those obligations are permanent `sorry`s: the
+    flattened and nested operand lists differ in length and an opaque function of
+    them is not provably equal. -/
+def flattenVariadicOpaque (f : VFunc) : List ScalarExpr → List ScalarExpr
+  | [] => []
+  | x :: xs =>
+    (match x with
+     | ScalarExpr.variadicOpaqueE g ys => if g = f then ys else [ScalarExpr.variadicOpaqueE g ys]
+     | y => [y]) ++ flattenVariadicOpaque f xs
 
 end MirRewrite

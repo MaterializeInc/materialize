@@ -547,10 +547,19 @@ fn translate_tmpl(t: &Tmpl, hole: &str) -> String {
 }
 
 /// The Lean constructor for a scalar variadic function, e.g. `Variadic[and]`.
+///
+/// `and`/`or` map to the two-valued `andE`/`orE`. The three non-Bool associative
+/// variadics (`coalesce`/`greatest`/`least`) map to the opaque `variadicOpaqueE`
+/// carrying a `VFunc` tag, since their (first-non-null/max/min) results are
+/// outside the two-valued model. Their rules' obligations are permanent
+/// `sorry`s (see `choose_proof`).
 fn scalar_variadic_ctor(func: &str) -> &'static str {
     match func {
         "and" => "ScalarExpr.andE",
         "or" => "ScalarExpr.orE",
+        "coalesce" => "ScalarExpr.variadicOpaqueE VFunc.coalesce",
+        "greatest" => "ScalarExpr.variadicOpaqueE VFunc.greatest",
+        "least" => "ScalarExpr.variadicOpaqueE VFunc.least",
         other => unimplemented!(
             "no Lean scalar translation for variadic func {other:?}; extend Semantics.lean's \
              ScalarExpr/denoteS and this match when a rule needs it"
@@ -603,14 +612,24 @@ fn tmpl_list_expr(list: &ListTmpl, hole: &str) -> String {
                     ),
                 },
                 // Nested same-func flattening, the `List`-level counterpart of
-                // `rest_filters::rest_flatten`. The Lean combinator and its
-                // fold-invariance lemma are not yet in Semantics.lean, so no rule
-                // may render a flatten splice to Lean. Extend Semantics.lean and
-                // this match before wiring a flatten `.rewrite` rule to a proof.
-                RestFilter::FlattenSameFunc { func } => unimplemented!(
-                    "no Lean flatten render for connective {func:?}; extend \
-                     Semantics.lean and this match when a rule needs it"
-                ),
+                // `rest_filters::rest_flatten`. `and`/`or` render the provable
+                // `flattenSameFuncAnd`/`_Or` (fold-invariance lemmas
+                // `denoteSFold_{and,or}_flatten` discharge the obligation in
+                // `choose_proof`). The three non-Bool funcs render the opaque
+                // `flattenVariadicOpaque`: type-correct so the theorem is
+                // well-formed, but `choose_proof` emits a permanent `sorry` for
+                // them (their value domain is outside the two-valued model).
+                RestFilter::FlattenSameFunc { func } => match func.as_str() {
+                    "and" => format!("(flattenSameFuncAnd {list})"),
+                    "or" => format!("(flattenSameFuncOr {list})"),
+                    "coalesce" => format!("(flattenVariadicOpaque VFunc.coalesce {list})"),
+                    "greatest" => format!("(flattenVariadicOpaque VFunc.greatest {list})"),
+                    "least" => format!("(flattenVariadicOpaque VFunc.least {list})"),
+                    other => unimplemented!(
+                        "no Lean flatten render for connective {other:?}; extend \
+                         Semantics.lean and this match when a rule needs it"
+                    ),
+                },
             },
         })
         .collect();
@@ -814,6 +833,17 @@ fn choose_proof(
             return "by\n    -- PERMANENT SORRY: negate table is Rust metadata\n    sorry"
                 .to_string();
         }
+        // `flatten_coalesce`/`_greatest`/`_least`: the operands are non-Bool
+        // variadics (`variadicOpaqueE`), whose value domain (first-non-null /
+        // max / min) is outside the two-valued model. Their denotation defers to
+        // the opaque `denoteVariadicOpaque`, and the flattened operand list
+        // differs in length from the nested one, so no equality is provable here.
+        // Keyed on the opaque LHS constructor, before the flatten/andE/orE arms
+        // below (which target the Bool `flatten_and`/`_or`).
+        if lhs.contains("ScalarExpr.variadicOpaqueE") {
+            return "by\n    -- PERMANENT SORRY: non-Bool variadic outside the two-valued model\n    sorry"
+                .to_string();
+        }
         // `isnull_fold`: the two-valued model denotes `isNullE` as `false`
         // unconditionally (see `Semantics.lean`'s `denoteS`), so the goal
         // reduces to `false = false` once `denoteS` is unfolded.
@@ -926,6 +956,26 @@ fn choose_proof(
                 "denoteSFold_and_absorb"
             } else {
                 "denoteSFold_or_absorb"
+            };
+            return format!(
+                "by\n    {intro}simp only [denoteS]; exact ({lemma} env {list_binder}).symm"
+            );
+        }
+        // `flatten_and`/`flatten_or`: the RHS is an `andE`/`orE` over the
+        // flattened operand list (`flattenSameFuncAnd`/`flattenSameFuncOr`).
+        // Keyed on that rendered RHS *shape*, not on the `FlattenApplies` guard
+        // (which the fold-invariance proof does not need: the associativity
+        // `denoteSFold_{and,or}_flatten` hold unconditionally over the fold).
+        // Placed before the generic De Morgan arm below, whose andE/orE match
+        // would otherwise swallow this LHS. `simp only [denoteS]` exposes the
+        // fold on both sides, then the matching `denoteSFold_*_flatten` lemma
+        // (Semantics.lean) closes it (`.symm`: the lemma orients flattened =
+        // original, the goal original = flattened).
+        if rhs.contains("flattenSameFunc") {
+            let lemma = if lhs.contains("ScalarExpr.andE") {
+                "denoteSFold_and_flatten"
+            } else {
+                "denoteSFold_or_flatten"
             };
             return format!(
                 "by\n    {intro}simp only [denoteS]; exact ({lemma} env {list_binder}).symm"

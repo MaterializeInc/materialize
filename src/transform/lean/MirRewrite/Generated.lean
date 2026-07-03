@@ -357,4 +357,32 @@ theorem rule_absorb_or :
     ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.orE xs) = denoteS env (ScalarExpr.orE ((absorbInnerAnd xs))) := by
     intro env xs; simp only [denoteS]; exact (denoteSFold_or_absorb env xs).symm
 
+-- And(.., And(inner..), ..) = And(.., inner.., ..) (associativity)
+theorem rule_flatten_and :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.andE xs) = denoteS env (ScalarExpr.andE ((flattenSameFuncAnd xs))) := by
+    intro env xs; simp only [denoteS]; exact (denoteSFold_and_flatten env xs).symm
+
+-- Or(.., Or(inner..), ..) = Or(.., inner.., ..) (associativity)
+theorem rule_flatten_or :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.orE xs) = denoteS env (ScalarExpr.orE ((flattenSameFuncOr xs))) := by
+    intro env xs; simp only [denoteS]; exact (denoteSFold_or_flatten env xs).symm
+
+-- Coalesce(.., Coalesce(inner..), ..) = Coalesce(.., inner.., ..) (associativity)
+theorem rule_flatten_coalesce :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.variadicOpaqueE VFunc.coalesce xs) = denoteS env (ScalarExpr.variadicOpaqueE VFunc.coalesce ((flattenVariadicOpaque VFunc.coalesce xs))) := by
+    -- PERMANENT SORRY: non-Bool variadic outside the two-valued model
+    sorry
+
+-- Greatest(.., Greatest(inner..), ..) = Greatest(.., inner.., ..) (associativity)
+theorem rule_flatten_greatest :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.variadicOpaqueE VFunc.greatest xs) = denoteS env (ScalarExpr.variadicOpaqueE VFunc.greatest ((flattenVariadicOpaque VFunc.greatest xs))) := by
+    -- PERMANENT SORRY: non-Bool variadic outside the two-valued model
+    sorry
+
+-- Least(.., Least(inner..), ..) = Least(.., inner.., ..) (associativity)
+theorem rule_flatten_least :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.variadicOpaqueE VFunc.least xs) = denoteS env (ScalarExpr.variadicOpaqueE VFunc.least ((flattenVariadicOpaque VFunc.least xs))) := by
+    -- PERMANENT SORRY: non-Bool variadic outside the two-valued model
+    sorry
+
 end MirRewrite
