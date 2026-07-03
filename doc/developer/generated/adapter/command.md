@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/command.rs
-revision: 7258dad07f
+revision: e926ec3a86
 ---
 
 # adapter::command

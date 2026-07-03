@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/statement.rs
-revision: fd5141bb8c
+revision: bb08b11a38
 ---
 
 # mz-sql-parser::ast::defs::statement
@@ -25,6 +25,12 @@ Each statement variant has a corresponding struct with its specific fields.
 `SelectStatement<T>`'s `AstDisplay` impl wraps the query in parentheses when `query.body.starts_with_show()` is true (i.e. the leftmost operand of the query body is a `Show` node), because a top-level leading `SHOW` is dispatched as `Statement::Show` and would terminate the statement before any following set operator or ORDER BY/LIMIT/OFFSET. The parser unwraps redundant outer parens during `parse_query_tail`, so wrapping round-trips.
 
 `CreateIndexStatement<T>`'s `AstDisplay` impl force-quotes an index name whose text is `in` (case-insensitive) to avoid ambiguity with the optional `IN CLUSTER` clause that follows the name position.
+
+`StatementKind` exposes two classification methods. `is_secret() -> bool` returns `true` for `CreateSecret` and `AlterSecret`, indicating the statement carries secret values that must never be persisted verbatim (e.g. in `mz_statement_execution_history`), even in error messages. `is_sensitive() -> bool` is a superset of `is_secret()` and additionally returns `true` for `Insert`, `Update`, and `Execute`.
+
+`CommentStatement<T>`'s `AstDisplay` impl redacts the comment body when `f.redacted()` is true, writing `'<REDACTED>'` in place of the escaped literal. `NULL` stays verbatim in all modes.
+
+`TableOptionName::PartitionBy` and `TableFromSourceOptionName::PartitionBy` return `true` from `redact_value()`, so scalar literals in `PARTITION BY` option values are redacted. Column-list identifiers (e.g. `PARTITION BY (a, b)`) remain verbatim because `WithOptionValue`'s per-type logic redacts only scalar literals.
 
 `RoleAttribute::Password`'s `AstDisplay` impl prints `PASSWORD NULL` for `Password(None)` and `PASSWORD '<REDACTED>'` for `Password(Some(_))`. The redacted form is a parseable placeholder string rather than a bare `PASSWORD` keyword (which would fail to reparse without a following `NULL` or string literal).
 
