@@ -1213,6 +1213,17 @@ impl CatalogState {
                             // which temporary items are a bit weird. So, here
                             // we are ...
                             catalog_item.set_conn_id(conn_id);
+                            // Deserializing replans the SQL, and the planner's
+                            // canonical printing can differ from `create_sql`,
+                            // for example when a feature flag changed how
+                            // references are printed since `create_sql` was
+                            // produced. Keep the exact input. A later op in the
+                            // same transaction retracts this item by
+                            // re-serializing it, and that retraction must
+                            // cancel byte-for-byte against this addition during
+                            // consolidation, else two retractions of the same
+                            // id survive and applying them panics.
+                            catalog_item.set_create_sql(create_sql);
                             retraction.item = catalog_item;
                         }
 
@@ -1242,6 +1253,9 @@ impl CatalogState {
                         // in here, but it's but one of the ways in which
                         // temporary items are a bit weird. So, here we are ...
                         catalog_item.set_conn_id(conn_id);
+                        // Keep the exact input create_sql, not the replanned
+                        // printing. See the comment on the reparse above.
+                        catalog_item.set_create_sql(create_sql);
 
                         CatalogEntry {
                             item: catalog_item,

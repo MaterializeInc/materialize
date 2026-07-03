@@ -903,3 +903,51 @@ query I
 SELECT count(*) FROM sql400_tv
 ----
 0
+
+# Regression test for ALTER SCHEMA SWAP panicking when a temporary object
+# depends on the swapped schema and catalog state changed how the planner
+# prints references since the temp object was created. The swap renames the
+# same schema twice in one transaction. The first rename's addition carries a
+# syntactic rewrite of the stored create_sql, while the second rename's
+# retraction used to re-serialize the in-memory item, whose create_sql had been
+# replaced by the replanned printing when the addition was applied. With
+# enable_alter_table_add_column turned on after the view was created,
+# replanning adds VERSION pinning to the view's table reference, so the
+# intermediate addition and retraction no longer cancelled during
+# consolidation, and the two surviving retractions of the same id panicked the
+# coordinator with "catalog out of sync, missing id".
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = false
+----
+COMPLETE 0
+
+statement ok
+CREATE SCHEMA swapflag_a
+
+statement ok
+CREATE SCHEMA swapflag_b
+
+statement ok
+CREATE TABLE swapflag_a.t (a int)
+
+statement ok
+CREATE TEMPORARY VIEW swapflag_tv AS SELECT a FROM swapflag_a.t
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = true
+----
+COMPLETE 0
+
+statement ok
+ALTER SCHEMA swapflag_a SWAP WITH swapflag_b
+
+query I
+SELECT count(*) FROM swapflag_tv
+----
+0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_alter_table_add_column
+----
+COMPLETE 0
