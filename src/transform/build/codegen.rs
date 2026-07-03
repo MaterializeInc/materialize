@@ -176,6 +176,9 @@ fn variadic_func_pat(func: &str) -> String {
     match func {
         "and" => "mz_expr::VariadicFunc::And(_)".to_string(),
         "or" => "mz_expr::VariadicFunc::Or(_)".to_string(),
+        "coalesce" => "mz_expr::VariadicFunc::Coalesce(_)".to_string(),
+        "greatest" => "mz_expr::VariadicFunc::Greatest(_)".to_string(),
+        "least" => "mz_expr::VariadicFunc::Least(_)".to_string(),
         other => panic!("unknown scalar variadic func keyword: {other}"),
     }
 }

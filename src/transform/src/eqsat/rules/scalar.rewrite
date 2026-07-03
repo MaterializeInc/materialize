@@ -190,3 +190,17 @@ rule absorb_or {
     doc "Or(.., a, .., And(.., a, ..)) = Or(.., a, ..), dropped extras error-free"
     Variadic[or](xs...) => Variadic[or](absorb(xs, and)) where absorb_applies(xs, and)
 }
+
+# Nested same-op flattening: a variadic operand that is itself the same
+# variadic op is inlined into the outer operand list. Mirrors
+# scalar/rules.rs::flatten_assoc for all 5 associative variadics.
+rule flatten_and { doc "And(.., And(inner..), ..) = And(.., inner.., ..) (associativity)"
+    Variadic[and](xs...) => Variadic[and](flatten(xs, and)) where flatten_applies(xs, and) }
+rule flatten_or  { doc "Or(.., Or(inner..), ..) = Or(.., inner.., ..) (associativity)"
+    Variadic[or](xs...)  => Variadic[or](flatten(xs, or))   where flatten_applies(xs, or) }
+rule flatten_coalesce { doc "Coalesce(.., Coalesce(inner..), ..) = Coalesce(.., inner.., ..) (associativity)"
+    Variadic[coalesce](xs...) => Variadic[coalesce](flatten(xs, coalesce)) where flatten_applies(xs, coalesce) }
+rule flatten_greatest { doc "Greatest(.., Greatest(inner..), ..) = Greatest(.., inner.., ..) (associativity)"
+    Variadic[greatest](xs...) => Variadic[greatest](flatten(xs, greatest)) where flatten_applies(xs, greatest) }
+rule flatten_least { doc "Least(.., Least(inner..), ..) = Least(.., inner.., ..) (associativity)"
+    Variadic[least](xs...) => Variadic[least](flatten(xs, least)) where flatten_applies(xs, least) }
