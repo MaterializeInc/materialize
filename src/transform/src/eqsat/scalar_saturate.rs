@@ -227,7 +227,7 @@ mod tests {
     // adjusting the assertion.
 
     /// Committed corpus fixture (see the file for the format and slice-1 scope).
-    const CORPUS: &str = include_str!("../../tests/testdata/eqsat_scalar_corpus");
+    const CORPUS: &str = include_str!("../../tests/eqsat_scalar_corpus");
 
     #[mz_ore::test]
     fn scalar_parity_not_not() {
