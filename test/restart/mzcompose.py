@@ -634,9 +634,17 @@ def workflow_drop_materialize_database(c: Composition) -> None:
     # Verify that materialize hasn't blown up
     c.sql("SELECT 1")
 
-    # Restore for next tests
+    # Restore for next tests. The recreated database is owned by mz_system, so
+    # the materialize role must be re-granted the database-level privileges
+    # (notably CREATE, needed to create schemas) and the public schema
+    # privileges it holds by default.
     c.sql(
         "CREATE DATABASE materialize",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        "GRANT ALL PRIVILEGES ON DATABASE materialize TO materialize",
         port=6877,
         user="mz_system",
     )
@@ -983,6 +991,94 @@ def workflow_user_id_no_reuse_after_restart(c: Composition) -> None:
     c.sql("DROP TABLE idreuse_t3")
     c.sql("DROP TABLE idreuse_t2")
     c.sql("DROP TABLE idreuse_t1")
+
+
+def workflow_rename_schema_types_functions(c: Composition) -> None:
+    """Verify that ALTER SCHEMA RENAME updates references to a renamed schema's types.
+
+    A type is only ever referenced by a schema-qualified name in "data type"
+    position: a cast, a table column type, or a nested element type. Every kind
+    of dependent object (view, materialized view, table, another type) reaches
+    the type the same way, so all of them must have their create_sql rewritten
+    on rename.
+
+    Regression test for three related bugs:
+
+    1. transact.rs RenameSchema only iterated schema.items, missing schema.types
+       (and schema.functions). The renamed schema's own types kept stale
+       create_sql, which fails to re-parse on restart (the original panic).
+
+    2. transform.rs CreateSqlRewriteSchema never descended into data types, so
+       references to a renamed schema's types inside dependents' create_sql
+       (casts, column types, element types) were left pointing at the old name.
+
+    3. consistency.rs check_items() only iterated schema.items, so a type with
+       invalid create_sql after a rename was never flagged by the checker.
+
+    The persisted create_sql is only re-parsed on boot, so the corruption is
+    invisible until a restart, after which the stale references fail to resolve.
+    """
+
+    c.up("materialized")
+
+    # Create a schema with a custom type, then exercise every object kind that
+    # can reference that type by a schema-qualified name.
+    c.sql("CREATE SCHEMA s1")
+    c.sql("CREATE TYPE s1.mytype AS LIST (ELEMENT TYPE = int4)")
+    # View: references the type in a cast.
+    c.sql("CREATE VIEW public.v_uses_type AS SELECT NULL::s1.mytype")
+    # Materialized view: same, but persisted as a separate object kind.
+    c.sql("CREATE MATERIALIZED VIEW public.mv_uses_type AS SELECT NULL::s1.mytype")
+    # Table: references the type as a column type.
+    c.sql("CREATE TABLE public.t_uses_type (a s1.mytype)")
+    # Type-in-type: an outer type in another schema whose element type is the
+    # renamed schema's type (nested data type position).
+    c.sql("CREATE TYPE public.outer_type AS LIST (ELEMENT TYPE = s1.mytype)")
+
+    # Sanity: everything works before rename.
+    assert c.sql_query("SELECT count(*) FROM public.v_uses_type")[0][0] == 1
+    assert c.sql_query("SELECT count(*) FROM public.mv_uses_type")[0][0] == 1
+    assert c.sql_query("SELECT count(*) FROM public.t_uses_type")[0][0] == 0
+
+    # Rename the schema.
+    c.sql("ALTER SCHEMA s1 RENAME TO s2")
+
+    # Restart Materialize. The persisted create_sql is re-parsed on boot, so any
+    # dependent whose create_sql still references the old schema name "s1" (which
+    # no longer exists) fails to resolve here.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # After restart, every dependent must still be queryable.
+    assert c.sql_query("SELECT count(*) FROM public.v_uses_type")[0][0] == 1
+    assert c.sql_query("SELECT count(*) FROM public.mv_uses_type")[0][0] == 1
+    assert c.sql_query("SELECT count(*) FROM public.t_uses_type")[0][0] == 0
+
+    # Every object's create_sql must reference the new schema name, never the old
+    # one. This covers the type itself and each kind of dependent.
+    checks = [
+        ("mz_types", "mytype"),
+        ("mz_types", "outer_type"),
+        ("mz_views", "v_uses_type"),
+        ("mz_materialized_views", "mv_uses_type"),
+        ("mz_tables", "t_uses_type"),
+    ]
+    for catalog_table, name in checks:
+        result = c.sql_query(
+            f"SELECT create_sql FROM {catalog_table} WHERE name = '{name}'"
+        )
+        create_sql = result[0][0]
+        assert (
+            '"s2"' in create_sql and '"s1"' not in create_sql
+        ), f"{name} create_sql still references old schema after rename: {create_sql}"
+
+    # Cleanup.
+    c.sql("DROP TABLE public.t_uses_type")
+    c.sql("DROP MATERIALIZED VIEW public.mv_uses_type")
+    c.sql("DROP VIEW public.v_uses_type")
+    c.sql("DROP TYPE public.outer_type")
+    c.sql("DROP TYPE s2.mytype")
+    c.sql("DROP SCHEMA s2")
 
 
 def workflow_default(c: Composition) -> None:
