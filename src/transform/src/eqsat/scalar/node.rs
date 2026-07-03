@@ -15,7 +15,7 @@ use mz_expr::{BinaryFunc, EvalError, UnaryFunc, UnmaterializableFunc, VariadicFu
 use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::{ReprColumnType, Row};
 
-use crate::eqsat::scalar::egraph::Id;
+use crate::eqsat::core::Id;
 
 /// A node in the scalar e-graph: a scalar operator whose operands are e-class
 /// ids. Mirrors the variants of [`mz_expr::MirScalarExpr`].

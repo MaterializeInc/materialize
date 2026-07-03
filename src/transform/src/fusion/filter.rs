@@ -208,7 +208,9 @@ mod tests {
     /// is what downstream temporal-filter detection requires (CLU-137).
     ///
     /// This is the through-the-transform companion to the e-graph-level
-    /// `eqsat::scalar::rules::tests::test_clu137_temporal_factors_to_top_level`.
+    /// CLU-137 coverage in
+    /// `eqsat::scalar_saturate::tests::scalar_parity_slice6f`'s
+    /// erroring-common-factor case.
     #[mz_ore::test]
     fn clu137_temporal_factors_to_top_level_with_flag() {
         let mut relation = clu137_filter();

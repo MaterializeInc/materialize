@@ -211,18 +211,20 @@ mod tests {
         assert_eq!(canonicalize_combined(&e, &[]), x);
     }
 
-    // Differential parity harness (SP2b Slice 1): asserts the combined path
-    // equals the old standalone scalar engine (`crate::eqsat::scalar::canonicalize`)
-    // on the expressions the ported rules cover. Both entry points are
-    // `pub(crate)`, so this lives in-crate rather than as an external
-    // integration test; the committed corpus fixture is read via `include_str!`
-    // relative to this file.
+    // Frozen differential-parity snapshot (SP2b Slice 1): asserts the combined
+    // path produces the documented rewrite for the expressions the ported
+    // rules cover. `canonicalize_combined` is `pub(crate)`, so this lives
+    // in-crate rather than as an external integration test; the committed
+    // corpus fixture is read via `include_str!` relative to this file. These
+    // snapshots were originally differential (checked against a standalone
+    // scalar engine, since deleted once the combined path became production);
+    // the frozen `expected` values are that oracle's last-agreed output.
     //
     // Slice 1 ports only `not_not`, so the corpus is restricted to
     // `not(not(...))`-shaped expressions over a bare column: no literals, no
-    // type context, nothing that would trigger one of the old engine's other
-    // 20 rules the new path lacks. A failure here is the slice-1 go/no-go
-    // trigger, not something to paper over by adjusting the assertion.
+    // type context, nothing that would trigger an unported rule. A failure
+    // here is the slice-1 go/no-go trigger, not something to paper over by
+    // adjusting the assertion.
 
     /// Committed corpus fixture (see the file for the format and slice-1 scope).
     const CORPUS: &str = include_str!("../../tests/testdata/eqsat_scalar_corpus");
@@ -231,11 +233,16 @@ mod tests {
     fn scalar_parity_not_not() {
         let not = |e: MirScalarExpr| e.call_unary(UnaryFunc::Not(mz_expr::func::Not));
         let x = MirScalarExpr::column(0);
-        let cases = vec![not(not(x.clone())), not(not(not(x.clone()))), x.clone()];
-        for e in cases {
+        // (input, expected): a double negation collapses, a triple leaves one
+        // NOT standing, and a bare column is already the identity.
+        let cases = vec![
+            (not(not(x.clone())), x.clone()),
+            (not(not(not(x.clone()))), not(x.clone())),
+            (x.clone(), x.clone()),
+        ];
+        for (e, expected) in cases {
             let new = canonicalize_combined(&e, &[]);
-            let old = crate::eqsat::scalar::canonicalize(&e, &[]);
-            assert_eq!(new, old, "parity failed for {e:?}");
+            assert_eq!(new, expected, "parity failed for {e:?}");
         }
     }
 
@@ -266,28 +273,33 @@ mod tests {
         };
         let c = MirScalarExpr::column;
 
+        // (input, expected). The 3-and/4-or De Morgan candidates are frozen
+        // UNCHANGED: the tree-size extractor keeps the original form because
+        // the de-Morganed alternative (one NOT per operand) always costs more
+        // when there is no further not_not/absorb to shrink it back down.
+        let not_and3 = not(and(vec![c(0), c(1), c(2)]));
+        let not_or4 = not(or(vec![c(0), c(1), c(2), c(3)]));
         let cases = vec![
-            and(vec![c(0)]),
-            or(vec![c(0)]),
-            not(and(vec![c(0), c(1), c(2)])),
-            not(or(vec![c(0), c(1), c(2), c(3)])),
-            not(and(vec![c(0)])),
+            (and(vec![c(0)]), c(0)),
+            (or(vec![c(0)]), c(0)),
+            (not_and3.clone(), not_and3),
+            (not_or4.clone(), not_or4),
+            (not(and(vec![c(0)])), not(c(0))),
             // Multi-operand de Morgan that OBSERVABLY changes the extracted
             // output: Not(And(Not #0, Not #1)) de-Morgans to
             // Or(Not Not #0, Not Not #1), then not_not collapses to Or(#0, #1)
             // (cost 3), beating the original (cost 6), so extraction picks the
             // pushed form. Uses only ported rules (not_demorgan_and, not_not)
             // over distinct bare columns.
-            not(and(vec![not(c(0)), not(c(1))])),
+            (not(and(vec![not(c(0)), not(c(1))])), or(vec![c(0), c(1)])),
             // slice-1 shapes still hold under the grown rule set:
-            not(not(c(0))),
+            (not(not(c(0))), c(0)),
         ];
-        for e in cases {
+        for (e, expected) in cases {
             // Boolean, type-agnostic rules: `&[]` col_types is sufficient (the
             // rules ported here never read a column type).
             let new = canonicalize_combined(&e, &[]);
-            let old = crate::eqsat::scalar::canonicalize(&e, &[]);
-            assert_eq!(new, old, "parity failed for {e:?}");
+            assert_eq!(new, expected, "parity failed for {e:?}");
         }
     }
 
@@ -366,30 +378,39 @@ mod tests {
             );
         let same_branches_errcond = if_expr(div_cond, c(2), c(2));
 
-        let cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
-            (true_fold, vec![bool_ct(), bool_ct()]),
-            (false_fold, vec![bool_ct(), bool_ct()]),
-            (null_fold, vec![bool_ct(), bool_ct()]),
-            (same_branches_ok, vec![bool_ct(), bool_ct()]),
-            (same_branches_errcond, vec![int_ct(), int_ct(), int_ct()]),
+        // (input, expected, col_types). same_branches_errcond is frozen
+        // UNCHANGED: the could_error gate blocks if_same_branches so the
+        // negative control must survive intact.
+        let cases: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (true_fold, c(0), vec![bool_ct(), bool_ct()]),
+            (false_fold, c(1), vec![bool_ct(), bool_ct()]),
+            (null_fold, c(1), vec![bool_ct(), bool_ct()]),
+            (same_branches_ok, c(1), vec![bool_ct(), bool_ct()]),
+            (
+                same_branches_errcond.clone(),
+                same_branches_errcond,
+                vec![int_ct(), int_ct(), int_ct()],
+            ),
         ];
-        for (e, ct) in cases {
+        for (e, expected, ct) in cases {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_eq!(
+                new, expected,
+                "parity failed for {e:?} with col_types {ct:?}"
+            );
         }
 
         // Regression sampling of slice-1/2 shapes: parity still holds for the
         // not_not/variadic rules under the grown If rule set.
+        let not_and3 = not(and(vec![c(0), c(1), c(2)]));
         let regression = vec![
-            not(not(c(0))),
-            and(vec![c(0)]),
-            not(and(vec![c(0), c(1), c(2)])),
+            (not(not(c(0))), c(0)),
+            (and(vec![c(0)]), c(0)),
+            (not_and3.clone(), not_and3),
         ];
-        for e in regression {
+        for (e, expected) in regression {
             let new = canonicalize_combined(&e, &[]);
-            let old = crate::eqsat::scalar::canonicalize(&e, &[]);
-            assert_eq!(new, old, "regression parity failed for {e:?}");
+            assert_eq!(new, expected, "regression parity failed for {e:?}");
         }
     }
 
@@ -429,9 +450,18 @@ mod tests {
     // safe to use directly: both engines fold it the same way.
     #[mz_ore::test]
     fn scalar_parity_const_eval() {
-        use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc, VariadicFunc};
+        use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, VariadicFunc};
         use mz_repr::{Datum, ReprColumnType, ReprScalarType};
 
+        let err_lit = |err: EvalError, typ: ReprScalarType, nullable: bool| {
+            MirScalarExpr::Literal(
+                Err(err),
+                ReprColumnType {
+                    scalar_type: typ,
+                    nullable,
+                },
+            )
+        };
         let c = MirScalarExpr::column;
         let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
         let add64 = || BinaryFunc::AddInt64(mz_expr::func::AddInt64);
@@ -475,35 +505,54 @@ mod tests {
         let and_empty = and(vec![]);
         let or_empty = or(vec![]);
 
-        let cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
-            (add_lit, vec![]),
-            (not_true, vec![]),
-            (if_lit, vec![]),
-            (div_by_zero, vec![]),
-            (overflow, vec![]),
-            (nested_err, vec![]),
-            (partial, vec![int_ct()]),
-            (and_empty, vec![]),
-            (or_empty, vec![]),
+        // (input, expected, col_types). `partial` is frozen UNCHANGED: the
+        // Column child blocks const_fold.
+        let cases: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (add_lit, int_lit(3), vec![]),
+            (not_true, MirScalarExpr::literal_false(), vec![]),
+            (if_lit, int_lit(1), vec![]),
+            (
+                div_by_zero,
+                err_lit(EvalError::DivisionByZero, ReprScalarType::Int64, false),
+                vec![],
+            ),
+            (
+                overflow,
+                err_lit(
+                    EvalError::NumericFieldOverflow,
+                    ReprScalarType::Int64,
+                    false,
+                ),
+                vec![],
+            ),
+            (
+                nested_err,
+                err_lit(EvalError::DivisionByZero, ReprScalarType::Int64, false),
+                vec![],
+            ),
+            (partial.clone(), partial, vec![int_ct()]),
+            (and_empty, MirScalarExpr::literal_true(), vec![]),
+            (or_empty, MirScalarExpr::literal_false(), vec![]),
         ];
-        for (e, ct) in cases {
+        for (e, expected, ct) in cases {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_eq!(
+                new, expected,
+                "parity failed for {e:?} with col_types {ct:?}"
+            );
         }
 
         // Regression sampling of slice-1/2/3 shapes under the grown rule set,
         // including the and_single/and_empty interaction: And(#0) must still
         // collapse to #0 via and_single, not and_empty.
-        let regression: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
-            (not(not(c(0))), vec![bool_ct()]),
-            (and(vec![c(0)]), vec![bool_ct()]),
-            (if_expr(c(0), c(1), c(1)), vec![bool_ct(), bool_ct()]),
+        let regression: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (not(not(c(0))), c(0), vec![bool_ct()]),
+            (and(vec![c(0)]), c(0), vec![bool_ct()]),
+            (if_expr(c(0), c(1), c(1)), c(1), vec![bool_ct(), bool_ct()]),
         ];
-        for (e, ct) in regression {
+        for (e, expected, ct) in regression {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "regression parity failed for {e:?}");
+            assert_eq!(new, expected, "regression parity failed for {e:?}");
         }
 
         // and_empty and and_single must not fight: lower `And(#0)` directly
@@ -582,7 +631,7 @@ mod tests {
     // is a real slice-5 divergence, not a corpus artifact.
     #[mz_ore::test]
     fn scalar_parity_slice5() {
-        use mz_expr::{BinaryFunc, MirScalarExpr, UnaryFunc};
+        use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc};
         use mz_repr::ReprScalarType;
 
         let c = MirScalarExpr::column;
@@ -590,6 +639,7 @@ mod tests {
         let int_lit =
             |v: i64| MirScalarExpr::literal_ok(mz_repr::Datum::Int64(v), ReprScalarType::Int64);
         let null_int = || MirScalarExpr::literal_null(ReprScalarType::Int64);
+        let null_bool = || MirScalarExpr::literal_null(ReprScalarType::Bool);
         let div64 = || BinaryFunc::DivInt64(mz_expr::func::DivInt64);
         let add64 = || BinaryFunc::AddInt64(mz_expr::func::AddInt64);
         let if_expr =
@@ -599,8 +649,17 @@ mod tests {
                 els: Box::new(els),
             };
         let int_ct = |nullable: bool| ReprScalarType::Int64.nullable(nullable);
+        let err_lit = |err: EvalError, typ: ReprScalarType, nullable: bool| {
+            MirScalarExpr::Literal(
+                Err(err),
+                ReprColumnType {
+                    scalar_type: typ,
+                    nullable,
+                },
+            )
+        };
 
-        let mut cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
+        let mut cases: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
 
         // --- if_err_cond: a literal-error condition (`1 / 0`, folded by the
         // already-ported const_fold) folds the whole If to that error. The
@@ -608,7 +667,11 @@ mod tests {
         // nullable Int64), so the result exercises the `then.typ.union(els.typ)`
         // merge path rather than a same-type trivial union.
         let err_cond_if = if_expr(int_lit(1).call_binary(int_lit(0), div64()), c(0), c(1));
-        cases.push((err_cond_if, vec![int_ct(false), int_ct(true)]));
+        cases.push((
+            err_cond_if,
+            err_lit(EvalError::DivisionByZero, ReprScalarType::Int64, true),
+            vec![int_ct(false), int_ct(true)],
+        ));
 
         // --- null_prop_binary: AddInt64(null, #0) with a bare-column (never
         // could_error) other operand folds to null. AddInt64(null, #0 / #1)
@@ -617,55 +680,100 @@ mod tests {
         // the gate blocks the rewrite in both engines (parity on the
         // "no fold" outcome, not just on folds).
         let null_prop_ok = null_int().call_binary(c(0), add64());
-        cases.push((null_prop_ok, vec![int_ct(false)]));
+        cases.push((null_prop_ok, null_int(), vec![int_ct(false)]));
 
         let erroring_div = c(0).call_binary(c(1), div64());
         let null_prop_blocked = null_int().call_binary(erroring_div, add64());
-        cases.push((null_prop_blocked, vec![int_ct(false), int_ct(false)]));
+        cases.push((
+            null_prop_blocked.clone(),
+            null_prop_blocked,
+            vec![int_ct(false), int_ct(false)],
+        ));
 
         // --- err_prop_binary: (1 / 0) + #0, other operand a bare column,
         // folds to the division's error. (1 / 0) + (#0 / #1) does NOT fold:
         // the other operand can also error, so the gate blocks substituting
-        // one error for another that eval might surface first.
+        // one error for another that eval might surface first. Its OWN `1 /
+        // 0` operand is still independently folded by const_fold though, so
+        // the frozen form is `err_lit + (#0 / #1)`, not the raw input.
         let err_expr = int_lit(1).call_binary(int_lit(0), div64());
         let err_prop_ok = err_expr.clone().call_binary(c(0), add64());
-        cases.push((err_prop_ok, vec![int_ct(false)]));
+        cases.push((
+            err_prop_ok,
+            err_lit(EvalError::DivisionByZero, ReprScalarType::Int64, false),
+            vec![int_ct(false)],
+        ));
 
         let erroring_div2 = c(0).call_binary(c(1), div64());
-        let err_prop_blocked = err_expr.call_binary(erroring_div2, add64());
-        cases.push((err_prop_blocked, vec![int_ct(false), int_ct(false)]));
+        let err_prop_blocked = err_expr.call_binary(erroring_div2.clone(), add64());
+        cases.push((
+            err_prop_blocked,
+            err_lit(EvalError::DivisionByZero, ReprScalarType::Int64, false)
+                .call_binary(erroring_div2, add64()),
+            vec![int_ct(false), int_ct(false)],
+        ));
 
         // --- isnull_fold: IsNull(#0) folds to false when #0 is non-nullable
         // (and error-free, trivially true for a bare column). The nullable
         // control, same shape, must not fold.
         let isnull_expr = c(0).call_unary(UnaryFunc::IsNull(mz_expr::func::IsNull));
-        cases.push((isnull_expr.clone(), vec![int_ct(false)]));
-        cases.push((isnull_expr, vec![int_ct(true)]));
+        cases.push((
+            isnull_expr.clone(),
+            MirScalarExpr::literal_false(),
+            vec![int_ct(false)],
+        ));
+        cases.push((isnull_expr.clone(), isnull_expr, vec![int_ct(true)]));
 
         // --- not_binary_negate (CRUX 2): every BinaryFunc pair negate()
-        // returns Some for, crossed with three null-operand shapes. Eq/NotEq
+        // returns Some for, crossed with three null-operand shapes, paired
+        // with its dual so the expected rewrite target is explicit. Eq/NotEq
         // are propagates_nulls comparisons over ExcludeNull<Datum> inputs (so
         // is Lt/Gte/Lte/Gt), so a literal-null operand also engages
-        // null_prop_binary/const_fold in both engines; that interaction is
-        // deliberate; parity must hold whichever rule combination wins the
-        // race to the fixpoint.
-        let negation_pairs: Vec<BinaryFunc> = vec![
-            BinaryFunc::Eq(mz_expr::func::Eq),
-            BinaryFunc::NotEq(mz_expr::func::NotEq),
-            BinaryFunc::Lt(mz_expr::func::Lt),
-            BinaryFunc::Gte(mz_expr::func::Gte),
-            BinaryFunc::Lte(mz_expr::func::Lte),
-            BinaryFunc::Gt(mz_expr::func::Gt),
+        // null_prop_binary/const_fold in both engines: both null-operand
+        // shapes fold to a typed null regardless of which function is under
+        // test, not to the dual comparison; that interaction is deliberate,
+        // parity must hold whichever rule combination wins the race to the
+        // fixpoint.
+        let negation_pairs: Vec<(BinaryFunc, BinaryFunc)> = vec![
+            (
+                BinaryFunc::Eq(mz_expr::func::Eq),
+                BinaryFunc::NotEq(mz_expr::func::NotEq),
+            ),
+            (
+                BinaryFunc::NotEq(mz_expr::func::NotEq),
+                BinaryFunc::Eq(mz_expr::func::Eq),
+            ),
+            (
+                BinaryFunc::Lt(mz_expr::func::Lt),
+                BinaryFunc::Gte(mz_expr::func::Gte),
+            ),
+            (
+                BinaryFunc::Gte(mz_expr::func::Gte),
+                BinaryFunc::Lt(mz_expr::func::Lt),
+            ),
+            (
+                BinaryFunc::Lte(mz_expr::func::Lte),
+                BinaryFunc::Gt(mz_expr::func::Gt),
+            ),
+            (
+                BinaryFunc::Gt(mz_expr::func::Gt),
+                BinaryFunc::Lte(mz_expr::func::Lte),
+            ),
         ];
-        for func in &negation_pairs {
+        for (func, dual) in &negation_pairs {
             let both_cols = not(c(0).call_binary(c(1), func.clone()));
-            cases.push((both_cols, vec![int_ct(false), int_ct(false)]));
+            let both_cols_expected = c(0).call_binary(c(1), dual.clone());
+            cases.push((
+                both_cols,
+                both_cols_expected,
+                vec![int_ct(false), int_ct(false)],
+            ));
 
             let one_null = not(c(0).call_binary(null_int(), func.clone()));
-            cases.push((one_null, vec![int_ct(false)]));
+            cases.push((one_null, null_bool(), vec![int_ct(false)]));
 
             let both_null = not(null_int().call_binary(null_int(), func.clone()));
-            cases.push((both_null, vec![]));
+            cases.push((both_null, null_bool(), vec![]));
         }
 
         // Nested double-negation over a negatable comparison: not_not (slice
@@ -675,7 +783,11 @@ mod tests {
         let nested_not_not = not(not(
             c(0).call_binary(c(1), BinaryFunc::Lt(mz_expr::func::Lt))
         ));
-        cases.push((nested_not_not, vec![int_ct(false), int_ct(false)]));
+        cases.push((
+            nested_not_not,
+            c(0).call_binary(c(1), BinaryFunc::Lt(mz_expr::func::Lt)),
+            vec![int_ct(false), int_ct(false)],
+        ));
 
         // Not(f(a, <literal error>)): the error operand is itself folded from
         // `1 / 0` by const_fold, then err_prop_binary collapses the
@@ -684,7 +796,11 @@ mod tests {
         // union mismatched classes.
         let err_operand = int_lit(1).call_binary(int_lit(0), div64());
         let not_f_err = not(c(0).call_binary(err_operand, BinaryFunc::Eq(mz_expr::func::Eq)));
-        cases.push((not_f_err, vec![int_ct(false)]));
+        cases.push((
+            not_f_err,
+            err_lit(EvalError::DivisionByZero, ReprScalarType::Bool, false),
+            vec![int_ct(false)],
+        ));
 
         // --- Interaction: if_err_cond combined with slice-4 const_fold and
         // slice-3 if_true on the same If. The inner If's literal-true
@@ -697,18 +813,28 @@ mod tests {
             int_lit(2),
         );
         let if_interaction = if_expr(inner_if, c(0), c(1));
-        cases.push((if_interaction, vec![int_ct(false), int_ct(false)]));
+        cases.push((
+            if_interaction,
+            err_lit(EvalError::DivisionByZero, ReprScalarType::Int64, false),
+            vec![int_ct(false), int_ct(false)],
+        ));
 
         // --- Interaction: not_binary_negate under a slice-1 not_not.
         let not_not_negate = not(not(
             c(0).call_binary(c(1), BinaryFunc::Eq(mz_expr::func::Eq))
         ));
-        cases.push((not_not_negate, vec![int_ct(false), int_ct(false)]));
+        cases.push((
+            not_not_negate,
+            c(0).call_binary(c(1), BinaryFunc::Eq(mz_expr::func::Eq)),
+            vec![int_ct(false), int_ct(false)],
+        ));
 
-        for (e, ct) in cases {
+        for (e, expected, ct) in cases {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_eq!(
+                new, expected,
+                "parity failed for {e:?} with col_types {ct:?}"
+            );
         }
 
         // Regression sampling of slices 1-4 under the grown rule set.
@@ -716,21 +842,29 @@ mod tests {
             func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
             exprs: es,
         };
-        let regression: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
-            (not(not(c(0))), vec![ReprScalarType::Bool.nullable(false)]),
-            (and(vec![c(0)]), vec![ReprScalarType::Bool.nullable(false)]),
+        let regression: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (
+                not(not(c(0))),
+                c(0),
+                vec![ReprScalarType::Bool.nullable(false)],
+            ),
+            (
+                and(vec![c(0)]),
+                c(0),
+                vec![ReprScalarType::Bool.nullable(false)],
+            ),
             (
                 if_expr(c(0), c(1), c(1)),
+                c(1),
                 vec![
                     ReprScalarType::Bool.nullable(false),
                     ReprScalarType::Bool.nullable(false),
                 ],
             ),
         ];
-        for (e, ct) in regression {
+        for (e, expected, ct) in regression {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "regression parity failed for {e:?}");
+            assert_eq!(new, expected, "regression parity failed for {e:?}");
         }
     }
 
@@ -835,91 +969,65 @@ mod tests {
         let null_bool = || MirScalarExpr::literal_null(ReprScalarType::Bool);
         let bool_ct = || ReprScalarType::Bool.nullable(false);
 
-        let mut cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
+        let mut cases: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
+        let f = MirScalarExpr::literal_false;
+        let t = MirScalarExpr::literal_true;
 
         // --- Positions: leading / middle / trailing false operand, all
         // collapse to false. Dual for Or/true.
-        cases.push((
-            and(vec![MirScalarExpr::literal_false(), c(0), c(1)]),
-            vec![bool_ct(), bool_ct()],
-        ));
-        cases.push((
-            and(vec![c(0), MirScalarExpr::literal_false(), c(1)]),
-            vec![bool_ct(), bool_ct()],
-        ));
-        cases.push((
-            and(vec![c(0), c(1), MirScalarExpr::literal_false()]),
-            vec![bool_ct(), bool_ct()],
-        ));
-        cases.push((
-            or(vec![MirScalarExpr::literal_true(), c(0), c(1)]),
-            vec![bool_ct(), bool_ct()],
-        ));
-        cases.push((
-            or(vec![c(0), MirScalarExpr::literal_true(), c(1)]),
-            vec![bool_ct(), bool_ct()],
-        ));
-        cases.push((
-            or(vec![c(0), c(1), MirScalarExpr::literal_true()]),
-            vec![bool_ct(), bool_ct()],
-        ));
+        cases.push((and(vec![f(), c(0), c(1)]), f(), vec![bool_ct(), bool_ct()]));
+        cases.push((and(vec![c(0), f(), c(1)]), f(), vec![bool_ct(), bool_ct()]));
+        cases.push((and(vec![c(0), c(1), f()]), f(), vec![bool_ct(), bool_ct()]));
+        cases.push((or(vec![t(), c(0), c(1)]), t(), vec![bool_ct(), bool_ct()]));
+        cases.push((or(vec![c(0), t(), c(1)]), t(), vec![bool_ct(), bool_ct()]));
+        cases.push((or(vec![c(0), c(1), t()]), t(), vec![bool_ct(), bool_ct()]));
 
         // --- Nulls (3VL): false/true dominates a null operand regardless of
         // position (the zero wins over the unit's absorbing-null behavior).
-        cases.push((
-            and(vec![c(0), MirScalarExpr::literal_false(), null_bool()]),
-            vec![bool_ct()],
-        ));
-        cases.push((
-            or(vec![c(0), MirScalarExpr::literal_true(), null_bool()]),
-            vec![bool_ct()],
-        ));
+        cases.push((and(vec![c(0), f(), null_bool()]), f(), vec![bool_ct()]));
+        cases.push((or(vec![c(0), t(), null_bool()]), t(), vec![bool_ct()]));
 
         // --- E-err envelope (the crux): a literal-error operand (`1 / 0`,
         // folded by the already-ported const_fold) must not block the fold,
         // in EITHER operand order.
         let err = || int_lit(1).call_binary(int_lit(0), div64());
-        cases.push((and(vec![MirScalarExpr::literal_false(), err()]), vec![]));
-        cases.push((and(vec![err(), MirScalarExpr::literal_false()]), vec![]));
-        cases.push((or(vec![MirScalarExpr::literal_true(), err()]), vec![]));
-        cases.push((or(vec![err(), MirScalarExpr::literal_true()]), vec![]));
+        cases.push((and(vec![f(), err()]), f(), vec![]));
+        cases.push((and(vec![err(), f()]), f(), vec![]));
+        cases.push((or(vec![t(), err()]), t(), vec![]));
+        cases.push((or(vec![err(), t()]), t(), vec![]));
 
         // --- Interactions: single-operand (and_single vs. short_circuit),
         // empty (and_empty; short_circuit does NOT fire, no zero operand),
         // and duplicate-false (and_or_dedup, unported, must not diverge).
-        cases.push((and(vec![MirScalarExpr::literal_false()]), vec![]));
-        cases.push((and(vec![]), vec![]));
-        cases.push((
-            and(vec![
-                MirScalarExpr::literal_false(),
-                MirScalarExpr::literal_false(),
-            ]),
-            vec![],
-        ));
+        cases.push((and(vec![f()]), f(), vec![]));
+        cases.push((and(vec![]), t(), vec![]));
+        cases.push((and(vec![f(), f()]), f(), vec![]));
 
-        for (e, ct) in cases {
+        for (e, expected, ct) in cases {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_eq!(
+                new, expected,
+                "parity failed for {e:?} with col_types {ct:?}"
+            );
         }
 
         // Regression sampling of slice-1..5 shapes under the grown rule set.
-        let regression: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
-            (not(not(c(0))), vec![bool_ct()]),
-            (and(vec![c(0)]), vec![bool_ct()]),
+        let regression: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (not(not(c(0))), c(0), vec![bool_ct()]),
+            (and(vec![c(0)]), c(0), vec![bool_ct()]),
             (
                 MirScalarExpr::If {
                     cond: Box::new(c(0)),
                     then: Box::new(c(1)),
                     els: Box::new(c(1)),
                 },
+                c(1),
                 vec![bool_ct(), bool_ct()],
             ),
         ];
-        for (e, ct) in regression {
+        for (e, expected, ct) in regression {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "regression parity failed for {e:?}");
+            assert_eq!(new, expected, "regression parity failed for {e:?}");
         }
     }
 
@@ -995,7 +1103,7 @@ mod tests {
     // (`And`/`Or::propagates_nulls()` is `false`).
     #[mz_ore::test]
     fn scalar_parity_slice6c() {
-        use mz_expr::{MirScalarExpr, VariadicFunc};
+        use mz_expr::{EvalError, MirScalarExpr, VariadicFunc};
         use mz_repr::{Datum, ReprScalarType};
 
         let c = MirScalarExpr::column;
@@ -1012,45 +1120,81 @@ mod tests {
         let div64 = || mz_expr::BinaryFunc::DivInt64(mz_expr::func::DivInt64);
         let null_bool = || MirScalarExpr::literal_null(ReprScalarType::Bool);
         let bool_ct = || ReprScalarType::Bool.nullable(false);
+        let bool_err = || {
+            MirScalarExpr::Literal(
+                Err(EvalError::DivisionByZero),
+                ReprColumnType {
+                    scalar_type: ReprScalarType::Bool,
+                    nullable: false,
+                },
+            )
+        };
 
-        let mut cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
+        let mut cases: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
 
         // --- drop_unit positions: leading / middle / trailing unit operand.
         cases.push((
             and(vec![MirScalarExpr::literal_true(), c(0), c(1)]),
+            and(vec![c(0), c(1)]),
             vec![bool_ct(), bool_ct()],
         ));
         cases.push((
             and(vec![c(0), MirScalarExpr::literal_true(), c(1)]),
+            and(vec![c(0), c(1)]),
             vec![bool_ct(), bool_ct()],
         ));
         cases.push((
             and(vec![c(0), c(1), MirScalarExpr::literal_true()]),
+            and(vec![c(0), c(1)]),
             vec![bool_ct(), bool_ct()],
         ));
         cases.push((
             or(vec![MirScalarExpr::literal_false(), c(0), c(1)]),
+            or(vec![c(0), c(1)]),
             vec![bool_ct(), bool_ct()],
         ));
         cases.push((
             or(vec![c(0), MirScalarExpr::literal_false(), c(1)]),
+            or(vec![c(0), c(1)]),
             vec![bool_ct(), bool_ct()],
         ));
         cases.push((
             or(vec![c(0), c(1), MirScalarExpr::literal_false()]),
+            or(vec![c(0), c(1)]),
             vec![bool_ct(), bool_ct()],
         ));
 
         // --- dedup: adjacent, non-adjacent, and more than two copies.
-        cases.push((and(vec![c(0), c(0), c(1)]), vec![bool_ct(), bool_ct()]));
-        cases.push((and(vec![c(0), c(1), c(0)]), vec![bool_ct(), bool_ct()]));
         cases.push((
-            and(vec![c(0), c(0), c(0), c(1)]),
+            and(vec![c(0), c(0), c(1)]),
+            and(vec![c(0), c(1)]),
             vec![bool_ct(), bool_ct()],
         ));
-        cases.push((or(vec![c(0), c(0), c(1)]), vec![bool_ct(), bool_ct()]));
-        cases.push((or(vec![c(0), c(1), c(0)]), vec![bool_ct(), bool_ct()]));
-        cases.push((or(vec![c(0), c(0), c(0), c(1)]), vec![bool_ct(), bool_ct()]));
+        cases.push((
+            and(vec![c(0), c(1), c(0)]),
+            and(vec![c(0), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            and(vec![c(0), c(0), c(0), c(1)]),
+            and(vec![c(0), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            or(vec![c(0), c(0), c(1)]),
+            or(vec![c(0), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            or(vec![c(0), c(1), c(0)]),
+            or(vec![c(0), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
+        cases.push((
+            or(vec![c(0), c(0), c(0), c(1)]),
+            or(vec![c(0), c(1)]),
+            vec![bool_ct(), bool_ct()],
+        ));
 
         // --- E-err envelope: a literal-error operand dedups with its
         // duplicate to the single error, and survives drop_unit dropping an
@@ -1070,19 +1214,29 @@ mod tests {
             d.clone()
                 .call_binary(d, mz_expr::BinaryFunc::Eq(mz_expr::func::Eq))
         };
-        cases.push((and(vec![err(), err()]), vec![]));
-        cases.push((and(vec![err(), MirScalarExpr::literal_true()]), vec![]));
-        cases.push((or(vec![err(), err()]), vec![]));
-        cases.push((or(vec![err(), MirScalarExpr::literal_false()]), vec![]));
+        cases.push((and(vec![err(), err()]), bool_err(), vec![]));
+        cases.push((
+            and(vec![err(), MirScalarExpr::literal_true()]),
+            bool_err(),
+            vec![],
+        ));
+        cases.push((or(vec![err(), err()]), bool_err(), vec![]));
+        cases.push((
+            or(vec![err(), MirScalarExpr::literal_false()]),
+            bool_err(),
+            vec![],
+        ));
 
         // --- Nulls (3VL): a null operand is not the unit, so drop_unit must
         // drop only the true/false operand and leave the null in place.
         cases.push((
             and(vec![c(0), MirScalarExpr::literal_true(), null_bool()]),
+            and(vec![c(0), null_bool()]),
             vec![bool_ct()],
         ));
         cases.push((
             or(vec![c(0), MirScalarExpr::literal_false(), null_bool()]),
+            or(vec![c(0), null_bool()]),
             vec![bool_ct()],
         ));
 
@@ -1091,25 +1245,33 @@ mod tests {
         // And(#0, true) -> And(#0) (drop_unit) -> #0 (and_single).
         cases.push((
             and(vec![c(0), MirScalarExpr::literal_true()]),
+            c(0),
             vec![bool_ct()],
         ));
         // And(true) -> And() (drop_unit) -> true (and_empty).
-        cases.push((and(vec![MirScalarExpr::literal_true()]), vec![]));
+        cases.push((
+            and(vec![MirScalarExpr::literal_true()]),
+            MirScalarExpr::literal_true(),
+            vec![],
+        ));
         // And(#0, #0) -> And(#0) (and_dedup) -> #0 (and_single).
-        cases.push((and(vec![c(0), c(0)]), vec![bool_ct()]));
+        cases.push((and(vec![c(0), c(0)]), c(0), vec![bool_ct()]));
 
-        for (e, ct) in cases {
+        for (e, expected, ct) in cases {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_eq!(
+                new, expected,
+                "parity failed for {e:?} with col_types {ct:?}"
+            );
         }
 
         // Regression sampling of slice-1..6a shapes under the grown rule set.
-        let regression: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
-            (not(not(c(0))), vec![bool_ct()]),
-            (and(vec![c(0)]), vec![bool_ct()]),
+        let regression: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (not(not(c(0))), c(0), vec![bool_ct()]),
+            (and(vec![c(0)]), c(0), vec![bool_ct()]),
             (
                 and(vec![MirScalarExpr::literal_false(), c(0), c(1)]),
+                MirScalarExpr::literal_false(),
                 vec![bool_ct(), bool_ct()],
             ),
             (
@@ -1118,13 +1280,13 @@ mod tests {
                     then: Box::new(c(1)),
                     els: Box::new(c(1)),
                 },
+                c(1),
                 vec![bool_ct(), bool_ct()],
             ),
         ];
-        for (e, ct) in regression {
+        for (e, expected, ct) in regression {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "regression parity failed for {e:?}");
+            assert_eq!(new, expected, "regression parity failed for {e:?}");
         }
     }
 
@@ -1227,20 +1389,23 @@ mod tests {
         let not = |e: MirScalarExpr| e.call_unary(mz_expr::UnaryFunc::Not(mz_expr::func::Not));
         let bool_ct = || ReprScalarType::Bool.nullable(false);
 
-        let mut cases: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
+        let mut cases: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = Vec::new();
 
         // --- absorb_and: a (#0) inside the inner Or at leading / middle /
         // trailing position. All three absorb to a bare `#0`.
         cases.push((
             and(vec![c(0), or(vec![c(0), c(1), c(2)])]),
+            c(0),
             vec![bool_ct(), bool_ct(), bool_ct()],
         ));
         cases.push((
             and(vec![c(0), or(vec![c(1), c(0), c(2)])]),
+            c(0),
             vec![bool_ct(), bool_ct(), bool_ct()],
         ));
         cases.push((
             and(vec![c(0), or(vec![c(1), c(2), c(0)])]),
+            c(0),
             vec![bool_ct(), bool_ct(), bool_ct()],
         ));
 
@@ -1248,14 +1413,17 @@ mod tests {
         // trailing position.
         cases.push((
             or(vec![c(0), and(vec![c(0), c(1), c(2)])]),
+            c(0),
             vec![bool_ct(), bool_ct(), bool_ct()],
         ));
         cases.push((
             or(vec![c(0), and(vec![c(1), c(0), c(2)])]),
+            c(0),
             vec![bool_ct(), bool_ct(), bool_ct()],
         ));
         cases.push((
             or(vec![c(0), and(vec![c(1), c(2), c(0)])]),
+            c(0),
             vec![bool_ct(), bool_ct(), bool_ct()],
         ));
 
@@ -1264,6 +1432,7 @@ mod tests {
         // And(a, Or(a, b), c) -> And(a, c).
         cases.push((
             and(vec![c(0), or(vec![c(0), c(1)]), c(2)]),
+            and(vec![c(0), c(2)]),
             vec![bool_ct(), bool_ct(), bool_ct()],
         ));
 
@@ -1272,6 +1441,7 @@ mod tests {
         // subset of the other's {a, b, c}. AND(a,b) v AND(a,b,c) -> AND(a,b).
         cases.push((
             or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(1), c(2)])]),
+            and(vec![c(0), c(1)]),
             vec![bool_ct(), bool_ct(), bool_ct()],
         ));
 
@@ -1279,6 +1449,7 @@ mod tests {
         // one saturation round; the outer Or(a, a) then dedups to `a` too.
         cases.push((
             or(vec![c(0), and(vec![c(0), or(vec![c(0), c(1)])])]),
+            c(0),
             vec![bool_ct(), bool_ct()],
         ));
 
@@ -1292,29 +1463,32 @@ mod tests {
                 c(0),
                 or(vec![c(0), c(1)]),
             ]),
+            c(0),
             vec![bool_ct(), bool_ct()],
         ));
 
-        for (e, ct) in cases {
+        for (e, expected, ct) in cases {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_eq!(
+                new, expected,
+                "parity failed for {e:?} with col_types {ct:?}"
+            );
         }
 
         // Regression sampling of slice-1..6c shapes under the grown rule set.
-        let regression: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
-            (not(not(c(0))), vec![bool_ct()]),
-            (and(vec![c(0)]), vec![bool_ct()]),
+        let regression: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
+            (not(not(c(0))), c(0), vec![bool_ct()]),
+            (and(vec![c(0)]), c(0), vec![bool_ct()]),
             (
                 and(vec![c(0), MirScalarExpr::literal_true(), c(1)]),
+                and(vec![c(0), c(1)]),
                 vec![bool_ct(), bool_ct()],
             ),
-            (and(vec![c(0), c(0)]), vec![bool_ct()]),
+            (and(vec![c(0), c(0)]), c(0), vec![bool_ct()]),
         ];
-        for (e, ct) in regression {
+        for (e, expected, ct) in regression {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "regression parity failed for {e:?}");
+            assert_eq!(new, expected, "regression parity failed for {e:?}");
         }
     }
 
@@ -1378,7 +1552,7 @@ mod tests {
     // but the wrongly-absorbed `a` alone would be null.
     #[mz_ore::test]
     fn absorb_guard_blocks_dropped_extra_error() {
-        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, VariadicFunc};
         use mz_repr::{Datum, ReprScalarType};
 
         let c = MirScalarExpr::column;
@@ -1396,15 +1570,26 @@ mod tests {
             let d = int_lit(1).call_binary(int_lit(0), div64());
             d.clone().call_binary(d, BinaryFunc::Eq(mz_expr::func::Eq))
         };
+        let err_lit = || {
+            MirScalarExpr::Literal(
+                Err(EvalError::DivisionByZero),
+                ReprColumnType {
+                    scalar_type: ReprScalarType::Bool,
+                    nullable: false,
+                },
+            )
+        };
         let ct = vec![ReprScalarType::Bool.nullable(true)];
 
         let guard_case = and(vec![c(0), or(vec![c(0), err()])]);
+        // The guard blocks absorption, so the erroring extra survives in
+        // place: only its own class is const-folded to the error literal.
+        let expected = and(vec![c(0), or(vec![c(0), err_lit()])]);
 
         let new = canonicalize_combined(&guard_case, &ct);
-        let old = crate::eqsat::scalar::canonicalize(&guard_case, &ct);
         assert_eq!(
-            new, old,
-            "guard-case parity failed for {guard_case:?}: combined={new:?} oracle={old:?}"
+            new, expected,
+            "guard-case parity failed for {guard_case:?}: combined={new:?} expected={expected:?}"
         );
         assert_ne!(
             new,
@@ -1466,7 +1651,7 @@ mod tests {
     // merge-conflict assertion fires on an Int64 error under a Bool connective).
     #[mz_ore::test]
     fn scalar_parity_slice6b() {
-        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, VariadicFunc};
         use mz_repr::{Datum, ReprScalarType};
 
         let c = MirScalarExpr::column;
@@ -1540,11 +1725,14 @@ mod tests {
                 int_ct(),
             ),
         ] {
+            let expected = MirScalarExpr::literal_null(ReprScalarType::Timestamp);
             let new = canonicalize_combined(&case, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
-            assert_eq!(new, old, "null_prop parity failed for {case:?}");
+            assert_eq!(new, expected, "null_prop parity failed for {case:?}");
             assert!(
-                matches!(new, MirScalarExpr::Literal(Ok(ref row), _) if row.unpack_first() == Datum::Null),
+                matches!(
+                    new,
+                    MirScalarExpr::Literal(Ok(ref row), _) if row.unpack_first() == Datum::Null
+                ),
                 "null_prop must fold to a typed null literal, got {new:?}"
             );
         }
@@ -1561,9 +1749,15 @@ mod tests {
                 f64_lit(0.0),
             ]);
             let ct = int_ct();
+            let expected = MirScalarExpr::Literal(
+                Err(EvalError::DivisionByZero),
+                ReprColumnType {
+                    scalar_type: ReprScalarType::Timestamp,
+                    nullable: false,
+                },
+            );
             let new = canonicalize_combined(&case, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
-            assert_eq!(new, old, "err_prop parity failed for {case:?}");
+            assert_eq!(new, expected, "err_prop parity failed for {case:?}");
             assert!(
                 matches!(new, MirScalarExpr::Literal(Err(_), _)),
                 "err_prop must fold to an error literal, got {new:?}"
@@ -1585,9 +1779,15 @@ mod tests {
                 f64_lit(0.0),
             ]);
             let ct = int_ct();
+            let expected = MirScalarExpr::Literal(
+                Err(EvalError::DivisionByZero),
+                ReprColumnType {
+                    scalar_type: ReprScalarType::Timestamp,
+                    nullable: false,
+                },
+            );
             let new = canonicalize_combined(&case, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
-            assert_eq!(new, old, "null-vs-error parity failed for {case:?}");
+            assert_eq!(new, expected, "null-vs-error parity failed for {case:?}");
             assert!(
                 matches!(new, MirScalarExpr::Literal(Err(_), _)),
                 "null-vs-error priority must yield the error, not null, got {new:?}"
@@ -1623,9 +1823,10 @@ mod tests {
             ),
         ];
         for (case, ct) in unchanged {
+            // Neither 6b rule may fire, so the call is frozen UNCHANGED.
+            let expected = case.clone();
             let new = canonicalize_combined(&case, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
-            assert_eq!(new, old, "unchanged-case parity failed for {case:?}");
+            assert_eq!(new, expected, "unchanged-case parity failed for {case:?}");
             assert!(
                 matches!(new, MirScalarExpr::CallVariadic { .. }),
                 "neither 6b rule may fire here; call must survive, got {new:?}"
@@ -1640,21 +1841,31 @@ mod tests {
             let d = int_err();
             d.clone().call_binary(d, BinaryFunc::Eq(mz_expr::func::Eq))
         };
-        let controls: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+        let controls: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
             (
                 and(vec![
                     MirScalarExpr::literal_null(ReprScalarType::Bool),
                     MirScalarExpr::literal_true(),
                 ]),
+                MirScalarExpr::literal_null(ReprScalarType::Bool),
                 vec![],
             ),
-            (or(vec![MirScalarExpr::literal_false(), err_bool()]), vec![]),
+            (
+                or(vec![MirScalarExpr::literal_false(), err_bool()]),
+                MirScalarExpr::Literal(
+                    Err(EvalError::DivisionByZero),
+                    ReprColumnType {
+                        scalar_type: ReprScalarType::Bool,
+                        nullable: false,
+                    },
+                ),
+                vec![],
+            ),
         ];
-        for (case, ct) in controls {
+        for (case, expected, ct) in controls {
             let new = canonicalize_combined(&case, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&case, &ct);
             assert_eq!(
-                new, old,
+                new, expected,
                 "And/Or negative-control parity failed for {case:?}"
             );
         }
@@ -1697,7 +1908,7 @@ mod tests {
     // null), and only those, proving the gate is load-bearing.
     #[mz_ore::test]
     fn null_prop_variadic_guard_blocks_erroring_operand() {
-        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, VariadicFunc};
         use mz_repr::{Datum, ReprScalarType};
 
         let int_lit = |v: i64| MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64);
@@ -1720,12 +1931,18 @@ mod tests {
             ],
         };
         let ct = vec![ReprScalarType::Int64.nullable(true)];
+        let expected = MirScalarExpr::Literal(
+            Err(EvalError::DivisionByZero),
+            ReprColumnType {
+                scalar_type: ReprScalarType::Timestamp,
+                nullable: false,
+            },
+        );
 
         let new = canonicalize_combined(&case, &ct);
-        let old = crate::eqsat::scalar::canonicalize(&case, &ct);
         assert_eq!(
-            new, old,
-            "guard-case parity failed for {case:?}: combined={new:?} oracle={old:?}"
+            new, expected,
+            "guard-case parity failed for {case:?}: combined={new:?} expected={expected:?}"
         );
         assert!(
             matches!(new, MirScalarExpr::Literal(Err(_), _)),
@@ -1817,7 +2034,7 @@ mod tests {
     // Least operands are well-typed Int64 columns.
     #[mz_ore::test]
     fn scalar_parity_slice6d() {
-        use mz_expr::{BinaryFunc, MirScalarExpr, VariadicFunc};
+        use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, VariadicFunc};
         use mz_repr::{Datum, ReprScalarType};
 
         let c = MirScalarExpr::column;
@@ -1879,60 +2096,77 @@ mod tests {
         // --- Pure-flatten And/Or with a nested same-op operand at leading /
         // middle / trailing position. Four distinct bool columns never dedup or
         // collapse, so each lands as a flat 4-ary call.
-        let flat_bool: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+        let flat_and = and(vec![c(0), c(1), c(2), c(3)]);
+        let flat_or = or(vec![c(0), c(1), c(2), c(3)]);
+        let flat_bool: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
             (
                 and(vec![and(vec![c(1), c(2)]), c(0), c(3)]),
+                flat_and.clone(),
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
             (
                 and(vec![c(0), and(vec![c(1), c(2)]), c(3)]),
+                flat_and.clone(),
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
             (
                 and(vec![c(0), c(3), and(vec![c(1), c(2)])]),
+                flat_and,
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
             (
                 or(vec![or(vec![c(1), c(2)]), c(0), c(3)]),
+                flat_or.clone(),
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
             (
                 or(vec![c(0), or(vec![c(1), c(2)]), c(3)]),
+                flat_or.clone(),
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
             (
                 or(vec![c(0), c(3), or(vec![c(1), c(2)])]),
+                flat_or,
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
         ];
-        for (e, ct) in flat_bool {
+        for (e, expected, ct) in flat_bool {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_eq!(
+                new, expected,
+                "parity failed for {e:?} with col_types {ct:?}"
+            );
             assert_flat(&new, 4);
         }
 
         // --- New-domain proof: flatten on Coalesce / Greatest / Least, the
         // three non-boolean associative variadics. Distinct Int64 columns, so
         // the only rewrite is the splice and the result is a flat 3-ary call.
-        let flat_nonbool: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+        // Coalesce/Greatest/Least are order-significant, so (unlike And/Or)
+        // the flat result keeps the source operand order verbatim.
+        let flat_nonbool: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
             (
                 coalesce(vec![c(0), coalesce(vec![c(1), c(2)])]),
+                coalesce(vec![c(0), c(1), c(2)]),
                 vec![int_ct(), int_ct(), int_ct()],
             ),
             (
                 greatest(vec![greatest(vec![c(0), c(1)]), c(2)]),
+                greatest(vec![c(0), c(1), c(2)]),
                 vec![int_ct(), int_ct(), int_ct()],
             ),
             (
                 least(vec![c(0), least(vec![c(1), c(2)])]),
+                least(vec![c(0), c(1), c(2)]),
                 vec![int_ct(), int_ct(), int_ct()],
             ),
         ];
-        for (e, ct) in flat_nonbool {
+        for (e, expected, ct) in flat_nonbool {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_eq!(
+                new, expected,
+                "parity failed for {e:?} with col_types {ct:?}"
+            );
             assert_flat(&new, 3);
         }
 
@@ -1941,61 +2175,63 @@ mod tests {
         {
             let e = and(vec![c(0), and(vec![c(1), and(vec![c(2), c(3)])])]);
             let ct = vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()];
+            let expected = and(vec![c(0), c(1), c(2), c(3)]);
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "deep-nesting parity failed for {e:?}");
+            assert_eq!(new, expected, "deep-nesting parity failed for {e:?}");
             assert_flat(&new, 4);
         }
 
         // --- Flatten feeding a cascade: the splice exposes a literal, a
         // duplicate, or an empty inner set that a downstream rule then folds.
-        // Parity must hold THROUGH the cascade, so these assert `new == old`
-        // only (the result is no longer a flat variadic).
-        let cascade: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+        let cascade: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
             // Short-circuit: the spliced `false` dominates the flat And.
             (
                 and(vec![c(0), and(vec![MirScalarExpr::literal_false(), c(1)])]),
+                MirScalarExpr::literal_false(),
                 vec![bool_ct(), bool_ct()],
             ),
             // Short-circuit (dual): the spliced `true` dominates the flat Or.
             (
                 or(vec![c(0), or(vec![MirScalarExpr::literal_true(), c(1)])]),
+                MirScalarExpr::literal_true(),
                 vec![bool_ct(), bool_ct()],
             ),
             // drop_unit: the spliced `true` is the And unit and drops out.
             (
                 and(vec![c(0), and(vec![MirScalarExpr::literal_true(), c(1)])]),
+                and(vec![c(0), c(1)]),
                 vec![bool_ct(), bool_ct()],
             ),
             // Cross-boundary dedup: `a` appears both outside and inside; after
             // the splice the duplicate collapses.
             (
                 and(vec![c(0), and(vec![c(0), c(1)])]),
+                and(vec![c(0), c(1)]),
                 vec![bool_ct(), bool_ct()],
             ),
             // Collapse to a single operand via the `and_or_single` self-loop
             // shape: the inner `Or([c0])` collapses into `c0`'s class, the outer
             // `Or([c0, c0])` dedups then collapses to `c0`.
-            (or(vec![c(0), or(vec![c(0)])]), vec![bool_ct()]),
+            (or(vec![c(0), or(vec![c(0)])]), c(0), vec![bool_ct()]),
             // Collapse to empty: the spliced-away empty inner And leaves a
             // single-operand And that collapses to `a`.
-            (and(vec![c(0), and(vec![])]), vec![bool_ct()]),
+            (and(vec![c(0), and(vec![])]), c(0), vec![bool_ct()]),
         ];
-        for (e, ct) in cascade {
+        for (e, expected, ct) in cascade {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "cascade parity failed for {e:?}");
+            assert_eq!(new, expected, "cascade parity failed for {e:?}");
         }
 
         // --- Mixed-op negative control: an Or operand inside an And is NOT a
-        // same-func nesting, so flatten never fires. Both engines leave the
-        // shape intact (the Or survives as a distinct operand).
+        // same-func nesting, so flatten never fires. The Or survives as a
+        // distinct operand (extraction reorders the outer And's operands by
+        // `Ord`: the bare Column sorts before the CallVariadic Or).
         {
             let e = and(vec![or(vec![c(0), c(1)]), c(2)]);
             let ct = vec![bool_ct(), bool_ct(), bool_ct()];
+            let expected = and(vec![c(2), or(vec![c(0), c(1)])]);
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "mixed-op control parity failed for {e:?}");
+            assert_eq!(new, expected, "mixed-op control parity failed for {e:?}");
             let MirScalarExpr::CallVariadic { func, exprs } = &new else {
                 panic!("mixed-op control must stay a CallVariadic And, got {new:?}");
             };
@@ -2017,9 +2253,19 @@ mod tests {
         // it live, the second folds it away under a short-circuit. Parity must
         // hold in both, and neither may panic the shared analysis's merge
         // assertion (which is exactly why the error is Bool-typed).
-        let errors: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+        let bool_err = || {
+            MirScalarExpr::Literal(
+                Err(EvalError::DivisionByZero),
+                ReprColumnType {
+                    scalar_type: ReprScalarType::Bool,
+                    nullable: false,
+                },
+            )
+        };
+        let errors: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
             (
                 and(vec![c(0), and(vec![err_bool(), c(1)])]),
+                and(vec![c(0), c(1), bool_err()]),
                 vec![ReprScalarType::Bool.nullable(true), bool_ct()],
             ),
             (
@@ -2027,13 +2273,13 @@ mod tests {
                     MirScalarExpr::literal_false(),
                     and(vec![err_bool(), c(0)]),
                 ]),
+                MirScalarExpr::literal_false(),
                 vec![bool_ct()],
             ),
         ];
-        for (e, ct) in errors {
+        for (e, expected, ct) in errors {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "error-operand parity failed for {e:?}");
+            assert_eq!(new, expected, "error-operand parity failed for {e:?}");
         }
     }
 
@@ -2181,14 +2427,15 @@ mod tests {
             )
         };
 
-        // --- FIRES: factoring rewrites the outer connective to its dual. Both
-        // engines must agree AND the shared result must show the flip, proving the
-        // rule fired (not merely that both engines left it alone). Or-of-Ands
-        // factors to an outer And; And-of-Ors to an outer Or.
-        let fires_to_and: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+        // --- FIRES: factoring rewrites the outer connective to its dual. The
+        // frozen form must show the flip too, proving the rule fired (not
+        // merely that the input was already left alone). Or-of-Ands factors
+        // to an outer And; And-of-Ors to an outer Or.
+        let fires_to_and: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
             // Or(And(c0,c1), And(c0,c2)) -> And(c0, Or(c1,c2)).
             (
                 or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(2)])]),
+                and(vec![c(0), or(vec![c(1), c(2)])]),
                 vec![bool_ct(), bool_ct(), bool_ct()],
             ),
             // n-ary: three branches sharing c0 -> And(c0, Or(c1,c2,c3)).
@@ -2198,19 +2445,23 @@ mod tests {
                     and(vec![c(0), c(2)]),
                     and(vec![c(0), c(3)]),
                 ]),
+                and(vec![c(0), or(vec![c(1), c(2), c(3)])]),
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
             // Common factor at a non-leading position inside each inner And.
             // Or(And(c1,c0), And(c2,c0)) -> And(c0, Or(c1,c2)).
             (
                 or(vec![and(vec![c(1), c(0)]), and(vec![c(2), c(0)])]),
+                and(vec![c(0), or(vec![c(1), c(2)])]),
                 vec![bool_ct(), bool_ct(), bool_ct()],
             ),
         ];
-        for (e, ct) in fires_to_and {
+        for (e, expected, ct) in fires_to_and {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "parity failed for {e:?} with col_types {ct:?}");
+            assert_eq!(
+                new, expected,
+                "parity failed for {e:?} with col_types {ct:?}"
+            );
             assert!(
                 is_and(&new),
                 "factoring must flip the outer Or to And: {new:?}"
@@ -2221,45 +2472,50 @@ mod tests {
         {
             let e = and(vec![or(vec![c(0), c(1)]), or(vec![c(0), c(2)])]);
             let ct = vec![bool_ct(), bool_ct(), bool_ct()];
+            let expected = or(vec![c(0), and(vec![c(1), c(2)])]);
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "dual parity failed for {e:?}");
+            assert_eq!(new, expected, "dual parity failed for {e:?}");
             assert!(
                 is_or(&new),
                 "dual factoring must flip the outer And to Or: {new:?}"
             );
         }
 
-        // --- DOES NOT FIRE: factoring leaves the outer connective intact. Parity
-        // must hold and the outer Or must survive (nothing flipped it to And).
-        let no_fire: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+        // --- DOES NOT FIRE: factoring leaves the outer connective intact
+        // (though extraction may still reorder And/Or operands by `Ord`).
+        let no_fire_1 = or(vec![and(vec![c(0), c(1)]), and(vec![c(2), c(3)])]);
+        let no_fire_2 = or(vec![
+            and(vec![c(0), c(1)]),
+            and(vec![c(0), c(2)]),
+            and(vec![c(3), c(4)]),
+        ]);
+        let no_fire: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
             // No common factor: disjoint inner sets.
             (
-                or(vec![and(vec![c(0), c(1)]), and(vec![c(2), c(3)])]),
+                no_fire_1.clone(),
+                no_fire_1,
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
             // Partial share: c0 is in two branches but not the third, so the
             // full intersection across every branch is empty.
             (
-                or(vec![
-                    and(vec![c(0), c(1)]),
-                    and(vec![c(0), c(2)]),
-                    and(vec![c(3), c(4)]),
-                ]),
+                no_fire_2.clone(),
+                no_fire_2,
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
             // Mixed: one branch is a bare column, not an inner And, so there is
-            // no uniform inner connective to factor over.
+            // no uniform inner connective to factor over. The Column operand
+            // sorts before the CallVariadic And.
             (
                 or(vec![and(vec![c(0), c(1)]), c(2)]),
+                or(vec![c(2), and(vec![c(0), c(1)])]),
                 vec![bool_ct(), bool_ct(), bool_ct()],
             ),
         ];
-        for (e, ct) in no_fire {
+        for (e, expected, ct) in no_fire {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
             assert_eq!(
-                new, old,
+                new, expected,
                 "no-fire parity failed for {e:?} with col_types {ct:?}"
             );
             assert!(
@@ -2269,13 +2525,13 @@ mod tests {
         }
 
         // Single branch: Or with one operand collapses via or_single, so factor
-        // never applies. Both engines yield the bare inner And.
+        // never applies. Extraction yields the bare inner And.
         {
             let e = or(vec![and(vec![c(0), c(1)])]);
             let ct = vec![bool_ct(), bool_ct()];
+            let expected = and(vec![c(0), c(1)]);
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "single-branch parity failed for {e:?}");
+            assert_eq!(new, expected, "single-branch parity failed for {e:?}");
         }
 
         // --- RESIDUAL-ERROR GATE (the correctness core, mirroring
@@ -2296,9 +2552,14 @@ mod tests {
                 ReprScalarType::Int64.nullable(true),
                 ReprScalarType::Bool.nullable(true),
             ];
+            // Blocked: the outer Or survives, its two And branches reordered
+            // by `Ord` (And(c0,c2) < And(c0,r): Column sorts before CallBinary).
+            let expected = or(vec![and(vec![c(0), c(2)]), and(vec![c(0), r.clone()])]);
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "erroring-residual gate parity failed for {e:?}");
+            assert_eq!(
+                new, expected,
+                "erroring-residual gate parity failed for {e:?}"
+            );
             assert!(
                 is_or(&new),
                 "blocked factoring must leave the outer Or intact, got {new:?}"
@@ -2325,19 +2586,20 @@ mod tests {
                 ReprScalarType::Bool.nullable(true),
                 ReprScalarType::Bool.nullable(true),
             ];
+            let expected = and(vec![g, or(vec![c(2), c(3)])]);
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "erroring-common-factor parity failed for {e:?}");
+            assert_eq!(
+                new, expected,
+                "erroring-common-factor parity failed for {e:?}"
+            );
             assert!(
                 is_and(&new),
                 "erroring common factor must still factor (CLU-137): {new:?}"
             );
         }
 
-        // --- CASCADE: factor feeding, or fed by, the neighbouring rules. The
-        // final form is whatever both engines fold to; parity must hold through
-        // the cascade, so these assert `new == old` only.
-        let cascade: Vec<(MirScalarExpr, Vec<ReprColumnType>)> = vec![
+        // --- CASCADE: factor feeding, or fed by, the neighbouring rules.
+        let cascade: Vec<(MirScalarExpr, MirScalarExpr, Vec<ReprColumnType>)> = vec![
             // Factor feeding flatten: the factored And(c0, Or(c1,c2)) lands
             // inside an outer And and flattens up one level.
             (
@@ -2345,12 +2607,14 @@ mod tests {
                     c(3),
                     or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(2)])]),
                 ]),
+                and(vec![c(0), c(3), or(vec![c(1), c(2)])]),
                 vec![bool_ct(), bool_ct(), bool_ct(), bool_ct()],
             ),
             // Fed-by flatten: the single-operand inner Or collapses, exposing a
             // clean Or-of-Ands that then factors.
             (
                 or(vec![and(vec![c(0), c(1)]), or(vec![and(vec![c(0), c(2)])])]),
+                and(vec![c(0), or(vec![c(1), c(2)])]),
                 vec![bool_ct(), bool_ct(), bool_ct()],
             ),
             // Short-circuit: a `true` operand dominates the outer Or, so factoring
@@ -2361,6 +2625,7 @@ mod tests {
                     and(vec![c(0), c(2)]),
                     MirScalarExpr::literal_true(),
                 ]),
+                MirScalarExpr::literal_true(),
                 vec![bool_ct(), bool_ct(), bool_ct()],
             ),
             // drop_unit feeding factor: the `true` drops from the outer And,
@@ -2371,6 +2636,7 @@ mod tests {
                     or(vec![c(0), c(2)]),
                     MirScalarExpr::literal_true(),
                 ]),
+                or(vec![c(0), and(vec![c(1), c(2)])]),
                 vec![bool_ct(), bool_ct(), bool_ct()],
             ),
             // dedup feeding factor: the duplicate branch collapses, leaving a
@@ -2381,27 +2647,28 @@ mod tests {
                     and(vec![c(0), c(2)]),
                     and(vec![c(0), c(1)]),
                 ]),
+                and(vec![c(0), or(vec![c(1), c(2)])]),
                 vec![bool_ct(), bool_ct(), bool_ct()],
             ),
             // Absorb boundary: an empty residual makes factor decline; absorb is
             // the rule that handles it (the inner set {c0,c1} subsumes {c0,c1,c2}
-            // -> the superset branch absorbs to c0 AND c1). Parity holds across
-            // the factor/absorb handoff.
+            // -> the superset branch absorbs to c0 AND c1).
             (
                 or(vec![and(vec![c(0), c(1)]), and(vec![c(0), c(1), c(2)])]),
+                and(vec![c(0), c(1)]),
                 vec![bool_ct(), bool_ct(), bool_ct()],
             ),
             // Empty inner And: and_empty folds And([]) to `true`, which then
             // short-circuits the outer Or to `true`.
             (
                 or(vec![and(vec![c(0), c(1)]), and(vec![])]),
+                MirScalarExpr::literal_true(),
                 vec![bool_ct(), bool_ct()],
             ),
         ];
-        for (e, ct) in cascade {
+        for (e, expected, ct) in cascade {
             let new = canonicalize_combined(&e, &ct);
-            let old = crate::eqsat::scalar::canonicalize(&e, &ct);
-            assert_eq!(new, old, "cascade parity failed for {e:?}");
+            assert_eq!(new, expected, "cascade parity failed for {e:?}");
         }
     }
 
