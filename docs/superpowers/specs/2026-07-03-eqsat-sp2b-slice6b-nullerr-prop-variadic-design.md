@@ -89,10 +89,19 @@ bump and aggregate `lake build` are hand-run mandatory gates.
 
 ## Architecture
 
-The builtin dispatch is fully generic. `Tmpl::Builtin { name, args }` emits
+The builtin *apply* dispatch is generic. `Tmpl::Builtin { name, args }` emits
 `crate::eqsat::scalar_builtins::{name}({args})?` (`build/codegen.rs:1085`), and the
-grammar parses any `name(args)` builtin call (`build/grammar.rs:652`). So no grammar,
-codegen, DSL-AST, or dispatch-registry change is needed. The slice adds:
+grammar parses any `name(args)` builtin call (`build/grammar.rs:652`), so no grammar,
+codegen, DSL-AST, or dispatch-registry change is needed for the Rust side.
+
+The Lean side is NOT generic on the builtin name. `translate_tmpl` in `lean.rs`
+produces the theorem-statement RHS via a per-name match (`lean.rs:533`) that panics
+on an unmapped builtin, and the Lean function it names must exist as an `opaque`
+declaration in `Semantics.lean` or the Lean build fails on an unknown identifier.
+So each new builtin needs a match arm in `lean.rs` plus an `opaque NAME : ScalarExpr
+-> ScalarExpr` in `Semantics.lean`, mirroring the binary `nullPropBinary` /
+`errPropBinary` precedent. The permanent `sorry` itself is emitted generically for
+any `Tmpl::Builtin` RHS (`lean.rs:795`). The slice adds:
 
 1. **`scalar_builtins::null_prop_variadic(g: &mut EGraph, class: Id) -> Result<Id, String>`**
    and **`err_prop_variadic(g, class)`**, mirroring `rules.rs:1013` / `:1085` exactly.
