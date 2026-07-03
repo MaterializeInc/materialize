@@ -257,10 +257,13 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
     /// NOTE: like `arity_of`, this panics via `arity_of` if a binding resolves
     /// to a scalar class id. See the forward-guard note on `arity_of` above:
     /// a future `colored: true` scalar rule must switch both to `try_arity`.
-    pub fn binding_arities(&self, b: &crate::eqsat::egraph::EBindings) -> BTreeMap<String, usize> {
+    pub fn binding_arities(
+        &self,
+        b: &crate::eqsat::egraph::EBindings,
+    ) -> BTreeMap<&'static str, usize> {
         b.rels
             .iter()
-            .map(|(n, &id)| (n.clone(), self.arity_of(id)))
+            .map(|(&n, &id)| (n, self.arity_of(id)))
             .collect()
     }
 

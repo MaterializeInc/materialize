@@ -636,18 +636,14 @@ fn body(rule: &Rule, m: &Matcher, mode: &FindMode) -> String {
     let mut seen_rel = std::collections::BTreeSet::new();
     for (name, local) in &m.rels {
         if seen_rel.insert(name.clone()) {
-            s.push_str(&format!("b.rels.insert({name:?}.to_string(), {local});\n"));
+            s.push_str(&format!("b.rels.insert({name:?}, {local});\n"));
         }
     }
     for (name, local) in &m.payloads {
-        s.push_str(&format!(
-            "b.payloads.insert({name:?}.to_string(), {local}.clone());\n"
-        ));
+        s.push_str(&format!("b.payloads.insert({name:?}, {local}.clone());\n"));
     }
     for (name, local) in &m.rests {
-        s.push_str(&format!(
-            "b.rests.insert({name:?}.to_string(), {local}.clone());\n"
-        ));
+        s.push_str(&format!("b.rests.insert({name:?}, {local}.clone());\n"));
     }
     for (name, local) in &m.funcs {
         s.push_str(&format!("b.bind_binary_func({name:?}, {local}.clone());\n"));

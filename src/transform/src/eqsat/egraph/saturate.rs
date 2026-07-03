@@ -28,14 +28,14 @@ use super::{INITIAL_BAN_LEN, MATCH_LIMIT, MAX_ENODES};
 /// All e-graph bindings produced by matching a rule's left-hand side.
 #[derive(Clone, Debug, Default)]
 pub struct EBindings {
-    pub rels: HashMap<String, Id>,
-    pub payloads: BTreeMap<String, Payload>,
-    pub rests: HashMap<String, Vec<Id>>,
+    pub rels: HashMap<&'static str, Id>,
+    pub payloads: BTreeMap<&'static str, Payload>,
+    pub rests: HashMap<&'static str, Vec<Id>>,
     /// Func-metavar bindings, e.g. the `BinaryFunc` bound by a `Pat::SBinaryVar`
     /// match. A function symbol has neither an e-class id (like `rels`) nor a
     /// payload list (like `payloads`), so it gets its own store. See
     /// `bind_binary_func`/`binary_func`.
-    binary_funcs: HashMap<String, BinaryFunc>,
+    binary_funcs: HashMap<&'static str, BinaryFunc>,
     /// The class at which the pattern's root matched.
     pub root: Id,
 }
@@ -43,8 +43,8 @@ pub struct EBindings {
 impl EBindings {
     /// Bind `name` to `func`, called by a compiled `find` when a `Pat::SBinaryVar`
     /// pattern matches.
-    pub fn bind_binary_func(&mut self, name: &str, func: BinaryFunc) {
-        self.binary_funcs.insert(name.to_string(), func);
+    pub fn bind_binary_func(&mut self, name: &'static str, func: BinaryFunc) {
+        self.binary_funcs.insert(name, func);
     }
 
     /// The `BinaryFunc` bound to metavariable `name`.
@@ -483,10 +483,10 @@ impl EGraph {
     /// than `arity`'s panic. A template that queries a skipped name via
     /// `IxExpr::Arity` gets the generated `apply` function's "unbound
     /// relation" error, not a panic.
-    pub(crate) fn binding_arities(&self, b: &EBindings) -> BTreeMap<String, usize> {
+    pub(crate) fn binding_arities(&self, b: &EBindings) -> BTreeMap<&'static str, usize> {
         b.rels
             .iter()
-            .filter_map(|(n, &id)| self.try_arity(id).map(|a| (n.clone(), a)))
+            .filter_map(|(&n, &id)| self.try_arity(id).map(|a| (n, a)))
             .collect()
     }
 }
