@@ -2561,22 +2561,21 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(||
         ]),
         // `event_type` and `object_type` are stored in `mz_catalog_raw` as the
         // numeric `Serialize_repr` of `proto::audit_log_event_v1::{EventType,
-        // ObjectType}`. The CASE expressions below map them back to the
-        // kebab-case strings produced by the in-memory `audit_log::{EventType,
-        // ObjectType}` Display impls: the format the prior BuiltinTable
-        // populator used.
+        // ObjectType}`. The CASE expressions map them to the kebab strings
+        // that `audit_log::{EventType, ObjectType}`'s Display impls produce.
         //
         // `event` is `AuditLogEvent::V1(AuditLogEventV1)`, externally tagged,
-        // so we reach through `key.event.V1` to get the inner struct.
+        // so we reach through `key.event.V1` for the inner struct.
         //
         // `user` is `Option<StringWrapper>`: JSON null when absent, otherwise
         // `{"inner": "<name>"}`. `->'user'->>'inner'` collapses both to a
-        // PostgreSQL NULL or the text, matching the populator.
+        // PostgreSQL NULL or the text.
         //
-        // `details` in `mz_catalog_raw` is the externally-tagged enum form
-        // `{"<VariantName>": <inner>}`. The prior populator stored the inner
-        // struct only (`EventDetails::as_json` strips the variant wrapper).
-        // `parse_catalog_audit_log_details` reproduces that unwrapping.
+        // `details` in `mz_catalog_raw` is the externally-tagged proto
+        // `Details` enum. `parse_catalog_audit_log_details` reshapes it into
+        // `audit_log::EventDetails::as_json`'s output, the format the prior
+        // BuiltinTable populator wrote. See that function's docstring and
+        // the round-trip test in `src/catalog/tests/audit_log_details.rs`.
         //
         // `occurred_at` is `EpochMillis` (u64). Dividing by 1000.0 and feeding
         // to `to_timestamp` matches `mz_ore::now::to_datetime`'s round-trip

@@ -722,7 +722,7 @@ db error: ERROR: cannot modify managed cluster t1
 query TTTT
 SELECT event_type, object_type, regexp_replace(details::text, '"replica_id":"u[^"]*"', '"replica_id":"u%"'), user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","internal":true,"logical_size":"scale=1,workers=2","reason":{"reason":{"Manual":{}}},"replica_id":"u%","replica_name":"free","scheduling_policies":null}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","internal":true,"logical_size":"scale=1,workers=2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r123 SIZE 'scale=1,workers=2', BILLED AS 'free'
@@ -782,7 +782,7 @@ COMPLETE 0
 query TTTT
 SELECT event_type, object_type, regexp_replace(details::text, '"replica_id":"u[^"]*"', '"replica_id":"u%"'), user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","internal":true,"logical_size":"scale=1,workers=2","reason":{"reason":{"Manual":{}}},"replica_id":"u%","replica_name":"free","scheduling_policies":null}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","internal":true,"logical_size":"scale=1,workers=2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.internal_r2 SIZE 'scale=1,workers=2', INTERNAL

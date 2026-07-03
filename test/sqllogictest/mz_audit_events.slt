@@ -254,16 +254,47 @@ WHERE event_type = 'grant' AND object_type = 'system'
 true  true  true
 
 # CreateClusterReplicaV* (e.g. CREATE CLUSTER ... REPLICAS): replica_id/replica_name
-# survive the catalog-raw round-trip.
-query TT
+# survive the catalog-raw round-trip, `reason` is collapsed to its kebab-case
+# audit-log form (`{"reason":{"Manual":{}}}` → `"manual"`), and the null
+# `scheduling_policies` proto field is dropped to match the audit-log
+# `#[serde(skip_serializing_if)]`.
+query TTTB
 SELECT
     details->>'cluster_name',
-    details->>'replica_name'
+    details->>'replica_name',
+    details->>'reason',
+    details ? 'scheduling_policies'
 FROM mz_audit_events
 WHERE event_type = 'create' AND object_type = 'cluster-replica'
   AND details->>'cluster_name' = 'cl_le'
 ----
-cl_le  r1
+cl_le  r1  manual  false
+
+# CreateSourceSinkV* (e.g. CREATE SOURCE): the proto field `external_type` is
+# exposed as audit `type` (an invisible rename on the audit-log side).
+query TTB
+SELECT
+    details->>'item',
+    details->>'type',
+    details ? 'external_type'
+FROM mz_audit_events
+WHERE event_type = 'create' AND object_type = 'source'
+  AND details->>'item' = 'src_le'
+----
+src_le  load-generator  false
+
+# CreateMaterializedViewV1 (non-replacement create): `replacement_target_id`
+# is `skip_serializing_if` on the audit-log side, so a null proto value must
+# be dropped.
+query TB
+SELECT
+    details->>'item',
+    details ? 'replacement_target_id'
+FROM mz_audit_events
+WHERE event_type = 'create' AND object_type = 'materialized-view'
+  AND details->>'item' = 'mv_le'
+----
+mv_le  false
 
 # --- user column -------------------------------------------------------------
 

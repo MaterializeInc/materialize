@@ -20,6 +20,16 @@
 //! compatibility. This is its own crate so that production and consumption can
 //! be in different processes and production is not allowed to specify private
 //! data structures unknown to the reader.
+//!
+//! `EventDetails::as_json` produces the JSON that
+//! `mz_catalog.mz_audit_events.details` exposes. The durable catalog stores
+//! the proto twin from `mz_catalog_protos::objects::audit_log_event_v1`,
+//! which `parse_catalog_audit_log_details` (in
+//! `src/expr/src/scalar/func/impls/jsonb.rs`) reshapes back into
+//! `as_json`'s output. Changes here that shift that output (new variants,
+//! renamed fields, added `skip_serializing_if`, field-name diffs against
+//! the proto) need matching updates there. The round-trip is covered by
+//! the property test in `src/catalog/tests/audit_log_details.rs`.
 
 use std::time::Duration;
 

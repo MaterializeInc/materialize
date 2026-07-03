@@ -26,12 +26,16 @@ $ kafka-create-topic topic=test
   (TOPIC 'testdrive-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS;
 
-# `mz_audit_events` is now a BuiltinMaterializedView over `mz_catalog_raw`, so
-# `details` reflects the catalog-shard JSON: `reason`/`scheduling_policies` are
-# the proto's nested-struct form and source `type` is `external_type`.
+# `mz_audit_events` is a BuiltinMaterializedView over `mz_catalog_raw`; the
+# scalar `parse_catalog_audit_log_details` reshapes the durable proto JSON
+# back into the audit-log form `EventDetails::as_json` used to produce.
+# `reason` is a kebab string ("manual"/"system"), null `scheduling_policies`
+# and `replica_id` fields are dropped for versions where the audit-log struct
+# uses `#[serde(skip_serializing_if)]`, and source `external_type` is
+# exposed as `type`.
 > SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal' - 'scheduling_policies' - 'reason', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
-create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"external_type\":\"kafka\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\"}" materialize
-create source "{\"cluster_id\":null,\"database\":\"materialize\",\"external_type\":\"progress\",\"id\":\"<GID>\",\"item\":\"kafka_src_progress\",\"schema\":\"public\"}" materialize
+create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"type\":\"kafka\"}" materialize
+create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_kafka_src\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"r1\"}" materialize
 create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
 
@@ -42,7 +46,7 @@ create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 
 > SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal' - 'scheduling_policies' - 'reason', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
-create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"external_type\":\"load-generator\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\"}" materialize
-create source "{\"cluster_id\":null,\"database\":\"materialize\",\"external_type\":\"progress\",\"id\":\"<GID>\",\"item\":\"counter_src_progress\",\"schema\":\"public\"}" materialize
+create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"type\":\"load-generator\"}" materialize
+create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_counter_src\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"r1\"}" materialize
 create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_counter_src\"}" materialize
