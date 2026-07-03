@@ -206,6 +206,24 @@ pub fn parse_item_name(sql: &str) -> Result<UnresolvedItemName, ParserError> {
     }
 }
 
+/// Parses a SQL item name, rejecting inputs larger than
+/// [`MAX_STATEMENT_BATCH_SIZE`] before lexing.
+///
+/// The outer `Result` is for the size guard; the inner `Result` is for the
+/// parser. Mirrors [`parse_statements_with_limit`] so untrusted-input paths
+/// (e.g. the MCP HTTP handlers) can bound work before allocating.
+pub fn parse_item_name_with_limit(
+    sql: &str,
+) -> Result<Result<UnresolvedItemName, ParserError>, String> {
+    if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
+        return Err(format!(
+            "statement batch size cannot exceed {}",
+            ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
+        ));
+    }
+    Ok(parse_item_name(sql))
+}
+
 /// Parses a string containing a comma-separated list of identifiers and
 /// returns their underlying string values.
 ///

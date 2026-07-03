@@ -36,13 +36,12 @@ use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
 };
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
-use mz_sql::parse::parse;
+use mz_sql::parse::{parse_item_name_with_limit, parse_with_limit};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{APPLICATION_NAME, Var, VarInput};
 use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql_parser::ast::visit::{self, Visit};
 use mz_sql_parser::ast::{Raw, RawItemName};
-use mz_sql_parser::parser::parse_item_name;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -1093,13 +1092,17 @@ fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
         ));
     }
 
-    let parsed = parse_item_name(name).map_err(|_| {
-        McpRequestError::QueryValidationFailed(format!(
-            "Invalid data product name: {}. Expected a valid object name, \
-             e.g. '\"database\".\"schema\".\"name\"' or 'my_view'",
-            name
-        ))
-    })?;
+    // `parse_item_name_with_limit` enforces the 1 MB guard on the raw input
+    // (DEX-64) before lexing.
+    let parsed = parse_item_name_with_limit(name)
+        .map_err(McpRequestError::QueryValidationFailed)?
+        .map_err(|_| {
+            McpRequestError::QueryValidationFailed(format!(
+                "Invalid data product name: {}. Expected a valid object name, \
+                 e.g. '\"database\".\"schema\".\"name\"' or 'my_view'",
+                name
+            ))
+        })?;
 
     // Stable formatting forces all identifiers to be double-quoted,
     // so SQL keywords and special characters cannot escape.
@@ -1235,10 +1238,14 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
         ));
     }
 
-    // Parse the SQL to get AST
-    let stmts = parse(sql).map_err(|e| {
-        McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
-    })?;
+    // Parse the SQL to get AST. `parse_with_limit` rejects inputs larger
+    // than `MAX_STATEMENT_BATCH_SIZE` before lexing so the MCP endpoint
+    // enforces the same 1 MB guard as the SQL HTTP path (DEX-64).
+    let stmts = parse_with_limit(sql)
+        .map_err(McpRequestError::QueryValidationFailed)?
+        .map_err(|e| {
+            McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
+        })?;
 
     // Only allow a single statement
     if stmts.len() != 1 {
@@ -1385,10 +1392,13 @@ impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
 /// to prevent misuse of the developer endpoint for arbitrary computation).
 /// SHOW and EXPLAIN statements are allowed without table references.
 fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
-    // Parse the SQL to validate it
-    let stmts = parse(sql).map_err(|e| {
-        McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
-    })?;
+    // Parse the SQL to validate it. `parse_with_limit` enforces the 1 MB
+    // guard shared with the SQL HTTP path (DEX-64).
+    let stmts = parse_with_limit(sql)
+        .map_err(McpRequestError::QueryValidationFailed)?
+        .map_err(|e| {
+            McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
+        })?;
 
     if stmts.is_empty() {
         return Err(McpRequestError::QueryValidationFailed(
@@ -1538,6 +1548,36 @@ mod tests {
     fn test_validate_readonly_query_rejects_empty() {
         assert!(validate_readonly_query("").is_err());
         assert!(validate_readonly_query("   ").is_err());
+    }
+
+    /// Regression test for DEX-64: without the 1 MB parser guard, the MCP
+    /// validators would happily lex and parse multi-megabyte input. Both
+    /// `validate_readonly_query` and `validate_system_catalog_query` now go
+    /// through `parse_with_limit`, so an oversized batch is rejected with the
+    /// same "statement batch size cannot exceed" message the SQL HTTP path
+    /// emits.
+    #[mz_ore::test]
+    fn test_validate_readonly_query_enforces_size_limit() {
+        // ~1.2 MB of valid statements: exceeds MAX_STATEMENT_BATCH_SIZE (1 MB).
+        let oversized: String = "SELECT 1;".repeat(1_200_000 / "SELECT 1;".len());
+        let err = validate_readonly_query(&oversized).expect_err("should be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("statement batch size cannot exceed"),
+            "expected size-guard error, got: {msg}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_enforces_size_limit() {
+        let oversized: String =
+            "SELECT * FROM mz_tables;".repeat(1_200_000 / "SELECT * FROM mz_tables;".len());
+        let err = validate_system_catalog_query(&oversized).expect_err("should be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("statement batch size cannot exceed"),
+            "expected size-guard error, got: {msg}"
+        );
     }
 
     #[mz_ore::test]
@@ -2079,6 +2119,20 @@ mod tests {
     fn test_safe_data_product_name_rejects_empty() {
         assert!(safe_data_product_name("").is_err());
         assert!(safe_data_product_name("   ").is_err());
+    }
+
+    /// DEX-64: `parse_item_name` is unbounded on its own; the MCP path
+    /// switches to `parse_item_name_with_limit` so a pathological name (e.g.
+    /// millions of `(` characters) is rejected before lexing.
+    #[mz_ore::test]
+    fn test_safe_data_product_name_enforces_size_limit() {
+        let oversized: String = "(".repeat(1_200_000);
+        let err = safe_data_product_name(&oversized).expect_err("should be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("statement batch size cannot exceed"),
+            "expected size-guard error, got: {msg}"
+        );
     }
 
     #[mz_ore::test]
