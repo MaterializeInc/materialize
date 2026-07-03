@@ -697,10 +697,16 @@ fn parser<'a>() -> impl Parser<'a, &'a [Token], Vec<Rule>, TokErr<'a>> {
         two_idents("non_identity_projection")
             .map(|(payload, rel)| Cond::NonIdentityProjection { payload, rel }),
         one_ident("reads_indexed_global").map(|rel| Cond::ReadsIndexedGlobal { rel }),
-        one_ident("scalar_lit_true").map(|scalar| Cond::ScalarLitTrue { scalar }),
-        one_ident("scalar_lit_false_or_null").map(|scalar| Cond::ScalarLitFalseOrNull { scalar }),
-        one_ident("scalar_no_error").map(|scalar| Cond::ScalarNoError { scalar }),
-        one_ident("scalar_non_nullable").map(|scalar| Cond::ScalarNonNullable { scalar }),
+        // Nested one level to stay within chumsky's 26-element `choice` tuple limit.
+        choice((
+            one_ident("scalar_lit_true").map(|scalar| Cond::ScalarLitTrue { scalar }),
+            one_ident("scalar_lit_false_or_null")
+                .map(|scalar| Cond::ScalarLitFalseOrNull { scalar }),
+            one_ident("scalar_no_error").map(|scalar| Cond::ScalarNoError { scalar }),
+            one_ident("scalar_any_lit_false").map(|list| Cond::AnyScalarLit { list, value: false }),
+            one_ident("scalar_any_lit_true").map(|list| Cond::AnyScalarLit { list, value: true }),
+            one_ident("scalar_non_nullable").map(|scalar| Cond::ScalarNonNullable { scalar }),
+        )),
     ));
 
     // --- rule ---
@@ -938,6 +944,41 @@ mod tests {
                 func: "f".to_string(),
                 expr1: Box::new(crate::dsl::Pat::RelVar("a".to_string())),
                 expr2: Box::new(crate::dsl::Pat::RelVar("b".to_string())),
+            }
+        );
+    }
+
+    /// `scalar_any_lit_false`/`scalar_any_lit_true` name the same rest metavar
+    /// a `Variadic` pattern binds (`xs` in `Variadic[and](xs...)`), confirming
+    /// the cond is grammar-general over a variadic's rest-captured list rather
+    /// than tied to a scalar-only production.
+    #[test]
+    fn parses_scalar_any_lit_cond() {
+        let src = "rule r { Variadic[and](xs...) => false where scalar_any_lit_false(xs) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        match &rules[0].lhs {
+            crate::dsl::Pat::SVariadic { func, inputs } => {
+                assert_eq!(func, "and");
+                assert_eq!(inputs.rest.as_deref(), Some("xs"));
+            }
+            other => panic!("expected SVariadic, got {other:?}"),
+        }
+        assert_eq!(rules[0].conds.len(), 1);
+        assert_eq!(
+            rules[0].conds[0],
+            crate::dsl::Cond::AnyScalarLit {
+                list: "xs".to_string(),
+                value: false,
+            }
+        );
+
+        let src = "rule r { Variadic[and](xs...) => false where scalar_any_lit_true(xs) }";
+        let rules = crate::grammar::parse(src).expect("parses");
+        assert_eq!(
+            rules[0].conds[0],
+            crate::dsl::Cond::AnyScalarLit {
+                list: "xs".to_string(),
+                value: true,
             }
         );
     }

@@ -414,6 +414,13 @@ pub enum Cond {
     /// `scalar_no_error(s)`: the class bound to `s` has `could_error == false`
     /// (scalar `could_error` analysis). Gates `if_same_branches`.
     ScalarNoError { scalar: String },
+    /// `scalar_any_lit_false(xs)` / `scalar_any_lit_true(xs)`: some operand in the
+    /// rest-captured list `xs` (a variadic operator's operands, `Vec<Id>`) is a scalar
+    /// literal equal to `value`. List-quantified: the per-element check is the scalar
+    /// `literal` analysis. Grammar-general over CombinedLang (the rest is `Vec<Id>` for
+    /// any variadic, scalar or relational); only the per-element predicate is scalar.
+    /// Gates `and_or_short_circuit`.
+    AnyScalarLit { list: String, value: bool },
     /// `scalar_non_nullable(s)`: the class bound to scalar metavar `s` is provably
     /// non-nullable, via `scalar_extract::raise(g, s).typ(col_types).nullable == false`.
     /// Computed on demand (no lattice storage). Gates `isnull_fold`.
