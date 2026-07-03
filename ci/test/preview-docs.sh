@@ -21,7 +21,7 @@ fi
 cd doc/user
 
 # Build main docs to public/
-hugo --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
+hugo --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
 
 # Build skill docs to public/markdown-docs/
 hugo --config config.toml,config.skill.toml --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds sitemap,robotsTXT,taxonomy
