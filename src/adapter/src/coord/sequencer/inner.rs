@@ -1516,13 +1516,23 @@ impl Coordinator {
             }
         }
 
-        let privilege_revoke_ops = privilege_revokes.into_iter().map(|(object_id, privilege)| {
-            catalog::Op::UpdatePrivilege {
-                target_id: object_id,
-                privilege,
-                variant: UpdatePrivilegeVariant::Revoke,
-            }
-        });
+        // Group revokes by target so each object is rewritten once, not once per privilege.
+        let mut privilege_revokes_by_target: BTreeMap<SystemObjectId, Vec<MzAclItem>> =
+            BTreeMap::new();
+        for (object_id, privilege) in privilege_revokes {
+            privilege_revokes_by_target
+                .entry(object_id)
+                .or_default()
+                .push(privilege);
+        }
+        let privilege_revoke_ops =
+            privilege_revokes_by_target
+                .into_iter()
+                .map(|(target_id, privileges)| catalog::Op::UpdatePrivilege {
+                    target_id,
+                    privileges,
+                    variant: UpdatePrivilegeVariant::Revoke,
+                });
         let default_privilege_revoke_ops = plan.default_privilege_revokes.into_iter().map(
             |(privilege_object, privilege_acl_item)| catalog::Op::UpdateDefaultPrivilege {
                 privilege_object,
@@ -4345,7 +4355,7 @@ impl Coordinator {
         grantees: Vec<RoleId>,
         variant: UpdatePrivilegeVariant,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = Vec::with_capacity(update_privileges.len() * grantees.len());
+        let mut ops = Vec::with_capacity(update_privileges.len());
         let mut warnings = Vec::new();
         let catalog = self.catalog().for_session(session);
 
@@ -4389,6 +4399,9 @@ impl Coordinator {
                     "GRANTs/REVOKEs on an object type with no privileges",
                 ))?;
 
+            // Collect every grantee's change to this target into one op, so a bulk grant/revoke
+            // touching one object is a single durable write rather than one per grantee.
+            let mut target_privileges = Vec::with_capacity(grantees.len());
             for grantee in &grantees {
                 self.catalog().ensure_not_system_role(grantee)?;
                 self.catalog().ensure_not_predefined_role(grantee)?;
@@ -4397,39 +4410,30 @@ impl Coordinator {
                     .map(Cow::Borrowed)
                     .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(*grantee, grantor)));
 
-                match variant {
-                    UpdatePrivilegeVariant::Grant
-                        if !existing_privilege.acl_mode.contains(acl_mode) =>
-                    {
-                        ops.push(catalog::Op::UpdatePrivilege {
-                            target_id: target_id.clone(),
-                            privilege: MzAclItem {
-                                grantee: *grantee,
-                                grantor,
-                                acl_mode,
-                            },
-                            variant,
-                        });
+                // Skip grantees for which the grant/revoke would be a no-op.
+                let changes = match variant {
+                    UpdatePrivilegeVariant::Grant => {
+                        !existing_privilege.acl_mode.contains(acl_mode)
                     }
-                    UpdatePrivilegeVariant::Revoke
-                        if !existing_privilege
-                            .acl_mode
-                            .intersection(acl_mode)
-                            .is_empty() =>
-                    {
-                        ops.push(catalog::Op::UpdatePrivilege {
-                            target_id: target_id.clone(),
-                            privilege: MzAclItem {
-                                grantee: *grantee,
-                                grantor,
-                                acl_mode,
-                            },
-                            variant,
-                        });
-                    }
-                    // no-op
-                    _ => {}
+                    UpdatePrivilegeVariant::Revoke => !existing_privilege
+                        .acl_mode
+                        .intersection(acl_mode)
+                        .is_empty(),
+                };
+                if changes {
+                    target_privileges.push(MzAclItem {
+                        grantee: *grantee,
+                        grantor,
+                        acl_mode,
+                    });
                 }
+            }
+            if !target_privileges.is_empty() {
+                ops.push(catalog::Op::UpdatePrivilege {
+                    target_id: target_id.clone(),
+                    privileges: target_privileges,
+                    variant,
+                });
             }
         }
 

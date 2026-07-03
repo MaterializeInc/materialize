@@ -672,9 +672,15 @@ fn generate_rbac_requirements(
             if_not_exists: _,
             ambiguous_columns: _,
         }) => RbacRequirements {
+            // `CREATE REPLACEMENT MATERIALIZED VIEW ... FOR <target>` requires ownership of the
+            // target, mirroring `ALTER ... APPLY REPLACEMENT` and `CREATE INDEX`, which require
+            // ownership of the item they act on. `replace` is the separate `CREATE OR REPLACE`
+            // target. Both are optional and independent, so require ownership of whichever are set.
             ownership: replace
-                .map(|id| vec![ObjectId::Item(id)])
-                .unwrap_or_default(),
+                .iter()
+                .chain(materialized_view.replacement_target.iter())
+                .map(|id| ObjectId::Item(*id))
+                .collect(),
             privileges: vec![
                 (
                     SystemObjectId::Object(name.qualifiers.clone().into()),

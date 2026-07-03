@@ -8,14 +8,14 @@
 // by the Apache License, Version 2.0.
 
 //! [`RenderPlan`], a representation of LIR plans used in the compute protocol and rendering,
-//! and support for converting [`Plan`]s into this representation.
+//! and support for converting [`LirRelationExpr`]s into this representation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{
-    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc,
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MfpPlan, SafeMfpPlan, TableFunc,
 };
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::{CompactScalars, ExprHumanizer};
@@ -24,19 +24,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan, ReducePlan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::{MonotonicTopKPlan, TopKPlan};
-use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId, Plan, PlanNode};
+use crate::plan::{
+    ArrangementStrategy, AvailableCollections, GetPlan, LirId, LirRelationExpr, LirRelationNode,
+};
 
 /// A representation of LIR plans used for rendering.
 ///
-/// In contrast to [`Plan`], which recursively contains its subplans, this type encodes references
+/// In contrast to [`LirRelationExpr`], which recursively contains its subplans, this type encodes references
 /// between nodes with their unique [`LirId`]. Doing so has the benefit that operations that visit
 /// all nodes in a [`RenderPlan`] have natural iterative implementations, avoiding the risk of
 /// stack overflows. An exception are recursive bindings, which are defined through nesting of
 /// [`RenderPlan`]s. We expect the depth of these nestings to be low for reasonable plans.
 ///
-/// A [`RenderPlan`] can be constructed from a [`Plan`] using the corresponding [`TryFrom`] impl.
+/// A [`RenderPlan`] can be constructed from a [`LirRelationExpr`] using the corresponding [`TryFrom`] impl.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RenderPlan {
     /// Stages of bindings to render in order.
@@ -119,7 +122,7 @@ pub struct Node {
 
 /// A relation expression in a [`RenderPlan`].
 ///
-/// Variants mostly match the ones of [`Plan`], except:
+/// Variants mostly match the ones of [`LirRelationExpr`], except:
 ///
 ///  * The `Let` and `LetRec` variants are removed.
 ///  * The `lir_id` fields are removed.
@@ -154,10 +157,10 @@ pub enum Expr {
         /// The input collection.
         input: LirId,
         /// Linear operator to apply to each record.
-        mfp: MapFilterProject,
+        mfp: MfpPlan<LirScalarExpr>,
         /// Whether the input is from an arrangement, and if so, whether we can seek to a specific
         /// value therein.
-        input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        input_key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
     },
     /// A variable number of output records for each input record.
     ///
@@ -172,15 +175,15 @@ pub enum Expr {
     /// cases. Instead, in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
         /// The particular arrangement of the input we expect to use, if any.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: LirId,
         /// Expressions that for each row prepare the arguments to `func`.
-        exprs: Vec<MirScalarExpr>,
+        exprs: Vec<LirScalarExpr>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Linear operator to apply to each record produced by `func`.
-        mfp_after: MapFilterProject,
+        mfp_after: MfpPlan<LirScalarExpr>,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -200,7 +203,7 @@ pub enum Expr {
     /// Aggregation by key.
     Reduce {
         /// The particular arrangement of the input we expect to use, if any.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: LirId,
         /// A plan for changing input records into key, value pairs.
@@ -213,10 +216,10 @@ pub enum Expr {
         plan: ReducePlan,
         /// An MFP that must be applied to results. The projection part of this MFP must preserve
         /// the key for the reduction; otherwise, the results become undefined. Additionally, the
-        /// MFP must be free from temporal predicates so that it can be readily evaluated.
-        mfp_after: MapFilterProject,
+        /// MFP is guaranteed be free from temporal predicates so that it can be readily evaluated.
+        mfp_after: SafeMfpPlan<LirScalarExpr>,
         /// How the renderer should form the internal input arrangement built by `Reduce`.
-        /// Mirrors [`PlanNode::Reduce::temporal_bucketing_strategy`].
+        /// Mirrors [`LirRelationNode::Reduce::temporal_bucketing_strategy`].
         temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
@@ -230,7 +233,7 @@ pub enum Expr {
         /// more detail.
         top_k_plan: TopKPlan,
         /// How the renderer should bucket the input collection ahead of the Top-K operator.
-        /// Mirrors [`PlanNode::TopK::temporal_bucketing_strategy`].
+        /// Mirrors [`LirRelationNode::TopK::temporal_bucketing_strategy`].
         temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Inverts the sign of each update.
@@ -263,22 +266,22 @@ pub enum Expr {
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
         /// Per-input bucketing strategies, lockstep with `inputs`. Mirrors
-        /// [`PlanNode::Union::temporal_bucketing_strategies`].
+        /// [`LirRelationNode::Union::temporal_bucketing_strategies`].
         temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
     /// The `input` plan, but with additional arrangements.
     ///
     /// This operator does not change the logical contents of `input`, but ensures that certain
     /// arrangements are available in the results. This operator can be important for e.g. the
-    /// `Join` stage which benefits from multiple arrangements or to cap a `Plan` so that indexes
+    /// `Join` stage which benefits from multiple arrangements or to cap a `LirRelationExpr` so that indexes
     /// can be exported.
     ArrangeBy {
         /// The key that must be used to access the input.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
         input: LirId,
         /// The MFP that must be applied to the input.
-        input_mfp: MapFilterProject,
+        input_mfp: MfpPlan<LirScalarExpr>,
         /// A list of arrangement keys, and possibly a raw collection, that will be added to those
         /// of the input. Does not include any other existing arrangements.
         forms: AvailableCollections,
@@ -287,17 +290,17 @@ pub enum Expr {
     },
 }
 
-impl TryFrom<Plan> for RenderPlan {
+impl TryFrom<LirRelationExpr> for RenderPlan {
     /// The only error is "invalid input plan".
     type Error = ();
 
-    /// Convert the given [`Plan`] into a [`RenderPlan`].
+    /// Convert the given [`LirRelationExpr`] into a [`RenderPlan`].
     ///
     /// The ids in [`Node`]s are the same as the original [`LirId`]s.
     ///
     /// # Preconditions
     ///
-    /// A [`RenderPlan`] requires certain structure of the [`Plan`] it is converted from.
+    /// A [`RenderPlan`] requires certain structure of the [`LirRelationExpr`] it is converted from.
     ///
     /// Informally, each valid plan is a sequence of Let and LetRec bindings atop a let-free
     /// expression. Each Let binding is to a let-free expression, and each LetRec binding is to a
@@ -309,12 +312,12 @@ impl TryFrom<Plan> for RenderPlan {
     ///              |  LETREC (v = <valid_plan>)* IN <valid_plan>
     /// ```
     ///
-    /// Input [`Plan`]s that do not satisfy this requirement will result in errors.
-    fn try_from(mut plan: Plan) -> Result<Self, Self::Error> {
-        use PlanNode::{Let, LetRec};
+    /// Input [`LirRelationExpr`]s that do not satisfy this requirement will result in errors.
+    fn try_from(mut plan: LirRelationExpr) -> Result<Self, Self::Error> {
+        use LirRelationNode::{Let, LetRec};
 
         // Peel off stages of bindings. Each stage is constructed of an arbitrary amount of leading
-        // `Plan::Let` nodes, and at most one `Plan::LetRec` node.
+        // `LirRelationExpr::Let` nodes, and at most one `LirRelationExpr::LetRec` node.
         let mut binds = Vec::new();
         while matches!(plan.node, Let { .. } | LetRec { .. }) {
             let mut lets = Vec::new();
@@ -349,24 +352,24 @@ impl TryFrom<Plan> for RenderPlan {
     }
 }
 
-impl TryFrom<Plan> for LetFreePlan {
+impl TryFrom<LirRelationExpr> for LetFreePlan {
     /// The only error is "invalid input plan".
     type Error = ();
 
-    /// Convert the given [`Plan`] into a [`LetFreePlan`].
+    /// Convert the given [`LirRelationExpr`] into a [`LetFreePlan`].
     ///
-    /// Returns an error if the given [`Plan`] contains `Let` or `LetRec` nodes.
-    fn try_from(plan: Plan) -> Result<Self, Self::Error> {
+    /// Returns an error if the given [`LirRelationExpr`] contains `Let` or `LetRec` nodes.
+    fn try_from(plan: LirRelationExpr) -> Result<Self, Self::Error> {
         use Expr::*;
 
-        // The strategy is to walk walk through the `Plan` in right-to-left pre-order and for each
+        // The strategy is to walk walk through the `LirRelationExpr` in right-to-left pre-order and for each
         // node (a) produce a corresponding `Node` and (b) push the contained subplans onto the
         // work stack. We do this until no further subplans remain.
 
         let root = plan.lir_id;
 
         // Stack of nodes to flatten, with their parent id and nesting.
-        let mut todo: Vec<(Plan, Option<LirId>, u8)> = vec![(plan, None, 0)];
+        let mut todo: Vec<(LirRelationExpr, Option<LirId>, u8)> = vec![(plan, None, 0)];
         // `RenderPlan` nodes produced so far.
         let mut nodes: BTreeMap<LirId, Node> = Default::default();
         // A list remembering the order in which nodes were flattened.
@@ -386,17 +389,17 @@ impl TryFrom<Plan> for LetFreePlan {
             flatten_order.push(id);
         };
 
-        while let Some((Plan { node, lir_id }, parent, nesting)) = todo.pop() {
+        while let Some((LirRelationExpr { node, lir_id }, parent, nesting)) = todo.pop() {
             match node {
-                PlanNode::Constant { rows } => {
+                LirRelationNode::Constant { rows } => {
                     let expr = Constant { rows };
                     insert_node(lir_id, parent, expr, nesting);
                 }
-                PlanNode::Get { id, keys, plan } => {
+                LirRelationNode::Get { id, keys, plan } => {
                     let expr = Get { id, keys, plan };
                     insert_node(lir_id, parent, expr, nesting);
                 }
-                PlanNode::Mfp {
+                LirRelationNode::Mfp {
                     input,
                     mfp,
                     input_key_val,
@@ -410,7 +413,7 @@ impl TryFrom<Plan> for LetFreePlan {
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::FlatMap {
+                LirRelationNode::FlatMap {
                     input_key,
                     input,
                     exprs,
@@ -428,7 +431,7 @@ impl TryFrom<Plan> for LetFreePlan {
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::Join { inputs, plan } => {
+                LirRelationNode::Join { inputs, plan } => {
                     let expr = Join {
                         inputs: inputs.iter().map(|i| i.lir_id).collect(),
                         plan,
@@ -441,7 +444,7 @@ impl TryFrom<Plan> for LetFreePlan {
                             .map(|plan| (plan, Some(lir_id), nesting.saturating_add(1))),
                     );
                 }
-                PlanNode::Reduce {
+                LirRelationNode::Reduce {
                     input_key,
                     input,
                     key_val_plan,
@@ -461,7 +464,7 @@ impl TryFrom<Plan> for LetFreePlan {
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::TopK {
+                LirRelationNode::TopK {
                     input,
                     top_k_plan,
                     temporal_bucketing_strategy,
@@ -475,7 +478,7 @@ impl TryFrom<Plan> for LetFreePlan {
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::Negate { input } => {
+                LirRelationNode::Negate { input } => {
                     let expr = Negate {
                         input: input.lir_id,
                     };
@@ -483,7 +486,7 @@ impl TryFrom<Plan> for LetFreePlan {
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::Threshold {
+                LirRelationNode::Threshold {
                     input,
                     threshold_plan,
                 } => {
@@ -495,7 +498,7 @@ impl TryFrom<Plan> for LetFreePlan {
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::Union {
+                LirRelationNode::Union {
                     inputs,
                     consolidate_output,
                     temporal_bucketing_strategies,
@@ -513,7 +516,7 @@ impl TryFrom<Plan> for LetFreePlan {
                             .map(|plan| (plan, Some(lir_id), nesting.saturating_add(1))),
                     );
                 }
-                PlanNode::ArrangeBy {
+                LirRelationNode::ArrangeBy {
                     input_key,
                     input,
                     input_mfp,
@@ -531,7 +534,7 @@ impl TryFrom<Plan> for LetFreePlan {
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::Let { .. } | PlanNode::LetRec { .. } => return Err(()),
+                LirRelationNode::Let { .. } | LirRelationNode::LetRec { .. } => return Err(()),
             };
         }
 
@@ -659,7 +662,7 @@ impl LetFreePlan {
 impl RenderPlan {
     /// Partitions the plan into `parts` many disjoint pieces.
     ///
-    /// This is used to partition `PlanNode::Constant` stages so that the work
+    /// This is used to partition `LirRelationNode::Constant` stages so that the work
     /// can be distributed across many workers.
     pub fn partition_among(self, parts: usize) -> Vec<Self> {
         if parts == 0 {
@@ -693,7 +696,7 @@ impl RenderPlan {
 impl BindStage {
     /// Partitions the stage into `parts` many disjoint pieces.
     ///
-    /// This is used to partition `PlanNode::Constant` stages so that the work
+    /// This is used to partition `LirRelationNode::Constant` stages so that the work
     /// can be distributed across many workers.
     fn partition_among(self, parts: usize) -> Vec<Self> {
         let mut part_binds = vec![
@@ -724,7 +727,7 @@ impl BindStage {
 impl LetFreePlan {
     /// Partitions the plan into `parts` many disjoint pieces.
     ///
-    /// This is used to partition `PlanNode::Constant` stages so that the work
+    /// This is used to partition `LirRelationNode::Constant` stages so that the work
     /// can be distributed across many workers.
     fn partition_among(self, parts: usize) -> Vec<Self> {
         let mut part_plans = vec![
@@ -757,7 +760,7 @@ impl LetFreePlan {
 impl Expr {
     /// Partitions the expr into `parts` many disjoint pieces.
     ///
-    /// This is used to partition `PlanNode::Constant` stages so that the work
+    /// This is used to partition `LirRelationNode::Constant` stages so that the work
     /// can be distributed across many workers.
     fn partition_among(self, parts: usize) -> Vec<Self> {
         use Expr::Constant;
@@ -826,7 +829,7 @@ impl<'a> RenderPlanExprHumanizer<'a> {
 }
 
 impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
-    // NOTE: This code needs to be kept in sync with `Plan::fmt_default_text`.
+    // NOTE: This code needs to be kept in sync with `LirRelationExpr::fmt_default_text`.
     //
     // This code determines what you see in `mz_lir_mapping`; that other code
     // determine what you see when you run `EXPLAIN`.

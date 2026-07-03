@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_compute_types::dataflows::IndexDesc;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, ReprRelationType};
 use mz_sql::names::QualifiedItemName;
@@ -237,7 +237,7 @@ impl Optimize<GlobalMirPlan> for Optimizer {
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
-        let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
+        let df_desc = LirRelationExpr::finalize_dataflow(df_desc, &self.config.features)?;
 
         // Trace the pipeline output under `optimize`.
         trace_plan(&df_desc);

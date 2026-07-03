@@ -19,6 +19,7 @@ use mz_compute_client::controller::error as compute_error;
 use mz_compute_client::controller::error::InstanceMissing;
 
 use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::ClusterId;
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
@@ -226,6 +227,13 @@ pub enum AdapterError {
     DDLOnlyTransaction,
     /// Another session modified the Catalog while this transaction was open.
     DDLTransactionRace,
+    /// A conditional cluster-config write failed its precondition: the cluster's
+    /// managed config changed between when the write was conditioned and when it
+    /// was applied. Produced by `Op::CheckClusterState`, never by SQL DDL, so it
+    /// does not reach a SQL client.
+    ClusterStateChanged {
+        cluster_id: ClusterId,
+    },
     /// An error occurred in the storage layer
     Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
@@ -899,6 +907,7 @@ impl AdapterError {
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::ClusterStateChanged { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
             // transaction" are not things in Postgres. This error code is the generic "bad txn
@@ -1291,6 +1300,9 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLTransactionRace => f.write_str(
                 "another session modified the catalog while this DDL transaction was open",
             ),
+            AdapterError::ClusterStateChanged { cluster_id } => {
+                write!(f, "cluster {cluster_id} was concurrently modified")
+            }
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),

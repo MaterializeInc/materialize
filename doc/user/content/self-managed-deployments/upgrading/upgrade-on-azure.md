@@ -4,7 +4,7 @@ description: "Upgrade Materialize on Azure using the new Terraform module."
 menu:
   main:
     parent: "upgrading"
-    weight: 30
+    weight: 25
 ---
 
 The following tutorial upgrades your Materialize deployment running on Azure
@@ -34,7 +34,6 @@ name="downgrade-restriction" >}}
 - [Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform)
 - [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
-- [Helm 3.2.0+](https://helm.sh/docs/intro/install/)
 
 ## Upgrade process
 
@@ -44,75 +43,81 @@ The following procedure performs a rolling upgrade, where both the old and new M
 
 {{</ important >}}
 
-### Step 1: Set up
+### Step 1: Update TF module source version
 
-1. Open a Terminal window.
-
-1. Configure Azure CLI with your Azure credentials. For details, see the [Azure
-   documentation](https://learn.microsoft.com/en-us/cli/azure/authenticate-azure-cli).
-
-1. Go to the Terraform directory for your Materialize deployment. For example,
-   if you deployed from the `azure/examples/simple` directory:
-
-   ```bash
-   cd materialize-terraform-self-managed/azure/examples/simple
-   ```
-
-1. Configure `kubectl` to connect to your AKS cluster, replacing:
-
-   - `<your-resource-group-name>` with your resource group name; i.e., the
-     `resource_group_name` in the Terraform output or in the
-     `terraform.tfvars` file.
-
-   - `<your-aks-cluster-name>` with your cluster name; i.e., the
-     `aks_cluster_name` in the Terraform output. For the sample example,
-     your cluster name has the form `{prefix_name}-aks`; e.g., simple-demo-aks`.
-
-   ```bash
-   # az aks get-credentials --resource-group <your-resource-group-name> --name <your-aks-cluster-name>
-   az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -raw aks_cluster_name)
-   ```
-
-   To verify that you have configured correctly, run the following command:
-
-   ```bash
-   kubectl get nodes
-   ```
-
-   For help with `kubectl` commands, see [kubectl Quick reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
-
-### Step 2: Update the Helm Chart
+Update each module's `source` to point to the desired release tag, substituting
+`<RELEASE_TAG>` in the code block below with your tag version:
 
 {{< important >}}
 
-{{% include-from-yaml data="self_managed/upgrades" name="upgrade-order-rule" %}}
+The following code block is not comprehensive. Only the core modules and their
+dependency chain are shown below.
 
-{{</ important >}}
+If your configuration includes additional modules (networking, storage,
+database, node pools, etc.) provided by Materialize, **update those to the same
+release tag as well**.
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-update-helm-chart" %}}
+{{< /important >}}
 
-### Step 3: Upgrade the Materialize Operator
+```hcl
+module "aks" {
+  source = "github.com/MaterializeInc/materialize-terraform-self-managed//azure/modules/aks?ref=<RELEASE_TAG>"
+  # ... your existing configuration ...
+}
 
-{{< important >}}
+module "cert_manager" {
+  source = "github.com/MaterializeInc/materialize-terraform-self-managed//kubernetes/modules/cert-manager?ref=<RELEASE_TAG>"
+  # ... your existing configuration ...
 
-{{% include-from-yaml data="self_managed/upgrades" name="upgrade-order-rule" %}}
+  # Your configuration may have additional dependencies here.
+  depends_on = [module.aks]
+}
 
-{{</ important >}}
+module "operator" {
+  source = "github.com/MaterializeInc/materialize-terraform-self-managed//azure/modules/operator?ref=<RELEASE_TAG>"
+  # ... your existing configuration ...
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-materialize-operator" %}}
+  # Your configuration may have additional dependencies here.
+  depends_on = [module.cert_manager]
+}
 
-### Step 4: Upgrading Materialize Instances
+module "materialize_instance" {
+  source = "github.com/MaterializeInc/materialize-terraform-self-managed//kubernetes/modules/materialize-instance?ref=<RELEASE_TAG>"
+  # ... your existing configuration ...
 
-{{< important >}}
+  # Your configuration may have additional dependencies here.
+  depends_on = [module.operator]
+}
 
-{{% include-from-yaml data="self_managed/upgrades" name="upgrade-order-rule" %}}
+# Update the source of any additional Materialize-provided modules to the same release tag
+```
 
-{{</ important >}}
+### Step 2: Explicitly request rollout if using v1alpha1
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-materialize-instance" %}}
+{{< self-managed/crd-version-note "v1alpha1" >}}
+
+{{< include-from-yaml data="self_managed/crd_version_checks"
+name="check-crd-version-tf" >}}
+
+- If you are using `v1`, skip to the [Apply the updated TF
+  step](#step-3-apply-the-updated-tf).
+- {{< include-from-yaml data="self_managed/upgrades"
+  name="upgrade-request_rollout" >}}
+
+### Step 3: Apply the updated TF
+
+{{% include-from-yaml data="self_managed/upgrades" name="upgrade-tf-apply" %}}
+
+### Step 4: Verify the upgrade
+
+Configure `kubectl` to connect to your AKS cluster:
+
+```bash
+# az aks get-credentials --resource-group <your-resource-group-name> --name <your-aks-cluster-name>
+az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -raw aks_cluster_name)
+```
+
+{{% include-from-yaml data="self_managed/upgrades" name="upgrade-verify-status" %}}
 
 ## See also
 

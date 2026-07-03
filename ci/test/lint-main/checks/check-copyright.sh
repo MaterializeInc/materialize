@@ -43,7 +43,7 @@ copyright_files=$(grep -vE \
     -e '^\.config/nextest\.toml$' \
     -e '(^|/)yarn\.lock$' \
     -e '(^|/)requirements.*\.txt$' \
-    -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html|so|uxf|woff2?)$' \
+    -e '\.(md|json|asc|png|jpe?g|svg|avif|avro|avsc|pb|ico|html|so|uxf|woff2?)$' \
     -e '^doc/user/.*(\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^ci/builder/(ssh_known_hosts|crosstool-.+\.defconfig)$' \
     -e '^ci/www/public/_redirects$' \

@@ -11,6 +11,9 @@
 # every time we get a CI builder with a cold cache.
 MZFROM console AS console
 
+# Statically-linked `ssh` client, used by the SSH tunnel feature.
+MZFROM openssh-static AS openssh-static
+
 MZFROM ubuntu-base
 
 ARG CI_SANITIZER=none
@@ -24,7 +27,6 @@ RUN groupadd --system --gid=999 materialize \
         gettext-base \
         nginx \
         postgresql-16 \
-        openssh-client \
         tini \
     && if [ "$CI_SANITIZER" != "none" ]; then \
         TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
@@ -61,6 +63,8 @@ COPY postgresql.conf pg_hba.conf /etc/postgresql/
 
 COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
 COPY console_nginx.template /etc/nginx/templates/default.conf.template
+
+COPY --from=openssh-static /output/ssh /usr/bin/ssh
 
 # Configure the console to listen on port 6874 and proxy API requests through to
 # the Materialize instance that will be started and listening for requests on

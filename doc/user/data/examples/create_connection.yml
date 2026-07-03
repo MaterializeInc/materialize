@@ -359,6 +359,38 @@
         |-------|-------|-------------|
         | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `true`. |
 
+- name: "syntax-glue"
+  code: |
+    CREATE CONNECTION <connection_name> TO AWS GLUE SCHEMA REGISTRY (
+        AWS CONNECTION = <aws_connection_name>,
+        REGISTRY = '<registry_name>'
+    )
+    [WITH (<with_options>)];
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`AWS CONNECTION`"
+      description: |
+        *Value:* object name. Required.
+
+        The name of an [AWS connection](#aws) that provides the credentials
+        Materialize uses to authenticate to AWS Glue. The Schema Registry's
+        region is taken from this connection.
+    - name: "`REGISTRY`"
+      description: |
+        *Value:* `text`. Required.
+
+        The name of the AWS Glue Schema Registry to read schemas from (for
+        example, `default-registry`). Must not be empty.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `true`. |
+
 - name: "syntax-mysql"
   code: |
     CREATE CONNECTION <connection_name> TO MYSQL (

@@ -237,3 +237,99 @@ simple conn=test_role,user=test_role
 SELECT * FROM mv
 ----
 COMPLETE 0
+
+
+# Regression test: authorization to CREATE a replacement against another role's
+# materialized view.
+#
+# CREATE [REPLACEMENT] MATERIALIZED VIEW ... FOR <target> must require ownership of
+# <target>, mirroring ALTER ... APPLY REPLACEMENT and CREATE INDEX, which both
+# require ownership of the item they act on. Without that check a role needs only
+# CREATE on a schema and a cluster it can use, plus USAGE on the target's schema to
+# name it, and can stage a replacement for another role's materialized view. At
+# most one replacement may exist per target, so that locks the owner out of the
+# replacement workflow on their own object, and the owner cannot drop the squatted
+# replacement because it is owned by the other role.
+#
+# The ownership requirement is enforced by the Plan::CreateMaterializedView arm of
+# generate_rbac_requirements in src/sql/src/rbac.rs, which includes
+# materialized_view.replacement_target in its ownership requirement.
+
+# RBAC enforcement is the premise of this test. It is on by default, but set it
+# explicitly so the test stays meaningful if that default ever changes.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks = true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE victim;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE attacker;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SCHEMA victim_schema;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SCHEMA attacker_schema;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA victim_schema OWNER TO victim;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA attacker_schema OWNER TO attacker;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON CLUSTER quickstart TO victim;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON CLUSTER quickstart TO attacker;
+----
+COMPLETE 0
+
+# The attacker gets only enough access to name the target, not to read it.
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA victim_schema TO attacker;
+----
+COMPLETE 0
+
+# The victim owns a materialized view in its own schema.
+simple conn=victim,user=victim
+CREATE TABLE victim_schema.t (a int, b int);
+----
+COMPLETE 0
+
+simple conn=victim,user=victim
+CREATE MATERIALIZED VIEW victim_schema.victim_mv AS SELECT a, b FROM victim_schema.t;
+----
+COMPLETE 0
+
+# The attacker reconstructs the target's output schema in its own table. The
+# column names and types are world-readable in the system catalog, so this needs
+# no read of the victim's data.
+simple conn=attacker,user=attacker
+CREATE TABLE attacker_schema.t2 (a int, b int);
+----
+COMPLETE 0
+
+# The attacker has no ownership, SELECT, or USAGE on victim_mv, so staging a
+# replacement for it must be rejected with an ownership error on the target.
+simple conn=attacker,user=attacker
+CREATE REPLACEMENT MATERIALIZED VIEW attacker_schema.rp FOR victim_schema.victim_mv AS SELECT a, b FROM attacker_schema.t2;
+----
+db error: ERROR: must be owner of MATERIALIZED VIEW materialize.victim_schema.victim_mv

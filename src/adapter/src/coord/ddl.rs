@@ -1294,6 +1294,7 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
+                | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
         }

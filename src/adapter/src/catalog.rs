@@ -106,6 +106,7 @@ pub(crate) mod consistency;
 mod migrate;
 
 mod apply;
+pub(crate) mod cluster_state;
 mod open;
 mod state;
 mod timeline;
@@ -178,7 +179,7 @@ impl Catalog {
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_types::plan::Plan>,
+        plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
     ) {
         self.state.set_physical_plan(id, plan);
     }
@@ -198,7 +199,7 @@ impl Catalog {
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
+    ) -> Option<&DataflowDescription<mz_compute_types::plan::LirRelationExpr>> {
         let entry = self.state.try_get_entry_by_global_id(id)?;
         entry.item().physical_plan().map(AsRef::as_ref)
     }
@@ -1401,7 +1402,7 @@ impl Catalog {
         id: GlobalId,
         local_mir: Option<OptimizedMirRelationExpr>,
         mut global_mir: DataflowDescription<OptimizedMirRelationExpr>,
-        mut physical_plan: DataflowDescription<mz_compute_types::plan::Plan>,
+        mut physical_plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
         optimizer_features: OptimizerFeatures,
     ) -> BoxFuture<'static, ()> {

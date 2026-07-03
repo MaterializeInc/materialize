@@ -112,7 +112,7 @@ use mz_compute_client::controller::error::{
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_controller::clusters::{
     ClusterConfig, ClusterEvent, ClusterStatus, ProcessId, ReplicaLocation,
 };
@@ -216,6 +216,7 @@ use crate::{AdapterNotice, ReadHolds, flags};
 
 pub(crate) mod appends;
 pub(crate) mod catalog_serving;
+pub(crate) mod cluster_controller;
 pub(crate) mod cluster_scheduling;
 pub(crate) mod consistency;
 pub(crate) mod id_bundle;
@@ -424,6 +425,11 @@ pub enum Message {
     /// A cluster will be On if and only if there is at least one On decision for it.
     /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
     SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
+
+    /// One pull/apply call from the cluster controller task, answered on the main
+    /// coordinator message loop from the catalog and live controller signals.
+    /// See [`cluster_controller`].
+    ClusterControllerRequest(cluster_controller::ClusterControllerRequest),
 }
 
 impl Message {
@@ -525,6 +531,7 @@ impl Message {
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
             Message::CheckSchedulingPolicies => "check_scheduling_policies",
             Message::SchedulingDecisions { .. } => "scheduling_decision",
+            Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
     }
@@ -697,6 +704,7 @@ pub struct PeekStageCopyTo {
     optimizer: optimize::copy_to::Optimizer,
     global_lir_plan: optimize::copy_to::GlobalLirPlan,
     optimization_finished_at: EpochMillis,
+    target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
 }
 
@@ -1861,6 +1869,10 @@ pub struct Coordinator {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Notification that triggers a group commit.
     group_commit_tx: appends::GroupCommitNotifier,
+    /// Wakes the cluster controller task to reconcile immediately instead of
+    /// waiting out its tick interval. Notified after catalog transactions that
+    /// change durable cluster state.
+    reconcile_now: Arc<Notify>,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
@@ -3810,6 +3822,7 @@ impl Coordinator {
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
+            self.spawn_cluster_controller_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -4227,7 +4240,7 @@ impl Coordinator {
     /// Panics if dataflow creation fails.
     pub(crate) async fn ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<Plan>,
+        dataflow: DataflowDescription<LirRelationExpr>,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) {
@@ -4240,7 +4253,7 @@ impl Coordinator {
     /// initialize the read policies for its exported readable objects.
     pub(crate) async fn try_ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<Plan>,
+        dataflow: DataflowDescription<LirRelationExpr>,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
@@ -4271,7 +4284,7 @@ impl Coordinator {
     /// Like `ship_dataflow`, but also await on builtin table updates.
     pub(crate) async fn ship_dataflow_and_notice_builtin_table_updates(
         &mut self,
-        dataflow: DataflowDescription<Plan>,
+        dataflow: DataflowDescription<LirRelationExpr>,
         instance: ComputeInstanceId,
         notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
         target_replica: Option<ReplicaId>,
@@ -4547,7 +4560,10 @@ fn arrangement_sizes_expired_retractions(
 #[cfg(test)]
 impl Coordinator {
     #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(&mut self, dataflow: DataflowDescription<Plan>) {
+    async fn verify_ship_dataflow_no_error(
+        &mut self,
+        dataflow: DataflowDescription<LirRelationExpr>,
+    ) {
         // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
         // called after `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors (which has
@@ -4983,6 +4999,7 @@ pub fn serve(
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,
+                    reconcile_now: Arc::new(Notify::new()),
                     strict_serializable_reads_tx,
                     linearize_reads_notify: Arc::new(Notify::new()),
                     global_timelines: timestamp_oracles,

@@ -196,9 +196,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "apache-avro"
@@ -5858,6 +5858,7 @@ dependencies = [
  "mz-cloud-provider",
  "mz-cloud-resources",
  "mz-cluster-client",
+ "mz-cluster-controller",
  "mz-compute-client",
  "mz-compute-types",
  "mz-controller",
@@ -5924,6 +5925,7 @@ dependencies = [
 name = "mz-adapter-types"
 version = "0.0.0"
 dependencies = [
+ "mz-compute-types",
  "mz-dyncfg",
  "mz-ore",
  "mz-repr",
@@ -6386,6 +6388,20 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "mz-cluster-controller"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "mz-adapter-types",
+ "mz-compute-types",
+ "mz-controller-types",
+ "mz-ore",
+ "mz-repr",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -8077,6 +8093,8 @@ dependencies = [
 name = "mz-row-spine"
 version = "0.0.0"
 dependencies = [
+ "ahash 0.8.12",
+ "columnar",
  "columnation",
  "differential-dataflow",
  "mz-ore",
@@ -8266,6 +8284,16 @@ dependencies = [
  "uncased",
  "uuid",
  "version-compare",
+]
+
+[[package]]
+name = "mz-sql-anonymize"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "mz-sql-parser",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

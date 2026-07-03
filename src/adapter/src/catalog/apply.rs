@@ -1532,12 +1532,7 @@ impl CatalogState {
             }
             StateUpdateKind::TemporaryItem(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
-            StateUpdateKind::Comment(comment) => vec![self.pack_comment_update(
-                comment.object_id,
-                comment.sub_component,
-                &comment.comment,
-                diff,
-            )],
+            StateUpdateKind::Comment(_) => Vec::new(),
             StateUpdateKind::SourceReferences(source_references) => {
                 self.pack_source_references_update(&source_references, diff)
             }
@@ -1586,7 +1581,7 @@ impl CatalogState {
     pub(super) fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_types::plan::Plan>,
+        plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
     ) {
         let item_id = self.entry_by_global_id[&id];
         let entry = self.get_entry_mut(&item_id);

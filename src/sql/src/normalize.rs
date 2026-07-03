@@ -361,11 +361,13 @@ pub fn create_statement(
         Statement::CreateSink(CreateSinkStatement {
             name,
             in_cluster: _,
+            from: _,
             connection: _,
             format: _,
             envelope: _,
+            mode: _,
+            with_options: _,
             if_not_exists,
-            ..
         }) => {
             if let Some(name) = name {
                 *name = allocate_name(name)?;
@@ -423,10 +425,10 @@ pub fn create_statement(
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
             in_cluster: _,
+            on_name: _,
             key_parts,
             with_options: _,
             if_not_exists,
-            ..
         }) => {
             let mut normalizer = QueryNormalizer::new();
             if let Some(key_parts) = key_parts {

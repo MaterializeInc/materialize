@@ -7,11 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import queue
 from copy import deepcopy
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
 from materialize.parallel_benchmark.framework import (
+    Action,
     ClosedLoop,
     LoadPhase,
     OpenLoop,
@@ -23,6 +25,7 @@ from materialize.parallel_benchmark.framework import (
     TdAction,
     TdPhase,
     disabled,
+    execute_query,
 )
 from materialize.util import PgConnInfo
 
@@ -454,6 +457,98 @@ class PoolRead(Scenario):
             conn_pool_size=100,
             guarantees={
                 "SELECT 1 (pooled)": {"avg": 5, "max": 200, "slope": 0.1},
+            },
+        )
+
+
+class GrantRevokeAllTables(Action):
+    """Grants then revokes `SELECT` on every table in a schema to many roles, over a
+    reused connection. Each invocation drives one bulk privilege transaction in each
+    direction, so the action keeps doing real work when looped (a repeated grant alone
+    would be a no-op after the first)."""
+
+    def __init__(self, schema: str, roles: list[str], conn_info: PgConnInfo):
+        grantees = ", ".join(roles)
+        self.grant = f"GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO {grantees}"
+        self.revoke = f"REVOKE SELECT ON ALL TABLES IN SCHEMA {schema} FROM {grantees}"
+        self.conn_info = conn_info
+        self.conn = conn_info.connect()
+        self.conn.autocommit = True
+        self.cur = self.conn.cursor()
+
+    def _run(self, conns: queue.Queue):
+        execute_query(self.cur, self.grant)
+        execute_query(self.cur, self.revoke)
+
+    def __str__(self) -> str:
+        return "GRANT/REVOKE SELECT ON ALL TABLES (reuse connection)"
+
+
+class BulkPrivilegeGrant(Scenario):
+    """Guards coordinator responsiveness during a bulk
+    `GRANT ... ON ALL TABLES IN SCHEMA ... TO <many roles>`.
+
+    The statement fans out to one catalog change per (table, grantee). Before the
+    durable-layer and op-batching fixes, every change ran an O(n) uniqueness scan over
+    the whole catalog, so the single big transaction wedged the single-threaded
+    coordinator for minutes and stalled unrelated queries. The operation is still not
+    cheap, but it no longer halts the coordinator, so we assert that a concurrent
+    `SELECT 1` stays responsive while grants and revokes churn in the background."""
+
+    SCALE = 150
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        schema = "bulk_privilege_grant"
+        tables = [f"t{i}" for i in range(self.SCALE)]
+        roles = [f"bulk_privilege_grant_r{i}" for i in range(self.SCALE)]
+        # Create the schema, tables, and roles as mz_system so it owns them and can grant on them,
+        # and raise the object/role limits the bulk fan-out needs.
+        setup = "\n".join(
+            [
+                "$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
+                "ALTER SYSTEM SET max_objects_per_schema = 1000000;",
+                "ALTER SYSTEM SET max_roles = 1000000;",
+                f"DROP SCHEMA IF EXISTS {schema} CASCADE;",
+                f"CREATE SCHEMA {schema};",
+                *[f"CREATE TABLE {schema}.{table} (a int);" for table in tables],
+                *[f"CREATE ROLE {role};" for role in roles],
+            ]
+        )
+        self.init(
+            [
+                TdPhase(setup),
+                LoadPhase(
+                    duration=60,
+                    actions=[
+                        # A single background thread issues the bulk grant/revoke back to back, so
+                        # at most one large catalog transaction runs at a time.
+                        ClosedLoop(
+                            action=GrantRevokeAllTables(
+                                schema=schema,
+                                roles=roles,
+                                conn_info=conn_infos["mz_system"],
+                            ),
+                            # We don't care whether the grant/revoke itself gets slower.
+                            report_regressions=False,
+                        ),
+                    ]
+                    + [
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "SELECT 1",
+                                conn_info=conn_infos["materialized"],
+                                strict_serializable=False,
+                            ),
+                        )
+                        for _ in range(10)
+                    ],
+                ),
+            ],
+            guarantees={
+                # Before the fix a single bulk grant blocked the coordinator for
+                # minutes. This bound catches that regression while leaving headroom
+                # for the background churn, which can briefly delay a `SELECT 1`.
+                "SELECT 1 (reuse connection)": {"max": 30000},
             },
         )
 

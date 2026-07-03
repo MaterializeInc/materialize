@@ -684,6 +684,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mcp_max_response_size",
     "user_id_pool_batch_size",
     "webhook_max_request_size_bytes",
+    "enable_cluster_controller",
+    "cluster_controller_tick_interval",
 ]
 
 

@@ -15,6 +15,8 @@
 #   - Schema evolution: records framed with v1 + v2 UUIDs against a v2 reader
 #   - KEY FORMAT + VALUE FORMAT (both Glue) under ENVELOPE UPSERT
 #   - ENVELOPE DEBEZIUM (Glue key + before/after envelope value)
+#   - Old-syntax sanity: FORMAT / ENVELOPE inline on CREATE SOURCE
+#     (bare ENVELOPE NONE and KEY/VALUE ENVELOPE UPSERT)
 #   - Negative cases (bad registry, missing/nonexistent SCHEMA NAME,
 #     non-Avro data format, wrong connection type, bare format + UPSERT,
 #     non-Kafka source)
@@ -348,6 +350,40 @@ $ kafka-ingest format=avro topic=dbz key-format=avro key-glue-schema-version-id=
 # id 1 updated to first-updated, id 2 deleted (after = null).
 > SELECT id, name FROM dbz_table ORDER BY id
 1 first-updated
+
+# ---------------------------------------------------------------------------
+# Old-syntax sanity checks: FORMAT / ENVELOPE inline on CREATE SOURCE (the
+# single-output source model), rather than on a CREATE TABLE .. FROM SOURCE.
+# This path is still reachable while `force_source_table_syntax` defaults to
+# off, and it purifies the Glue format through the same code as the table form.
+# Both topics were already ingested above, so these just re-read them through a
+# source that carries the format directly.
+# ---------------------------------------------------------------------------
+
+# Old syntax, bare FORMAT + ENVELOPE NONE (reuses the simple topic).
+> CREATE SOURCE simple_source_old_syntax
+  IN CLUSTER quickstart
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-simple-${testdrive.seed}')
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = '${simple-schema-name}')
+  ENVELOPE NONE
+
+> SELECT a, b FROM simple_source_old_syntax ORDER BY a
+1 hello
+2 world
+42 glue
+
+# Old syntax, KEY FORMAT + VALUE FORMAT + ENVELOPE UPSERT (reuses the upsert
+# topic). Confirms the key/value clause split works inline on CREATE SOURCE.
+> CREATE SOURCE upsert_source_old_syntax
+  IN CLUSTER quickstart
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-${testdrive.seed}')
+  KEY FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = '${upsert-key-schema-name}')
+  VALUE FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (SCHEMA NAME = '${upsert-value-schema-name}')
+  ENVELOPE UPSERT
+
+> SELECT key, f FROM upsert_source_old_syntax ORDER BY key
+cat  7
+fish 2000
 
 # ---------------------------------------------------------------------------
 # Negative: a bare (value-only) Glue FORMAT under ENVELOPE UPSERT must be

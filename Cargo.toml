@@ -24,6 +24,7 @@ members = [
     "src/cloud-resources",
     "src/cluster",
     "src/cluster-client",
+    "src/cluster-controller",
     "src/clusterd",
     "src/clusterd-test-driver",
     "src/compute",
@@ -102,6 +103,7 @@ members = [
     "src/server-core",
     "src/service",
     "src/sql",
+    "src/sql-anonymize",
     "src/sql-lexer",
     "src/sql-parser",
     "src/sql-pretty",
@@ -155,6 +157,7 @@ default-members = [
     "src/cloud-resources",
     "src/cluster",
     "src/cluster-client",
+    "src/cluster-controller",
     "src/clusterd",
     "src/clusterd-test-driver",
     "src/compute",
@@ -231,6 +234,7 @@ default-members = [
     "src/server-core",
     "src/service",
     "src/sql",
+    "src/sql-anonymize",
     "src/sql-lexer",
     "src/sql-parser",
     "src/sql-pretty",
@@ -260,6 +264,11 @@ exclude = [
     "misc/wasm/*",
     # Ignore any Rust dependencies that python packages might pull in.
     "misc/python/venv/*",
+    # The `src/*/fuzz` cargo-fuzz crates need no entry here: each sets
+    # `package.workspace = "../../../test/cargo-fuzz"`, attaching it to the fuzz
+    # workspace, and a crate nested under a workspace member is never
+    # auto-included in the root workspace. They build on a nightly toolchain
+    # (libFuzzer) via `cargo +nightly fuzz run ...` or `ci/test/cargo-fuzz.sh`.
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features,

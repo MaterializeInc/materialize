@@ -614,3 +614,45 @@ DataRow {"fields":["1"]}
 DataRow {"fields":["2"]}
 CommandComplete {"tag":"SELECT 2"}
 ReadyForQuery {"status":"I"}
+
+# Regression test for SQL-373: a constant peek must not let a COPY (a write)
+# sneak into a read-only transaction. The constant SELECT turns the
+# transaction's ops into a constant Peeks. The COPY used to be wrongly
+# accepted, switching the transaction into a write transaction, and a later
+# write then tripped an assertion and panicked. The COPY must be rejected.
+send
+Query {"query": "BEGIN READ ONLY; SELECT 1"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"T"}
+
+# The COPY is a write and must be rejected with a read-only error (25006),
+# moving the explicit transaction into the failed state.
+send
+Query {"query": "COPY t FROM STDIN"}
+CopyData "1\n"
+CopyDone
+----
+
+until err_field_typs=CM
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text"]}
+ErrorResponse {"fields":[{"typ":"C","value":"25006"},{"typ":"M","value":"transaction in read-only mode"}]}
+ReadyForQuery {"status":"E"}
+
+send
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}

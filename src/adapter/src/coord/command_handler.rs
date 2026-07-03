@@ -37,7 +37,7 @@ use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
 use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSinkAction, AlterSourceAction, AstInfo,
     ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement,
-    SubscribeStatement,
+    StatementKind, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -1072,6 +1072,19 @@ impl Coordinator {
         // outer execute should be considered finished once the inner one is.
         outer_context: Option<ExecuteContextGuard>,
     ) {
+        // A new statement is starting, so discard any cancellation that was signaled while no
+        // statement was running. Such a cancellation targeted an earlier statement and must not
+        // cancel the new one. (Like in PostgreSQL, a cancel request that arrives when nothing is
+        // running has no effect.) The watch would otherwise retain a stale `true` within an
+        // explicit transaction, because it is removed only when the transaction is cleared, not
+        // at statement end.
+        //
+        // Don't do this for nested executes (e.g., FETCH executing its cursor's statement): the
+        // outer statement is still running and a pending cancellation may target it.
+        if outer_context.is_none() {
+            self.connection_cancel_watches.remove(session.conn_id());
+        }
+
         if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
                 .context()
@@ -1382,9 +1395,17 @@ impl Coordinator {
                             }
                         }
 
-                        return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(
-                            stmt.to_string(),
-                        )));
+                        // For statements that can carry sensitive material, redact
+                        // literals so they don't leak into the error message, which
+                        // is persisted in `mz_statement_execution_history` (matching
+                        // how their SQL text is redacted). Other statements keep
+                        // their literals for a clearer error.
+                        let op = if StatementKind::from(&*stmt).is_sensitive() {
+                            stmt.to_ast_string_redacted()
+                        } else {
+                            stmt.to_string()
+                        };
+                        return ctx.retire(Err(AdapterError::OperationProhibitsTransaction(op)));
                     }
                 }
             }
