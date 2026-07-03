@@ -583,6 +583,15 @@ fn tmpl_list_expr(list: &ListTmpl, hole: &str) -> String {
                 ),
                 // Drop later duplicates by membership.
                 RestFilter::DedupById => format!("(dedupById {list})"),
+                // TODO(SP2b Slice 6e Task 4): renders as a plain splice,
+                // ignoring the absorption filter, mirroring the compile-only
+                // placeholder `and_or_dedup` got in 6c Task 2 before its Task 4
+                // proof landed. Correct only by accident; a rule whose proof
+                // depends on the dropped operand being absent needs a real Lean
+                // rendering (a `List`-level counterpart of
+                // `rest_filters::rest_absorb`) before its `choose_proof` arm can
+                // be trusted.
+                RestFilter::AbsorbSubsumed { .. } => list.clone(),
             },
         })
         .collect();

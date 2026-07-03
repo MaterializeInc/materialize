@@ -60,6 +60,10 @@ pub(crate) trait MatchGraph {
     /// Whether two or more of `ids` share a canonical e-class id. The backing
     /// for `Cond::HasDuplicateId`, the `and_or_dedup` fire-guard.
     fn cond_has_duplicate_id(&self, ids: &[Id]) -> bool;
+    /// Whether some operand in `ids` is subsumption-droppable under dual
+    /// connective `inner` with error-free dropped extras. Backs
+    /// `Cond::AbsorbApplies`.
+    fn cond_absorb_applies(&self, ids: &[Id], inner: &mz_expr::VariadicFunc) -> bool;
     // Color-exact conditions (graph/payload/arity only):
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool;
     fn cond_cols_in_range(&self, p: &Payload, lo: i64, hi: i64) -> bool;
@@ -174,6 +178,10 @@ impl<'a> MatchGraph for BaseView<'a> {
     fn cond_has_duplicate_id(&self, ids: &[Id]) -> bool {
         let mut seen = std::collections::HashSet::new();
         !ids.iter().all(|&id| seen.insert(self.eg.find(id)))
+    }
+
+    fn cond_absorb_applies(&self, ids: &[Id], inner: &mz_expr::VariadicFunc) -> bool {
+        crate::eqsat::rest_filters::absorb_drop_index(self.eg, ids, inner).is_some()
     }
 
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {

@@ -67,6 +67,9 @@ fn cond_is_color_exact(c: &Cond) -> bool {
         // reason: it only ever guards a scalar rule (`and_or_dedup`), and the
         // `ColoredView` impl is unconditionally inert.
         Cond::HasDuplicateId { .. } => false,
+        // Same reasoning as `HasDuplicateId`: only ever guards a scalar rule
+        // (`absorb_and_or`), and the `ColoredView` impl is unconditionally inert.
+        Cond::AbsorbApplies { .. } => false,
     }
 }
 
@@ -558,6 +561,11 @@ fn cond_expr(c: &Cond, m: &Matcher) -> String {
         Cond::HasDuplicateId { list } => {
             format!("g.cond_has_duplicate_id(&{})", m.rest_local(list))
         }
+        Cond::AbsorbApplies { list, inner } => format!(
+            "g.cond_absorb_applies(&{}, &{})",
+            m.rest_local(list),
+            variadic_func_value(inner)
+        ),
     }
 }
 
@@ -1131,6 +1139,10 @@ fn listtmpl_stmts(
                     RestFilter::DropScalarLit(value) => format!(
                         "crate::eqsat::rest_filters::rest_drop_scalar_lit(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?, {value})"
                     ),
+                    RestFilter::AbsorbSubsumed { inner } => format!(
+                        "crate::eqsat::rest_filters::rest_absorb(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?, &{})",
+                        variadic_func_value(inner)
+                    ),
                 };
                 out.push_str(&format!("{v}.extend({call});\n"));
             }
@@ -1501,6 +1513,9 @@ fn telem(e: &TElem) -> String {
             let f = match filter {
                 RestFilter::DedupById => format!("{P}::RestFilter::DedupById"),
                 RestFilter::DropScalarLit(v) => format!("{P}::RestFilter::DropScalarLit({v})"),
+                RestFilter::AbsorbSubsumed { inner } => {
+                    format!("{P}::RestFilter::AbsorbSubsumed {{ inner: {} }}", s(inner))
+                }
             };
             format!(
                 "{P}::TElem::FilterSplice {{ list: {}, filter: {} }}",
@@ -1681,6 +1696,11 @@ fn cond(c: &Cond) -> String {
         Cond::HasDuplicateId { list } => {
             format!("{P}::Cond::HasDuplicateId {{ list: {} }}", s(list))
         }
+        Cond::AbsorbApplies { list, inner } => format!(
+            "{P}::Cond::AbsorbApplies {{ list: {}, inner: {} }}",
+            s(list),
+            s(inner)
+        ),
     }
 }
 
