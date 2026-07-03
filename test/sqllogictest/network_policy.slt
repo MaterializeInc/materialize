@@ -107,3 +107,167 @@ select * from (SHOW NETWORK POLICIES)
 default
 open_ingress
 (empty)
+
+# Regression test: `GRANT/REVOKE USAGE ON ALL POLICIES` must apply to existing
+# network policies. The `All` target chain in plan_update_privilege
+# built its id set from clusters, databases, schemas, and items only. None of
+# those iterators produce an `ObjectId::NetworkPolicy`, so the object-type
+# filter dropped every candidate and the statement planned zero updates. The
+# result was a silent no-op: `GRANT`/`REVOKE` reported success while changing
+# nothing. This mirrors the omission fixed earlier for DROP OWNED BY / REASSIGN
+# OWNED BY.
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE np_grantee
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE NETWORK POLICY np_grant (RULES (r1 (address='0.0.0.0/32', action='allow', direction='ingress')))
+----
+COMPLETE 0
+
+# np_grantee starts without any network policy privileges.
+query TT rowsort
+SELECT np.name, mz_internal.mz_aclitem_privileges(priv)
+FROM mz_internal.mz_network_policies np,
+     unnest(np.privileges) AS priv,
+     mz_roles r
+WHERE mz_internal.mz_aclitem_grantee(priv) = r.id AND r.name = 'np_grantee'
+----
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON ALL POLICIES TO np_grantee
+----
+COMPLETE 0
+
+# The grant must land on every user network policy: the built-in `default`
+# policy and the freshly created `np_grant`.
+query TT rowsort
+SELECT np.name, mz_internal.mz_aclitem_privileges(priv)
+FROM mz_internal.mz_network_policies np,
+     unnest(np.privileges) AS priv,
+     mz_roles r
+WHERE mz_internal.mz_aclitem_grantee(priv) = r.id AND r.name = 'np_grantee'
+----
+default
+U
+np_grant
+U
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON ALL POLICIES FROM np_grantee
+----
+COMPLETE 0
+
+# The revoke must clear USAGE from every user network policy.
+query TT rowsort
+SELECT np.name, mz_internal.mz_aclitem_privileges(priv)
+FROM mz_internal.mz_network_policies np,
+     unnest(np.privileges) AS priv,
+     mz_roles r
+WHERE mz_internal.mz_aclitem_grantee(priv) = r.id AND r.name = 'np_grantee'
+----
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY np_grant
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE np_grantee
+----
+COMPLETE 0
+
+# Regression test: a non-system role that owns a network policy can grant and
+# revoke USAGE on it through the singular `GRANT/REVOKE ... ON NETWORK POLICY
+# <name>` form. The bulk `ALL POLICIES` form always includes the built-in
+# `default` policy owned by mz_system, so the GRANT/REVOKE ownership check in
+# generate_rbac_requirements rejects the whole statement for a non-system
+# owner. The singular target is the escape hatch owners need to manage USAGE on
+# their own policies.
+
+# RBAC enforcement is the premise of this test. It is on by default, but set it
+# explicitly so the test stays meaningful if that default ever changes.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks = true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE np_owner
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE np_owner_grantee
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATENETWORKPOLICY ON SYSTEM TO np_owner
+----
+COMPLETE 0
+
+# np_owner creates and therefore owns this policy.
+simple conn=np_owner,user=np_owner
+CREATE NETWORK POLICY np_owner_np (RULES (r1 (address='0.0.0.0/32', action='allow', direction='ingress')))
+----
+COMPLETE 0
+
+# The bulk form is unusable for np_owner: it also targets the built-in `default`
+# policy, which np_owner does not own.
+simple conn=np_owner,user=np_owner
+GRANT USAGE ON ALL POLICIES TO np_owner_grantee
+----
+db error: ERROR: must be owner of NETWORK POLICY default
+
+# The singular form lets np_owner grant USAGE on the policy it owns.
+simple conn=np_owner,user=np_owner
+GRANT USAGE ON NETWORK POLICY np_owner_np TO np_owner_grantee
+----
+COMPLETE 0
+
+query TT rowsort
+SELECT np.name, mz_internal.mz_aclitem_privileges(priv)
+FROM mz_internal.mz_network_policies np,
+     unnest(np.privileges) AS priv,
+     mz_roles r
+WHERE mz_internal.mz_aclitem_grantee(priv) = r.id AND r.name = 'np_owner_grantee'
+----
+np_owner_np
+U
+
+# And the singular form revokes it again.
+simple conn=np_owner,user=np_owner
+REVOKE USAGE ON NETWORK POLICY np_owner_np FROM np_owner_grantee
+----
+COMPLETE 0
+
+query TT rowsort
+SELECT np.name, mz_internal.mz_aclitem_privileges(priv)
+FROM mz_internal.mz_network_policies np,
+     unnest(np.privileges) AS priv,
+     mz_roles r
+WHERE mz_internal.mz_aclitem_grantee(priv) = r.id AND r.name = 'np_owner_grantee'
+----
+
+simple conn=mz_system,user=mz_system
+DROP NETWORK POLICY np_owner_np
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE np_owner_grantee
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATENETWORKPOLICY ON SYSTEM FROM np_owner
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE np_owner
+----
+COMPLETE 0

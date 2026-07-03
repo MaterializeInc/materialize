@@ -465,10 +465,16 @@ fn plan_update_privilege(
                         .get_items()
                         .into_iter()
                         .map(|item| item.id().into());
+                    let network_policy_ids = scx
+                        .catalog
+                        .get_network_policies()
+                        .into_iter()
+                        .map(|network_policy| ObjectId::NetworkPolicy(network_policy.id()));
                     cluster_ids
                         .chain(database_ids)
                         .chain(schema_ids)
                         .chain(item_ids)
+                        .chain(network_policy_ids)
                         .filter(|object_id| object_type_filter(object_id, &object_type, scx))
                         .filter(|object_id| object_id.is_user())
                         .collect()

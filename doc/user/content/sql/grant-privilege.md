@@ -125,6 +125,28 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
+<!-- ================== Network policy syntax ==================  -->
+
+{{< tab "Network policy">}}
+
+For specific network policies:
+
+```mzsql
+GRANT <USAGE | ALL [PRIVILEGES]>
+ON NETWORK POLICY <name> [, ...]
+TO <role_name> [, ... ];
+```
+
+For all network policies:
+
+```mzsql
+GRANT <USAGE | ALL [PRIVILEGES]>
+ON ALL POLICIES
+TO <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
 <!-- ==================== Schema syntax =====================  -->
 
 {{< tab "Schema">}}
