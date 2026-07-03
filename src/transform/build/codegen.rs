@@ -62,14 +62,14 @@ fn cond_is_color_exact(c: &Cond) -> bool {
         Cond::ScalarNoError { .. } => false,
         Cond::ScalarNonNullable { .. } => false,
         Cond::AnyScalarLit { .. } => false,
+        // Also reads the e-class scalar `could_error` analysis (the dropped-
+        // extras gate), so it belongs in this group for the same reason.
+        Cond::AbsorbApplies { .. } => false,
         // Not analysis-gated (reads canonical ids via `find`, not an e-class
         // Analysis), but grouped with the scalar conds above for the same
         // reason: it only ever guards a scalar rule (`and_or_dedup`), and the
         // `ColoredView` impl is unconditionally inert.
         Cond::HasDuplicateId { .. } => false,
-        // Same reasoning as `HasDuplicateId`: only ever guards a scalar rule
-        // (`absorb_and_or`), and the `ColoredView` impl is unconditionally inert.
-        Cond::AbsorbApplies { .. } => false,
     }
 }
 
