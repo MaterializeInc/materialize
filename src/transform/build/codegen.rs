@@ -61,6 +61,7 @@ fn cond_is_color_exact(c: &Cond) -> bool {
         Cond::ScalarLitFalseOrNull { .. } => false,
         Cond::ScalarNoError { .. } => false,
         Cond::ScalarNonNullable { .. } => false,
+        Cond::AnyScalarLit { .. } => false,
     }
 }
 
@@ -453,6 +454,15 @@ impl Matcher {
             .map(|(_, l)| l.clone())
             .unwrap_or_else(|| panic!("payload `{name}` referenced but not bound"))
     }
+
+    /// The generated local holding the `Vec<Id>` bound to rest-metavar `name`.
+    fn rest_local(&self, name: &str) -> String {
+        self.rests
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, l)| l.clone())
+            .unwrap_or_else(|| panic!("rest `{name}` referenced but not bound"))
+    }
 }
 
 /// An index expression in `find` (side conditions): arities come from the
@@ -536,6 +546,9 @@ fn cond_expr(c: &Cond, m: &Matcher) -> String {
         }
         Cond::ScalarNonNullable { scalar } => {
             format!("!g.scalar_nullable({})", m.rel_local(scalar))
+        }
+        Cond::AnyScalarLit { list, value } => {
+            format!("g.cond_any_scalar_lit(&{}, {})", m.rest_local(list), value)
         }
     }
 }
@@ -1630,6 +1643,11 @@ fn cond(c: &Cond) -> String {
         Cond::ScalarNonNullable { scalar } => {
             format!("{P}::Cond::ScalarNonNullable {{ scalar: {} }}", s(scalar))
         }
+        Cond::AnyScalarLit { list, value } => format!(
+            "{P}::Cond::AnyScalarLit {{ list: {}, value: {} }}",
+            s(list),
+            value
+        ),
     }
 }
 

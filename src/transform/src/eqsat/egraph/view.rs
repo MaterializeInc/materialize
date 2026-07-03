@@ -50,6 +50,13 @@ pub(crate) trait MatchGraph {
     /// the graph's `col_types`, is nullable. Computed on demand rather than
     /// stored in an analysis lattice.
     fn scalar_nullable(&self, id: Id) -> bool;
+    /// Whether some id in `ids` is a scalar literal equal to `value`. The
+    /// list-quantified backing for `Cond::AnyScalarLit`. Reuses the per-element
+    /// `scalar_lit_bool_or_null` so no new analysis is needed.
+    fn cond_any_scalar_lit(&self, ids: &[Id], value: bool) -> bool {
+        ids.iter()
+            .any(|&id| self.scalar_lit_bool_or_null(id) == Some(Some(value)))
+    }
     // Color-exact conditions (graph/payload/arity only):
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool;
     fn cond_cols_in_range(&self, p: &Payload, lo: i64, hi: i64) -> bool;
@@ -383,6 +390,69 @@ mod tests {
             view.scalar_lit_bool_or_null(col),
             None,
             "non-literal class must return None"
+        );
+    }
+
+    #[mz_ore::test]
+    fn cond_any_scalar_lit() {
+        use crate::eqsat::scalar::analysis::ClassAnalysis;
+        use mz_repr::{Datum, ReprScalarType, Row};
+
+        let mut eg = EGraph::new();
+        let col = eg.add(CNode::Scalar(SNode::Column(
+            0,
+            mz_ore::treat_as_equal::TreatAsEqual(None),
+        )));
+        let bool_ty = ReprColumnType {
+            scalar_type: ReprScalarType::Bool,
+            nullable: false,
+        };
+        let lit_false = eg.add(CNode::Scalar(SNode::Literal(
+            Ok(Row::pack_slice(&[Datum::False])),
+            bool_ty.clone(),
+        )));
+        eg.rebuild();
+
+        let (col_id, lit_false_id) = (eg.find(col), eg.find(lit_false));
+        eg.data_mut().scalar.analysis.insert(
+            col_id,
+            ClassAnalysis {
+                could_error: false,
+                literal: None,
+            },
+        );
+        eg.data_mut().scalar.analysis.insert(
+            lit_false_id,
+            ClassAnalysis {
+                could_error: false,
+                literal: Some((Ok(Row::pack_slice(&[Datum::False])), bool_ty)),
+            },
+        );
+
+        let index = eg.rel_index();
+        let scalar_index = eg.scalar_index();
+        let an = Analyses::default();
+        let view = BaseView {
+            eg: &eg,
+            index: &index,
+            scalar_index: &scalar_index,
+            an: &an,
+        };
+
+        let mixed = [lit_false, col];
+        assert!(
+            view.cond_any_scalar_lit(&mixed, false),
+            "list containing a literal-false id must match value:false"
+        );
+        assert!(
+            !view.cond_any_scalar_lit(&mixed, true),
+            "list with no literal-true id must not match value:true"
+        );
+
+        let only_columns = [col];
+        assert!(
+            !view.cond_any_scalar_lit(&only_columns, false),
+            "list of only columns must never match"
         );
     }
 
