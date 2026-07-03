@@ -145,7 +145,9 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
     PrometheusSqlQuery {
         metric_name: "mz_cluster_reps_count",
         help: "Number of active cluster replicas in the instance, by replica size.",
-        query: "select size
+        // `mz_cluster_replicas.size` is NULL for unmanaged replicas. Coalesce
+        // to an empty string so the resulting Prometheus label is a string.
+        query: "select COALESCE(size, '') as size
                 , count(id) as replicas
             from mz_cluster_replicas
             where cluster_id like 'u%'
@@ -173,7 +175,7 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         query: "SELECT
                 type,
                 COALESCE(envelope_type, '<none>') AS envelope_type,
-                mz_cluster_replicas.size AS size,
+                COALESCE(mz_cluster_replicas.size, '') AS size,
                 count(mz_sources.id) AS sources
             FROM
                 mz_sources, mz_cluster_replicas
@@ -212,7 +214,7 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         query: "SELECT
                 type,
                 COALESCE(envelope_type, '<none>') AS envelope_type,
-                mz_cluster_replicas.size AS size,
+                COALESCE(mz_cluster_replicas.size, '') AS size,
                 count(mz_sinks.id) AS sinks
             FROM
                 mz_sinks, mz_cluster_replicas
