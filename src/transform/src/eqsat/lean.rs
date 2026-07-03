@@ -570,14 +570,20 @@ fn tmpl_list_expr(list: &ListTmpl, hole: &str) -> String {
             TElem::MapSplice { func, list } => {
                 format!("({list}.map (fun h => {}))", translate_tmpl(func, "h"))
             }
-            // TODO(SP2b Slice 6c Task 4): renders as a plain splice, ignoring
-            // `filter`. Correct only by accident (e.g. when the filter is a
-            // no-op on the modeled inputs); a rule whose proof depends on the
-            // filtered-out elements being absent needs a real Lean rendering
-            // (a `List.dedup`/`List.filter` counterpart of `rest_filters`)
-            // before its `choose_proof` arm can be trusted. Added to unblock
-            // compilation, not to model `FilterSplice` semantics.
-            TElem::FilterSplice { list, .. } => list.clone(),
+            // A filtered rest list. The Lean counterparts (`keepDropUnit` /
+            // `dedupById` in Semantics.lean) render the SYNTACTIC filter, and
+            // the fold-invariance lemmas `denoteSFold_{and,or}_{drop_unit,
+            // dedup}` are stated over these exact terms, so `choose_proof`'s
+            // arms discharge the theorem against this rendering.
+            TElem::FilterSplice { list, filter } => match filter {
+                // Drop the connective's unit literal (`litB unit`).
+                RestFilter::DropScalarLit(unit) => format!(
+                    "(List.filter (keepDropUnit {}) {list})",
+                    if *unit { "true" } else { "false" }
+                ),
+                // Drop later duplicates by membership.
+                RestFilter::DedupById => format!("(dedupById {list})"),
+            },
         })
         .collect();
     if parts.len() == 1 {
@@ -841,6 +847,42 @@ fn choose_proof(
                     "by\n    {intro}first | (simp only [denoteS]; exact {lemma} env {list} h_{list}) | sorry"
                 );
             }
+        }
+        // `and_drop_unit`/`or_drop_unit` and `and_dedup`/`or_dedup`: the RHS is
+        // an `andE`/`orE` applied to a filtered operand list. Keyed on the
+        // rendered RHS *shape* (`List.filter (keepDropUnit ...)` /
+        // `dedupById`), NOT on the reused `AnyScalarLit`/`HasDuplicateId`
+        // guards, which the fold-invariance proofs do not need (both rules hold
+        // unconditionally over the fold). This also keeps the short-circuit arm
+        // above (whose RHS is a bare `litB`) and this arm from clobbering each
+        // other. `simp only [denoteS]` exposes the fold on both sides, then the
+        // matching `denoteSFold_*` lemma (Semantics.lean), stated over the same
+        // rendered filter term, closes it (`.symm`: the lemma orients
+        // filtered = original, the goal original = filtered).
+        let list_binder = binders
+            .iter()
+            .find(|(_, ty)| *ty == "List ScalarExpr")
+            .map(|(n, _)| n.as_str())
+            .unwrap_or("xs");
+        if rhs.contains("List.filter (keepDropUnit") {
+            let lemma = if lhs.contains("ScalarExpr.andE") {
+                "denoteSFold_and_drop_unit"
+            } else {
+                "denoteSFold_or_drop_unit"
+            };
+            return format!(
+                "by\n    {intro}simp only [denoteS]; exact ({lemma} env {list_binder}).symm"
+            );
+        }
+        if rhs.contains("dedupById") {
+            let lemma = if lhs.contains("ScalarExpr.andE") {
+                "denoteSFold_and_dedup"
+            } else {
+                "denoteSFold_or_dedup"
+            };
+            return format!(
+                "by\n    {intro}simp only [denoteS]; exact ({lemma} env {list_binder}).symm"
+            );
         }
         // De Morgan over a list (`not_demorgan_and`/`not_demorgan_or`): a
         // `foldr`/`map` induction over an unconstrained list, which plain

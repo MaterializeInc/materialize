@@ -315,4 +315,24 @@ theorem rule_or_short_circuit :
     ∀ (env : Nat → Bool) (xs : List ScalarExpr) (h_xs : ∃ x ∈ xs, denoteS env x = true), denoteS env (ScalarExpr.orE xs) = denoteS env (ScalarExpr.litB true) := by
     intro env xs h_xs; first | (simp only [denoteS]; exact denoteSFold_or_true env xs h_xs) | sorry
 
+-- And([.., true, ..]) = And([.. without true])
+theorem rule_and_drop_unit :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr) (h_xs : ∃ x ∈ xs, denoteS env x = true), denoteS env (ScalarExpr.andE xs) = denoteS env (ScalarExpr.andE ((List.filter (keepDropUnit true) xs))) := by
+    intro env xs h_xs; simp only [denoteS]; exact (denoteSFold_and_drop_unit env xs).symm
+
+-- Or([.., false, ..]) = Or([.. without false])
+theorem rule_or_drop_unit :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr) (h_xs : ∃ x ∈ xs, denoteS env x = false), denoteS env (ScalarExpr.orE xs) = denoteS env (ScalarExpr.orE ((List.filter (keepDropUnit false) xs))) := by
+    intro env xs h_xs; simp only [denoteS]; exact (denoteSFold_or_drop_unit env xs).symm
+
+-- And([a, a, b]) = And([a, b])
+theorem rule_and_dedup :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.andE xs) = denoteS env (ScalarExpr.andE ((dedupById xs))) := by
+    intro env xs; simp only [denoteS]; exact (denoteSFold_and_dedup env xs).symm
+
+-- Or([a, a, b]) = Or([a, b])
+theorem rule_or_dedup :
+    ∀ (env : Nat → Bool) (xs : List ScalarExpr), denoteS env (ScalarExpr.orE xs) = denoteS env (ScalarExpr.orE ((dedupById xs))) := by
+    intro env xs; simp only [denoteS]; exact (denoteSFold_or_dedup env xs).symm
+
 end MirRewrite

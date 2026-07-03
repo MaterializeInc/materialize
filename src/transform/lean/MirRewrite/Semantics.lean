@@ -311,6 +311,171 @@ theorem denoteSFold_or_true (env : Nat → Bool) (xs : List ScalarExpr)
       rw [ih ⟨x, h', hx⟩]
       simp
 
+/-! ### Evidence for the drop-unit and dedup rules
+
+`and_drop_unit`/`or_drop_unit` remove operands equal to the connective unit
+(`true` for And, `false` for Or). `and_dedup`/`or_dedup` remove later
+duplicates. Both preserve the AND/OR fold because that fold is the `all`/`any`
+of the operands: it is idempotent and commutative over `Bool`, so it depends
+only on which operands are present, not on their multiplicity, and dropping a
+unit operand (a `true` conjunct or a `false` disjunct) is the fold's identity.
+
+NOTE: Lean models the SYNTACTIC filter here. `keepDropUnit` drops the literal
+`litB unit`, and `dedupById` drops later membership-duplicates. The Rust rules
+use the strictly stronger SEMANTIC predicate (an operand whose scalar-literal
+analysis is the unit, or whose canonical e-class id repeats). What Lean proves
+is the ALGEBRA: unit is the And/Or identity and And/Or is idempotent over the
+`Bool` fold. The soundness of lifting that algebra to the semantic predicate
+rests on the Rust analysis plus the differential parity oracle, not on this
+Lean layer. This is the same scope stance as `isnull_fold` in an earlier
+slice. -/
+
+theorem denoteSFold_and_eq_all (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env xs true (· && ·) = xs.all (fun x => denoteS env x) := by
+  induction xs with
+  | nil => rfl
+  | cons a as ih => simp [denoteSFold, List.all_cons, ih]
+
+theorem denoteSFold_or_eq_any (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env xs false (· || ·) = xs.any (fun x => denoteS env x) := by
+  induction xs with
+  | nil => rfl
+  | cons a as ih => simp [denoteSFold, List.any_cons, ih]
+
+/-- The drop-unit keep predicate: keep every operand except the literal
+    `litB unit`. Comparing only the inner `Bool` (via `Bool`'s computable
+    `!=`) avoids needing `DecidableEq ScalarExpr`. -/
+def keepDropUnit (unit : Bool) : ScalarExpr → Bool
+  | ScalarExpr.litB c => c != unit
+  | _ => true
+
+/-- An operand dropped by `keepDropUnit unit` is exactly `litB unit`, whose
+    denotation is `unit`. This is the fact that makes dropping it the fold's
+    identity. -/
+theorem denoteS_of_keepDropUnit_false (env : Nat → Bool) (unit : Bool)
+    (x : ScalarExpr) (hx : keepDropUnit unit x = false) : denoteS env x = unit := by
+  cases x with
+  | litB c => cases c <;> cases unit <;> simp_all [keepDropUnit, denoteS]
+  | var n => simp [keepDropUnit] at hx
+  | notE e => simp [keepDropUnit] at hx
+  | andE es => simp [keepDropUnit] at hx
+  | orE es => simp [keepDropUnit] at hx
+  | ifE c t e => simp [keepDropUnit] at hx
+  | isNullE e => simp [keepDropUnit] at hx
+  | binaryE f a b => simp [keepDropUnit] at hx
+
+/-- Filtering out operands that all denote `true` leaves `List.all` unchanged:
+    a `true` conjunct is the identity of the AND fold. -/
+theorem all_filter_of_dropped_true (f p : ScalarExpr → Bool) (l : List ScalarExpr)
+    (hdrop : ∀ x, p x = false → f x = true) :
+    (l.filter p).all f = l.all f := by
+  induction l with
+  | nil => simp
+  | cons a as ih =>
+    cases hp : p a with
+    | true => simp [List.filter_cons, hp, List.all_cons, ih]
+    | false =>
+      have hfa : f a = true := hdrop a hp
+      simp [List.filter_cons, hp, List.all_cons, ih, hfa]
+
+/-- Dual of `all_filter_of_dropped_true`: filtering out operands that all
+    denote `false` leaves `List.any` unchanged (a `false` disjunct is the
+    identity of the OR fold). -/
+theorem any_filter_of_dropped_false (f p : ScalarExpr → Bool) (l : List ScalarExpr)
+    (hdrop : ∀ x, p x = false → f x = false) :
+    (l.filter p).any f = l.any f := by
+  induction l with
+  | nil => simp
+  | cons a as ih =>
+    cases hp : p a with
+    | true => simp [List.filter_cons, hp, List.any_cons, ih]
+    | false =>
+      have hfa : f a = false := hdrop a hp
+      simp [List.filter_cons, hp, List.any_cons, ih, hfa]
+
+theorem denoteSFold_and_drop_unit (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env (xs.filter (keepDropUnit true)) true (· && ·)
+      = denoteSFold env xs true (· && ·) := by
+  rw [denoteSFold_and_eq_all, denoteSFold_and_eq_all]
+  exact all_filter_of_dropped_true (fun x => denoteS env x) (keepDropUnit true) xs
+    (fun x hx => denoteS_of_keepDropUnit_false env true x hx)
+
+theorem denoteSFold_or_drop_unit (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env (xs.filter (keepDropUnit false)) false (· || ·)
+      = denoteSFold env xs false (· || ·) := by
+  rw [denoteSFold_or_eq_any, denoteSFold_or_eq_any]
+  exact any_filter_of_dropped_false (fun x => denoteS env x) (keepDropUnit false) xs
+    (fun x hx => denoteS_of_keepDropUnit_false env false x hx)
+
+-- First-occurrence-agnostic dedup: keep one operand per membership class,
+-- dropping repeats. Only membership matters for the AND/OR fold, so keeping the
+-- last rather than the first occurrence is immaterial to soundness. Uses
+-- classical decidability of `∈` to avoid `DecidableEq ScalarExpr`; the def is
+-- `noncomputable` because it is a proof-only spec, never run.
+open Classical in
+noncomputable def dedupById : List ScalarExpr → List ScalarExpr
+  | [] => []
+  | x :: xs => if x ∈ dedupById xs then dedupById xs else x :: dedupById xs
+
+/-- `dedupById` preserves membership: it drops repeats, never a class. -/
+theorem mem_dedupById (x : ScalarExpr) (xs : List ScalarExpr) :
+    x ∈ dedupById xs ↔ x ∈ xs := by
+  induction xs generalizing x with
+  | nil => simp [dedupById]
+  | cons a as ih =>
+    simp only [dedupById]
+    by_cases h : a ∈ dedupById as
+    · rw [if_pos h, ih x]
+      have ha : a ∈ as := (ih a).mp h
+      simp only [List.mem_cons]
+      constructor
+      · exact fun hx => Or.inr hx
+      · rintro (rfl | hx)
+        · exact ha
+        · exact hx
+    · rw [if_neg h]
+      simp [List.mem_cons, ih x]
+
+/-- `List.all` depends only on membership, so equal-membership lists agree. -/
+theorem all_congr_mem (f : ScalarExpr → Bool) {l₁ l₂ : List ScalarExpr}
+    (h : ∀ x, x ∈ l₁ ↔ x ∈ l₂) : l₁.all f = l₂.all f := by
+  have key : ∀ a b : List ScalarExpr, (∀ x, x ∈ a → x ∈ b) →
+      b.all f = true → a.all f = true := by
+    intro a b hsub hb
+    rw [List.all_eq_true] at hb ⊢
+    intro x hx
+    exact hb x (hsub x hx)
+  have h1 : l₁.all f = true → l₂.all f = true :=
+    key l₂ l₁ (fun x hx => (h x).mpr hx)
+  have h2 : l₂.all f = true → l₁.all f = true :=
+    key l₁ l₂ (fun x hx => (h x).mp hx)
+  cases hb1 : l₁.all f <;> cases hb2 : l₂.all f <;> simp_all
+
+/-- Dual of `all_congr_mem` for `List.any`. -/
+theorem any_congr_mem (f : ScalarExpr → Bool) {l₁ l₂ : List ScalarExpr}
+    (h : ∀ x, x ∈ l₁ ↔ x ∈ l₂) : l₁.any f = l₂.any f := by
+  have key : ∀ a b : List ScalarExpr, (∀ x, x ∈ a → x ∈ b) →
+      a.any f = true → b.any f = true := by
+    intro a b hsub ha
+    rw [List.any_eq_true] at ha ⊢
+    obtain ⟨x, hx, hfx⟩ := ha
+    exact ⟨x, hsub x hx, hfx⟩
+  have h1 : l₁.any f = true → l₂.any f = true :=
+    key l₁ l₂ (fun x hx => (h x).mp hx)
+  have h2 : l₂.any f = true → l₁.any f = true :=
+    key l₂ l₁ (fun x hx => (h x).mpr hx)
+  cases hb1 : l₁.any f <;> cases hb2 : l₂.any f <;> simp_all
+
+theorem denoteSFold_and_dedup (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env (dedupById xs) true (· && ·) = denoteSFold env xs true (· && ·) := by
+  rw [denoteSFold_and_eq_all, denoteSFold_and_eq_all]
+  exact all_congr_mem (fun x => denoteS env x) (fun x => mem_dedupById x xs)
+
+theorem denoteSFold_or_dedup (env : Nat → Bool) (xs : List ScalarExpr) :
+    denoteSFold env (dedupById xs) false (· || ·) = denoteSFold env xs false (· || ·) := by
+  rw [denoteSFold_or_eq_any, denoteSFold_or_eq_any]
+  exact any_congr_mem (fun x => denoteS env x) (fun x => mem_dedupById x xs)
+
 /-- The const-eval builtin, opaque: its result is computed by Rust `mz_expr`
     evaluation, not modeled in Lean. Rules whose RHS is `constEval` carry a
     permanent `sorry`. The opaque declaration is what makes that `sorry`
