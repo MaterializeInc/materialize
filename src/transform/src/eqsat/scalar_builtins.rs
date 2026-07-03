@@ -382,6 +382,119 @@ pub fn err_prop_variadic(g: &mut EGraph, class: Id) -> Result<Id, String> {
     Ok(g.add(CNode::Scalar(SNode::Literal(row, col_type))))
 }
 
+/// `(a∧b)∨(a∧c) -> a∧(b∨c)` and the dual: undistribute a common factor out of an
+/// AND/OR, residual-error gated. The Rust RHS of the `factor_and_or` builtin rule.
+///
+/// Mirrors `scalar/rules.rs::factor_and_or` exactly: full-intersection factoring
+/// (the factor is the inner-set intersection common to EVERY branch), with the
+/// non-empty-residual condition (an empty residual is the absorption case, left to
+/// `absorb`) and the residual-error gate (every residual operand must be error-free;
+/// the common factor MAY error and is deliberately exempt, the CLU-137 narrowing).
+/// Non-destructive: builds and returns the factored form for the caller to union in,
+/// so extraction picks the cheaper form. Fires only when the factored form is
+/// well-formed; otherwise `Err` (no union), mirroring the old engine's `vec![]`.
+pub fn factor_and_or(g: &mut EGraph, class: Id) -> Result<Id, String> {
+    let target = scalar_class_nodes(g, class).into_iter().find_map(|node| {
+        let SNode::CallVariadic { func, exprs } = &node else {
+            return None;
+        };
+        if !is_and_or(func) || exprs.len() < 2 {
+            return None;
+        }
+        Some((func.clone(), exprs.clone()))
+    });
+    let Some((outer_func, outer_operands)) = target else {
+        return Err("factor_and_or: no eligible And/Or node".to_string());
+    };
+    let inner_func = outer_func.switch_and_or();
+
+    // Each outer operand's inner-operand set under `inner_func` (canonical, sorted,
+    // unique), or a singleton `{find(operand)}` if it holds no such call.
+    let branch_sets: Vec<Vec<Id>> = outer_operands
+        .iter()
+        .map(|&operand| {
+            let canon = g.find(operand);
+            for sibling in g.nodes(canon) {
+                if let CNode::Scalar(SNode::CallVariadic { func, exprs }) = sibling {
+                    if func == inner_func {
+                        let mut ids: Vec<Id> = exprs.iter().map(|&e| g.find(e)).collect();
+                        ids.sort();
+                        ids.dedup();
+                        return ids;
+                    }
+                }
+            }
+            vec![canon]
+        })
+        .collect();
+
+    // The intersection common to every branch (built from branch 0, kept sorted/unique).
+    let mut intersection = branch_sets[0].clone();
+    for set in &branch_sets[1..] {
+        intersection.retain(|id| set.contains(id));
+    }
+    if intersection.is_empty() {
+        return Err("factor_and_or: no common factor".to_string());
+    }
+
+    // Each branch's residual; an empty residual is the absorption case (deferred).
+    let mut residuals: Vec<Vec<Id>> = Vec::with_capacity(branch_sets.len());
+    for set in &branch_sets {
+        let residual: Vec<Id> = set
+            .iter()
+            .copied()
+            .filter(|id| !intersection.contains(id))
+            .collect();
+        if residual.is_empty() {
+            return Err("factor_and_or: empty residual (absorption case)".to_string());
+        }
+        residuals.push(residual);
+    }
+
+    // Residual-error gate: every residual operand must be provably error-free. The
+    // common factor is intentionally exempt (never moved past a masking value).
+    for residual in &residuals {
+        if residual.iter().any(|&id| scalar_could_error(g, id)) {
+            return Err("factor_and_or: residual can error".to_string());
+        }
+    }
+
+    // Build the factored form. Sort branch ids so the combination node is stable
+    // across re-firing (hashcons keys on the operand vector).
+    let mut branch_ids: Vec<Id> = residuals
+        .into_iter()
+        .map(|residual| {
+            if residual.len() == 1 {
+                residual[0]
+            } else {
+                g.add(CNode::Scalar(SNode::CallVariadic {
+                    func: inner_func.clone(),
+                    exprs: residual,
+                }))
+            }
+        })
+        .collect();
+    branch_ids.sort();
+    let residual_combination = g.add(CNode::Scalar(SNode::CallVariadic {
+        func: outer_func,
+        exprs: branch_ids,
+    }));
+    let mut factored_exprs = intersection;
+    factored_exprs.push(residual_combination);
+    Ok(g.add(CNode::Scalar(SNode::CallVariadic {
+        func: inner_func,
+        exprs: factored_exprs,
+    })))
+}
+
+/// An And or Or variadic (the connectives `factor_and_or` distributes over).
+fn is_and_or(func: &mz_expr::VariadicFunc) -> bool {
+    matches!(
+        func,
+        mz_expr::VariadicFunc::And(_) | mz_expr::VariadicFunc::Or(_)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use mz_expr::{BinaryFunc, EvalError, VariadicFunc};
@@ -985,6 +1098,185 @@ mod tests {
         assert!(
             err_prop_variadic(&mut g, lit).is_err(),
             "a class with no CallVariadic node must not fire"
+        );
+    }
+
+    // --- factor_and_or ---
+
+    fn and_func() -> VariadicFunc {
+        VariadicFunc::And(mz_expr::func::variadic::And)
+    }
+
+    fn or_func() -> VariadicFunc {
+        VariadicFunc::Or(mz_expr::func::variadic::Or)
+    }
+
+    /// The `inner_func`-rooted operand ids of factored class `id`, asserting it
+    /// holds exactly one such variadic node.
+    fn variadic_operands(g: &EGraph, id: Id, want: &VariadicFunc) -> Vec<Id> {
+        scalar_class_nodes(g, id)
+            .into_iter()
+            .find_map(|n| match n {
+                SNode::CallVariadic { func, exprs } if &func == want => Some(exprs),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("class must hold a {want:?} node"))
+    }
+
+    /// `Or(And(c0,c1), And(c0,c2))` factors the common `c0` out to
+    /// `And(c0, Or(c1,c2))`. The returned class is rooted at the inner
+    /// connective (`And`) with the factor and the residual combination.
+    #[mz_ore::test]
+    fn factor_and_or_fires_on_or_of_ands() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![bool_ty(); 3];
+        let c0 = col(&mut g, 0);
+        let c1 = col(&mut g, 1);
+        let c2 = col(&mut g, 2);
+        let and01 = variadic(&mut g, and_func(), vec![c0, c1]);
+        let and02 = variadic(&mut g, and_func(), vec![c0, c2]);
+        let or = variadic(&mut g, or_func(), vec![and01, and02]);
+
+        let factored = factor_and_or(&mut g, or).expect("common factor c0 must fire");
+
+        let operands = variadic_operands(&g, factored, &and_func());
+        assert_eq!(operands.len(), 2, "And(c0, Or(c1,c2)) has two operands");
+        let c0c = g.find(c0);
+        assert!(
+            operands.contains(&c0c),
+            "the common factor c0 is an operand"
+        );
+        let residual = operands
+            .iter()
+            .copied()
+            .find(|&id| id != c0c)
+            .expect("the residual combination is the other operand");
+        let mut got = variadic_operands(&g, residual, &or_func());
+        got.sort();
+        let mut want = vec![g.find(c1), g.find(c2)];
+        want.sort();
+        assert_eq!(got, want, "residual is Or(c1,c2)");
+    }
+
+    /// The dual: `And(Or(c0,c1), Or(c0,c2))` factors to `Or(c0, And(c1,c2))`.
+    #[mz_ore::test]
+    fn factor_and_or_fires_on_and_of_ors() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![bool_ty(); 3];
+        let c0 = col(&mut g, 0);
+        let c1 = col(&mut g, 1);
+        let c2 = col(&mut g, 2);
+        let or01 = variadic(&mut g, or_func(), vec![c0, c1]);
+        let or02 = variadic(&mut g, or_func(), vec![c0, c2]);
+        let and = variadic(&mut g, and_func(), vec![or01, or02]);
+
+        let factored = factor_and_or(&mut g, and).expect("common factor c0 must fire");
+
+        let operands = variadic_operands(&g, factored, &or_func());
+        assert_eq!(operands.len(), 2, "Or(c0, And(c1,c2)) has two operands");
+        let c0c = g.find(c0);
+        assert!(
+            operands.contains(&c0c),
+            "the common factor c0 is an operand"
+        );
+        let residual = operands
+            .iter()
+            .copied()
+            .find(|&id| id != c0c)
+            .expect("the residual combination is the other operand");
+        let mut got = variadic_operands(&g, residual, &and_func());
+        got.sort();
+        let mut want = vec![g.find(c1), g.find(c2)];
+        want.sort();
+        assert_eq!(got, want, "residual is And(c1,c2)");
+    }
+
+    /// `Or(And(c0,c1), And(c2,c3))` has an empty inner-set intersection, so
+    /// full-intersection factoring does not apply.
+    #[mz_ore::test]
+    fn factor_and_or_errs_on_no_common_factor() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![bool_ty(); 4];
+        let c0 = col(&mut g, 0);
+        let c1 = col(&mut g, 1);
+        let c2 = col(&mut g, 2);
+        let c3 = col(&mut g, 3);
+        let and01 = variadic(&mut g, and_func(), vec![c0, c1]);
+        let and23 = variadic(&mut g, and_func(), vec![c2, c3]);
+        let or = variadic(&mut g, or_func(), vec![and01, and23]);
+
+        assert!(
+            factor_and_or(&mut g, or).is_err(),
+            "no common factor must not fire"
+        );
+    }
+
+    /// `Or(And(c0,c1), And(c0,c1,c2))`: the intersection `{c0,c1}` is the whole
+    /// first branch, so its residual is empty. That is the absorption case,
+    /// deferred to the absorption rule, not fired here.
+    #[mz_ore::test]
+    fn factor_and_or_errs_on_empty_residual_absorption() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![bool_ty(); 3];
+        let c0 = col(&mut g, 0);
+        let c1 = col(&mut g, 1);
+        let c2 = col(&mut g, 2);
+        let and01 = variadic(&mut g, and_func(), vec![c0, c1]);
+        let and012 = variadic(&mut g, and_func(), vec![c0, c1, c2]);
+        let or = variadic(&mut g, or_func(), vec![and01, and012]);
+
+        assert!(
+            factor_and_or(&mut g, or).is_err(),
+            "an empty residual (absorption) must not fire"
+        );
+    }
+
+    /// `Or(And(c0, 1/0::bool), And(c0, c2))`: the residual `1/0` of the first
+    /// branch `could_error`, so the residual-error gate blocks factoring. The
+    /// error literal is Bool-typed to match the connective's operand type.
+    #[mz_ore::test]
+    fn factor_and_or_errs_on_erroring_residual() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![bool_ty(); 3];
+        let c0 = col(&mut g, 0);
+        let c2 = col(&mut g, 2);
+        let errb = err_lit(&mut g, EvalError::DivisionByZero, bool_ty());
+        assert!(
+            scalar_could_error(&g, errb),
+            "the Bool error literal must could_error for this test to be meaningful"
+        );
+        let and_a = variadic(&mut g, and_func(), vec![c0, errb]);
+        let and_b = variadic(&mut g, and_func(), vec![c0, c2]);
+        let or = variadic(&mut g, or_func(), vec![and_a, and_b]);
+
+        assert!(
+            factor_and_or(&mut g, or).is_err(),
+            "an erroring residual operand must block factoring"
+        );
+    }
+
+    /// A bare column class holds no And/Or node, so there is no target shape.
+    #[mz_ore::test]
+    fn factor_and_or_errs_on_bare_column() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![bool_ty()];
+        let c0 = col(&mut g, 0);
+        assert!(
+            factor_and_or(&mut g, c0).is_err(),
+            "a class with no And/Or node must not fire"
+        );
+    }
+
+    /// A single-branch `Or(c0)` has too few branches to find a common factor.
+    #[mz_ore::test]
+    fn factor_and_or_errs_on_single_branch() {
+        let mut g = EGraph::new();
+        g.data_mut().scalar.col_types = vec![bool_ty()];
+        let c0 = col(&mut g, 0);
+        let or = variadic(&mut g, or_func(), vec![c0]);
+        assert!(
+            factor_and_or(&mut g, or).is_err(),
+            "a single-branch Or must not fire"
         );
     }
 }
