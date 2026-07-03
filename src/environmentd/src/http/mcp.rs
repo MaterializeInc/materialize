@@ -1558,8 +1558,10 @@ mod tests {
     /// emits.
     #[mz_ore::test]
     fn test_validate_readonly_query_enforces_size_limit() {
-        // ~1.2 MB of valid statements: exceeds MAX_STATEMENT_BATCH_SIZE (1 MB).
-        let oversized: String = "SELECT 1;".repeat(1_200_000 / "SELECT 1;".len());
+        use mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
+        // Just over the limit so the guard is the *only* thing that rejects.
+        let oversized: String =
+            "SELECT 1;".repeat((MAX_STATEMENT_BATCH_SIZE / "SELECT 1;".len()) + 1);
         let err = validate_readonly_query(&oversized).expect_err("should be rejected");
         let msg = err.to_string();
         assert!(
@@ -1570,8 +1572,9 @@ mod tests {
 
     #[mz_ore::test]
     fn test_validate_system_catalog_query_enforces_size_limit() {
-        let oversized: String =
-            "SELECT * FROM mz_tables;".repeat(1_200_000 / "SELECT * FROM mz_tables;".len());
+        use mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
+        let stmt = "SELECT * FROM mz_tables;";
+        let oversized: String = stmt.repeat((MAX_STATEMENT_BATCH_SIZE / stmt.len()) + 1);
         let err = validate_system_catalog_query(&oversized).expect_err("should be rejected");
         let msg = err.to_string();
         assert!(
@@ -2126,7 +2129,8 @@ mod tests {
     /// millions of `(` characters) is rejected before lexing.
     #[mz_ore::test]
     fn test_safe_data_product_name_enforces_size_limit() {
-        let oversized: String = "(".repeat(1_200_000);
+        use mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
+        let oversized: String = "(".repeat(MAX_STATEMENT_BATCH_SIZE + 1);
         let err = safe_data_product_name(&oversized).expect_err("should be rejected");
         let msg = err.to_string();
         assert!(
