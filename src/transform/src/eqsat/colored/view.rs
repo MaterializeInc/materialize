@@ -424,6 +424,12 @@ impl<'a, 'b, 'v> MatchGraph for ColoredView<'a, 'b, 'v> {
         false
     }
 
+    fn cond_flatten_applies(&self, _ids: &[Id], _func: &mz_expr::VariadicFunc) -> bool {
+        // Same reasoning as `cond_has_duplicate_id` above: unreachable for a
+        // `colored: false` scalar rule, inert `false` if ever reached.
+        false
+    }
+
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {
         let rel_arity = self.arity_of(rel);
         payload_columns(p, |id| self.esc(id))

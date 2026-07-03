@@ -602,6 +602,15 @@ fn tmpl_list_expr(list: &ListTmpl, hole: &str) -> String {
                          Semantics.lean and this match when a rule needs it"
                     ),
                 },
+                // Nested same-func flattening, the `List`-level counterpart of
+                // `rest_filters::rest_flatten`. The Lean combinator and its
+                // fold-invariance lemma are not yet in Semantics.lean, so no rule
+                // may render a flatten splice to Lean. Extend Semantics.lean and
+                // this match before wiring a flatten `.rewrite` rule to a proof.
+                RestFilter::FlattenSameFunc { func } => unimplemented!(
+                    "no Lean flatten render for connective {func:?}; extend \
+                     Semantics.lean and this match when a rule needs it"
+                ),
             },
         })
         .collect();

@@ -122,6 +122,64 @@ pub(crate) fn rest_absorb(g: &EGraph, ids: &[Id], inner: &VariadicFunc) -> Vec<I
     }
 }
 
+/// Hard cap on the operand vector `rest_flatten` produces, defense-in-depth
+/// against transitive same-func cycles the one-hop circular-ref skip misses.
+/// Above any realistic predicate width and above `MAX_ENODES`, so it never
+/// triggers on legitimate input. Declining only means less flattening.
+const FLATTEN_MAX_OPERANDS: usize = 4096;
+
+/// The canonical, non-circular inner ids of `operand` under `func`, if its class
+/// holds a same-`func` variadic node whose canonicalized children do not contain
+/// `find(operand)` (the circular-ref skip: after `and_or_single` collapses
+/// `f(x)` into x's class, x's class holds `f`-nodes pointing back, and splicing
+/// them would replace one operand with N copies, exponential across iterations).
+fn flatten_inner(g: &EGraph, operand: Id, func: &VariadicFunc) -> Option<Vec<Id>> {
+    let canon = g.find(operand);
+    for node in g.nodes(canon) {
+        if let CNode::Scalar(SNode::CallVariadic {
+            func: inner_func,
+            exprs,
+        }) = node
+        {
+            if &inner_func != func {
+                continue;
+            }
+            let inner_canons: Vec<Id> = exprs.iter().map(|&e| g.find(e)).collect();
+            if inner_canons.contains(&canon) {
+                continue;
+            }
+            return Some(inner_canons);
+        }
+    }
+    None
+}
+
+/// Whether `flatten` would change `ids`: some operand is a non-circular same-func
+/// node. The fire guard's core, shared with `rest_flatten` so they never disagree.
+pub(crate) fn flatten_applies(g: &EGraph, ids: &[Id], func: &VariadicFunc) -> bool {
+    ids.iter().any(|&id| flatten_inner(g, id, func).is_some())
+}
+
+/// Splice every non-circular same-`func` operand's inner ids in place, keeping
+/// other operands. Caps the result at `FLATTEN_MAX_OPERANDS` (declining returns
+/// the input unchanged). Ports `scalar::rules::flatten_assoc`.
+pub(crate) fn rest_flatten(g: &EGraph, ids: &[Id], func: &VariadicFunc) -> Vec<Id> {
+    let mut out: Vec<Id> = Vec::with_capacity(ids.len());
+    let mut spliced = false;
+    for &id in ids {
+        if let Some(inner) = flatten_inner(g, id, func) {
+            out.extend(inner);
+            spliced = true;
+        } else {
+            out.push(id);
+        }
+    }
+    if !spliced || out.len() > FLATTEN_MAX_OPERANDS {
+        return ids.to_vec();
+    }
+    out
+}
+
 /// Whether scalar class `id` may error, per the base scalar `could_error`
 /// analysis.
 fn scalar_could_error(g: &EGraph, id: Id) -> bool {

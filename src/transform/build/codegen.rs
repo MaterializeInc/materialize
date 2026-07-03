@@ -65,6 +65,11 @@ fn cond_is_color_exact(c: &Cond) -> bool {
         // Also reads the e-class scalar `could_error` analysis (the dropped-
         // extras gate), so it belongs in this group for the same reason.
         Cond::AbsorbApplies { .. } => false,
+        // Structural read (same-func operand via `find`/`nodes`, no e-class
+        // Analysis), but only ever guards a scalar rule (`flatten_assoc`), and
+        // the `ColoredView` impl is unconditionally inert. Same reasoning as
+        // `HasDuplicateId`/`AbsorbApplies`.
+        Cond::FlattenApplies { .. } => false,
         // Not analysis-gated (reads canonical ids via `find`, not an e-class
         // Analysis), but grouped with the scalar conds above for the same
         // reason: it only ever guards a scalar rule (`and_or_dedup`), and the
@@ -189,6 +194,13 @@ fn variadic_func_value(func: &str) -> String {
     match func {
         "and" => "mz_expr::VariadicFunc::And(mz_expr::func::variadic::And)".to_string(),
         "or" => "mz_expr::VariadicFunc::Or(mz_expr::func::variadic::Or)".to_string(),
+        "coalesce" => {
+            "mz_expr::VariadicFunc::Coalesce(mz_expr::func::variadic::Coalesce)".to_string()
+        }
+        "greatest" => {
+            "mz_expr::VariadicFunc::Greatest(mz_expr::func::variadic::Greatest)".to_string()
+        }
+        "least" => "mz_expr::VariadicFunc::Least(mz_expr::func::variadic::Least)".to_string(),
         other => panic!("unknown scalar variadic func keyword: {other}"),
     }
 }
@@ -565,6 +577,11 @@ fn cond_expr(c: &Cond, m: &Matcher) -> String {
             "g.cond_absorb_applies(&{}, &{})",
             m.rest_local(list),
             variadic_func_value(inner)
+        ),
+        Cond::FlattenApplies { list, func } => format!(
+            "g.cond_flatten_applies(&{}, &{})",
+            m.rest_local(list),
+            variadic_func_value(func)
         ),
     }
 }
@@ -1143,6 +1160,10 @@ fn listtmpl_stmts(
                         "crate::eqsat::rest_filters::rest_absorb(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?, &{})",
                         variadic_func_value(inner)
                     ),
+                    RestFilter::FlattenSameFunc { func } => format!(
+                        "crate::eqsat::rest_filters::rest_flatten(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?, &{})",
+                        variadic_func_value(func)
+                    ),
                 };
                 out.push_str(&format!("{v}.extend({call});\n"));
             }
@@ -1516,6 +1537,9 @@ fn telem(e: &TElem) -> String {
                 RestFilter::AbsorbSubsumed { inner } => {
                     format!("{P}::RestFilter::AbsorbSubsumed {{ inner: {} }}", s(inner))
                 }
+                RestFilter::FlattenSameFunc { func } => {
+                    format!("{P}::RestFilter::FlattenSameFunc {{ func: {} }}", s(func))
+                }
             };
             format!(
                 "{P}::TElem::FilterSplice {{ list: {}, filter: {} }}",
@@ -1700,6 +1724,11 @@ fn cond(c: &Cond) -> String {
             "{P}::Cond::AbsorbApplies {{ list: {}, inner: {} }}",
             s(list),
             s(inner)
+        ),
+        Cond::FlattenApplies { list, func } => format!(
+            "{P}::Cond::FlattenApplies {{ list: {}, func: {} }}",
+            s(list),
+            s(func)
         ),
     }
 }

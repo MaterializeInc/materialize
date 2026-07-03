@@ -64,6 +64,9 @@ pub(crate) trait MatchGraph {
     /// connective `inner` with error-free dropped extras. Backs
     /// `Cond::AbsorbApplies`.
     fn cond_absorb_applies(&self, ids: &[Id], inner: &mz_expr::VariadicFunc) -> bool;
+    /// Whether some operand in `ids` is a non-circular same-`func` variadic node,
+    /// so flattening would change the operand list. Backs `Cond::FlattenApplies`.
+    fn cond_flatten_applies(&self, ids: &[Id], func: &mz_expr::VariadicFunc) -> bool;
     // Color-exact conditions (graph/payload/arity only):
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool;
     fn cond_cols_in_range(&self, p: &Payload, lo: i64, hi: i64) -> bool;
@@ -182,6 +185,10 @@ impl<'a> MatchGraph for BaseView<'a> {
 
     fn cond_absorb_applies(&self, ids: &[Id], inner: &mz_expr::VariadicFunc) -> bool {
         crate::eqsat::rest_filters::absorb_drop_index(self.eg, ids, inner).is_some()
+    }
+
+    fn cond_flatten_applies(&self, ids: &[Id], func: &mz_expr::VariadicFunc) -> bool {
+        crate::eqsat::rest_filters::flatten_applies(self.eg, ids, func)
     }
 
     fn cond_uses_only_input(&self, p: &Payload, rel: Id) -> bool {
