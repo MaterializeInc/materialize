@@ -544,6 +544,13 @@ opaque nullPropVariadic : ScalarExpr → ScalarExpr
     rules whose RHS is `errPropVariadic` carry a permanent `sorry`. -/
 opaque errPropVariadic : ScalarExpr → ScalarExpr
 
+/-- Distributive factoring `(a∧b)∨(a∧c) = a∧(b∨c)` (and dual). Computed by the
+    Rust builtin `factor_and_or`. Distributivity IS provable in this two-valued
+    model, so this opaque is a REPRESENTATION artifact of the builtin RHS, not a
+    genuine gap. It is dischargeable by declarativizing the rule. Rules whose RHS
+    is `factorAndOr` carry a permanent `sorry` for that representation reason. -/
+opaque factorAndOr : ScalarExpr → ScalarExpr
+
 /-! ### Evidence for the inner-set subsumption absorption rules
 
 `absorb_and`/`absorb_or` (the DSL's `absorb(xs, or)` / `absorb(xs, and)`) drop an

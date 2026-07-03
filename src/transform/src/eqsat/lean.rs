@@ -538,6 +538,7 @@ fn translate_tmpl(t: &Tmpl, hole: &str) -> String {
             "err_prop_binary" => format!("errPropBinary {}", args[0]),
             "null_prop_variadic" => format!("nullPropVariadic {}", args[0]),
             "err_prop_variadic" => format!("errPropVariadic {}", args[0]),
+            "factor_and_or" => format!("factorAndOr {}", args[0]),
             other => unimplemented!(
                 "no Lean builtin translation for {other:?}; extend Semantics.lean's opaque \
                  builtins and this match when a rule needs it"
@@ -819,6 +820,16 @@ fn choose_proof(
     // falls back to an explicit `sorry` rather than emitting a tactic that
     // might not discharge the goal.
     if is_scalar {
+        // `factor_and_or`: the THIRD sorry category. Distributivity IS provable in
+        // the two-valued Bool model; this sorry is purely a representation artifact
+        // of the builtin RHS (the fact is not expressed declaratively), and is
+        // dischargeable by declarativizing the rule. It is neither opaque-computation
+        // (const_fold, eval-dependent) nor outside-value-domain (6d non-Bool flatten).
+        // Keyed on the rendered RHS and placed before the generic `is_builtin_rhs`
+        // arm so factor carries this honest reason rather than the generic text.
+        if rhs.contains("factorAndOr") {
+            return "by\n    -- PERMANENT SORRY: distributivity IS provable in the Bool model; this sorry is a\n    -- representation artifact of the builtin RHS (not declaratively expressed),\n    -- dischargeable by declarativizing. NOT opaque-computation (const_fold,\n    -- eval-dependent) NOR outside-value-domain (6d non-Bool flatten).\n    sorry".to_string();
+        }
         // The RHS is computed by a Rust builtin (e.g. `const_eval`), an
         // evaluation product opaque to Lean (see `constEval` in
         // Semantics.lean): the equality is not provable here, so the

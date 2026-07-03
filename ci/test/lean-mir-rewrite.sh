@@ -52,12 +52,16 @@ docker run --rm \
 # matches. `|| true` keeps `set -o pipefail` from treating that as
 # script-fatal, so the count check below reports a proper error (a zero count
 # is now a failure, since markers are expected).
-expected_permanent=10  # const_fold, if_err_cond, null_prop_binary, err_prop_binary,
+expected_permanent=11  # const_fold, if_err_cond, null_prop_binary, err_prop_binary,
                       # null_prop_variadic, err_prop_variadic (builtin RHS)
                       # + not_binary_negate (opaque negate table)
                       # + flatten_coalesce, flatten_greatest, flatten_least (opaque
                       # non-Bool variadic RHS: Coalesce/Greatest/Least return
                       # first-non-null/max/min, outside the two-valued Bool model).
+                      # + factor_and_or (THIRD sorry category: distributivity IS
+                      # provable in the Bool model, but the fact rides a builtin RHS
+                      # not expressed declaratively; dischargeable by declarativizing,
+                      # distinct from opaque-computation and outside-value-domain).
                       # isnull_fold and flatten_and/flatten_or prove outright (no sorry).
 permanent=$(grep -rho "PERMANENT SORRY" "$lean_dir/MirRewrite" | wc -l || true)
 if [ "$permanent" -ne "$expected_permanent" ]; then

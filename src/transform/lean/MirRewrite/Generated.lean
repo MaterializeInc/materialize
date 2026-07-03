@@ -385,4 +385,13 @@ theorem rule_flatten_least :
     -- PERMANENT SORRY: non-Bool variadic outside the two-valued model
     sorry
 
+-- (a∧b)∨(a∧c) = a∧(b∨c) and dual: undistribute a common factor, residual-error gated
+theorem rule_factor_and_or :
+    ∀ (env : Nat → Bool) (e : ScalarExpr), denoteS env e = denoteS env (factorAndOr e) := by
+    -- PERMANENT SORRY: distributivity IS provable in the Bool model; this sorry is a
+    -- representation artifact of the builtin RHS (not declaratively expressed),
+    -- dischargeable by declarativizing. NOT opaque-computation (const_fold,
+    -- eval-dependent) NOR outside-value-domain (6d non-Bool flatten).
+    sorry
+
 end MirRewrite
