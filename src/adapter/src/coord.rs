@@ -189,7 +189,8 @@ use crate::config::{
     SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig,
 };
 use crate::coord::appends::{
-    BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit, PendingWriteTxn,
+    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit,
+    PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
@@ -804,6 +805,7 @@ pub struct CreateViewExplain {
 pub enum ExplainTimestampStage {
     Optimize(ExplainTimestampOptimize),
     RealTimeRecency(ExplainTimestampRealTimeRecency),
+    LinearizeTimestamp(ExplainTimestampLinearizeTimestamp),
     Finish(ExplainTimestampFinish),
 }
 
@@ -824,7 +826,7 @@ pub struct ExplainTimestampRealTimeRecency {
 }
 
 #[derive(Debug)]
-pub struct ExplainTimestampFinish {
+pub struct ExplainTimestampLinearizeTimestamp {
     validity: PlanValidity,
     format: ExplainFormat,
     optimized_plan: OptimizedMirRelationExpr,
@@ -832,6 +834,23 @@ pub struct ExplainTimestampFinish {
     source_ids: BTreeSet<GlobalId>,
     when: QueryWhen,
     real_time_recency_ts: Option<Timestamp>,
+}
+
+#[derive(Debug)]
+pub struct ExplainTimestampFinish {
+    validity: PlanValidity,
+    format: ExplainFormat,
+    cluster_id: ClusterId,
+    source_ids: BTreeSet<GlobalId>,
+    when: QueryWhen,
+    real_time_recency_ts: Option<Timestamp>,
+    /// The timeline context derived in the preceding `LinearizeTimestamp`
+    /// stage, carried forward so it stays consistent with `oracle_read_ts`.
+    timeline_context: TimelineContext,
+    /// The linearized read timestamp, read off the coordinator loop in the
+    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
+    /// needed.
+    oracle_read_ts: Option<Timestamp>,
 }
 
 #[derive(Debug)]
@@ -970,6 +989,7 @@ pub struct CreateMaterializedViewExplain {
 #[derive(Debug)]
 pub enum SubscribeStage {
     OptimizeMir(SubscribeOptimizeMir),
+    LinearizeTimestamp(SubscribeLinearizeTimestamp),
     TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
     Finish(SubscribeFinish),
     Explain(SubscribeExplain),
@@ -989,6 +1009,20 @@ pub struct SubscribeOptimizeMir {
 }
 
 #[derive(Debug)]
+pub struct SubscribeLinearizeTimestamp {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    timeline: TimelineContext,
+    optimizer: optimize::subscribe::Optimizer,
+    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+    dependency_ids: BTreeSet<GlobalId>,
+    replica_id: Option<ReplicaId>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPLAIN for this statement.
+    explain_ctx: ExplainContext,
+}
+
+#[derive(Debug)]
 pub struct SubscribeTimestampOptimizeLir {
     validity: PlanValidity,
     plan: plan::SubscribePlan,
@@ -997,6 +1031,10 @@ pub struct SubscribeTimestampOptimizeLir {
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
     dependency_ids: BTreeSet<GlobalId>,
     replica_id: Option<ReplicaId>,
+    /// The linearized read timestamp, read off the coordinator loop in the
+    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
+    /// needed.
+    oracle_read_ts: Option<Timestamp>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
@@ -1574,12 +1612,15 @@ impl std::ops::DerefMut for ExecuteContext {
     }
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct ExecuteContextInner {
     tx: ClientTransmitter<ExecuteResponse>,
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     session: Session,
     extra: ExecuteContextGuard,
+    #[derivative(Debug = "ignore")]
+    response_barriers: Vec<BuiltinTableAppendNotify>,
 }
 
 impl ExecuteContext {
@@ -1605,11 +1646,22 @@ impl ExecuteContext {
         session: Session,
         extra: ExecuteContextGuard,
     ) -> Self {
+        Self::from_parts_with_response_barriers(tx, internal_cmd_tx, session, extra, Vec::new())
+    }
+
+    pub fn from_parts_with_response_barriers(
+        tx: ClientTransmitter<ExecuteResponse>,
+        internal_cmd_tx: mpsc::UnboundedSender<Message>,
+        session: Session,
+        extra: ExecuteContextGuard,
+        response_barriers: Vec<BuiltinTableAppendNotify>,
+    ) -> Self {
         Self {
             inner: ExecuteContextInner {
                 tx,
                 session,
                 extra,
+                response_barriers,
                 internal_cmd_tx,
             }
             .into(),
@@ -1623,7 +1675,8 @@ impl ExecuteContext {
     /// the coordinator and the pgwire layer. As part of any such
     /// protocol, we must ensure that the `ExecuteContextGuard`
     /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
-    /// eventual retirement.
+    /// eventual retirement. The returned response barriers must stay attached
+    /// to the user-visible response path.
     pub fn into_parts(
         self,
     ) -> (
@@ -1631,14 +1684,16 @@ impl ExecuteContext {
         mpsc::UnboundedSender<Message>,
         Session,
         ExecuteContextGuard,
+        Vec<BuiltinTableAppendNotify>,
     ) {
         let ExecuteContextInner {
             tx,
             internal_cmd_tx,
             session,
             extra,
+            response_barriers,
         } = *self.inner;
-        (tx, internal_cmd_tx, session, extra)
+        (tx, internal_cmd_tx, session, extra, response_barriers)
     }
 
     /// Retire the execution, by sending a message to the coordinator.
@@ -1649,24 +1704,26 @@ impl ExecuteContext {
             internal_cmd_tx,
             session,
             extra,
+            response_barriers,
         } = *self.inner;
-        let reason = if extra.is_trivial() {
-            None
+        if response_barriers.is_empty() {
+            retire_execution_context(tx, internal_cmd_tx, session, extra, result);
         } else {
-            Some((&result).into())
-        };
-        tx.send(result, session);
-        if let Some(reason) = reason {
-            // Retire the guard to get the inner ExecuteContextExtra without triggering auto-retire
-            let extra = extra.defuse();
-            if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
-                otel_ctx: OpenTelemetryContext::obtain(),
-                data: extra,
-                reason,
-            }) {
-                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-            }
+            spawn(
+                || "execute_context::retire_after_response_barriers",
+                async move {
+                    for barrier in response_barriers {
+                        barrier.await;
+                    }
+                    retire_execution_context(tx, internal_cmd_tx, session, extra, result);
+                },
+            );
         }
+    }
+
+    /// Delays sending this statement's response until `barrier` resolves.
+    pub(crate) fn delay_response_until(&mut self, barrier: BuiltinTableAppendCompletion) {
+        self.response_barriers.push(barrier.into_notify());
     }
 
     pub fn extra(&self) -> &ExecuteContextGuard {
@@ -1675,6 +1732,31 @@ impl ExecuteContext {
 
     pub fn extra_mut(&mut self) -> &mut ExecuteContextGuard {
         &mut self.extra
+    }
+}
+
+fn retire_execution_context(
+    tx: ClientTransmitter<ExecuteResponse>,
+    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    session: Session,
+    extra: ExecuteContextGuard,
+    result: Result<ExecuteResponse, AdapterError>,
+) {
+    let reason = if extra.is_trivial() {
+        None
+    } else {
+        Some((&result).into())
+    };
+    tx.send(result, session);
+    if let Some(reason) = reason {
+        let extra = extra.defuse();
+        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+            otel_ctx: OpenTelemetryContext::obtain(),
+            data: extra,
+            reason,
+        }) {
+            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        }
     }
 }
 

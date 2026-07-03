@@ -959,8 +959,12 @@ impl Coordinator {
             }
 
             if !active_compute_sinks_to_drop.is_empty() {
-                self.retire_compute_sinks(active_compute_sinks_to_drop)
+                let retire_notify = self
+                    .retire_compute_sinks(active_compute_sinks_to_drop)
                     .await;
+                if let Some(ctx) = ctx {
+                    ctx.delay_response_until(retire_notify);
+                }
             }
 
             if !peeks_to_drop.is_empty() {
