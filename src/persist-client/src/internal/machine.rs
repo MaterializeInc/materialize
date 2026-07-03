@@ -31,7 +31,7 @@ use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{Instrument, debug, info, trace_span};
+use tracing::{Instrument, debug, info, trace_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES;
@@ -1169,6 +1169,12 @@ pub(crate) fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters
 
 pub const INFO_MIN_ATTEMPTS: usize = 3;
 
+/// Attempts after which a still-failing retry loop escalates from INFO to WARN.
+/// `retry_external` always uses the persist backoff (clamped at 16s), so this
+/// is roughly five minutes of continuous failure: well past transient retries,
+/// and a sign the operation (e.g. a blob whose GET never returns) is wedged.
+pub const WARN_MIN_ATTEMPTS: usize = 30;
+
 pub async fn retry_external<R, F, WorkFn>(metrics: &RetryMetrics, mut work_fn: WorkFn) -> R
 where
     F: std::future::Future<Output = Result<R, ExternalError>>,
@@ -1187,7 +1193,15 @@ where
                 return x;
             }
             Err(err) => {
-                if retry.attempt() >= INFO_MIN_ATTEMPTS {
+                if retry.attempt() >= WARN_MIN_ATTEMPTS {
+                    warn!(
+                        "external operation {} has failed {} times, retrying in {:?}: {}",
+                        metrics.name,
+                        retry.attempt(),
+                        retry.next_sleep(),
+                        err.display_with_causes()
+                    );
+                } else if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
                         "external operation {} failed, retrying in {:?}: {}",
                         metrics.name,

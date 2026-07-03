@@ -1580,8 +1580,8 @@ pub mod plan {
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
-    use crate::Eval;
     use crate::scalar::optimizable::OptimizableExpr;
+    use crate::{Columns, Eval};
     use crate::{EvalError, MapFilterProject, MirScalarExpr};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
@@ -1849,6 +1849,48 @@ pub mod plan {
                 && self.upper_bounds.is_empty()
                 && self.mfp.mfp.projection.is_empty()
                 && self.mfp.mfp.predicates.is_empty()
+        }
+    }
+
+    impl MfpPlan<MirScalarExpr> {
+        /// Reconstruct a `MapFilterProject` by folding temporal bounds back as
+        /// `mz_now()` predicates.
+        ///
+        /// This is the inverse of `create_from`: the returned MFP, when passed
+        /// through `create_from`, will produce an equivalent `MfpPlan`.
+        ///
+        /// Lower bounds become `mz_now() >= expr` predicates;
+        /// upper bounds become `mz_now() < expr` predicates.
+        pub fn into_map_filter_project(self) -> MapFilterProject<MirScalarExpr> {
+            let (safe, lower_bounds, upper_bounds) = self.into_parts();
+            let mut mfp = safe.into_mfp();
+
+            let mz_now = MirScalarExpr::CallUnmaterializable(crate::UnmaterializableFunc::MzNow);
+
+            for lb in lower_bounds {
+                // mz_now() >= lb
+                let predicate = mz_now.clone().call_binary(lb, crate::func::Gte);
+                let support = predicate
+                    .support()
+                    .into_iter()
+                    .max()
+                    .map(|c| c + 1)
+                    .unwrap_or(0);
+                mfp.predicates.push((support, predicate));
+            }
+            for ub in upper_bounds {
+                // mz_now() < ub
+                let predicate = mz_now.clone().call_binary(ub, crate::func::Lt);
+                let support = predicate
+                    .support()
+                    .into_iter()
+                    .max()
+                    .map(|c| c + 1)
+                    .unwrap_or(0);
+                mfp.predicates.push((support, predicate));
+            }
+
+            mfp
         }
     }
 

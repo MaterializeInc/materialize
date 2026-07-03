@@ -11,6 +11,12 @@
       "authenticator_kind": "None",
       "allowed_roles": "Internal",
       "enable_tls": false
+    },
+    "password": {
+      "addr": "0.0.0.0:6880",
+      "authenticator_kind": "Password",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false
     }
   },
   "http": {
@@ -18,13 +24,15 @@
       "addr": "0.0.0.0:6876",
       "authenticator_kind": "None",
       "allowed_roles": "NormalAndInternal",
-      "enable_tls": true,
+      "enable_tls": false,
       "routes": {
         "base": true,
         "webhook": true,
         "internal": false,
         "metrics": false,
         "profiling": false,
+        "mcp_agent": false,
+        "mcp_developer": false,
         "console_config": true
       }
     },
@@ -39,6 +47,8 @@
         "internal": true,
         "metrics": true,
         "profiling": true,
+        "mcp_agent": false,
+        "mcp_developer": false,
         "console_config": false
       }
     }

@@ -781,7 +781,7 @@ impl ComputeController {
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        mut dataflow: DataflowDescription<mz_compute_types::plan::Plan, ()>,
+        mut dataflow: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
@@ -1013,7 +1013,7 @@ impl ComputeController {
     fn determine_time_dependence(
         &self,
         instance_id: ComputeInstanceId,
-        dataflow: &DataflowDescription<mz_compute_types::plan::Plan, ()>,
+        dataflow: &DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
         let instance = self
             .instance(instance_id)

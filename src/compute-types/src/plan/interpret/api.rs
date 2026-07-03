@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Utilities for abstract interpretation of [crate::plan::Plan] structures.
+//! Utilities for abstract interpretation of [crate::plan::LirRelationExpr] structures.
 //!
-//! Those can be used to define analysis passes over [crate::plan::Plan]s in a
+//! Those can be used to define analysis passes over [crate::plan::LirRelationExpr]s in a
 //! consistent and unified manner. The primary abstraction here is the
 //! [Interpreter] trait.
 
@@ -19,8 +19,7 @@ use std::fmt::Debug;
 use differential_dataflow::lattice::Lattice;
 use itertools::zip_eq;
 use mz_expr::{
-    EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RECURSION_LIMIT,
-    TableFunc,
+    EvalError, Id, LetRecLimit, LocalId, MfpPlan, RECURSION_LIMIT, SafeMfpPlan, TableFunc,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -29,14 +28,15 @@ use mz_repr::{Diff, Row, Timestamp};
 
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{AvailableCollections, GetPlan, Plan, PlanNode};
+use crate::plan::{AvailableCollections, GetPlan, LirRelationExpr, LirRelationNode};
 
-/// An [abstract interpreter] for [Plan] expressions.
+/// An [abstract interpreter] for [LirRelationExpr] expressions.
 ///
 /// This is an [object algebra] / [tagless final encoding] of the language
-/// defined by [crate::plan::Plan], with the exception of the `Let*`
+/// defined by [crate::plan::LirRelationExpr], with the exception of the `Let*`
 /// variants. The latter are modeled as part of the various recursion methods,
 /// as they are constructs to introduce and reference context.
 ///
@@ -46,7 +46,7 @@ use crate::plan::{AvailableCollections, GetPlan, Plan, PlanNode};
 ///     <https://www.cs.utexas.edu/~wcook/Drafts/2012/ecoop2012.pdf>
 /// [tagless final encoding]: <https://okmij.org/ftp/tagless-final/>
 ///
-/// TODO(database-issues#7446): align this with the `Plan` structure
+/// TODO(database-issues#7446): align this with the `LirRelationExpr` structure
 pub trait Interpreter {
     /// TODO(database-issues#7533): Add documentation.
     type Domain: Debug + Sized;
@@ -72,19 +72,19 @@ pub trait Interpreter {
         &self,
         ctx: &Context<Self::Domain>,
         input: Self::Domain,
-        mfp: &MapFilterProject,
-        input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        mfp: &MfpPlan<LirScalarExpr>,
+        input_key_val: &Option<(Vec<LirScalarExpr>, Option<Row>)>,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
     fn flat_map(
         &self,
         ctx: &Context<Self::Domain>,
-        input_key: &Option<Vec<MirScalarExpr>>,
+        input_key: &Option<Vec<LirScalarExpr>>,
         input: Self::Domain,
-        exprs: &Vec<MirScalarExpr>,
+        exprs: &Vec<LirScalarExpr>,
         func: &TableFunc,
-        mfp: &MapFilterProject,
+        mfp: &MfpPlan<LirScalarExpr>,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
@@ -99,11 +99,11 @@ pub trait Interpreter {
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
-        input_key: &Option<Vec<MirScalarExpr>>,
+        input_key: &Option<Vec<LirScalarExpr>>,
         input: Self::Domain,
         key_val_plan: &KeyValPlan,
         plan: &ReducePlan,
-        mfp_after: &MapFilterProject,
+        mfp_after: &SafeMfpPlan<LirScalarExpr>,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
@@ -139,8 +139,8 @@ pub trait Interpreter {
         ctx: &Context<Self::Domain>,
         input: Self::Domain,
         forms: &AvailableCollections,
-        input_key: &Option<Vec<MirScalarExpr>>,
-        input_mfp: &MapFilterProject,
+        input_key: &Option<Vec<LirScalarExpr>>,
+        input_mfp: &MfpPlan<LirScalarExpr>,
     ) -> Self::Domain;
 }
 
@@ -209,7 +209,7 @@ pub trait BoundedLattice: Lattice {
 /// bottom() elements for all recursive bindings.
 const MAX_LET_REC_ITERATIONS: u64 = 100;
 
-/// A wrapper for a recursive fold invocation over a [Plan] that cannot
+/// A wrapper for a recursive fold invocation over a [LirRelationExpr] that cannot
 /// mutate its input.
 #[allow(missing_debug_implementations)]
 pub struct Fold<I>
@@ -233,21 +233,21 @@ where
         }
     }
 
-    /// An immutable fold (structural recursion) over a [Plan] instance.
+    /// An immutable fold (structural recursion) over a [LirRelationExpr] instance.
     ///
     /// Runs an abstract interpreter over the given `expr` in a bottom-up
     /// manner, keeping the `ctx` field of the enclosing field up to date, and
     /// returns the final result for the entire `expr`.
-    pub fn apply(&mut self, expr: &Plan) -> Result<I::Domain, RecursionLimitError> {
+    pub fn apply(&mut self, expr: &LirRelationExpr) -> Result<I::Domain, RecursionLimitError> {
         self.apply_rec(expr, &RecursionGuard::with_limit(RECURSION_LIMIT))
     }
 
     fn apply_rec(
         &mut self,
-        expr: &Plan,
+        expr: &LirRelationExpr,
         rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
-        use PlanNode::*;
+        use LirRelationNode::*;
         rg.checked_recur(|_| {
             match &expr.node {
                 Constant { rows } => {
@@ -464,7 +464,7 @@ where
     }
 }
 
-/// A wrapper for a recursive fold invocation over a [Plan] that can
+/// A wrapper for a recursive fold invocation over a [LirRelationExpr] that can
 /// mutate its input.
 #[allow(missing_debug_implementations)]
 pub struct FoldMut<I, Action>
@@ -480,7 +480,7 @@ impl<I, A> FoldMut<I, A>
 where
     I: Interpreter,
     I::Domain: BoundedLattice + Clone,
-    A: FnMut(&mut Plan, &I::Domain, &[I::Domain]),
+    A: FnMut(&mut LirRelationExpr, &I::Domain, &[I::Domain]),
 {
     /// TODO(database-issues#7533): Add documentation.
     pub fn new(interpreter: I, action: A) -> Self {
@@ -491,7 +491,7 @@ where
         }
     }
 
-    /// An immutable fold (structural recursion) over a [Plan] instance.
+    /// An immutable fold (structural recursion) over a [LirRelationExpr] instance.
     ///
     /// Runs an abstract interpreter over the given `expr` in a bottom-up
     /// manner, keeping the `ctx` field of the enclosing field up to date, and
@@ -500,16 +500,16 @@ where
     /// At each step, the current `expr` is passed along with the interpretation
     /// result of itself and its children to an `action` callback that can
     /// optionally mutate it.
-    pub fn apply(&mut self, expr: &mut Plan) -> Result<I::Domain, RecursionLimitError> {
+    pub fn apply(&mut self, expr: &mut LirRelationExpr) -> Result<I::Domain, RecursionLimitError> {
         self.apply_rec(expr, &RecursionGuard::with_limit(RECURSION_LIMIT))
     }
 
     fn apply_rec(
         &mut self,
-        expr: &mut Plan,
+        expr: &mut LirRelationExpr,
         rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
-        use PlanNode::*;
+        use LirRelationNode::*;
         rg.checked_recur(|_| {
             match &mut expr.node {
                 Constant { rows } => {

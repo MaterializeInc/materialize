@@ -31,6 +31,8 @@ export interface ConnectInstructionsProps extends BoxProps {
   environmentdAddress?: string;
   /** Override the query params in the psql connection string. */
   psqlQueryParams?: string;
+  /** Self-managed deployment with OIDC enabled; gets the browser OAuth flow. */
+  oidcEnabled?: boolean;
   /** Pre-computed Base64 token for MCP configuration (cloud only). */
   mcpBase64Token?: string;
   /** Called when the active tab changes. */
@@ -44,6 +46,7 @@ export interface ConnectInstructionsProps extends BoxProps {
 const ConnectInstructions = ({
   user,
   onTabChange,
+  oidcEnabled,
   mcpBase64Token,
   onGenerateToken,
   isGeneratingToken,
@@ -134,6 +137,7 @@ const ConnectInstructions = ({
           children: (
             <McpConnectInstructions
               userStr={userStr}
+              oidcEnabled={oidcEnabled}
               mcpBase64Token={mcpBase64Token}
               onGenerateToken={onGenerateToken}
               isGeneratingToken={isGeneratingToken}

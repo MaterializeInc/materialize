@@ -1,0 +1,26 @@
+[package]
+name = "mz-cluster-controller"
+description = "Pure cluster-autoscaling controller: strategies and the reconcile kernel."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+mz-adapter-types = { path = "../adapter-types" }
+mz-compute-types = { path = "../compute-types" }
+mz-controller-types = { path = "../controller-types" }
+mz-ore = { path = "../ore", features = ["async", "tracing"] }
+mz-repr = { path = "../repr" }
+tracing.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["async", "tracing", "test"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = []

@@ -68,7 +68,7 @@ use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::SUBSCRIBE_SNAPSHOT_OPTIMIZATION;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_controller_types::ClusterId;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
@@ -91,7 +91,7 @@ use crate::TimestampContext;
 type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
 /// A type for a [`DataflowDescription`] backed by `Lir~` plans. Used internally
 /// by the optimizer implementations.
-type LirDataflowDescription = DataflowDescription<Plan>;
+type LirDataflowDescription = DataflowDescription<LirRelationExpr>;
 
 // Core API
 // --------

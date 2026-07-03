@@ -159,8 +159,11 @@ fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
 fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
     let f = round_float32(a);
     // TODO(benesch): remove potentially dangerous usage of `as`.
+    // NOTE: `u32::MAX` is not representable as f32 and rounds up to 2^32, so the
+    // bound must be strict. A `<=` here would admit 2^32, which the `as` cast
+    // below then saturates to `u32::MAX` instead of erroring.
     #[allow(clippy::as_conversions)]
-    if (f >= 0.0) && (f <= (u32::MAX as f32)) {
+    if (f >= 0.0) && (f < (u32::MAX as f32)) {
         Ok(f as u32)
     } else {
         Err(EvalError::UInt32OutOfRange(f.to_string().into()))
@@ -176,8 +179,11 @@ fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
 fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
     let f = round_float32(a);
     // TODO(benesch): remove potentially dangerous usage of `as`.
+    // NOTE: `u64::MAX` is not representable as f32 and rounds up to 2^64, so the
+    // bound must be strict. A `<=` here would admit 2^64, which the `as` cast
+    // below then saturates to `u64::MAX` instead of erroring.
     #[allow(clippy::as_conversions)]
-    if (f >= 0.0) && (f <= (u64::MAX as f32)) {
+    if (f >= 0.0) && (f < (u64::MAX as f32)) {
         Ok(f as u64)
     } else {
         Err(EvalError::UInt64OutOfRange(f.to_string().into()))

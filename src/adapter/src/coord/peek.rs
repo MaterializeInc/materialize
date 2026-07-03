@@ -137,7 +137,7 @@ impl DroppedDependency {
 
 #[derive(Clone, Debug)]
 pub struct PeekDataflowPlan {
-    pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan, ()>,
+    pub(crate) desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
     pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: Vec<usize>,
@@ -146,7 +146,7 @@ pub struct PeekDataflowPlan {
 
 impl PeekDataflowPlan {
     pub fn new(
-        desc: DataflowDescription<mz_compute_types::plan::Plan, ()>,
+        desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
         id: GlobalId,
         typ: &SqlRelationType,
     ) -> Self {
@@ -1404,7 +1404,7 @@ impl crate::coord::Coordinator {
     /// All errors (setup or execution) are sent through tx.
     pub(crate) async fn implement_copy_to(
         &mut self,
-        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,

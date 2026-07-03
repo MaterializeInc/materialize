@@ -842,6 +842,14 @@ fn test_pgtest_mz_raise() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_subscribe_dependency_dropped() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/subscribe-dependency-dropped.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_startup() {
     pg_test_inner(Path::new("../../test/pgtest-mz/startup.pt"), true);
 }

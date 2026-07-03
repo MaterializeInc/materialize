@@ -1200,3 +1200,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17093  generate_series_unoptimized
 17094  generate_series_unoptimized
 17095  mz_overridden_system_parameters
+17096  mz_console_cluster_utilization_overview_3h
+17097  mz_console_cluster_utilization_overview_3h_ind
+17098  mz_console_cluster_utilization_overview_24h
+17099  mz_console_cluster_utilization_overview_24h_ind

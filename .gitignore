@@ -68,3 +68,4 @@ uv.lock
 /plots/
 /test/testdrive/types.parquet*
 /test/mz-deploy/**/target/
+target-fuzz/

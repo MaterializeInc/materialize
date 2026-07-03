@@ -748,6 +748,112 @@ fn test_statement_logging_prepared_statement_throttling() {
     run_throttling_test(true);
 }
 
+/// throttling the first execution of a prepared statement must not make
+//  every subsequent execution of that statement invisible in
+//  `mz_recent_activity_log`.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_statement_logging_throttled_prepared_statement_stays_visible() {
+    const APPLICATION_NAME: &str = "throttled_prepared_repro";
+    const NUM_SUBSEQUENT_STATEMENT_EXECUTIONS: i64 = 5;
+
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "1");
+    let mut mz_client = server.connect_internal(postgres::NoTls).unwrap();
+
+    // cap the credit at a single byte such that the first execution of our
+    // prepared statement is guaranteed to be throttled.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_target_data_rate = 1")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_max_data_credit = 1")
+        .unwrap();
+
+    client
+        .batch_execute(&format!("SET application_name = '{APPLICATION_NAME}'"))
+        .unwrap();
+
+    // First execution of the prepared statement. This one gets throttled, and so
+    // is never logged.
+    let stmt = client.prepare("SELECT $1::text").unwrap();
+    assert_eq!(
+        client
+            .query_one(&stmt, &[&"first"])
+            .unwrap()
+            .get::<_, String>(0),
+        "first"
+    );
+
+    // Lift the throttle so subsequent executions are logged. Sleep afterwards so
+    // the token bucket has time to refill before the next execution
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_target_data_rate = 1000000000")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_max_data_credit = 1000000000")
+        .unwrap();
+    thread::sleep(Duration::from_secs(2));
+
+    // Subsequent executions of the same prepared statement.
+    for _ in 0..NUM_SUBSEQUENT_STATEMENT_EXECUTIONS {
+        assert_eq!(
+            client
+                .query_one(&stmt, &[&"again"])
+                .unwrap()
+                .get::<_, String>(0),
+            "again"
+        );
+    }
+
+    // Statement logging flushes asynchronously; wait until the
+    // subsequent executions have landed in `mz_statement_execution_history`.
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let mseh_count: i64 = mz_client
+                .query_one(
+                    &format!(
+                        "SELECT count(*)
+                         FROM mz_internal.mz_statement_execution_history
+                         WHERE application_name = '{APPLICATION_NAME}'"
+                    ),
+                    &[],
+                )
+                .unwrap()
+                .get(0);
+            if mseh_count >= NUM_SUBSEQUENT_STATEMENT_EXECUTIONS {
+                Ok(())
+            } else {
+                Err(format!(
+                    "only {mseh_count} of {NUM_SUBSEQUENT_STATEMENT_EXECUTIONS} executions logged so far"
+                ))
+            }
+        })
+        .expect("subsequent executions never appeared in mz_statement_execution_history");
+
+    // The subsequent executions in mz_statement_execution_history should
+    // have a matching entry in mz_prepared_statement_history
+    let orphan_count: i64 = mz_client
+        .query_one(
+            &format!(
+                "SELECT count(*)
+                 FROM mz_internal.mz_statement_execution_history mseh
+                 LEFT JOIN mz_internal.mz_prepared_statement_history mpsh
+                   ON mseh.prepared_statement_id = mpsh.id
+                 WHERE mseh.application_name = '{APPLICATION_NAME}'
+                   AND mpsh.id IS NULL"
+            ),
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        orphan_count, 0,
+        "{orphan_count} mz_statement_execution_history rows reference a \
+         prepared_statement_id with no matching mz_prepared_statement_history row"
+    );
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_statement_logging_subscribes() {

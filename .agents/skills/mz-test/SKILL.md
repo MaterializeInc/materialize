@@ -47,6 +47,23 @@ Add `--optimized` when running many or large files: it significantly improves ex
 For a single small file, skip `--optimized`, since the extra compile time outweighs the runtime savings.
 You can use `-v` for printing each query before it is run, e.g. to figure out where we are crashing.
 
+## When sqllogictest gives InconsistentViewOutcome
+
+CI runs many SLTs with `--auto-index-selects`, which wraps most successful
+`SELECT`s in an indexed view and checks that the view returns the same rows as
+the one-shot query. A query that behaves differently when wrapped fails this
+check even though a normal run passes.
+
+You can exempt a file from that mode by adding its path to both configs in
+`test/sqllogictest/mzcompose.py`:
+
+* `compileFastSltConfig` (the `sqllogictest-fast` PR job): add to
+  `tests_without_views`.
+* `compileSlowSltConfig` (the Nightly `slow-tests` job): add to
+  `tests_no_auto_index_selects`.
+
+The file still runs, just without the indexed-view wrapping.
+
 ## Testdrive
 
 Run testdrive files with:

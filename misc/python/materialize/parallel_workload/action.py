@@ -1899,6 +1899,8 @@ class FlipFlagsAction(Action):
             "oidc_group_role_sync_strict",
             "console_oidc_client_id",
             "console_oidc_scopes",
+            "enable_cluster_controller",
+            "cluster_controller_tick_interval",
         ]
 
     def run(self, exe: Executor) -> bool:
@@ -3346,7 +3348,8 @@ dml_nontrans_action_list = ActionList(
         (SetClusterAction, 1),
         (ReconnectAction, 1),
         (FlipFlagsAction, 2),
-        (SourceSinkStallCheckAction, 4),
+        # TODO: Reenable when SS-193 and SS-325 are fixed
+        # (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,  # deletes can't be inside of transactions

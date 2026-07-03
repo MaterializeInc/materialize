@@ -187,13 +187,18 @@ authentication mechanisms.
    | `name_prefix` | Set a prefix for all resource names (e.g., `simple-demo`) as well as your release name for the Operator |
    | `region`      | Set the GCP region for the deployment (e.g., `us-central1`).  |
    | `license_key` | Set to your Materialize license key.     |
+   | `crd_version` | CRD API version to use for the Materialize instance: `v1` or `v1alpha1`. |
    | `labels`      | Set to the labels to apply to resources. |
 
-   ```bash
+   {{% include-from-yaml data="self_managed/installation"
+   name="installation-tfvars-crd-version-tip" %}}
+
+   ```hcl
    project_id  = "my-gcp-project"
    name_prefix = "simple-demo"
    region      = "us-central1"
    license_key = "your-materialize-license-key"
+   crd_version = "v1"   # v1 is available for Materialize v26.30+ and TF v3.1.1+.
    labels = {
      environment = "demo"
      created_by  = "terraform"
@@ -263,6 +268,10 @@ authentication mechanisms.
 1. Check the status of your deployment:
    {{% include-from-yaml data="self_managed/installation"
    name="installation-verify-status" %}}
+
+1. Check the CRD version of the Materialize manifest.
+   {{% include-from-yaml data="self_managed/crd_version_checks"
+   name="check-crd-version-tf" %}}
 
 ### Step 5: Connect to Materialize
 

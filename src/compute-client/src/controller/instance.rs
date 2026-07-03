@@ -1394,7 +1394,7 @@ impl Instance {
     #[mz_ore::instrument(level = "debug")]
     pub fn create_dataflow(
         &mut self,
-        dataflow: DataflowDescription<mz_compute_types::plan::Plan, ()>,
+        dataflow: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
         import_read_holds: Vec<ReadHold>,
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState>,
         target_replica: Option<ReplicaId>,

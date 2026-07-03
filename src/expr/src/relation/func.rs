@@ -3066,7 +3066,22 @@ impl<T: TimestampLike> Iterator for TimestampRangeStepInclusive<T> {
             match add_timestamp_months(self.state.deref(), self.step.months) {
                 Ok(state) => match state.checked_add_signed(self.step.duration_as_chrono()) {
                     Some(v) => match CheckedTimestamp::from_timestamplike(v) {
-                        Ok(v) => self.state = v,
+                        Ok(v) => {
+                            // Advance only if the step makes progress toward `stop`. A mixed
+                            // month/day step can reach an in-bounds fixed point (month addition
+                            // saturates a short month back onto the start day), which would
+                            // otherwise loop forever.
+                            let progressed = if self.rev {
+                                v < self.state
+                            } else {
+                                v > self.state
+                            };
+                            if progressed {
+                                self.state = v
+                            } else {
+                                self.done = true
+                            }
+                        }
                         Err(_) => self.done = true,
                     },
                     None => self.done = true,

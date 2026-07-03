@@ -18,11 +18,10 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{Eval, EvalError, MirScalarExpr};
 
-#[sqlfunc(
-    sqlname = "arraytolist",
-    preserves_uniqueness = true,
-    introduces_nulls = false
-)]
+// NOTE: This cast does not preserve uniqueness: It returns only the array's elements and drops the
+// dimension metadata, so arrays that differ only in their lower bounds (e.g. `[1:1]={42}` and
+// `[2:2]={42}`) collapse to the same list.
+#[sqlfunc(sqlname = "arraytolist", introduces_nulls = false)]
 fn cast_array_to_list_one_dim<'a, T>(a: Array<'a, T>) -> Result<DatumList<'a, T>, EvalError> {
     let ndims = a.dims().ndims();
     if ndims > 1 {
@@ -190,7 +189,11 @@ impl LazyUnaryFunc for CastArrayToJsonb {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        true
+        // NOTE: JSONB arrays reconstruct nested arrays from dimension lengths
+        // only and carry no lower bounds, so arrays that differ only in their
+        // lower bounds (e.g. `[1:1]={42}` and `[2:2]={42}`) produce the same
+        // JSONB value. This cast is therefore not uniqueness-preserving.
+        false
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {

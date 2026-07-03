@@ -59,10 +59,30 @@ PRODUCTION_APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
 
 STAGING_REGION = "aws/eu-west-1"
 STAGING_ENVIRONMENT = "staging"
-STAGING_USERNAME = os.getenv(
-    "NIGHTLY_CANARY_USERNAME", "infra+nightly-canary@materialize.com"
-)
-STAGING_APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
+
+
+def staging_username_for_account(index: int) -> str:
+    return f"infra+cloud-integration-tests-staging-database-{index}@materialize.io"
+
+
+def staging_credentials() -> tuple[str, str]:
+    """`(username, app_password)` for this run's staging account.
+
+    Each parallel CI shard gets its own dedicated Frontegg account from the e2e
+    pool, picked by the parallel-job index, so concurrent shards don't trample
+    each other on shared cloud state. The per-account app passwords are
+    pre-generated and stored in i2 (see bin/gen-staging-database-app-passwords
+    there), exposed one per account as `..._APP_PASSWORD_<index>`.
+    """
+    index = buildkite.get_parallelism_index()
+    app_password = os.getenv(f"E2E_STAGING_TEST_FRONTEGG_DATABASE_APP_PASSWORD_{index}")
+    if not app_password:
+        raise UIError(
+            f"E2E_STAGING_TEST_FRONTEGG_DATABASE_APP_PASSWORD_{index} is not set. "
+            "It is required to select a per-shard staging account."
+        )
+    return staging_username_for_account(index), app_password
+
 
 MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "memory_limiter_interval": "0s",
@@ -3693,17 +3713,18 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             app_password=PRODUCTION_APP_PASSWORD or "",
         )
     elif args.target == "cloud-staging":
+        staging_username, staging_app_password = staging_credentials()
         target: BenchTarget = CloudTarget(
             composition,
-            STAGING_USERNAME,
-            STAGING_APP_PASSWORD or "",
+            staging_username,
+            staging_app_password,
             is_staging=True,
             version=staging_version(),
         )
         mz = Mz(
             region=STAGING_REGION,
             environment=STAGING_ENVIRONMENT,
-            app_password=STAGING_APP_PASSWORD or "",
+            app_password=staging_app_password,
         )
     elif args.target == "docker":
         target = DockerTarget(composition)

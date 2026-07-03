@@ -1264,7 +1264,6 @@ impl TransactionStatus {
 
     /// Checks whether the current state of this transaction allows writes
     /// (adding write ops).
-    /// transaction
     pub fn allows_writes(&self) -> bool {
         match self {
             TransactionStatus::Started(Transaction { ops, access, .. })
@@ -1273,10 +1272,12 @@ impl TransactionStatus {
                 match ops {
                     TransactionOps::None => access != &Some(TransactionAccessMode::ReadOnly),
                     TransactionOps::Peeks { determination, .. } => {
-                        // If-and-only-if peeks thus far do not have a timestamp
-                        // (i.e. they are constant), we can switch to a write
-                        // transaction.
-                        !determination.timestamp_context.contains_timestamp()
+                        // We can switch a peek-only transaction to a write
+                        // transaction only if the peeks thus far are constant
+                        // (i.e. they do not have a timestamp) and the
+                        // transaction is not explicitly marked read-only.
+                        access != &Some(TransactionAccessMode::ReadOnly)
+                            && !determination.timestamp_context.contains_timestamp()
                     }
                     TransactionOps::Subscribe => false,
                     TransactionOps::Writes(_) => true,
@@ -1360,12 +1361,20 @@ impl TransactionStatus {
                                 *requires_linearization = add_requires_linearization;
                             }
                         }
-                        // Iff peeks thus far do not have a timestamp (i.e.
-                        // they are constant), we can switch to a write
-                        // transaction.
+                        // If the peeks thus far are constant (i.e. they do not
+                        // have a timestamp), writes can follow and switch the
+                        // transaction to a write transaction. But a read-only
+                        // transaction must still reject the write. Without that
+                        // check the write would silently turn a read-only
+                        // transaction into a write transaction, and a later
+                        // write would then trip the assert in the `Writes` arm
+                        // below.
                         writes @ TransactionOps::Writes(..)
                             if !determination.timestamp_context.contains_timestamp() =>
                         {
+                            if matches!(access, Some(TransactionAccessMode::ReadOnly)) {
+                                return Err(AdapterError::ReadOnlyTransaction);
+                            }
                             *ops = writes;
                         }
                         _ => return Err(AdapterError::ReadOnlyTransaction),

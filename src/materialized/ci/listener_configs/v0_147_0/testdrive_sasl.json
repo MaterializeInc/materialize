@@ -2,7 +2,7 @@
   "sql": {
     "external": {
       "addr": "0.0.0.0:6875",
-      "authenticator_kind": "Frontegg",
+      "authenticator_kind": "None",
       "allowed_roles": "Normal",
       "enable_tls": false
     },
@@ -11,20 +11,34 @@
       "authenticator_kind": "None",
       "allowed_roles": "Internal",
       "enable_tls": false
+    },
+    "password": {
+      "addr": "0.0.0.0:6880",
+      "authenticator_kind": "Password",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false
+    },
+    "sasl": {
+      "addr": "0.0.0.0:6881",
+      "authenticator_kind": "Sasl",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false
     }
   },
   "http": {
     "external": {
       "addr": "0.0.0.0:6876",
-      "authenticator_kind": "Frontegg",
-      "allowed_roles": "Normal",
-      "enable_tls": true,
+      "authenticator_kind": "None",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false,
       "routes": {
         "base": true,
         "webhook": true,
         "internal": false,
         "metrics": false,
         "profiling": false,
+        "mcp_agent": false,
+        "mcp_developer": false,
         "console_config": true
       }
     },
@@ -39,6 +53,8 @@
         "internal": true,
         "metrics": true,
         "profiling": true,
+        "mcp_agent": false,
+        "mcp_developer": false,
         "console_config": false
       }
     }

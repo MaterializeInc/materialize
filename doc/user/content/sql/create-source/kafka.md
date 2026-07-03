@@ -42,14 +42,37 @@ in the source.
 
 {{% include-syntax file="examples/create_source_kafka" example="syntax-avro" %}}
 
+#### Schema registries
+
+Materialize can retrieve Avro schemas from either of two schema registries,
+selected by the `USING` clause:
+
+- **[Confluent Schema Registry](/sql/create-connection/#confluent-schema-registry)**
+  (`USING CONFLUENT SCHEMA REGISTRY`): schemas are looked up by topic using the
+  `TopicNameStrategy`, and the message's embedded schema ID resolves the writer
+  schema at decode time.
+
+- **[AWS Glue Schema Registry](/sql/create-connection/#aws-glue-schema-registry)**
+  (`USING AWS GLUE SCHEMA REGISTRY`) {{< private-preview-inline />}}: schemas are
+  looked up by the `SCHEMA NAME` you provide, and the message's embedded schema
+  version ID resolves the writer schema at decode time. Each `FORMAT AVRO USING
+  AWS GLUE` clause resolves a single schema. To decode keys and values from
+  different schemas (for example, under `ENVELOPE UPSERT` or `ENVELOPE
+  DEBEZIUM`), you must specify `KEY FORMAT ... VALUE FORMAT ...` explicitly.
 
 #### Schema versioning
 
-The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued.
+The schema is resolved when the `CREATE SOURCE` statement is issued. With
+[Confluent Schema Registry](/sql/create-connection/#confluent-schema-registry),
+the _latest_ schema is retrieved using the
+[`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html)
+strategy. With [AWS Glue Schema
+Registry](/sql/create-connection/#aws-glue-schema-registry), the latest version
+of the schema named by `SCHEMA NAME` is retrieved.
 
 #### Schema evolution
 
-As long as the writer schema changes in a [compatible way](https://avro.apache.org/docs/++version++/specification/#schema-resolution), Materialize will continue using the original reader schema definition by mapping values from the new to the old schema version. To use the new version of the writer schema in Materialize, you need to **drop and recreate** the source.
+As long as the writer schema changes in a [compatible way](https://avro.apache.org/docs/++version++/specification/#schema-resolution), Materialize will continue using the original reader schema definition by mapping values from the new to the old schema version. To use the new version of the writer schema in Materialize, you need to **drop and recreate** the source. This applies to both Confluent Schema Registry and AWS Glue Schema Registry.
 
 #### Name collision
 
@@ -798,6 +821,29 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 {{< /tab >}}
 {{< /tabs >}}
 
+#### AWS Glue Schema Registry
+
+{{< private-preview />}}
+
+An [AWS Glue Schema Registry connection](/sql/create-connection/#aws-glue-schema-registry)
+authenticates through a separate [AWS connection](/sql/create-connection/#aws),
+which supplies the credentials and region:
+
+```mzsql
+CREATE CONNECTION aws_connection TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
+);
+
+CREATE CONNECTION glue_connection TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_connection,
+    REGISTRY = 'default-registry'
+);
+```
+
+The AWS connection must be allowed to read schemas from the registry. See
+[Permissions](/sql/create-connection/#glue-permissions) for the required IAM
+actions.
+
 ### Creating a source
 
 {{< tabs tabID="1" >}}
@@ -809,6 +855,16 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 CREATE SOURCE avro_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+```
+
+**Using AWS Glue Schema Registry** {{< private-preview-inline />}}
+
+```mzsql
+CREATE SOURCE avro_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_connection (
+    SCHEMA NAME = 'test_schema'
+  );
 ```
 
 {{< /tab >}}
