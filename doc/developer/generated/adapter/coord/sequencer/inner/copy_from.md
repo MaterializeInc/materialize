@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/copy_from.rs
-revision: a23b5e40d2
+revision: 1c17d34993
 ---
 
 # adapter::coord::sequencer::inner::copy_from

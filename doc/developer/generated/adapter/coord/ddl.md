@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/ddl.rs
-revision: 73111c3e52
+revision: 1c17d34993
 ---
 
 # adapter::coord::ddl

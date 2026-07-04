@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord.rs
-revision: e926ec3a86
+revision: 1c17d34993
 ---
 
 # adapter::coord
@@ -14,3 +14,6 @@ The `Coordinator` struct holds a `catalog_info_metrics_registry: MetricsRegistry
 Bootstrap handles derived builtin storage collections (builtin MVs) separately: after registering input-less collections in dependency order, it bumps their sinces based on transitive dependency frontiers to satisfy as-of selection invariants. Bootstrap also calls `push_replica_dyncfg_overrides` once before dataflows are rendered so that replica-scoped dyncfg flags take effect on the first configuration of each replica, and calls `spawn_cluster_controller_task` to start the cluster controller background task.
 The `Message` enum includes a `ClusterControllerRequest(cluster_controller::ClusterControllerRequest)` variant, carrying one pull/apply call from the cluster controller task to be answered on the main coordinator message loop.
 `ship_dataflow`, `try_ship_dataflow`, and `ship_dataflow_and_notice_builtin_table_updates` accept `DataflowDescription<LirRelationExpr>` (previously `DataflowDescription<Plan>`).
+`ExecuteContextInner` carries a `response_barriers: Vec<BuiltinTableAppendNotify>` field (Debug-ignored). `ExecuteContext::from_parts` is a convenience wrapper around `from_parts_with_response_barriers`, which accepts an explicit barrier list. `into_parts` returns the barrier list as a fifth element alongside `tx`, `internal_cmd_tx`, `session`, and `extra`; callers that repack an `ExecuteContext` must preserve and forward these barriers. `delay_response_until` appends a `BuiltinTableAppendCompletion` barrier; on retirement, the response is held until all barriers resolve.
+`ExplainTimestampStage` has four variants in order: `Optimize`, `RealTimeRecency`, `LinearizeTimestamp` (carries `ExplainTimestampLinearizeTimestamp`: validity, format, optimized_plan, cluster_id, source_ids, when, real_time_recency_ts), and `Finish` (carries `ExplainTimestampFinish`: validity, format, cluster_id, source_ids, when, real_time_recency_ts, timeline_context, oracle_read_ts). The `LinearizeTimestamp` stage reads the oracle timestamp off the coordinator loop and passes it forward as `oracle_read_ts` in `ExplainTimestampFinish`.
+`SubscribeStage` has five variants in order: `OptimizeMir`, `LinearizeTimestamp` (carries `SubscribeLinearizeTimestamp`: validity, plan, timeline, optimizer, global_mir_plan, dependency_ids, replica_id, explain_ctx), `TimestampOptimizeLir` (carries `SubscribeTimestampOptimizeLir`, which includes `oracle_read_ts: Option<Timestamp>`), `Finish`, and `Explain`. The `LinearizeTimestamp` stage reads the oracle timestamp off the coordinator loop before LIR optimization.

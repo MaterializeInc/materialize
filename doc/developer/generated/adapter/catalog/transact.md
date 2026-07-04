@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/transact.rs
-revision: c1ed1f82e9
+revision: 699d823624
 ---
 
 # adapter::catalog::transact
@@ -18,3 +18,4 @@ Zero-downtime deployment logic (0dt) is also managed here; DDL operations can be
 `Op::UpdatePrivilege` carries `privileges: Vec<MzAclItem>` (previously a single `privilege: MzAclItem`), allowing a bulk `GRANT`/`REVOKE` touching one object for many grantees to land as a single durable write while still emitting one audit event per grantee.
 When dropping a cluster replica, the code expands dependent objects (including materialized views that target the replica) using `state.cluster_replica_dependents(cluster_id, replica_id, &mut seen)`, records their comments for cleanup, and adds them to the drop list; `seen` is seeded from already-collected items so the plan-driven path (which processes dependents before the replica in reverse-dependency order) does not re-add them.
 When dropping items, all storage collections associated with a dropped entry are scheduled for removal unconditionally; whether the item was a replacement target is not considered at this stage.
+`Op::RenameSchema` iterates over `schema.items`, `schema.types`, and `schema.functions` so that types and functions defined in the schema are renamed alongside regular items. A `seen: BTreeSet<CatalogItemId>` dedup guard prevents duplicate retraction/addition updates when a temporary item depends on multiple objects in the renamed schema, which would otherwise produce a diff that consolidates to an invalid value and panics catalog apply.
