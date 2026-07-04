@@ -17,6 +17,8 @@ use mz_storage_types::sinks::S3UploadInfo;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
+use crate::plan::scalar::LirScalarExpr;
+
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ComputeSinkDesc<S: 'static = ()> {
@@ -34,6 +36,15 @@ pub struct ComputeSinkDesc<S: 'static = ()> {
     pub non_null_assertions: Vec<usize>,
     /// TODO(database-issues#7533): Add documentation.
     pub refresh_schedule: Option<RefreshSchedule>,
+    /// The arrangement key by which the renderer should consume the `from` collection.
+    ///
+    /// `None` means consume the unarranged collection. `Some(key)` names an arrangement of
+    /// `from` from which the renderer reconstructs full rows before feeding the sink. The
+    /// permutation and thinning are a pure function of `key` and are derived at render time.
+    ///
+    /// Chosen during LIR lowering, where the available arrangements of `from` are known. It is
+    /// `None` before lowering runs.
+    pub from_key: Option<Vec<LirScalarExpr>>,
 }
 
 /// TODO(database-issues#7533): Add documentation.

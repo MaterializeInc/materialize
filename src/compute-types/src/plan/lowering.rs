@@ -190,12 +190,39 @@ impl Context {
             objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
+        // Choose, for each sink, which form of its `from` collection the renderer consumes.
+        // `None` means the unarranged collection. Otherwise we name an arrangement key, so the
+        // renderer no longer has to pick one arbitrarily at runtime. The choice is possible here
+        // because the loop above registered the arrangements of every built object.
+        let mut sink_exports = desc.sink_exports;
+        for sink in sink_exports.values_mut() {
+            let available = self
+                .arrangements
+                .get(&Id::Global(sink.from))
+                .ok_or_else(|| {
+                    format!("sink source {} is neither imported nor built", sink.from)
+                })?;
+            // Prefer the unarranged collection when it exists, even if arrangements exist too.
+            // The renderer reads `bundle.collection` whenever it is present, and reading it
+            // avoids reconstructing full rows from an arrangement's key and value.
+            sink.from_key = if available.raw {
+                None
+            } else {
+                // `AvailableCollections` holds at least one form, so without `raw` there is an
+                // arrangement. `arbitrary_arrangement` asserts this.
+                let (key, _permutation, _thinning) = available
+                    .arbitrary_arrangement()
+                    .expect("non-raw collection has an arrangement");
+                Some(key.clone())
+            };
+        }
+
         let mut dataflow = DataflowDescription {
             source_imports: desc.source_imports,
             index_imports: desc.index_imports,
             objects_to_build,
             index_exports: desc.index_exports,
-            sink_exports: desc.sink_exports,
+            sink_exports,
             as_of: desc.as_of,
             until: desc.until,
             initial_storage_as_of: desc.initial_storage_as_of,

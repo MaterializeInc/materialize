@@ -243,6 +243,8 @@ impl Optimize<MetricSink> for Optimizer {
             up_to: Antichain::new(),
             non_null_assertions: Vec::new(),
             refresh_schedule: None,
+            // Populated during LIR lowering.
+            from_key: None,
         };
         df_desc.export_sink(self.sink_id, sink_description);
 
