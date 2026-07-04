@@ -476,10 +476,21 @@ impl TxnsTableWorker {
         // Sneak in any txns shard tidying from previous commits.
         txn.tidy(std::mem::take(&mut self.tidy));
         let txn_res = txn.commit_at(&mut self.txns, write_ts).await;
-        let response = match txn_res {
+        match txn_res {
             Ok(apply) => {
-                // TODO: Do the applying in a background task. This will be a
-                // significant INSERT latency performance win.
+                // The commit to the txns shard already made the write durable
+                // and linearized, so unblock the caller before applying. The
+                // apply is idempotent and reads of the affected data shards
+                // block until it has happened, so deferring it shifts latency
+                // from every write onto reads of the just-written shards. If
+                // we crash before applying, the next append's apply covers it,
+                // because applying is `apply_le`: it applies all unapplied
+                // txns up to its timestamp, and group commit appends at least
+                // once per timestamp interval.
+                //
+                // It is not an error for the other end to hang up.
+                let _ = tx.send(Ok(()));
+
                 debug!("applying {:?}", apply);
                 let tidy = apply.apply(&mut self.txns).await;
                 self.tidy.merge(tidy);
@@ -488,8 +499,6 @@ impl TxnsTableWorker {
                 // and compact as aggressively as we can (i.e. to the time we
                 // just wrote).
                 let () = self.txns.compact_to(write_ts).await;
-
-                Ok(())
             }
             Err(current) => {
                 self.tidy.merge(txn.take_tidy());
@@ -497,7 +506,7 @@ impl TxnsTableWorker {
                     "unable to commit txn at {:?} current={:?}",
                     write_ts, current
                 );
-                Err(StorageError::InvalidUppers(
+                let response = Err(StorageError::InvalidUppers(
                     self.write_handles
                         .keys()
                         .copied()
@@ -506,11 +515,11 @@ impl TxnsTableWorker {
                             current_upper: Antichain::from_elem(current),
                         })
                         .collect(),
-                ))
+                ));
+                // It is not an error for the other end to hang up.
+                let _ = tx.send(response);
             }
-        };
-        // It is not an error for the other end to hang up.
-        let _ = tx.send(response);
+        }
     }
 }
 
