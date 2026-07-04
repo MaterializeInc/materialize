@@ -134,6 +134,8 @@ optimizer_feature_flags!({
     // See the feature flag of the same name.
     enable_simplify_quantified_comparisons: bool,
     // See the feature flag of the same name.
+    enable_simplify_from_less_existence: bool,
+    // See the feature flag of the same name.
     enable_coalesce_case_transform: bool,
     // See the feature flag of the same name.
     enable_will_distinct_propagation: bool,

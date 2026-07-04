@@ -281,6 +281,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_replica_targeted_materialized_views
     enable_s3_tables_region_check
     enable_session_timelines
+    enable_simplify_from_less_existence
     enable_simplify_quantified_comparisons
     enable_time_at_time_zone
     enable_unlimited_retain_history
