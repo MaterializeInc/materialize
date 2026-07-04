@@ -179,120 +179,14 @@ fn raise_inner(
                 equivalences.iter().map(|class| resolve(class)).collect(),
             );
             // Physical phase only: commit acyclic joins to a cost-model-chosen
-            // Differential so JoinImplementation no-ops on them. On any failure,
-            // fall back to the bare Unimplemented join and let JoinImplementation
-            // handle it.
-            if !commit_wcoj || !flags.commit {
-                return join;
-            }
-            // Don't commit if any raised input is a constant singleton:
-            // join_scalars drops them, creating an index mismatch with the
-            // order computed from the original (pre-drop) Rel inputs.
-            if raised_inputs.iter().any(|i| i.is_constant_singleton()) {
-                return join;
-            }
-            // Canonicalize the equivalences with the production canonicalizer
-            // before planning. This is what makes every other optimizer path
-            // build-profile-stable: each class collapses to one canonical
-            // representative (lowest-complexity / lowest column), and that
-            // representative is substituted into expressions across classes,
-            // deterministically. Without it, the eqsat-extracted spelling (e.g.
-            // `#2` vs `#0` inside a null-pad CASE) can differ by build profile and
-            // flip the chosen join order, making goldens flaky. We commit a
-            // Differential, for which the canonical spelling is still fully keyed
-            // (no cross), so canonicalizing here is safe. Done only on the commit
-            // path, so JoinImplementation still sees the original spelling on every
-            // fallback (it canonicalizes Unimplemented joins itself).
-            let mut canon_equivs: Vec<Vec<MirScalarExpr>> =
-                equivalences.iter().map(|class| resolve(class)).collect();
-            let input_types: Vec<_> = raised_inputs.iter().map(|i| i.typ()).collect();
-            mz_expr::canonicalize::canonicalize_equivalences(
-                &mut canon_equivs,
-                input_types.iter().map(|t| &t.column_types),
-            );
-            // Compute the order over the canonical equivalences (converted back to
-            // the cost model's `EScalar` IR) so the order matches the committed
-            // spelling and is build-profile-stable.
-            let canon_escalars: Vec<Vec<crate::eqsat::ir::EScalar>> = canon_equivs
-                .iter()
-                .map(|class| {
-                    class
-                        .iter()
-                        .cloned()
-                        .map(crate::eqsat::ir::EScalar::plain)
-                        .collect()
-                })
-                .collect();
-            let model = if available.is_empty() {
-                crate::eqsat::cost::CostModel::new()
+            // Differential/DeltaQuery so JoinImplementation no-ops on them. On any
+            // failure, fall back to the bare Unimplemented join and let
+            // JoinImplementation handle it.
+            if commit_wcoj && flags.commit {
+                commit_join(inputs, &raised_inputs, equivalences, available, flags).unwrap_or(join)
             } else {
-                crate::eqsat::cost::CostModel::with_available(available.clone())
-            };
-            let Some(order) = model.binary_join_order(inputs, &canon_escalars) else {
-                return join;
-            };
-            // Abort if any non-start step has no key columns: that step would
-            // be a cross join in the Differential plan, which is no improvement
-            // over what JoinImplementation already produces, and the empty
-            // lookup key can trigger a `find_bound_expr` panic in LIR lowering
-            // for joins whose equivalences have complex (non-column) members.
-            // frontier_key_cols correctly returns an empty set when the chosen
-            // order lacks a frontier connection at that step.
-            if order.steps[1..].iter().any(|s| s.key_cols.is_empty()) {
-                return join;
+                join
             }
-            let per_input = per_input_available(&raised_inputs, available);
-            // Delta only helps for 3+ inputs: it avoids the intermediate
-            // arrangements a differential chain builds (k-2 of them). A 1-input
-            // "join" is a filter whose delta plan is unrenderable (empty
-            // per-driver path panics source_keys derivation in
-            // delta_join.rs:98-110); a 2-input join has no intermediate
-            // arrangement to save and delta would add a second path for nothing.
-            // Match JoinImplementation, which forces differential for
-            // num_inputs <= 2 (join_implementation.rs:408-429).
-            if inputs.len() > 2 {
-                // Try a delta commit first: it is preferred when it needs no new
-                // arrangements (strict) or no more than differential (eager).
-                // Viability is delta_join_order returning Some (every step
-                // keyed); a disconnected join has no delta plan and stays
-                // differential.
-                if let Some(paths) = model.delta_join_order(inputs, &canon_escalars) {
-                    let delta_new =
-                        crate::eqsat::join_commit::delta_new_arrangements(&paths, &per_input);
-                    let commit_delta = if flags.eager_delta {
-                        delta_new <= differential_new_arrangements(&order, &per_input)
-                    } else {
-                        delta_new == 0
-                    };
-                    if commit_delta {
-                        let canon_join = MirRelationExpr::join_scalars(
-                            raised_inputs.clone(),
-                            canon_equivs.clone(),
-                        );
-                        if let Some(j) = crate::eqsat::join_commit::commit_delta_query(
-                            canon_join,
-                            paths,
-                            &per_input,
-                            &raised_inputs,
-                            flags.prioritize_arranged,
-                        ) {
-                            return j;
-                        }
-                    }
-                }
-            }
-            // Fall through to the SP-B1 differential commit. The committed join
-            // carries the canonical equivalences, matching the order computed
-            // above.
-            let canon_join = MirRelationExpr::join_scalars(raised_inputs.clone(), canon_equivs);
-            crate::eqsat::join_commit::commit_differential(
-                canon_join,
-                order,
-                &per_input,
-                &raised_inputs,
-                flags.prioritize_arranged,
-            )
-            .unwrap_or(join)
         }
         Rel::Negate { input } => raise(input, scope).negate(),
         Rel::Threshold { input } => raise(input, scope).threshold(),
@@ -477,6 +371,127 @@ fn raise_inner(
             }
         }
     }
+}
+
+/// Commit an acyclic join to a cost-model-chosen Differential or DeltaQuery so
+/// `JoinImplementation` no-ops on it. Returns the committed join, or `None` to
+/// fall back to the bare `Unimplemented` join (a constant-singleton input, an
+/// unkeyed cross-join step, or a delta/differential planning failure).
+///
+/// `inputs` are the `Rel` join inputs (for the cost-model order search),
+/// `raised_inputs` their already-raised MIR forms (for arrangement
+/// installation), `equivalences` the join's equivalence classes, `available` the
+/// index availability map, and `flags` the native-commit flags. Takes the
+/// already-raised inputs so it needs no scope, callable on any single join.
+fn commit_join(
+    inputs: &[Rel],
+    raised_inputs: &[MirRelationExpr],
+    equivalences: &[Vec<EScalar>],
+    available: &BTreeMap<GlobalId, Vec<Vec<MirScalarExpr>>>,
+    flags: NativeJoinFlags,
+) -> Option<MirRelationExpr> {
+    // Don't commit if any raised input is a constant singleton:
+    // join_scalars drops them, creating an index mismatch with the
+    // order computed from the original (pre-drop) Rel inputs.
+    if raised_inputs.iter().any(|i| i.is_constant_singleton()) {
+        return None;
+    }
+    // Canonicalize the equivalences with the production canonicalizer
+    // before planning. This is what makes every other optimizer path
+    // build-profile-stable: each class collapses to one canonical
+    // representative (lowest-complexity / lowest column), and that
+    // representative is substituted into expressions across classes,
+    // deterministically. Without it, the eqsat-extracted spelling (e.g.
+    // `#2` vs `#0` inside a null-pad CASE) can differ by build profile and
+    // flip the chosen join order, making goldens flaky. We commit a
+    // Differential, for which the canonical spelling is still fully keyed
+    // (no cross), so canonicalizing here is safe. Done only on the commit
+    // path, so JoinImplementation still sees the original spelling on every
+    // fallback (it canonicalizes Unimplemented joins itself).
+    let mut canon_equivs: Vec<Vec<MirScalarExpr>> =
+        equivalences.iter().map(|class| resolve(class)).collect();
+    let input_types: Vec<_> = raised_inputs.iter().map(|i| i.typ()).collect();
+    mz_expr::canonicalize::canonicalize_equivalences(
+        &mut canon_equivs,
+        input_types.iter().map(|t| &t.column_types),
+    );
+    // Compute the order over the canonical equivalences (converted back to
+    // the cost model's `EScalar` IR) so the order matches the committed
+    // spelling and is build-profile-stable.
+    let canon_escalars: Vec<Vec<crate::eqsat::ir::EScalar>> = canon_equivs
+        .iter()
+        .map(|class| {
+            class
+                .iter()
+                .cloned()
+                .map(crate::eqsat::ir::EScalar::plain)
+                .collect()
+        })
+        .collect();
+    let model = if available.is_empty() {
+        crate::eqsat::cost::CostModel::new()
+    } else {
+        crate::eqsat::cost::CostModel::with_available(available.clone())
+    };
+    let order = model.binary_join_order(inputs, &canon_escalars)?;
+    // Abort if any non-start step has no key columns: that step would
+    // be a cross join in the Differential plan, which is no improvement
+    // over what JoinImplementation already produces, and the empty
+    // lookup key can trigger a `find_bound_expr` panic in LIR lowering
+    // for joins whose equivalences have complex (non-column) members.
+    // frontier_key_cols correctly returns an empty set when the chosen
+    // order lacks a frontier connection at that step.
+    if order.steps[1..].iter().any(|s| s.key_cols.is_empty()) {
+        return None;
+    }
+    let per_input = per_input_available(raised_inputs, available);
+    // Delta only helps for 3+ inputs: it avoids the intermediate
+    // arrangements a differential chain builds (k-2 of them). A 1-input
+    // "join" is a filter whose delta plan is unrenderable (empty
+    // per-driver path panics source_keys derivation in
+    // delta_join.rs:98-110); a 2-input join has no intermediate
+    // arrangement to save and delta would add a second path for nothing.
+    // Match JoinImplementation, which forces differential for
+    // num_inputs <= 2 (join_implementation.rs:408-429).
+    if inputs.len() > 2 {
+        // Try a delta commit first: it is preferred when it needs no new
+        // arrangements (strict) or no more than differential (eager).
+        // Viability is delta_join_order returning Some (every step
+        // keyed); a disconnected join has no delta plan and stays
+        // differential.
+        if let Some(paths) = model.delta_join_order(inputs, &canon_escalars) {
+            let delta_new = crate::eqsat::join_commit::delta_new_arrangements(&paths, &per_input);
+            let commit_delta = if flags.eager_delta {
+                delta_new <= differential_new_arrangements(&order, &per_input)
+            } else {
+                delta_new == 0
+            };
+            if commit_delta {
+                let canon_join =
+                    MirRelationExpr::join_scalars(raised_inputs.to_vec(), canon_equivs.clone());
+                if let Some(j) = crate::eqsat::join_commit::commit_delta_query(
+                    canon_join,
+                    paths,
+                    &per_input,
+                    raised_inputs,
+                    flags.prioritize_arranged,
+                ) {
+                    return Some(j);
+                }
+            }
+        }
+    }
+    // Fall through to the SP-B1 differential commit. The committed join
+    // carries the canonical equivalences, matching the order computed
+    // above.
+    let canon_join = MirRelationExpr::join_scalars(raised_inputs.to_vec(), canon_equivs);
+    crate::eqsat::join_commit::commit_differential(
+        canon_join,
+        order,
+        &per_input,
+        raised_inputs,
+        flags.prioritize_arranged,
+    )
 }
 
 /// New arrangements a differential plan needs, mirroring `differential::plan`
