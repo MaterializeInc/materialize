@@ -1340,33 +1340,67 @@ FROM t, u, v
 WHERE a = c AND d = e AND b + d > 42
 ----
 Explained Query:
-  Join::Linear
-    final_closure
-      project=(#0, #1, #1)
-    linear_stage[0]
-      closure
-        project=(#1, #0)
-      lookup={ relation=1, key=[#1] }
-      stream={ key=[#0{a}], thinning=() }
-    linear_stage[1]
-      closure
-        project=(#3, #4)
-        filter=((#3 > 42))
-        map=((#2{b} + #1{d}), (#0{a} + #1{d}))
-      lookup={ relation=0, key=[#0] }
-      stream={ key=[#0{a}], thinning=(#1) }
-    source={ relation=2, key=[#0{a}] }
+  Join::Delta
+    plan_path[0]
+      final_closure
+        project=(#0, #1, #1)
+      delta_stage[1]
+        closure
+          project=(#1, #2)
+        lookup={ relation=2, key=[#0] }
+        stream={ key=[#0{a}], thinning=(#1, #2) }
+      delta_stage[0]
+        closure
+          project=(#2..=#4)
+          filter=((#3 > 42))
+          map=((#1{b} + #2{d}), (#0{a} + #2{d}))
+        lookup={ relation=1, key=[#0] }
+        stream={ key=[#0{a}], thinning=(#1) }
+      source={ relation=0, key=[#0] }
+    plan_path[1]
+      final_closure
+        project=(#0, #1, #1)
+      delta_stage[1]
+        closure
+          project=(#3, #4)
+          filter=((#3 > 42))
+          map=((#2{b} + #1{d}), (#0{a} + #1{d}))
+        lookup={ relation=0, key=[#0] }
+        stream={ key=[#0{a}], thinning=(#1) }
+      delta_stage[0]
+        closure
+          project=(#1, #0)
+        lookup={ relation=2, key=[#0] }
+        stream={ key=[#1{a}], thinning=(#0) }
+      source={ relation=1, key=[#0] }
+    plan_path[2]
+      final_closure
+        project=(#0, #1, #1)
+      delta_stage[1]
+        closure
+          project=(#3, #4)
+          filter=((#3 > 42))
+          map=((#2{b} + #1{d}), (#0{a} + #1{d}))
+        lookup={ relation=0, key=[#0] }
+        stream={ key=[#0{a}], thinning=(#1) }
+      delta_stage[0]
+        closure
+          project=(#1, #0)
+        lookup={ relation=1, key=[#1] }
+        stream={ key=[#0{a}], thinning=() }
+      source={ relation=2, key=[#0] }
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      arrangements[1]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
       Get::Collection materialize.public.u
         raw=true
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[#0{a}], permutation=id, thinning=() }
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
       Get::Collection materialize.public.v
         raw=true
 
@@ -1377,7 +1411,7 @@ Source materialize.public.v
   filter=((#0{a}) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.t_a_idx (differential join)
+  - materialize.public.t_a_idx (delta join 1st input (full scan))
 
 Target cluster: quickstart
 

@@ -126,20 +126,55 @@ Explained Query:
           Constant
             - (null)
   Return
-    Join::Linear
-      linear_stage[0]
-        closure
-          project=(#0, #5..=#8)
-          map=((#4) IS NULL, case when #5 then null else #3 end, (#2) IS NULL, case when #7 then null else #1 end)
-        lookup={ relation=1, key=[#0] }
-        stream={ key=[#0], thinning=(#1, #2) }
-      linear_stage[1]
-        closure
-          project=(#0, #5, #6, #2, #7, #4)
-          map=(case when #1 then null else #0 end, case when #3 then null else #0 end)
-        lookup={ relation=0, key=[#0] }
-        stream={ key=[#0], thinning=(#1..=#4) }
-      source={ relation=2, key=[#0] }
+    Join::Delta
+      plan_path[0]
+        delta_stage[1]
+          closure
+            project=(#0..=#3, #7, #8)
+            map=((#5) IS NULL, case when #6 then null else #0 end, case when #6 then null else #4 end)
+          lookup={ relation=2, key=[#0] }
+          stream={ key=[#0], thinning=(#1..=#3) }
+        delta_stage[0]
+          closure
+            project=(#0, #1, #5, #6)
+            map=((#3) IS NULL, case when #4 then null else #0 end, case when #4 then null else #2 end)
+          lookup={ relation=1, key=[#0] }
+          stream={ key=[#0], thinning=(#1) }
+        source={ relation=0, key=[#0] }
+      plan_path[1]
+        delta_stage[1]
+          closure
+            project=(#1, #2, #4, #3, #8, #9)
+            map=((#6) IS NULL, case when #7 then null else #1 end, case when #7 then null else #5 end)
+          lookup={ relation=2, key=[#0] }
+          stream={ key=[#2], thinning=(#0, #1, #3, #4) }
+        delta_stage[0]
+          closure
+            project=(#0, #3, #0, #2, #4)
+            map=(case when #1 then null else #0 end)
+          lookup={ relation=0, key=[#0] }
+          stream={ key=[#0], thinning=(#1, #2) }
+        initial_closure
+          project=(#0, #3, #4)
+          map=((#2) IS NULL, case when #3 then null else #1 end)
+        source={ relation=1, key=[#0] }
+      plan_path[2]
+        delta_stage[1]
+          closure
+            project=(#1, #2, #8, #9, #4, #3)
+            map=((#6) IS NULL, case when #7 then null else #1 end, case when #7 then null else #5 end)
+          lookup={ relation=1, key=[#0] }
+          stream={ key=[#2], thinning=(#0, #1, #3, #4) }
+        delta_stage[0]
+          closure
+            project=(#0, #3, #0, #2, #4)
+            map=(case when #1 then null else #0 end)
+          lookup={ relation=0, key=[#0] }
+          stream={ key=[#0], thinning=(#1, #2) }
+        initial_closure
+          project=(#0, #3, #4)
+          map=((#2) IS NULL, case when #3 then null else #1 end)
+        source={ relation=2, key=[#0] }
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }

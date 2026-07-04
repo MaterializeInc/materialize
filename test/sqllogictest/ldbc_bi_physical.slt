@@ -1414,18 +1414,41 @@ Explained Query:
           val_plan
             project=(#5..=#7)
             map=(case when (#2) IS NULL then 0 else coalesce(#1, 0) end, case when (#4) IS NULL then 0 else coalesce(#3, 0) end, true)
-          Join::Linear
-            linear_stage[0]
-              closure
-                project=(#3, #4, #0..=#2)
-              lookup={ relation=1, key=[#0] }
-              stream={ key=[#0], thinning=(#1, #2) }
-            linear_stage[1]
-              closure
-                project=(#5, #1..=#4)
-              lookup={ relation=0, key=[#0] }
-              stream={ key=[#2], thinning=(#0, #1, #3, #4) }
-            source={ relation=2, key=[#0] }
+          Join::Delta
+            plan_path[0]
+              delta_stage[1]
+                closure
+                  project=(#1..=#5)
+                lookup={ relation=2, key=[#0] }
+                stream={ key=[#0], thinning=(#1..=#3) }
+              delta_stage[0]
+                lookup={ relation=1, key=[#0] }
+                stream={ key=[#0], thinning=(#1) }
+              source={ relation=0, key=[#0] }
+            plan_path[1]
+              delta_stage[1]
+                closure
+                  project=(#1..=#5)
+                lookup={ relation=2, key=[#0] }
+                stream={ key=[#1], thinning=(#0, #2, #3) }
+              delta_stage[0]
+                closure
+                  project=(#3, #0..=#2)
+                lookup={ relation=0, key=[#0] }
+                stream={ key=[#0], thinning=(#1, #2) }
+              source={ relation=1, key=[#0] }
+            plan_path[2]
+              delta_stage[1]
+                closure
+                  project=(#1, #4, #5, #2, #3)
+                lookup={ relation=1, key=[#0] }
+                stream={ key=[#1], thinning=(#0, #2, #3) }
+              delta_stage[0]
+                closure
+                  project=(#3, #0..=#2)
+                lookup={ relation=0, key=[#0] }
+                stream={ key=[#0], thinning=(#1, #2) }
+              source={ relation=2, key=[#0] }
             ArrangeBy
               raw=true
               arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -5954,23 +5977,45 @@ Explained Query:
           raw=false
           arrangements[0]={ key=[#2{tagid}], permutation={#0: #1, #1: #2, #2: #0}, thinning=(#0, #1) }
       cte l3 =
-        Join::Linear
-          linear_stage[0]
-            closure
-              project=(#1, #0)
-            lookup={ relation=1, key=[#1] }
-            stream={ key=[#0], thinning=() }
-          linear_stage[1]
-            lookup={ relation=0, key=[#0] }
-            stream={ key=[#0{creatorpersonid}], thinning=(#1) }
-          source={ relation=2, key=[#0] }
+        Join::Delta
+          plan_path[0]
+            delta_stage[1]
+              closure
+                project=(#1, #0)
+              lookup={ relation=2, key=[#0] }
+              stream={ key=[#1{creatorpersonid}], thinning=(#0) }
+            delta_stage[0]
+              lookup={ relation=1, key=[#0] }
+              stream={ key=[#0{creatorpersonid}], thinning=() }
+            source={ relation=0, key=[#0] }
+          plan_path[1]
+            delta_stage[1]
+              closure
+                project=(#1, #0)
+              lookup={ relation=2, key=[#0] }
+              stream={ key=[#1{creatorpersonid}], thinning=(#0) }
+            delta_stage[0]
+              lookup={ relation=0, key=[#0] }
+              stream={ key=[#0{creatorpersonid}], thinning=(#1) }
+            source={ relation=1, key=[#0] }
+          plan_path[2]
+            delta_stage[1]
+              lookup={ relation=0, key=[#0] }
+              stream={ key=[#0{creatorpersonid}], thinning=(#1) }
+            delta_stage[0]
+              closure
+                project=(#1, #0)
+              lookup={ relation=1, key=[#1] }
+              stream={ key=[#0{creatorpersonid}], thinning=() }
+            source={ relation=2, key=[#0] }
           Get::PassArrangements l0
             raw=false
             arrangements[0]={ key=[#0], permutation=id, thinning=() }
           ArrangeBy
             input_key=[#0, #1]
             raw=false
-            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+            arrangements[1]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
             Reduce::Distinct
               key_plan
                 project=(#1, #0)
@@ -6076,23 +6121,45 @@ Explained Query:
               project=(#0)
               raw=true
       cte l6 =
-        Join::Linear
-          linear_stage[0]
-            closure
-              project=(#1, #0)
-            lookup={ relation=1, key=[#1] }
-            stream={ key=[#0], thinning=() }
-          linear_stage[1]
-            lookup={ relation=0, key=[#0] }
-            stream={ key=[#0{creatorpersonid}], thinning=(#1) }
-          source={ relation=2, key=[#0] }
+        Join::Delta
+          plan_path[0]
+            delta_stage[1]
+              closure
+                project=(#1, #0)
+              lookup={ relation=2, key=[#0] }
+              stream={ key=[#1{creatorpersonid}], thinning=(#0) }
+            delta_stage[0]
+              lookup={ relation=1, key=[#0] }
+              stream={ key=[#0{creatorpersonid}], thinning=() }
+            source={ relation=0, key=[#0] }
+          plan_path[1]
+            delta_stage[1]
+              closure
+                project=(#1, #0)
+              lookup={ relation=2, key=[#0] }
+              stream={ key=[#1{creatorpersonid}], thinning=(#0) }
+            delta_stage[0]
+              lookup={ relation=0, key=[#0] }
+              stream={ key=[#0{creatorpersonid}], thinning=(#1) }
+            source={ relation=1, key=[#0] }
+          plan_path[2]
+            delta_stage[1]
+              lookup={ relation=0, key=[#0] }
+              stream={ key=[#0{creatorpersonid}], thinning=(#1) }
+            delta_stage[0]
+              closure
+                project=(#1, #0)
+              lookup={ relation=1, key=[#1] }
+              stream={ key=[#0{creatorpersonid}], thinning=() }
+            source={ relation=2, key=[#0] }
           Get::PassArrangements l0
             raw=false
             arrangements[0]={ key=[#0], permutation=id, thinning=() }
           ArrangeBy
             input_key=[#0, #1]
             raw=false
-            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+            arrangements[1]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
             Reduce::Distinct
               key_plan
                 project=(#1, #0)
@@ -6363,34 +6430,135 @@ Explained Query:
             raw=false
             arrangements[0]={ key=[#1{messageid}], permutation={#0: #1, #1: #0}, thinning=(#0, #2..=#12) }
       cte l1 =
-        Get::PassArrangements materialize.public.forum_hasmember_person
+        Get::Arrangement materialize.public.forum_hasmember_person
+          project=(#0, #2)
+          key=#1{forumid}
           raw=false
           arrangements[0]={ key=[#1{forumid}], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
       cte l2 =
-        Join::Linear
-          linear_stage[0]
-            closure
-              project=(#4, #0, #2)
-            lookup={ relation=3, key=[#1] }
-            stream={ key=[#1{forumid}], thinning=(#0, #2) }
-          linear_stage[1]
-            closure
-              project=(#0, #3, #1, #2)
-            lookup={ relation=2, key=[#0] }
-            stream={ key=[#0{personid}], thinning=(#1, #2) }
-          linear_stage[2]
-            closure
-              project=(#4, #0, #5, #3)
-              filter=((#1{creatorpersonid} != #2{creatorpersonid}))
-            lookup={ relation=1, key=[#1, #2] }
-            stream={ key=[#1{parentmessageid}, #3{personid}], thinning=(#0, #2) }
-          linear_stage[3]
-            closure
-              project=(#5, #2, #3)
-              filter=((#0{containerforumid} != #3{containerforumid}) AND ((#4{creationdate} + 12:00:00) < #1{creationdate}))
-            lookup={ relation=0, key=[#2] }
-            stream={ key=[#3{forumid}], thinning=(#0..=#2) }
-          source={ relation=4, key=[#1{forumid}] }
+        Join::Delta
+          plan_path[0]
+            delta_stage[3]
+              closure
+                project=(#2..=#4)
+              lookup={ relation=4, key=[#0, #1] }
+              stream={ key=[#1{containerforumid}, #3{creatorpersonid}], thinning=(#0, #2, #4) }
+            delta_stage[2]
+              closure
+                project=(#2, #3, #0, #6, #7)
+                filter=(((#1{creationdate} + 12:00:00) < #5{creationdate}) AND (#6{creatorpersonid} != #4{creatorpersonid}) AND (#3{containerforumid} != #7{containerforumid}))
+              lookup={ relation=1, key=[#1] }
+              stream={ key=[#4{parentmessageid}], thinning=(#0..=#3) }
+            delta_stage[1]
+              closure
+                project=(#1..=#3, #0, #4)
+              lookup={ relation=2, key=[#0] }
+              stream={ key=[#3{personid}], thinning=(#0..=#2) }
+            delta_stage[0]
+              closure
+                project=(#1, #2, #0, #3)
+              lookup={ relation=3, key=[#0] }
+              stream={ key=[#2{containerforumid}], thinning=(#0, #1) }
+            initial_closure
+              project=(#1, #2, #0)
+            source={ relation=0, key=[#2] }
+          plan_path[1]
+            delta_stage[3]
+              closure
+                project=(#5, #2, #3)
+                filter=((#0{containerforumid} != #3{containerforumid}) AND ((#4{creationdate} + 12:00:00) < #1{creationdate}))
+              lookup={ relation=0, key=[#2] }
+              stream={ key=[#3{forumid}], thinning=(#0..=#2) }
+            delta_stage[2]
+              closure
+                project=(#2..=#4, #0)
+              lookup={ relation=4, key=[#0, #1] }
+              stream={ key=[#4{forumid}, #2{creatorpersonid}], thinning=(#0, #1, #3) }
+            delta_stage[1]
+              closure
+                project=(#1..=#5)
+              lookup={ relation=3, key=[#1] }
+              stream={ key=[#4{creatorpersonid}], thinning=(#0..=#3) }
+            delta_stage[0]
+              closure
+                project=(#1, #0, #2..=#4)
+                filter=((#2{creatorpersonid} != #4{creatorpersonid}))
+              lookup={ relation=2, key=[#1] }
+              stream={ key=[#1{messageid}], thinning=(#0, #2, #3) }
+            initial_closure
+              project=(#1, #0, #2, #3)
+            source={ relation=1, key=[#1] }
+          plan_path[2]
+            delta_stage[3]
+              closure
+                project=(#5, #2, #3)
+                filter=((#0{containerforumid} != #3{containerforumid}) AND ((#4{creationdate} + 12:00:00) < #1{creationdate}))
+              lookup={ relation=0, key=[#2] }
+              stream={ key=[#3{forumid}], thinning=(#0..=#2) }
+            delta_stage[2]
+              closure
+                project=(#2..=#4, #0)
+              lookup={ relation=4, key=[#0, #1] }
+              stream={ key=[#4{forumid}, #2{creatorpersonid}], thinning=(#0, #1, #3) }
+            delta_stage[1]
+              closure
+                project=(#1..=#5)
+              lookup={ relation=3, key=[#1] }
+              stream={ key=[#4{creatorpersonid}], thinning=(#0..=#3) }
+            delta_stage[0]
+              closure
+                project=(#2, #0, #3, #4, #1)
+                filter=((#3{creatorpersonid} != #1{creatorpersonid}))
+              lookup={ relation=1, key=[#1] }
+              stream={ key=[#1{parentmessageid}], thinning=(#0) }
+            source={ relation=2, key=[#0] }
+          plan_path[3]
+            delta_stage[3]
+              closure
+                project=(#2..=#4)
+              lookup={ relation=4, key=[#0, #1] }
+              stream={ key=[#4{forumid}, #2{creatorpersonid}], thinning=(#0, #1, #3) }
+            delta_stage[2]
+              closure
+                project=(#2, #0, #7, #8, #5)
+                filter=(((#1{creationdate} + 12:00:00) < #6{creationdate}) AND (#7{creatorpersonid} != #4{creatorpersonid}) AND (#3{containerforumid} != #8{containerforumid}))
+              lookup={ relation=1, key=[#1] }
+              stream={ key=[#4{parentmessageid}], thinning=(#0..=#3, #5) }
+            delta_stage[1]
+              closure
+                project=(#1..=#3, #0, #5, #4)
+              lookup={ relation=2, key=[#0] }
+              stream={ key=[#4{personid}], thinning=(#0..=#3) }
+            delta_stage[0]
+              closure
+                project=(#2, #3, #0, #0, #1)
+              lookup={ relation=0, key=[#2] }
+              stream={ key=[#0{forumid}], thinning=(#1) }
+            source={ relation=3, key=[#0] }
+          plan_path[4]
+            delta_stage[3]
+              closure
+                project=(#2..=#4)
+              lookup={ relation=3, key=[#0, #1] }
+              stream={ key=[#4{forumid}, #3{creatorpersonid}], thinning=(#0..=#2) }
+            delta_stage[2]
+              closure
+                project=(#1, #0, #3, #5, #4)
+                filter=((#2{creatorpersonid} != #5{creatorpersonid}))
+              lookup={ relation=2, key=[#1] }
+              stream={ key=[#1{messageid}], thinning=(#0, #2..=#4) }
+            delta_stage[1]
+              closure
+                project=(#2, #6, #0, #7, #4)
+                filter=(((#1{creationdate} + 12:00:00) < #5{creationdate}) AND (#3{containerforumid} != #7{containerforumid}))
+              lookup={ relation=1, key=[#2] }
+              stream={ key=[#4{personid}], thinning=(#0..=#3) }
+            delta_stage[0]
+              closure
+                project=(#2, #3, #0, #0, #1)
+              lookup={ relation=0, key=[#2] }
+              stream={ key=[#0{forumid}], thinning=(#1) }
+            source={ relation=4, key=[#0, #1] }
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#2], permutation={#0: #1, #1: #2, #2: #0}, thinning=(#0, #1) }
@@ -6399,23 +6567,31 @@ Explained Query:
               raw=true
           ArrangeBy
             raw=true
-            arrangements[0]={ key=[#1, #2], permutation={#0: #2, #1: #0, #2: #1}, thinning=(#0, #3) }
+            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0, #2, #3) }
+            arrangements[1]={ key=[#2], permutation={#0: #1, #1: #2, #2: #0}, thinning=(#0, #1, #3) }
             Get::Collection l0
               project=(#0..=#3)
               raw=true
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+            arrangements[1]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
             Get::Collection l0
               project=(#2, #4)
               filter=((#4{parentmessageid}) IS NOT NULL)
               raw=true
-          Get::PassArrangements l1
-            raw=false
-            arrangements[0]={ key=[#1{forumid}], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
-          Get::PassArrangements l1
-            raw=false
-            arrangements[0]={ key=[#1{forumid}], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+            arrangements[1]={ key=[#0, #1], permutation=id, thinning=() }
+            arrangements[2]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            Get::PassArrangements l1
+              raw=true
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+            Get::PassArrangements l1
+              raw=true
       cte l3 =
         Reduce::Distinct
           key_plan=id
@@ -6461,11 +6637,8 @@ Explained Query:
                       project=(#1, #0)
                     val_plan
                       project=()
-                    Get::Arrangement materialize.public.forum_hasmember_person
-                      project=(#0, #2)
-                      key=#1{forumid}
-                      raw=false
-                      arrangements[0]={ key=[#1{forumid}], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
+                    Get::PassArrangements l1
+                      raw=true
               ArrangeBy
                 input_key=[#0, #1]
                 raw=true
@@ -6475,7 +6648,7 @@ Explained Query:
 
 Used Indexes:
   - materialize.public.tag_name (lookup)
-  - materialize.public.forum_hasmember_person_forumid (*** full scan ***, differential join)
+  - materialize.public.forum_hasmember_person_forumid (*** full scan ***)
   - materialize.public.message_hastag_tag_tagid (differential join)
   - materialize.public.message_messageid (differential join)
 

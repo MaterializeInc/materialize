@@ -10116,6 +10116,23 @@ WHERE a = c AND d = e AND b + d > 42
                           [
                             {
                               "Column": [
+                                0,
+                                null
+                              ]
+                            }
+                          ],
+                          [
+                            0,
+                            1
+                          ],
+                          [
+                            1
+                          ]
+                        ],
+                        [
+                          [
+                            {
+                              "Column": [
                                 1,
                                 null
                               ]
@@ -10182,7 +10199,7 @@ WHERE a = c AND d = e AND b + d > 42
                             {
                               "Column": [
                                 0,
-                                "a"
+                                null
                               ]
                             }
                           ],
@@ -10199,46 +10216,190 @@ WHERE a = c AND d = e AND b + d > 42
               }
             ],
             "plan": {
-              "Linear": {
-                "source_relation": 2,
-                "source_key": [
+              "Delta": {
+                "path_plans": [
                   {
-                    "Column": [
-                      0,
-                      "a"
-                    ]
-                  }
-                ],
-                "initial_closure": null,
-                "stage_plans": [
-                  {
-                    "lookup_relation": 1,
-                    "stream_key": [
+                    "source_relation": 0,
+                    "source_key": [
                       {
                         "Column": [
                           0,
-                          "a"
-                        ]
-                      }
-                    ],
-                    "stream_thinning": [],
-                    "lookup_key": [
-                      {
-                        "Column": [
-                          1,
                           null
                         ]
                       }
                     ],
-                    "closure": {
+                    "initial_closure": {
                       "ready_equivalences": [],
                       "before": {
                         "mfp": {
                           "expressions": [],
                           "predicates": [],
                           "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      }
+                    },
+                    "stage_plans": [
+                      {
+                        "lookup_relation": 1,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              0,
+                              "a"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [
+                          1
+                        ],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              0,
+                              null
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [],
+                          "before": {
+                            "mfp": {
+                              "expressions": [
+                                {
+                                  "CallBinary": {
+                                    "func": {
+                                      "AddInt32": null
+                                    },
+                                    "expr1": {
+                                      "Column": [
+                                        1,
+                                        "b"
+                                      ]
+                                    },
+                                    "expr2": {
+                                      "Column": [
+                                        2,
+                                        "d"
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "CallBinary": {
+                                    "func": {
+                                      "AddInt32": null
+                                    },
+                                    "expr1": {
+                                      "Column": [
+                                        0,
+                                        "a"
+                                      ]
+                                    },
+                                    "expr2": {
+                                      "Column": [
+                                        2,
+                                        "d"
+                                      ]
+                                    }
+                                  }
+                                }
+                              ],
+                              "predicates": [
+                                [
+                                  4,
+                                  {
+                                    "CallBinary": {
+                                      "func": {
+                                        "Gt": null
+                                      },
+                                      "expr1": {
+                                        "Column": [
+                                          3,
+                                          null
+                                        ]
+                                      },
+                                      "expr2": {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                45,
+                                                42
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "Int32",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                ]
+                              ],
+                              "projection": [
+                                2,
+                                3,
+                                4
+                              ],
+                              "input_arity": 3
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "lookup_relation": 2,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              0,
+                              "a"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [
+                          1,
+                          2
+                        ],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              0,
+                              null
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [],
+                          "before": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                1,
+                                2
+                              ],
+                              "input_arity": 3
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "final_closure": {
+                      "ready_equivalences": [],
+                      "before": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
                             1,
-                            0
+                            1
                           ],
                           "input_arity": 2
                         }
@@ -10246,19 +10407,8 @@ WHERE a = c AND d = e AND b + d > 42
                     }
                   },
                   {
-                    "lookup_relation": 0,
-                    "stream_key": [
-                      {
-                        "Column": [
-                          0,
-                          "a"
-                        ]
-                      }
-                    ],
-                    "stream_thinning": [
-                      1
-                    ],
-                    "lookup_key": [
+                    "source_relation": 1,
+                    "source_key": [
                       {
                         "Column": [
                           0,
@@ -10266,109 +10416,366 @@ WHERE a = c AND d = e AND b + d > 42
                         ]
                       }
                     ],
-                    "closure": {
+                    "initial_closure": {
                       "ready_equivalences": [],
                       "before": {
                         "mfp": {
-                          "expressions": [
-                            {
-                              "CallBinary": {
-                                "func": {
-                                  "AddInt32": null
-                                },
-                                "expr1": {
-                                  "Column": [
-                                    2,
-                                    "b"
-                                  ]
-                                },
-                                "expr2": {
-                                  "Column": [
-                                    1,
-                                    "d"
-                                  ]
-                                }
-                              }
-                            },
-                            {
-                              "CallBinary": {
-                                "func": {
-                                  "AddInt32": null
-                                },
-                                "expr1": {
-                                  "Column": [
-                                    0,
-                                    "a"
-                                  ]
-                                },
-                                "expr2": {
-                                  "Column": [
-                                    1,
-                                    "d"
-                                  ]
-                                }
-                              }
-                            }
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
                           ],
-                          "predicates": [
-                            [
-                              4,
-                              {
-                                "CallBinary": {
-                                  "func": {
-                                    "Gt": null
-                                  },
-                                  "expr1": {
-                                    "Column": [
-                                      3,
-                                      null
-                                    ]
-                                  },
-                                  "expr2": {
-                                    "Literal": [
-                                      {
-                                        "Ok": {
-                                          "data": [
-                                            45,
-                                            42
-                                          ]
-                                        }
-                                      },
-                                      {
-                                        "scalar_type": "Int32",
-                                        "nullable": false
-                                      }
-                                    ]
+                          "input_arity": 2
+                        }
+                      }
+                    },
+                    "stage_plans": [
+                      {
+                        "lookup_relation": 2,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              1,
+                              "a"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [
+                          0
+                        ],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              0,
+                              null
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [],
+                          "before": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                1,
+                                0
+                              ],
+                              "input_arity": 2
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "lookup_relation": 0,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              0,
+                              "a"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [
+                          1
+                        ],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              0,
+                              null
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [],
+                          "before": {
+                            "mfp": {
+                              "expressions": [
+                                {
+                                  "CallBinary": {
+                                    "func": {
+                                      "AddInt32": null
+                                    },
+                                    "expr1": {
+                                      "Column": [
+                                        2,
+                                        "b"
+                                      ]
+                                    },
+                                    "expr2": {
+                                      "Column": [
+                                        1,
+                                        "d"
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "CallBinary": {
+                                    "func": {
+                                      "AddInt32": null
+                                    },
+                                    "expr1": {
+                                      "Column": [
+                                        0,
+                                        "a"
+                                      ]
+                                    },
+                                    "expr2": {
+                                      "Column": [
+                                        1,
+                                        "d"
+                                      ]
+                                    }
                                   }
                                 }
-                              }
-                            ]
-                          ],
+                              ],
+                              "predicates": [
+                                [
+                                  4,
+                                  {
+                                    "CallBinary": {
+                                      "func": {
+                                        "Gt": null
+                                      },
+                                      "expr1": {
+                                        "Column": [
+                                          3,
+                                          null
+                                        ]
+                                      },
+                                      "expr2": {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                45,
+                                                42
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "Int32",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                ]
+                              ],
+                              "projection": [
+                                3,
+                                4
+                              ],
+                              "input_arity": 3
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "final_closure": {
+                      "ready_equivalences": [],
+                      "before": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
                           "projection": [
-                            3,
-                            4
+                            0,
+                            1,
+                            1
                           ],
-                          "input_arity": 3
+                          "input_arity": 2
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "source_relation": 2,
+                    "source_key": [
+                      {
+                        "Column": [
+                          0,
+                          null
+                        ]
+                      }
+                    ],
+                    "initial_closure": {
+                      "ready_equivalences": [],
+                      "before": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0
+                          ],
+                          "input_arity": 1
+                        }
+                      }
+                    },
+                    "stage_plans": [
+                      {
+                        "lookup_relation": 1,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              0,
+                              "a"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              1,
+                              null
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [],
+                          "before": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                1,
+                                0
+                              ],
+                              "input_arity": 2
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "lookup_relation": 0,
+                        "stream_key": [
+                          {
+                            "Column": [
+                              0,
+                              "a"
+                            ]
+                          }
+                        ],
+                        "stream_thinning": [
+                          1
+                        ],
+                        "lookup_key": [
+                          {
+                            "Column": [
+                              0,
+                              null
+                            ]
+                          }
+                        ],
+                        "closure": {
+                          "ready_equivalences": [],
+                          "before": {
+                            "mfp": {
+                              "expressions": [
+                                {
+                                  "CallBinary": {
+                                    "func": {
+                                      "AddInt32": null
+                                    },
+                                    "expr1": {
+                                      "Column": [
+                                        2,
+                                        "b"
+                                      ]
+                                    },
+                                    "expr2": {
+                                      "Column": [
+                                        1,
+                                        "d"
+                                      ]
+                                    }
+                                  }
+                                },
+                                {
+                                  "CallBinary": {
+                                    "func": {
+                                      "AddInt32": null
+                                    },
+                                    "expr1": {
+                                      "Column": [
+                                        0,
+                                        "a"
+                                      ]
+                                    },
+                                    "expr2": {
+                                      "Column": [
+                                        1,
+                                        "d"
+                                      ]
+                                    }
+                                  }
+                                }
+                              ],
+                              "predicates": [
+                                [
+                                  4,
+                                  {
+                                    "CallBinary": {
+                                      "func": {
+                                        "Gt": null
+                                      },
+                                      "expr1": {
+                                        "Column": [
+                                          3,
+                                          null
+                                        ]
+                                      },
+                                      "expr2": {
+                                        "Literal": [
+                                          {
+                                            "Ok": {
+                                              "data": [
+                                                45,
+                                                42
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "scalar_type": "Int32",
+                                            "nullable": false
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                ]
+                              ],
+                              "projection": [
+                                3,
+                                4
+                              ],
+                              "input_arity": 3
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "final_closure": {
+                      "ready_equivalences": [],
+                      "before": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1,
+                            1
+                          ],
+                          "input_arity": 2
                         }
                       }
                     }
                   }
-                ],
-                "final_closure": {
-                  "ready_equivalences": [],
-                  "before": {
-                    "mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1,
-                        1
-                      ],
-                      "input_arity": 2
-                    }
-                  }
-                }
+                ]
               }
             }
           }
