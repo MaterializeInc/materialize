@@ -164,14 +164,17 @@ impl Transform for PhysicalEqSatTransform {
         // Unlike the logical pass, this calls optimize_with_availability
         // (commit_wcoj=true) so the e-graph's WcoJoin choice is lowered to a
         // live DeltaQuery with an index-aware cost model.
-        let use_ilp = ctx.features.enable_eqsat_ilp_extraction;
+        let use_ilp =
+            ctx.features.enable_eqsat_ilp_extraction || ctx.features.enable_eqsat_filter_sharing;
         let use_delta = ctx.features.enable_eqsat_delta_join_cost;
+        let filter_sharing = ctx.features.enable_eqsat_filter_sharing;
         let optimized = crate::eqsat::optimize_with_availability(
             relation.clone(),
             available,
             seeds,
             use_ilp,
             use_delta,
+            filter_sharing,
             crate::eqsat::raise::NativeJoinFlags {
                 commit: ctx.features.enable_eqsat_native_join_commit,
                 prioritize_arranged: ctx.features.enable_join_prioritize_arranged,
@@ -527,6 +530,7 @@ mod tests {
             vec![marker_seed()],
             false,
             false,
+            false,
             crate::eqsat::raise::NativeJoinFlags::none(),
         );
         assert!(
@@ -557,6 +561,7 @@ mod tests {
             vec![marker_seed()],
             false,
             false,
+            false,
             crate::eqsat::raise::NativeJoinFlags::none(),
         );
         assert!(
@@ -584,6 +589,7 @@ mod tests {
             input,
             avail(),
             vec![marker_seed_for(lit_pred(), 3)],
+            false,
             false,
             false,
             crate::eqsat::raise::NativeJoinFlags::none(),
@@ -628,6 +634,7 @@ mod tests {
             vec![marker_seed()],
             false,
             false,
+            false,
             crate::eqsat::raise::NativeJoinFlags::none(),
         );
         assert!(
@@ -667,6 +674,7 @@ mod tests {
                 avail(),
                 seeds.clone(),
                 use_ilp,
+                false,
                 false,
                 crate::eqsat::raise::NativeJoinFlags::none(),
             );

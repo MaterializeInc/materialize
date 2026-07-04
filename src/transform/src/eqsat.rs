@@ -88,6 +88,7 @@ pub fn optimize(expr: MirRelationExpr) -> MirRelationExpr {
         false,
         false,
         false,
+        false,
         raise::NativeJoinFlags::none(),
     )
 }
@@ -105,6 +106,7 @@ pub fn optimize_without_let_union(expr: MirRelationExpr) -> MirRelationExpr {
         default_ruleset(),
         false,
         Vec::new(),
+        false,
         false,
         false,
         false,
@@ -127,6 +129,10 @@ pub fn optimize_without_let_union(expr: MirRelationExpr) -> MirRelationExpr {
 /// `use_ilp` selects the [`extract::IlpExtractor`] instead of the default
 /// greedy extractor when `true`. Default is `false` (greedy).
 ///
+/// `filter_sharing` makes the ILP's node tier scalar-aware (see
+/// [`extract::IlpExtractor::weight_scalar_nodes`]) and gates the filter-sharing
+/// rewrites. Default is `false`.
+///
 /// This is the entry point used by [`PhysicalEqSatTransform`].
 ///
 /// [`PhysicalEqSatTransform`]: transform::PhysicalEqSatTransform
@@ -136,13 +142,24 @@ pub fn optimize_with_availability(
     seeds: Vec<egraph::IndexedFilterSeed>,
     use_ilp: bool,
     use_delta: bool,
+    filter_sharing: bool,
     flags: crate::eqsat::raise::NativeJoinFlags,
 ) -> MirRelationExpr {
     // Live physical pass: the cost model sees arrangement / index availability,
     // so arrangement-sensitive rules (`phase physical`) may fire here.
     let rules = default_ruleset().for_phase(dsl::Phase::Physical);
     optimize_inner(
-        expr, true, available, rules, true, seeds, use_ilp, false, use_delta, flags,
+        expr,
+        true,
+        available,
+        rules,
+        true,
+        seeds,
+        use_ilp,
+        false,
+        use_delta,
+        filter_sharing,
+        flags,
     )
 }
 
@@ -163,6 +180,7 @@ pub fn optimize_logical(expr: MirRelationExpr, enable_wmr_lift: bool) -> MirRela
         Vec::new(),
         false,
         enable_wmr_lift,
+        false,
         false,
         raise::NativeJoinFlags::none(),
     )
@@ -186,6 +204,7 @@ pub fn optimize_with_wmr_lift(expr: MirRelationExpr) -> MirRelationExpr {
         false,
         true,
         false,
+        false,
         raise::NativeJoinFlags::none(),
     )
 }
@@ -200,6 +219,7 @@ fn optimize_inner(
     use_ilp: bool,
     enable_wmr_lift: bool,
     use_delta: bool,
+    filter_sharing: bool,
     flags: crate::eqsat::raise::NativeJoinFlags,
 ) -> MirRelationExpr {
     let rel = lower::lower_with(&expr, enable_wmr_lift);
@@ -218,7 +238,9 @@ fn optimize_inner(
         optimizer.without_let_union()
     };
     let optimizer = if use_ilp {
-        optimizer.with_extractor(std::sync::Arc::new(extract::IlpExtractor))
+        optimizer.with_extractor(std::sync::Arc::new(extract::IlpExtractor {
+            weight_scalar_nodes: filter_sharing,
+        }))
     } else {
         optimizer
     };

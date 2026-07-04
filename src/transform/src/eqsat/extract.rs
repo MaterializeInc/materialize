@@ -69,8 +69,14 @@ impl Extractor for GreedyExtractor {
 ///
 /// microlp is early-stage; any solver failure falls back to [`GreedyExtractor`],
 /// which is always sound.
-#[derive(Debug, Clone)]
-pub struct IlpExtractor;
+#[derive(Debug, Clone, Default)]
+pub struct IlpExtractor {
+    /// When set, weight the node tier by each selected node's direct scalar-payload
+    /// count, mirroring cost.rs's scalar-aware node count. Gated behind
+    /// `enable_eqsat_filter_sharing`. When false the objective is byte-identical
+    /// to the flat-node-tier form, so the corpus is unaffected.
+    pub weight_scalar_nodes: bool,
+}
 
 /// Whether the subgraph reachable from `root_class` contains a directed cycle,
 /// where an edge runs from a class to each child class of each of its e-nodes.
@@ -258,7 +264,6 @@ impl IlpExtractor {
             .collect();
         let work_total: f64 = node_work.iter().sum::<f64>() + 1.0;
         let w_time = 0.5 / work_total;
-        let w_nodes = 0.5 * w_time / (node_vars.len() as f64 + 1.0);
 
         let mut obj_expr: good_lp::Expression = good_lp::Expression::from(0.0);
         for (arr_i, (arr_class, arr_key)) in arr_vars.iter().enumerate() {
@@ -273,9 +278,28 @@ impl IlpExtractor {
                 obj_expr += arr_sel[arr_i];
             }
         }
-        // Time tier + node-count tier, per selected node.
-        for (vi, nsel) in node_sel.iter().enumerate() {
-            obj_expr += (w_time * node_work[vi] + w_nodes) * *nsel;
+        // Node tier. Flag off runs the ORIGINAL formula verbatim, so the
+        // objective is byte-identical to today (same op-order, same solver
+        // path). Flag on weights each selected node by its direct scalar-payload
+        // count and rescales w_nodes by total node-tier MASS (not node count),
+        // so no scalar-laden assignment can let the node tier dominate a genuine
+        // time difference.
+        if self.weight_scalar_nodes {
+            let node_mass: Vec<f64> = node_vars
+                .iter()
+                .map(|(_, node)| 1.0 + node_scalar_count(node, egraph) as f64)
+                .collect();
+            let mass_total: f64 = node_mass.iter().sum::<f64>() + 1.0;
+            let w_nodes = 0.5 * w_time / mass_total;
+            for (vi, nsel) in node_sel.iter().enumerate() {
+                obj_expr += (w_time * node_work[vi] + w_nodes * node_mass[vi]) * *nsel;
+            }
+        } else {
+            // ORIGINAL, untouched. Copy verbatim from the pre-edit code.
+            let w_nodes = 0.5 * w_time / (node_vars.len() as f64 + 1.0);
+            for (vi, nsel) in node_sel.iter().enumerate() {
+                obj_expr += (w_time * node_work[vi] + w_nodes) * *nsel;
+            }
         }
 
         let mut lp_model = vars.minimise(obj_expr).using(good_lp::microlp);
@@ -678,6 +702,39 @@ fn node_work_degree(node: &ENode, egraph: &EGraph, best: &BTreeMap<Id, f64>) -> 
     }
 }
 
+/// The direct scalar-payload node count of `node`, the exact per-node term of
+/// `Rel::scalar_node_count` (ir.rs): the sum of `scalar_expr_cost` over the
+/// node's interned scalar children (`ENode::scalar_children`, resolved via
+/// `resolve_scalars` to their cached `EScalar` exprs) plus the two un-interned
+/// scalar payloads a node carries verbatim (`Reduce.aggregates`,
+/// `TopK.shape.limit`). Uses `scalar_expr_cost`, the same metric
+/// `Rel::scalar_node_count` sums, so summing `1 + node_scalar_count` over the
+/// DAG-selected relational nodes equals `node_count + scalar_node_count`, the
+/// `nodes` axis at cost.rs:370. Does NOT recurse into the relational subtree:
+/// the ILP sums it per selected node, so a shared relational child's scalar mass
+/// is counted once, not once per parent. Sound as a compute-once preference ONLY
+/// for memory-free streaming operators (filters, maps). Do not reuse for a
+/// scalar carried across an arrangement boundary without a width charge (WS2).
+fn node_scalar_count(node: &ENode, egraph: &EGraph) -> usize {
+    let interned: usize = egraph
+        .resolve_scalars(&node.scalar_children())
+        .iter()
+        .map(|s| crate::eqsat::ir::scalar_expr_cost(&s.expr))
+        .sum();
+    let raw: usize = match node {
+        ENode::Reduce { aggregates, .. } => aggregates
+            .iter()
+            .map(|a| crate::eqsat::ir::scalar_expr_cost(&a.expr))
+            .sum(),
+        ENode::TopK { shape, .. } => shape
+            .limit
+            .as_ref()
+            .map_or(0, crate::eqsat::ir::scalar_expr_cost),
+        _ => 0,
+    };
+    interned + raw
+}
+
 /// The per-class cheapest output-size degree, by a bottom-up fixpoint over the
 /// reachable subgraph. A class's degree is the minimum over its nodes; a node's
 /// output degree mirrors `CostModel::size_degree`, except an `IndexedFilter`
@@ -817,7 +874,7 @@ mod tests {
         eg.union(a, b);
         eg.rebuild();
         let model = CostModel::new();
-        let plan = IlpExtractor
+        let plan = IlpExtractor::default()
             .extract(&eg, a, &model, &ArrangementCount, None, None)
             .unwrap();
         assert_eq!(model.cost(&plan).arrangements, 0);
@@ -874,7 +931,7 @@ mod tests {
         let greedy_plan = GreedyExtractor
             .extract(&eg, a, &model, &ArrangementCount, None, None)
             .expect("greedy must find a plan");
-        let ilp_plan = IlpExtractor
+        let ilp_plan = IlpExtractor::default()
             .extract(&eg, a, &model, &ArrangementCount, None, None)
             .expect("ILP must find a plan");
         let greedy_cost = model.cost(&greedy_plan);
@@ -884,6 +941,96 @@ mod tests {
             "ILP produced more arrangements ({}) than greedy ({})",
             ilp_cost.arrangements,
             greedy_cost.arrangements
+        );
+    }
+
+    #[mz_ore::test]
+    fn scalar_aware_node_tier_prefers_split_filter() {
+        // The WS1 acceptance shape (`SELECT * FROM r WHERE a UNION ALL SELECT *
+        // FROM r WHERE a AND b`): a Union of consumer 1 (bare `Filter[a](r)`)
+        // and consumer 2, whose class holds both the fused `Filter[a,b](r)`
+        // and the split `Filter[b](Filter[a](r))`. The split's inner filter is
+        // byte-identical to consumer 1's, so it hash-conses into the same
+        // class: consumer 1 pays for `Filter[a]` regardless, so choosing split
+        // for consumer 2 only adds the outer `Filter[b]`, while choosing fused
+        // adds a brand-new node that re-pays predicate `a`'s scalar cost from
+        // scratch. Across the whole plan this makes fused and split tie on
+        // both the time tier (each totals the same number of filter passes:
+        // consumer 1's shared filter, plus one filter for consumer 2) and, flag
+        // off, on flat node count (4 selected nodes either way). Only the
+        // scalar-aware node tier breaks the tie, in favor of split.
+        //
+        // A single-consumer construction (fused vs. split with no sibling
+        // reusing the inner filter) does NOT tie: splitting one filter into
+        // two strictly adds a filter pass with nothing to amortize it against,
+        // so both the real cost model (cost.rs's sorted `time` axis) and the
+        // ILP's summed work-degree proxy already prefer fused before the node
+        // tier is ever consulted. The sibling consumer is essential here, not
+        // decoration; a bare fused-vs-split union with no shared consumer would
+        // fail even with the flag on.
+        use crate::eqsat::ir::{EScalar, Rel};
+        use crate::eqsat::objective::ArrangementCount;
+        use mz_expr::MirScalarExpr;
+
+        let get = Rel::Get {
+            name: "r".into(),
+            arity: 2,
+        };
+        let a = EScalar::plain(MirScalarExpr::column(0).call_is_null().not());
+        let b = EScalar::plain(MirScalarExpr::column(1).call_is_null().not());
+
+        // Consumer 1: always needs `Filter[a](r)`.
+        let consumer1 = Rel::Filter {
+            predicates: vec![a.clone()],
+            input: Box::new(get.clone()),
+        };
+        // Consumer 2, fused form: one Filter node re-encoding both predicates.
+        let fused = Rel::Filter {
+            predicates: vec![a.clone(), b.clone()],
+            input: Box::new(get.clone()),
+        };
+        // Consumer 2, split form: the inner Filter[a] is byte-identical to
+        // consumer 1's and hash-conses into the same class.
+        let split = Rel::Filter {
+            predicates: vec![b.clone()],
+            input: Box::new(Rel::Filter {
+                predicates: vec![a.clone()],
+                input: Box::new(get.clone()),
+            }),
+        };
+        let root_rel = Rel::Union {
+            base: Box::new(consumer1),
+            inputs: vec![fused],
+        };
+
+        let mut eg = EGraph::new();
+        let root = eg.add_rel(&root_rel);
+        let split_id = eg.add_rel(&split);
+        // Consumer 2's class is the Union's second child (`base` is consumer
+        // 1). Union it with the split alternative so the ILP must choose.
+        let root_node = eg.rel_class_nodes(eg.find(root))[0].clone();
+        let consumer2_class = match root_node {
+            ENode::Union { inputs } => inputs[1],
+            other => panic!("expected a Union root, got {other:?}"),
+        };
+        eg.union(consumer2_class, split_id);
+        eg.rebuild();
+
+        let model = CostModel::new();
+        let plan = IlpExtractor {
+            weight_scalar_nodes: true,
+        }
+        .extract(&eg, root, &model, &ArrangementCount, None, None)
+        .expect("extract");
+        let Rel::Union { inputs, .. } = &plan else {
+            panic!("expected a Union root, got {plan:?}");
+        };
+        assert_eq!(inputs.len(), 1, "expected exactly one non-base input");
+        // Split form: an outer single-predicate Filter over an inner Filter.
+        assert!(
+            matches!(&inputs[0], Rel::Filter { predicates, input }
+                if predicates.len() == 1 && matches!(**input, Rel::Filter { .. })),
+            "expected consumer 2 to extract as the split form, got {plan:?}",
         );
     }
 
@@ -955,7 +1102,7 @@ mod tests {
 
         // ILP must return either None (triggering greedy fallback) or a
         // polarity-sound plan. It must never return Reduce(Negate(...)).
-        let ilp = IlpExtractor.extract(&eg, root, &model, &ArrangementCount, None, None);
+        let ilp = IlpExtractor::default().extract(&eg, root, &model, &ArrangementCount, None, None);
         if let Some(ref plan) = ilp {
             assert!(
                 validate_polarity(plan),
