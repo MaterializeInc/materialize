@@ -1,0 +1,60 @@
+mode cockroach
+
+statement ok
+CREATE TABLE r(a int, b int, payload int)
+
+# Flag OFF: two independent filters, no shared Let.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_filter_sharing = false
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM r WHERE a > 0
+UNION ALL
+SELECT * FROM r WHERE a > 0 AND b > 0
+----
+Explained Query:
+  Union
+    Filter (#0{a} > 0)
+      ReadStorage materialize.public.r
+    Filter (#0{a} > 0) AND (#1{b} > 0)
+      ReadStorage materialize.public.r
+
+Source materialize.public.r
+  filter=((#0{a} > 0))
+
+Target cluster: quickstart
+
+EOF
+
+# Flag ON: Filter[a>0](r) bound once in a Let and shared by both branches.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_filter_sharing = true
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM r WHERE a > 0
+UNION ALL
+SELECT * FROM r WHERE a > 0 AND b > 0
+----
+Explained Query:
+  With
+    cte l0 =
+      Filter (#0{a} > 0)
+        ReadStorage materialize.public.r
+  Return
+    Union
+      Get l0
+      Filter (#1{b} > 0)
+        Get l0
+
+Source materialize.public.r
+  filter=((#0{a} > 0))
+
+Target cluster: quickstart
+
+EOF
