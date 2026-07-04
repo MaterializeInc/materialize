@@ -460,7 +460,30 @@ fn commit_join(
         // keyed); a disconnected join has no delta plan and stays
         // differential.
         if let Some(paths) = model.delta_join_order(inputs, &canon_escalars) {
-            let delta_new = crate::eqsat::join_commit::delta_new_arrangements(&paths, &per_input);
+            // Net-of-shared: the differential plan for this order builds an
+            // arrangement for each of its steps' `(input, key)`. A delta plan
+            // reuses those same per-input arrangements and drops the k-2
+            // intermediate arrangements a differential chain builds, so charging
+            // delta for the shared per-input set makes it lose a comparison it
+            // should win. Credit the differential-built arrangements before
+            // counting delta's, matched on exact `(input, key)` so a delta
+            // arrangement differential does not build (a key mismatch) still
+            // counts and delta stays uncommitted (under-commit, never over). This
+            // reaches in one pass the decision JoinImplementation reaches across
+            // its two-pass fixpoint, where run 1 builds these ArrangeBys and run 2
+            // credits its own builds to get `delta_new == 0`.
+            let mut delta_avail = per_input.clone();
+            for step in &order.steps {
+                let key: Vec<MirScalarExpr> = step
+                    .key_cols
+                    .iter()
+                    .map(|&c| MirScalarExpr::column(c))
+                    .collect();
+                if !delta_avail[step.input].contains(&key) {
+                    delta_avail[step.input].push(key);
+                }
+            }
+            let delta_new = crate::eqsat::join_commit::delta_new_arrangements(&paths, &delta_avail);
             let commit_delta = if flags.eager_delta {
                 delta_new <= differential_new_arrangements(&order, &per_input)
             } else {
