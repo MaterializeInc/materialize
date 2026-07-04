@@ -1,9 +1,16 @@
 # Eqsat consolidation: optimizer retirement roadmap
 
-> **Status as of 2026-07-01.**
-> Planning artifact for subsuming the directional optimizer into eqsat.
-> The goal is consolidation and maintainability, not better plans (the capability question is closed, see `20260701_eqsat_showcase_status.md`).
-> This is the ledger the effort tracks retirement against.
+> **Tempered by the verdict. See `20260704_eqsat_research_verdict.md`.**
+> This roadmap plans subsuming directional passes into eqsat for consolidation.
+> The final verdict bounds how far that pays: eqsat is MIR-only (a hard layer
+> ceiling, so HIR passes like decorrelation cannot be subsumed), the MIR logical
+> layer is already well-covered, and retirement of the remaining passes rides the
+> same foundational cardinality, coverage, and key/FK spend as everything else,
+> not a free consolidation. So this ledger is gated on those foundations. Retained
+> as the retirement analysis, read against the verdict's bounded-value conclusion.
+>
+> **Original status (2026-07-01):** planning artifact for subsuming the directional
+> optimizer into eqsat, consolidation and maintainability goal, capability closed.
 
 ## Purpose
 

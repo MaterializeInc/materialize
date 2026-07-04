@@ -1,9 +1,16 @@
 # Eqsat optimizer: showcase status
 
-> **Status as of 2026-07-01.**
-> The capability hunt is complete.
-> Verdict: eqsat is a consolidation and maintainability bet, not a capability win.
-> Engine adoption is an open engineering-ROI decision.
+> **Superseded. See `20260704_eqsat_research_verdict.md` for the complete verdict.**
+> This 2026-07-01 status was correct but shallow. The arc continued past it: the
+> physical join planning phases (1 and 2 landed, 3 shelved), a constructive
+> phase-ordering hunt that briefly reopened then reclosed the logical capability
+> axis, the maintainability layer-ceiling finding, the foundational-levers
+> meta-finding, and an external literature scan. The capstone is the current,
+> complete answer. This doc is retained as the mid-arc snapshot.
+>
+> **Original status (2026-07-01):** capability hunt complete, verdict eqsat is a
+> consolidation and maintainability bet, not a capability win, engine adoption an
+> open engineering-ROI decision.
 
 ## Purpose
 
