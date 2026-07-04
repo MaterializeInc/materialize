@@ -9,6 +9,8 @@
 
 """mz env util"""
 
+import psycopg
+
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mz import Mz
 
@@ -24,3 +26,35 @@ def get_cloud_hostname(
         Mz(region=region, environment=environment, app_password=app_password)
     ):
         return c.cloud_hostname(quiet=quiet)
+
+
+def print_environment_id(conn: psycopg.Connection, indent: str = "") -> None:
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT mz_environment_id()")
+            row = cur.fetchone()
+        env_id = row[0] if row else "<unknown>"
+        print(f"{indent}mz_environment_id() = {env_id}")
+    except Exception as e:
+        print(f"{indent}WARNING: failed to read mz_environment_id(): {e}")
+
+
+def connect_and_print_environment_id(
+    host: str,
+    user: str | None,
+    password: str | None,
+    port: int = 6875,
+    dbname: str = "materialize",
+) -> None:
+    try:
+        with psycopg.connect(
+            host=host,
+            user=user,
+            password=password,
+            port=port,
+            dbname=dbname,
+            sslmode="require",
+        ) as conn:
+            print_environment_id(conn)
+    except Exception as e:
+        print(f"WARNING: failed to connect to {host}: {e}")

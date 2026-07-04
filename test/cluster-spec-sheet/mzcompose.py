@@ -32,6 +32,7 @@ from psycopg import InterfaceError, OperationalError
 from psycopg import sql as psycopg_sql
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mz_env_util import print_environment_id
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import _wait_for_pg
 from materialize.mzcompose.composition import (
@@ -3561,14 +3562,8 @@ def log_environment_info(target: "BenchTarget") -> None:
         print(f"  WARNING: could not open connection to log environment info: {e}")
         return
     try:
+        print_environment_id(conn, indent="  ")
         with conn.cursor() as cur:
-            try:
-                cur.execute("SELECT mz_environment_id()")
-                row = cur.fetchone()
-                env_id = row[0] if row else "<unknown>"
-                print(f"  mz_environment_id() = {env_id}")
-            except Exception as e:
-                print(f"  WARNING: failed to read mz_environment_id(): {e}")
             for param in SYSTEM_PARAMETERS_TO_LOG:
                 try:
                     cur.execute(
