@@ -2149,6 +2149,17 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_eqsat_filter_sharing,
+        // Default off: gates both the filter-split rewrite during saturation
+        // and the scalar-aware ILP node tier at extraction. With it off the
+        // corpus is byte-identical. `enable_eqsat_ilp_extraction` is default on,
+        // so the scalar-aware tier must be gated here, not by the extractor
+        // default. See doc/developer/design/20260624_eqsat/20260704_eqsat_sharing_aware_cost.md.
+        desc: "share a filtered collection across consumers in eqsat via filter-split plus a scalar-aware ILP node tier",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_off_thread_optimization,
         desc: "use off-thread optimization in `CREATE` statements",
         default: true,
@@ -2386,6 +2397,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_eqsat_scalar_canonicalize: vars.enable_eqsat_scalar_canonicalize(),
             enable_eqsat_delta_join_cost: vars.enable_eqsat_delta_join_cost(),
             enable_eqsat_native_join_commit: vars.enable_eqsat_native_join_commit(),
+            enable_eqsat_filter_sharing: vars.enable_eqsat_filter_sharing(),
         }
     }
 }
@@ -2433,6 +2445,9 @@ mod tests {
             enable_will_distinct_propagation,
             enable_eqsat_wmr_lift,
             enable_eqsat_scalar_canonicalize,
+            enable_eqsat_delta_join_cost,
+            enable_eqsat_native_join_commit,
+            enable_eqsat_filter_sharing,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2468,6 +2483,9 @@ mod tests {
         set_var!(enable_will_distinct_propagation);
         set_var!(enable_eqsat_wmr_lift);
         set_var!(enable_eqsat_scalar_canonicalize);
+        set_var!(enable_eqsat_delta_join_cost);
+        set_var!(enable_eqsat_native_join_commit);
+        set_var!(enable_eqsat_filter_sharing);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

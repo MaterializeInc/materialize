@@ -4959,6 +4959,7 @@ pub fn unplan_create_cluster(
                 enable_eqsat_scalar_canonicalize: _,
                 enable_eqsat_delta_join_cost: _,
                 enable_eqsat_native_join_commit: _,
+                enable_eqsat_filter_sharing: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {

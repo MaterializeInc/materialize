@@ -164,6 +164,9 @@ optimizer_feature_flags!({
     // acyclic joins to a Differential at raise time so JoinImplementation
     // no-ops on them.
     enable_eqsat_native_join_commit: bool,
+    // Bound from `SystemVars::enable_eqsat_filter_sharing`. Gates the eqsat
+    // filter-split rewrite and the scalar-aware ILP node tier. Default off.
+    enable_eqsat_filter_sharing: bool,
 });
 
 /// A trait used to implement layered config construction.
