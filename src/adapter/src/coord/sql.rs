@@ -21,7 +21,7 @@ use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::Catalog;
-use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::{Coordinator, Message};
 use crate::session::{Session, StateRevision, TransactionStatus};
 use crate::util::describe;
@@ -204,21 +204,34 @@ impl Coordinator {
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    pub(crate) async fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
+    ///
+    /// Returns a notify that resolves once any `mz_subscriptions` retractions
+    /// caused by cleanup are durable.
+    pub(crate) async fn clear_transaction(
+        &mut self,
+        session: &mut Session,
+    ) -> (TransactionStatus, BuiltinTableAppendCompletion) {
         // This function is *usually* called when transactions end, but it can fail to be called in
         // some cases (for example if the session's role id was dropped, then we return early and
         // don't go through the normal sequence_end_transaction path). The `Command::Commit` handler
         // and `AdapterClient::end_transaction` protect against this by each executing their parts
         // of this function. Thus, if this function changes, ensure that the changes are propogated
         // to either of those components.
-        self.clear_connection(session.conn_id()).await;
-        session.clear_transaction()
+        let retire_notify = self.clear_connection(session.conn_id()).await;
+        (session.clear_transaction(), retire_notify)
     }
 
     /// Clears coordinator state for a connection.
-    pub(crate) async fn clear_connection(&mut self, conn_id: &ConnectionId) {
+    ///
+    /// Returns a notify that resolves once any `mz_subscriptions` retractions
+    /// caused by cleanup are durable.
+    pub(crate) async fn clear_connection(
+        &mut self,
+        conn_id: &ConnectionId,
+    ) -> BuiltinTableAppendCompletion {
         self.connection_cancel_watches.remove(conn_id);
-        self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Finished)
+        let retire_notify = self
+            .retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Finished)
             .await;
         self.retire_cluster_reconfigurations_for_conn(conn_id).await;
 
@@ -243,13 +256,15 @@ impl Coordinator {
                 let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
             }
         }
+
+        retire_notify
     }
 
     /// Adds coordinator bookkeeping for an active compute sink.
     ///
     /// This is a low-level method. The caller is responsible for installing the
     /// sink in the controller.
-    pub(crate) async fn add_active_compute_sink(
+    pub(crate) fn add_active_compute_sink(
         &mut self,
         id: GlobalId,
         active_sink: ActiveComputeSink,
@@ -273,7 +288,12 @@ impl Coordinator {
                     );
                     let update = self.catalog().state().resolve_builtin_table_update(update);
 
-                    self.builtin_table_update().execute(vec![update]).await.0
+                    // Defer the introspection-row write to a group commit instead of
+                    // committing it inline. An inline `execute` would block the coordinator
+                    // loop on a timestamp-oracle round trip and stall every other session.
+                    // `implement_subscribe` waits for this write before returning the
+                    // `SUBSCRIBE` response to the subscribing session.
+                    self.builtin_table_update().defer(vec![update])
                 } else {
                     // Internal subscribes skip the builtin table update.
                     Box::pin(std::future::ready(()))
@@ -300,14 +320,21 @@ impl Coordinator {
 
     /// Removes coordinator bookkeeping for an active compute sink.
     ///
+    /// Returns the removed sink together with a notify that resolves once the
+    /// `mz_subscriptions` retraction is durable. The retraction is deferred to a group
+    /// commit rather than committed inline, which would block the coordinator loop on a
+    /// timestamp-oracle round trip. Callers that expose completion of the retirement
+    /// should wait on the notify off the loop before responding. The notify is already
+    /// resolved for sinks that write no introspection row (internal subscribes and COPY TO).
+    ///
     /// This is a low-level method. The caller is responsible for dropping the
     /// sink from the controller. Consider calling `drop_compute_sink` or
-    /// `retire_compute_sink` instead.
+    /// `retire_compute_sinks` instead.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn remove_active_compute_sink(
         &mut self,
         id: GlobalId,
-    ) -> Option<ActiveComputeSink> {
+    ) -> Option<(ActiveComputeSink, BuiltinTableAppendNotify)> {
         if let Some(sink) = self.active_compute_sinks.remove(&id) {
             let user = self.active_conns()[sink.connection_id()].user();
             let session_type = metrics::session_type_label_value(user);
@@ -318,32 +345,42 @@ impl Coordinator {
                 .drop_sinks
                 .remove(&id);
 
-            match &sink {
+            let write_notify: BuiltinTableAppendNotify = match &sink {
                 ActiveComputeSink::Subscribe(active_subscribe) => {
-                    // Skip builtin table update for internal subscribes
-                    if !active_subscribe.internal {
+                    // Internal subscribes write no introspection row.
+                    let notify = if !active_subscribe.internal {
                         let update = self.catalog().state().pack_subscribe_update(
                             id,
                             active_subscribe,
                             Diff::MINUS_ONE,
                         );
                         let update = self.catalog().state().resolve_builtin_table_update(update);
-                        self.builtin_table_update().blocking(vec![update]).await;
-                    }
+                        // Defer the retraction to a group commit, for the same reason we
+                        // defer the insert (see `add_active_compute_sink`): committing inline
+                        // would block the coordinator loop. Callers that expose the
+                        // retirement wait on the notify off the loop before responding.
+                        self.builtin_table_update().defer(vec![update])
+                    } else {
+                        Box::pin(std::future::ready(()))
+                    };
 
                     self.metrics
                         .active_subscribes
                         .with_label_values(&[session_type])
                         .dec();
+
+                    notify
                 }
                 ActiveComputeSink::CopyTo(_) => {
                     self.metrics
                         .active_copy_tos
                         .with_label_values(&[session_type])
                         .dec();
+
+                    Box::pin(std::future::ready(()))
                 }
-            }
-            Some(sink)
+            };
+            Some((sink, write_notify))
         } else {
             None
         }

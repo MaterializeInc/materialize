@@ -345,7 +345,10 @@ impl Coordinator {
                         .await;
                     // Part of the Command::Commit contract is that the Coordinator guarantees that
                     // it has cleared its transaction state for the connection.
-                    self.clear_connection(&conn_id).await;
+                    let retire_notify = self.clear_connection(&conn_id).await;
+                    // `sequence_plan` has already handled the client response.
+                    // This call only satisfies the internal cleanup contract.
+                    drop(retire_notify);
                 }
 
                 Command::CatalogSnapshot { tx } => {
@@ -471,7 +474,7 @@ impl Coordinator {
                         statement_logging_id,
                         self.internal_cmd_tx.clone(),
                     );
-                    let result = self
+                    match self
                         .implement_subscribe(
                             &mut ctx_extra,
                             df_desc,
@@ -483,8 +486,21 @@ impl Coordinator {
                             read_holds,
                             plan,
                         )
-                        .await;
-                    let _ = tx.send(result);
+                        .await
+                    {
+                        Ok((resp, write_notify)) => {
+                            // Wait for the `mz_subscriptions` bookkeeping write off the
+                            // coordinator loop before returning the `SUBSCRIBE` response to
+                            // the subscribing session.
+                            task::spawn(|| "execute_subscribe::await_bookkeeping", async move {
+                                write_notify.await;
+                                let _ = tx.send(Ok(resp));
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                        }
+                    }
                 }
 
                 Command::CopyToPreflight {
@@ -1930,7 +1946,10 @@ impl Coordinator {
 
         self.cancel_pending_peeks(&conn_id);
         self.cancel_pending_watchsets(&conn_id);
-        self.cancel_compute_sinks_for_conn(&conn_id).await;
+        let retire_notify = self.cancel_compute_sinks_for_conn(&conn_id).await;
+        // SQL cancellation has no success response to delay. Each subscribe
+        // still waits for its own retraction before it observes retirement.
+        drop(retire_notify);
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
             .await;
         self.cancel_pending_copy(&conn_id);
@@ -1955,7 +1974,10 @@ impl Coordinator {
 
         // We do not need to call clear_transaction here because there are no side effects to run
         // based on any session transaction state.
-        self.clear_connection(&conn_id).await;
+        let retire_notify = self.clear_connection(&conn_id).await;
+        // Termination has no statement response to delay. Each subscribe still
+        // waits for its own retraction before it observes retirement.
+        drop(retire_notify);
 
         self.drop_temp_items(&conn_id).await;
         // Only call catalog_mut() if a temporary schema actually exists for this connection.

@@ -16,16 +16,17 @@ use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
 use mz_repr::explain::ExplainFormat;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Row, Timestamp};
 use mz_sql::plan::{self};
 use mz_sql::session::metadata::SessionMetadata;
 use tracing::{Instrument, Span};
 
-use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
 use crate::coord::{
-    Coordinator, ExplainTimestampFinish, ExplainTimestampOptimize, ExplainTimestampRealTimeRecency,
-    ExplainTimestampStage, Message, PlanValidity, StageResult, Staged, TargetCluster,
+    Coordinator, ExplainTimestampFinish, ExplainTimestampLinearizeTimestamp,
+    ExplainTimestampOptimize, ExplainTimestampRealTimeRecency, ExplainTimestampStage, Message,
+    PlanValidity, StageResult, Staged, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::optimize::{self, Optimize};
@@ -39,6 +40,7 @@ impl Staged for ExplainTimestampStage {
         match self {
             ExplainTimestampStage::Optimize(stage) => &mut stage.validity,
             ExplainTimestampStage::RealTimeRecency(stage) => &mut stage.validity,
+            ExplainTimestampStage::LinearizeTimestamp(stage) => &mut stage.validity,
             ExplainTimestampStage::Finish(stage) => &mut stage.validity,
         }
     }
@@ -55,10 +57,13 @@ impl Staged for ExplainTimestampStage {
                     .explain_timestamp_real_time_recency(ctx.session(), stage)
                     .await
             }
-            ExplainTimestampStage::Finish(stage) => {
+            ExplainTimestampStage::LinearizeTimestamp(stage) => {
                 coord
-                    .explain_timestamp_finish(ctx.session_mut(), stage)
+                    .explain_timestamp_linearize_timestamp(ctx.session(), stage)
                     .await
+            }
+            ExplainTimestampStage::Finish(stage) => {
+                coord.explain_timestamp_finish(ctx.session_mut(), stage)
             }
         }
     }
@@ -190,22 +195,24 @@ impl Coordinator {
                     async move {
                         let real_time_recency_ts =
                             Coordinator::await_real_time_recent_timestamp(catalog, fut).await?;
-                        let stage = ExplainTimestampStage::Finish(ExplainTimestampFinish {
-                            validity,
-                            format,
-                            optimized_plan,
-                            cluster_id,
-                            source_ids,
-                            when,
-                            real_time_recency_ts: Some(real_time_recency_ts),
-                        });
+                        let stage = ExplainTimestampStage::LinearizeTimestamp(
+                            ExplainTimestampLinearizeTimestamp {
+                                validity,
+                                format,
+                                optimized_plan,
+                                cluster_id,
+                                source_ids,
+                                when,
+                                real_time_recency_ts: Some(real_time_recency_ts),
+                            },
+                        );
                         Ok(Box::new(stage))
                     }
                     .instrument(span),
                 )))
             }
             None => Ok(StageResult::Immediate(Box::new(
-                ExplainTimestampStage::Finish(ExplainTimestampFinish {
+                ExplainTimestampStage::LinearizeTimestamp(ExplainTimestampLinearizeTimestamp {
                     validity,
                     format,
                     optimized_plan,
@@ -216,6 +223,56 @@ impl Coordinator {
                 }),
             ))),
         }
+    }
+
+    /// Possibly linearize a timestamp from a `TimestampOracle`, off the
+    /// coordinator loop.
+    #[instrument]
+    async fn explain_timestamp_linearize_timestamp(
+        &self,
+        session: &Session,
+        ExplainTimestampLinearizeTimestamp {
+            validity,
+            format,
+            optimized_plan,
+            cluster_id,
+            source_ids,
+            when,
+            real_time_recency_ts,
+        }: ExplainTimestampLinearizeTimestamp,
+    ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
+        let mut timeline_context = self
+            .catalog()
+            .validate_timeline_context(source_ids.iter().copied())?;
+        if matches!(timeline_context, TimelineContext::TimestampIndependent)
+            && optimized_plan.contains_temporal()
+        {
+            // If the source IDs are timestamp independent but the query contains temporal functions,
+            // then the timeline context needs to be upgraded to timestamp dependent. This is
+            // required because `source_ids` doesn't contain functions.
+            timeline_context = TimelineContext::TimestampDependent;
+        }
+
+        let oracle = self.linearized_read_ts_oracle(session, &timeline_context, &when);
+
+        let build_stage = move |oracle_read_ts: Option<Timestamp>| {
+            ExplainTimestampStage::Finish(ExplainTimestampFinish {
+                validity,
+                format,
+                cluster_id,
+                source_ids,
+                when,
+                real_time_recency_ts,
+                timeline_context,
+                oracle_read_ts,
+            })
+        };
+
+        Ok(spawn_linearized_read_ts(
+            oracle,
+            "explain timestamp linearize timestamp",
+            build_stage,
+        ))
     }
 
     pub(crate) fn explain_timestamp(
@@ -285,17 +342,18 @@ impl Coordinator {
     }
 
     #[instrument]
-    async fn explain_timestamp_finish(
+    fn explain_timestamp_finish(
         &mut self,
         session: &mut Session,
         ExplainTimestampFinish {
             validity: _,
             format,
-            optimized_plan,
             cluster_id,
             source_ids,
             when,
             real_time_recency_ts,
+            timeline_context,
+            oracle_read_ts,
         }: ExplainTimestampFinish,
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let id_bundle = self
@@ -309,19 +367,6 @@ impl Coordinator {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
         };
-        let mut timeline_context = self
-            .catalog()
-            .validate_timeline_context(source_ids.iter().copied())?;
-        if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && optimized_plan.contains_temporal()
-        {
-            // If the source IDs are timestamp independent but the query contains temporal functions,
-            // then the timeline context needs to be upgraded to timestamp dependent. This is
-            // required because `source_ids` doesn't contain functions.
-            timeline_context = TimelineContext::TimestampDependent;
-        }
-
-        let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
 
         let determination = self.sequence_peek_timestamp(
             session,

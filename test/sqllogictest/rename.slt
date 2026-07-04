@@ -718,3 +718,156 @@ EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW s_rename_metainfo_renamed.mv
 
 statement ok
 EXPLAIN OPTIMIZED PLAN FOR INDEX s_rename_metainfo_renamed.idx_in_schema
+
+# Regression test: ALTER SCHEMA ... RENAME TO ... must rewrite references to the
+# schema's user-defined types. A type is referenced by a schema-qualified name
+# only in "data type" position (a cast, a column type, a nested element type),
+# which lives in a separate map (schema.types) from regular items and is reached
+# through a different AST node than item references. Before the fix, the renamed
+# schema's own types and every dependent that used one kept create_sql pointing
+# at the old schema name, which then failed to re-parse on restart.
+#
+# NOTE: assertions here read the raw `create_sql` column, not `SHOW CREATE`.
+# `SHOW CREATE` re-resolves names against the current catalog (by id), so it
+# would print the new name even if the stored `create_sql` were never rewritten,
+# masking the bug. The raw column is what gets re-parsed on boot.
+
+statement ok
+CREATE SCHEMA ty1
+
+statement ok
+CREATE TYPE ty1.mylist AS LIST (ELEMENT TYPE = int4)
+
+# Every object kind that can reference a type by a schema-qualified name.
+
+statement ok
+CREATE VIEW ty_view AS SELECT NULL::ty1.mylist AS c
+
+statement ok
+CREATE MATERIALIZED VIEW ty_mv AS SELECT NULL::ty1.mylist AS c
+
+statement ok
+CREATE TABLE ty_table (a ty1.mylist)
+
+statement ok
+CREATE TYPE ty_outer AS LIST (ELEMENT TYPE = ty1.mylist)
+
+statement ok
+CREATE TYPE ty_map_outer AS MAP (KEY TYPE = text, VALUE TYPE = ty1.mylist)
+
+# An anonymous map type spells out its key and value types inline, so the
+# rewrite has to descend through the map's structure to reach the reference.
+
+statement ok
+CREATE VIEW ty_map_view AS SELECT NULL::map[text => ty1.mylist] AS c
+
+statement ok
+ALTER SCHEMA ty1 RENAME TO ty2
+
+# Everything still resolves and is queryable after the rename.
+
+query I
+SELECT count(*) FROM ty_view
+----
+1
+
+query I
+SELECT count(*) FROM ty_mv
+----
+1
+
+query I
+SELECT count(*) FROM ty_table
+----
+0
+
+query I
+SELECT count(*) FROM ty_map_view
+----
+1
+
+# The type's own raw create_sql, and every dependent's, must reference the new
+# schema name and never the old one. Each row appears only if its create_sql was
+# correctly rewritten, so a missing row signals a stale reference.
+
+query T rowsort
+SELECT name FROM mz_types
+WHERE name IN ('mylist', 'ty_outer', 'ty_map_outer')
+  AND create_sql LIKE '%ty2%' AND create_sql NOT LIKE '%ty1%'
+UNION ALL
+SELECT name FROM mz_views
+WHERE name IN ('ty_view', 'ty_map_view')
+  AND create_sql LIKE '%ty2%' AND create_sql NOT LIKE '%ty1%'
+UNION ALL
+SELECT name FROM mz_materialized_views
+WHERE name = 'ty_mv'
+  AND create_sql LIKE '%ty2%' AND create_sql NOT LIKE '%ty1%'
+UNION ALL
+SELECT name FROM mz_tables
+WHERE name = 'ty_table'
+  AND create_sql LIKE '%ty2%' AND create_sql NOT LIKE '%ty1%'
+----
+mylist
+ty_map_outer
+ty_map_view
+ty_mv
+ty_outer
+ty_table
+ty_view
+
+# Regression test for the temp-object double-enqueue hazard in ALTER SCHEMA
+# RENAME (SQL-401 / database-issues#9975). A temporary object is never a member
+# of the renamed schema (temp objects live in mz_temp), so the rename reaches it
+# only as a dependent, once for each object in the schema it references. The
+# rename loop deduplicates persistent items via items_to_update, but temporary
+# items are appended straight to temporary_item_updates with no dedup, so a temp
+# object that references two objects in the renamed schema used to be enqueued
+# twice: two identical retractions and two identical additions. Catalog apply
+# consolidates updates by kind, so the duplicates collapse to a diff of +/-2 and
+# trip the "diff other than -1 or 1" assertion, panicking the coordinator.
+
+# Case 1: temp object referencing two types in the renamed schema.
+
+statement ok
+CREATE SCHEMA tydup1
+
+statement ok
+CREATE TYPE tydup1.tdl AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE TYPE tydup1.tdr AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE TEMP TABLE tmp_two_types (a tydup1.tdl, b tydup1.tdr)
+
+statement ok
+ALTER SCHEMA tydup1 RENAME TO tydup2
+
+query I
+SELECT count(*) FROM tmp_two_types
+----
+0
+
+# Case 2: temp object referencing two persistent items in the renamed schema.
+# This triggers the same panic without any type support, via a temp view's two
+# table references, i.e. the original SQL-401 report.
+
+statement ok
+CREATE SCHEMA titem1
+
+statement ok
+CREATE TABLE titem1.a (x int)
+
+statement ok
+CREATE TABLE titem1.b (y int)
+
+statement ok
+CREATE TEMP VIEW tmp_two_tables AS SELECT x, y FROM titem1.a, titem1.b
+
+statement ok
+ALTER SCHEMA titem1 RENAME TO titem2
+
+query I
+SELECT count(*) FROM tmp_two_tables
+----
+0
