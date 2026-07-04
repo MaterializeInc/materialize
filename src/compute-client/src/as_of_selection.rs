@@ -1130,6 +1130,7 @@ mod tests {
                     up_to: Default::default(),
                     non_null_assertions: Default::default(),
                     refresh_schedule: Default::default(),
+                    from_key: None,
                 };
                 (id, desc)
             })

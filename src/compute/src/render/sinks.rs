@@ -60,32 +60,36 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             }
         }
 
-        // TODO[btv] - We should determine the key and permutation to use during planning,
-        // rather than at runtime.
-        //
-        // This is basically an inlined version of the old `as_collection`.
+        // Which arrangement of the `from` collection to consume was decided during LIR lowering
+        // and recorded in `sink.from_key`. An unarranged form takes precedence when the bundle
+        // provides one. Lowering promises one exactly when `from_key` is `None`, but the renderer
+        // can produce one where lowering promised only an arrangement: a snapshot-excluded
+        // subscribe imports an index as a filtered collection instead (see `import_index`).
+        // When we do consume the arrangement named by `from_key`, we reconstruct full rows via an
+        // MFP. The permutation and thinning are a pure function of `key`, so we derive them here
+        // rather than carrying them in the plan.
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, mut err_collection) = if let Some(collection) = &bundle.collection {
-            collection.clone()
-        } else {
-            let (key, _arrangement) = bundle
-                .arranged
-                .iter()
-                .next()
-                .expect("Invariant violated: at least one collection must be present.");
-            let unthinned_arity = sink.from_desc.arity();
-            let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
-            let mut mfp = MapFilterProject::<LirScalarExpr>::new(unthinned_arity);
-            mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-            let mfp_plan = mfp.into_plan().expect("MFP planning failed");
-            bundle.as_collection_core(
-                mfp_plan,
-                Some((key.clone(), None)),
-                self.until.clone(),
-                &self.config_set,
-            )
+        let (ok_collection, mut err_collection) = match (&bundle.collection, &sink.from_key) {
+            (Some(collection), _) => collection.clone(),
+            (None, Some(key)) => {
+                let unthinned_arity = sink.from_desc.arity();
+                let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
+                let mut mfp = MapFilterProject::<LirScalarExpr>::new(unthinned_arity);
+                mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
+                let mfp_plan = mfp.into_plan().expect("MFP planning failed");
+                bundle.as_collection_core(
+                    mfp_plan,
+                    Some((key.clone(), None)),
+                    self.until.clone(),
+                    &self.config_set,
+                )
+            }
+            (None, None) => panic!(
+                "sink source {} has neither a collection nor a planned arrangement key",
+                sink.from
+            ),
         };
 
         // Attach logging of dataflow errors.

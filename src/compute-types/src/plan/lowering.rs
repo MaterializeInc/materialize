@@ -146,12 +146,32 @@ impl Context {
             objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
+        // Choose, for each sink, which form of its `from` collection the renderer consumes.
+        // `None` means the unarranged collection. Otherwise we name an arrangement key, so the
+        // renderer no longer has to pick one arbitrarily at runtime. The choice is possible here
+        // because the loop above registered the arrangements of every built object.
+        let mut sink_exports = desc.sink_exports;
+        for sink in sink_exports.values_mut() {
+            let available = self
+                .arrangements
+                .get(&Id::Global(sink.from))
+                .cloned()
+                .unwrap_or_else(AvailableCollections::new_raw);
+            sink.from_key = if available.raw {
+                None
+            } else {
+                available
+                    .arbitrary_arrangement()
+                    .map(|(key, _permutation, _thinning)| key.clone())
+            };
+        }
+
         Ok(DataflowDescription {
             source_imports: desc.source_imports,
             index_imports: desc.index_imports,
             objects_to_build,
             index_exports: desc.index_exports,
-            sink_exports: desc.sink_exports,
+            sink_exports,
             as_of: desc.as_of,
             until: desc.until,
             initial_storage_as_of: desc.initial_storage_as_of,
