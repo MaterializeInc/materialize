@@ -30,6 +30,7 @@ pub mod dsl;
 pub mod egraph;
 pub mod engine;
 pub mod extract;
+pub(crate) mod filter_split;
 pub mod ir;
 pub(crate) mod join_commit;
 pub(crate) mod join_spelling;
@@ -148,6 +149,14 @@ pub fn optimize_with_availability(
     // Live physical pass: the cost model sees arrangement / index availability,
     // so arrangement-sensitive rules (`phase physical`) may fire here.
     let rules = default_ruleset().for_phase(dsl::Phase::Physical);
+    // The filter-split rewrite lives outside the generated table (the DSL cannot
+    // destructure predicate lists), so append it here when sharing is on. The
+    // scalar-aware ILP tier then prefers the lower-scalar-mass split form.
+    let rules = if filter_sharing {
+        rules.with_extra_rule(&crate::eqsat::filter_split::SPLIT_RULE)
+    } else {
+        rules
+    };
     optimize_inner(
         expr,
         true,

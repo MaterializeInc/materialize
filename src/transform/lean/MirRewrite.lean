@@ -11,3 +11,4 @@
 -- aggregate, only in isolation.
 import MirRewrite.Semantics
 import MirRewrite.Generated
+import MirRewrite.FilterSplit

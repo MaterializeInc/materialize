@@ -116,6 +116,23 @@ impl CompiledRuleSet {
         self.rules.iter().copied().filter(|r| r.colored).collect()
     }
 
+    /// Append one hand-written rule that lives outside the generated
+    /// `COMPILED_RULES` table (for example `filter_split`, which the DSL cannot
+    /// express). The rule must be a `&'static`, matching the set's element type,
+    /// so it is registered as a `static` with its cap baked in rather than built
+    /// per call.
+    pub(crate) fn with_extra_rule(mut self, rule: &'static CompiledRule) -> CompiledRuleSet {
+        self.rules.push(rule);
+        self
+    }
+
+    /// A set of exactly the given `&'static` rules, in order. Used by unit tests
+    /// of hand-written rules to saturate with a single rule.
+    #[cfg(test)]
+    pub(crate) fn of(rules: Vec<&'static CompiledRule>) -> CompiledRuleSet {
+        CompiledRuleSet { rules }
+    }
+
     /// The rules active in `phase`: those declared for that phase or for `Both`.
     pub fn for_phase(&self, phase: Phase) -> CompiledRuleSet {
         CompiledRuleSet {
