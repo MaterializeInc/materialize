@@ -260,6 +260,7 @@ fn optimize_inner(
     let optimizer = if use_ilp {
         optimizer.with_extractor(std::sync::Arc::new(extract::IlpExtractor {
             weight_scalar_nodes: filter_sharing || scalar_sharing,
+            width_aware: scalar_sharing,
         }))
     } else {
         optimizer

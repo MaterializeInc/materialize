@@ -76,6 +76,11 @@ pub struct IlpExtractor {
     /// `enable_eqsat_filter_sharing`. When false the objective is byte-identical
     /// to the flat-node-tier form, so the corpus is unaffected.
     pub weight_scalar_nodes: bool,
+    /// When set, add an arity tier to the objective ranked below the arrangement
+    /// count and above time, so a widening carry (wider arranged collection) is
+    /// declined. Gated behind enable_eqsat_scalar_sharing. When false the
+    /// objective is byte-identical to today.
+    pub width_aware: bool,
 }
 
 /// Whether the subgraph reachable from `root_class` contains a directed cycle,
@@ -244,26 +249,44 @@ impl IlpExtractor {
             .map(|_| vars.add(variable().binary()))
             .collect();
 
-        // Build the objective expression, in three strictly separated tiers:
+        // Build the objective expression, in strictly separated tiers:
         //   1. PRIMARY: count of non-oracle-covered arrangements (integer steps).
-        //   2. TIME: total work-term degree of the selected nodes. This is what
+        //   2. ARITY (width-aware only): total arity of the arrangements selected
+        //      in tier 1, so among arrangements that tie on count the ILP prefers
+        //      the narrower one, declining a widening carry.
+        //   3. TIME: total work-term degree of the selected nodes. This is what
         //      lets the ILP prefer an `IndexedFilter` (a bounded lookup, work 0)
         //      over the sibling full-scan `Filter` (work 1), and an operator
         //      sitting above a lookup is charged the lookup's bounded output.
         //      Without it the ILP ties the two forms on arrangements and falls
         //      through to a pure node-count tie-break, which rewards sharing the
         //      full scan over two distinct lookups (the relation_cse regression).
-        //   3. NODES: a structural tie-break preferring fewer nodes.
+        //   4. NODES: a structural tie-break preferring fewer nodes.
         // The tier weights are scaled to the reachable subgraph so that each tier
-        // strictly dominates the next: one arrangement outweighs all time terms,
-        // and any time difference outweighs all node-count terms.
+        // strictly dominates the next: one arrangement outweighs all arity and
+        // time terms, any arity difference outweighs all time and node-count
+        // terms, and any time difference outweighs all node-count terms.
+        // Arity tier (width-aware): ranked below the arrangement-count primary
+        // and above the time tier. Off => not computed and w_time keeps its
+        // original 0.5/work_total anchoring, byte-identical.
+        let arr_arity: Vec<f64> = arr_vars
+            .iter()
+            .map(|(arr_class, _)| egraph.try_arity(*arr_class).unwrap_or(1) as f64)
+            .collect();
+        let arity_total: f64 = arr_arity.iter().sum::<f64>() + 1.0;
+        let w_arity = 0.5 / arity_total;
+
         let best_degrees = best_output_degrees(egraph, &reachable);
         let node_work: Vec<f64> = node_vars
             .iter()
             .map(|(_, node)| node_work_degree(node, egraph, &best_degrees))
             .collect();
         let work_total: f64 = node_work.iter().sum::<f64>() + 1.0;
-        let w_time = 0.5 / work_total;
+        let w_time = if self.width_aware {
+            0.5 * w_arity / work_total
+        } else {
+            0.5 / work_total
+        };
 
         let mut obj_expr: good_lp::Expression = good_lp::Expression::from(0.0);
         for (arr_i, (arr_class, arr_key)) in arr_vars.iter().enumerate() {
@@ -276,6 +299,9 @@ impl IlpExtractor {
                 && is_oracle_covered(egraph, model, *arr_class, arr_key);
             if !covered {
                 obj_expr += arr_sel[arr_i];
+                if self.width_aware {
+                    obj_expr += w_arity * arr_arity[arr_i] * arr_sel[arr_i];
+                }
             }
         }
         // Node tier. Flag off runs the ORIGINAL formula verbatim, so the
@@ -1019,6 +1045,7 @@ mod tests {
         let model = CostModel::new();
         let plan = IlpExtractor {
             weight_scalar_nodes: true,
+            width_aware: false,
         }
         .extract(&eg, root, &model, &ArrangementCount, None, None)
         .expect("extract");
@@ -1032,6 +1059,75 @@ mod tests {
                 if predicates.len() == 1 && matches!(**input, Rel::Filter { .. })),
             "expected consumer 2 to extract as the split form, got {plan:?}",
         );
+    }
+
+    #[mz_ore::test]
+    fn width_aware_arity_tier_prefers_narrower_arrangement() {
+        use crate::eqsat::cost::CostModel;
+        use crate::eqsat::egraph::EGraph;
+        use crate::eqsat::ir::{EScalar, Rel};
+        use crate::eqsat::objective::ArrangementCount;
+        use mz_expr::MirScalarExpr;
+
+        // Two arrangement forms tying on every tier the ILP scores before arity:
+        // each needs exactly one arrangement (PRIMARY), and each ArrangeBy sits
+        // directly over a leaf Get, whose work-degree proxy and best-output-degree
+        // are both constants independent of arity (see `node_work_degree` and
+        // `best_output_degrees`), so the TIME and NODES tiers are identical on
+        // both sides too. Only the arrangement's arity differs: a 1-column
+        // relation versus a 3-column relation, each arranged on column 0. This
+        // isolates the arity tier as the sole tie-breaker.
+        let key = vec![EScalar::plain(MirScalarExpr::column(0))];
+        let narrow = Rel::ArrangeBy {
+            input: Box::new(Rel::Get {
+                name: "narrow".into(),
+                arity: 1,
+            }),
+            key: key.clone(),
+        };
+        let wide = Rel::ArrangeBy {
+            input: Box::new(Rel::Get {
+                name: "wide".into(),
+                arity: 3,
+            }),
+            key: key.clone(),
+        };
+
+        let mut eg = EGraph::new();
+        let n = eg.add_rel(&narrow);
+        let w = eg.add_rel(&wide);
+        eg.union(n, w);
+        eg.rebuild();
+
+        let model = CostModel::new();
+
+        // Flag on: the ILP must prefer the narrower (arity 1) arrangement.
+        let plan = IlpExtractor {
+            width_aware: true,
+            ..Default::default()
+        }
+        .extract(&eg, n, &model, &ArrangementCount, None, None)
+        .expect("extract");
+        let Rel::ArrangeBy { input, .. } = &plan else {
+            panic!("expected an ArrangeBy root, got {plan:?}");
+        };
+        match input.as_ref() {
+            Rel::Get { arity, .. } => assert_eq!(
+                *arity, 1,
+                "expected the narrow (arity 1) relation, got arity {arity}"
+            ),
+            other => panic!("expected a Get input, got {other:?}"),
+        }
+
+        // Flag off: the arity tier is not computed, so the tie between the two
+        // forms is genuine on every remaining tier and either side is a valid
+        // optimum. The one invariant that must still hold is the one the
+        // arrangement-count tier already guarantees: exactly one arrangement is
+        // used, not both.
+        let default_plan = IlpExtractor::default()
+            .extract(&eg, n, &model, &ArrangementCount, None, None)
+            .expect("extract");
+        assert_eq!(model.cost(&default_plan).arrangements, 1);
     }
 
     /// Polarity soundness reproducer (Finding 1): when a Reduce input class
