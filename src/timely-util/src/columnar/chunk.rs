@@ -260,6 +260,17 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         }
     }
 
+    /// The first and last data items, from resident state only.
+    fn data_span(&self) -> (columnar::Ref<'_, D>, columnar::Ref<'_, D>) {
+        match self {
+            ColumnChunk::Resident(col) => {
+                let data = col.borrow().0;
+                (data.get(0), data.get(data.len() - 1))
+            }
+            ColumnChunk::Spilled(body) => (body.first.borrow().get(0), body.last.borrow().get(0)),
+        }
+    }
+
     /// Commit a non-empty column: spill it to the pool when spilling is on and
     /// the body is worth a slot, else keep it resident.
     fn commit(column: Column<(D, T, R)>) -> Self {
@@ -352,7 +363,43 @@ where
     /// threshold. The exhausted front retires. A survivor consumed partway is
     /// rewritten and pushed back; a survivor not consumed at all goes back as
     /// it was — in particular a spilled body is neither rebuilt nor re-spilled.
+    ///
+    /// Fronts whose data ranges are disjoint never load at all: the resident
+    /// fence entries decide, and the lower front moves to the output verbatim.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
+        // Disjoint fast path: when one front lies strictly below the other's
+        // first data item (equal boundary data could still interleave on
+        // time), the merged prefix through the shared horizon is exactly that
+        // front, unchanged.
+        let low_side = {
+            let (a_first, a_last) = in1
+                .front()
+                .expect("caller guarantees non-empty input")
+                .data_span();
+            let (b_first, b_last) = in2
+                .front()
+                .expect("caller guarantees non-empty input")
+                .data_span();
+            if rr::<D>(a_last) < rr::<D>(b_first) {
+                Some(true)
+            } else if rr::<D>(b_last) < rr::<D>(a_first) {
+                Some(false)
+            } else {
+                None
+            }
+        };
+        match low_side {
+            Some(true) => {
+                out.push_back(in1.pop_front().expect("front observed above"));
+                return;
+            }
+            Some(false) => {
+                out.push_back(in2.pop_front().expect("front observed above"));
+                return;
+            }
+            None => {}
+        }
+
         let a = in1.pop_front().expect("caller guarantees non-empty input");
         let b = in2.pop_front().expect("caller guarantees non-empty input");
         let mut spill_a = match &a {
@@ -502,7 +549,16 @@ where
         // Per-group scratch: advanced owned times with owned diffs.
         let mut scratch: Vec<(T, R)> = Vec::new();
         let mut index = 0;
-        let mut groups_since_cut = 0usize;
+        // Cut output at the commit size, checked amortized by emitted records
+        // (the size test walks the container's leaves, so probing it per
+        // record would be quadratic). Records, not groups: a single group may
+        // carry arbitrarily many advanced times, and a cut is legal anywhere
+        // in the sorted sequence, so bounding by records keeps the largest
+        // possible output chunk within one check period of the target — it
+        // must not outgrow the pool's largest size class, past which a body
+        // degrades to a permanently resident heap chunk.
+        const CUT_CHECK_RECORDS: usize = 1024;
+        let mut records_since_check = 0usize;
         while index < end {
             let group_d = data.get(index);
             scratch.clear();
@@ -524,19 +580,18 @@ where
                     result.0.push(group_d);
                     result.1.push(&t);
                     result.2.push(&r);
+                    records_since_check += 1;
+                    if records_since_check >= CUT_CHECK_RECORDS {
+                        records_since_check = 0;
+                        if u64::cast_from(indexed::length_in_words(&result.borrow()))
+                            >= u64::cast_from(COMMIT_BYTES / 8)
+                        {
+                            out.push_back(ColumnChunk::Resident(Rc::new(Column::Typed(
+                                std::mem::take(&mut result),
+                            ))));
+                        }
+                    }
                 }
-            }
-            // Cut output at the commit size, checked amortized: the size test
-            // walks the container's leaves, so probing it per group would be
-            // quadratic in small-group runs.
-            groups_since_cut += 1;
-            if groups_since_cut & 31 == 0
-                && u64::cast_from(indexed::length_in_words(&result.borrow()))
-                    >= u64::cast_from(COMMIT_BYTES / 8)
-            {
-                out.push_back(ColumnChunk::Resident(Rc::new(Column::Typed(
-                    std::mem::take(&mut result),
-                ))));
             }
         }
         if result.borrow().len() > 0 {

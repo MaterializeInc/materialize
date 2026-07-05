@@ -1332,6 +1332,12 @@ impl ChunkHandle {
                 dst.extend_from_slice(payload);
             }
             Residency::Evicted => {
+                // The zero-fill ahead of the decompress is deliberate waste
+                // (~a tenth of the decompress cost): the extent read takes an
+                // initialized `&mut [u8]`, so skipping the fill would mean
+                // exposing uninitialized memory through a safe reference.
+                // Callers that read repeatedly amortize it by reusing `dst`'s
+                // capacity.
                 dst.resize(meta.len, 0);
                 let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
                 let extent = state.extent.as_mut().expect("evicted chunk has an extent");

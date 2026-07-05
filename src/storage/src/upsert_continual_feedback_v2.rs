@@ -73,7 +73,6 @@
 
 use std::fmt::Debug;
 
-use columnar::Index as _;
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -761,130 +760,156 @@ where
         .batches_through(Antichain::new().borrow())
         .expect("complete read of persist trace; is it closed?");
 
+    // Eligible keys are probed against the trace in windows of this many
+    // distinct keys, bounding what one pass stages resident: probe hits carry
+    // full values, so an unwindowed pass over a byte-graded chunk of small
+    // records could stage tens of thousands of values at once where the old
+    // cursor walk held one.
+    const PROBE_WINDOW: usize = 1024;
+
     for chunk in sealed {
+        use columnar::{Index, Len};
         let view = chunk.borrow();
+        let total = view.len();
+        let mut start = 0;
+        while start < total {
+            // Pass 1: this window's sorted, deduplicated probe keys. The
+            // chunk is sorted by (key, time), so a window is a contiguous
+            // record range, probes come out sorted, and dedup is a neighbor
+            // test; the window closes where its PROBE_WINDOW + 1st distinct
+            // eligible key would begin.
+            let mut probe_col = <UpsertKey as columnar::Columnar>::Container::default();
+            let mut probe_count = 0usize;
+            let mut end = total;
+            {
+                use columnar::Push;
+                let mut last_probe: Option<&UpsertKey> = None;
+                for index in start..total {
+                    let (key, ts, _diff) = view.get(index);
+                    let ts = <T as columnar::Columnar>::into_owned(ts);
+                    if persist_upper.less_equal(&ts) && !persist_upper.less_than(&ts) {
+                        if last_probe != Some(key) {
+                            if probe_count == PROBE_WINDOW {
+                                end = index;
+                                break;
+                            }
+                            probe_col.push(key);
+                            probe_count += 1;
+                            last_probe = Some(key);
+                        }
+                    }
+                }
+            }
 
-        // Pass 1: the sorted, deduplicated probe keys of this chunk's
-        // eligible entries. The chunk is sorted by (key, time), so probes
-        // come out sorted and dedup is a neighbor test.
-        let mut probe_col = <UpsertKey as columnar::Columnar>::Container::default();
-        let mut probe_count = 0usize;
-        {
-            use columnar::Push;
-            let mut last_probe: Option<&UpsertKey> = None;
-            for (key, ts, _diff) in view.into_index_iter() {
+            // Pass 2: bulk-probe the trace's batches through the chunk
+            // batches' `UnloadChunk` surface and consolidate the hits into
+            // the prior value per key. Hits arrive per batch, so equal
+            // `(key, val)` pairs from different batches are non-adjacent;
+            // sort before folding.
+            let mut old_values: std::collections::BTreeMap<UpsertKey, UpsertValue> =
+                std::collections::BTreeMap::new();
+            if probe_count > 0 {
+                use columnar::Borrow;
+                let mut staging = <FeedbackUpdate<T> as columnar::Columnar>::Container::default();
+                for batch in &batches {
+                    batch.extract_into(probe_col.borrow(), &mut staging);
+                }
+                let staged = staging.borrow();
+                let mut hits: Vec<_> = (0..staged.len())
+                    .map(|i| {
+                        let ((key, val), _time, diff) = staged.get(i);
+                        (key, val, <Diff as columnar::Columnar>::into_owned(diff))
+                    })
+                    .collect();
+                hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+                let mut i = 0;
+                while i < hits.len() {
+                    let (key, val, _) = hits[i];
+                    let mut count = Diff::ZERO;
+                    let mut j = i;
+                    while j < hits.len() && hits[j].0 == key && hits[j].1 == val {
+                        count += hits[j].2;
+                        j += 1;
+                    }
+                    if count.is_positive() {
+                        assert!(
+                            count == 1.into(),
+                            "unexpected multiple entries for the same key in persist trace"
+                        );
+                        let prev = old_values.insert(*key, decode_upsert_value(val.iter()));
+                        assert!(
+                            prev.is_none(),
+                            "unexpected multiple values for the same key in persist trace"
+                        );
+                    }
+                    i = j;
+                }
+            }
+
+            // Pass 3: classify and emit this window's records.
+            for index in start..end {
+                let (key, ts, diff) = view.get(index);
                 let ts = <T as columnar::Columnar>::into_owned(ts);
-                if persist_upper.less_equal(&ts) && !persist_upper.less_than(&ts) {
-                    if last_probe != Some(key) {
-                        probe_col.push(key);
-                        probe_count += 1;
-                        last_probe = Some(key);
-                    }
+                if !persist_upper.less_equal(&ts) {
+                    // ts < persist_upper: drop.
+                    continue;
                 }
-            }
-        }
-
-        // Pass 2: bulk-probe the trace's batches through the chunk batches'
-        // `UnloadChunk` surface and consolidate the hits into the prior
-        // value per key. Hits arrive per batch, so equal `(key, val)` pairs
-        // from different batches are non-adjacent; sort before folding.
-        let mut old_values: std::collections::BTreeMap<UpsertKey, UpsertValue> =
-            std::collections::BTreeMap::new();
-        if probe_count > 0 {
-            use columnar::{Borrow, Index, Len};
-            let mut staging = <FeedbackUpdate<T> as columnar::Columnar>::Container::default();
-            for batch in &batches {
-                batch.extract_into(probe_col.borrow(), &mut staging);
-            }
-            let staged = staging.borrow();
-            let mut hits: Vec<_> = (0..staged.len())
-                .map(|i| {
-                    let ((key, val), _time, diff) = staged.get(i);
-                    (key, val, <Diff as columnar::Columnar>::into_owned(diff))
-                })
-                .collect();
-            hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-            let mut i = 0;
-            while i < hits.len() {
-                let (key, val, _) = hits[i];
-                let mut count = Diff::ZERO;
-                let mut j = i;
-                while j < hits.len() && hits[j].0 == key && hits[j].1 == val {
-                    count += hits[j].2;
-                    j += 1;
+                if persist_upper.less_than(&ts) {
+                    // ts > persist_upper: re-stash for later (owned).
+                    ineligible.push((
+                        *key,
+                        ts,
+                        <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
+                    ));
+                    continue;
                 }
-                if count.is_positive() {
-                    assert!(
-                        count == 1.into(),
-                        "unexpected multiple entries for the same key in persist trace"
-                    );
-                    let prev = old_values.insert(*key, decode_upsert_value(val.iter()));
-                    assert!(
-                        prev.is_none(),
-                        "unexpected multiple values for the same key in persist trace"
-                    );
+
+                // ts == persist_upper: eligible. The chunk holds one entry per
+                // (key, time) and eligibility pins the time, so this key appears
+                // at most once and its prior value can move out of the map.
+                eligible_count += 1;
+                let old_value = old_values.remove(key);
+
+                if old_value.is_some() {
+                    result_count += 1;
                 }
-                i = j;
-            }
-        }
 
-        // Pass 3: classify and emit.
-        for (key, ts, diff) in view.into_index_iter() {
-            let ts = <T as columnar::Columnar>::into_owned(ts);
-            if !persist_upper.less_equal(&ts) {
-                // ts < persist_upper: drop.
-                continue;
-            }
-            if persist_upper.less_than(&ts) {
-                // ts > persist_upper: re-stash for later (owned).
-                ineligible.push((
-                    *key,
-                    ts,
-                    <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
-                ));
-                continue;
-            }
-
-            // ts == persist_upper: eligible. The chunk holds one entry per
-            // (key, time) and eligibility pins the time, so this key appears
-            // at most once and its prior value can move out of the map.
-            eligible_count += 1;
-            let old_value = old_values.remove(key);
-
-            if old_value.is_some() {
-                result_count += 1;
-            }
-
-            match diff.value {
-                Some(row) => {
-                    if let Some(old_val) = old_value {
-                        let size = upsert_value_byte_len(&old_val);
+                match diff.value {
+                    Some(row) => {
+                        if let Some(old_val) = old_value {
+                            let size = upsert_value_byte_len(&old_val);
+                            output_handle
+                                .give_fueled(
+                                    output_cap,
+                                    (old_val, ts.clone(), Diff::MINUS_ONE),
+                                    size,
+                                )
+                                .await;
+                            output_count += 1;
+                            updates += 1;
+                        } else {
+                            inserts += 1;
+                        }
+                        let new_val = decode_upsert_value(row.iter());
+                        let size = upsert_value_byte_len(&new_val);
                         output_handle
-                            .give_fueled(output_cap, (old_val, ts.clone(), Diff::MINUS_ONE), size)
+                            .give_fueled(output_cap, (new_val, ts, Diff::ONE), size)
                             .await;
                         output_count += 1;
-                        updates += 1;
-                    } else {
-                        inserts += 1;
                     }
-                    let new_val = decode_upsert_value(row.iter());
-                    let size = upsert_value_byte_len(&new_val);
-                    output_handle
-                        .give_fueled(output_cap, (new_val, ts, Diff::ONE), size)
-                        .await;
-                    output_count += 1;
-                }
-                None => {
-                    if let Some(old_val) = old_value {
-                        let size = upsert_value_byte_len(&old_val);
-                        output_handle
-                            .give_fueled(output_cap, (old_val, ts, Diff::MINUS_ONE), size)
-                            .await;
-                        output_count += 1;
-                        deletes += 1;
+                    None => {
+                        if let Some(old_val) = old_value {
+                            let size = upsert_value_byte_len(&old_val);
+                            output_handle
+                                .give_fueled(output_cap, (old_val, ts, Diff::MINUS_ONE), size)
+                                .await;
+                            output_count += 1;
+                            deletes += 1;
+                        }
                     }
                 }
             }
+            start = end;
         }
     }
 
