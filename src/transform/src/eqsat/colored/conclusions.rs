@@ -118,7 +118,7 @@ mod tests {
         eg.rebuild();
         let mut ceg = ColoredEGraph::new(&eg);
         let c = ceg.new_color(None);
-        let mut ids = std::collections::HashSet::new();
+        let mut ids = mz_ore::collections::HashSet::new();
         for &leaf in &leaves {
             ids.insert(ceg.add_colored(c, ToyNode::Op(9, vec![leaf])));
             // Re-adding the same node must not allocate again.

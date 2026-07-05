@@ -12,7 +12,9 @@
 //! merges. In `debug`/`test` builds the result is checked against the old
 //! full-rescan congruence (`close_congruence_fullpass`) for partition identity.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
+
+use mz_ore::collections::HashMap as OreHashMap;
 
 use crate::eqsat::colored::{ColorId, ColoredEGraph};
 use crate::eqsat::core::{Id, Language};
@@ -37,7 +39,7 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
     /// resolved through `find(c, ·)`. Precomputes child reps so the closure
     /// handed to `map_children` is `Fn` (find is `&mut self`).
     pub(crate) fn canon(&mut self, c: ColorId, n: &L::Node) -> L::Node {
-        let rep_of: HashMap<Id, Id> = L::children(n)
+        let rep_of: OreHashMap<Id, Id> = L::children(n)
             .into_iter()
             .map(|ch| (ch, self.find(c, ch)))
             .collect();
@@ -76,7 +78,7 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
     /// (the ≤2× minimization). A no-op until colored conclusions exist (Task 4).
     fn recanonicalize_delta_nodes(&mut self, c: ColorId) {
         let old = std::mem::take(&mut self.colors[c.0].delta_nodes);
-        let mut new: HashMap<L::Node, Id> = HashMap::with_capacity(old.len());
+        let mut new: BTreeMap<L::Node, Id> = BTreeMap::new();
         for (n, id) in old {
             let cn = self.canon(c, &n);
             new.entry(cn).or_insert(id);
@@ -234,8 +236,8 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
     fn close_congruence_incremental(&mut self, c: ColorId) -> (usize, usize) {
         let visible = self.visible_nodes(c);
         let n = visible.len();
-        let mut memo: HashMap<L::Node, Id> = HashMap::with_capacity(n);
-        let mut parents: HashMap<Id, Vec<usize>> = HashMap::new();
+        let mut memo: OreHashMap<L::Node, Id> = OreHashMap::with_capacity(n);
+        let mut parents: OreHashMap<Id, Vec<usize>> = OreHashMap::new();
         let mut dirty: VecDeque<Id> = VecDeque::new();
         let mut induced_merges = 0;
 
@@ -297,8 +299,8 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
         c: ColorId,
         owner: Id,
         node: &L::Node,
-        memo: &mut HashMap<L::Node, Id>,
-        parents: &mut HashMap<Id, Vec<usize>>,
+        memo: &mut OreHashMap<L::Node, Id>,
+        parents: &mut OreHashMap<Id, Vec<usize>>,
         dirty: &mut VecDeque<Id>,
         induced: &mut usize,
     ) {
@@ -325,7 +327,7 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
         c: ColorId,
         a: Id,
         b: Id,
-        parents: &mut HashMap<Id, Vec<usize>>,
+        parents: &mut OreHashMap<Id, Vec<usize>>,
         dirty: &mut VecDeque<Id>,
         induced: &mut usize,
     ) {
@@ -353,7 +355,7 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
         let visible = self.visible_nodes(c);
         let mut induced_merges = 0;
         loop {
-            let mut memo: HashMap<L::Node, Id> = HashMap::new();
+            let mut memo: OreHashMap<L::Node, Id> = OreHashMap::new();
             let mut merged = false;
             for (owner, n) in &visible {
                 let cn = self.canon(c, n);
@@ -433,8 +435,8 @@ fn partition_labels_equal(a: &[Id], b: &[Id]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    let mut fwd: HashMap<Id, Id> = HashMap::new();
-    let mut bwd: HashMap<Id, Id> = HashMap::new();
+    let mut fwd: OreHashMap<Id, Id> = OreHashMap::new();
+    let mut bwd: OreHashMap<Id, Id> = OreHashMap::new();
     for (&x, &y) in a.iter().zip(b) {
         if *fwd.entry(x).or_insert(y) != y {
             return false;

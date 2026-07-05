@@ -855,7 +855,7 @@ impl EGraph {
                 let mut colors: Vec<ColorId> = layer.color_of.values().copied().collect();
                 colors.sort_by_key(|c| c.0);
                 colors.dedup_by_key(|c| c.0);
-                let mut tables: OreHashMap<ColorId, HashMap<Id, (CNode, usize)>> =
+                let mut tables: OreHashMap<ColorId, BTreeMap<Id, (CNode, usize)>> =
                     OreHashMap::new();
                 for c in colors {
                     // Skip colors with no relational delta nodes: `extract_colored`
@@ -1258,9 +1258,11 @@ mod tests {
     /// returns the `Filter`.)
     #[mz_ore::test]
     fn extraction_picks_colored_conclusion_when_cheaper() {
-        use std::collections::{HashMap, HashSet};
+        use std::collections::BTreeMap;
 
         use mz_expr::{BinaryFunc, func};
+        use mz_ore::collections::HashMap as OreHashMap;
+        use mz_ore::collections::HashSet as OreHashSet;
         use mz_repr::{Datum, ReprScalarType};
 
         use crate::eqsat::colored::{ColoredEGraph, colored_saturate};
@@ -1297,13 +1299,13 @@ mod tests {
         let mut ceg = ColoredEGraph::new(&eg);
         let color = ceg.new_color(None);
         ceg.union(color, eg.find(tru), eg.find(pred));
-        let mut color_of = HashMap::new();
+        let mut color_of = BTreeMap::new();
         color_of.insert(eg.find(filt), color);
         let mut layer = ColoredLayer {
             ceg,
             color_of,
-            empty_classes: HashSet::new(),
-            delta_escalar: HashMap::new(),
+            empty_classes: OreHashSet::new(),
+            delta_escalar: OreHashMap::new(),
         };
 
         let rounds = colored_saturate(&mut layer, &eg);

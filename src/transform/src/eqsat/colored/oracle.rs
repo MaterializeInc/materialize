@@ -9,7 +9,9 @@
 //! extraction. O(n²·iters); test-sized graphs only. Realizes the same semantic
 //! model as SP3a's `close_color_by_copy`.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+
+use mz_ore::collections::HashMap as OreHashMap;
 
 use crate::eqsat::colored::extract::CostModel;
 use crate::eqsat::colored::{ColorId, ColoredEGraph};
@@ -18,7 +20,10 @@ use crate::eqsat::core::{EGraph, Id, Language};
 /// The result of an oracle closure: a flat representative map over the relevant
 /// id space, plus the visible `(owner, node)` pairs (for extraction in Task 5).
 pub(crate) struct OracleColor<L: Language> {
-    parent: HashMap<Id, Id>,
+    /// Only ever looked up by a specific id, never iterated, so the
+    /// non-iterable wrapper is safe: this is an independent test oracle, not
+    /// itself on the production merge path.
+    parent: OreHashMap<Id, Id>,
     pub(crate) nodes: Vec<(Id, L::Node)>,
 }
 
@@ -68,7 +73,7 @@ pub(crate) fn oracle_close<L: Language>(
 
     // Seed the rep map: base ids resolve to their base root; delta ids are their
     // own roots.
-    let mut parent: HashMap<Id, Id> = HashMap::new();
+    let mut parent: OreHashMap<Id, Id> = OreHashMap::new();
     for id in 0..base.uf_len() {
         parent.insert(id, base.find(id));
     }
@@ -129,17 +134,20 @@ pub(crate) fn same_partition<L: Language>(
 pub(crate) fn oracle_extract<L: Language, C: CostModel<L>>(
     oracle: &OracleColor<L>,
     model: &C,
-) -> HashMap<Id, C::Cost> {
-    let mut by_class: HashMap<Id, Vec<(L::Node, HashMap<Id, Id>)>> = HashMap::new();
+) -> OreHashMap<Id, C::Cost> {
+    // `by_class`/`cmap` mirror `extract_colored`'s own classification
+    // (`colored/extract.rs`): iterated directly to drive the least-cost
+    // fixpoint, so sorted order keeps tie-break winners process-independent.
+    let mut by_class: BTreeMap<Id, Vec<(L::Node, BTreeMap<Id, Id>)>> = BTreeMap::new();
     for (owner, n) in &oracle.nodes {
         let rep = oracle.rep(*owner);
-        let cmap: HashMap<Id, Id> = L::children(n)
+        let cmap: BTreeMap<Id, Id> = L::children(n)
             .into_iter()
             .map(|ch| (ch, oracle.rep(ch)))
             .collect();
         by_class.entry(rep).or_default().push((n.clone(), cmap));
     }
-    let mut best: HashMap<Id, C::Cost> = HashMap::new();
+    let mut best: OreHashMap<Id, C::Cost> = OreHashMap::new();
     loop {
         let mut changed = false;
         for (&cls, nodes) in &by_class {

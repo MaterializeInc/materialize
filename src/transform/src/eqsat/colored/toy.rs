@@ -7,7 +7,7 @@
 //! the colored e-graph tests and the measurement harness. Carried from the SP3a
 //! spike unchanged.
 
-use std::collections::HashMap;
+use mz_ore::collections::HashMap as OreHashMap;
 
 use crate::eqsat::colored::extract::CostModel;
 use crate::eqsat::core::{EGraph, Id, Language};
@@ -102,8 +102,8 @@ pub(crate) struct GenParams {
 }
 
 /// In-degree (number of e-nodes referencing each class as a child) per base root.
-pub(crate) fn indegree(base: &EGraph<ToyLang>) -> HashMap<Id, usize> {
-    let mut deg: HashMap<Id, usize> = HashMap::new();
+pub(crate) fn indegree(base: &EGraph<ToyLang>) -> OreHashMap<Id, usize> {
+    let mut deg: OreHashMap<Id, usize> = OreHashMap::new();
     for id in base.class_ids() {
         for n in base.nodes(id) {
             for c in ToyLang::children(&n) {

@@ -12,9 +12,11 @@
 //! "merge across all nodes in a class + bounded fixpoint" semantics are
 //! identical to production.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{Columns, MirScalarExpr};
+use mz_ore::collections::HashMap as OreHashMap;
+use mz_ore::collections::HashSet as OreHashSet;
 
 use crate::analysis::equivalences::EquivalenceClasses;
 use crate::eqsat::analysis::{Equivalences, RelCtx};
@@ -82,9 +84,15 @@ pub(crate) struct DerivedScopes {
     /// Deduped distinct equality-sets (one future color each).
     pub scopes: Vec<ScopeEqualities>,
     /// Canonical relational class -> index into `scopes` (absent ⇒ black/no color).
-    pub class_scope: HashMap<Id, usize>,
+    ///
+    /// `BTreeMap`: `build_colored_layer` consumes this by re-canonicalizing
+    /// every key through `base.find` and collecting into `color_of`. Two
+    /// pre-rebuild classes can collapse onto the same post-rebuild id, so the
+    /// consuming order decides which scope's color survives the collision.
+    /// Sorted iteration makes that pick process-independent.
+    pub class_scope: BTreeMap<Id, usize>,
     /// Canonical relational classes that denote the empty relation.
-    pub empty_classes: HashSet<Id>,
+    pub empty_classes: BTreeSet<Id>,
 }
 
 /// The colored e-graph layer derived from a set of [`DerivedScopes`]: one color
@@ -98,16 +106,21 @@ pub(crate) struct DerivedScopes {
 pub(crate) struct ColoredLayer<'b> {
     pub ceg: ColoredEGraph<'b, CombinedLang>,
     /// Canonical relational class -> the color holding its contextual equalities.
-    pub color_of: HashMap<Id, ColorId>,
+    ///
+    /// `BTreeMap`: `build.rs`'s colored-conclusion table build iterates this to
+    /// map each class to its color's conclusion, without an independent
+    /// re-sort. Sorted iteration keeps that mapping process-independent when a
+    /// re-canonicalization collides two classes onto one id.
+    pub color_of: BTreeMap<Id, ColorId>,
     /// Canonical relational classes that denote the empty relation.
-    pub empty_classes: HashSet<Id>,
+    pub empty_classes: OreHashSet<Id>,
     /// Caller-owned `EScalar` cache for colored-delta scalar ids minted by the
     /// colored rule driver's `intern_scalar` (ids `>= base.uf_len()`, absent from
     /// `base.data()`). Owned here so it persists across the driver's per-round
     /// `ColoredView` rebuilds and across colors — each [`ColoredView::new`] is
     /// handed `&mut layer.delta_escalar` so an id minted in one round stays
     /// resolvable in the next. Colored extraction (a later task) reads it too.
-    pub delta_escalar: HashMap<Id, EScalar>,
+    pub delta_escalar: OreHashMap<Id, EScalar>,
 }
 
 /// Build the colored layer from `scopes` over the frozen `base`.
@@ -207,7 +220,7 @@ pub(crate) fn build_colored_layer<'b>(base: &'b EGraph, scopes: DerivedScopes) -
         ceg,
         color_of,
         empty_classes,
-        delta_escalar: HashMap::new(),
+        delta_escalar: OreHashMap::new(),
     }
 }
 
@@ -336,7 +349,7 @@ pub(crate) fn derive(eg: &mut EGraph) -> DerivedScopes {
     // relational classes, so the canonical ids in `facts` stay valid throughout.
     let facts = derive_facts(eg);
 
-    let mut empty_classes: HashSet<Id> = HashSet::new();
+    let mut empty_classes: BTreeSet<Id> = BTreeSet::new();
     // Recorded equality unions, keyed by the **context class** whose
     // output-equivalences justify them — i.e. the *input* class of the Filter/Map
     // node, NOT the node's own (enclosing) class.
@@ -349,7 +362,7 @@ pub(crate) fn derive(eg: &mut EGraph) -> DerivedScopes {
     // color) folds a sibling whose own input proves nothing — wrong results.
     // Keying by the input class makes each sibling resolve under its own input's
     // context, which is sound.
-    let mut by_context: HashMap<Id, Vec<(Id, Id)>> = HashMap::new();
+    let mut by_context: BTreeMap<Id, Vec<(Id, Id)>> = BTreeMap::new();
 
     // Deterministic order (ids are `usize`), independent of HashMap iteration.
     let mut canon_ids: Vec<Id> = facts.keys().copied().collect();
@@ -428,8 +441,8 @@ pub(crate) fn derive(eg: &mut EGraph) -> DerivedScopes {
 
     // Dedup identical equality-sets into one scope each (sorted-pair key).
     let mut scopes: Vec<ScopeEqualities> = Vec::new();
-    let mut class_scope: HashMap<Id, usize> = HashMap::new();
-    let mut key_to_idx: HashMap<Vec<(Id, Id)>, usize> = HashMap::new();
+    let mut class_scope: BTreeMap<Id, usize> = BTreeMap::new();
+    let mut key_to_idx: OreHashMap<Vec<(Id, Id)>, usize> = OreHashMap::new();
     for (canon, mut unions) in per_class {
         unions.sort_unstable();
         unions.dedup();
@@ -769,7 +782,7 @@ mod tests {
         let (mut eg, _) = two_filters_same_equality_fixture();
         let d = derive(&mut eg);
         // Two classes with the same equality-set share one scope index.
-        let distinct: std::collections::HashSet<_> = d.class_scope.values().collect();
+        let distinct: mz_ore::collections::HashSet<_> = d.class_scope.values().collect();
         assert!(distinct.len() < d.class_scope.len() || d.class_scope.len() <= 1);
     }
 
@@ -848,7 +861,9 @@ mod tests {
     /// 2`), `#5` is filtered out and the in-range payload `#1 + 1` is returned.
     #[mz_ore::test]
     fn resolve_colored_rejects_out_of_range_member() {
-        use std::collections::{HashMap, HashSet};
+        use std::collections::BTreeMap;
+
+        use mz_ore::collections::{HashMap as OreHashMap, HashSet as OreHashSet};
 
         use crate::eqsat::colored::ColoredEGraph;
 
@@ -866,9 +881,9 @@ mod tests {
         ceg.union(color, eg.find(payload), eg.find(oor));
         let mut layer = ColoredLayer {
             ceg,
-            color_of: HashMap::new(),
-            empty_classes: HashSet::new(),
-            delta_escalar: HashMap::new(),
+            color_of: BTreeMap::new(),
+            empty_classes: OreHashSet::new(),
+            delta_escalar: OreHashMap::new(),
         };
 
         // Sanity: the cheaper out-of-range column IS a member of the colored
@@ -902,7 +917,9 @@ mod tests {
     /// matching the Phase-2a reducer's lower-index canonicalization.
     #[mz_ore::test]
     fn resolve_colored_equal_cost_prefers_lower_column_index() {
-        use std::collections::{HashMap, HashSet};
+        use std::collections::BTreeMap;
+
+        use mz_ore::collections::{HashMap as OreHashMap, HashSet as OreHashSet};
 
         use crate::eqsat::colored::ColoredEGraph;
         use crate::eqsat::ir::EScalar;
@@ -929,9 +946,9 @@ mod tests {
         ceg.union(color, eg.find(payload_id), eg.find(canonical_id));
         let mut layer = ColoredLayer {
             ceg,
-            color_of: HashMap::new(),
-            empty_classes: HashSet::new(),
-            delta_escalar: HashMap::new(),
+            color_of: BTreeMap::new(),
+            empty_classes: OreHashSet::new(),
+            delta_escalar: OreHashMap::new(),
         };
 
         // max_col = 2: both `#0` and `#1` are in range; neither is filtered.
@@ -1004,7 +1021,7 @@ mod tests {
     /// sorts by `(|unions|, unions)` and creates the parent color before the child.
     #[mz_ore::test]
     fn color_forest_is_inclusion_ordered() {
-        use std::collections::HashSet;
+        use std::collections::BTreeSet;
 
         use super::{DerivedScopes, ScopeEqualities};
 
@@ -1041,7 +1058,7 @@ mod tests {
                 }, // index 1 → rel_small
             ],
             class_scope: [(rel_large, 0), (rel_small, 1)].into_iter().collect(),
-            empty_classes: HashSet::new(),
+            empty_classes: BTreeSet::new(),
         };
 
         let layer = build_colored_layer(&eg, scopes);
@@ -1080,7 +1097,7 @@ mod tests {
     /// the canonical form of `Eq(#0,#0)`, so congruence merges them.
     #[mz_ore::test]
     fn colored_congruence_propagates_from_seeds() {
-        use std::collections::HashSet;
+        use std::collections::BTreeSet;
 
         use super::{DerivedScopes, ScopeEqualities};
 
@@ -1109,7 +1126,7 @@ mod tests {
         let scopes = DerivedScopes {
             scopes: vec![ScopeEqualities { unions }],
             class_scope: [(rel, 0)].into_iter().collect(),
-            empty_classes: HashSet::new(),
+            empty_classes: BTreeSet::new(),
         };
 
         let mut layer = build_colored_layer(&eg, scopes);

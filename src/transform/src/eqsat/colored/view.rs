@@ -37,14 +37,17 @@
 //! meaning a colored-delta scalar id minted in round N would panic in round N+1.
 //!
 //! The fix: `delta_escalar` is owned by the *caller* (driver or test) and passed
-//! in as `&mut HashMap<Id, EScalar>`. `ColoredView::new` holds a mutable
-//! reference to it and never clears it. The caller reuses the same `HashMap`
-//! across rounds and across child colors — this is safe because colored ids come
-//! from a monotonic allocator so there are no cross-color collisions.
+//! in as `&mut mz_ore::collections::HashMap<Id, EScalar>`. `ColoredView::new`
+//! holds a mutable reference to it and never clears it. The caller reuses the
+//! same map across rounds and across child colors. This is safe because
+//! colored ids come from a monotonic allocator, so there are no cross-color
+//! collisions.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::Columns;
+use mz_ore::collections::HashMap as OreHashMap;
+use mz_ore::collections::HashSet as OreHashSet;
 use mz_repr::ReprColumnType;
 
 use crate::eqsat::colored::{ColorId, ColoredEGraph, Id};
@@ -75,25 +78,32 @@ pub(crate) struct ColoredView<'a, 'b, 'v> {
     pub base: &'b EGraph,
     /// Caller-owned cache of `EScalar` for colored-delta scalar ids created
     /// during colored saturation (`intern_scalar`). Persists across view rebuilds
-    /// and across colors — the caller must pass the *same* `HashMap` to every
+    /// and across colors. The caller must pass the *same* map to every
     /// `ColoredView::new` call so that ids minted in round N are still readable
     /// in round N+1. Base scalar ids (`< base.uf_len()`) resolve via
     /// `base.data().escalar`; they are never inserted here (M1).
-    pub delta_escalar: &'v mut HashMap<Id, EScalar>,
+    pub delta_escalar: &'v mut OreHashMap<Id, EScalar>,
     /// Per-color sym index over `canon(color, ·)` of `visible_nodes(color)`,
     /// keyed by operator [`Sym`], paired with the node's colored-canonical class.
     /// Deduped: no two entries in a bucket are equal (M2).
-    pub index: HashMap<Sym, Vec<(Id, ENode)>>,
+    ///
+    /// `Sym` (`egraph/node.rs`, out of this sweep's scope) has no `Ord`, so this
+    /// stays the non-iterable wrapper rather than a `BTreeMap`. The M2 dedup
+    /// pass below needs per-bucket mutable access, not a full-map iteration: it
+    /// visits buckets via a separately tracked key list rather than
+    /// `values_mut()`, so the wrapper still proves no order-sensitive iteration
+    /// happens over `index` itself.
+    pub index: OreHashMap<Sym, Vec<(Id, ENode)>>,
     /// The distinct colored-canonical ids of classes holding a relational node.
     pub rel_class_ids: Vec<Id>,
     /// Colored-canonical class id → its relational e-nodes (colored-canonical).
     /// Deduped: no two entries per class are equal (M2).
-    pub class_nodes: HashMap<Id, Vec<ENode>>,
+    pub class_nodes: BTreeMap<Id, Vec<ENode>>,
     /// Colored-canonical class id → its arity (color-invariant).
-    pub arity: HashMap<Id, usize>,
+    pub arity: OreHashMap<Id, usize>,
     /// Colored-canonical class id → a base member of the class, when one exists.
     /// Used to resolve color-invariant base facts (column types) for a class.
-    pub base_rep: HashMap<Id, Id>,
+    pub base_rep: OreHashMap<Id, Id>,
 }
 
 impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
@@ -110,14 +120,20 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
         ceg: &'a mut ColoredEGraph<'b, CombinedLang>,
         color: ColorId,
         base: &'b EGraph,
-        delta_escalar: &'v mut HashMap<Id, EScalar>,
+        delta_escalar: &'v mut OreHashMap<Id, EScalar>,
     ) -> Self {
         // Build the per-color sym index and the colored class → node map from the
         // color's visible e-nodes, each canonicalized under the color. `visible`
         // is owned, so the `&mut ceg` reads below borrow nothing from it.
         let visible = ceg.visible_nodes(color);
-        let mut index: HashMap<Sym, Vec<(Id, ENode)>> = HashMap::new();
-        let mut class_nodes: HashMap<Id, Vec<ENode>> = HashMap::new();
+        let mut index: OreHashMap<Sym, Vec<(Id, ENode)>> = OreHashMap::new();
+        // Distinct syms seen, in first-insertion order: `index` (the wrapper)
+        // has no `.keys()`/`.values_mut()`, so the M2 dedup pass below revisits
+        // buckets through this list instead. Insertion order doesn't matter
+        // (each bucket's dedup is independent of the others), only that every
+        // distinct sym appears once.
+        let mut syms: Vec<Sym> = Vec::new();
+        let mut class_nodes: BTreeMap<Id, Vec<ENode>> = BTreeMap::new();
         let mut rel_ids: BTreeSet<Id> = BTreeSet::new();
         for (id, node) in visible {
             if !matches!(node, CNode::Rel(_)) {
@@ -127,7 +143,11 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
             let CNode::Rel(ce) = ceg.canon(color, &node) else {
                 continue;
             };
-            index.entry(ce.sym()).or_default().push((rep, ce.clone()));
+            let sym = ce.sym();
+            if !index.contains_key(&sym) {
+                syms.push(sym);
+            }
+            index.entry(sym).or_default().push((rep, ce.clone()));
             class_nodes.entry(rep).or_default().push(ce);
             rel_ids.insert(rep);
         }
@@ -137,9 +157,11 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
         // to canonicalize to the same rep and produce identical (rep, ENode)
         // pairs. Dedup keeps the snapshot clean and prevents MATCH_LIMIT
         // inflation from duplicate entries.
-        for bucket in index.values_mut() {
-            bucket.sort_unstable();
-            bucket.dedup();
+        for sym in syms {
+            if let Some(bucket) = index.get_mut(&sym) {
+                bucket.sort_unstable();
+                bucket.dedup();
+            }
         }
         for nodes in class_nodes.values_mut() {
             nodes.sort_unstable();
@@ -151,8 +173,8 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
         // arity), so a base member's `base.try_arity` is authoritative. A
         // colored-only class (no base member) derives its arity structurally
         // from its colored e-nodes.
-        let mut arity: HashMap<Id, usize> = HashMap::new();
-        let mut base_rep: HashMap<Id, Id> = HashMap::new();
+        let mut arity: OreHashMap<Id, usize> = OreHashMap::new();
+        let mut base_rep: OreHashMap<Id, Id> = OreHashMap::new();
         for &r in &rel_class_ids {
             // Prefer a direct base lookup when `r` itself is a base id; else scan
             // the colored class for a base member (a base class merged into a
@@ -172,7 +194,8 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
                     }
                 }
                 None => {
-                    if let Some(a) = structural_arity(&class_nodes, base, r, &mut HashSet::new()) {
+                    if let Some(a) = structural_arity(&class_nodes, base, r, &mut OreHashSet::new())
+                    {
                         arity.insert(r, a);
                     }
                 }
@@ -222,7 +245,7 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
                 return a;
             }
         }
-        structural_arity(&self.class_nodes, self.base, id, &mut HashSet::new())
+        structural_arity(&self.class_nodes, self.base, id, &mut OreHashSet::new())
             .expect("colored class has a well-defined arity")
     }
 
@@ -280,10 +303,10 @@ impl<'a, 'b, 'v> ColoredView<'a, 'b, 'v> {
 /// (arity is color-invariant) and colored children through the snapshot. Used
 /// only for colored-only classes (no base member pins the arity).
 fn structural_arity(
-    class_nodes: &HashMap<Id, Vec<ENode>>,
+    class_nodes: &BTreeMap<Id, Vec<ENode>>,
     base: &EGraph,
     id: Id,
-    visiting: &mut HashSet<Id>,
+    visiting: &mut OreHashSet<Id>,
 ) -> Option<usize> {
     if id < base.uf_len() {
         return base.try_arity(id);
@@ -536,7 +559,7 @@ impl<'a, 'b, 'v> MatchGraph for ColoredView<'a, 'b, 'v> {
     fn cond_reads_indexed_global(&self, id: Id) -> bool {
         use mz_expr::MirRelationExpr;
         let mut stack = vec![id];
-        let mut seen = HashSet::new();
+        let mut seen = OreHashSet::new();
         while let Some(cls) = stack.pop() {
             if !seen.insert(cls) {
                 continue;
@@ -653,9 +676,8 @@ fn lower_colored_impl(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use mz_expr::{BinaryFunc, MirScalarExpr, func};
+    use mz_ore::collections::HashMap as OreHashMap;
 
     use crate::eqsat::colored::ColoredEGraph;
     use crate::eqsat::colored::view::ColoredView;
@@ -678,7 +700,7 @@ mod tests {
         let mut ceg = ColoredEGraph::new(&eg);
         let color = ceg.new_color(None);
         ceg.union(color, eg.find(c0), eg.find(c1)); // #0 ≅_c #1
-        let mut delta_escalar = HashMap::new();
+        let mut delta_escalar = OreHashMap::new();
         let view = ColoredView::new(&mut ceg, color, &eg, &mut delta_escalar);
         // Under the color, #0 and #1 canonicalize to the same id.
         assert_eq!(
@@ -702,7 +724,7 @@ mod tests {
 
         let mut ceg = ColoredEGraph::new(&eg);
         let color = ceg.new_color(None);
-        let mut delta_escalar = HashMap::new();
+        let mut delta_escalar = OreHashMap::new();
         let mut view = ColoredView::new(&mut ceg, color, &eg, &mut delta_escalar);
 
         let sum = EScalar::plain(MirScalarExpr::column(0).call_binary(
@@ -743,7 +765,7 @@ mod tests {
         let mut ceg = ColoredEGraph::new(&eg);
         let color = ceg.new_color(None);
         ceg.union(color, eg.find(c0), eg.find(c1)); // #0 ≅_c #1
-        let mut delta_escalar = HashMap::new();
+        let mut delta_escalar = OreHashMap::new();
         let view = ColoredView::new(&mut ceg, color, &eg, &mut delta_escalar);
 
         let filt_rep = view.ceg.find(color, eg.find(filt));
@@ -796,7 +818,7 @@ mod tests {
         let color = ceg.new_color(None);
 
         // The external cache is owned here and threaded through both views.
-        let mut delta_escalar: HashMap<_, _> = HashMap::new();
+        let mut delta_escalar: OreHashMap<_, _> = OreHashMap::new();
 
         let sum = EScalar::plain(MirScalarExpr::column(0).call_binary(
             MirScalarExpr::column(1),

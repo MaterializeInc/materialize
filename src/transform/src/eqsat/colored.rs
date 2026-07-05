@@ -42,7 +42,7 @@ mod measure;
 #[cfg(test)]
 mod oracle;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::eqsat::colored::union_find::ColoredUnionFind;
 use crate::eqsat::core::{EGraph, Language};
@@ -64,7 +64,12 @@ struct ColorData<L: Language> {
     /// This color's own delta over its parent's partition.
     uf: ColoredUnionFind,
     /// Colored e-nodes that exist only in this color, kept canonical (Task 4).
-    delta_nodes: HashMap<L::Node, Id>,
+    ///
+    /// `BTreeMap`, not a hash map: `congruence::visible_nodes` iterates this
+    /// directly to build the closure's node-visitation order, which decides
+    /// congruence-merge survivors and colored extraction winners. Hash order
+    /// would make those choices seed-dependent.
+    delta_nodes: BTreeMap<L::Node, Id>,
 }
 
 /// A colored e-graph: one shared, immutable base + a tree of colors. Generic
@@ -109,7 +114,7 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
         self.colors.push(ColorData {
             parent,
             uf: ColoredUnionFind::new(),
-            delta_nodes: HashMap::new(),
+            delta_nodes: BTreeMap::new(),
         });
         id
     }

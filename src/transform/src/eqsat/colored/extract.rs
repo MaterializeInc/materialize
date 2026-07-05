@@ -9,7 +9,9 @@
 //! so a colored equality can expose a cheaper representative. SP3b ships a toy
 //! additive cost; SP4 supplies the real relational/scalar cost.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+
+use mz_ore::collections::HashMap as OreHashMap;
 
 use crate::eqsat::colored::{ColorId, ColoredEGraph};
 use crate::eqsat::core::{Id, Language, MAX_ANALYSIS_ITERS};
@@ -31,23 +33,33 @@ impl<'b, L: Language> ColoredEGraph<'b, L> {
         &mut self,
         c: ColorId,
         model: &C,
-    ) -> HashMap<Id, (L::Node, C::Cost)> {
+    ) -> BTreeMap<Id, (L::Node, C::Cost)> {
         // Gather visible nodes (base + c/ancestor delta), grouped by colored
         // class. For each node, precompute the resolution child_id -> rep so the
         // fixpoint never needs `&mut self`.
-        let mut by_class: HashMap<Id, Vec<(L::Node, HashMap<Id, Id>)>> = HashMap::new();
+        //
+        // `by_class` is a `BTreeMap`, not a hash map: it is iterated directly
+        // below to drive the least-cost fixpoint, and a class's winning node on
+        // a cost tie is whichever is first PROCESSED across rounds, which
+        // depends on when its children's classes converge, itself a function
+        // of the order classes are visited. Sorted iteration makes tie-break
+        // winners process-independent.
+        let mut by_class: BTreeMap<Id, Vec<(L::Node, BTreeMap<Id, Id>)>> = BTreeMap::new();
         let visible = self.visible_nodes(c);
         for (owner, n) in visible {
             let rep = self.find(c, owner);
-            let cmap: HashMap<Id, Id> = L::children(&n)
+            let cmap: BTreeMap<Id, Id> = L::children(&n)
                 .into_iter()
                 .map(|ch| (ch, self.find(c, ch)))
                 .collect();
             by_class.entry(rep).or_default().push((n, cmap));
         }
 
-        let mut best: HashMap<Id, C::Cost> = HashMap::new();
-        let mut best_node: HashMap<Id, L::Node> = HashMap::new();
+        // Keyed-only (never iterated): the winner per class is decided solely
+        // by `by_class`'s sorted visitation order and the tie-break below, not
+        // by these maps' own order.
+        let mut best: OreHashMap<Id, C::Cost> = OreHashMap::new();
+        let mut best_node: OreHashMap<Id, L::Node> = OreHashMap::new();
         for _ in 0..MAX_ANALYSIS_ITERS {
             let mut changed = false;
             for (&cls, nodes) in &by_class {

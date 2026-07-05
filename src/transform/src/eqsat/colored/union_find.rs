@@ -8,14 +8,21 @@
 //! own representative" — the color inherits the base/parent partition there.
 //! SP3b replaces SP3a's dense `Vec`-backed `ColoredUf` with this.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+
+use mz_ore::collections::HashMap as OreHashMap;
 
 use crate::eqsat::core::Id;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ColoredUnionFind {
-    parent: HashMap<Id, Id>,
-    size: HashMap<Id, usize>,
+    /// `BTreeMap`, not a hash map: `remove`'s child-reattachment scan
+    /// (`self.parent.iter()`) picks a new root among a removed root's children
+    /// when there's more than one, and that pick must not depend on hash order.
+    parent: BTreeMap<Id, Id>,
+    /// Keyed-only (looked up by a specific root, never iterated), so the
+    /// non-iterable wrapper is safe here even though `parent` is not.
+    size: OreHashMap<Id, usize>,
 }
 
 impl ColoredUnionFind {

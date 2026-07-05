@@ -96,9 +96,10 @@ pub(crate) fn colored_saturate<'b>(layer: &mut ColoredLayer<'b>, base: &'b EGrap
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::BTreeMap;
 
     use mz_expr::{BinaryFunc, MirScalarExpr, func};
+    use mz_ore::collections::{HashMap as OreHashMap, HashSet as OreHashSet};
     use mz_repr::{Datum, ReprScalarType};
 
     use crate::eqsat::colored::ColoredEGraph;
@@ -131,9 +132,9 @@ mod tests {
         let _c = ceg.new_color(None);
         let mut layer = ColoredLayer {
             ceg,
-            color_of: HashMap::new(),
-            empty_classes: HashSet::new(),
-            delta_escalar: HashMap::new(),
+            color_of: BTreeMap::new(),
+            empty_classes: OreHashSet::new(),
+            delta_escalar: OreHashMap::new(),
         };
 
         let n = colored_saturate(&mut layer, &eg);
@@ -184,13 +185,13 @@ mod tests {
         let mut ceg = ColoredEGraph::new(&eg);
         let color = ceg.new_color(None);
         ceg.union(color, eg.find(tru), eg.find(pred));
-        let mut color_of = HashMap::new();
+        let mut color_of = BTreeMap::new();
         color_of.insert(eg.find(filt), color);
         let mut layer = ColoredLayer {
             ceg,
             color_of,
-            empty_classes: HashSet::new(),
-            delta_escalar: HashMap::new(),
+            empty_classes: OreHashSet::new(),
+            delta_escalar: OreHashMap::new(),
         };
 
         let n = colored_saturate(&mut layer, &eg);
