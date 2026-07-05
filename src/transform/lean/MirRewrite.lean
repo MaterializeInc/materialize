@@ -12,3 +12,4 @@
 import MirRewrite.Semantics
 import MirRewrite.Generated
 import MirRewrite.FilterSplit
+import MirRewrite.MapSplit

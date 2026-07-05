@@ -253,46 +253,72 @@ with the greedy extractor.
 The WS1 pattern applied to `Map { input, scalars: Vec<Id> }` (node.rs:36-40, the
 same opaque-list situation as Filter predicates). A hand-written `CompiledRule`
 (the DSL cannot destructure the scalar list, and `Tmpl::Builtin` is scalar-only),
-mirroring `filter_split.rs`: peel one scalar into an upstream `Map`, single-scalar
-peel, length cap, canonical-`find` ordering, record declines.
+mirroring `filter_split.rs`. The mechanism is peel-FIRST, the reverse of
+`fuse_maps`: peel ONLY the first scalar (index 0) into an upstream `Map`,
+`Map[s0, rest](r)` becomes `Map[rest](Map[s0](r))`. Length cap `K`, record
+declines. Iterated peel-first plus `fuse_maps` reaches every common POSITIONAL,
+in-order prefix, so restricting to the first scalar loses no positional-prefix
+share.
 
-### Shared peel helper
+### Peel-first needs no guard and no index rewrite
 
-`filter_split` and `map_split` both do single-element peel, length cap,
-canonical-`g.find(p)` sort, and decline counting. Factor that into one Rust
-helper, with two thin wrappers for the `Filter` and `Map` node types. One peel
-implementation to keep aligned instead of two divergent copies. The Lean
-theorems stay separate (filter-composition versus map-composition are different
+The forward rule `fuse_maps` is `Map[s2](Map[s1](r)) = Map[s1 ++ s2](r)`, so its
+reverse at the first scalar is unconditional:
+
+* No independence guard. The first appended scalar reads only input columns by
+  construction (nothing precedes it to reference), so it is always the
+  provably-sound input-only case. This covers the jsonb value case (`data->'obj'`
+  reads only the input `data` column) whenever that scalar is the positional
+  first.
+* No column-index rewrite. A position-1 prefix split places `s0` at exactly the
+  column index it already occupies in the fused Map. `Map[rest](Map[s0](r))`
+  preserves the exact output column layout and arity, so no restoring `Project`
+  and no reindex are needed. `rest` keeps its ORIGINAL order, since Map appends
+  columns positionally and reordering would change the layout. This is the
+  opposite of filter-split, which sorts to canonicalize an order-insensitive
+  predicate set.
+
+### LIMITATION: order-sensitivity
+
+A share is MISSED when the shared scalar is not a positional prefix of the
+extending Map. `Map[g, s](r)` alongside a sibling `Map[s](r)` does not share,
+because `s` is not first and Map scalars are order-sensitive (unlike filter
+predicates there is no reordering to canonicalize this away). The follow-up for
+that reach is an any-input-only-peel with a column-index rewrite (a corrective
+`Project` for a middle peel), deferred if that reach matters. Peel-first is the
+unconditional, layout-preserving core that needs neither.
+
+### Shared peel helper: not factored
+
+`filter_split` and `map_split` share only a thin skeleton (the `nodes_by_sym`
+loop, the `K` cap, the `n < 2` skip, the `DECLINED` counter). Their cores
+DIVERGE: filter emits one match per predicate index and sorts `rest` by
+`g.find`, map emits one match and peels index 0 preserving order. Factoring the
+skeleton behind closures for the differing parts contorts both rules for a
+handful of shared lines, so the two are kept separate. The Lean theorems stay
+separate regardless (filter-composition versus map-composition are different
 statements).
 
-### The correctness crux: map-split is not a trivial reflection
+### Lean: a sorry symmetric to fuse_maps
 
-Filter predicates are order-independent (conjunction commutes), so filter-split
-was a clean reflection of `merge_filters`. Map scalars are NOT order-independent:
-`Map[f, g]` where `g` reads `f`'s appended output column cannot be reordered, and
-peeling shifts column indices. Map-split is therefore sound only under a
-condition, and both the rule and its Lean theorem must carry it.
+Hand-authored in a new `MirRewrite/MapSplit.lean`, imported into `MirRewrite.lean`
+(invisible to gen-lean, like `FilterSplit.lean`). The statement is
+`mapB (catRows s1 s2) r = mapB s2 (mapB s1 r)`, the reverse orientation of
+`rule_fuse_maps`. Map acts on row/column structure, which the bag model
+(`Row -> Int` multiplicity) does not represent, so this is a SORRY, the same
+established Map-rule modeling boundary that `fuse_maps`, `fuse_projects`, and
+`push_filter_through_map` sit behind. It is NOT a discharged precondition-carrying
+theorem: peel-first is unconditional, so there is no independence precondition to
+state, and no precondition to discharge. Consistent with `rule_fuse_maps`, the
+sorry carries no `-- PERMANENT SORRY` marker, so the permanent-sorry guard count
+is unchanged.
 
-* Independence guard. WS2a peels only an INPUT-ONLY scalar, one that reads only
-  columns of the Map's input `r`, not any sibling appended scalar. This is the
-  provably-sound subset and it covers the jsonb value case (`data->'obj'` reads
-  only the input `data` column). A scalar that references a sibling is not
-  peeled. Dependent-scalar hoisting is out of scope.
-* Column-index rewrite. Hoisting scalar `s` at position `|r| + i` into an
-  upstream `Map[s](r)` places `s` at position `|r|` in the shared prefix, so the
-  outer `Map` (the remaining scalars) and a restoring `Project` must reindex so
-  the overall output columns and arity are preserved. This index rewrite is the
-  subtle part of WS2a and the plan must specify it precisely.
-* Lean theorem. Hand-authored in a new `MirRewrite/MapSplit.lean`, imported into
-  `MirRewrite.lean` (invisible to gen-lean, like `FilterSplit.lean`). The
-  statement is map-composition WITH the independence precondition, not a bare
-  reflection: it must state that `s` reads only `r`'s columns.
-* Drift test. A test that asserts the rule's emitted shape matches the shape its
-  Lean theorem states. This is a TRIPWIRE, not a correspondence proof: it pins
-  the rule's output so a future change to the Rust rule breaks the test and
-  forces re-review of the hand-authored theorem. It does not verify the theorem
-  is semantically about the rule. Given map-split's precondition subtlety the
-  tripwire matters more here than for filter-split.
+* Drift test. A test that asserts the rule's emitted shape (`apply_map_split` on
+  `Map[s0, s1]` produces `Map[[s1]](Map[[s0]](input))`) matches the shape the Lean
+  theorem states. This is a TRIPWIRE, not a correspondence proof: it pins the
+  rule's output so a future change to the Rust rule breaks the test and forces
+  re-review of the hand-authored theorem. It does not verify the theorem is
+  semantically about the rule.
 
 ## WS2d: reconcile with the post-eqsat pipeline
 
@@ -346,9 +372,9 @@ settled value or difficulty judgment. Revisit after the Map-prefix slice lands.
 * Unit tests. The `cost.rs` `(degree, arity)` memory comparison (a wider
   arrangement costs more than a narrower one of equal cardinality degree, and a
   higher degree still dominates any arity). The ILP arity term (a widening carry
-  is declined, an arity-neutral share is taken). The Map-split rule (single
-  peel, cap, canonical order, independence guard rejects a dependent scalar,
-  index-reference preservation, declines recorded). The drift test.
+  is declined, an arity-neutral share is taken). The Map-split rule (peel-first
+  exposes the shared prefix, `rest` keeps original order, cap declines a wide
+  Map and records it). The drift test pinning `Map[[s1]](Map[[s0]](input))`.
 * Use the `mz-test` skill for canonical commands (`bin/sqllogictest --optimized`).
 
 ## Scope boundaries
@@ -383,8 +409,18 @@ settled value or difficulty judgment. Revisit after the Map-prefix slice lands.
 4. WS0 left untouched, orthogonal (work tier versus memory tier), composes with
    the width term. WS0's real future subsumption is a `cost.rs` time-axis
    scalar-work term, unrelated to the width axis.
-5. Map-split hand-written with a shared peel helper factored across
-   `filter_split`, an input-only independence guard, a column-index rewrite, a
-   precondition-carrying hand-authored Lean theorem, and a drift-detection
-   tripwire test. The DSL destructuring primitive is deferred until a third split
-   rule (Project-split) would justify it.
+5. Map-split hand-written as peel-FIRST (reverse of `fuse_maps`), NOT a general
+   single-input-only-scalar peel with an index rewrite. Peeling only the first
+   scalar needs no independence guard (the first scalar is always input-only) and
+   no column-index rewrite (a position-1 prefix split preserves the layout), and
+   iterated peel-first plus `fuse_maps` reaches all positional in-order common
+   prefixes. The order-sensitivity LIMITATION is accepted: a share is missed when
+   the shared scalar is not a positional prefix (`Map[g, s]` versus sibling
+   `Map[s]` does not share), and the any-input-only-peel with index rewrite is the
+   follow-up if that reach matters. The Lean theorem is a SORRY symmetric to
+   `rule_fuse_maps` (Map acts on row/column structure, not bag-modeled), paired
+   with a drift-detection tripwire test. The peel skeleton is NOT factored with
+   `filter_split`: their cores diverge (filter sorts `rest`, map preserves order),
+   so the handful of shared lines does not justify a contorting shared helper. The
+   DSL destructuring primitive is deferred until a third split rule
+   (Project-split) would justify it.

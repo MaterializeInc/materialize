@@ -36,6 +36,7 @@ pub(crate) mod join_commit;
 pub(crate) mod join_spelling;
 pub mod lean;
 pub mod lower;
+pub(crate) mod map_split;
 pub mod matcher;
 pub mod objective;
 pub mod raise;
@@ -160,6 +161,14 @@ pub fn optimize_with_availability(
     // scalar-aware ILP tier then prefers the lower-scalar-mass split form.
     let rules = if filter_sharing {
         rules.with_extra_rule(&crate::eqsat::filter_split::SPLIT_RULE)
+    } else {
+        rules
+    };
+    // The map-split rewrite likewise lives outside the generated table (the DSL
+    // cannot destructure the scalar list), so append it when scalar sharing is on.
+    // The scalar-aware ILP tier then prefers the lower-scalar-mass split form.
+    let rules = if scalar_sharing {
+        rules.with_extra_rule(&crate::eqsat::map_split::SPLIT_RULE)
     } else {
         rules
     };
