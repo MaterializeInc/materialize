@@ -179,7 +179,7 @@ impl<'a> MatchGraph for BaseView<'a> {
     }
 
     fn cond_has_duplicate_id(&self, ids: &[Id]) -> bool {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = mz_ore::collections::HashSet::new();
         !ids.iter().all(|&id| seen.insert(self.eg.find(id)))
     }
 

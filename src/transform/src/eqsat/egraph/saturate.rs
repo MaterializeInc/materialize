@@ -5,10 +5,11 @@
 
 //! Equality saturation, side conditions, and analysis driver for [`EGraph`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use mz_expr::{BinaryFunc, Columns, MirScalarExpr};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashMap as OreHashMap;
 
 use crate::eqsat::analysis::{ConstCols, KeySet, Keys, LocalFacts, Monotonic, NonNeg, is_superkey};
 use crate::eqsat::core::Id;
@@ -26,18 +27,37 @@ use super::{INITIAL_BAN_LEN, MATCH_LIMIT, MAX_ENODES};
 // --- compiled-rule bindings -----------------------------------------------
 
 /// All e-graph bindings produced by matching a rule's left-hand side.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct EBindings {
-    pub rels: HashMap<&'static str, Id>,
+    /// Relation-metavariable bindings, keyed by pattern name. Iterated by
+    /// `binding_arities` (here and in the colored view), so this is a
+    /// `BTreeMap`: a `HashMap` would make that iteration order (and so the
+    /// resulting arities map's construction order) per-process random.
+    pub rels: BTreeMap<&'static str, Id>,
     pub payloads: BTreeMap<&'static str, Payload>,
-    pub rests: HashMap<&'static str, Vec<Id>>,
+    pub rests: OreHashMap<&'static str, Vec<Id>>,
     /// Func-metavar bindings, e.g. the `BinaryFunc` bound by a `Pat::SBinaryVar`
     /// match. A function symbol has neither an e-class id (like `rels`) nor a
     /// payload list (like `payloads`), so it gets its own store. See
     /// `bind_binary_func`/`binary_func`.
-    binary_funcs: HashMap<&'static str, BinaryFunc>,
+    binary_funcs: OreHashMap<&'static str, BinaryFunc>,
     /// The class at which the pattern's root matched.
     pub root: Id,
+}
+
+// Manual, not derived: the wrapper `OreHashMap`'s derived `Default` requires
+// its key and value types to implement `Default` too (unlike
+// `std::collections::HashMap`'s unconditional impl), and `BinaryFunc` does not.
+impl Default for EBindings {
+    fn default() -> Self {
+        EBindings {
+            rels: BTreeMap::new(),
+            payloads: BTreeMap::new(),
+            rests: OreHashMap::new(),
+            binary_funcs: OreHashMap::new(),
+            root: 0,
+        }
+    }
 }
 
 impl EBindings {
@@ -269,9 +289,9 @@ impl EGraph {
     /// the bare `Get` unlocks an existing index.
     pub(crate) fn cond_reads_indexed_global(&self, id: Id) -> bool {
         use mz_expr::MirRelationExpr;
-        use std::collections::HashSet;
+        use mz_ore::collections::HashSet as OreHashSet;
         let mut stack = vec![self.find(id)];
-        let mut seen = HashSet::new();
+        let mut seen = OreHashSet::new();
         while let Some(cls) = stack.pop() {
             if !seen.insert(cls) {
                 continue;

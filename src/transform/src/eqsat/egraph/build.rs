@@ -5,9 +5,11 @@
 
 //! Construction, interning, query, and extraction methods on [`EGraph`].
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_ore::collections::HashMap as OreHashMap;
+use mz_ore::collections::HashSet as OreHashSet;
 use mz_repr::{GlobalId, ReprColumnType};
 
 use crate::analysis::equivalences::EquivalenceClasses;
@@ -242,7 +244,7 @@ impl EGraph {
     /// operator [`Sym`], paired with its canonical class. Scalar e-classes are
     /// skipped. Call after `rebuild()` so child ids are canonical.
     pub(crate) fn rel_index(&self) -> Index {
-        let mut idx: Index = HashMap::new();
+        let mut idx: Index = Index::new();
         // Iterate relational classes only; scalar classes have no relational
         // e-node and would contribute nothing to the index. (M1.2)
         for id in self.rel_class_ids() {
@@ -381,7 +383,7 @@ impl EGraph {
     /// (mixed relational/scalar iteration). [`Self::arity`] is the asserting
     /// convenience wrapper for the common case of a known-relational class.
     pub(crate) fn try_arity(&self, id: Id) -> Option<usize> {
-        self.arity_guarded(id, &mut HashSet::new())
+        self.arity_guarded(id, &mut OreHashSet::new())
     }
 
     /// The arity of a known-relational class. Panics if the class has no
@@ -396,7 +398,7 @@ impl EGraph {
         self.try_arity(id).expect("class has a well-defined arity")
     }
 
-    fn arity_guarded(&self, id: Id, visiting: &mut HashSet<Id>) -> Option<usize> {
+    fn arity_guarded(&self, id: Id, visiting: &mut OreHashSet<Id>) -> Option<usize> {
         let id = self.find(id);
         if !visiting.insert(id) {
             // Reached `id` again on this path: this derivation is cyclic and
@@ -461,13 +463,13 @@ impl EGraph {
     /// Returns `None` (rather than defaulting) for any case it cannot derive, so
     /// callers can fall back deliberately.
     pub(crate) fn column_types(&self, id: Id) -> Option<Vec<ReprColumnType>> {
-        self.column_types_guarded(id, &mut HashSet::new())
+        self.column_types_guarded(id, &mut OreHashSet::new())
     }
 
     fn column_types_guarded(
         &self,
         id: Id,
-        visiting: &mut HashSet<Id>,
+        visiting: &mut OreHashSet<Id>,
     ) -> Option<Vec<ReprColumnType>> {
         let id = self.find(id);
         if !visiting.insert(id) {
@@ -494,7 +496,7 @@ impl EGraph {
     fn node_column_types(
         &self,
         node: &ENode,
-        visiting: &mut HashSet<Id>,
+        visiting: &mut OreHashSet<Id>,
     ) -> Option<Vec<ReprColumnType>> {
         match node {
             // A synthesized empty carries its types directly; an empty without
@@ -593,10 +595,11 @@ impl EGraph {
         queue.push_back(root);
         while let Some(id) = queue.pop_front() {
             let mut nodes: Vec<ENode> = self.rel_class_nodes(id).into_iter().cloned().collect();
-            // `classes` stores each class's nodes in a `HashSet`, whose iteration
-            // order is randomized per process. Downstream consumers (the ILP
-            // extractor's variable order, golden plan text) must be deterministic,
-            // so impose the stable `Ord` order over the nodes.
+            // `classes` is a `BTreeMap<Id, BTreeSet<CNode>>`, so `rel_class_nodes`
+            // already yields these in `Ord` order; the explicit sort is kept as
+            // the enumeration-order contract at this use site, independent of
+            // `classes`'s current representation. Downstream consumers (the ILP
+            // extractor's variable order, golden plan text) must be deterministic.
             //
             // Note: `ENode`'s derived `Ord` compares scalar children by their
             // `Id` (not resolved `EScalar` content), so this only fixes the
@@ -842,10 +845,18 @@ impl EGraph {
         // id (`< uf_len()`): `build_rel` resolves children through the base
         // `find`/`escalar` cache, which a colored-delta child id would not be in.
         // Conclusions referencing colored deltas are conservatively skipped.
-        let conclusion_of: HashMap<Id, ENode> = match colored.as_deref_mut() {
+        let conclusion_of: OreHashMap<Id, ENode> = match colored.as_deref_mut() {
             Some(layer) => {
-                let colors: HashSet<ColorId> = layer.color_of.values().copied().collect();
-                let mut tables: HashMap<ColorId, HashMap<Id, (CNode, usize)>> = HashMap::new();
+                // `ColorId` doesn't derive `Ord` (a plain newtype in `colored.rs`,
+                // out of this sweep's scope), so dedup on its raw field rather
+                // than through a `BTreeSet`. This still visits each color exactly
+                // once, in a process-independent order, rather than a `HashSet`'s
+                // per-process randomized one.
+                let mut colors: Vec<ColorId> = layer.color_of.values().copied().collect();
+                colors.sort_by_key(|c| c.0);
+                colors.dedup_by_key(|c| c.0);
+                let mut tables: OreHashMap<ColorId, HashMap<Id, (CNode, usize)>> =
+                    OreHashMap::new();
                 for c in colors {
                     // Skip colors with no relational delta nodes: `extract_colored`
                     // would visit only base nodes and produce no relational
@@ -858,7 +869,7 @@ impl EGraph {
                 }
                 let entries: Vec<(Id, ColorId)> =
                     layer.color_of.iter().map(|(&cls, &c)| (cls, c)).collect();
-                let mut conc: HashMap<Id, ENode> = HashMap::new();
+                let mut conc: OreHashMap<Id, ENode> = OreHashMap::new();
                 for (cls, c) in entries {
                     let rep = layer.ceg.find(c, cls);
                     if let Some((CNode::Rel(e), _)) = tables.get(&c).and_then(|t| t.get(&rep)) {
@@ -874,7 +885,7 @@ impl EGraph {
                 }
                 conc
             }
-            None => HashMap::new(),
+            None => OreHashMap::new(),
         };
 
         // Cost is a pure, compositional function of the built `Rel`. Extraction
@@ -891,8 +902,8 @@ impl EGraph {
         // Both are filled in the same fixpoint so each class can serve whichever
         // demand its parent imposes. The soundness rule (see `build_rel`) pulls a
         // non-linear reduce or TopK input from `best_nonneg`, never `best_any`.
-        let mut best_any: HashMap<Id, (Cost, Rel)> = HashMap::new();
-        let mut best_nonneg: HashMap<Id, (Cost, Rel)> = HashMap::new();
+        let mut best_any: OreHashMap<Id, (Cost, Rel)> = OreHashMap::new();
+        let mut best_nonneg: OreHashMap<Id, (Cost, Rel)> = OreHashMap::new();
         for _ in 0..(self.classes.len() + 1) {
             let mut changed = false;
             for (&id, nodes) in &self.classes {
@@ -982,8 +993,8 @@ impl EGraph {
         class: Id,
         node: &ENode,
         demand: Demand,
-        best_any: &HashMap<Id, (Cost, Rel)>,
-        best_nonneg: &HashMap<Id, (Cost, Rel)>,
+        best_any: &OreHashMap<Id, (Cost, Rel)>,
+        best_nonneg: &OreHashMap<Id, (Cost, Rel)>,
         mut colored: Option<&mut ColoredLayer<'_>>,
         model: &CostModel,
         spellings: Option<&HashMap<Id, EquivalenceClasses>>,

@@ -6,9 +6,10 @@
 //! Combined relational+scalar language types, the e-graph type alias, and
 //! associated index/seed types.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_ore::collections::HashMap as OreHashMap;
 use mz_repr::GlobalId;
 
 use crate::eqsat::core::{self, Id, Language};
@@ -46,7 +47,6 @@ pub enum CSym {
 /// The combined e-graph's language-owned state: the relational availability
 /// oracle, the scalar per-class analysis, and the write-once `escalar` cache
 /// mapping each scalar e-class to the `EScalar` fact relational code reads.
-#[derive(Default)]
 pub struct CombinedData {
     pub rel: RelGraphData,
     pub scalar: ScalarGraphData,
@@ -67,7 +67,20 @@ pub struct CombinedData {
     ///   smallest [`EScalar::name_key`], which prefers a present name over `None`
     ///   then orders lexicographically — so EXPLAIN renders a stable name
     ///   regardless of the order classes were interned.
-    escalar: HashMap<Id, EScalar>,
+    escalar: OreHashMap<Id, EScalar>,
+}
+
+// Manual, not derived: the wrapper `OreHashMap`'s derived `Default` requires
+// its key and value types to implement `Default` too (unlike
+// `std::collections::HashMap`'s unconditional impl), and `EScalar` does not.
+impl Default for CombinedData {
+    fn default() -> Self {
+        CombinedData {
+            rel: RelGraphData::default(),
+            scalar: ScalarGraphData::default(),
+            escalar: OreHashMap::new(),
+        }
+    }
 }
 
 impl CombinedData {
@@ -173,13 +186,13 @@ pub type EGraph = core::EGraph<CombinedLang>;
 /// [`Sym`], paired with their canonical class. Scalar classes are excluded (no
 /// scalar rules run in SP4a), so the generated rule matchers continue to key on
 /// `Sym` and bind `ENode`s directly. Built by [`EGraph::rel_index`].
-pub(crate) type Index = HashMap<Sym, Vec<(Id, ENode)>>;
+pub(crate) type Index = OreHashMap<Sym, Vec<(Id, ENode)>>;
 
 /// Match index for scalar e-nodes, bucketed by scalar operator symbol. Built
 /// per saturation round by the scalar saturate driver, mirroring the relational
 /// `Index`. Kept separate so the relational matcher never sees scalar nodes and
 /// vice versa.
-pub(crate) type ScalarIndex = std::collections::HashMap<ScalarSym, Vec<(Id, SNode)>>;
+pub(crate) type ScalarIndex = OreHashMap<ScalarSym, Vec<(Id, SNode)>>;
 
 impl EGraph {
     /// Bucket every scalar e-node by its `ScalarSym`. One entry per (class, node).
@@ -189,7 +202,7 @@ impl EGraph {
     /// production, hence `#[allow(dead_code)]`.
     #[allow(dead_code)]
     pub(crate) fn scalar_index(&self) -> ScalarIndex {
-        let mut idx: ScalarIndex = std::collections::HashMap::new();
+        let mut idx: ScalarIndex = ScalarIndex::new();
         for id in self.class_ids() {
             for node in self.nodes(id) {
                 if let CNode::Scalar(s) = node {
