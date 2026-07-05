@@ -240,7 +240,7 @@ def test_assume_role(c: Composition, ctx: TestContext):
         )[0][0]
         ctx.iam.update_assume_role_policy(
             RoleName=customer_role,
-            PolicyDocument=json.dumps(trust_policy),
+            PolicyDocument=json.dumps(_allow_set_source_identity(trust_policy)),
         )
 
         # Wait for IAM to propagate.
@@ -298,7 +298,7 @@ def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
         )[0][0]
         ctx.iam.update_assume_role_policy(
             RoleName=customer_role,
-            PolicyDocument=json.dumps(trust_policy),
+            PolicyDocument=json.dumps(_allow_set_source_identity(trust_policy)),
         )
 
         c.sql(
@@ -377,7 +377,7 @@ def test_s3tablesrest_region_mismatch(c: Composition, ctx: TestContext):
         )[0][0]
         ctx.iam.update_assume_role_policy(
             RoleName=customer_role,
-            PolicyDocument=json.dumps(trust_policy),
+            PolicyDocument=json.dumps(_allow_set_source_identity(trust_policy)),
         )
 
         c.sleep(ctx.iam_propagation_seconds)
@@ -491,7 +491,7 @@ def test_iceberg_e2e(c: Composition, ctx: TestContext):
 
         ctx.iam.update_assume_role_policy(
             RoleName=customer_role,
-            PolicyDocument=json.dumps(trust_policy),
+            PolicyDocument=json.dumps(_allow_set_source_identity(trust_policy)),
         )
         c.sleep(ctx.iam_propagation_seconds)
 
@@ -537,22 +537,50 @@ def test_iceberg_e2e(c: Composition, ctx: TestContext):
             _delete_role(ctx, customer_role)
 
 
+def _allow_set_source_identity(trust_policy: dict) -> dict:
+    # CI sessions carry a source identity (scratch-aws-access hook, #36639),
+    # which propagates through the AssumeRole chain and makes STS require
+    # sts:SetSourceIdentity on each role's trust policy. Add it as its own
+    # statement per AssumeRole principal rather than folding it into the
+    # existing statement: Materialize's example_trust_policy conditions
+    # AssumeRole on sts:ExternalId, and that key is absent from the request
+    # context when SetSourceIdentity is authorized, so a shared condition would
+    # always deny it. The customer-facing example_trust_policy itself is left
+    # untouched (see SEC-617).
+    extra = []
+    for statement in trust_policy["Statement"]:
+        actions = statement["Action"]
+        actions = [actions] if isinstance(actions, str) else actions
+        if "sts:AssumeRole" in actions:
+            extra.append(
+                {
+                    "Effect": "Allow",
+                    "Principal": statement["Principal"],
+                    "Action": "sts:SetSourceIdentity",
+                }
+            )
+    trust_policy["Statement"].extend(extra)
+    return trust_policy
+
+
 def _create_role(ctx: TestContext, customer_role: str, principal: str) -> None:
     ctx.iam.create_role(
         RoleName=customer_role,
         AssumeRolePolicyDocument=json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Principal": {
-                            "AWS": principal,
-                        },
-                        "Action": "sts:AssumeRole",
-                    }
-                ],
-            }
+            _allow_set_source_identity(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "AWS": principal,
+                            },
+                            "Action": "sts:AssumeRole",
+                        }
+                    ],
+                }
+            )
         ),
     )
 
