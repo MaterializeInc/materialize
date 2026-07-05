@@ -6,14 +6,15 @@
 //! Equality-saturation rewrites over a subset of MIR relational expressions.
 //! See `docs/superpowers/specs/2026-06-19-mir-egraph-saturation-pass-design.md`.
 
-// This module ports a self-contained prototype; the repo-wide bans on std hash
-// collections and `Iterator::zip` (determinism conventions elsewhere) do not
-// apply to the ported engine. The ported modules also use numeric `as` casts
-// pervasively; rewriting them would obscure the prototype's intent. The crate's
-// `missing_docs`/`missing_debug_implementations` lints likewise do not fit the
-// ported code, so they are relaxed for this module subtree.
+// The repo-wide std hash-collection ban applies to this module. Per-process
+// randomized iteration order over an e-graph makes e-class canonicalization,
+// and so plan extraction, nondeterministic. Iterated maps use BTreeMap/BTreeSet
+// and keyed-only maps use the non-iterable mz_ore::collections wrapper. The
+// ported engine still relies on `Iterator::zip` and numeric `as` casts
+// pervasively, and rewriting them would obscure the prototype's intent, so
+// those two conventions stay relaxed here. The crate's missing_docs and
+// missing_debug_implementations lints likewise do not fit the ported code.
 #![allow(
-    clippy::disallowed_types,
     clippy::disallowed_methods,
     clippy::as_conversions,
     missing_docs,
