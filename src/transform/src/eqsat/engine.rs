@@ -21,13 +21,15 @@ use crate::eqsat::egraph::{EGraph, IndexedFilterSeed};
 use crate::eqsat::ir::Rel;
 use crate::eqsat::rules::CompiledRuleSet;
 
-/// Bound on the scope-refinement loop that re-analyzes a binding scope after
-/// rewriting it: a rewrite can prove a stronger recursive invariant that enables
-/// another, strictly cost-lowering rewrite. The loop adopts round 0
-/// unconditionally, then accepts a further round only when it strictly lowers
-/// cost under the active objective. A cost-equal re-spelling is the extraction
-/// flap, not refinement, so the loop rejects it and stops. Convergence is fast
-/// because genuine improvements are rare, so a small cap suffices.
+/// Bound on the scope-refinement loop for a `LetRec`. The loop re-analyzes a
+/// recursive binding after rewriting it: a rewrite can prove a stronger recursive
+/// invariant that a later round exploits for a strictly cost-lowering rewrite.
+/// The loop adopts round 0 unconditionally, then accepts a further round only when
+/// it strictly lowers cost under the active objective, and rejects a cost-equal
+/// re-spelling. A non-recursive `Let` has no recursive feedback edge, so a later
+/// round cannot improve on the first. It runs a single round (see `optimize_scope`).
+/// Convergence is fast because genuine improvements are rare, so a small cap
+/// suffices.
 const SCOPE_REFINE_ROUNDS: usize = 4;
 
 /// SP4d colored saturation: run `colored_saturate` after `build_colored_layer`
@@ -419,7 +421,15 @@ impl Optimizer {
         // deterministic per input, so a rejected round would only be re-derived,
         // hence break rather than continue.
         let mut incumbent_cost: Option<Cost> = None;
-        for _ in 0..SCOPE_REFINE_ROUNDS {
+        // The refinement loop strengthens a recursive invariant across rounds: a
+        // rewrite of a LetRec binding can prove a stronger fact about the
+        // recursive reference that a later round exploits. A non-recursive Let
+        // has no such feedback edge, so a second round cannot improve on the
+        // first. It would only re-descend into every child and be rejected, a
+        // 2^d blowup on deep non-recursive nests. So a non-recursive Let runs a
+        // single round.
+        let rounds = if recursive { SCOPE_REFINE_ROUNDS } else { 1 };
+        for _ in 0..rounds {
             let facts = letrec_local_facts(&bindings, outer);
 
             let mut next = Vec::with_capacity(bindings.len());
@@ -999,9 +1009,13 @@ mod tests {
 
     #[mz_ore::test]
     fn refinement_loop_converges_under_cost_equal_flap() {
-        // Scope: Let x = leaf in <body>. With without_let_union, each round runs
-        // exactly two extract calls: optimize_node(value) then optimize_node(body).
-        // Script a cost-equal flap on the body (A on round 0, B on round 1), binding
+        // Scope: LetRec { x = leaf } in <body> (single binding). Only a LetRec
+        // still probes a second round under the round cap (a non-recursive Let
+        // runs a single round, see `non_recursive_let_runs_one_round`), so this
+        // must be a LetRec to exercise the convergence-stop property. The LetRec
+        // body path always uses optimize_node, so each round runs exactly two
+        // extract calls: optimize_node(value) then optimize_node(body). Script a
+        // cost-equal flap on the body (A on round 0, B on round 1), binding
         // stable. A and B are two Constants of identical cost, different card.
         let constant = |card: u64| Rel::Constant {
             card,
@@ -1021,12 +1035,10 @@ mod tests {
             calls: std::cell::Cell::new(0),
             seq,
         });
-        let opt = Optimizer::new(default_ruleset(), CostModel::new())
-            .with_extractor(ext.clone())
-            .without_let_union();
-        let scope = Rel::Let {
-            id: 0,
-            value: Box::new(leaf.clone()),
+        let opt = Optimizer::new(default_ruleset(), CostModel::new()).with_extractor(ext.clone());
+        let scope = Rel::LetRec {
+            bindings: vec![(0, leaf.clone())],
+            limits: vec![None],
             body: Box::new(a.clone()), // any Let-free body; extractor overrides it
         };
         let (result, _) = opt.optimize_scope(scope, &LocalFacts::default());
@@ -1041,8 +1053,77 @@ mod tests {
         );
         // The emitted body is the round-0 representative A, not the round-1 flap B.
         match result {
-            Rel::Let { body, .. } => assert_eq!(*body, a, "must emit the round-0 rep"),
+            Rel::LetRec { body, .. } => assert_eq!(*body, a, "must emit the round-0 rep"),
+            other => panic!("expected LetRec, got {other:?}"),
+        }
+    }
+
+    #[mz_ore::test]
+    fn non_recursive_let_runs_one_round() {
+        // Let x = leaf in body, without_let_union. One round = 2 extract calls
+        // (value, body). The cap means no round-1 probe, so exactly 2 calls even
+        // though the scripted extractor would flap if asked for a second round.
+        let constant = |card: u64| Rel::Constant {
+            card,
+            arity: 1,
+            col_types: None,
+        };
+        let leaf = constant(1);
+        let a = constant(2);
+        let b = constant(3);
+        let seq = vec![leaf.clone(), a.clone(), leaf.clone(), b.clone()];
+        let ext = std::sync::Arc::new(ScriptedExtractor {
+            calls: std::cell::Cell::new(0),
+            seq,
+        });
+        let opt = Optimizer::new(default_ruleset(), CostModel::new())
+            .with_extractor(ext.clone())
+            .without_let_union();
+        let scope = Rel::Let {
+            id: 0,
+            value: Box::new(leaf.clone()),
+            body: Box::new(a.clone()),
+        };
+        let (result, _) = opt.optimize_scope(scope, &LocalFacts::default());
+        assert_eq!(
+            ext.calls.get(),
+            2,
+            "non-recursive Let must run exactly one round"
+        );
+        match result {
+            Rel::Let { body, .. } => assert_eq!(*body, a, "emits the round-0 rep"),
             other => panic!("expected Let, got {other:?}"),
         }
+    }
+
+    #[mz_ore::test]
+    fn letrec_still_probes_second_round() {
+        // A single-binding LetRec whose round-1 re-extraction is cost-equal: the
+        // loop still runs round 1 (the probe), so it makes 4 extract calls then
+        // rejects. This proves the cap is scoped to non-recursive Let, not
+        // applied to LetRec.
+        let constant = |card: u64| Rel::Constant {
+            card,
+            arity: 1,
+            col_types: None,
+        };
+        let leaf = constant(1);
+        let a = constant(2);
+        let b = constant(3);
+        // The LetRec path always uses optimize_node for the body (no let-union),
+        // so each round is 2 calls: value then body.
+        let seq = vec![leaf.clone(), a.clone(), leaf.clone(), b.clone()];
+        let ext = std::sync::Arc::new(ScriptedExtractor {
+            calls: std::cell::Cell::new(0),
+            seq,
+        });
+        let opt = Optimizer::new(default_ruleset(), CostModel::new()).with_extractor(ext.clone());
+        let scope = Rel::LetRec {
+            bindings: vec![(0, leaf.clone())],
+            limits: vec![None],
+            body: Box::new(a.clone()),
+        };
+        let (_result, _) = opt.optimize_scope(scope, &LocalFacts::default());
+        assert_eq!(ext.calls.get(), 4, "LetRec still probes a second round");
     }
 }
