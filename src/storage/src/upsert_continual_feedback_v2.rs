@@ -31,20 +31,21 @@
 //! 1. **Ingest source data.** Read upsert commands from the source input,
 //!    wrap each in an [`UpsertDiff`] (carrying a columnar order key projected
 //!    from `FromTime` via [`UpsertSourceTime`] for dedup), and push into the
-//!    source-stash batcher. The batcher is a paged columnar merge batcher: it
-//!    consolidates entries for the same `(key, time)` via the `UpsertDiff`
-//!    Semigroup — keeping the update with the highest order key (latest source
-//!    offset) — through amortized geometric merging as data is pushed in, and
-//!    pages cold chains out of RSS through the pager. This bounds resident
-//!    memory to O(unique key-time pairs) even during large source snapshots.
+//!    source-stash batcher. The batcher is differential's chunk merge batcher
+//!    over `ColumnChunk`s: it consolidates entries for the same `(key, time)`
+//!    via the `UpsertDiff` Semigroup — keeping the update with the highest
+//!    order key (latest source offset) — through amortized geometric merging
+//!    as data is pushed in, and spills committed chunk bodies to the process
+//!    buffer pool, which pages them out of RSS under its budget. This bounds
+//!    resident memory even during large source snapshots.
 //!
 //! 2. **Read persist frontier.** Check the probe on the persist arrangement
 //!    to learn which times have been committed. When the persist frontier
 //!    reaches the resume upper, rehydration is complete.
 //!
-//! 3. **Seal & drain.** Call `batcher.seal_paged(input_upper)` to extract all
-//!    source-finalized entries as sorted, consolidated `Column` chunks, kept
-//!    paged and rehydrated one chunk at a time by the drain. Each entry is
+//! 3. **Seal & drain.** Call `batcher.seal(input_upper)` to extract all
+//!    source-finalized entries as sorted, consolidated chunks whose bodies
+//!    stay spilled; the drain loads one chunk at a time. Each entry is
 //!    classified:
 //!    - **Eligible** (at the persist frontier): the persist trace has the
 //!      correct "before" state for this time. Look up the old value via a
@@ -79,6 +80,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::logging::Logger;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
+use differential_dataflow::trace::chunk::ChunkBatcher;
 use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -90,7 +92,7 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use mz_timely_util::columnar::chunk::ColumnChunk;
 use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
 use mz_timely_util::containers::stack::FueledBuilder;
 use std::convert::Infallible;
@@ -222,10 +224,10 @@ fn flush_to_batcher<T, O>(
     chunker: &mut UpsertChunker<T, O>,
     batcher: &mut UpsertBatcher<T, O>,
 ) where
-    T: columnar::Columnar + Default + Clone + PartialOrder,
+    T: columnar::Columnar + Default + Timestamp + Lattice + Ord,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    O: columnar::Columnar + Default + Ord + Clone,
-    for<'a> columnar::Ref<'a, O>: Ord,
+    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
+    for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
     use timely::container::{ContainerBuilder as _, PushInto as _};
     if updates.is_empty() {
@@ -237,23 +239,28 @@ fn flush_to_batcher<T, O>(
     }
     chunker.push_into(&mut raw);
     while let Some(chunk) = chunker.extract() {
-        batcher.push_into(std::mem::take(chunk));
+        batcher.push_into(ColumnChunk::from_column(std::mem::take(chunk)));
     }
 }
 
-// The source stash uses the paged columnar merge batcher. Data is pushed in
-// unsorted; the batcher maintains geometrically-sized sorted chains and
-// consolidates via the UpsertDiff Semigroup automatically. Unlike DD's
-// in-memory `VecMerger`, this batcher stores each chain entry as a `Column`
-// routed through the process-global pager, so the not-yet-eligible backlog
-// (the snapshot / persist-lag window) pages out of RSS instead of growing it.
+// The source stash uses differential's chunk merge batcher over
+// `ColumnChunk`s. Data is pushed in unsorted; the batcher maintains
+// geometrically-sized sorted chains and consolidates via the UpsertDiff
+// Semigroup automatically. Committed chunks spill their bodies to the process
+// buffer pool (see `mz_timely_util::columnar::chunk`), so the
+// not-yet-eligible backlog (the snapshot / persist-lag window) pages out of
+// RSS instead of growing it.
 
 /// One source-stash update: a key, its dataflow time, and the payload diff.
 /// `O` is the columnar order key projected from the source `FromTime` (see
 /// [`UpsertSourceTime`]).
 type UpsertUpdate<T, O> = (UpsertKey, T, UpsertDiff<O>);
 
-type UpsertBatcher<T, O> = ColumnMergeBatcher<UpsertKey, T, UpsertDiff<O>>;
+/// One stash chunk: a sorted, consolidated run of updates, resident or
+/// spilled to the buffer pool.
+type UpsertChunk<T, O> = ColumnChunk<UpsertUpdate<T, O>>;
+
+type UpsertBatcher<T, O> = ChunkBatcher<UpsertChunk<T, O>>;
 
 /// The chunker that sorts and consolidates raw input into the `Column` chunks
 /// [`UpsertBatcher`] consumes.
@@ -354,7 +361,7 @@ pub fn upsert_inner<'scope, T, FromTime>(
     PressOnDropButton,
 )
 where
-    T: Timestamp + TotalOrder + Sync,
+    T: Timestamp + TotalOrder + Ord + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
     T: columnar::Columnar + Default,
@@ -466,20 +473,16 @@ where
 
         let mut hydrating = true;
 
-        // Source stash backed by the paged columnar merge batcher. The batcher
-        // maintains geometrically-sized sorted chains and consolidates via the
-        // UpsertDiff Semigroup as data is pushed in, bounding memory to
-        // O(unique key-time pairs) even during large initial snapshots, and
-        // pages cold chains out of RSS through the pager.
-        //
-        // The pager is storage-owned (configured by `UpdateConfiguration` from
-        // storage's own dyncfgs), distinct from the compute column-paged
-        // batcher's process-global pager. Captured once here: backend / budget /
-        // codec tunes take effect live (the policy is reconfigured in place),
-        // but flipping the enable flag takes effect on dataflows created after
-        // the change. While disabled, the pager keeps every chunk resident.
+        // Source stash: differential's chunk merge batcher over `ColumnChunk`s.
+        // The batcher maintains geometrically-sized sorted chains and
+        // consolidates via the UpsertDiff Semigroup as data is pushed in,
+        // bounding memory to O(unique key-time pairs) even during large
+        // initial snapshots. Committed chunks spill their bodies to the
+        // process buffer pool, which owns residency from there under its
+        // budget; the spill gate is storage's `enable_upsert_paged_spill`
+        // flag, consulted at every settle, so flips apply to running
+        // dataflows.
         let mut batcher: UpsertBatcher<T, FromTime::Order> = Batcher::new(None, 0);
-        batcher.set_pager(crate::upsert::upsert_stash_pager::pager());
         // The chunker sorts and consolidates raw input into the `Column` chunks
         // the batcher consumes.
         let mut chunker: UpsertChunker<T, FromTime::Order> = Default::default();
@@ -640,11 +643,11 @@ where
                 // (which readies a complete chunk per `push_into`), so the
                 // chunker holds nothing pending here and we can seal directly.
                 //
-                // `seal_paged` keeps the sealed chunks paged; the drain below
-                // rehydrates them one at a time, so a large drain (a frontier
+                // Sealed chunks keep their bodies spilled; the drain below
+                // loads them one at a time, so a large drain (a frontier
                 // advance releasing a snapshot's worth of stash at once) holds
                 // at most one chunk resident rather than the whole backlog.
-                let (sealed, _description) = batcher.seal_paged(input_upper.clone());
+                let (sealed, _description) = batcher.seal(input_upper.clone());
                 // Frontier of data remaining in the batcher (ts >= input_upper).
                 let remaining_frontier = batcher.frontier().to_owned();
 
@@ -653,7 +656,7 @@ where
                 // `output_handle` (fueled), so there is no intermediate output
                 // buffer to drain afterward.
                 let drain_stats = drain_sealed_input(
-                    sealed,
+                    sealed.into_iter().map(ColumnChunk::into_column),
                     &mut ineligible,
                     &output_handle,
                     &*cap,

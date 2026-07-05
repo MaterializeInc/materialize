@@ -319,10 +319,15 @@ pub mod upsert_stash_pager {
 
     /// Enable or disable the stash's use of the shared spill mechanism. When
     /// enabled, the stash spills through the shared budget; when disabled it
-    /// keeps every chunk resident. Takes effect for dataflows rendered after
-    /// the change; running dataflows keep the pager they captured.
+    /// keeps every chunk resident.
+    ///
+    /// The flag drives two consumers: the source stash's chunk spill gate
+    /// (consulted at every settle, so flips apply to running dataflows) and
+    /// the feedback arrangement's pager (captured at dataflow render, so
+    /// flips apply to dataflows rendered after the change).
     pub fn set_enabled(enabled: bool) {
         ENABLED.store(enabled, Ordering::Relaxed);
+        mz_timely_util::columnar::chunk::set_spill_enabled(enabled);
     }
 
     /// The upsert-stash pager, resolved against the enable flag and the
