@@ -164,8 +164,13 @@ impl Transform for PhysicalEqSatTransform {
         // Unlike the logical pass, this calls optimize_with_availability
         // (commit_wcoj=true) so the e-graph's WcoJoin choice is lowered to a
         // live DeltaQuery with an index-aware cost model.
-        let use_ilp =
-            ctx.features.enable_eqsat_ilp_extraction || ctx.features.enable_eqsat_filter_sharing;
+        // Both sharing flags require the DAG-aware ILP extractor (greedy cannot
+        // realize a share), so each forces it on. No-op under today's defaults
+        // (enable_eqsat_ilp_extraction is on), it only matters if the ILP is
+        // turned off as a safeguard.
+        let use_ilp = ctx.features.enable_eqsat_ilp_extraction
+            || ctx.features.enable_eqsat_filter_sharing
+            || ctx.features.enable_eqsat_scalar_sharing;
         let use_delta = ctx.features.enable_eqsat_delta_join_cost;
         let filter_sharing = ctx.features.enable_eqsat_filter_sharing;
         let scalar_sharing = ctx.features.enable_eqsat_scalar_sharing;
