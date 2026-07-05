@@ -14,9 +14,8 @@
 // Until then, only the round-trip test below exercises it.
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet};
-
 use mz_expr::{MirScalarExpr, VariadicFunc};
+use mz_ore::collections::{HashMap, HashSet};
 
 use crate::eqsat::core::Id;
 use crate::eqsat::egraph::{CNode, EGraph};

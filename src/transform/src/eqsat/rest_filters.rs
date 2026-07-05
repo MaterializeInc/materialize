@@ -7,9 +7,8 @@
 //! base `EGraph` during apply. Scalar rules are `colored: false`, so their apply
 //! bodies only ever compile against the base graph.
 
-use std::collections::HashSet;
-
 use mz_expr::VariadicFunc;
+use mz_ore::collections::HashSet;
 
 use crate::eqsat::egraph::{CNode, EGraph, Id};
 use crate::eqsat::scalar::node::SNode;

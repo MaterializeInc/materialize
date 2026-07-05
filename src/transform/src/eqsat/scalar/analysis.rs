@@ -9,9 +9,8 @@
 //! nodes are added and classes merge. The analyses are read by Phase 1 rewrite
 //! rules as side-condition guards.
 
-use std::collections::HashMap;
-
 use mz_expr::EvalError;
+use mz_ore::collections::HashMap;
 use mz_repr::{ReprColumnType, Row};
 
 use crate::eqsat::core::Id;

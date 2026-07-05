@@ -11,7 +11,9 @@
 //! cost-monotone rewriter would. Conditions are evaluated by a single
 //! evaluator, the e-class one in [`crate::eqsat::egraph`], over the saturated graph.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+
+use mz_ore::collections::HashMap;
 
 use crate::eqsat::analysis::{LocalFacts, letrec_local_facts};
 use crate::eqsat::colored_derive::{DerivedScopes, build_colored_layer, derive};
@@ -995,7 +997,7 @@ mod tests {
             _objective: &dyn crate::eqsat::objective::Objective,
             _colored: Option<&mut crate::eqsat::colored_derive::ColoredLayer<'_>>,
             _spellings: Option<
-                &std::collections::HashMap<
+                &mz_ore::collections::HashMap<
                     crate::eqsat::egraph::Id,
                     crate::analysis::equivalences::EquivalenceClasses,
                 >,

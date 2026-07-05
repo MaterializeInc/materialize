@@ -5,7 +5,7 @@
 
 //! Construction, interning, query, and extraction methods on [`EGraph`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::collections::HashMap as OreHashMap;
@@ -823,7 +823,7 @@ impl EGraph {
         // cheapest congruent spelling under the class's color and empty-folds
         // classes the layer proved unsatisfiable. `None` reproduces Phase-2a.
         mut colored: Option<&mut ColoredLayer<'_>>,
-        spellings: Option<&HashMap<Id, EquivalenceClasses>>,
+        spellings: Option<&OreHashMap<Id, EquivalenceClasses>>,
     ) -> Option<Rel> {
         let cmp = |a: &Cost, b: &Cost| objective.cmp(a, b);
 
@@ -997,7 +997,7 @@ impl EGraph {
         best_nonneg: &OreHashMap<Id, (Cost, Rel)>,
         mut colored: Option<&mut ColoredLayer<'_>>,
         model: &CostModel,
-        spellings: Option<&HashMap<Id, EquivalenceClasses>>,
+        spellings: Option<&OreHashMap<Id, EquivalenceClasses>>,
     ) -> Option<Rel> {
         // Empty-fold (SP4b): a class the colored layer proved unsatisfiable
         // denotes the empty relation, so it extracts to an empty `Constant` of

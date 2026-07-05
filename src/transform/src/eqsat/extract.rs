@@ -14,7 +14,9 @@
 //! dynamic program; [`IlpExtractor`] (a 0/1 program) optimizes the
 //! non-compositional set-cardinality objective the greedy form cannot.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+
+use mz_ore::collections::HashMap;
 
 use crate::analysis::equivalences::EquivalenceClasses;
 use crate::eqsat::colored_derive::ColoredLayer;

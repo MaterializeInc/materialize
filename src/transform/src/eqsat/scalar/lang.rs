@@ -10,8 +10,7 @@
 //! `on_add`/`on_union` hooks (the fixpoint recompute lives in the scalar
 //! `saturate` driver). See `doc/developer/design/20260624_eqsat/20260627_eqsat_scalar_instance.md`.
 
-use std::collections::HashMap;
-
+use mz_ore::collections::HashMap;
 use mz_repr::ReprColumnType;
 
 use crate::eqsat::core::{Id, Language};
@@ -38,13 +37,24 @@ pub enum ScalarSym {
 /// Language-owned state on the scalar e-graph: the relation's column types
 /// (read by the typed-literal rules) and the per-class analyses (maintained by
 /// the hooks).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ScalarGraphData {
     /// Column types of the relation the expression is evaluated against, indexed
     /// by column position. Empty when no rule needs a column type.
     pub(crate) col_types: Vec<ReprColumnType>,
     /// Per-class analyses, keyed by canonical class id.
     pub(crate) analysis: HashMap<Id, ClassAnalysis>,
+}
+
+// Manual `Default`: the derive would require `ClassAnalysis: Default`, which it
+// intentionally does not implement (see core.rs::EGraph for the same pattern).
+impl Default for ScalarGraphData {
+    fn default() -> Self {
+        ScalarGraphData {
+            col_types: Vec::new(),
+            analysis: HashMap::new(),
+        }
+    }
 }
 
 /// The scalar node language.

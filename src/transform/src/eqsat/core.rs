@@ -327,7 +327,6 @@ impl<L: Language> EGraph<L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
     enum Arith {
@@ -415,7 +414,7 @@ mod tests {
     // via `get`) and on_union (folding loser into winner).
     #[derive(Default)]
     struct SumData {
-        vals: HashMap<Id, i64>,
+        vals: OreHashMap<Id, i64>,
     }
 
     struct SumLang;
