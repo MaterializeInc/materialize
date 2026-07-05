@@ -33,14 +33,10 @@ pub(crate) const K: usize = 4;
 /// un-split). Lets a no-share outcome be told apart from a cap decline.
 pub(crate) static DECLINED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Build the split `CompiledRule`. `cap` is advisory: the matcher reads the
-/// module [`K`] directly, since a fn-pointer `find` cannot carry a runtime cap.
-/// A `const fn` so the `&'static` [`SPLIT_RULE`] can be initialized from it.
-pub(crate) const fn filter_split_rule(cap: usize) -> CompiledRule {
-    // `cap` is not threadable into the fn-pointer `find`. It is retained for
-    // symmetry with the generated rule constructors and documents that the
-    // matcher's cap is `K`. Call sites pass `K`.
-    let _ = cap;
+/// Build the split `CompiledRule`. The predicate-list cap is the module [`K`],
+/// read directly by the fn-pointer `find` (a fn pointer cannot carry a runtime
+/// cap). A `const fn` so the `&'static` [`SPLIT_RULE`] can be initialized from it.
+pub(crate) const fn filter_split_rule() -> CompiledRule {
     CompiledRule {
         name: "filter_split",
         phase: Phase::Physical,
@@ -57,7 +53,7 @@ pub(crate) const fn filter_split_rule(cap: usize) -> CompiledRule {
 
 /// The registered split rule. Appended to the physical rule set by
 /// `CompiledRuleSet::with_extra_rule` when `filter_sharing` is on.
-pub(crate) static SPLIT_RULE: CompiledRule = filter_split_rule(K);
+pub(crate) static SPLIT_RULE: CompiledRule = filter_split_rule();
 
 /// Enumerate one match per predicate to peel outward, for every `Filter` with
 /// `2..=K` predicates. Every single-predicate peel is emitted as its own match
@@ -243,7 +239,7 @@ mod tests {
 
     #[mz_ore::test]
     fn rule_metadata_is_stable() {
-        let r = filter_split_rule(K);
+        let r = filter_split_rule();
         assert_eq!(r.name, "filter_split");
         assert_eq!(r.phase, Phase::Physical);
     }
