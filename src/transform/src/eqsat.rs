@@ -250,6 +250,7 @@ fn optimize_inner(
     } else {
         cost::CostModel::with_available(available)
     };
+    let model = model.with_width_aware_memory(scalar_sharing);
     let optimizer = engine::Optimizer::new(rules, model).with_seeds(seeds);
     let optimizer = if union_let_defs {
         optimizer

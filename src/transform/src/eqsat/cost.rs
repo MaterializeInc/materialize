@@ -96,6 +96,10 @@ pub struct Cost {
     /// must live in memory.  A larger entry, or an extra entry, means more
     /// memory pressure.
     pub memory: Vec<f64>,
+    /// Per-arrangement arity (column count), co-indexed with `memory`. All zeros
+    /// unless the width-aware flag is on. A width tie-break within a memory
+    /// degree, never across degrees. See cmp_memory_vecs.
+    pub memory_arity: Vec<usize>,
     /// Time-term degrees (sorted descending, entries ≤ EPS dropped).
     ///
     /// Each entry represents the work done by one operator proportional to
@@ -112,7 +116,12 @@ impl Cost {
     ///
     /// This is the **default ordering**: memory is the scarce resource.
     pub fn cmp_memory_first(&self, other: &Cost) -> std::cmp::Ordering {
-        let ord = cmp_vecs(&self.memory, &other.memory);
+        let ord = cmp_memory_vecs(
+            &self.memory,
+            &self.memory_arity,
+            &other.memory,
+            &other.memory_arity,
+        );
         if ord != std::cmp::Ordering::Equal {
             return ord;
         }
@@ -132,7 +141,12 @@ impl Cost {
         if ord != std::cmp::Ordering::Equal {
             return ord;
         }
-        let ord = cmp_vecs(&self.memory, &other.memory);
+        let ord = cmp_memory_vecs(
+            &self.memory,
+            &self.memory_arity,
+            &other.memory,
+            &other.memory_arity,
+        );
         if ord != std::cmp::Ordering::Equal {
             return ord;
         }
@@ -166,6 +180,45 @@ pub(crate) fn cmp_vecs(a: &[f64], b: &[f64]) -> std::cmp::Ordering {
         }
         if bv > av + EPS {
             return Less;
+        }
+    }
+    Equal
+}
+
+/// Lexicographic comparison of two memory vectors with arity as a tie-break.
+///
+/// Degrees dominate: any degree difference beyond `EPS` decides first, exactly
+/// as [`cmp_vecs`] over the whole vector. A degree is an exponent of `N`, so it
+/// must never be overridden by arity, which is only a constant column count. So
+/// a wider small-degree arrangement can never outrank a narrower larger-degree
+/// one. Only when the degree vectors tie within `EPS` everywhere do the
+/// co-indexed arities break the tie, compared descending (larger arity =
+/// costlier = `Greater`).
+///
+/// The arity vectors are co-indexed with their degree vectors. With all-zero
+/// arities (width-blind, the flag-off default) the arity loop yields `Equal`, so
+/// this is identical to `cmp_vecs`.
+pub(crate) fn cmp_memory_vecs(
+    a_mem: &[f64],
+    a_arity: &[usize],
+    b_mem: &[f64],
+    b_arity: &[usize],
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+    let deg = cmp_vecs(a_mem, b_mem);
+    if deg != Equal {
+        return deg;
+    }
+    // Degree vectors tie within EPS everywhere: the co-indexed arities break the
+    // tie. A missing arity entry (past the end of a shorter vector) is 0,
+    // matching the missing-degree convention.
+    let n = a_arity.len().max(b_arity.len());
+    for i in 0..n {
+        let aa = a_arity.get(i).copied().unwrap_or(0);
+        let ba = b_arity.get(i).copied().unwrap_or(0);
+        match aa.cmp(&ba) {
+            Equal => {}
+            ord => return ord,
         }
     }
     Equal
@@ -230,6 +283,10 @@ pub struct CostModel {
     /// The join-order search strategy. Defaults to `DpSub` (the historical
     /// behavior); an evaluation harness flips it via `MZ_EQSAT_JOIN_ORDERER`.
     join_orderer: JoinOrdererKind,
+    /// When on, each arranged collection's memory entry carries its arity as a
+    /// within-degree tie-break. Off (the `Default`) is byte-identical
+    /// width-blind memory. Gated by enable_eqsat_scalar_sharing.
+    width_aware: bool,
 }
 
 /// The hypergraph-structure part of an [`Hypergraph::agm_degree_subset`] query
@@ -287,6 +344,14 @@ impl CostModel {
     /// mirror it onto the e-graph for `reads_indexed_global`.
     pub(crate) fn available(&self) -> &BTreeMap<GlobalId, Vec<Vec<MirScalarExpr>>> {
         &self.available
+    }
+
+    /// Turn on width-aware memory: each arranged collection's memory entry gains
+    /// its arity as a within-degree tie-break. Off (default) is byte-identical
+    /// width-blind memory. Gated by enable_eqsat_scalar_sharing.
+    pub fn with_width_aware_memory(mut self, on: bool) -> Self {
+        self.width_aware = on;
+        self
     }
 
     /// Override the join-order strategy, bypassing the env var. Test-only seam;
@@ -355,13 +420,25 @@ impl CostModel {
         time.sort_by(|a, b| b.partial_cmp(a).unwrap());
 
         let mut memory = Vec::new();
-        let arrangements = self.collect_memory(rel, &mut memory);
-        memory.retain(|d| *d > EPS);
-        memory.sort_by(|a, b| b.partial_cmp(a).unwrap());
+        let mut memory_arity = Vec::new();
+        let arrangements = self.collect_memory(rel, &mut memory, &mut memory_arity);
+        // Sort the co-indexed (degree, arity) pairs together so the arity stays
+        // attached to its degree, dropping pairs whose degree is negligible.
+        // With `width_aware` off every arity is 0, so the key degenerates to
+        // degree-only and `memory` comes out byte-identical to the width-blind
+        // vector.
+        let mut pairs: Vec<(f64, usize)> = memory
+            .into_iter()
+            .zip(memory_arity)
+            .filter(|(d, _)| *d > EPS)
+            .collect();
+        pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then_with(|| b.1.cmp(&a.1)));
+        let (memory, memory_arity): (Vec<f64>, Vec<usize>) = pairs.into_iter().unzip();
 
         Cost {
             arrangements,
             memory,
+            memory_arity,
             time,
             // Scalar-aware (SP4c): the `node_count` term is the relational tree
             // size (also the CSE ordering key, kept relational-only); the
@@ -426,7 +503,7 @@ impl CostModel {
     ///
     /// A term is emitted for each arranged (indexed) collection that must
     /// reside in memory.
-    fn collect_memory(&self, rel: &Rel, out: &mut Vec<f64>) -> usize {
+    fn collect_memory(&self, rel: &Rel, out: &mut Vec<f64>, out_arity: &mut Vec<usize>) -> usize {
         // Charge each DISTINCT persistent arrangement once. A given collection
         // arranged by a given key is built and maintained a single time, then
         // shared by every consumer (after CSE hoists the shared subtree), so a
@@ -434,14 +511,25 @@ impl CostModel {
         // plan adds no memory. `seen` records the arrangement identities already
         // charged.
         let mut seen: BTreeSet<ArrId> = BTreeSet::new();
-        self.collect_memory_into(rel, out, &mut seen);
+        self.collect_memory_into(rel, out, out_arity, &mut seen);
         seen.len()
     }
 
     /// Accumulate memory-term degrees, charging each distinct arrangement
     /// (tracked in `seen`) at most once. Join intermediate-result degrees are
     /// transient per join and are not deduplicated.
-    fn collect_memory_into(&self, rel: &Rel, out: &mut Vec<f64>, seen: &mut BTreeSet<ArrId>) {
+    ///
+    /// `out_arity` stays co-indexed with `out`: every push into `out` has a
+    /// matching push into `out_arity` (the arranged collection's arity when
+    /// `width_aware`, else 0). The Join intermediate terms are not single
+    /// arranged collections, so they push a run of 0s to hold the co-indexing.
+    fn collect_memory_into(
+        &self,
+        rel: &Rel,
+        out: &mut Vec<f64>,
+        out_arity: &mut Vec<usize>,
+        seen: &mut BTreeSet<ArrId>,
+    ) {
         match rel {
             // Reduce arranges its input by the group key; TopK maintains
             // per-group top-k state arranged by the group and order keys. The
@@ -451,6 +539,7 @@ impl CostModel {
             Rel::Reduce { input, .. } | Rel::TopK { input, .. } => {
                 if seen.insert(ArrId::Node(rel.clone())) {
                     out.push(self.size_degree(input));
+                    out_arity.push(if self.width_aware { input.arity() } else { 0 });
                 }
             }
             // ArrangeBy is an explicit arrangement of its input by `key`. An
@@ -462,6 +551,7 @@ impl CostModel {
                     && seen.insert(ArrId::Node(rel.clone()))
                 {
                     out.push(self.size_degree(input));
+                    out_arity.push(if self.width_aware { input.arity() } else { 0 });
                 }
             }
             // Binary join persistently arranges its per-input collections and
@@ -492,6 +582,7 @@ impl CostModel {
                             key,
                         }) {
                             out.push(self.size_degree(input));
+                            out_arity.push(if self.width_aware { input.arity() } else { 0 });
                         }
                     }
                     offset += input.arity();
@@ -500,6 +591,10 @@ impl CostModel {
                 // Drop the final-join output degree (the last term); it is
                 // streamed to the parent, not persistently arranged.
                 terms.pop();
+                // The intermediate join terms are transient results, not single
+                // arranged collections with an arity, so hold the co-indexing
+                // with a matching run of 0s rather than a real width.
+                out_arity.extend(std::iter::repeat(0).take(terms.len()));
                 out.extend(terms);
             }
             // WcoJoin (leapfrog/generic join) arranges every input.
@@ -520,6 +615,7 @@ impl CostModel {
                             key,
                         }) {
                             out.push(self.size_degree(input));
+                            out_arity.push(if self.width_aware { input.arity() } else { 0 });
                         }
                     }
                     offset += input.arity();
@@ -540,6 +636,7 @@ impl CostModel {
                         }))
                     {
                         out.push(self.size_degree(input));
+                        out_arity.push(if self.width_aware { input.arity() } else { 0 });
                     }
                 }
             }
@@ -548,7 +645,7 @@ impl CostModel {
         }
         // Recurse into children for all variants.
         for c in rel.children() {
-            self.collect_memory_into(c, out, seen);
+            self.collect_memory_into(c, out, out_arity, seen);
         }
     }
 
@@ -1453,6 +1550,7 @@ fn terms_cost(terms: &[f64]) -> Cost {
     Cost {
         arrangements: 0,
         memory: vec![],
+        memory_arity: vec![],
         time,
         nodes: 0,
     }
@@ -2343,12 +2441,14 @@ mod tests {
         let a = Cost {
             arrangements: 0,
             memory: vec![1.0],
+            memory_arity: vec![],
             time: vec![2.0],
             nodes: 1,
         };
         let b = Cost {
             arrangements: 0,
             memory: vec![2.0],
+            memory_arity: vec![],
             time: vec![1.0],
             nodes: 1,
         };
@@ -2376,6 +2476,7 @@ mod tests {
         let mem_cost = Cost {
             arrangements: 0,
             memory: vec![1.0],
+            memory_arity: vec![],
             time: vec![2.0],
             nodes: 3,
         };
@@ -2383,6 +2484,7 @@ mod tests {
         let time_cost = Cost {
             arrangements: 0,
             memory: vec![2.0],
+            memory_arity: vec![],
             time: vec![1.0],
             nodes: 3,
         };
@@ -2476,6 +2578,43 @@ mod tests {
             m_same.len() + 1,
             "self-join shares one input arrangement: same={m_same:?} distinct={m_distinct:?}"
         );
+    }
+
+    #[mz_ore::test]
+    fn width_aware_memory_prefers_narrower_arrangement() {
+        use crate::eqsat::ir::{EScalar, Rel};
+        use mz_expr::MirScalarExpr;
+        // Two ArrangeBy plans of equal cardinality degree, different arity: a
+        // 1-col projection vs the full 3-col collection, arranged by key [0].
+        let get = Rel::Get {
+            name: "t".into(),
+            arity: 3,
+        };
+        let key = vec![EScalar::plain(MirScalarExpr::column(0))];
+        let narrow = Rel::ArrangeBy {
+            input: Box::new(Rel::Project {
+                outputs: vec![0],
+                input: Box::new(get.clone()),
+            }),
+            key: key.clone(),
+        };
+        let wide = Rel::ArrangeBy {
+            input: Box::new(get),
+            key,
+        };
+
+        // Flag on: narrower arrangement is strictly cheaper on memory.
+        let on = CostModel::new().with_width_aware_memory(true);
+        assert_eq!(
+            on.cost(&narrow).cmp(&on.cost(&wide)),
+            std::cmp::Ordering::Less
+        );
+
+        // Flag off: the two tie on the width-blind memory axis (same degree),
+        // and memory is byte-identical to the degree-only vector.
+        let off = CostModel::new().with_width_aware_memory(false);
+        assert_eq!(off.cost(&narrow).memory, off.cost(&wide).memory);
+        assert!(off.cost(&narrow).memory_arity.iter().all(|&a| a == 0));
     }
 
     #[mz_ore::test]

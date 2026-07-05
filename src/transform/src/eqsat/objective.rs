@@ -83,12 +83,14 @@ mod tests {
         let a = Cost {
             arrangements: 0,
             memory: vec![2.0],
+            memory_arity: vec![],
             time: vec![2.0, 1.5],
             nodes: 3,
         };
         let b = Cost {
             arrangements: 0,
             memory: vec![1.0, 1.0, 1.0],
+            memory_arity: vec![],
             time: vec![1.5],
             nodes: 5,
         };
@@ -105,12 +107,14 @@ mod tests {
         let a = Cost {
             arrangements: 1,
             memory: vec![2.0],
+            memory_arity: vec![],
             time: vec![2.0],
             nodes: 3,
         };
         let b = Cost {
             arrangements: 3,
             memory: vec![1.0, 1.0, 1.0],
+            memory_arity: vec![],
             time: vec![1.5],
             nodes: 5,
         };
