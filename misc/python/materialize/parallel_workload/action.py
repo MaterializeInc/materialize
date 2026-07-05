@@ -941,7 +941,7 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
+        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-400 is fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         if (
             not temp
@@ -1951,7 +1951,7 @@ class CreateViewAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
+        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-400 is fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
