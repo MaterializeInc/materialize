@@ -21,10 +21,13 @@ use crate::eqsat::egraph::{EGraph, IndexedFilterSeed};
 use crate::eqsat::ir::Rel;
 use crate::eqsat::rules::CompiledRuleSet;
 
-/// Bound on the outer fixpoint that re-analyzes a binding scope after rewriting
-/// it (a rewrite can reveal a stronger recursive invariant that enables another
-/// rewrite). Convergence is fast — the analyses are monotone and the rewrites
-/// idempotent — so a small cap suffices.
+/// Bound on the scope-refinement loop that re-analyzes a binding scope after
+/// rewriting it: a rewrite can prove a stronger recursive invariant that enables
+/// another, strictly cost-lowering rewrite. The loop adopts round 0
+/// unconditionally, then accepts a further round only when it strictly lowers
+/// cost under the active objective. A cost-equal re-spelling is the extraction
+/// flap, not refinement, so the loop rejects it and stops. Convergence is fast
+/// because genuine improvements are rare, so a small cap suffices.
 const SCOPE_REFINE_ROUNDS: usize = 4;
 
 /// SP4d colored saturation: run `colored_saturate` after `build_colored_layer`
@@ -406,15 +409,23 @@ impl Optimizer {
         };
 
         let mut total = 0;
+        // The loop refines a scope by re-optimizing its bindings and body with the
+        // facts proven of the previous round's bindings, which can be strictly
+        // stronger and enable a cost-lowering rewrite. A round that only re-spells
+        // at equal cost is the extraction flap, not refinement, so it is rejected:
+        // we keep the incumbent and stop. Round 0 is always adopted because
+        // extraction returns a plan no costlier than its input, so its result is
+        // the optimization to emit, not the unoptimized input. Extraction is
+        // deterministic per input, so a rejected round would only be re-derived,
+        // hence break rather than continue.
+        let mut incumbent_cost: Option<Cost> = None;
         for _ in 0..SCOPE_REFINE_ROUNDS {
             let facts = letrec_local_facts(&bindings, outer);
-            let mut changed = false;
 
             let mut next = Vec::with_capacity(bindings.len());
             for (id, value) in &bindings {
                 let (v, i) = self.optimize_node(value.clone(), &facts);
                 total += i;
-                changed |= v != *value;
                 next.push((*id, v));
             }
             // For a non-recursive `Let x = v in body`, optimize the body in an
@@ -435,11 +446,15 @@ impl Optimizer {
                 self.optimize_body_with_let_union(body.clone(), *id, value, &facts)
             };
             total += i;
-            changed |= nb != body;
 
-            bindings = next;
-            body = nb;
-            if !changed {
+            let cand_cost = self
+                .model
+                .cost(&assemble_scope(recursive, &next, &limits, &nb));
+            if accept_round(self.objective.as_ref(), &cand_cost, incumbent_cost.as_ref()) {
+                bindings = next;
+                body = nb;
+                incumbent_cost = Some(cand_cost);
+            } else {
                 break;
             }
         }
@@ -746,6 +761,49 @@ fn contains_scope(rel: &Rel) -> bool {
         || rel.children().iter().any(|c| contains_scope(c))
 }
 
+/// Whether a refinement round's candidate scope cost is accepted. Round 0 (no
+/// incumbent yet) is always accepted, because extraction returns a plan no
+/// costlier than its input, so its result is the optimization to emit. A later
+/// round is accepted only when strictly cheaper under the active objective. A
+/// cost-equal re-spelling is the extraction flap, not refinement, so it is
+/// rejected. The comparison MUST use the objective, not `Cost::cmp_memory_first`,
+/// because the default objective (`ArrangementCount`) minimizes the
+/// `arrangements` field that `cmp_memory_first` ignores.
+fn accept_round(
+    objective: &dyn crate::eqsat::objective::Objective,
+    candidate: &Cost,
+    incumbent: Option<&Cost>,
+) -> bool {
+    match incumbent {
+        None => true,
+        Some(inc) => objective.cmp(candidate, inc) == std::cmp::Ordering::Less,
+    }
+}
+
+/// Build a scope `Rel` from its parts, for costing a candidate refinement round
+/// without consuming the parts. `recursive` selects `LetRec` vs `Let`.
+fn assemble_scope(
+    recursive: bool,
+    bindings: &[(usize, Rel)],
+    limits: &[Option<mz_expr::LetRecLimit>],
+    body: &Rel,
+) -> Rel {
+    if recursive {
+        Rel::LetRec {
+            bindings: bindings.to_vec(),
+            limits: limits.to_vec(),
+            body: Box::new(body.clone()),
+        }
+    } else {
+        let (id, value) = &bindings[0];
+        Rel::Let {
+            id: *id,
+            value: Box::new(value.clone()),
+            body: Box::new(body.clone()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mz_expr::{BinaryFunc, MirScalarExpr, func};
@@ -863,5 +921,128 @@ mod tests {
             filters_on(&out, &eq_col0_lit1()),
             "must retain the `#0 = 1` filter predicate (soundness); got {out:?}",
         );
+    }
+
+    use crate::eqsat::objective::ArrangementCount;
+
+    fn cost_of(arrangements: usize, memory: Vec<f64>, time: Vec<f64>, nodes: usize) -> Cost {
+        let memory_arity = vec![0; memory.len()];
+        Cost {
+            arrangements,
+            memory,
+            memory_arity,
+            time,
+            nodes,
+        }
+    }
+
+    #[mz_ore::test]
+    fn accept_round_zero_always_adopts() {
+        // Incumbent None (round 0): adopt even a cost-equal-to-raw result.
+        let c = cost_of(2, vec![1.0], vec![1.0], 5);
+        assert!(accept_round(&ArrangementCount, &c, None));
+    }
+
+    #[mz_ore::test]
+    fn accept_round_strict_improvement_adopts() {
+        let inc = cost_of(3, vec![1.0], vec![1.0], 5);
+        let better = cost_of(2, vec![1.0], vec![1.0], 5);
+        assert!(accept_round(&ArrangementCount, &better, Some(&inc)));
+    }
+
+    #[mz_ore::test]
+    fn accept_round_cost_equal_rejects() {
+        let inc = cost_of(2, vec![1.0], vec![1.0], 5);
+        let equal = cost_of(2, vec![1.0], vec![1.0], 5);
+        assert!(!accept_round(&ArrangementCount, &equal, Some(&inc)));
+    }
+
+    #[mz_ore::test]
+    fn accept_round_uses_objective_not_memory_first() {
+        // The comparator trap: candidate has FEWER arrangements but identical
+        // memory/time/nodes. The objective must see the arrangement win (accept),
+        // while cmp_memory_first would tie (Equal) and wrongly reject.
+        let inc = cost_of(3, vec![1.0], vec![1.0], 5);
+        let cand = cost_of(2, vec![1.0], vec![1.0], 5);
+        assert!(accept_round(&ArrangementCount, &cand, Some(&inc)));
+        assert_eq!(cand.cmp_memory_first(&inc), std::cmp::Ordering::Equal);
+    }
+
+    /// Test-only extractor that returns a scripted sequence of plans, ignoring the
+    /// e-graph. Models a deterministic cost-equal flap or a genuine improvement to
+    /// exercise the refinement loop's convergence contract.
+    #[derive(Debug)]
+    struct ScriptedExtractor {
+        calls: std::cell::Cell<usize>,
+        seq: Vec<Rel>,
+    }
+    impl crate::eqsat::extract::Extractor for ScriptedExtractor {
+        fn extract(
+            &self,
+            _eg: &crate::eqsat::egraph::EGraph,
+            _root: crate::eqsat::egraph::Id,
+            _model: &crate::eqsat::cost::CostModel,
+            _objective: &dyn crate::eqsat::objective::Objective,
+            _colored: Option<&mut crate::eqsat::colored_derive::ColoredLayer<'_>>,
+            _spellings: Option<
+                &std::collections::HashMap<
+                    crate::eqsat::egraph::Id,
+                    crate::analysis::equivalences::EquivalenceClasses,
+                >,
+            >,
+        ) -> Option<Rel> {
+            let i = self.calls.get();
+            self.calls.set(i + 1);
+            Some(self.seq[i.min(self.seq.len() - 1)].clone())
+        }
+    }
+
+    #[mz_ore::test]
+    fn refinement_loop_converges_under_cost_equal_flap() {
+        // Scope: Let x = leaf in <body>. With without_let_union, each round runs
+        // exactly two extract calls: optimize_node(value) then optimize_node(body).
+        // Script a cost-equal flap on the body (A on round 0, B on round 1), binding
+        // stable. A and B are two Constants of identical cost, different card.
+        let constant = |card: u64| Rel::Constant {
+            card,
+            arity: 1,
+            col_types: None,
+        };
+        let leaf = constant(1);
+        let a = constant(2);
+        let b = constant(3);
+        let seq = vec![
+            leaf.clone(),
+            a.clone(), // round 0
+            leaf.clone(),
+            b.clone(), // round 1 (cost-equal, rejected)
+        ];
+        let ext = std::sync::Arc::new(ScriptedExtractor {
+            calls: std::cell::Cell::new(0),
+            seq,
+        });
+        let opt = Optimizer::new(default_ruleset(), CostModel::new())
+            .with_extractor(ext.clone())
+            .without_let_union();
+        let scope = Rel::Let {
+            id: 0,
+            value: Box::new(leaf.clone()),
+            body: Box::new(a.clone()), // any Let-free body; extractor overrides it
+        };
+        let (result, _) = opt.optimize_scope(scope, &LocalFacts::default());
+
+        // The loop must break after the round-1 reject: exactly 4 extract calls
+        // (2 rounds x 2), never 8 (4 rounds). This is the 4^d guard at the
+        // phenomenon level.
+        assert_eq!(
+            ext.calls.get(),
+            4,
+            "loop must stop after the cost-equal round-1 reject"
+        );
+        // The emitted body is the round-0 representative A, not the round-1 flap B.
+        match result {
+            Rel::Let { body, .. } => assert_eq!(*body, a, "must emit the round-0 rep"),
+            other => panic!("expected Let, got {other:?}"),
+        }
     }
 }
