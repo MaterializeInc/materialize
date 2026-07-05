@@ -2374,6 +2374,66 @@ mod tests {
         }
     }
 
+    // Regression for the flatten x dedup non-confluence, And case. `flatten` and
+    // `and_dedup` are mutually non-confluent when flatten leaves duplicates in
+    // place: flatten splices `and(c0, and(c0, c1))` to `and(c0, c0, c1)`,
+    // `and_dedup` merges the narrow `and(c0, c1)` back into that class, and the
+    // next flatten finds the wider member and splices one more `c0`, growing the
+    // operand list one element per round without bound. Deterministic iteration
+    // order never stumbles into a no-change round, so this diverges up to
+    // `FLATTEN_MAX_OPERANDS` (past `MAX_ITERS`). Deduping flatten's own output for
+    // And produces the already-deduped form, which hash-cons-hits next round, so
+    // saturation converges. This is the minimal diverging And shape.
+    #[mz_ore::test]
+    fn flatten_and_dedup_terminates() {
+        use mz_expr::{MirScalarExpr, VariadicFunc};
+        use mz_repr::ReprScalarType;
+
+        let c = MirScalarExpr::column;
+        let and = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::And(mz_expr::func::variadic::And),
+            exprs: es,
+        };
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+
+        let e = and(vec![c(0), and(vec![c(0), c(1)])]);
+        let mut eg = EGraph::new();
+        eg.data_mut().scalar.col_types = vec![bool_ct(), bool_ct()];
+        let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &e);
+        let iters = saturate(&mut eg);
+        assert!(
+            iters <= 10,
+            "flatten x and_dedup must converge quickly for {e:?}; got {iters} iters"
+        );
+    }
+
+    // Regression for the flatten x dedup non-confluence, Or case. Dual of
+    // `flatten_and_dedup_terminates`: `flatten` and `or_dedup` grow
+    // `or(c0, or(c0, c1))` one operand per round without deduping flatten's
+    // output. This is the minimal diverging Or shape.
+    #[mz_ore::test]
+    fn flatten_or_dedup_terminates() {
+        use mz_expr::{MirScalarExpr, VariadicFunc};
+        use mz_repr::ReprScalarType;
+
+        let c = MirScalarExpr::column;
+        let or = |es: Vec<MirScalarExpr>| MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or(mz_expr::func::variadic::Or),
+            exprs: es,
+        };
+        let bool_ct = || ReprScalarType::Bool.nullable(false);
+
+        let e = or(vec![c(0), or(vec![c(0), c(1)])]);
+        let mut eg = EGraph::new();
+        eg.data_mut().scalar.col_types = vec![bool_ct(), bool_ct()];
+        let _root = crate::eqsat::scalar::lower::lower_into(&mut eg, &e);
+        let iters = saturate(&mut eg);
+        assert!(
+            iters <= 10,
+            "flatten x or_dedup must converge quickly for {e:?}; got {iters} iters"
+        );
+    }
+
     // Differential parity harness (SP2b Slice 6f): dual-connective distributive
     // factoring (`factor_and_or`, the last ported scalar rule). Full-intersection
     // factoring pulls the operands common to every inner And/Or branch out to the

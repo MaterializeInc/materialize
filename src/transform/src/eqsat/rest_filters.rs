@@ -177,6 +177,20 @@ pub(crate) fn rest_flatten(g: &EGraph, ids: &[Id], func: &VariadicFunc) -> Vec<I
     if !spliced || out.len() > FLATTEN_MAX_OPERANDS {
         return ids.to_vec();
     }
+    // Dedup the flattened operands for And and Or only. Those are the only
+    // connectives with a `dedup` rule (`and_dedup`/`or_dedup`), which merges the
+    // deduped narrow form back into the wide class. Left un-deduped, flatten and
+    // that rule are mutually non-confluent under deterministic iteration order:
+    // flatten widens the operand list, dedup merges the narrow form in, and the
+    // next flatten finds the wider class member and widens again, growing one
+    // operand per round without bound. Producing the deduped form here makes the
+    // result hash-cons-hit next round, so saturation terminates. First-occurrence
+    // order is preserved (matching the `dedupById` model), which is error-safe.
+    // Coalesce/greatest/least have no dedup rule and no such partner, so deduping
+    // them would assert a canonical-form change no rule declares. Leave them.
+    if matches!(func, VariadicFunc::And(_) | VariadicFunc::Or(_)) {
+        out = rest_dedup_by_id(g, &out);
+    }
     out
 }
 

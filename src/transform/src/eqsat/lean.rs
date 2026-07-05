@@ -613,16 +613,19 @@ fn tmpl_list_expr(list: &ListTmpl, hole: &str) -> String {
                     ),
                 },
                 // Nested same-func flattening, the `List`-level counterpart of
-                // `rest_filters::rest_flatten`. `and`/`or` render the provable
-                // `flattenSameFuncAnd`/`_Or` (fold-invariance lemmas
-                // `denoteSFold_{and,or}_flatten` discharge the obligation in
-                // `choose_proof`). The three non-Bool funcs render the opaque
-                // `flattenVariadicOpaque`: type-correct so the theorem is
-                // well-formed, but `choose_proof` emits a permanent `sorry` for
-                // them (their value domain is outside the two-valued model).
+                // `rest_filters::rest_flatten`. `and`/`or` dedup their flattened
+                // output by canonical id, so the render wraps the provable
+                // `flattenSameFuncAnd`/`_Or` in `dedupById` to match. Both pieces
+                // are fold-invariant (`denoteSFold_{and,or}_flatten` and
+                // `denoteSFold_{and,or}_dedup`), so `choose_proof` discharges the
+                // composed obligation. The three non-Bool funcs are not deduped and
+                // render the opaque `flattenVariadicOpaque`: type-correct so the
+                // theorem is well-formed, but `choose_proof` emits a permanent
+                // `sorry` for them (their value domain is outside the two-valued
+                // model).
                 RestFilter::FlattenSameFunc { func } => match func.as_str() {
-                    "and" => format!("(flattenSameFuncAnd {list})"),
-                    "or" => format!("(flattenSameFuncOr {list})"),
+                    "and" => format!("(dedupById (flattenSameFuncAnd {list}))"),
+                    "or" => format!("(dedupById (flattenSameFuncOr {list}))"),
                     "coalesce" => format!("(flattenVariadicOpaque VFunc.coalesce {list})"),
                     "greatest" => format!("(flattenVariadicOpaque VFunc.greatest {list})"),
                     "least" => format!("(flattenVariadicOpaque VFunc.least {list})"),
@@ -946,6 +949,34 @@ fn choose_proof(
             };
             return format!(
                 "by\n    {intro}simp only [denoteS]; exact ({lemma} env {list_binder}).symm"
+            );
+        }
+        // `flatten_and`/`flatten_or`: the flattened operand list is deduped for
+        // the two Bool connectives, so the RHS is
+        // `dedupById (flattenSameFunc... xs)`, a composition of two fold-invariant
+        // rewrites. Discharge it by chaining the two existing proven lemmas: dedup
+        // is invariant over the flattened list and flatten is invariant over the
+        // original, so their `.trans` gives
+        // `denoteSFold_* (dedupById (flattenSameFunc... xs)) = denoteSFold_* xs`,
+        // and the goal is its `.symm`. Matched before the bare `dedupById` and
+        // `flattenSameFunc` arms below, whose single-lemma proofs would not
+        // typecheck against the composed RHS.
+        if rhs.contains("dedupById") && rhs.contains("flattenSameFunc") {
+            let (dedup_lemma, flatten_lemma, flatten_fn) = if lhs.contains("ScalarExpr.andE") {
+                (
+                    "denoteSFold_and_dedup",
+                    "denoteSFold_and_flatten",
+                    "flattenSameFuncAnd",
+                )
+            } else {
+                (
+                    "denoteSFold_or_dedup",
+                    "denoteSFold_or_flatten",
+                    "flattenSameFuncOr",
+                )
+            };
+            return format!(
+                "by\n    {intro}simp only [denoteS]; exact (({dedup_lemma} env ({flatten_fn} {list_binder})).trans ({flatten_lemma} env {list_binder})).symm"
             );
         }
         if rhs.contains("dedupById") {
