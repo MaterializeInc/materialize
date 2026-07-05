@@ -422,6 +422,19 @@ pub fn global_pool_peek() -> Option<mz_ore::pool::Pool> {
     GLOBAL_POOL.get().cloned().flatten()
 }
 
+/// Returns the pool only when pool mode is the active shared mechanism —
+/// installed and budgeted by [`apply_pool_config`] — and never initializes
+/// anything. Consumers that spill outside the pager (the chunk world) resolve
+/// their backing through this, so they follow the same mechanism selection as
+/// [`shared_pager`] opt-ins and stay inert under the tiered mechanism.
+pub fn active_pool() -> Option<mz_ore::pool::Pool> {
+    if POOL_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        global_pool_peek()
+    } else {
+        None
+    }
+}
+
 /// Apply a pool-backed pager configuration. Returns `false` (and changes
 /// nothing) if the pool is unavailable, so the caller can fall back to
 /// [`apply_tiered_config`].

@@ -1493,14 +1493,72 @@ impl ChunkHandle {
         }
     }
 
+    /// Copies the whole contents into `dst` (cleared first), leaving the
+    /// chunk's residency untouched: a resident slot is copied out directly,
+    /// and an evicted extent decompresses straight into `dst` without
+    /// allocating a slot. A read therefore never raises resident bytes,
+    /// never converts the chunk's state, and hands out no reference into
+    /// pool memory.
+    ///
+    /// The copy runs under the chunk's state lock, which is what makes the
+    /// no-reference contract cheap: eviction takes the same lock, so there
+    /// is no reader it could race, and no pin accounting is needed.
+    pub fn read_into(&self, dst: &mut Vec<u64>) {
+        dst.clear();
+        let meta = &*self.meta;
+        if meta.len == 0 {
+            return;
+        }
+        let mut state = meta.state.lock().expect("chunk state poisoned");
+        state.touched = true;
+        let mut extent_revived = false;
+        match state.residency {
+            Residency::Oversize => {
+                let payload = state.oversize.as_ref().expect("oversize chunk has payload");
+                dst.extend_from_slice(payload);
+            }
+            Residency::Evicted => {
+                dst.resize(meta.len, 0);
+                let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst.as_mut_slice());
+                let extent = state.extent.as_mut().expect("evicted chunk has an extent");
+                // Reading faults the extent's pages back in; re-count it
+                // against the compressed tier.
+                let was_resident = extent.is_resident();
+                extent.read_into(bytes);
+                if !was_resident {
+                    let alloc = extent.alloc_size();
+                    meta.pool.note_extent_resident(&self.meta, alloc);
+                    extent_revived = true;
+                }
+            }
+            Residency::UnbackedResident | Residency::BackedResident | Residency::WriteInFlight => {
+                let slot = state.slot.expect("resident non-empty chunk has a slot");
+                let region = &meta.pool.regions[slot.class];
+                // SAFETY: the slot belongs to this chunk while the state lock
+                // is held (eviction and free both take it), and `meta.len`
+                // words fit the class by construction.
+                let src = unsafe {
+                    std::slice::from_raw_parts(
+                        region.slot_ptr(slot.index).cast_const().cast::<u64>(),
+                        meta.len,
+                    )
+                };
+                dst.extend_from_slice(src);
+            }
+        }
+        drop(state);
+        // The read revived the extent's compressed pages; the tier may need
+        // trimming. Enforcement locks chunk states itself, so it must run
+        // after the unlock.
+        if extent_revived {
+            meta.pool.enforce_or_defer_compressed_cap();
+        }
+    }
+
     /// Copies the whole contents into `dst` (cleared first), then frees the
     /// chunk.
     pub fn take(self, dst: &mut Vec<u64>) {
-        dst.clear();
-        if self.meta.len > 0 {
-            let pin = self.pin();
-            dst.extend_from_slice(&pin);
-        }
+        self.read_into(dst);
     }
 
     /// Test-only: the byte size of the chunk's size class, or `None` for

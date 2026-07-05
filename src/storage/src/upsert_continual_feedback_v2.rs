@@ -77,32 +77,29 @@ use columnar::Index as _;
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::logging::Logger;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
-use differential_dataflow::trace::chunk::ChunkBatcher;
-use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
+use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkBuilder, ChunkSpine};
+use differential_dataflow::trace::{Batcher, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton,
 };
+use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::ColumnChunk;
-use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
+use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk};
 use mz_timely_util::containers::stack::FueledBuilder;
 use std::convert::Infallible;
-use timely::container::{CapacityContainerBuilder, PushInto};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::operators::{Capability, CapabilitySet, Exchange as _};
 use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
@@ -112,51 +109,20 @@ use crate::upsert::UpsertKey;
 use crate::upsert::UpsertSourceTime;
 use crate::upsert::UpsertValue;
 
-/// The persist-feedback arrangement's batcher, wrapping [`Col2ValPagedBatcher`]
-/// only to capture the storage upsert-stash pager at construction.
-///
-/// `arrange_core` builds its batcher via [`Batcher::new`], which has no pager
-/// hook, so a plain `Col2ValPagedBatcher` falls back to the process-global
-/// (compute) pager — meaning the feedback arrangement's spill would be gated by
-/// compute's `enable_column_paged_batcher_spill` rather than storage's
-/// `enable_upsert_paged_spill`. Injecting `upsert_stash_pager::pager()` in `new`
-/// puts the feedback arrangement under the same flag as the source stash. Every
-/// other method delegates to the inner batcher unchanged.
-struct UpsertFeedbackBatcher<T: columnar::Columnar>(Col2ValPagedBatcher<UpsertKey, Row, T, Diff>);
+/// One persist-feedback update: a key, its current value row, the time, and
+/// an additive count.
+type FeedbackUpdate<T> = ((UpsertKey, Row), T, Diff);
 
-impl<T> Batcher for UpsertFeedbackBatcher<T>
-where
-    T: Timestamp + columnar::Columnar + Default + PartialOrder,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-{
-    type Output = Column<((UpsertKey, Row), T, Diff)>;
-    type Time = T;
+/// One feedback-arrangement chunk: a sorted, consolidated run of updates,
+/// resident or spilled to the buffer pool. Both batcher chains and sealed
+/// spine batches are sequences of these, so the arrangement's state pages out
+/// of RSS under the pool's budget, and the drain reads it back through the
+/// bulk [`UnloadChunk`](differential_dataflow::trace::chunk::UnloadChunk)
+/// surface — copy-out probes, no cursor borrows.
+type FeedbackChunk<T> = ColumnChunk<(UpsertKey, Row), T, Diff>;
 
-    fn new(logger: Option<Logger>, operator_id: usize) -> Self {
-        let mut batcher =
-            <Col2ValPagedBatcher<UpsertKey, Row, T, Diff> as Batcher>::new(logger, operator_id);
-        batcher.set_pager(crate::upsert::upsert_stash_pager::pager());
-        Self(batcher)
-    }
-
-    fn seal(&mut self, upper: Antichain<T>) -> (Vec<Self::Output>, Description<T>) {
-        self.0.seal(upper)
-    }
-
-    fn frontier(&mut self) -> AntichainRef<'_, T> {
-        self.0.frontier()
-    }
-}
-
-impl<T> PushInto<Column<((UpsertKey, Row), T, Diff)>> for UpsertFeedbackBatcher<T>
-where
-    T: Timestamp + columnar::Columnar + Default + PartialOrder,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-{
-    fn push_into(&mut self, chunk: Column<((UpsertKey, Row), T, Diff)>) {
-        self.0.push_into(chunk)
-    }
-}
+/// The feedback arrangement's trace: a spine of `Rc`-shared chunk batches.
+type FeedbackSpine<T> = ChunkSpine<FeedbackChunk<T>>;
 
 // The source stash carries the upsert payload in a custom diff type so the
 // merge batcher consolidates by (key, time), keeping the update with the
@@ -258,7 +224,7 @@ type UpsertUpdate<T, O> = (UpsertKey, T, UpsertDiff<O>);
 
 /// One stash chunk: a sorted, consolidated run of updates, resident or
 /// spilled to the buffer pool.
-type UpsertChunk<T, O> = ColumnChunk<UpsertUpdate<T, O>>;
+type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O>>;
 
 type UpsertBatcher<T, O> = ChunkBatcher<UpsertChunk<T, O>>;
 
@@ -402,12 +368,11 @@ where
             );
         });
     // Encode (UpsertKey, UpsertValue) → (UpsertKey, Row) into `Column`
-    // containers so the feedback arrangement uses the paged columnar path: the
-    // batcher routes its spine input through the process-global pager, paging
-    // cold feedback chains out of RSS, while `ValRowSpine` keeps keys in a
-    // columnation arena (UpsertKey is fixed-size [u8; 32]) and values as packed
-    // `Row` bytes in a `DatumContainer`. Built with `Pipeline` so we keep the
-    // locality established by the `UpsertKey::hashed` exchange above.
+    // containers, and arrange them as a spine of chunk batches: chains and
+    // sealed batches alike are `FeedbackChunk`s whose bodies spill to the
+    // buffer pool, gated by the same storage flag as the source stash. Built
+    // with `Pipeline` so we keep the locality established by the
+    // `UpsertKey::hashed` exchange above.
     let encoded = persist_keyed
         .inner
         .unary::<ColumnBuilder<((UpsertKey, Row), T, Diff)>, _, _, _>(
@@ -428,10 +393,10 @@ where
     let persist_arranged = arrange_core::<
         _,
         _,
-        ColumnChunker<((UpsertKey, Row), T, Diff)>,
-        UpsertFeedbackBatcher<T>,
-        ValRowColPagedBuilder<UpsertKey, T, Diff>,
-        ValRowSpine<UpsertKey, T, Diff>,
+        ChunkChunker<(UpsertKey, Row), T, Diff>,
+        ChunkBatcher<FeedbackChunk<T>>,
+        ChunkBuilder<FeedbackChunk<T>>,
+        FeedbackSpine<T>,
     >(encoded, Pipeline, "Persist feedback");
     let mut persist_trace = persist_arranged.trace.clone();
 
@@ -757,26 +722,29 @@ struct DrainStats {
 ///     never again hold) and pin the operator's output frontier below the
 ///     shard upper. This mirrors v1's `relevant = persist_upper.less_equal(ts)`.
 ///
-/// The sealed chunks are already sorted and consolidated by the MergeBatcher,
-/// so the trace cursor walks forward through keys in order — seeks amortize.
-/// Chunks are pulled from the iterator one at a time and dropped before the
-/// next is requested, so at most one rehydrated chunk is resident regardless
-/// of drain size; eligible values are emitted straight from the column's
-/// `RowRef` with no owned `UpsertDiff` copy, and only the re-stashed
-/// ineligible set is materialized.
+/// The sealed chunks are already sorted and consolidated by the merge
+/// batcher, so each chunk's eligible keys form a sorted, deduplicated probe
+/// set, and the prior state comes back through one bulk `extract_into` pass
+/// per trace batch — resident fence metadata selects the touched chunks, and
+/// only those bodies are read back, copy-out, per chunk probed. Sealed chunks
+/// are pulled from the iterator one at a time and dropped before the next is
+/// requested, so at most one loaded stash chunk (plus the probe hits for its
+/// keys) is resident regardless of drain size; only the re-stashed ineligible
+/// set is materialized.
 async fn drain_sealed_input<T, O>(
     sealed: impl Iterator<Item = Column<UpsertUpdate<T, O>>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
     persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<ValRowSpine<UpsertKey, T, Diff>>,
+    trace: &mut TraceAgent<FeedbackSpine<T>>,
     worker_id: usize,
     source_id: GlobalId,
 ) -> DrainStats
 where
     T: TotalOrder + Lattice + timely::ExchangeData + Timestamp + Clone + Debug + Ord + Sync,
-    T: columnation::Columnation + columnar::Columnar,
+    T: columnation::Columnation + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
     O: columnar::Columnar,
 {
     let mut eligible_count: u64 = 0;
@@ -786,10 +754,82 @@ where
     let mut updates: u64 = 0;
     let mut deletes: u64 = 0;
 
-    let (mut cursor, storage) = trace.cursor();
+    // The batches this drain reads against. `Rc` clones of the trace's
+    // sealed chunk batches: chunk bodies stay spilled and are read back
+    // copy-out, per probed chunk, inside `extract_into`.
+    let batches = trace
+        .batches_through(Antichain::new().borrow())
+        .expect("complete read of persist trace; is it closed?");
 
     for chunk in sealed {
-        for (key, ts, diff) in chunk.borrow().into_index_iter() {
+        let view = chunk.borrow();
+
+        // Pass 1: the sorted, deduplicated probe keys of this chunk's
+        // eligible entries. The chunk is sorted by (key, time), so probes
+        // come out sorted and dedup is a neighbor test.
+        let mut probe_col = <UpsertKey as columnar::Columnar>::Container::default();
+        let mut probe_count = 0usize;
+        {
+            use columnar::Push;
+            let mut last_probe: Option<&UpsertKey> = None;
+            for (key, ts, _diff) in view.into_index_iter() {
+                let ts = <T as columnar::Columnar>::into_owned(ts);
+                if persist_upper.less_equal(&ts) && !persist_upper.less_than(&ts) {
+                    if last_probe != Some(key) {
+                        probe_col.push(key);
+                        probe_count += 1;
+                        last_probe = Some(key);
+                    }
+                }
+            }
+        }
+
+        // Pass 2: bulk-probe the trace's batches through the chunk batches'
+        // `UnloadChunk` surface and consolidate the hits into the prior
+        // value per key. Hits arrive per batch, so equal `(key, val)` pairs
+        // from different batches are non-adjacent; sort before folding.
+        let mut old_values: std::collections::BTreeMap<UpsertKey, UpsertValue> =
+            std::collections::BTreeMap::new();
+        if probe_count > 0 {
+            use columnar::{Borrow, Index, Len};
+            let mut staging = <FeedbackUpdate<T> as columnar::Columnar>::Container::default();
+            for batch in &batches {
+                batch.extract_into(probe_col.borrow(), &mut staging);
+            }
+            let staged = staging.borrow();
+            let mut hits: Vec<_> = (0..staged.len())
+                .map(|i| {
+                    let ((key, val), _time, diff) = staged.get(i);
+                    (key, val, <Diff as columnar::Columnar>::into_owned(diff))
+                })
+                .collect();
+            hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+            let mut i = 0;
+            while i < hits.len() {
+                let (key, val, _) = hits[i];
+                let mut count = Diff::ZERO;
+                let mut j = i;
+                while j < hits.len() && hits[j].0 == key && hits[j].1 == val {
+                    count += hits[j].2;
+                    j += 1;
+                }
+                if count.is_positive() {
+                    assert!(
+                        count == 1.into(),
+                        "unexpected multiple entries for the same key in persist trace"
+                    );
+                    let prev = old_values.insert(*key, decode_upsert_value(val.iter()));
+                    assert!(
+                        prev.is_none(),
+                        "unexpected multiple values for the same key in persist trace"
+                    );
+                }
+                i = j;
+            }
+        }
+
+        // Pass 3: classify and emit.
+        for (key, ts, diff) in view.into_index_iter() {
             let ts = <T as columnar::Columnar>::into_owned(ts);
             if !persist_upper.less_equal(&ts) {
                 // ts < persist_upper: drop.
@@ -805,37 +845,11 @@ where
                 continue;
             }
 
-            // ts == persist_upper: eligible. Look up the prior value for this
-            // key in the persist trace and emit the retraction / insertion. The
-            // spine stores keys in a columnation arena, so we seek by the
-            // column's borrowed `&UpsertKey` directly.
+            // ts == persist_upper: eligible. The chunk holds one entry per
+            // (key, time) and eligibility pins the time, so this key appears
+            // at most once and its prior value can move out of the map.
             eligible_count += 1;
-            cursor.seek_key(&storage, key);
-            let old_value = match cursor.get_key(&storage) {
-                Some(found) if found == key => {
-                    let mut result = None;
-                    while let Some(val) = cursor.get_val(&storage) {
-                        let mut count = Diff::ZERO;
-                        cursor.map_times(&storage, |_time, d| {
-                            count += d.clone();
-                        });
-                        if count.is_positive() {
-                            assert!(
-                                count == 1.into(),
-                                "unexpected multiple entries for the same key in persist trace"
-                            );
-                            assert!(
-                                result.is_none(),
-                                "unexpected multiple values for the same key in persist trace"
-                            );
-                            result = Some(decode_upsert_value(val));
-                        }
-                        cursor.step_val(&storage);
-                    }
-                    result
-                }
-                _ => None,
-            };
+            let old_value = old_values.remove(key);
 
             if old_value.is_some() {
                 result_count += 1;

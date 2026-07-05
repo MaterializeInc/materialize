@@ -296,49 +296,19 @@ macro_rules! upsert_source_time_unit {
 }
 upsert_source_time_unit!(GtidPartition, Lsn);
 
-/// Pager for the upsert-v2 source stash.
+/// Spill gate for the upsert-v2 source stash and feedback arrangement.
 ///
-/// This draws from the process-wide shared spill mechanism — the buffer pool
-/// when compute's config installed pool mode, else the [`TieredPolicy`]
-/// budget — but whether the stash *uses* it is gated by storage's own
-/// `enable_upsert_paged_spill` flag, independently of compute's
-/// `enable_column_paged_batcher_spill`. The shared mechanism's budget,
-/// backend, and codec are configured by compute's config handler (storage
-/// and compute run in the same `clusterd` process); each `pager` call
-/// resolves against whichever mechanism the last config apply installed.
-///
-/// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
+/// Both spill through the process buffer pool via the chunk seam
+/// ([`mz_timely_util::columnar::chunk`]): committed chunk bodies land in the
+/// pool when pool mode is the active shared mechanism (installed by compute's
+/// config handler; storage and compute run in the same `clusterd` process),
+/// gated by storage's own `enable_upsert_paged_spill` flag independently of
+/// compute's `enable_column_paged_batcher_spill`. The gate is consulted at
+/// every chunk commit, so flips apply to running dataflows.
 pub mod upsert_stash_pager {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    use mz_timely_util::column_pager::{ColumnPager, shared_pager};
-
-    /// Whether the stash participates in the shared spill mechanism, applied
-    /// from storage configuration.
-    static ENABLED: AtomicBool = AtomicBool::new(false);
-
-    /// Enable or disable the stash's use of the shared spill mechanism. When
-    /// enabled, the stash spills through the shared budget; when disabled it
-    /// keeps every chunk resident.
-    ///
-    /// The flag drives two consumers: the source stash's chunk spill gate
-    /// (consulted at every settle, so flips apply to running dataflows) and
-    /// the feedback arrangement's pager (captured at dataflow render, so
-    /// flips apply to dataflows rendered after the change).
+    /// Enable or disable spilling of upsert chunk bodies to the buffer pool.
     pub fn set_enabled(enabled: bool) {
-        ENABLED.store(enabled, Ordering::Relaxed);
         mz_timely_util::columnar::chunk::set_spill_enabled(enabled);
-    }
-
-    /// The upsert-stash pager, resolved against the enable flag and the
-    /// process-wide shared mechanism (buffer pool vs tiered) at the moment of
-    /// the call. Callers capture the result at dataflow render and keep it
-    /// for the dataflow's lifetime, so resolution happens as late as
-    /// possible: a source rendered (or restarted) after a mechanism change
-    /// picks up the new mechanism, rather than the one in effect when
-    /// storage configuration last arrived.
-    pub fn pager() -> ColumnPager {
-        shared_pager(ENABLED.load(Ordering::Relaxed))
     }
 }
 
