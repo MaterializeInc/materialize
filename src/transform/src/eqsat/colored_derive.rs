@@ -108,9 +108,10 @@ pub(crate) struct ColoredLayer<'b> {
     /// Canonical relational class -> the color holding its contextual equalities.
     ///
     /// `BTreeMap`: `build.rs`'s colored-conclusion table build iterates this to
-    /// map each class to its color's conclusion, without an independent
-    /// re-sort. Sorted iteration keeps that mapping process-independent when a
-    /// re-canonicalization collides two classes onto one id.
+    /// map each class to its color's conclusion. Sorted iteration keeps that
+    /// build order, and so the conclusion table, process-independent. The
+    /// survivor pick when two pre-rebuild classes canonicalize onto one id is
+    /// resolved upstream by `class_scope` being a `BTreeMap`, not here.
     pub color_of: BTreeMap<Id, ColorId>,
     /// Canonical relational classes that denote the empty relation.
     pub empty_classes: OreHashSet<Id>,
