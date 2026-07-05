@@ -503,7 +503,7 @@ mod tests {
     fn class_ids_iterate_in_sorted_order() {
         // Determinism contract: `classes` iteration must be order-stable, so
         // `class_ids()` is sorted. Congruence-merge survivor selection and matcher
-        // order depend on this. Adds create ascending ids; a HashMap would return
+        // order depend on this. Adds create ascending ids. A HashMap would return
         // them in seed-randomized order, a BTreeMap in sorted order.
         let mut eg: EGraph<ArithLang> = EGraph::new();
         let mut ids = Vec::new();
