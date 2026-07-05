@@ -1649,6 +1649,59 @@ class Composition:
             f"Could not read cgroup memory usage from container {container_id}"
         )
 
+    # cgroup peak file paths, in order of preference (v2 first).
+    _CGROUP_PEAK_PATHS = (
+        "/sys/fs/cgroup/memory.peak",
+        "/sys/fs/cgroup/memory/memory.max_usage_in_bytes",
+    )
+
+    def mem_peak(self, service: str) -> int | None:
+        """Return the high-water-mark memory usage in bytes for the service's
+        container since the last reset (or container start).
+
+        Reads the cgroup ``memory.peak`` (v2) or ``memory.max_usage_in_bytes``
+        (v1) file via ``docker exec``. Returns ``None`` if neither file can
+        be read.
+        """
+        container_id = self.container_id(service)
+        assert container_id is not None
+
+        for path in self._CGROUP_PEAK_PATHS:
+            try:
+                out = subprocess.check_output(
+                    ["docker", "exec", container_id, "cat", path],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+                return int(out)
+            except (subprocess.CalledProcessError, ValueError):
+                continue
+
+        return None
+
+    def mem_peak_reset(self, service: str) -> bool:
+        """Reset the cgroup peak counter for the service's container.
+
+        Writing ``0`` to ``memory.peak`` requires kernel >= 6.7 (cgroup v2);
+        writing ``0`` to ``memory.max_usage_in_bytes`` (cgroup v1) has been
+        supported for much longer. Returns whether a reset succeeded.
+        """
+        container_id = self.container_id(service)
+        assert container_id is not None
+
+        for path in self._CGROUP_PEAK_PATHS:
+            try:
+                subprocess.check_call(
+                    ["docker", "exec", container_id, "sh", "-c", f"echo 0 > {path}"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return True
+            except subprocess.CalledProcessError:
+                continue
+
+        return False
+
     def testdrive(
         self,
         input: str,

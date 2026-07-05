@@ -1799,6 +1799,7 @@ class ManyKafkaSourcesOnSameCluster(Scenario):
         MeasurementType.WALLCLOCK: 0.10,
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 100.0,
+        MeasurementType.MEMORY_PEAK_CLUSTERD: 100.0,
     }
 
     COUNT_SOURCE_ENTRIES = 100000
@@ -2135,6 +2136,8 @@ class SqlServerInitialLoad(SqlServerCdc):
         MeasurementType.WALLCLOCK: 0.10,
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 100.0,
+        MeasurementType.MEMORY_PEAK_MZ: 0.20,
+        MeasurementType.MEMORY_PEAK_CLUSTERD: 100.0,
     }
 
     def shared(self) -> Action:

@@ -38,18 +38,34 @@ class MeasurementType(Enum):
     WALLCLOCK = auto()
     MEMORY_MZ = auto()
     MEMORY_CLUSTERD = auto()
+    # Per-iteration peak RSS sampled from the cgroup memory.peak file. Reset
+    # before each measurement so the value reflects the high-water mark of the
+    # workload rather than steady-state.
+    MEMORY_PEAK_MZ = auto()
+    MEMORY_PEAK_CLUSTERD = auto()
 
     def __str__(self) -> str:
-        return self.name.lower()
+        # Short display names so the report's TYPE column stays narrow.
+        # Existing wallclock / memory_mz / memory_clusterd labels are
+        # preserved for compatibility with tooling that parses reports.
+        return _DISPLAY_NAMES.get(self, self.name.lower())
 
     def is_amount(self) -> bool:
         return self in {
             MeasurementType.MEMORY_MZ,
             MeasurementType.MEMORY_CLUSTERD,
+            MeasurementType.MEMORY_PEAK_MZ,
+            MeasurementType.MEMORY_PEAK_CLUSTERD,
         }
 
     def is_lower_value_better(self) -> bool:
         return True
+
+
+_DISPLAY_NAMES: dict[MeasurementType, str] = {
+    MeasurementType.MEMORY_PEAK_MZ: "peak_mz",
+    MeasurementType.MEMORY_PEAK_CLUSTERD: "peak_clusterd",
+}
 
 
 @dataclass
