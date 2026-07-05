@@ -1696,6 +1696,32 @@ SELECT mz_unsafe.mz_sleep('inf'::float8)
 statement error cannot sleep for 1e\+300 seconds
 SELECT mz_unsafe.mz_sleep('1e300'::float8)
 
+# mz_all/mz_any back the ALL/ANY subquery operators, whose rewrite always feeds
+# them a boolean comparison. They render as accumulable reduces whose accumulator
+# only accepts boolean datums, so a non-boolean argument used to crash a compute
+# worker with "Invalid argument to AggregateFunc::Any" (database-issues#9298).
+# The Bool parameter turns this into a clean plan-time error instead, for the
+# plain aggregate, the windowed aggregate, and the grouped forms alike.
+statement error function mz_unsafe\.mz_any\(integer\) does not exist
+SELECT mz_unsafe.mz_any(a) FROM (VALUES (1), (2)) AS t (a)
+
+statement error function mz_unsafe\.mz_all\(integer\) does not exist
+SELECT mz_unsafe.mz_all(a) FROM (VALUES (1), (2)) AS t (a)
+
+statement error function mz_unsafe\.mz_any\(integer\) does not exist
+SELECT mz_unsafe.mz_any(a) OVER (ORDER BY a) FROM (VALUES (1), (2)) AS t (a)
+
+# The boolean form that the ALL/ANY subquery rewrite depends on still works.
+query B
+SELECT mz_unsafe.mz_any(a) FROM (VALUES (false), (true)) AS t (a)
+----
+true
+
+query B
+SELECT mz_unsafe.mz_all(a) FROM (VALUES (false), (true)) AS t (a)
+----
+false
+
 # mz_unsafe functions can't be executed with the enable_unsafe_functions flag turned off
 
 simple conn=mz_system,user=mz_system
@@ -1719,7 +1745,7 @@ statement ok
 INSERT INTO dangerous_table (a) VALUES (1)
 
 statement error executing potentially dangerous functions is not supported
-SELECT mz_unsafe.mz_any(a) FROM dangerous_table
+SELECT mz_unsafe.mz_any(a > 0) FROM dangerous_table
 
 statement error executing potentially dangerous functions is not supported
 INSERT INTO dangerous_table (b) VALUES (mz_unsafe.mz_panic('hello'))
