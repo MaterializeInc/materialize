@@ -596,7 +596,7 @@ impl EGraph {
         while let Some(id) = queue.pop_front() {
             let mut nodes: Vec<ENode> = self.rel_class_nodes(id).into_iter().cloned().collect();
             // `classes` is a `BTreeMap<Id, BTreeSet<CNode>>`, so `rel_class_nodes`
-            // already yields these in `Ord` order; the explicit sort is kept as
+            // already yields these in `Ord` order. The explicit sort is kept as
             // the enumeration-order contract at this use site, independent of
             // `classes`'s current representation. Downstream consumers (the ILP
             // extractor's variable order, golden plan text) must be deterministic.
