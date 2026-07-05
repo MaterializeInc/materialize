@@ -1627,6 +1627,17 @@ fn coerce_args_to_types(
                         // polymorphic type.
                         PlanError::UnsolvablePolymorphicFunctionInput
                     })?;
+                if let SqlScalarType::Array(elem) = &target {
+                    if matches!(
+                        **elem,
+                        SqlScalarType::List { .. } | SqlScalarType::Map { .. }
+                    ) {
+                        bail_unsupported!(format!(
+                            "{}[]",
+                            ecx.humanize_sql_scalar_type(elem, false)
+                        ));
+                    }
+                }
                 do_convert(cexpr, &target)?
             }
         };
