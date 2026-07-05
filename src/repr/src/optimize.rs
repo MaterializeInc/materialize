@@ -167,6 +167,10 @@ optimizer_feature_flags!({
     // Bound from `SystemVars::enable_eqsat_filter_sharing`. Gates the eqsat
     // filter-split rewrite and the scalar-aware ILP node tier. Default off.
     enable_eqsat_filter_sharing: bool,
+    // Bound from `SystemVars::enable_eqsat_scalar_sharing`. Gates the eqsat
+    // Map-split rewrite, the width-aware cost memory, and the ILP arity tier.
+    // Default off.
+    enable_eqsat_scalar_sharing: bool,
 });
 
 /// A trait used to implement layered config construction.

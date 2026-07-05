@@ -2160,6 +2160,16 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_eqsat_scalar_sharing,
+        // Default off: gates the Map-split rewrite, the width-aware cost memory
+        // in cost.rs, and the ILP arity tier. cost.rs is shared with the greedy
+        // extractor, so flag-off must be byte-identical. See
+        // doc/developer/design/20260624_eqsat/20260705_eqsat_scalar_sharing_width.md.
+        desc: "share a materialized Map prefix across consumers in eqsat via Map-split, a width cost term, and the scalar-aware ILP node tier",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_off_thread_optimization,
         desc: "use off-thread optimization in `CREATE` statements",
         default: true,
@@ -2398,6 +2408,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_eqsat_delta_join_cost: vars.enable_eqsat_delta_join_cost(),
             enable_eqsat_native_join_commit: vars.enable_eqsat_native_join_commit(),
             enable_eqsat_filter_sharing: vars.enable_eqsat_filter_sharing(),
+            enable_eqsat_scalar_sharing: vars.enable_eqsat_scalar_sharing(),
         }
     }
 }
@@ -2448,6 +2459,7 @@ mod tests {
             enable_eqsat_delta_join_cost,
             enable_eqsat_native_join_commit,
             enable_eqsat_filter_sharing,
+            enable_eqsat_scalar_sharing,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2486,6 +2498,7 @@ mod tests {
         set_var!(enable_eqsat_delta_join_cost);
         set_var!(enable_eqsat_native_join_commit);
         set_var!(enable_eqsat_filter_sharing);
+        set_var!(enable_eqsat_scalar_sharing);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

@@ -646,6 +646,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_eqsat_delta_join_cost: Default::default(),
                 enable_eqsat_native_join_commit: Default::default(),
                 enable_eqsat_filter_sharing: Default::default(),
+                enable_eqsat_scalar_sharing: Default::default(),
             },
         })
     }

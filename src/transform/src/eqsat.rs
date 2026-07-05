@@ -90,6 +90,7 @@ pub fn optimize(expr: MirRelationExpr) -> MirRelationExpr {
         false,
         false,
         false,
+        false,
         raise::NativeJoinFlags::none(),
     )
 }
@@ -107,6 +108,7 @@ pub fn optimize_without_let_union(expr: MirRelationExpr) -> MirRelationExpr {
         default_ruleset(),
         false,
         Vec::new(),
+        false,
         false,
         false,
         false,
@@ -134,6 +136,9 @@ pub fn optimize_without_let_union(expr: MirRelationExpr) -> MirRelationExpr {
 /// [`extract::IlpExtractor::weight_scalar_nodes`]) and gates the filter-sharing
 /// rewrites. Default is `false`.
 ///
+/// `scalar_sharing` also makes the ILP's node tier scalar-aware, in addition to
+/// `filter_sharing`. Default is `false`.
+///
 /// This is the entry point used by [`PhysicalEqSatTransform`].
 ///
 /// [`PhysicalEqSatTransform`]: transform::PhysicalEqSatTransform
@@ -144,6 +149,7 @@ pub fn optimize_with_availability(
     use_ilp: bool,
     use_delta: bool,
     filter_sharing: bool,
+    scalar_sharing: bool,
     flags: crate::eqsat::raise::NativeJoinFlags,
 ) -> MirRelationExpr {
     // Live physical pass: the cost model sees arrangement / index availability,
@@ -168,6 +174,7 @@ pub fn optimize_with_availability(
         false,
         use_delta,
         filter_sharing,
+        scalar_sharing,
         flags,
     )
 }
@@ -189,6 +196,7 @@ pub fn optimize_logical(expr: MirRelationExpr, enable_wmr_lift: bool) -> MirRela
         Vec::new(),
         false,
         enable_wmr_lift,
+        false,
         false,
         false,
         raise::NativeJoinFlags::none(),
@@ -214,6 +222,7 @@ pub fn optimize_with_wmr_lift(expr: MirRelationExpr) -> MirRelationExpr {
         true,
         false,
         false,
+        false,
         raise::NativeJoinFlags::none(),
     )
 }
@@ -229,6 +238,7 @@ fn optimize_inner(
     enable_wmr_lift: bool,
     use_delta: bool,
     filter_sharing: bool,
+    scalar_sharing: bool,
     flags: crate::eqsat::raise::NativeJoinFlags,
 ) -> MirRelationExpr {
     let rel = lower::lower_with(&expr, enable_wmr_lift);
@@ -248,7 +258,7 @@ fn optimize_inner(
     };
     let optimizer = if use_ilp {
         optimizer.with_extractor(std::sync::Arc::new(extract::IlpExtractor {
-            weight_scalar_nodes: filter_sharing,
+            weight_scalar_nodes: filter_sharing || scalar_sharing,
         }))
     } else {
         optimizer

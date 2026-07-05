@@ -168,6 +168,7 @@ impl Transform for PhysicalEqSatTransform {
             ctx.features.enable_eqsat_ilp_extraction || ctx.features.enable_eqsat_filter_sharing;
         let use_delta = ctx.features.enable_eqsat_delta_join_cost;
         let filter_sharing = ctx.features.enable_eqsat_filter_sharing;
+        let scalar_sharing = ctx.features.enable_eqsat_scalar_sharing;
         let optimized = crate::eqsat::optimize_with_availability(
             relation.clone(),
             available,
@@ -175,6 +176,7 @@ impl Transform for PhysicalEqSatTransform {
             use_ilp,
             use_delta,
             filter_sharing,
+            scalar_sharing,
             crate::eqsat::raise::NativeJoinFlags {
                 commit: ctx.features.enable_eqsat_native_join_commit,
                 prioritize_arranged: ctx.features.enable_join_prioritize_arranged,
@@ -531,6 +533,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             crate::eqsat::raise::NativeJoinFlags::none(),
         );
         assert!(
@@ -562,6 +565,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             crate::eqsat::raise::NativeJoinFlags::none(),
         );
         assert!(
@@ -589,6 +593,7 @@ mod tests {
             input,
             avail(),
             vec![marker_seed_for(lit_pred(), 3)],
+            false,
             false,
             false,
             false,
@@ -635,6 +640,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             crate::eqsat::raise::NativeJoinFlags::none(),
         );
         assert!(
@@ -674,6 +680,7 @@ mod tests {
                 avail(),
                 seeds.clone(),
                 use_ilp,
+                false,
                 false,
                 false,
                 crate::eqsat::raise::NativeJoinFlags::none(),
