@@ -45,6 +45,7 @@ aws-sdk-glue = { workspace = true, features = ["test-util"] }
 aws-smithy-mocks.workspace = true
 mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry", features = ["test-util"] }
 mz-build-info = { path = "../build-info" }
+mz-ore = { path = "../ore", features = ["test"] }
 mz-secrets = { path = "../secrets" }
 
 [features]

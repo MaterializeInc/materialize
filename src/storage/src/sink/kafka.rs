@@ -109,7 +109,7 @@ use mz_ore::task::{self, AbortOnDropHandle};
 use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -1398,6 +1398,88 @@ async fn fetch_partition_count_loop<F>(
     }
 }
 
+/// Register an Avro `schema` with the sink's schema registry and build an
+/// [`AvroEncoder`] framing records for that registry.
+///
+/// `subject` is the registry name for the schema, either `{topic}-key` or
+/// `{topic}-value`. It is the Confluent subject or, for Glue, the schema name.
+/// Registration happens here in the render cycle, so schemas are re-published
+/// each time the sink is rendered. The `WireFormat` must carry a registry:
+/// sinks are never built without one (see the sink planner), so a missing
+/// registry is unreachable.
+async fn build_avro_encoder(
+    desc: RelationDesc,
+    debezium: bool,
+    schema: String,
+    compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
+    wire_format: WireFormat,
+    subject: String,
+    storage_configuration: &StorageConfiguration,
+) -> Result<AvroEncoder, anyhow::Error> {
+    let schema_id = match wire_format {
+        WireFormat::Confluent {
+            registry: Some(csr),
+        } => {
+            let ccsr = csr.connect(storage_configuration, InTask::Yes).await?;
+            let schema_id = mz_storage_client::sink::publish_kafka_schema(
+                ccsr,
+                subject,
+                schema.clone(),
+                mz_ccsr::SchemaType::Avro,
+                compatibility_level,
+            )
+            .await
+            .context("error publishing kafka schemas for sink")?;
+            AvroSchemaId::Confluent(schema_id)
+        }
+        WireFormat::Glue {
+            registry: Some(glue),
+        } => {
+            let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                .get(storage_configuration.config_set());
+            let sdk_config = glue
+                .aws_connection
+                .connection
+                .load_sdk_config(
+                    &storage_configuration.connection_context,
+                    glue.aws_connection.connection_id,
+                    InTask::Yes,
+                    enforce_external_addresses,
+                )
+                .await?;
+            let client = mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
+            let compatibility =
+                compatibility_level.map(mz_storage_client::sink::glue_compatibility_from_csr);
+            // `subject` (`{topic}-key` or `{topic}-value`) is used verbatim as
+            // the Glue schema name, no mangling needed. Kafka topic chars
+            // `[a-zA-Z0-9._-]` are a subset of Glue's `[a-zA-Z0-9-_$#.]`, and
+            // the `-` in the suffix is valid. The longest suffix, `-value`, is
+            // 6 chars, so the max Kafka topic length (249) plus the suffix
+            // lands exactly on Glue's max schema name length (255).
+            //
+            // Kafka topic name rules:
+            // https://github.com/a0x8o/kafka/blob/master/core/src/main/scala/kafka/common/Topic.scala
+            // Glue schema name rules:
+            // https://docs.aws.amazon.com/glue/latest/webapi/API_CreateSchema.html
+            let schema_version_id = mz_storage_client::sink::publish_glue_schema(
+                client,
+                glue.registry_name,
+                subject,
+                schema.clone(),
+                compatibility,
+            )
+            .await
+            .context("error publishing glue schemas for sink")?;
+            AvroSchemaId::Glue(schema_version_id)
+        }
+        other => unreachable!(
+            "sink Avro wire_format must carry a registry, got {:?}",
+            other
+        ),
+    };
+    Ok(AvroEncoder::new(desc, debezium, &schema, schema_id))
+}
+
 /// Walks each arrangement batch and emits encoded Kafka messages, one per
 /// `DiffPair` observed at each `(key, timestamp)`.
 ///
@@ -1447,42 +1529,17 @@ fn encode_collection<'scope>(
                         compatibility_level,
                         wire_format,
                     })) => {
-                        // Ensure that schemas are registered with the schema registry.
-                        //
-                        // Note that where this lies in the rendering cycle means that we will publish the
-                        // schemas each time the sink is rendered.
-                        let csr_connection = match wire_format {
-                            WireFormat::Confluent {
-                                registry: Some(csr),
-                            } => csr,
-                            // Sinks are only ever built with a Confluent
-                            // registry (see the sink planner), so anything
-                            // else is unreachable.
-                            other => unreachable!(
-                                "sink Avro key wire_format must be Confluent with registry, got {:?}",
-                                other
-                            ),
-                        };
-                        let ccsr = csr_connection
-                            .connect(&storage_configuration, InTask::Yes)
-                            .await?;
-
-                        let schema_id = mz_storage_client::sink::publish_kafka_schema(
-                            ccsr,
-                            format!("{}-key", connection.topic),
-                            schema.clone(),
-                            mz_ccsr::SchemaType::Avro,
-                            compatibility_level,
-                        )
-                        .await
-                        .context("error publishing kafka schemas for sink")?;
-
-                        Some(Box::new(AvroEncoder::new(
+                        let encoder = build_avro_encoder(
                             desc,
                             false,
-                            &schema,
-                            AvroSchemaId::Confluent(schema_id),
-                        )))
+                            schema,
+                            compatibility_level,
+                            wire_format,
+                            format!("{}-key", connection.topic),
+                            &storage_configuration,
+                        )
+                        .await?;
+                        Some(Box::new(encoder))
                     }
                     (None, None) => None,
                     (desc, format) => {
@@ -1506,39 +1563,17 @@ fn encode_collection<'scope>(
                     compatibility_level,
                     wire_format,
                 } => {
-                    let csr_connection = match wire_format {
-                        WireFormat::Confluent {
-                            registry: Some(csr),
-                        } => csr,
-                        other => unreachable!(
-                            "sink Avro value wire_format must be Confluent with registry, got {:?}",
-                            other
-                        ),
-                    };
-                    // Ensure that schemas are registered with the schema registry.
-                    //
-                    // Note that where this lies in the rendering cycle means that we will publish the
-                    // schemas each time the sink is rendered.
-                    let ccsr = csr_connection
-                        .connect(&storage_configuration, InTask::Yes)
-                        .await?;
-
-                    let schema_id = mz_storage_client::sink::publish_kafka_schema(
-                        ccsr,
-                        format!("{}-value", connection.topic),
-                        schema.clone(),
-                        mz_ccsr::SchemaType::Avro,
-                        compatibility_level,
-                    )
-                    .await
-                    .context("error publishing kafka schemas for sink")?;
-
-                    Box::new(AvroEncoder::new(
+                    let encoder = build_avro_encoder(
                         value_desc,
                         debezium,
-                        &schema,
-                        AvroSchemaId::Confluent(schema_id),
-                    ))
+                        schema,
+                        compatibility_level,
+                        wire_format,
+                        format!("{}-value", connection.topic),
+                        &storage_configuration,
+                    )
+                    .await?;
+                    Box::new(encoder)
                 }
             };
 
