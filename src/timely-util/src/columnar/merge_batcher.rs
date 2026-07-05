@@ -1173,8 +1173,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
     fn batcher_seal_round_trip_pooled() {
         // Zero-budget pool: every inserted chunk is evicted to its extent as
-        // soon as it lands, so the merge / seal path must fault everything
-        // back in from extents rather than reading pool slots.
+        // soon as it lands, so the merge / seal path must read everything
+        // back from extents rather than pool slots.
         let pool = mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig {
             class_capacity_bytes: 64 << 20,
         })
@@ -1197,14 +1197,13 @@ mod tests {
         assert_eq!(out, expected);
 
         // The data really round-tripped through extents: the zero budget
-        // forced compressing evictions, and reading the chains back faulted
-        // chunks in from those extents.
+        // forced compressing evictions, and reading the chains back
+        // decompressed chunks from those extents.
         let stats = pool.stats();
         assert!(stats.inserts > 0, "expected pool inserts: {stats:?}");
         assert!(
             stats.evictions_compress > 0,
             "expected compressing evictions: {stats:?}"
         );
-        assert!(stats.faults > 0, "expected extent fault-ins: {stats:?}");
     }
 }

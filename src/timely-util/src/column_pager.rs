@@ -303,9 +303,9 @@ impl PagingPolicy for AlwaysResidentPolicy {
 // installed ([`POOL_MODE`]) and whether compute's own batchers are enabled
 // ([`COMPUTE_ENABLED`]) — plus the two mechanism singletons and the
 // [`SWAP_PAGEOUT`] toggle. Every pager a consumer sees is *derived* from
-// those bits at the moment it asks ([`global_pager`] for compute,
-// [`shared_pager`] for per-consumer opt-ins), so there is one resolution
-// path and nothing cached to fall out of sync. Consumers that capture a
+// those bits at the moment it asks ([`global_pager`] for the pager path,
+// [`active_pool`] for the chunk world), so there is one resolution path
+// and nothing cached to fall out of sync. Consumers that capture a
 // pager (at render, say) keep it until they next ask; live reconfiguration
 // takes effect on the next call.
 
@@ -389,9 +389,9 @@ pub fn apply_tiered_config(
 static GLOBAL_POOL: std::sync::OnceLock<Option<mz_ore::pool::Pool>> = std::sync::OnceLock::new();
 
 /// Whether the pool is the active shared spill mechanism (set by
-/// [`apply_pool_config`], cleared by [`apply_tiered_config`]). Read by
-/// [`shared_pager`] so per-consumer opt-ins follow whichever mechanism the
-/// last config apply installed.
+/// [`apply_pool_config`], cleared by [`apply_tiered_config`]). Read by the
+/// resolution path so consumers follow whichever mechanism the last config
+/// apply installed.
 static POOL_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Returns the process-wide buffer pool, initializing it on first call.
@@ -426,7 +426,7 @@ pub fn global_pool_peek() -> Option<mz_ore::pool::Pool> {
 /// installed and budgeted by [`apply_pool_config`] — and never initializes
 /// anything. Consumers that spill outside the pager (the chunk world) resolve
 /// their backing through this, so they follow the same mechanism selection as
-/// [`shared_pager`] opt-ins and stay inert under the tiered mechanism.
+/// the pager path and stay inert under the tiered mechanism.
 pub fn active_pool() -> Option<mz_ore::pool::Pool> {
     if POOL_MODE.load(std::sync::atomic::Ordering::Relaxed) {
         global_pool_peek()
@@ -440,9 +440,9 @@ pub fn active_pool() -> Option<mz_ore::pool::Pool> {
 /// [`apply_tiered_config`].
 ///
 /// On success the pool becomes the active shared mechanism — [`global_pager`]
-/// resolves to it when `enabled`, and per-consumer opt-ins via
-/// [`shared_pager`] reach it either way — and the pool's resident budget is
-/// retuned in place so live handles stay coherent.
+/// resolves to it when `enabled`, and the chunk world reaches it through
+/// [`active_pool`] — and the pool's resident budget is retuned in place so
+/// live handles stay coherent.
 pub fn apply_pool_config(cfg: PoolPagerConfig) -> bool {
     let Some(pool) = global_pool() else {
         return false;
@@ -476,50 +476,28 @@ pub struct PoolPagerConfig {
     pub rss_target_bytes: usize,
 }
 
-/// The pager for compute's own batchers: [`shared_pager`] resolved against
-/// the compute enable bit the last `apply_*_config` call stored. Cheap (one
-/// `Arc` clone); called per chunk, so unlike [`shared_pager`] it does not
-/// log its resolution.
+/// The pager for compute's own batchers, resolved against the compute enable
+/// bit the last `apply_*_config` call stored: when enabled, the buffer pool
+/// when [`apply_pool_config`] installed it, else the [`tiered_policy`] budget
+/// `apply_tiered_config` sizes; when disabled, an always-resident pager.
+/// Cheap (one `Arc` clone) and called per chunk, so dyncfg flips apply live.
 pub fn global_pager() -> ColumnPager {
-    resolve_shared(COMPUTE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)).0
-}
-
-/// A pager that, when `enabled`, draws from the process-wide shared spill
-/// mechanism — the buffer pool when [`apply_pool_config`] installed it, else
-/// the [`tiered_policy`] budget `apply_tiered_config` sizes — and otherwise is
-/// a disabled (always-resident) pager.
-///
-/// This lets a second consumer (e.g. the storage upsert source stash) opt into
-/// the one shared budget independently of whether the config apply enabled
-/// the process-global pager for its own (compute) batchers. There is still a
-/// single budget; only the enable decision is per-consumer. Which mechanism
-/// is shared follows the most recent config apply ([`apply_pool_config`] vs
-/// [`apply_tiered_config`]), so a consumer that captured a pager before a
-/// mechanism flip keeps its old one until it next calls here.
-pub fn shared_pager(enabled: bool) -> ColumnPager {
-    let (pager, resolved) = resolve_shared(enabled);
-    tracing::info!(
-        enabled,
-        pool_mode = POOL_MODE.load(std::sync::atomic::Ordering::Relaxed),
-        "shared column pager resolved: {resolved}",
-    );
-    pager
+    resolve_shared(COMPUTE_ENABLED.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// The one resolution path from the two configuration bits to a pager.
-/// Returns the pager and a label naming the resolution for logs.
-fn resolve_shared(enabled: bool) -> (ColumnPager, &'static str) {
+fn resolve_shared(enabled: bool) -> ColumnPager {
     if !enabled {
-        return (ColumnPager::disabled(), "disabled");
+        return ColumnPager::disabled();
     }
     if POOL_MODE.load(std::sync::atomic::Ordering::Relaxed) {
         if let Some(pool) = global_pool() {
-            return (ColumnPager::pooled(pool), "pool");
+            return ColumnPager::pooled(pool);
         }
     }
     #[allow(clippy::clone_on_ref_ptr)]
     let dyn_policy: Arc<dyn PagingPolicy> = TIERED_POLICY.clone();
-    (ColumnPager::new(dyn_policy), "tiered")
+    ColumnPager::new(dyn_policy)
 }
 
 impl ColumnPager {
@@ -1023,7 +1001,6 @@ mod tests {
         assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
         let stats = pool.stats();
         assert_eq!(stats.inserts, 1);
-        assert_eq!(stats.faults, 1);
         assert_eq!(stats.frees, 1);
     }
 
@@ -1091,20 +1068,20 @@ mod tests {
         assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
 
         let mut col = sample_typed();
-        let paged = shared_pager(true).page(&mut col);
+        let paged = resolve_shared(true).page(&mut col);
         assert!(matches!(paged, PagedColumn::Pooled { .. }));
-        drop(shared_pager(true).take(paged));
+        drop(resolve_shared(true).take(paged));
 
         // Disabled consumers stay resident regardless of mechanism.
         let mut col = sample_typed();
-        let paged = shared_pager(false).page(&mut col);
+        let paged = resolve_shared(false).page(&mut col);
         assert!(matches!(paged, PagedColumn::Resident(_, _)));
         drop(paged);
 
         // Tiered config flips the mechanism back: shared pager no longer pools.
         apply_tiered_config(true, usize::MAX, Backend::Swap, None, false);
         let mut col = sample_typed();
-        let paged = shared_pager(true).page(&mut col);
+        let paged = resolve_shared(true).page(&mut col);
         assert!(
             !matches!(paged, PagedColumn::Pooled { .. }),
             "tiered mode must not hand out pooled columns",

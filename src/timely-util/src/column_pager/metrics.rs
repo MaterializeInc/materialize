@@ -93,10 +93,9 @@ pub fn register(registry: &MetricsRegistry) {
         register_pool_gauge(registry, "writes_elided_total", "Backing writes elided: chunks freed while unbacked, dead before any compression or extent write happened.", |s| s.writes_elided);
         register_pool_gauge(registry, "evictions_compress_total", "Evictions that compressed a chunk into a new swap-backed extent.", |s| s.evictions_compress);
         register_pool_gauge(registry, "evictions_cheap_total", "Evictions of already-backed chunks: physical pages released with no compression or extent write.", |s| s.evictions_cheap);
-        register_pool_gauge(registry, "faults_total", "Fault-ins decompressing a chunk from its extent back into its pool slot.", |s| s.faults);
         register_pool_gauge(registry, "extent_bytes_written_total", "Compressed bytes written into swap-backed extents.", |s| s.extent_bytes_written);
         register_pool_gauge(registry, "spill_scheduled_total", "Evictions handed to buffer-pool spill threads.", |s| s.spill_scheduled);
-        register_pool_gauge(registry, "spill_cancelled_total", "Scheduled evictions cancelled before completing (chunk freed or pinned).", |s| s.spill_cancelled);
+        register_pool_gauge(registry, "spill_cancelled_total", "Scheduled evictions cancelled because the chunk was freed with the write in flight.", |s| s.spill_cancelled);
         register_pool_gauge(registry, "spill_in_flight", "Spill entries queued or being processed.", |s| s.spill_in_flight);
         register_pool_gauge(registry, "slot_exhausted_fallbacks_total", "Inserts that fell back to unpageable heap chunks because their size class had no free slot.", |s| s.slot_exhausted_fallbacks);
         register_pool_gauge(registry, "live_chunks", "Live pool chunks, whatever their residency: for backlog-shaped consumers, the un-drained backlog in chunks.", |s| s.live_chunks);

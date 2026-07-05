@@ -18,10 +18,9 @@
 //! One [`Region`] per size class, each a single anonymous `mmap` reservation.
 //! The reservation is virtual; physical memory materializes on first write to
 //! a slot. Slots are scoped to residency: eviction releases a slot's physical
-//! pages with [`dontneed`] and returns the slot index to the free list, and a
-//! fault-in allocates a fresh slot — possibly a different one — so a chunk's
-//! address is stable only between a fault-in and the next eviction, and
-//! pointers into a slot are valid only under the owning chunk's pin.
+//! pages with [`dontneed`] and returns the slot index to the free list, so a
+//! chunk holds a slot only from insert until its eviction, and the pool reads
+//! slots strictly copy-out under the owning chunk's state lock.
 //!
 //! Two fault-amortization mechanisms soften the cost of cycling slots:
 //!
@@ -147,8 +146,8 @@ impl Region {
     /// preferred, then cold, then never-touched bump slots.
     ///
     /// Slots are scoped to residency (eviction frees them), so demand scales
-    /// with the *resident* set — bounded by the pool budget plus pinned and
-    /// in-flight slack — and exhaustion means residency outgrew
+    /// with the *resident* set — bounded by the pool budget plus in-flight
+    /// slack — and exhaustion means residency outgrew
     /// `class_capacity_bytes`; callers degrade rather than fail.
     pub(crate) fn alloc(&self) -> Option<(u32, bool)> {
         let mut slots = self.slots.lock().expect("region allocator poisoned");
