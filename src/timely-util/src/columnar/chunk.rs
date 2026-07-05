@@ -85,9 +85,9 @@ thread_local! {
 ///
 /// Takes effect at the next `settle`; already-spilled chunks are unaffected
 /// either way. The pool is resolved per commit through
-/// [`crate::column_pager::active_pool`], so chunks spill only when pool mode
-/// is the process's active shared mechanism; under the tiered mechanism (or
-/// with no pool installed) chunks stay resident regardless of the gates.
+/// [`crate::pool_config::active_pool`], so chunks spill only once
+/// `apply_pool_config` has installed and budgeted the pool; with no pool
+/// installed chunks stay resident regardless of the gates.
 pub fn set_compute_spill_enabled(enabled: bool) {
     COMPUTE_SPILL_ENABLED.store(enabled, Ordering::Relaxed);
 }
@@ -113,7 +113,7 @@ fn spill_pool() -> Option<Pool> {
     let enabled = COMPUTE_SPILL_ENABLED.load(Ordering::Relaxed)
         || STORAGE_SPILL_ENABLED.load(Ordering::Relaxed);
     if enabled {
-        crate::column_pager::active_pool()
+        crate::pool_config::active_pool()
     } else {
         None
     }

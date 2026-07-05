@@ -155,8 +155,8 @@ use mz_ore::pool::{ChunkHandle, Pool};
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::column_pager;
 use mz_timely_util::columnar::Column;
+use mz_timely_util::pool_config;
 use mz_timely_util::temporal::{Bucket, BucketChain};
 use timely::PartialOrder;
 use timely::dataflow::channels::ContainerBytes;
@@ -1412,7 +1412,7 @@ impl<D: Data> Chunk<D> {
         let mut spilled = None;
         let mut resident = OnceLock::new();
         let len_bytes = data.length_in_bytes();
-        match column_pager::active_pool() {
+        match pool_config::active_pool() {
             Some(pool) if len_bytes >= SPILL_MIN_BYTES => {
                 spilled = Some(spill_column(data, &pool, len_bytes));
             }
@@ -2075,19 +2075,18 @@ mod tests {
     /// configuration is process-wide; concurrent tests only ever observe a correct round-trip
     /// regardless of configuration, so racing on it is benign.
     fn with_spill_pool<R>(f: impl FnOnce() -> R) -> R {
-        let spill_all = column_pager::PoolPagerConfig {
-            enabled: false,
+        let spill_all = pool_config::PoolPagerConfig {
             budget_bytes: 0,
             spill_threads: 0,
             eager_backing: false,
             rss_target_bytes: 0,
         };
         assert!(
-            column_pager::apply_pool_config(spill_all),
+            pool_config::apply_pool_config(spill_all),
             "buffer pool unavailable",
         );
         let result = f();
-        column_pager::apply_pool_config(column_pager::PoolPagerConfig {
+        pool_config::apply_pool_config(pool_config::PoolPagerConfig {
             budget_bytes: usize::MAX,
             ..spill_all
         });

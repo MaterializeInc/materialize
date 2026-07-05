@@ -1668,12 +1668,7 @@ class FlipFlagsAction(Action):
             "0.05",
             "0.25",
         ]
-        self.flags_with_values["column_paged_batcher_lz4"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["column_paged_batcher_swap_pageout"] = (
-            BOOLEAN_FLAG_VALUES
-        )
-        self.flags_with_values["column_paged_batcher_use_pool"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["column_paged_batcher_pool_spill_threads"] = [
+        self.flags_with_values["column_paged_batcher_spill_worker_count"] = [
             "0",
             "2",
             "4",

@@ -294,18 +294,17 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     "Limit snapshot buffering in upsert.",
 );
 
-/// Allow the upsert-v2 source stash's paged columnar merge batcher to spill
-/// cold chains out of RSS via the column pager. The stash draws from the same
-/// shared budget pool (and backend / codec) as the compute column-paged
-/// batcher — there is one budget — but this flag gates the stash's
-/// participation independently of the compute-side
-/// `enable_column_paged_batcher_spill`.
+/// Allow the upsert-v2 source stash's chunk batcher to spill cold chains out
+/// of RSS via the process buffer pool. The stash draws from the same shared
+/// pool budget as the compute chunk batchers — there is one budget — but
+/// this flag gates the stash's participation independently of the
+/// compute-side `enable_column_paged_batcher_spill`.
 ///
 /// Off by default; the stash keeps every chunk resident until enabled.
 pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
     "enable_upsert_paged_spill",
     false,
-    "Allow the upsert-v2 source stash to spill chunks via the shared column pager, gated \
+    "Allow the upsert-v2 source stash to spill chunks to the shared buffer pool, gated \
      independently of the compute `enable_column_paged_batcher_spill`.",
 );
 

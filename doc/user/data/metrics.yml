@@ -452,49 +452,9 @@ metrics:
   - server_name
   source: src/service/src/transport/metrics.rs
   visibility: internal
-- name: mz_column_pager_budget_configured_bytes
-  help: Most-recently-configured total budget for the column-pager tiered policy.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_budget_remaining_bytes
-  help: Bytes the column-pager tiered policy currently has available for resident columns.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_paged_bytes_in_total
-  help: Total uncompressed bytes handed to the pager for pageout, before any codec is applied.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_paged_bytes_out_total
-  help: Total on-storage bytes after codec / padding.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_pagein_bytes_total
-  help: Total uncompressed bytes delivered by page-in.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_pageins_total
-  help: Successful page-ins from `ColumnPager::take`.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_pageouts_total
-  help: Pager decisions that paged the chunk out.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_resident_released_bytes_total
-  help: Total bytes returned to the budget by ticket drops.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_resident_released_total
-  help: Resident-ticket drops returning budget.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_skip_bytes_total
-  help: Total bytes kept resident by skip decisions.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_skip_decisions_total
-  help: Pager decisions that kept the chunk resident.
-  source: src/timely-util/src/column_pager/metrics.rs
+- name: mz_column_pool_*
+  help: help
+  source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_compute_collection_count
   help: The number and hydration status of maintained compute collections.

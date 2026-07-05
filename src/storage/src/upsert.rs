@@ -300,13 +300,13 @@ upsert_source_time_unit!(GtidPartition, Lsn);
 ///
 /// Both spill through the process buffer pool via the chunk seam
 /// ([`mz_timely_util::columnar::chunk`]): committed chunk bodies land in the
-/// pool when pool mode is the active shared mechanism (installed by compute's
-/// config handler; storage and compute run in the same `clusterd` process).
+/// pool once compute's config handler has installed and budgeted it (storage
+/// and compute run in the same `clusterd` process).
 /// The chunk spill gate is shared with compute's arrangement batchers as an
 /// OR of the two subsystems' flags; storage contributes its leg from
 /// `enable_upsert_paged_spill`. The gate is consulted at every chunk commit,
 /// so flips apply to running dataflows.
-pub mod upsert_stash_pager {
+pub mod upsert_stash_spill {
     /// Enable or disable spilling of upsert chunk bodies to the buffer pool.
     pub fn set_enabled(enabled: bool) {
         mz_timely_util::columnar::chunk::set_storage_spill_enabled(enabled);

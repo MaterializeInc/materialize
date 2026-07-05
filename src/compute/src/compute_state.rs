@@ -289,19 +289,6 @@ impl ComputeState {
             lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
-        // Pager backend selection follows scratch-directory availability:
-        // a scratch dir means the file backend; no scratch dir means swap.
-        // `set_scratch_dir` and `set_backend` are both idempotent, so calling
-        // on every `apply_worker_config` tick is safe. The pager module is
-        // only compiled on Unix targets (`mz_ore::pager` is `cfg(unix)`).
-        #[cfg(unix)]
-        if let Some(path) = &self.context.scratch_directory {
-            mz_ore::pager::set_scratch_dir(path.clone());
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::File);
-        } else {
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::Swap);
-        }
-
         crate::memory_limiter::apply_limiter_config(config);
 
         mz_ore::region::ENABLE_LGALLOC_REGION.store(
@@ -314,35 +301,21 @@ impl ComputeState {
         // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that
         // flipping the flag does not retroactively change arrangements on existing replicas.
 
-        // Apply column-paged-batcher configuration. Routes through
-        // `apply_tiered_config`, which reuses a process-wide `TieredPolicy`
-        // singleton — operator-driven tunes mutate the existing atomics
-        // rather than installing a fresh policy with a fresh budget atomic
-        // that would orphan in-flight resident tickets.
-        //
-        // Backend selection mirrors the lower-level `mz_ore::pager`
-        // already configured above: file when a scratch directory is
-        // available, swap otherwise.
+        // Configure the process-wide buffer pool that backs chunk spilling,
+        // then set compute's spill gate.
         {
-            use mz_ore::pager::Backend;
-            use mz_timely_util::column_pager::{
-                Codec, PoolPagerConfig, apply_pool_config, apply_tiered_config,
-            };
+            use mz_timely_util::pool_config::{PoolPagerConfig, apply_pool_config};
 
             let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
-            let use_pool = COLUMN_PAGED_BATCHER_USE_POOL.get(config);
             let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
             let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
-            let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
-            let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
 
             // Budget derivation: fraction × physical RAM, with a 128 MiB
             // floor so the no-pressure case doesn't page per chunk. Resident
             // budgets derive from RAM — never from the announced memory
             // limit, which on swap-provisioned nodes deliberately includes
             // swap for the memory limiter's purposes. Falls back to a 4 GiB
-            // assumption if detection fails. The pool and tiered paths share
-            // the derivation: the budget bounds resident bytes either way.
+            // assumption if detection fails.
             const MIB: usize = 1024 * 1024;
             const DEFAULT_RAM: usize = 4 * 1024 * MIB;
             let ram = mz_ore::memory::physical_memory_bytes().unwrap_or(DEFAULT_RAM);
@@ -356,27 +329,13 @@ impl ComputeState {
             // write pages out immediately, the pre-tier behavior.
             let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
 
-            let backend = if self.context.scratch_directory.is_some() {
-                Backend::File
-            } else {
-                Backend::Swap
-            };
-
-            let pool_config = PoolPagerConfig {
-                enabled,
+            let applied = apply_pool_config(PoolPagerConfig {
                 budget_bytes: total,
                 spill_threads,
                 eager_backing,
                 rss_target_bytes: rss_target,
-            };
-            if use_pool && apply_pool_config(pool_config) {
-                // Keep the tiered singleton configured even though the pool
-                // is the installed mechanism: consumers that captured a
-                // tiered pager (boot-time config ordering between the
-                // compute and storage protocols is unconstrained) must see
-                // the operator's budget and codec, not the singleton's
-                // zero-budget, codec-less boot state.
-                mz_timely_util::column_pager::tiered_policy().reconfigure(total, backend, codec);
+            });
+            if applied {
                 info!(
                     enabled,
                     fraction,
@@ -385,26 +344,10 @@ impl ComputeState {
                     spill_threads,
                     eager_backing,
                     rss_target_bytes = rss_target,
-                    "column-paged batcher: applying pool config",
+                    "chunk spill: applying buffer-pool config",
                 );
             } else {
-                if use_pool {
-                    warn!(
-                        "column-paged batcher: buffer pool unavailable; \
-                         falling back to tiered config",
-                    );
-                }
-                info!(
-                    enabled,
-                    ?backend,
-                    ?codec,
-                    swap_pageout,
-                    fraction,
-                    ram,
-                    budget_bytes = total,
-                    "column-paged batcher: applying tiered config",
-                );
-                apply_tiered_config(enabled, total, backend, codec, swap_pageout);
+                warn!("chunk spill: buffer pool unavailable; chunks stay resident");
             }
 
             // Compute's leg of the chunk-world spill gate: committed chunk

@@ -101,7 +101,7 @@ pub async fn serve(
         assert_eq!(storage_log_readers.len(), workers_per_process);
         storage_log_readers.into_iter().map(Some).collect()
     };
-    mz_timely_util::column_pager::metrics::register(metrics_registry);
+    mz_timely_util::pool_config::metrics::register(metrics_registry);
 
     let config = Config {
         persist_clients,
