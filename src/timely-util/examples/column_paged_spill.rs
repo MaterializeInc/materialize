@@ -41,8 +41,7 @@ use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
 use mz_ore::cast::{CastFrom, CastLossy, ReinterpretCast};
 use mz_ore::pager::{self, Backend};
-use mz_timely_util::column_pager::policy::TieredPolicy;
-use mz_timely_util::column_pager::{ColumnPager, set_global_pager};
+use mz_timely_util::column_pager::apply_tiered_config;
 use mz_timely_util::columnar::Col2ValPagedBatcher;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
@@ -79,13 +78,10 @@ struct Config {
 fn install_pager(spill: bool, budget: usize) {
     if spill {
         // Each process keeps a single `mz-pager-{pid}-{nonce}` subdir under
-        // this root; reused across `set_global_pager` reinstalls.
+        // this root; reused across config reapplies.
         pager::set_scratch_dir(std::env::temp_dir());
-        let policy = Arc::new(TieredPolicy::new(budget, Backend::File, None));
-        set_global_pager(ColumnPager::new(policy));
-    } else {
-        set_global_pager(ColumnPager::disabled());
     }
+    apply_tiered_config(spill, budget, Backend::File, None, false);
 }
 
 fn run_dataflow(cfg: &Config, label: &str) -> Duration {

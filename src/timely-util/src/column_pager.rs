@@ -25,6 +25,11 @@
 //! 2. A [`ColumnPager`] that drains a `Column<C>` into a [`PagedColumn`] and
 //!    rehydrates it on demand.
 //! 3. Lz4 frame-format compression as an optional codec.
+//! 4. A pooled path ([`PageDecision::Pool`]) that hands the body to an
+//!    [`mz_ore::pool::Pool`] instead of a pager backend. Residency becomes a
+//!    state of the pool's chunk handle rather than a property baked in at
+//!    pageout time — the prototype seam for
+//!    `doc/developer/design/20260610_buffer_managed_state.md`.
 //!
 //! The serialization uses the existing [`ContainerBytes`] protocol on
 //! `Column<C>`, so we get a single byte layout that both raw and compressed
@@ -37,7 +42,7 @@ pub mod policy;
 
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock};
 
 use columnar::Columnar;
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
@@ -63,7 +68,7 @@ pub struct PageHint {
 }
 
 /// Outcome of a policy decision.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum PageDecision {
     /// Keep the column resident; no I/O, no compression.
     Skip,
@@ -74,6 +79,11 @@ pub enum PageDecision {
         /// Compression codec, or `None` for raw bytes.
         codec: Option<Codec>,
     },
+    /// Hand the body to the given buffer pool. The pool owns residency from
+    /// here on: it enforces its own resident-bytes budget and compresses
+    /// into swap-backed extents at eviction time, so neither a backend nor a
+    /// codec choice applies.
+    Pool(mz_ore::pool::Pool),
 }
 
 /// Notifications the column-pager sends back to the policy. Implementations
@@ -172,6 +182,16 @@ pub enum PagedColumn<C: Columnar> {
         /// Sizing metadata.
         meta: Meta,
     },
+    /// Body held as a buffer-pool chunk. Residency is a state of the handle,
+    /// not of this variant: the pool keeps the chunk resident or evicts it
+    /// to a swap-backed extent under its own budget, and
+    /// [`ColumnPager::take`] reads it back from wherever it currently lives.
+    Pooled {
+        /// Pool handle owning the chunk.
+        handle: mz_ore::pool::ChunkHandle,
+        /// Sizing metadata.
+        meta: Meta,
+    },
 }
 
 /// Drop guard that returns budget to a [`PagingPolicy`] when a
@@ -227,6 +247,16 @@ impl ColumnPager {
     pub fn disabled() -> Self {
         Self::new(Arc::new(AlwaysResidentPolicy))
     }
+
+    /// Constructs a pager backed by `pool`: every non-empty [`page`] routes
+    /// the body into the pool, which enforces its own resident-bytes budget
+    /// (see [`policy::PoolPolicy`]). A prototype seam, opt-in via callers'
+    /// pager injection points rather than the global pager plumbing.
+    ///
+    /// [`page`]: ColumnPager::page
+    pub fn pooled(pool: mz_ore::pool::Pool) -> Self {
+        Self::new(Arc::new(policy::PoolPolicy::new(pool)))
+    }
 }
 
 /// Policy that keeps every column resident and discards events. Backs
@@ -247,16 +277,19 @@ impl PagingPolicy for AlwaysResidentPolicy {
 // either duplicate the global flag at the struct level or invite confusion
 // about which configuration wins."
 //
-// The lower-level `mz_ore::pager` already uses a global atomic for backend
-// selection. This module's policy/budget layer mirrors that shape: one
-// `ColumnPager` per process, swapped atomically when the controller changes
-// the configuration. Merge batchers clone the `Arc` inside on use; live
-// reinstalls take effect on the next call without per-thread coordination.
+// The configuration state is exactly two bits — which shared mechanism is
+// installed ([`POOL_MODE`]) and whether compute's own batchers are enabled
+// ([`COMPUTE_ENABLED`]) — plus the two mechanism singletons and the
+// [`SWAP_PAGEOUT`] toggle. Every pager a consumer sees is *derived* from
+// those bits at the moment it asks ([`global_pager`] for compute,
+// [`shared_pager`] for per-consumer opt-ins), so there is one resolution
+// path and nothing cached to fall out of sync. Consumers that capture a
+// pager (at render, say) keep it until they next ask; live reconfiguration
+// takes effect on the next call.
 
-/// Process-global active pager. Defaults to [`ColumnPager::disabled`]
-/// until worker init calls [`set_global_pager`].
-static GLOBAL_PAGER: LazyLock<RwLock<ColumnPager>> =
-    LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
+/// Whether compute's own batchers page through the shared mechanism.
+/// [`global_pager`] derives from this; set by the `apply_*_config` calls.
+static COMPUTE_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Process-global toggle for `MADV_PAGEOUT` on the lz4 + swap spill path.
 ///
@@ -268,17 +301,6 @@ static GLOBAL_PAGER: LazyLock<RwLock<ColumnPager>> =
 /// one, and every consumer of the shared pager reads the same value. Defaults
 /// to off; the eager-reclaim syscall stays gated until proven.
 static SWAP_PAGEOUT: AtomicBool = AtomicBool::new(false);
-
-/// Install `pager` as the process-wide active pager. Subsequent
-/// [`global_pager`] calls return a clone of this value across all threads.
-///
-/// Prefer [`apply_tiered_config`] for the production path so the
-/// `TieredPolicy` budget atomic stays stable across reconfigures. Direct
-/// `set_global_pager` use is appropriate for tests, the disabled pager, or
-/// callers that intentionally want a fresh policy.
-pub fn set_global_pager(pager: ColumnPager) {
-    *GLOBAL_PAGER.write().expect("global pager poisoned") = pager;
-}
 
 /// Process-wide [`policy::TieredPolicy`] singleton.
 ///
@@ -307,11 +329,11 @@ pub fn tiered_policy() -> &'static policy::TieredPolicy {
 /// [`policy::TieredPolicy`] so in-flight `ResidentTicket`s remain coherent
 /// with the running budget after the operator tunes any of the inputs.
 ///
-/// When `enabled` is true, installs a [`ColumnPager`] backed by the
-/// singleton policy. When false, installs [`ColumnPager::disabled`] —
-/// in-flight tickets still credit the singleton, which is harmless: the
-/// budget grows above the configured total until the next enable reconciles
-/// it via `reconfigure`.
+/// Makes the tiered policy the shared mechanism; [`global_pager`] resolves
+/// to it when `enabled` and to the disabled pager otherwise. With paging
+/// disabled, in-flight tickets still credit the singleton, which is
+/// harmless: the budget grows above the configured total until the next
+/// enable reconciles it via `reconfigure`.
 ///
 /// `swap_pageout` toggles `MADV_PAGEOUT` on the lz4 + swap spill path (see
 /// `SWAP_PAGEOUT`); it is stored unconditionally so the next `page` call
@@ -324,40 +346,145 @@ pub fn apply_tiered_config(
     swap_pageout: bool,
 ) {
     SWAP_PAGEOUT.store(swap_pageout, Ordering::Relaxed);
-    let p: &Arc<policy::TieredPolicy> = &TIERED_POLICY;
-    p.reconfigure(total_budget, backend, codec);
-    if enabled {
-        #[allow(clippy::clone_on_ref_ptr)]
-        let dyn_policy: Arc<dyn PagingPolicy> = p.clone();
-        set_global_pager(ColumnPager::new(dyn_policy));
-    } else {
-        set_global_pager(ColumnPager::disabled());
-    }
+    TIERED_POLICY.reconfigure(total_budget, backend, codec);
+    POOL_MODE.store(false, std::sync::atomic::Ordering::Relaxed);
+    COMPUTE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Returns the current global pager. Cheap: clones the inner `Arc<dyn
-/// PagingPolicy>`.
+/// Process-wide buffer pool shared by every pooled pager in the process.
+///
+/// A singleton for the same reason [`TIERED_POLICY`] is one: live
+/// [`PagedColumn::Pooled`] handles keep their `Arc` into the pool, so
+/// replacing it on reconfigure would split residency accounting across two
+/// budgets. Operator-driven tunes go through
+/// [`mz_ore::pool::Pool::set_budget`] on the one instance instead.
+///
+/// Construction reserves virtual address space only (a few GiB per size
+/// class); physical memory is paid per resident chunk. On the rare platforms
+/// or configurations where the reservation fails, the pool is permanently
+/// unavailable for this process and [`apply_pool_config`] reports that by
+/// returning `false` so callers can fall back to the tiered path.
+static GLOBAL_POOL: std::sync::OnceLock<Option<mz_ore::pool::Pool>> = std::sync::OnceLock::new();
+
+/// Whether the pool is the active shared spill mechanism (set by
+/// [`apply_pool_config`], cleared by [`apply_tiered_config`]). Read by
+/// [`shared_pager`] so per-consumer opt-ins follow whichever mechanism the
+/// last config apply installed.
+static POOL_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Returns the process-wide buffer pool, initializing it on first call.
+/// `None` if the virtual reservation failed at first use.
+pub fn global_pool() -> Option<mz_ore::pool::Pool> {
+    GLOBAL_POOL
+        .get_or_init(
+            || match mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig::default()) {
+                Ok(pool) => Some(pool),
+                Err(err) => {
+                    tracing::warn!(
+                        %err,
+                        "column pager: buffer pool reservation failed; pool mode unavailable",
+                    );
+                    None
+                }
+            },
+        )
+        .clone()
+}
+
+/// Returns the process-wide buffer pool only if something already
+/// initialized it; never triggers the virtual reservation itself. Metrics
+/// scrapes read through this so that observing a process (which may never
+/// enable pool mode) does not mmap the pool's address space as a side
+/// effect.
+pub fn global_pool_peek() -> Option<mz_ore::pool::Pool> {
+    GLOBAL_POOL.get().cloned().flatten()
+}
+
+/// Apply a pool-backed pager configuration. Returns `false` (and changes
+/// nothing) if the pool is unavailable, so the caller can fall back to
+/// [`apply_tiered_config`].
+///
+/// On success the pool becomes the active shared mechanism — [`global_pager`]
+/// resolves to it when `enabled`, and per-consumer opt-ins via
+/// [`shared_pager`] reach it either way — and the pool's resident budget is
+/// retuned in place so live handles stay coherent.
+pub fn apply_pool_config(cfg: PoolPagerConfig) -> bool {
+    let Some(pool) = global_pool() else {
+        return false;
+    };
+    pool.set_budget(cfg.budget_bytes);
+    pool.set_rss_target(cfg.rss_target_bytes);
+    pool.set_spill_threads(cfg.spill_threads);
+    pool.set_eager_backing(cfg.eager_backing);
+    POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
+    COMPUTE_ENABLED.store(cfg.enabled, std::sync::atomic::Ordering::Relaxed);
+    true
+}
+
+/// Inputs to [`apply_pool_config`]. All sizes are absolute bytes; fractions
+/// are resolved by the caller against *physical RAM* (see
+/// `mz_ore::memory::physical_memory_bytes`), never against an announced
+/// limit that may include swap.
+#[derive(Clone, Copy, Debug)]
+pub struct PoolPagerConfig {
+    /// Whether compute's own batchers page through the pool.
+    pub enabled: bool,
+    /// Resident-bytes budget for uncompressed slots.
+    pub budget_bytes: usize,
+    /// Spill threads for off-worker eviction I/O (spawn-once).
+    pub spill_threads: usize,
+    /// Whether idle spill threads eagerly compress chunks to
+    /// `BackedResident` ahead of pressure.
+    pub eager_backing: bool,
+    /// Ceiling on the pool's total RSS; the compressed-resident tier is the
+    /// headroom above the budget and warm cap. Zero collapses the tier.
+    pub rss_target_bytes: usize,
+}
+
+/// The pager for compute's own batchers: [`shared_pager`] resolved against
+/// the compute enable bit the last `apply_*_config` call stored. Cheap (one
+/// `Arc` clone); called per chunk, so unlike [`shared_pager`] it does not
+/// log its resolution.
 pub fn global_pager() -> ColumnPager {
-    GLOBAL_PAGER.read().expect("global pager poisoned").clone()
+    resolve_shared(COMPUTE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)).0
 }
 
-/// A pager that, when `enabled`, draws from the shared [`tiered_policy`] budget
-/// pool — the same pool `apply_tiered_config` sizes for the process-global
-/// pager — and otherwise is a disabled (always-resident) pager.
+/// A pager that, when `enabled`, draws from the process-wide shared spill
+/// mechanism — the buffer pool when [`apply_pool_config`] installed it, else
+/// the [`tiered_policy`] budget `apply_tiered_config` sizes — and otherwise is
+/// a disabled (always-resident) pager.
 ///
 /// This lets a second consumer (e.g. the storage upsert source stash) opt into
-/// the one shared budget independently of whether `apply_tiered_config` enabled
+/// the one shared budget independently of whether the config apply enabled
 /// the process-global pager for its own (compute) batchers. There is still a
-/// single budget pool and a single underlying `mz_ore::pager`; only the
-/// enable decision is per-consumer.
+/// single budget; only the enable decision is per-consumer. Which mechanism
+/// is shared follows the most recent config apply ([`apply_pool_config`] vs
+/// [`apply_tiered_config`]), so a consumer that captured a pager before a
+/// mechanism flip keeps its old one until it next calls here.
 pub fn shared_pager(enabled: bool) -> ColumnPager {
-    if enabled {
-        #[allow(clippy::clone_on_ref_ptr)]
-        let dyn_policy: Arc<dyn PagingPolicy> = TIERED_POLICY.clone();
-        ColumnPager::new(dyn_policy)
-    } else {
-        ColumnPager::disabled()
+    let (pager, resolved) = resolve_shared(enabled);
+    tracing::info!(
+        enabled,
+        pool_mode = POOL_MODE.load(std::sync::atomic::Ordering::Relaxed),
+        "shared column pager resolved: {resolved}",
+    );
+    pager
+}
+
+/// The one resolution path from the two configuration bits to a pager.
+/// Returns the pager and a label naming the resolution for logs.
+fn resolve_shared(enabled: bool) -> (ColumnPager, &'static str) {
+    if !enabled {
+        return (ColumnPager::disabled(), "disabled");
     }
+    if POOL_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Some(pool) = global_pool() {
+            return (ColumnPager::pooled(pool), "pool");
+        }
+    }
+    #[allow(clippy::clone_on_ref_ptr)]
+    let dyn_policy: Arc<dyn PagingPolicy> = TIERED_POLICY.clone();
+    (ColumnPager::new(dyn_policy), "tiered")
 }
 
 impl ColumnPager {
@@ -411,6 +538,53 @@ impl ColumnPager {
                 };
                 return PagedColumn::Resident(resident, ticket);
             }
+            PageDecision::Pool(pool) => {
+                debug_assert_eq!(len_bytes % 8, 0);
+                // Serialize straight into the pool slot: one page population,
+                // no staging buffers. The `Align` variant is already the
+                // serialized form and copies in directly; other variants
+                // write their `ContainerBytes` encoding through a cursor over
+                // the slot memory. Sizing is exact, so a short or overlong
+                // write is a `ContainerBytes` contract violation and panics
+                // via the cursor's bounds.
+                let handle = match std::mem::take(col) {
+                    Column::Align(v) => {
+                        pool.insert_with(v.len(), |dst| dst.copy_from_slice(v.as_slice()))
+                    }
+                    mut other => {
+                        let handle = pool.insert_with(len_bytes / 8, |dst| {
+                            let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
+                            let mut cursor = std::io::Cursor::new(bytes);
+                            other.into_bytes(&mut cursor);
+                            assert_eq!(
+                                usize::try_from(cursor.position()).expect("usize position"),
+                                len_bytes,
+                                "serialized body must fill the chunk exactly",
+                            );
+                        });
+                        // `into_bytes` only borrowed `other`; clear it in
+                        // place and hand it back so the caller keeps the
+                        // `Typed` allocation for its next refill.
+                        other.clear();
+                        *col = other;
+                        handle
+                    }
+                };
+                // The pool compresses internally at eviction time, so the
+                // policy-visible size is the uncompressed body on both sides.
+                // The pool's extent store is swap-backed.
+                metrics::observe_pageout(len_bytes, len_bytes);
+                self.policy.record(PageEvent::PagedOut {
+                    bytes_in: len_bytes,
+                    bytes_out: len_bytes,
+                    backend: Backend::Swap,
+                    codec: None,
+                });
+                return PagedColumn::Pooled {
+                    handle,
+                    meta: Meta { len_bytes },
+                };
+            }
             PageDecision::Page { backend, codec } => (backend, codec),
         };
         let meta = Meta { len_bytes };
@@ -421,23 +595,7 @@ impl ColumnPager {
                 // pager. `Column::Align` already is; other variants are
                 // serialized and copied.
                 debug_assert_eq!(len_bytes % 8, 0);
-                let body: Vec<u64> = match std::mem::take(col) {
-                    // Move the aligned buffer straight into the pager: the
-                    // allocation transfers with no copy. `take` already left
-                    // `col` as a refill-ready `Typed` default.
-                    Column::Align(v) => v,
-                    mut other => {
-                        let mut buf = Vec::with_capacity(len_bytes);
-                        other.into_bytes(&mut buf);
-                        debug_assert_eq!(buf.len() % 8, 0);
-                        // `into_bytes` only borrowed `other`; clear it in place
-                        // and hand it back so the caller keeps the `Typed`
-                        // allocation instead of us dropping a reusable buffer.
-                        other.clear();
-                        *col = other;
-                        bytemuck::allocation::pod_collect_to_vec::<u8, u64>(&buf)
-                    }
-                };
+                let body = drain_to_aligned(col, len_bytes);
                 let handle = pager::pageout_with(backend, &mut [body]);
                 let bytes_out = handle.len_bytes();
                 metrics::observe_pageout(len_bytes, bytes_out);
@@ -545,6 +703,38 @@ impl ColumnPager {
                 // produces the refcounted `Bytes` that `ContainerBytes` expects.
                 Column::from_bytes(BytesMut::from(decoded).freeze())
             }
+            PagedColumn::Pooled { handle, meta } => {
+                let mut body: Vec<u64> = Vec::with_capacity(handle.len());
+                handle.take(&mut body);
+                debug_assert_eq!(body.len() * 8, meta.len_bytes);
+                metrics::observe_pagein(meta.len_bytes);
+                self.policy.record(PageEvent::PagedIn {
+                    bytes: meta.len_bytes,
+                });
+                Column::Align(body)
+            }
+        }
+    }
+}
+
+/// Drains `col` into the u64-aligned raw body shared by the uncompressed
+/// pageout paths: a [`Column::Align`] moves its buffer out with no copy
+/// (leaving `col` a refill-ready `Typed` default), while other variants
+/// serialize via [`ContainerBytes::into_bytes`] and widen the bytes, handing
+/// the cleared `Typed` allocation back to `col` for reuse.
+fn drain_to_aligned<C: Columnar>(col: &mut Column<C>, len_bytes: usize) -> Vec<u64> {
+    match std::mem::take(col) {
+        Column::Align(v) => v,
+        mut other => {
+            let mut buf = Vec::with_capacity(len_bytes);
+            other.into_bytes(&mut buf);
+            debug_assert_eq!(buf.len() % 8, 0);
+            // `into_bytes` only borrowed `other`; clear it in place and hand
+            // it back so the caller keeps the `Typed` allocation instead of
+            // us dropping a reusable buffer.
+            other.clear();
+            *col = other;
+            bytemuck::allocation::pod_collect_to_vec::<u8, u64>(&buf)
         }
     }
 }
@@ -615,7 +805,7 @@ mod tests {
 
     impl PagingPolicy for TestPolicy {
         fn decide(&self, _hint: PageHint) -> PageDecision {
-            self.decision
+            self.decision.clone()
         }
         fn record(&self, event: PageEvent) {
             match event {
@@ -694,6 +884,16 @@ mod tests {
         assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
     }
 
+    /// Serializes tests that mutate the process-global pager configuration
+    /// (`POOL_MODE` / `COMPUTE_ENABLED` / `SWAP_PAGEOUT` / the singletons);
+    /// concurrent mutation makes their assertions race. Poison is recovered:
+    /// a prior test's panic doesn't invalidate the globals contract here.
+    fn global_config_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// With the swap-pageout flag on, the lz4 + swap path issues `MADV_PAGEOUT`
     /// over the compressed bytes; the round-trip must still reproduce the input
     /// (the advice is a non-destructive reclaim hint). Drives the global pager
@@ -703,6 +903,7 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `madvise` on OS `linux`
     fn round_trip_swap_lz4_pageout() {
+        let _guard = global_config_lock();
         apply_tiered_config(true, 0, Backend::Swap, Some(Codec::Lz4), true);
         let cp = global_pager();
         let mut col = sample_typed();
@@ -757,6 +958,57 @@ mod tests {
         assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
     }
 
+    /// Builds a small pool with a modest virtual reservation per size class.
+    fn test_pool(budget_bytes: usize) -> mz_ore::pool::Pool {
+        mz_ore::pool::Pool::new(mz_ore::pool::PoolConfig {
+            budget_bytes,
+            class_capacity_bytes: 64 << 20,
+        })
+        .expect("pool creation")
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn round_trip_pooled() {
+        let pool = test_pool(256 << 20);
+        let cp = ColumnPager::pooled(pool.clone());
+        let mut col = sample_typed();
+        let paged = cp.page(&mut col);
+        let PagedColumn::Pooled { handle, meta } = &paged else {
+            panic!("expected Pooled");
+        };
+        assert_eq!(handle.len_bytes(), meta.len_bytes);
+        // Push the chunk out to its extent and poison the freed slots, so a
+        // `take` that read stale slot memory (the macOS `MADV_DONTNEED`
+        // hazard via free-list reuse) would fail the content check below.
+        pool.evict(handle);
+        pool.poison_free_slots();
+        let rt = cp.take(paged);
+        assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
+        let stats = pool.stats();
+        assert_eq!(stats.inserts, 1);
+        assert_eq!(stats.faults, 1);
+        assert_eq!(stats.frees, 1);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // mmap and madvise are foreign calls
+    fn pooled_align_fast_path() {
+        let pool = test_pool(256 << 20);
+        let cp = ColumnPager::pooled(pool);
+        let body: Vec<u64> = (1u64..=512).collect();
+        let mut col: Column<i64> = Column::Align(body.clone());
+        let paged = cp.page(&mut col);
+        assert!(matches!(paged, PagedColumn::Pooled { .. }));
+        // After paging an Align variant, `col` is reset to the typed default.
+        assert!(matches!(col, Column::Typed(_)));
+        let rt = cp.take(paged);
+        match rt {
+            Column::Align(v) => assert_eq!(v, body),
+            other => panic!("expected Align, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
     #[mz_ore::test]
     fn align_variant_fast_path() {
         // Construct an Align column directly to exercise the move-only raw path.
@@ -777,5 +1029,53 @@ mod tests {
             Column::Align(v) => assert_eq!(v, body),
             other => panic!("expected Align, got {:?}", std::mem::discriminant(&other)),
         }
+    }
+
+    /// Exercises the process-global mechanism switch end to end. Runs as one
+    /// test because it mutates the process-wide `POOL_MODE` / global pager;
+    /// serialized against the other global-mutating tests via
+    /// [`global_config_lock`].
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
+    fn pool_mode_routing() {
+        let _guard = global_config_lock();
+        // Pool mode on: the global pager and shared pager both go pooled.
+        let ok = apply_pool_config(PoolPagerConfig {
+            enabled: true,
+            budget_bytes: 1 << 30,
+            spill_threads: 0,
+            eager_backing: false,
+            rss_target_bytes: 0,
+        });
+        assert!(ok, "pool reservation expected to succeed in tests");
+        let mut col = sample_typed();
+        let paged = global_pager().page(&mut col);
+        assert!(matches!(paged, PagedColumn::Pooled { .. }));
+        let rt = global_pager().take(paged);
+        assert_eq!(collect_i64(&rt), (0i64..1024).collect::<Vec<_>>());
+
+        let mut col = sample_typed();
+        let paged = shared_pager(true).page(&mut col);
+        assert!(matches!(paged, PagedColumn::Pooled { .. }));
+        drop(shared_pager(true).take(paged));
+
+        // Disabled consumers stay resident regardless of mechanism.
+        let mut col = sample_typed();
+        let paged = shared_pager(false).page(&mut col);
+        assert!(matches!(paged, PagedColumn::Resident(_, _)));
+        drop(paged);
+
+        // Tiered config flips the mechanism back: shared pager no longer pools.
+        apply_tiered_config(true, usize::MAX, Backend::Swap, None, false);
+        let mut col = sample_typed();
+        let paged = shared_pager(true).page(&mut col);
+        assert!(
+            !matches!(paged, PagedColumn::Pooled { .. }),
+            "tiered mode must not hand out pooled columns",
+        );
+        drop(paged);
+
+        // Leave the globals in the disabled state for any future test runs.
+        apply_tiered_config(false, 0, Backend::Swap, None, false);
     }
 }

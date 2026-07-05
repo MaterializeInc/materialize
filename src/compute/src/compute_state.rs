@@ -324,21 +324,33 @@ impl ComputeState {
         // available, swap otherwise.
         {
             use mz_ore::pager::Backend;
-            use mz_timely_util::column_pager::{Codec, apply_tiered_config};
+            use mz_timely_util::column_pager::{
+                Codec, PoolPagerConfig, apply_pool_config, apply_tiered_config,
+            };
 
             let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
+            let use_pool = COLUMN_PAGED_BATCHER_USE_POOL.get(config);
+            let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
+            let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
             let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
             let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
 
-            // Budget derivation: fraction × announced memory limit, with a
-            // 128 MiB floor so the no-pressure case doesn't page per chunk.
-            // Falls back to a 4 GiB assumption if no limit was announced
-            // (e.g. dev environments).
+            // Budget derivation: fraction × physical RAM, with a 128 MiB
+            // floor so the no-pressure case doesn't page per chunk. Resident
+            // budgets derive from RAM — never from the announced memory
+            // limit, which on swap-provisioned nodes deliberately includes
+            // swap for the memory limiter's purposes. Falls back to a 4 GiB
+            // assumption if detection fails. The pool and tiered paths share
+            // the derivation: the budget bounds resident bytes either way.
             const MIB: usize = 1024 * 1024;
-            const DEFAULT_MEM_LIMIT: usize = 4 * 1024 * MIB;
-            let mem_limit = crate::memory_limiter::get_memory_limit().unwrap_or(DEFAULT_MEM_LIMIT);
+            const DEFAULT_RAM: usize = 4 * 1024 * MIB;
+            let ram = mz_ore::memory::physical_memory_bytes().unwrap_or(DEFAULT_RAM);
             let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
-            let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
+            let total = usize::cast_lossy(f64::cast_lossy(ram) * fraction).max(128 * MIB);
+            let target_fraction = COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION
+                .get(config)
+                .max(0.0);
+            let rss_target = usize::cast_lossy(f64::cast_lossy(ram) * target_fraction);
 
             let backend = if self.context.scratch_directory.is_some() {
                 Backend::File
@@ -346,17 +358,50 @@ impl ComputeState {
                 Backend::Swap
             };
 
-            debug!(
+            let pool_config = PoolPagerConfig {
                 enabled,
-                ?backend,
-                ?codec,
-                swap_pageout,
-                fraction,
-                mem_limit,
-                budget_bytes = total,
-                "column-paged batcher: applying tiered config",
-            );
-            apply_tiered_config(enabled, total, backend, codec, swap_pageout);
+                budget_bytes: total,
+                spill_threads,
+                eager_backing,
+                rss_target_bytes: rss_target,
+            };
+            if use_pool && apply_pool_config(pool_config) {
+                // Keep the tiered singleton configured even though the pool
+                // is the installed mechanism: consumers that captured a
+                // tiered pager (boot-time config ordering between the
+                // compute and storage protocols is unconstrained) must see
+                // the operator's budget and codec, not the singleton's
+                // zero-budget, codec-less boot state.
+                mz_timely_util::column_pager::tiered_policy().reconfigure(total, backend, codec);
+                info!(
+                    enabled,
+                    fraction,
+                    ram,
+                    budget_bytes = total,
+                    spill_threads,
+                    eager_backing,
+                    rss_target_bytes = rss_target,
+                    "column-paged batcher: applying pool config",
+                );
+            } else {
+                if use_pool {
+                    warn!(
+                        "column-paged batcher: buffer pool unavailable; \
+                         falling back to tiered config",
+                    );
+                }
+                info!(
+                    enabled,
+                    ?backend,
+                    ?codec,
+                    swap_pageout,
+                    fraction,
+                    ram,
+                    budget_bytes = total,
+                    "column-paged batcher: applying tiered config",
+                );
+                apply_tiered_config(enabled, total, backend, codec, swap_pageout);
+            }
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on

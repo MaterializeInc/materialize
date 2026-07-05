@@ -42,9 +42,10 @@
 //!    to learn which times have been committed. When the persist frontier
 //!    reaches the resume upper, rehydration is complete.
 //!
-//! 3. **Seal & drain.** Call `batcher.seal(input_upper)` to extract all
-//!    source-finalized entries as sorted, consolidated `Column` chunks. Each
-//!    entry is classified:
+//! 3. **Seal & drain.** Call `batcher.seal_paged(input_upper)` to extract all
+//!    source-finalized entries as sorted, consolidated `Column` chunks, kept
+//!    paged and rehydrated one chunk at a time by the drain. Each entry is
+//!    classified:
 //!    - **Eligible** (at the persist frontier): the persist trace has the
 //!      correct "before" state for this time. Look up the old value via a
 //!      cursor, emit a retraction if present, and emit the new value.
@@ -638,7 +639,12 @@ where
                 // Step 1 already consolidated `push_buffer` through the chunker
                 // (which readies a complete chunk per `push_into`), so the
                 // chunker holds nothing pending here and we can seal directly.
-                let (sealed, _description) = batcher.seal(input_upper.clone());
+                //
+                // `seal_paged` keeps the sealed chunks paged; the drain below
+                // rehydrates them one at a time, so a large drain (a frontier
+                // advance releasing a snapshot's worth of stash at once) holds
+                // at most one chunk resident rather than the whole backlog.
+                let (sealed, _description) = batcher.seal_paged(input_upper.clone());
                 // Frontier of data remaining in the batcher (ts >= input_upper).
                 let remaining_frontier = batcher.frontier().to_owned();
 
@@ -653,8 +659,8 @@ where
                     &*cap,
                     &persist_upper,
                     &mut persist_trace,
-                    &source_config.worker_id,
-                    &source_config.id,
+                    source_config.worker_id,
+                    source_config.id,
                 )
                 .await;
 
@@ -681,22 +687,19 @@ where
                 let min_ineligible_ts = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
                 flush_to_batcher(&mut ineligible, &mut chunker, &mut batcher);
 
-                let has_remaining = !remaining_frontier.is_empty() || min_ineligible_ts.is_some();
-                if has_remaining {
-                    let min_ts = match (
-                        remaining_frontier.elements().first(),
-                        min_ineligible_ts.as_ref(),
-                    ) {
-                        (Some(a), Some(b)) => std::cmp::min(a, b).clone(),
-                        (Some(a), None) => a.clone(),
-                        (None, Some(b)) => b.clone(),
-                        (None, None) => unreachable!(),
-                    };
-                    cap.downgrade(&min_ts);
-                } else {
+                // `Option::min` alone would be wrong here — `None` sorts low —
+                // so chain the candidates and take the min over present ones.
+                let min_ts = remaining_frontier
+                    .elements()
+                    .first()
+                    .into_iter()
+                    .chain(min_ineligible_ts.as_ref())
+                    .min();
+                match min_ts {
+                    Some(min_ts) => cap.downgrade(min_ts),
                     // Batcher is completely empty — drop the capability so
                     // downstream operators can make progress.
-                    stash_cap = None;
+                    None => stash_cap = None,
                 }
             }
 
@@ -736,48 +739,43 @@ struct DrainStats {
 }
 
 /// Process sealed chunks from the batcher, classifying each entry by its
-/// timestamp relative to `persist_upper`: entries at the frontier are eligible
-/// for processing now (cursor lookup + output), entries above it are returned
-/// in `ineligible` for re-stashing, and entries below it are already persisted
-/// and dropped (see the body for why).
+/// timestamp relative to `persist_upper`:
+///
+///   * `ts == persist_upper`: eligible for processing now (cursor lookup +
+///     output).
+///   * `ts >  persist_upper`: not yet processable; returned in `ineligible`
+///     for re-stashing until the feedback frontier catches up to it.
+///   * `ts <  persist_upper`: already persisted by some writer and not
+///     relevant anymore; DROPPED. The downstream persist_sink would filter
+///     such updates out anyway since the shard upper is further ahead, and
+///     our state is already up-to-date to `persist_upper` so we could not
+///     emit correct retractions for it. Re-stashing it would strand the data
+///     forever (`persist_upper` only advances, so `ts == persist_upper` can
+///     never again hold) and pin the operator's output frontier below the
+///     shard upper. This mirrors v1's `relevant = persist_upper.less_equal(ts)`.
 ///
 /// The sealed chunks are already sorted and consolidated by the MergeBatcher,
 /// so the trace cursor walks forward through keys in order — seeks amortize.
+/// Chunks are pulled from the iterator one at a time and dropped before the
+/// next is requested, so at most one rehydrated chunk is resident regardless
+/// of drain size; eligible values are emitted straight from the column's
+/// `RowRef` with no owned `UpsertDiff` copy, and only the re-stashed
+/// ineligible set is materialized.
 async fn drain_sealed_input<T, O>(
-    sealed: Vec<Column<UpsertUpdate<T, O>>>,
+    sealed: impl Iterator<Item = Column<UpsertUpdate<T, O>>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
     persist_upper: &Antichain<T>,
     trace: &mut TraceAgent<ValRowSpine<UpsertKey, T, Diff>>,
-    worker_id: &usize,
-    source_id: &GlobalId,
+    worker_id: usize,
+    source_id: GlobalId,
 ) -> DrainStats
 where
     T: TotalOrder + Lattice + timely::ExchangeData + Timestamp + Clone + Debug + Ord + Sync,
     T: columnation::Columnation + columnar::Columnar,
     O: columnar::Columnar,
 {
-    // Classify each entry by its timestamp relative to `persist_upper`:
-    //
-    //   * `ts == persist_upper`: eligible for processing now.
-    //   * `ts >  persist_upper`: not yet processable; re-stashed (ineligible)
-    //     until the feedback frontier catches up to it.
-    //   * `ts <  persist_upper`: already persisted by some writer and not
-    //     relevant anymore. We DROP it. The downstream persist_sink would
-    //     filter such updates out anyway since the shard upper is further
-    //     ahead, and our state is already up-to-date to `persist_upper` so we
-    //     could not emit correct retractions for it. Re-stashing it would
-    //     strand the data forever (`persist_upper` only advances, so
-    //     `ts == persist_upper` can never again hold) and pin the operator's
-    //     output frontier below the shard upper. This mirrors v1's
-    //     `relevant = persist_upper.less_equal(ts)`.
-    // Walk the sealed chunks by reference rather than collecting the eligible
-    // set into an owned Vec. The chunks are globally sorted (the seal merges
-    // all chains into one run), so the cursor seeks still walk forward and
-    // amortize, and eligible values are emitted straight from the column's
-    // `RowRef` with no owned `UpsertDiff` copy. Only the re-stashed ineligible
-    // set is materialized.
     let mut eligible_count: u64 = 0;
     let mut result_count: u64 = 0;
     let mut output_count: u64 = 0;
@@ -787,7 +785,7 @@ where
 
     let (mut cursor, storage) = trace.cursor();
 
-    for chunk in &sealed {
+    for chunk in sealed {
         for (key, ts, diff) in chunk.borrow().into_index_iter() {
             let ts = <T as columnar::Columnar>::into_owned(ts);
             if !persist_upper.less_equal(&ts) {
