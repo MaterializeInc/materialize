@@ -70,6 +70,10 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.test_result import (
+    FailedTestExecutionError,
+    TestFailureDetails,
+)
 from materialize.ui import UIError
 from materialize.version_list import get_latest_published_version
 
@@ -832,10 +836,14 @@ def values_equivalent(a: Any, b: Any) -> bool | None:
         return sa == sb
 
 
-def report(title: str, names: Iterable[str]) -> None:
-    print(f"--- {title}")
-    for name in sorted(names):
-        print(f"  {name}")
+def format_section(title: str, lines: Iterable[str]) -> str:
+    """Render a discrepancy block: the title, then each detail line indented.
+
+    The same rendering feeds both the grouped CI log output and the Buildkite
+    failure annotation, so the annotation carries the full per-flag detail
+    rather than just a summary count.
+    """
+    return "\n".join([title, *(f"  {line}" for line in lines)])
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -961,48 +969,61 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"{len(env_divergences)} cross-environment."
     )
 
+    # Build a section per discrepancy kind, carrying the full per-flag detail.
+    # These feed both the grouped CI log output below and the failure annotation.
+    sections: list[str] = []
+
     if unexpected_missing:
-        report(
-            "ERROR: synchronized parameters missing in LaunchDarkly "
-            "(add an LD flag, or add to KNOWN_MISSING_FROM_LD)",
-            unexpected_missing,
+        sections.append(
+            format_section(
+                "ERROR: synchronized parameters missing in LaunchDarkly. "
+                "Add an LD flag, or add to KNOWN_MISSING_FROM_LD.",
+                sorted(unexpected_missing),
+            )
         )
 
     if unexpected_stale:
-        report(
-            "ERROR: stale LaunchDarkly flags -- no longer a synchronized "
-            "parameter in the current build or last release (archive in "
-            "LaunchDarkly, or add to KNOWN_STALE_LD_FLAGS)",
-            unexpected_stale,
+        sections.append(
+            format_section(
+                "ERROR: stale LaunchDarkly flags, no longer a synchronized "
+                "parameter in the current build or last release. Archive in "
+                "LaunchDarkly, or add to KNOWN_STALE_LD_FLAGS.",
+                sorted(unexpected_stale),
+            )
         )
 
     if cloud_vs_default:
-        print(
-            f"--- ERROR: flags whose cloud default ('{PRODUCTION_ENVIRONMENT}') "
-            f"differs from the compiled-in default"
-        )
-        for name in sorted(cloud_vs_default):
-            mz_value, prod_value = cloud_vs_default[name]
-            print(f"  {name}: default={mz_value!r} cloud={prod_value!r}")
-        print(
-            "Reconcile the compiled-in default, or -- if this is intentional "
-            "cloud-only tuning -- add the flag to INTENTIONAL_LD_OVERRIDES."
+        sections.append(
+            format_section(
+                f"ERROR: flags whose cloud default ('{PRODUCTION_ENVIRONMENT}') "
+                "differs from the compiled-in default. Reconcile the compiled-in "
+                "default, or add to INTENTIONAL_LD_OVERRIDES if this is "
+                "intentional cloud-only tuning.",
+                [
+                    f"{name}: default={mz_value!r} cloud={prod_value!r}"
+                    for name, (mz_value, prod_value) in sorted(cloud_vs_default.items())
+                ],
+            )
         )
 
     if env_divergences:
-        print(
-            "--- ERROR: flags whose LaunchDarkly default differs between "
-            f"environments ({', '.join(LAUNCHDARKLY_ENVIRONMENTS)})"
-        )
-        for name in sorted(env_divergences):
-            rendered = ", ".join(
-                f"{env}={value!r}" for env, value in env_divergences[name].items()
+        sections.append(
+            format_section(
+                "ERROR: flags whose LaunchDarkly default differs between "
+                f"environments ({', '.join(LAUNCHDARKLY_ENVIRONMENTS)}). Make the "
+                "environments agree, or add to KNOWN_CROSS_ENV_DIVERGENCES if "
+                "this is a deliberate staged rollout.",
+                [
+                    f"{name}: "
+                    + ", ".join(f"{env}={value!r}" for env, value in per_env.items())
+                    for name, per_env in sorted(env_divergences.items())
+                ],
             )
-            print(f"  {name}: {rendered}")
-        print(
-            "Make the environments agree, or -- if this is a deliberate staged "
-            "rollout -- add the flag to KNOWN_CROSS_ENV_DIVERGENCES."
         )
+
+    # Emit each section as its own collapsible Buildkite log group.
+    for section in sections:
+        print(f"--- {section}")
 
     # Allowlist entries that are no longer discrepancies, so they can be pruned.
     # For the divergence lists we only flag entries we could actually evaluate
@@ -1043,7 +1064,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if args.no_fail:
             print(f"WARNING: {message}")
         else:
-            raise UIError(message)
+            # Carry the full per-flag breakdown as the failure detail so the
+            # Buildkite annotation shows what diverged, not just the count.
+            raise FailedTestExecutionError(
+                error_summary=message,
+                errors=[
+                    TestFailureDetails(
+                        message=message,
+                        details="\n\n".join(sections),
+                    )
+                ],
+            )
     else:
         print(
             "No unexpected discrepancies: every difference is covered by the "
