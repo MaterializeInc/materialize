@@ -127,7 +127,7 @@ impl IlpExtractor {
         model: &CostModel,
         spellings: Option<&HashMap<Id, EquivalenceClasses>>,
     ) -> Option<Rel> {
-        use good_lp::{ProblemVariables, Solution, SolverModel, constraint, variable};
+        use good_lp::{constraint, variable, ProblemVariables, Solution, SolverModel};
 
         // Collect every class and its e-nodes reachable from root.
         let reachable = egraph.reachable(root);
@@ -141,9 +141,9 @@ impl IlpExtractor {
         }
 
         // A cyclic reachable subgraph (join commutativity is inherently cyclic) is
-        // handled directly: constraint 6 below encodes acyclicity of the SELECTED
-        // subgraph via MTZ level variables, so the program only ever admits a
-        // finite DAG plan and never needs to bail on the cycle.
+        // handled directly: the subtour-elimination cuts below encode acyclicity
+        // of the SELECTED subgraph, so the program only ever admits a finite DAG
+        // plan and never needs to bail on the cycle.
 
         // Assign a stable index to every (class, node) pair and every distinct
         // (class, key) arrangement.
@@ -211,25 +211,41 @@ impl IlpExtractor {
             .map(|_| vars.add(variable().binary()))
             .collect();
 
-        // MTZ acyclicity (constraint 6) is only needed inside strongly-connected
-        // components of the candidate graph. Only a class that lies on a directed
-        // cycle can be selected into an infinite term, so a class in a trivial SCC
-        // needs no level variable and no constraint. Scoping this way keeps every
-        // surviving big-M tight (the SCC size, not the whole class count), which
-        // is what keeps the solver fast. `cyclic_classes` returns the SCC
-        // partition plus the set of classes that sit in a non-trivial SCC.
-        let (scc_of, scc_size, cyclic) = cyclic_classes(egraph, &reachable);
+        // Acyclicity of the SELECTED subgraph is enforced by subtour-elimination
+        // cuts scoped to non-trivial SCCs of the candidate graph. Only a class on
+        // a directed cycle can be selected into an infinite term, so a class in a
+        // trivial SCC needs no cut. `cyclic_classes` returns the SCC partition
+        // plus the set of classes that sit in a non-trivial SCC.
+        //
+        // The cut form is specialized to the SCC size. A self-loop (size 1) is
+        // forbidden node by node. A size-2 SCC is forbidden by a single
+        // mutual-exclusion inequality over its cross-edges. Only size >= 3 falls
+        // back to the general big-M MTZ level encoding. The exact cuts at sizes 1
+        // and 2 are pure-binary, which microlp solves far faster than the
+        // continuous big-M level variables MTZ would use.
+        let (scc_of, _scc_size, cyclic) = cyclic_classes(egraph, &reachable);
 
-        // Level var per class in a non-trivial SCC, bounded [0, |SCC| - 1]. The
-        // per-SCC big-M in constraint 6 is |SCC| = level_max + 1, tight, so an
-        // unselected edge is never falsely binding. Iterating `class_order` keeps
-        // the variable order deterministic.
-        let mut level_of: BTreeMap<Id, good_lp::Variable> = BTreeMap::new();
+        // Group the non-trivial-SCC classes by SCC index. Iterating `class_order`
+        // (BTreeMap key order) keeps the grouping and every downstream cut
+        // deterministic.
+        let mut scc_members: BTreeMap<usize, Vec<Id>> = BTreeMap::new();
         for &cls in &class_order {
             if cyclic.contains(&cls) {
-                let k = scc_size[scc_of[&cls]];
-                let lvl_max = (k.saturating_sub(1)) as f64;
-                level_of.insert(cls, vars.add(variable().min(0.0).max(lvl_max)));
+                scc_members.entry(scc_of[&cls]).or_default().push(cls);
+            }
+        }
+
+        // Level variables exist ONLY for size >= 3 SCCs (the MTZ fallback).
+        // Size-1 and size-2 SCCs use the pure-binary cuts below and need no level
+        // variable and no big-M. Each level is bounded [0, |SCC| - 1] with per-SCC
+        // big-M |SCC|, tight, so an unselected edge is never falsely binding.
+        let mut level_of: BTreeMap<Id, good_lp::Variable> = BTreeMap::new();
+        for members in scc_members.values() {
+            if members.len() >= 3 {
+                let lvl_max = (members.len() - 1) as f64;
+                for &cls in members {
+                    level_of.insert(cls, vars.add(variable().min(0.0).max(lvl_max)));
+                }
             }
         }
 
@@ -371,31 +387,76 @@ impl IlpExtractor {
             }
         }
 
-        // Constraint 6 (MTZ acyclicity of the selected subgraph), scoped to
-        // non-trivial SCCs. For a child edge whose parent and child sit in the
-        // SAME non-trivial SCC, a SELECTED parent node forces
-        // level[c] + 1 <= level[p]. The big-M is the SCC size, the tight per-SCC
-        // bound (M = |SCC| = level_max + 1), so an unselected edge is never
-        // falsely binding. A cross-SCC edge and an edge inside a trivial SCC can
-        // never lie on a cycle, so they get no constraint. A selected self-loop
-        // (c == p, in a non-trivial size-1 SCC) yields level[p] + 1 <= level[p],
-        // infeasible, so the solver never selects it. Iterating `reachable` (a
-        // BTreeMap) keeps the constraint order deterministic.
+        // Subtour-elimination cuts (exact Dantzig-Fulkerson-Johnson), scoped to
+        // non-trivial SCCs and specialized to the SCC size.
+        //
+        // Cut 1 (self-loop, |S| = 1): for every node whose child class equals its
+        // own class, forbid selecting it. A selected self-loop is an infinite
+        // term. This is the single self-loop mechanism, a constraint rather than
+        // candidate-set exclusion, and it applies regardless of SCC size so a
+        // self-loop nested in a larger SCC is covered too. Iterating `reachable`
+        // (a BTreeMap) keeps the constraint order deterministic.
         for (&class, nodes) in &reachable {
-            if !cyclic.contains(&class) {
-                continue;
-            }
-            let scc = scc_of[&class];
-            let m = scc_size[scc] as f64;
-            let lp = level_of[&class];
             for (pos, node) in nodes.iter().enumerate() {
-                let vi = node_idx[&(class, pos)];
-                for child in egraph.child_classes(node) {
-                    if scc_of[&child] == scc {
-                        let lc = level_of[&child];
-                        // level[child] + 1 <= level[parent] + M * (1 - node_sel[vi])
-                        lp_model =
-                            lp_model.with(constraint!(lc + 1.0 <= lp + m * (1.0 - node_sel[vi])));
+                if egraph.child_classes(node).into_iter().any(|c| c == class) {
+                    let vi = node_idx[&(class, pos)];
+                    lp_model = lp_model.with(constraint!(node_sel[vi] == 0));
+                }
+            }
+        }
+
+        // Cuts 2 and 3 per non-trivial SCC, by size.
+        for members in scc_members.values() {
+            match members.len() {
+                // Size 1: only a self-loop, already forbidden by cut 1. No
+                // multi-class cycle is possible in a singleton component.
+                1 => {}
+                // Cut 2 (mutual exclusion, |S| = 2). A selected 2-cycle over
+                // {A, B} exists iff A's selected node has a child in B AND B's
+                // selected node has a child in A. `xa` sums node_sel over EVERY
+                // A-node with any child class == B (any node type, via
+                // `child_classes`, not just a commute Project), `xb` symmetric.
+                // `xa + xb <= 1` forbids exactly that conjunction, together with
+                // the exactly-one-node-per-used-class constraint. Sound and
+                // complete for the 2-cycle, with no continuous vars and no big-M.
+                2 => {
+                    let (a, b) = (members[0], members[1]);
+                    let mut xa = good_lp::Expression::from(0.0);
+                    for (pos, node) in reachable[&a].iter().enumerate() {
+                        if egraph.child_classes(node).into_iter().any(|c| c == b) {
+                            xa += node_sel[node_idx[&(a, pos)]];
+                        }
+                    }
+                    let mut xb = good_lp::Expression::from(0.0);
+                    for (pos, node) in reachable[&b].iter().enumerate() {
+                        if egraph.child_classes(node).into_iter().any(|c| c == a) {
+                            xb += node_sel[node_idx[&(b, pos)]];
+                        }
+                    }
+                    lp_model = lp_model.with(constraint!(xa + xb <= 1));
+                }
+                // Cut 3 (MTZ fallback, |S| >= 3). For a within-SCC child edge, a
+                // SELECTED parent node forces level[child] + 1 <= level[parent].
+                // The big-M is the SCC size, the tight per-SCC bound, so an
+                // unselected edge is never falsely binding. This path is dormant
+                // corpus-wide (every SCC is size <= 2) but kept as the general
+                // acyclicity encoding for a future larger SCC.
+                _ => {
+                    let m = members.len() as f64;
+                    let scc = scc_of[&members[0]];
+                    for &class in members {
+                        let lp = level_of[&class];
+                        for (pos, node) in reachable[&class].iter().enumerate() {
+                            let vi = node_idx[&(class, pos)];
+                            for child in egraph.child_classes(node) {
+                                if scc_of[&child] == scc {
+                                    let lc = level_of[&child];
+                                    lp_model = lp_model.with(constraint!(
+                                        lc + 1.0 <= lp + m * (1.0 - node_sel[vi])
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1038,14 +1099,14 @@ mod tests {
     /// Join commutativity is inherently cyclic: `Join(a, b)` and `Join(b, a)`
     /// are equal up to a column swap, so the two alternatives cross-reference
     /// through swap Projects and the reachable candidate graph has a directed
-    /// cycle. The two classes form one non-trivial SCC of size 2, so they get
-    /// level variables bounded `[0, 1]` with per-SCC big-M 2. The MTZ constraints
-    /// let the ILP extract the acyclic optimum (the plain Join) directly rather
-    /// than bailing to greedy on the cycle.
+    /// cycle. The two classes form one non-trivial SCC of size 2, so the size-2
+    /// mutual-exclusion cut `xa + xb <= 1` forbids selecting both cross-edges at
+    /// once. That lets the ILP extract the acyclic optimum (the plain Join)
+    /// directly rather than bailing to greedy on the cycle.
     ///
     /// The class also carries a self-referential identity Project whose input is
-    /// its own class. Selecting it would force `level[A] + 1 <= level[A]`,
-    /// infeasible under MTZ, so the solver must never select it.
+    /// its own class. The universal self-loop cut pins its `node_sel` to 0, so
+    /// the solver must never select it.
     #[mz_ore::test]
     fn ilp_handles_join_commutativity_cycle() {
         use crate::eqsat::cost::CostModel;
@@ -1119,15 +1180,14 @@ mod tests {
         }
     }
 
-    /// MTZ per-SCC big-M off-by-one guard. The two classes form one non-trivial
-    /// SCC of size 2, so their level variables are bounded `[0, 1]` with per-SCC
-    /// big-M 2. The selected chain must span every level in that range: the leaf
-    /// sits at level 0 and the root at level 1, exactly on the `[0, |SCC| - 1]`
-    /// boundary. A too-tight level bound (or a too-small big-M) would make the
-    /// program infeasible and `solve` would bail, so asserting `Some` proves the
-    /// worst-case boundary level is reachable.
+    /// Size-2 mutual-exclusion cut admits the one acyclic selection. The two
+    /// classes form one non-trivial SCC of size 2 with a cross-edge each way, so
+    /// the cut `xa + xb <= 1` forbids taking both at once. Exactly one acyclic
+    /// selection survives: `p1 = Project(leaf)`, `leaf = Get`. Asserting `Some`
+    /// proves the cut does not over-constrain and rule out that valid selection,
+    /// and the `Project(Get)` shape proves the 2-cycle was broken at the leaf.
     #[mz_ore::test]
-    fn ilp_mtz_level_bound_reaches_full_depth() {
+    fn ilp_size_two_cut_admits_acyclic_selection() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::{CNode, EGraph, ENode};
         use crate::eqsat::ir::Rel;
@@ -1135,8 +1195,7 @@ mod tests {
         // leaf <- p1 <- p2, then union(leaf, p2) closes a cycle through
         // congruence. Reachable from p1 are exactly two classes: p1 and the
         // merged leaf/p2 class. They form one size-2 SCC. The only acyclic
-        // selection is p1 = Project(leaf), leaf = Get, forcing levels leaf = 0
-        // and p1 = 1 = |SCC| - 1.
+        // selection is p1 = Project(leaf), leaf = Get.
         let mut eg = EGraph::new();
         let leaf = eg.add(CNode::Rel(ENode::Get {
             name: "r".into(),
@@ -1157,7 +1216,7 @@ mod tests {
         let model = CostModel::new();
         let plan = IlpExtractor::default()
             .solve(&eg, root, &model, None)
-            .expect("the MTZ boundary level must be feasible; a too-tight bound would bail");
+            .expect("the size-2 cut must admit the acyclic selection, not over-constrain it");
         assert!(
             matches!(&plan, Rel::Project { input, .. } if matches!(**input, Rel::Get { .. })),
             "expected the Project(Get) chain, got {plan:?}",
@@ -1167,11 +1226,10 @@ mod tests {
     /// A size-1 SCC with a self-loop is still non-trivial. A class carries a
     /// self-referential identity Project (its input is its own class) alongside a
     /// finite ArrangeBy alternative. Tarjan reports the class as a size-1
-    /// component, so the self-loop rule is what keeps it non-trivial. Without that
-    /// rule the class would get no acyclicity constraint and the ILP would take
-    /// the zero-arrangement self Project, an infinite term. The self-loop
-    /// constraint `level[R] + 1 <= level[R]` is infeasible when the self Project
-    /// is selected, so the solver must take the finite ArrangeBy instead.
+    /// component, so the self-loop rule is what keeps it non-trivial. Without a
+    /// cut the ILP would take the zero-arrangement self Project, an infinite term.
+    /// The universal self-loop cut pins the self Project's `node_sel` to 0, so the
+    /// solver must take the finite ArrangeBy instead.
     #[mz_ore::test]
     fn ilp_size_one_self_loop_scc_never_extractable() {
         use crate::eqsat::cost::CostModel;
@@ -1261,6 +1319,105 @@ mod tests {
         assert!(
             scc_size.iter().all(|&s| s == 1),
             "every acyclic class must be a size-1 SCC, scc_size = {scc_size:?}",
+        );
+    }
+
+    /// Size >= 3 MTZ fallback. Corpus-wide every non-trivial SCC is size 2, so
+    /// the MTZ path is dormant and golden churn never exercises it. This
+    /// hand-built size-3 cycle keeps it from rotting and insures a future larger
+    /// SCC. Three classes A -> B -> C -> A each carry a zero-arrangement Project
+    /// to the next class (the cycle) and a one-arrangement `ArrangeBy(Get)`
+    /// grounding. The full 3-cycle is the cheapest selection on arrangements
+    /// (zero), so absent the MTZ cut the ILP would pick it, an infinite term that
+    /// fails reconstruction. The MTZ level constraints make the 3-cycle
+    /// infeasible, forcing the ILP to ground at a leaf and pay one arrangement.
+    #[mz_ore::test]
+    fn ilp_size_three_cycle_mtz_fallback() {
+        use crate::eqsat::cost::CostModel;
+        use crate::eqsat::egraph::{CNode, EGraph, ENode};
+        use crate::eqsat::ir::Rel;
+
+        let mut eg = EGraph::new();
+        let a_leaf = eg.add(CNode::Rel(ENode::Get {
+            name: "a".into(),
+            arity: 1,
+        }));
+        let b_leaf = eg.add(CNode::Rel(ENode::Get {
+            name: "b".into(),
+            arity: 1,
+        }));
+        let c_leaf = eg.add(CNode::Rel(ENode::Get {
+            name: "c".into(),
+            arity: 1,
+        }));
+
+        // A key-less ArrangeBy grounds each class in a finite, one-arrangement
+        // form. The Project below is the zero-arrangement cross-edge to the next
+        // class, so grounding is what the ILP pays to escape the cycle.
+        let a_arr = eg.add(CNode::Rel(ENode::ArrangeBy {
+            input: a_leaf,
+            key: vec![],
+        }));
+        let b_arr = eg.add(CNode::Rel(ENode::ArrangeBy {
+            input: b_leaf,
+            key: vec![],
+        }));
+        let c_arr = eg.add(CNode::Rel(ENode::ArrangeBy {
+            input: c_leaf,
+            key: vec![],
+        }));
+
+        // Close the cycle: class A gets a Project referencing class B, B one
+        // referencing C, C one referencing A. Union each into the arranged class
+        // so A -> B -> C -> A is one size-3 SCC.
+        let a_to_b = eg.add(CNode::Rel(ENode::Project {
+            input: b_arr,
+            outputs: vec![0],
+        }));
+        let b_to_c = eg.add(CNode::Rel(ENode::Project {
+            input: c_arr,
+            outputs: vec![0],
+        }));
+        let c_to_a = eg.add(CNode::Rel(ENode::Project {
+            input: a_arr,
+            outputs: vec![0],
+        }));
+        eg.union(a_arr, a_to_b);
+        eg.union(b_arr, b_to_c);
+        eg.union(c_arr, c_to_a);
+        eg.rebuild();
+
+        let root = eg.find(a_arr);
+
+        // Confirm the three classes form one non-trivial size-3 SCC, so the MTZ
+        // fallback (not the size-1 or size-2 binary cuts) is the path under test.
+        let reachable = eg.reachable(root);
+        let (scc_of, scc_size, cyclic) = cyclic_classes(&eg, &reachable);
+        assert!(
+            cyclic.contains(&root),
+            "the cycle classes must be non-trivial, cyclic = {cyclic:?}",
+        );
+        assert_eq!(
+            scc_size[scc_of[&root]], 3,
+            "the three classes must form one size-3 SCC exercising the MTZ fallback",
+        );
+
+        let model = CostModel::new();
+        let plan = IlpExtractor::default()
+            .solve(&eg, root, &model, None)
+            .expect("the MTZ fallback must break the 3-cycle and yield a finite plan");
+
+        // The acyclic optimum grounds root A directly: ArrangeBy(Get "a"), one
+        // arrangement. The infinite 3-cycle (a Project chain that never grounds)
+        // must never be extracted.
+        assert!(
+            matches!(&plan, Rel::ArrangeBy { input, .. } if matches!(**input, Rel::Get { .. })),
+            "expected the grounded ArrangeBy(Get), never the 3-cycle, got {plan:?}",
+        );
+        assert_eq!(
+            model.cost(&plan).arrangements,
+            1,
+            "breaking the cycle must cost exactly one arrangement, got {plan:?}",
         );
     }
 
