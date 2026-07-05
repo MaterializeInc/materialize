@@ -1,9 +1,29 @@
 # WS2: MFP-part sharing and the width cost axis
 
-Status: design, pending implementation. Builds on WS0 + WS1 (landed,
-`20260704_eqsat_sharing_aware_cost.md`). Scope: build WS2a (Map-split rule) +
-WS2c (width cost axis) + WS2d (post-eqsat reconcile) now, design and defer WS2b
-(factoring extractor) and Project-splitting.
+Status: WS2a-c BUILT and reviewed, LANDED INERT, acceptance NOT certified.
+Builds on WS0 + WS1 (landed, `20260704_eqsat_sharing_aware_cost.md`). Scope:
+WS2a (Map-split rule, peel-first) + WS2c (width cost axis) + WS2d (post-eqsat
+reconcile) built; WS2b (factoring extractor) and Project-splitting designed and
+deferred.
+
+The Map-split rule, the width-aware `(degree, arity)` cost memory, and the ILP
+arity tier are implemented, each two-stage reviewed, and byte-identical
+flag-off. They do NOT yet produce a share end to end on the target shape, so
+scalar sharing is landed INERT and the acceptance is uncertified. The blocker is
+a pre-existing bug outside WS2: the join-shaped acceptance triggers a
+join-commutativity cycle that trips the ILP cycle-guard, silently falling back
+to the DAG-blind greedy extractor where the scalar-aware and width tiers do not
+apply. See `20260705_eqsat_ilp_join_commute_cycle_bail.md`. That is a live
+default-path degradation (the ILP is default-on), broader than WS2. WS2's Task 5
+acceptance re-runs once it is fixed.
+
+Note on why no acceptance shape exists today: WS2 needs two consumers that share
+a `Map` prefix and DIFFER in arity. `UNION` cannot express that (equal-arity,
+padding breaks the prefix into a diverging share), so the acceptance uses a join
+of two subqueries. But the join shape is exactly what trips the commutativity
+cycle above. So the UNION-cannot / join-blocked chain means no constructible
+acceptance shape exists today. This is the real sense in which WS2 is inert, not
+a flag-wiring triviality.
 
 ## Motivation
 
