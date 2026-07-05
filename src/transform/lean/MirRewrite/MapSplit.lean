@@ -17,7 +17,7 @@ namespace MirRewrite
 
 theorem rule_map_split :
     ∀ (s1 : Row → Row) (s2 : Row → Row) (r : Bag), mapB (catRows s1 s2) r = mapB s2 (mapB s1 r) := by
-    -- not modeled at the bag level (acts on row/column structure); see rule_fuse_maps
+    -- not modeled at the bag level (acts on row/column structure). See rule_fuse_maps.
     sorry
 
 end MirRewrite
