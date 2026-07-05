@@ -16,3 +16,6 @@ aws-types.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
