@@ -46,6 +46,17 @@ impl Client {
         }
     }
 
+    /// Wraps an existing SDK client.
+    ///
+    /// Exists so tests can inject a mocked SDK client (e.g. via
+    /// `aws_smithy_mocks`). Production callers construct clients through
+    /// [`ClientConfig`](crate::ClientConfig) instead, which is why this is
+    /// gated behind the `test-util` feature.
+    #[cfg(feature = "test-util")]
+    pub fn from_sdk_client(inner: aws_sdk_glue::Client) -> Self {
+        Client { inner }
+    }
+
     /// Look up a registry by name.
     ///
     /// Returns [`GetRegistryError::NotFound`] if the registry does not exist
@@ -130,19 +141,23 @@ impl Client {
     }
 
     /// Look up the schema version whose definition byte-for-byte matches
-    /// `definition`, returning its UUID.
+    /// `definition`.
     ///
     /// This is the sink reuse path: before registering a new version, callers
     /// check whether the exact definition is already registered so that a sink
     /// restart does not create a duplicate version. Returns
     /// [`GetSchemaByDefinitionError::NotFound`] if the schema does not exist or
     /// has no version matching `definition`.
+    ///
+    /// The match is by definition only: Glue also matches versions whose
+    /// lifecycle status is `Failure` or `Deleting`, so callers must check the
+    /// returned status before reusing the version's id.
     pub async fn get_schema_by_definition(
         &self,
         registry_name: &str,
         schema_name: &str,
         definition: &str,
-    ) -> Result<Uuid, GetSchemaByDefinitionError> {
+    ) -> Result<RegisteredSchemaVersion, GetSchemaByDefinitionError> {
         let schema_id = SchemaId::builder()
             .registry_name(registry_name)
             .schema_name(schema_name)
@@ -155,23 +170,33 @@ impl Client {
             .send()
             .await
             .map_err(classify_get_schema_by_definition_error)?;
-        parse_schema_version_id(output.schema_version_id).map_err(GetSchemaByDefinitionError::Other)
+        let id = parse_schema_version_id(output.schema_version_id)
+            .map_err(GetSchemaByDefinitionError::Other)?;
+        Ok(RegisteredSchemaVersion {
+            id,
+            lifecycle_status: output.status.map(SchemaVersionLifecycleStatus::from_sdk),
+        })
     }
 
-    /// Register `definition` as a new version of an existing schema, returning
-    /// the new version's UUID.
+    /// Register `definition` as a new version of an existing schema.
     ///
     /// The schema `(registry_name, schema_name)` must already exist. Returns
     /// [`RegisterSchemaVersionError::SchemaNotFound`] if it does not, in which
     /// case the caller should create it with [`Client::create_schema`].
     /// Registering a definition identical to an existing version is idempotent
-    /// on Glue's side and returns that version's UUID.
+    /// on Glue's side and returns that version.
+    ///
+    /// Glue runs the compatibility check asynchronously: a newly registered
+    /// version comes back `Pending` and only later transitions to `Available`
+    /// or `Failure`. Callers must not use the version's id until they have
+    /// observed it `Available`, polling via
+    /// [`Client::get_schema_version_by_id`].
     pub async fn register_schema_version(
         &self,
         registry_name: &str,
         schema_name: &str,
         definition: &str,
-    ) -> Result<Uuid, RegisterSchemaVersionError> {
+    ) -> Result<RegisteredSchemaVersion, RegisterSchemaVersionError> {
         let schema_id = SchemaId::builder()
             .registry_name(registry_name)
             .schema_name(schema_name)
@@ -184,12 +209,21 @@ impl Client {
             .send()
             .await
             .map_err(classify_register_schema_version_error)?;
-        parse_schema_version_id(output.schema_version_id).map_err(RegisterSchemaVersionError::Other)
+        let id = parse_schema_version_id(output.schema_version_id)
+            .map_err(RegisterSchemaVersionError::Other)?;
+        Ok(RegisteredSchemaVersion {
+            id,
+            lifecycle_status: output.status.map(SchemaVersionLifecycleStatus::from_sdk),
+        })
     }
 
     /// Create a schema in `registry_name` with `definition` as its first version
-    /// and `compatibility` as its evolution policy, returning the first
-    /// version's UUID.
+    /// and `compatibility` as its evolution policy, returning that first
+    /// version.
+    ///
+    /// A first version has no prior version to be compatible with, so it is
+    /// usually `Available` immediately, but callers should still confirm the
+    /// returned status before using the version's id.
     ///
     /// Glue sets a schema's compatibility only at creation. This crate exposes
     /// no way to change it afterward, matching the sink's set-if-unset policy:
@@ -205,7 +239,7 @@ impl Client {
         data_format: DataFormat,
         compatibility: Compatibility,
         definition: &str,
-    ) -> Result<Uuid, CreateSchemaError> {
+    ) -> Result<RegisteredSchemaVersion, CreateSchemaError> {
         let registry_id = RegistryId::builder().registry_name(registry_name).build();
         let output = self
             .inner
@@ -218,7 +252,14 @@ impl Client {
             .send()
             .await
             .map_err(classify_create_schema_error)?;
-        parse_schema_version_id(output.schema_version_id).map_err(CreateSchemaError::Other)
+        let id =
+            parse_schema_version_id(output.schema_version_id).map_err(CreateSchemaError::Other)?;
+        Ok(RegisteredSchemaVersion {
+            id,
+            lifecycle_status: output
+                .schema_version_status
+                .map(SchemaVersionLifecycleStatus::from_sdk),
+        })
     }
 
     /// Fetch a schema's metadata by `(registry_name, schema_name)`.
@@ -349,6 +390,20 @@ impl SchemaVersion {
             lifecycle_status: output.status.map(SchemaVersionLifecycleStatus::from_sdk),
         }
     }
+}
+
+/// A schema version's identity and lifecycle status, as returned by the write
+/// path methods [`Client::get_schema_by_definition`],
+/// [`Client::register_schema_version`], and [`Client::create_schema`].
+///
+/// Glue validates new versions asynchronously, so `lifecycle_status` is often
+/// `Pending` here. A version is only usable for framing records once it is
+/// `Available`. Callers holding a non-`Available` status must poll
+/// [`Client::get_schema_version_by_id`] until it resolves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredSchemaVersion {
+    pub id: Uuid,
+    pub lifecycle_status: Option<SchemaVersionLifecycleStatus>,
 }
 
 /// Data format of a Glue schema.
@@ -652,7 +707,85 @@ fn classify_get_schema_error(err: SdkError<SdkGetSchemaError>) -> GetSchemaError
 
 #[cfg(test)]
 mod tests {
+    use aws_sdk_glue::operation::create_schema::CreateSchemaOutput;
+    use aws_sdk_glue::operation::get_schema_by_definition::GetSchemaByDefinitionOutput;
+    use aws_sdk_glue::operation::register_schema_version::RegisterSchemaVersionOutput;
+    use aws_smithy_mocks::{RuleMode, mock, mock_client};
+
     use super::*;
+
+    const VERSION_ID: &str = "12345678-1234-5678-1234-567812345678";
+
+    /// The write methods must surface the lifecycle status from each response:
+    /// Glue validates versions asynchronously, so callers gate on it before
+    /// using a version's id.
+    #[mz_ore::test(tokio::test)]
+    async fn write_methods_surface_lifecycle_status() {
+        let register = mock!(aws_sdk_glue::Client::register_schema_version).then_output(|| {
+            RegisterSchemaVersionOutput::builder()
+                .schema_version_id(VERSION_ID)
+                .status(SdkSchemaVersionStatus::Pending)
+                .build()
+        });
+        let by_definition =
+            mock!(aws_sdk_glue::Client::get_schema_by_definition).then_output(|| {
+                GetSchemaByDefinitionOutput::builder()
+                    .schema_version_id(VERSION_ID)
+                    .status(SdkSchemaVersionStatus::Failure)
+                    .build()
+            });
+        let create = mock!(aws_sdk_glue::Client::create_schema).then_output(|| {
+            CreateSchemaOutput::builder()
+                .schema_version_id(VERSION_ID)
+                .schema_version_status(SdkSchemaVersionStatus::Available)
+                .build()
+        });
+        let client = Client {
+            inner: mock_client!(
+                aws_sdk_glue,
+                RuleMode::MatchAny,
+                &[&register, &by_definition, &create]
+            ),
+        };
+
+        let id = Uuid::parse_str(VERSION_ID).expect("valid uuid literal");
+        assert_eq!(
+            client
+                .register_schema_version("registry", "schema", "{}")
+                .await
+                .expect("mocked register succeeds"),
+            RegisteredSchemaVersion {
+                id,
+                lifecycle_status: Some(SchemaVersionLifecycleStatus::Pending),
+            }
+        );
+        assert_eq!(
+            client
+                .get_schema_by_definition("registry", "schema", "{}")
+                .await
+                .expect("mocked lookup succeeds"),
+            RegisteredSchemaVersion {
+                id,
+                lifecycle_status: Some(SchemaVersionLifecycleStatus::Failure),
+            }
+        );
+        assert_eq!(
+            client
+                .create_schema(
+                    "registry",
+                    "schema",
+                    DataFormat::Avro,
+                    Compatibility::Backward,
+                    "{}",
+                )
+                .await
+                .expect("mocked create succeeds"),
+            RegisteredSchemaVersion {
+                id,
+                lifecycle_status: Some(SchemaVersionLifecycleStatus::Available),
+            }
+        );
+    }
 
     #[mz_ore::test]
     fn parse_schema_version_id_valid() {
