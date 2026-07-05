@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
-use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal, Navigable};
+use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dyncfgs::{
     ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING,
@@ -103,9 +104,12 @@ impl LinearJoinSpec {
     ) -> VecCollection<'s, T, I::Item, Diff>
     where
         T: Lattice + timely::progress::Timestamp,
-        Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
-        L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
+        Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        Tr2: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        BatchCursor<Tr1>: Cursor<Time = T, Diff = Diff> + 'static,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, Time = T, Diff = Diff>,
+        BatchCursor<Tr2>: 'static,
+        L: FnMut(BatchKey<'_, Tr1>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
         I: IntoIterator<Item: Data> + 'static,
     {
         use LinearJoinImpl::*;
@@ -479,11 +483,14 @@ where
         Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     )
     where
-        Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
-        for<'a> Tr1::Key<'a>: ExtendDatums,
-        for<'a> Tr1::Val<'a>: ExtendDatums,
-        for<'a> Tr2::Val<'a>: ExtendDatums,
+        Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        Tr2: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        BatchCursor<Tr1>: Cursor<Time = T, Diff = Diff> + 'static,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, Time = T, Diff = Diff>,
+        BatchCursor<Tr2>: 'static,
+        for<'a> BatchKey<'a, Tr1>: ExtendDatums,
+        for<'a> BatchVal<'a, Tr1>: ExtendDatums,
+        for<'a> BatchVal<'a, Tr2>: ExtendDatums,
     {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();

@@ -17,8 +17,9 @@ use std::time::{Duration, Instant};
 use bytesize::ByteSize;
 use differential_dataflow::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::cursor::BatchCursor;
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
@@ -1670,7 +1671,8 @@ impl IndexPeek {
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus
     where
-        for<'a> Tr: TraceReader<
+        Tr: TraceReader<Batch: Navigable>,
+        for<'a> BatchCursor<Tr>: Cursor<
                 Key<'a>: ExtendDatums + Eq,
                 KeyContainer: BatchContainer<Owned = Row>,
                 Val<'a>: ExtendDatums,

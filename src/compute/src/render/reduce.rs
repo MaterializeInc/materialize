@@ -21,6 +21,9 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::cursor::{
+    BatchCursor, BatchDiff, BatchValOwn, Cursor, Navigable,
+};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
@@ -769,20 +772,21 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         name_tag: Option<&str>,
     ) -> Arranged<'s, TraceAgent<Tr>>
     where
-        Tr: for<'a> Trace<
+        Tr: Trace<Batch: Navigable, Time = T> + 'static,
+        for<'a> BatchCursor<Tr>: Cursor<
                 Key<'a> = DatumSeq<'a>,
                 KeyContainer: BatchContainer<Owned = Row>,
                 Time = T,
                 Diff = Diff,
                 ValOwn: Data + MaybeValidatingRow<(), String>,
-            > + 'static,
+            >,
         Bu: Builder<
                 Time = T,
                 Input: Container
                            + ClearContainer
-                           + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
+                           + PushInto<((Row, BatchValOwn<Tr>), Tr::Time, BatchDiff<Tr>)>,
                 Output = Tr::Batch,
-            >,
+            > + 'static,
         Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -803,7 +807,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 "Arranged ReduceInaccumulable Distinct [val: empty]",
             )
             .mz_reduce_abelian::<_, Bu, Tr>(&output_name, move |_, source, t| {
-                if let Some(err) = Tr::ValOwn::into_error() {
+                if let Some(err) = BatchValOwn::<Tr>::into_error() {
                     for (value, count) in source.iter() {
                         if count.is_positive() {
                             continue;
@@ -815,7 +819,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         return;
                     }
                 }
-                t.push((Tr::ValOwn::ok(()), Diff::ONE))
+                t.push((BatchValOwn::<Tr>::ok(()), Diff::ONE))
             })
     }
 
@@ -1119,20 +1123,21 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         Arranged<'s, TraceAgent<Tr>>,
     )
     where
-        Tr: for<'a> Trace<
+        Tr: Trace<Batch: Navigable, Time = T> + 'static,
+        for<'a> BatchCursor<Tr>: Cursor<
                 Key<'a> = DatumSeq<'a>,
                 KeyContainer: BatchContainer<Owned = Row>,
                 ValOwn: Data + MaybeValidatingRow<Row, Row>,
                 Time = T,
                 Diff = Diff,
-            > + 'static,
+            >,
         Bu: Builder<
                 Time = T,
                 Input: Container
                            + ClearContainer
-                           + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
+                           + PushInto<((Row, BatchValOwn<Tr>), Tr::Time, BatchDiff<Tr>)>,
                 Output = Tr::Batch,
-            >,
+            > + 'static,
         Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -1154,7 +1159,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let reduced = arranged_input.clone().mz_reduce_abelian::<_, Bu, Tr>(
             "Reduced Fallibly MinsMaxesHierarchical",
             move |key, source, target| {
-                if let Some(err) = Tr::ValOwn::into_error() {
+                if let Some(err) = BatchValOwn::<Tr>::into_error() {
                     // Should negative accumulations reach us, we should loudly complain.
                     for (value, count) in source.iter() {
                         if count.is_positive() {
@@ -1167,7 +1172,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
                         target.push((
-                            err(<Tr::KeyContainer as BatchContainer>::into_owned(key)),
+                            err(<<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::into_owned(key)),
                             Diff::ONE,
                         ));
                         return;
@@ -1199,11 +1204,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // of the multiplicity of the final result in the input, we only want to have one copy
                 // in the output.
                 target.reserve(source.len().saturating_add(1));
-                target.push((Tr::ValOwn::ok(row_builder.clone()), Diff::MINUS_ONE));
+                target.push((BatchValOwn::<Tr>::ok(row_builder.clone()), Diff::MINUS_ONE));
                 target.extend(source.iter().map(|(values, cnt)| {
                     let mut cnt = *cnt;
                     cnt.negate();
-                    (Tr::ValOwn::ok(values.to_row()), cnt)
+                    (BatchValOwn::<Tr>::ok(values.to_row()), cnt)
                 }));
             },
         );

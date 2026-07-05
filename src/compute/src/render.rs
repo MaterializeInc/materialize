@@ -115,7 +115,8 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::operators::iterate::Variable;
-use differential_dataflow::trace::{BatchReader, TraceReader};
+use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchKey, BatchVal, Navigable};
+use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -564,15 +565,16 @@ where
     /// that we'll filter those out later if necessary.)
     fn import_filtered_index_collection<
         'outer,
-        Tr: TraceReader<Time = mz_repr::Timestamp> + Clone,
+        Tr: TraceReader<Batch: Navigable, Time = mz_repr::Timestamp> + Clone,
         V: Data,
     >(
         &self,
         arranged: Arranged<'outer, Tr>,
         start_signal: StartSignal,
-        mut logic: impl FnMut(Tr::Key<'_>, Tr::Val<'_>) -> V + 'static,
-    ) -> VecCollection<'g, T, V, Tr::Diff>
+        mut logic: impl FnMut(BatchKey<'_, Tr>, BatchVal<'_, Tr>) -> V + 'static,
+    ) -> VecCollection<'g, T, V, BatchDiff<Tr>>
     where
+        BatchCursor<Tr>: Cursor<Time = Tr::Time>,
         // This is implied by the fact that the outer timestamp = mz_repr::Timestamp, but it's essential
         // for our batch-level filtering to be safe, so we document it here regardless.
         mz_repr::Timestamp: TotalOrder,

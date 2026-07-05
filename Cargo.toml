@@ -641,6 +641,11 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+# Chunk-API migration: differential master-next plus the UnloadChunk bulk-read
+# capability, from the `unload-chunk` branch.
+differential-dataflow = { git = "https://github.com/DAlperin/differential-dataflow.git", rev = "b27ad576c5634afc345b446f81ef686d403b9514" }
+differential-dogs3 = { git = "https://github.com/DAlperin/differential-dataflow.git", rev = "b27ad576c5634afc345b446f81ef686d403b9514" }
+
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

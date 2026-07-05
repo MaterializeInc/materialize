@@ -20,8 +20,9 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
+use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{Builder, Trace};
+use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
 use mz_compute_types::plan::ArrangementStrategy;
@@ -591,16 +592,17 @@ where
     T: MzTimestamp,
     Bu: Builder<
             Time = T,
-            Input: Container + ClearContainer + PushInto<((Row, Tr::ValOwn), T, Diff)>,
+            Input: Container + ClearContainer + PushInto<((Row, BatchValOwn<Tr>), T, Diff)>,
             Output = Tr::Batch,
-        >,
-    Tr: for<'a> Trace<
+        > + 'static,
+    Tr: Trace<Batch: Navigable, Time = T> + 'static,
+    for<'a> BatchCursor<Tr>: Cursor<
             Key<'a> = DatumSeq<'a>,
             KeyContainer: BatchContainer<Owned = Row>,
             ValOwn: Data + MaybeValidatingRow<Row, Row>,
             Time = T,
             Diff = Diff,
-        > + 'static,
+        >,
     Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -630,7 +632,7 @@ where
     let reduced = arranged
         .clone()
         .mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
-            move |hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
+            move |hash_key, source, target: &mut Vec<(BatchValOwn<Tr>, Diff)>| {
                 // Unpack the limit, either into an integer literal or an expression to evaluate.
                 let limit = match &limit {
                     Some(Ok(lit)) => Some(*lit),
@@ -652,7 +654,7 @@ where
                     None => None,
                 };
 
-                if let Some(err) = Tr::ValOwn::into_error() {
+                if let Some(err) = BatchValOwn::<Tr>::into_error() {
                     for (datums, diff) in source.iter() {
                         if diff.is_positive() {
                             continue;
@@ -676,7 +678,7 @@ where
                 // dependencies on the user-provided (potentially unbounded) limit.
                 target.reserve(source.len());
                 for (datums, diff) in source.iter() {
-                    target.push((Tr::ValOwn::ok((*datums).to_row()), -diff));
+                    target.push((BatchValOwn::<Tr>::ok((*datums).to_row()), -diff));
                 }
                 // local copies that may count down to zero.
                 let mut offset = offset;
@@ -726,7 +728,7 @@ where
                     if diff.is_positive() {
                         // Emit retractions for the elements actually part of
                         // the set of TopK elements.
-                        target.push((Tr::ValOwn::ok(datums.to_row()), diff));
+                        target.push((BatchValOwn::<Tr>::ok(datums.to_row()), diff));
                     }
                 }
             }

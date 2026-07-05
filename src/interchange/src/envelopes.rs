@@ -12,7 +12,7 @@ use std::iter;
 use std::sync::LazyLock;
 
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{BatchReader, Cursor};
+use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
 use itertools::EitherOrBoth;
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
@@ -33,13 +33,19 @@ use crate::avro::DiffPair;
 /// with more than one pair (e.g., for primary-key violation checks).
 pub fn for_each_diff_pair<B, F>(batch: &B, mut on_diff_pair: F)
 where
-    B: BatchReader<Diff = Diff>,
-    B::Time: Copy,
-    B::ValOwn: 'static,
-    F: FnMut(&<B::KeyContainer as BatchContainer>::Owned, B::Time, DiffPair<B::ValOwn>),
+    B: BatchReader + Navigable,
+    B::Cursor: Cursor<Time = <B as BatchReader>::Time, Diff = Diff>,
+    <B as BatchReader>::Time: Copy,
+    <B::Cursor as Cursor>::ValOwn: 'static,
+    F: FnMut(
+        &<<B::Cursor as Cursor>::KeyContainer as BatchContainer>::Owned,
+        <B as BatchReader>::Time,
+        DiffPair<<B::Cursor as Cursor>::ValOwn>,
+    ),
 {
-    let mut befores: Vec<(B::Time, B::ValOwn, usize)> = vec![];
-    let mut afters: Vec<(B::Time, B::ValOwn, usize)> = vec![];
+    type Val<B> = <<B as Navigable>::Cursor as Cursor>::ValOwn;
+    let mut befores: Vec<(<B as BatchReader>::Time, Val<B>, usize)> = vec![];
+    let mut afters: Vec<(<B as BatchReader>::Time, Val<B>, usize)> = vec![];
 
     let mut cursor = batch.cursor();
     while cursor.key_valid(batch) {
@@ -50,10 +56,10 @@ where
         while cursor.val_valid(batch) {
             let v = cursor.val(batch);
             cursor.map_times(batch, |t, diff| {
-                let diff = B::owned_diff(diff);
+                let diff = <B::Cursor as Cursor>::owned_diff(diff);
                 let update = (
-                    B::owned_time(t),
-                    B::owned_val(v),
+                    <B::Cursor as Cursor>::owned_time(t),
+                    <B::Cursor as Cursor>::owned_val(v),
                     usize::cast_from(diff.unsigned_abs()),
                 );
                 if diff < Diff::ZERO {
@@ -73,11 +79,12 @@ where
         // implementation, we might use `iter::repeat((t, v)).take(cnt)`, but that would clone `v` `cnt` times even
         // when `cnt = 1`. By contrast, `repeat_n((t, v), cnt)` will return the original `(t, v)` when `cnt = 1`,
         // and only clone when `cnt > 1`.
-        let fan_out = |(t, v, cnt): (B::Time, B::ValOwn, usize)| iter::repeat_n((t, v), cnt);
+        let fan_out =
+            |(t, v, cnt): (<B as BatchReader>::Time, Val<B>, usize)| iter::repeat_n((t, v), cnt);
         let befores_iter = befores.drain(..).flat_map(fan_out);
         let afters_iter = afters.drain(..).flat_map(fan_out);
 
-        let key_owned = <B::KeyContainer as BatchContainer>::into_owned(k);
+        let key_owned = <<B::Cursor as Cursor>::KeyContainer as BatchContainer>::into_owned(k);
 
         for pair in
             itertools::merge_join_by(befores_iter, afters_iter, |(t1, _v1), (t2, _v2)| t1.cmp(t2))
@@ -172,10 +179,11 @@ mod tests {
     /// sorted list for easy assertion.
     fn collect_diff_pairs<B>(batch: &B) -> Vec<(String, u64, Option<String>, Option<String>)>
     where
-        B: BatchReader<Diff = Diff>,
-        B::Time: Copy + Into<u64>,
-        B::ValOwn: 'static + Into<String>,
-        <B::KeyContainer as BatchContainer>::Owned: Into<String> + Clone,
+        B: BatchReader + Navigable,
+        B::Cursor: Cursor<Time = <B as BatchReader>::Time, Diff = Diff>,
+        <B as BatchReader>::Time: Copy + Into<u64>,
+        <B::Cursor as Cursor>::ValOwn: 'static + Into<String>,
+        <<B::Cursor as Cursor>::KeyContainer as BatchContainer>::Owned: Into<String> + Clone,
     {
         let mut out = vec![];
         for_each_diff_pair(batch, |k, t, dp| {

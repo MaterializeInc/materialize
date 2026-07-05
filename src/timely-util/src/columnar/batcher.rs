@@ -774,16 +774,19 @@ where
         }
     }
 
-    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+    fn len(chunk: &Self::Chunk) -> usize {
+        usize::try_from(chunk.record_count()).expect("record_count is non-negative")
+    }
+
+    fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
         use timely::dataflow::channels::ContainerBytes;
-        let records = usize::try_from(chunk.record_count()).expect("record_count is non-negative");
         // Serialized footprint stands in for both `size` and `capacity`: the
         // chunk owns one logical allocation worth of leaf storage, and we
         // ship/recycle the whole thing rather than tracking per-leaf
         // capacities. Treating `size == capacity` matches how the framework
         // accounts already-shipped chunks (no slack to absorb).
         let bytes = chunk.length_in_bytes();
-        (records, bytes, bytes, 1)
+        (bytes, bytes, 1)
     }
 }
 

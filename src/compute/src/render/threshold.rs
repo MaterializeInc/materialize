@@ -13,8 +13,9 @@
 
 use differential_dataflow::Data;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchValOwn};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{Builder, Trace, TraceReader};
+use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace, TraceReader};
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_repr::Diff;
@@ -37,39 +38,37 @@ fn threshold_arrangement<'scope, Ts, T1, Bu2, T2, L>(
 ) -> Arranged<'scope, TraceAgent<T2>>
 where
     Ts: MzTimestamp,
-    T1: TraceReader<
+    T1: TraceReader<Batch: Navigable, Time = Ts> + Clone + 'static,
+    BatchCursor<T1>: Cursor<
             KeyContainer: BatchContainer<Owned: MzData + Data>,
             ValOwn: MzData + Data,
             Time = Ts,
             Diff = Diff,
-        > + Clone
-        + 'static,
+        >,
     Bu2: Builder<
             Time = Ts,
             Input: Container
                        + ClearContainer
                        + PushInto<(
-                (<T1::KeyContainer as BatchContainer>::Owned, T1::ValOwn),
+                (
+                    <<BatchCursor<T1> as Cursor>::KeyContainer as BatchContainer>::Owned,
+                    BatchValOwn<T1>,
+                ),
                 Ts,
                 Diff,
             )>,
             Output = T2::Batch,
-        >,
-    T2: for<'a> Trace<
-            Key<'a> = T1::Key<'a>,
-            Val<'a> = T1::Val<'a>,
-            KeyContainer: BatchContainer<Owned = <T1::KeyContainer as BatchContainer>::Owned>,
-            ValOwn = T1::ValOwn,
-            Time = Ts,
-            Diff = Diff,
         > + 'static,
+    T2: Trace<Batch: Navigable, Time = Ts> + 'static,
+    for<'a> BatchCursor<T2>:
+        Cursor<Key<'a> = BatchKey<'a, T1>, ValOwn = BatchValOwn<T1>, Time = Ts, Diff = Diff>,
     L: Fn(&Diff) -> bool + 'static,
     Arranged<'scope, TraceAgent<T2>>: ArrangementSize,
 {
     arrangement.mz_reduce_abelian::<_, Bu2, T2>(name, move |_key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
-                t.push((T1::owned_val(*record), *count));
+                t.push((<BatchCursor<T1> as Cursor>::owned_val(*record), *count));
             }
         }
     })
