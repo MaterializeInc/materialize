@@ -14,7 +14,7 @@
 //! dynamic program; [`IlpExtractor`] (a 0/1 program) optimizes the
 //! non-compositional set-cardinality objective the greedy form cannot.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::analysis::equivalences::EquivalenceClasses;
 use crate::eqsat::colored_derive::ColoredLayer;
@@ -22,6 +22,19 @@ use crate::eqsat::cost::CostModel;
 use crate::eqsat::egraph::{EGraph, ENode, Id};
 use crate::eqsat::ir::Rel;
 use crate::eqsat::objective::Objective;
+
+/// Count of ILP-to-greedy fallbacks this process, by reason. Read by the
+/// solve-time measurement and the fallback test. Not silent: every fallback also
+/// emits a debug log via [`record_ilp_fallback`].
+pub(crate) static ILP_FALLBACKS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Record one ILP-to-greedy fallback with its reason. Bumps [`ILP_FALLBACKS`]
+/// and emits a debug log so a fallback is never silent.
+fn record_ilp_fallback(reason: &str) {
+    ILP_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tracing::debug!(reason, "ilp extractor fell back to greedy");
+}
 
 /// Reconstructs the best [`Rel`] for `root` from a saturated e-graph under an
 /// [`Objective`]. Returns `None` only when no representative can be built (the
@@ -83,52 +96,6 @@ pub struct IlpExtractor {
     pub width_aware: bool,
 }
 
-/// Whether the subgraph reachable from `root_class` contains a directed cycle,
-/// where an edge runs from a class to each child class of each of its e-nodes.
-///
-/// The ILP encodes a finite DAG selection, so a cyclic reachable subgraph has no
-/// representable plan. Within a Let-free fragment the e-graph is acyclic by
-/// construction, so this is a guard against an upstream invariant violation, not
-/// an expected case. Three-color DFS over canonical class ids: a back edge to a
-/// node still on the recursion stack is a cycle. Recursion depth is bounded by
-/// the class count, itself bounded by the `total_nodes > 600` cap in `solve`.
-fn reachable_has_cycle(
-    egraph: &EGraph,
-    reachable: &BTreeMap<Id, Vec<ENode>>,
-    root_class: Id,
-) -> bool {
-    fn visit(
-        egraph: &EGraph,
-        reachable: &BTreeMap<Id, Vec<ENode>>,
-        class: Id,
-        on_stack: &mut BTreeSet<Id>,
-        done: &mut BTreeSet<Id>,
-    ) -> bool {
-        if done.contains(&class) {
-            return false;
-        }
-        // Already on the current DFS path: this edge closes a cycle.
-        if !on_stack.insert(class) {
-            return true;
-        }
-        if let Some(nodes) = reachable.get(&class) {
-            for node in nodes {
-                for child in egraph.child_classes(node) {
-                    if visit(egraph, reachable, child, on_stack, done) {
-                        return true;
-                    }
-                }
-            }
-        }
-        on_stack.remove(&class);
-        done.insert(class);
-        false
-    }
-    let mut on_stack = BTreeSet::new();
-    let mut done = BTreeSet::new();
-    visit(egraph, reachable, root_class, &mut on_stack, &mut done)
-}
-
 impl Extractor for IlpExtractor {
     fn extract(
         &self,
@@ -169,19 +136,14 @@ impl IlpExtractor {
         // MAX_ENODES is already capped upstream, but be defensive here too.
         let total_nodes: usize = reachable.values().map(|v| v.len()).sum();
         if total_nodes > 600 {
+            record_ilp_fallback("size_cap");
             return None;
         }
 
-        // Defense in depth: the ILP selects a finite DAG and cannot represent a
-        // cyclic plan. A Let-free fragment's e-graph is acyclic by construction
-        // (recursive references stay opaque `LocalGet` leaves and are never
-        // unioned into their own definition, see `engine`), so a cycle here means
-        // an upstream invariant was violated. Reject it up front and let the
-        // caller fall back to greedy, rather than discovering it 500 frames deep
-        // in `build_selected_inner`.
-        if reachable_has_cycle(egraph, &reachable, egraph.find(root)) {
-            return None;
-        }
+        // A cyclic reachable subgraph (join commutativity is inherently cyclic) is
+        // handled directly: constraint 6 below encodes acyclicity of the SELECTED
+        // subgraph via MTZ level variables, so the program only ever admits a
+        // finite DAG plan and never needs to bail on the cycle.
 
         // Assign a stable index to every (class, node) pair and every distinct
         // (class, key) arrangement.
@@ -247,6 +209,17 @@ impl IlpExtractor {
             .collect();
         let class_used: Vec<_> = (0..class_order.len())
             .map(|_| vars.add(variable().binary()))
+            .collect();
+
+        // Topological level per class for MTZ acyclicity of the SELECTED
+        // subgraph (constraint 6). Bound [0, C-1] since a topological numbering
+        // of C classes needs levels 0..C-1. The big-M there is C = level_max + 1,
+        // so an unselected edge is never falsely binding at the boundary. Built
+        // over `class_order` so the variable order stays deterministic.
+        let num_classes = class_order.len();
+        let level_max = (num_classes.saturating_sub(1)) as f64;
+        let level: Vec<_> = (0..num_classes)
+            .map(|_| vars.add(variable().min(0.0).max(level_max)))
             .collect();
 
         // Build the objective expression, in strictly separated tiers:
@@ -387,6 +360,29 @@ impl IlpExtractor {
             }
         }
 
+        // Constraint 6 (MTZ acyclicity of the selected subgraph): for every node
+        // n in class p and every child class c of n, a SELECTED n forces
+        // level[c] + 1 <= level[p]. An unselected n is relaxed by big-M = C.
+        // Invariant M >= level_max + 1 holds (M = num_classes, level_max =
+        // num_classes - 1), so an unselected edge is never falsely binding. A
+        // self-referential node (c == p) selected gives level[p] + 1 <= level[p],
+        // infeasible, so the solver never selects it. Iterating `reachable` (a
+        // BTreeMap) keeps the constraint order deterministic.
+        let big_m = num_classes as f64;
+        for (&class, nodes) in &reachable {
+            let pp = class_pos[&class];
+            for (pos, node) in nodes.iter().enumerate() {
+                let vi = node_idx[&(class, pos)];
+                for child in egraph.child_classes(node) {
+                    let cp = class_pos[&child];
+                    // level[child] + 1 <= level[parent] + big_m * (1 - node_sel[vi])
+                    lp_model = lp_model.with(constraint!(
+                        level[cp] + 1.0 <= level[pp] + big_m * (1.0 - node_sel[vi])
+                    ));
+                }
+            }
+        }
+
         // Solve and read back the solution. microlp may panic or return an error
         // on hard problems; catch either form and fall back to greedy.
         let selected: BTreeMap<Id, ENode> =
@@ -408,19 +404,30 @@ impl IlpExtractor {
             })) {
                 Ok(Some(sel)) => sel,
                 // Solver returned an error or the closure returned None.
-                Ok(None) => return None,
+                Ok(None) => {
+                    record_ilp_fallback("solver_error");
+                    return None;
+                }
                 // microlp panicked; fall back to greedy.
-                Err(_) => return None,
+                Err(_) => {
+                    record_ilp_fallback("solver_panic");
+                    return None;
+                }
             };
 
         // Reconstruct the Rel top-down from root.
-        let rel = Self::build_selected(egraph, root_class, &selected, model, spellings)?;
+        let Some(rel) = Self::build_selected(egraph, root_class, &selected, model, spellings)
+        else {
+            record_ilp_fallback("build_failed");
+            return None;
+        };
         // Post-validate polarity: reject any plan where a non-linear operator
         // (Reduce with aggregates, or TopK) has a sign-bearing input. The ILP
         // does not encode polarity constraints, so saturation may have placed a
         // Negate-rooted form in a class that feeds a non-linear reduce. Falling
         // back to greedy is always sound.
         if !validate_polarity(&rel) {
+            record_ilp_fallback("polarity");
             return None;
         }
         Some(rel)
@@ -833,49 +840,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn reachable_has_cycle_detects_back_edge() {
-        use crate::eqsat::egraph::{CNode, EGraph, ENode};
-        use crate::eqsat::ir::Rel;
-        // Construct a pathological cyclic e-graph: leaf <- Project <- Project,
-        // then union the outer Project's class into the leaf's, closing a cycle
-        // through congruence. The engine never builds this (recursive references
-        // stay opaque `LocalGet` leaves), but the guard in `solve` must catch it.
-        let mut eg = EGraph::new();
-        let leaf = eg.add(CNode::Rel(ENode::Get {
-            name: "r".into(),
-            arity: 1,
-        }));
-        let p1 = eg.add(CNode::Rel(ENode::Project {
-            input: leaf,
-            outputs: vec![0],
-        }));
-        let p2 = eg.add(CNode::Rel(ENode::Project {
-            input: p1,
-            outputs: vec![0],
-        }));
-        eg.union(leaf, p2);
-        eg.rebuild();
-        let root = eg.find(p1);
-        assert!(
-            reachable_has_cycle(&eg, &eg.reachable(root), root),
-            "the leaf <-> Project cycle must be detected",
-        );
-
-        // An ordinary acyclic plan must not be flagged (no false positive that
-        // would silently disable the ILP on every well-formed fragment).
-        let mut eg2 = EGraph::new();
-        let acyclic = eg2.add_rel(&Rel::Project {
-            outputs: vec![0],
-            input: Box::new(Rel::Get {
-                name: "t".into(),
-                arity: 2,
-            }),
-        });
-        let r2 = eg2.find(acyclic);
-        assert!(!reachable_has_cycle(&eg2, &eg2.reachable(r2), r2));
-    }
-
-    #[mz_ore::test]
     fn ilp_extracts_min_arrangement_plan() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::EGraph;
@@ -904,6 +868,130 @@ mod tests {
             .extract(&eg, a, &model, &ArrangementCount, None, None)
             .unwrap();
         assert_eq!(model.cost(&plan).arrangements, 0);
+    }
+
+    /// Join commutativity is inherently cyclic: `Join(a, b)` and `Join(b, a)`
+    /// are equal up to a column swap, so the two alternatives cross-reference
+    /// through swap Projects and the reachable candidate graph has a directed
+    /// cycle. The MTZ level variables let the ILP extract the acyclic optimum
+    /// (the plain Join) directly rather than bailing to greedy on the cycle.
+    ///
+    /// The class also carries a self-referential identity Project whose input is
+    /// its own class. Selecting it would force `level[A] + 1 <= level[A]`,
+    /// infeasible under MTZ, so the solver must never select it.
+    #[mz_ore::test]
+    fn ilp_handles_join_commutativity_cycle() {
+        use crate::eqsat::cost::CostModel;
+        use crate::eqsat::egraph::{CNode, EGraph, ENode};
+        use crate::eqsat::ir::Rel;
+
+        let mut eg = EGraph::new();
+        let a = eg.add(CNode::Rel(ENode::Get {
+            name: "a".into(),
+            arity: 1,
+        }));
+        let b = eg.add(CNode::Rel(ENode::Get {
+            name: "b".into(),
+            arity: 1,
+        }));
+
+        // Class A: Join(a, b). Class B: Join(b, a).
+        let join_ab = eg.add(CNode::Rel(ENode::Join {
+            inputs: vec![a, b],
+            equivalences: vec![],
+        }));
+        let join_ba = eg.add(CNode::Rel(ENode::Join {
+            inputs: vec![b, a],
+            equivalences: vec![],
+        }));
+
+        // Project[1,0] over B is the column-swapped B, equal to Join(a, b): union
+        // it into class A. Symmetrically for B. Now A references B and B
+        // references A, so the reachable candidate graph is cyclic.
+        let swap_of_b = eg.add(CNode::Rel(ENode::Project {
+            input: join_ba,
+            outputs: vec![1, 0],
+        }));
+        eg.union(join_ab, swap_of_b);
+        let swap_of_a = eg.add(CNode::Rel(ENode::Project {
+            input: join_ab,
+            outputs: vec![1, 0],
+        }));
+        eg.union(join_ba, swap_of_a);
+
+        // A self-referential identity Project whose input is class A itself.
+        let self_proj = eg.add(CNode::Rel(ENode::Project {
+            input: join_ab,
+            outputs: vec![0, 1],
+        }));
+        eg.union(join_ab, self_proj);
+        eg.rebuild();
+
+        let root = eg.find(join_ab);
+        let model = CostModel::new();
+
+        // Call `solve` directly so the assertion sees the ILP result, never a
+        // greedy fallback. Today `solve` bails to `None` on the cycle (RED); with
+        // the MTZ level variables it extracts the acyclic optimum (GREEN).
+        let plan = IlpExtractor::default()
+            .solve(&eg, root, &model, None)
+            .expect("ILP must solve the cyclic candidate graph rather than bail on the cycle");
+
+        // The acyclic optimum is the plain Join over the two leaves. A plain Join
+        // of two Gets contains no Project, so this also proves neither the
+        // commuting swap Project nor the self-referential Project was selected.
+        match &plan {
+            Rel::Join { inputs, .. } => {
+                assert_eq!(inputs.len(), 2, "expected a 2-input Join, got {plan:?}");
+                assert!(
+                    inputs.iter().all(|i| matches!(i, Rel::Get { .. })),
+                    "expected both Join inputs to be leaf Gets, got {plan:?}",
+                );
+            }
+            other => panic!("expected a plain Join (never a Project), got {other:?}"),
+        }
+    }
+
+    /// MTZ big-M off-by-one guard. A selected chain that must span every level
+    /// `0..C-1`: the leaf sits at level 0 and the root at level `C-1`, exactly on
+    /// the `[0, C-1]` boundary. A too-tight level bound (or a too-small big-M)
+    /// would make the program infeasible and `solve` would bail, so asserting
+    /// `Some` proves the worst-case boundary level is reachable.
+    #[mz_ore::test]
+    fn ilp_mtz_level_bound_reaches_full_depth() {
+        use crate::eqsat::cost::CostModel;
+        use crate::eqsat::egraph::{CNode, EGraph, ENode};
+        use crate::eqsat::ir::Rel;
+
+        // leaf <- p1 <- p2, then union(leaf, p2) closes a cycle through
+        // congruence. Reachable from p1 are exactly two classes: p1 and the
+        // merged leaf/p2 class. The only acyclic selection is p1 = Project(leaf),
+        // leaf = Get, forcing levels leaf = 0 and p1 = 1 = C - 1.
+        let mut eg = EGraph::new();
+        let leaf = eg.add(CNode::Rel(ENode::Get {
+            name: "r".into(),
+            arity: 1,
+        }));
+        let p1 = eg.add(CNode::Rel(ENode::Project {
+            input: leaf,
+            outputs: vec![0],
+        }));
+        let p2 = eg.add(CNode::Rel(ENode::Project {
+            input: p1,
+            outputs: vec![0],
+        }));
+        eg.union(leaf, p2);
+        eg.rebuild();
+
+        let root = eg.find(p1);
+        let model = CostModel::new();
+        let plan = IlpExtractor::default()
+            .solve(&eg, root, &model, None)
+            .expect("the MTZ boundary level must be feasible; a too-tight bound would bail");
+        assert!(
+            matches!(&plan, Rel::Project { input, .. } if matches!(**input, Rel::Get { .. })),
+            "expected the Project(Get) chain, got {plan:?}",
+        );
     }
 
     /// Non-trivial comparison: a class with two semantically equivalent forms, one
