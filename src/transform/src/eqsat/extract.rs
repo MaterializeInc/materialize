@@ -127,7 +127,7 @@ impl IlpExtractor {
         model: &CostModel,
         spellings: Option<&HashMap<Id, EquivalenceClasses>>,
     ) -> Option<Rel> {
-        use good_lp::{constraint, variable, ProblemVariables, Solution, SolverModel};
+        use good_lp::{ProblemVariables, Solution, SolverModel, constraint, variable};
 
         // Collect every class and its e-nodes reachable from root.
         let reachable = egraph.reachable(root);
