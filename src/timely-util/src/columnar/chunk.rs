@@ -27,7 +27,8 @@
 //!
 //! Spilling happens in [`Chunk::settle`], the trait's designated commit point:
 //! chunks moved to settled output are handed to the pool when spilling is
-//! enabled (see [`set_spill_enabled`]). Grading is by serialized bytes — the
+//! enabled (see [`set_compute_spill_enabled`] and [`set_storage_spill_enabled`]).
+//! Grading is by serialized bytes — the
 //! ship size [`Column`] already targets — rather than by the record-count
 //! `TARGET`, since record count does not bound bytes for variable-width data.
 //!
@@ -58,8 +59,11 @@ use timely::progress::frontier::AntichainRef;
 use crate::columnar::batcher::ColumnChunker;
 use crate::columnar::{Column, at_serialized_capacity};
 
-/// Whether committed chunks spill to the process pool.
-static SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Compute's leg of the process spill gate; see [`set_compute_spill_enabled`].
+static COMPUTE_SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Storage's leg of the process spill gate; see [`set_storage_spill_enabled`].
+static STORAGE_SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     /// A thread-scoped pool override, taking precedence over the global
@@ -71,15 +75,28 @@ thread_local! {
     static READ_SCRATCH: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Enable or disable spilling of committed chunks to the process pool.
+/// Enable or disable chunk spilling on behalf of compute's arrangement
+/// batchers.
+///
+/// Chunks carry no subsystem identity, so the spill decision is process-wide:
+/// committed chunks spill while *either* the compute or the storage gate is
+/// set. Each subsystem's config application writes only its own gate, so the
+/// two dyncfg flags compose as an OR instead of clobbering each other.
 ///
 /// Takes effect at the next `settle`; already-spilled chunks are unaffected
 /// either way. The pool is resolved per commit through
 /// [`crate::column_pager::active_pool`], so chunks spill only when pool mode
 /// is the process's active shared mechanism; under the tiered mechanism (or
-/// with no pool installed) chunks stay resident regardless of this flag.
-pub fn set_spill_enabled(enabled: bool) {
-    SPILL_ENABLED.store(enabled, Ordering::Relaxed);
+/// with no pool installed) chunks stay resident regardless of the gates.
+pub fn set_compute_spill_enabled(enabled: bool) {
+    COMPUTE_SPILL_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Enable or disable chunk spilling on behalf of storage's upsert dataflows.
+///
+/// See [`set_compute_spill_enabled`] for the shared-gate semantics.
+pub fn set_storage_spill_enabled(enabled: bool) {
+    STORAGE_SPILL_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 /// Route this thread's chunk spills through `pool` (or back to the global
@@ -93,7 +110,9 @@ fn spill_pool() -> Option<Pool> {
     if let Some(pool) = SPILL_OVERRIDE.with(|cell| cell.borrow().clone()) {
         return Some(pool);
     }
-    if SPILL_ENABLED.load(Ordering::Relaxed) {
+    let enabled = COMPUTE_SPILL_ENABLED.load(Ordering::Relaxed)
+        || STORAGE_SPILL_ENABLED.load(Ordering::Relaxed);
+    if enabled {
         crate::column_pager::active_pool()
     } else {
         None
@@ -718,6 +737,67 @@ where
     }
 }
 
+/// A batch builder over [`ColumnChunk`] input that delegates to a builder
+/// over [`Column`] input, loading each chunk's body as it is pushed.
+///
+/// This is the adapter that lets a [`ChunkBatcher`] feed the existing
+/// column-input batch builders (and through them the existing spine layouts):
+/// the batcher's chains carry pool-spillable chunks, and bodies are read back
+/// copy-out only at the seal, one chunk at a time.
+///
+/// [`ChunkBatcher`]: differential_dataflow::trace::chunk::ChunkBatcher
+pub struct UnchunkBuilder<Bu, D: Columnar, T: Columnar, R: Columnar> {
+    inner: Bu,
+    _marker: std::marker::PhantomData<(D, T, R)>,
+}
+
+impl<Bu, D, T, R> differential_dataflow::trace::Builder for UnchunkBuilder<Bu, D, T, R>
+where
+    Bu: differential_dataflow::trace::Builder<Input = Column<(D, T, R)>>,
+    D: Columnar + 'static,
+    T: Columnar + 'static,
+    R: Columnar + 'static,
+{
+    type Input = ColumnChunk<D, T, R>;
+    type Time = Bu::Time;
+    type Output = Bu::Output;
+
+    fn new() -> Self {
+        Self {
+            inner: Bu::new(),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
+        Self {
+            inner: Bu::with_capacity(keys, vals, upds),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn push(&mut self, chunk: &mut Self::Input) {
+        let mut column = std::mem::take(chunk).into_column();
+        self.inner.push(&mut column);
+    }
+
+    fn done(
+        self,
+        description: differential_dataflow::trace::Description<Self::Time>,
+    ) -> Self::Output {
+        self.inner.done(description)
+    }
+
+    fn seal(
+        chain: &mut Vec<Self::Input>,
+        description: differential_dataflow::trace::Description<Self::Time>,
+    ) -> Self::Output {
+        let mut columns: Vec<Column<(D, T, R)>> =
+            chain.drain(..).map(ColumnChunk::into_column).collect();
+        Bu::seal(&mut columns, description)
+    }
+}
+
 /// A chunker for `arrange_core` over [`ColumnChunk`]s: sorts and consolidates
 /// raw input columns through a [`ColumnChunker`] and wraps its output chunks.
 pub struct ChunkChunker<D: Columnar, T: Columnar, R: Columnar> {
@@ -754,9 +834,9 @@ where
 
 impl<D, T, R> ContainerBuilder for ChunkChunker<D, T, R>
 where
-    D: Columnar + Send + Sync + 'static,
-    T: Columnar + Send + Sync + 'static,
-    R: Columnar + Send + Sync + 'static,
+    D: Columnar + 'static,
+    T: Columnar + 'static,
+    R: Columnar + 'static,
     ColumnChunker<(D, T, R)>: ContainerBuilder<Container = Column<(D, T, R)>>,
 {
     type Container = ColumnChunk<D, T, R>;

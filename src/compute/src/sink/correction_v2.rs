@@ -151,10 +151,11 @@ use std::sync::{Mutex, OnceLock};
 
 use columnar::{Columnar, Index, Len, Ref};
 use mz_ore::cast::CastLossy;
+use mz_ore::pool::{ChunkHandle, Pool};
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::column_pager::{self, PagedColumn};
+use mz_timely_util::column_pager;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::temporal::{Bucket, BucketChain};
 use timely::PartialOrder;
@@ -1324,6 +1325,31 @@ impl<D: Data> Cursor<D> {
     }
 }
 
+/// Bodies smaller than this stay resident: the pool's smallest size class is 64 KiB, so
+/// spilling below it trades no meaningful memory for slot waste.
+const SPILL_MIN_BYTES: usize = 64 << 10;
+
+/// Serialize a column into a pool slot. The `Align` variant is already the serialized form and
+/// copies in directly; other variants write their [`ContainerBytes`] encoding through a cursor
+/// over the slot memory. Sizing is exact, so a short or overlong write is a contract violation
+/// and panics.
+fn spill_column<C: Columnar>(column: Column<C>, pool: &Pool, len_bytes: usize) -> ChunkHandle {
+    debug_assert_eq!(len_bytes % 8, 0);
+    match column {
+        Column::Align(words) => pool.insert_with(words.len(), |dst| dst.copy_from_slice(&words)),
+        other => pool.insert_with(len_bytes / 8, |dst| {
+            let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
+            let mut cursor = std::io::Cursor::new(bytes);
+            other.into_bytes(&mut cursor);
+            assert_eq!(
+                usize::try_from(cursor.position()).expect("usize position"),
+                len_bytes,
+                "serialized body must fill the chunk exactly",
+            );
+        }),
+    }
+}
+
 /// A non-empty chunk of updates, backed by a columnar region.
 ///
 /// All updates in a chunk are sorted by (time, data) and consolidated.
@@ -1333,14 +1359,16 @@ impl<D: Data> Cursor<D> {
 /// boundary (~2 MiB, matching the ship granularity used elsewhere in the codebase), so each
 /// chunk corresponds to a single, predictably sized allocation.
 struct Chunk<D: Data> {
-    /// The paged-out form, taken on first materialization.
+    /// The spilled form: the serialized column in the process buffer pool, present until the
+    /// chunk is materialized.
     ///
     /// A `Mutex` (not `RefCell`) keeps the chunk `Sync`: cursors hold chunks behind a shared
     /// `Rc`, and the iterator returned by [`CorrectionV2::updates_before`] borrows them across
     /// the persist writer's `await`, so `&Chunk` must be `Send`. The lock is taken once, at
     /// materialization, and is otherwise uncontended (the sink runs single-threaded per worker).
-    paged: Mutex<Option<PagedColumn<(D, Timestamp, Diff)>>>,
-    /// The materialized form, populated lazily by [`Chunk::column`] on first access.
+    spilled: Mutex<Option<ChunkHandle>>,
+    /// The materialized form, populated at construction when the chunk does not spill, or lazily
+    /// by [`Chunk::column`] on first access.
     ///
     /// An `OnceLock` (not `OnceCell`) for the same `Sync` reason. Once set the slot is never
     /// cleared, so its address is stable and [`Chunk::index`] can hand out `Ref<'_>` borrows tied
@@ -1363,17 +1391,17 @@ impl<D: Data> fmt::Debug for Chunk<D> {
 }
 
 impl<D: Data> Chunk<D> {
-    /// Page the given non-empty column out into a chunk.
+    /// Wrap the given non-empty column in a chunk.
     ///
-    /// Reads the cached metadata (length, boundary times) while the column is still resident, then
-    /// hands it to the global column pager. The policy decides whether it actually spills; either
-    /// way the chunk is born paged and materializes lazily on first read.
+    /// Reads the cached metadata (length, boundary times) while the column is still resident,
+    /// then spills the body to the process buffer pool when pool mode is active and the body is
+    /// worth a slot; a spilled chunk materializes lazily on first read.
     ///
     /// # Panics
     ///
     /// Panics if the column is empty. Chunks are non-empty by construction; [`ChunkBuilder`] only
     /// ever builds a chunk from a populated column.
-    fn from_column(mut data: Column<(D, Timestamp, Diff)>) -> Self {
+    fn from_column(data: Column<(D, Timestamp, Diff)>) -> Self {
         let (len, first_time, last_time) = {
             let borrowed = data.borrow();
             let len = borrowed.len();
@@ -1381,29 +1409,40 @@ impl<D: Data> Chunk<D> {
             (len, borrowed.get(0).1, borrowed.get(len - 1).1)
         };
 
-        let paged = column_pager::global_pager().page(&mut data);
+        let mut spilled = None;
+        let mut resident = OnceLock::new();
+        let len_bytes = data.length_in_bytes();
+        match column_pager::active_pool() {
+            Some(pool) if len_bytes >= SPILL_MIN_BYTES => {
+                spilled = Some(spill_column(data, &pool, len_bytes));
+            }
+            _ => resident = OnceLock::from(data),
+        }
+
         Self {
-            paged: Mutex::new(Some(paged)),
-            resident: OnceLock::new(),
+            spilled: Mutex::new(spilled),
+            resident,
             len,
             first_time,
             last_time,
         }
     }
 
-    /// Materialize the chunk's column, paging it in on first access.
+    /// Materialize the chunk's column, reading it back from the pool on first access.
     ///
     /// The returned reference is valid for as long as `&self`: the `OnceLock` slot is never
     /// cleared once populated, so its contents have a stable address.
     fn column(&self) -> &Column<(D, Timestamp, Diff)> {
         self.resident.get_or_init(|| {
-            let paged = self
-                .paged
+            let handle = self
+                .spilled
                 .lock()
-                .expect("pager mutex poisoned")
+                .expect("spill mutex poisoned")
                 .take()
-                .expect("paged form present until materialized");
-            column_pager::global_pager().take(paged)
+                .expect("spilled form present until materialized");
+            let mut words = Vec::new();
+            handle.take(&mut words);
+            Column::Align(words)
         })
     }
 
@@ -1467,27 +1506,19 @@ impl<D: Data> Chunk<D> {
 
     /// Return the size of the chunk, for use in metrics.
     ///
-    /// Reports resident bytes only: a chunk still spilled (on swap or in a pager file) is not part
-    /// of RSS and contributes nothing, matching the accounting in
-    /// [`mz_timely_util::columnar::merge_batcher`].
+    /// Reports resident bytes only: a spilled body lives in the process buffer pool, which does
+    /// its own residency accounting, so it contributes nothing here.
     fn get_size(&self) -> SizeMetrics {
-        let resident = |col: &Column<(D, Timestamp, Diff)>| {
-            let bytes = col.length_in_bytes();
-            SizeMetrics {
-                size: bytes,
-                capacity: bytes,
-                allocations: 1,
+        match self.resident.get() {
+            Some(col) => {
+                let bytes = col.length_in_bytes();
+                SizeMetrics {
+                    size: bytes,
+                    capacity: bytes,
+                    allocations: 1,
+                }
             }
-        };
-
-        if let Some(col) = self.resident.get() {
-            return resident(col);
-        }
-        // Not yet materialized: a policy that kept the column resident still occupies RSS, so
-        // account for it; a genuinely spilled column does not.
-        match &*self.paged.lock().expect("pager mutex poisoned") {
-            Some(PagedColumn::Resident(col, _)) => resident(col),
-            _ => SizeMetrics::default(),
+            None => SizeMetrics::default(),
         }
     }
 }
@@ -1549,7 +1580,7 @@ impl<D: Data> ChunkBuilder<D> {
         //
         // `finish` can hand back an empty column (e.g. when the last shipped chunk landed exactly
         // on the boundary). Skip those: `Chunk::from_column` requires a non-empty column, and an
-        // empty chunk would needlessly engage the pager.
+        // empty chunk would needlessly engage the pool.
         std::iter::from_fn(move || {
             loop {
                 let col = std::mem::take(self.inner.finish()?);
@@ -1865,10 +1896,10 @@ mod tests {
         }
         let chain = builder.finish();
 
-        // Crossing the mint boundary must have produced more than one chunk; otherwise the spill
-        // path (each minted chunk is paged out and read back through the pager) wouldn't be
-        // exercised. The chunk payload itself is now behind the pager (see [`Chunk`]), so we
-        // assert on chunk count rather than inspecting the column variant directly.
+        // Crossing the mint boundary must have produced more than one chunk; otherwise the
+        // multi-chunk read path wouldn't be exercised. The chunk payload may live in the buffer
+        // pool (see [`Chunk`]), so we assert on chunk count rather than inspecting the column
+        // variant directly.
         assert!(
             chain.chunks.len() > 1,
             "expected multiple minted chunks, got {} chunk(s): {:?}",
@@ -2038,27 +2069,39 @@ mod tests {
         );
     }
 
-    /// Configure the global pager to spill every chunk to swap (uncompressed) for the duration
-    /// of `f`, then restore the default (disabled) pager. A zero tiered budget makes every
-    /// `decide` answer `Page`, driving the actual spill path so the tests exercise
-    /// [`Chunk::column`]'s page-in through [`mz_ore::pager`]. The pager configuration is
-    /// process-wide; concurrent tests only ever observe a correct round-trip regardless of
-    /// backend, so racing on it is benign.
-    fn with_swap_pager<R>(f: impl FnOnce() -> R) -> R {
-        column_pager::apply_tiered_config(true, 0, mz_ore::pager::Backend::Swap, None, false);
+    /// Make the process buffer pool the active spill mechanism for the duration of `f`, with a
+    /// zero resident budget so every spilled body is evicted and reads drive the actual
+    /// read-back path in [`Chunk::column`], then restore an unlimited budget. The pool
+    /// configuration is process-wide; concurrent tests only ever observe a correct round-trip
+    /// regardless of configuration, so racing on it is benign.
+    fn with_spill_pool<R>(f: impl FnOnce() -> R) -> R {
+        let spill_all = column_pager::PoolPagerConfig {
+            enabled: false,
+            budget_bytes: 0,
+            spill_threads: 0,
+            eager_backing: false,
+            rss_target_bytes: 0,
+        };
+        assert!(
+            column_pager::apply_pool_config(spill_all),
+            "buffer pool unavailable",
+        );
         let result = f();
-        column_pager::apply_tiered_config(false, 0, mz_ore::pager::Backend::Swap, None, false);
+        column_pager::apply_pool_config(column_pager::PoolPagerConfig {
+            budget_bytes: usize::MAX,
+            ..spill_all
+        });
         result
     }
 
-    /// Build a chain crossing the mint boundary while every chunk is spilled to swap, then assert
-    /// `iter()` (the read path behind `updates_before`) pages each chunk back in and roundtrips
-    /// values, order, and diffs.
+    /// Build a chain crossing the mint boundary while every chunk is spilled to the buffer pool,
+    /// then assert `iter()` (the read path behind `updates_before`) reads each chunk back and
+    /// roundtrips values, order, and diffs.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // madvise on the swap backend is unsupported under miri
-    fn iter_roundtrips_through_swap_backend() {
+    #[cfg_attr(miri, ignore)] // the pool's mmap-backed regions are unsupported under miri
+    fn iter_roundtrips_through_pool() {
         let count = 200_000_u64;
-        with_swap_pager(|| {
+        with_spill_pool(|| {
             let mut builder = ChainBuilder::<i64>::default();
             for i in 0..count {
                 let d = i64::try_from(i).expect("fits");
@@ -2080,13 +2123,13 @@ mod tests {
     }
 
     /// Drive a [`Cursor`] over a spilled, multi-chunk chain to completion (the access pattern
-    /// merges use). Each step pages the front chunk back in via [`Chunk::column`]; assert the
-    /// cursor yields every update in order.
+    /// merges use). Each step reads the front chunk back from the pool via [`Chunk::column`];
+    /// assert the cursor yields every update in order.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // madvise on the swap backend is unsupported under miri
-    fn cursor_steps_through_swap_backend() {
+    #[cfg_attr(miri, ignore)] // the pool's mmap-backed regions are unsupported under miri
+    fn cursor_steps_through_pool() {
         let count = 200_000_u64;
-        with_swap_pager(|| {
+        with_spill_pool(|| {
             let mut builder = ChainBuilder::<i64>::default();
             for i in 0..count {
                 let d = i64::try_from(i).expect("fits");
