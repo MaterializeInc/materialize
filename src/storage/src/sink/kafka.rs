@@ -90,7 +90,7 @@ use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_expr::{Eval, MirScalarExpr};
-use mz_interchange::avro::AvroEncoder;
+use mz_interchange::avro::{AvroEncoder, AvroSchemaId};
 use mz_interchange::encode::Encode;
 use mz_interchange::envelopes::{dbz_format, for_each_diff_pair};
 use mz_interchange::json::JsonEncoder;
@@ -1477,7 +1477,12 @@ fn encode_collection<'scope>(
                         .await
                         .context("error publishing kafka schemas for sink")?;
 
-                        Some(Box::new(AvroEncoder::new(desc, false, &schema, schema_id)))
+                        Some(Box::new(AvroEncoder::new(
+                            desc,
+                            false,
+                            &schema,
+                            AvroSchemaId::Confluent(schema_id),
+                        )))
                     }
                     (None, None) => None,
                     (desc, format) => {
@@ -1528,7 +1533,12 @@ fn encode_collection<'scope>(
                     .await
                     .context("error publishing kafka schemas for sink")?;
 
-                    Box::new(AvroEncoder::new(value_desc, debezium, &schema, schema_id))
+                    Box::new(AvroEncoder::new(
+                        value_desc,
+                        debezium,
+                        &schema,
+                        AvroSchemaId::Confluent(schema_id),
+                    ))
                 }
             };
 
