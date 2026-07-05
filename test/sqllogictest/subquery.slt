@@ -301,12 +301,14 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 ----
 Explained Query:
   Project (#0{a}, #0{a}, #2{b}) // { arity: 3 }
-    Join on=(#0{a} = #1{a} AND #2{b} = #3{b}) type=differential // { arity: 4 }
+    Join on=(#0{a} = #1{a} AND #2{b} = #3{b}) type=delta // { arity: 4 }
       implementation
-        %2[#0{b}]UKA » %1:t3[#1{b}]K » %0:t1[#0{a}]K
+        %0:t1 » %1:t3[#0{a}]K » %2[#0{b}]UKA
+        %1:t3 » %0:t1[#0{a}]K » %2[#0{b}]UKA
+        %2 » %1:t3[#1{b}]K » %0:t1[#0{a}]K
       ArrangeBy keys=[[#0{a}]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
-      ArrangeBy keys=[[#1{b}]] // { arity: 2 }
+      ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
         ReadStorage materialize.public.t3 // { arity: 2 }
       ArrangeBy keys=[[#0{b}]] // { arity: 1 }
         Distinct project=[#0{b}] // { arity: 1 }
