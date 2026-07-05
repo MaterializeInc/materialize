@@ -314,15 +314,15 @@ impl EGraph {
 /// by analysis-backed side conditions.
 #[derive(Default)]
 pub(crate) struct Analyses {
-    pub(crate) nn: HashMap<Id, bool>,
-    pub(crate) keys: HashMap<Id, KeySet>,
+    pub(crate) nn: BTreeMap<Id, bool>,
+    pub(crate) keys: BTreeMap<Id, KeySet>,
     // Read only by `cond_monotonic`, which no rule uses yet; kept for the
     // monotonic physical rewrites the rule file is expected to grow.
     #[allow(dead_code)]
-    pub(crate) mono: HashMap<Id, bool>,
+    pub(crate) mono: BTreeMap<Id, bool>,
     // Consumed by Cond::ScalarEquiv (Task 2); unread for now.
     #[allow(dead_code)]
-    pub(crate) cc: HashMap<Id, ConstCols>,
+    pub(crate) cc: BTreeMap<Id, ConstCols>,
 }
 
 impl EGraph {
@@ -389,7 +389,7 @@ impl EGraph {
                         ctx,
                     )
                 } else {
-                    HashMap::new()
+                    BTreeMap::new()
                 },
                 keys: if needs.keys {
                     self.run_analysis(
@@ -399,7 +399,7 @@ impl EGraph {
                         ctx,
                     )
                 } else {
-                    HashMap::new()
+                    BTreeMap::new()
                 },
                 mono: if needs.monotonic {
                     self.run_analysis(
@@ -409,12 +409,12 @@ impl EGraph {
                         ctx,
                     )
                 } else {
-                    HashMap::new()
+                    BTreeMap::new()
                 },
                 // ConstantColumns has no rule consumer yet (no `ScalarEquiv`
                 // condition exists), so computing it every round is pure waste.
                 // Re-wire through `AnalysisNeeds` when a rule first reads it.
-                cc: HashMap::new(),
+                cc: BTreeMap::new(),
             };
             let mut pending: Vec<(usize, EBindings)> = Vec::new();
             {

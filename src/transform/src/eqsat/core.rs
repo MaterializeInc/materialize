@@ -7,9 +7,11 @@
 //! engine (`EGraph<RelLang>`). The scalar engine and colored e-graphs are added
 //! in later sub-projects. See `doc/developer/design/20260624_eqsat/20260627_eqsat_generic_core.md`.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::hash::Hash;
+
+use mz_ore::collections::HashMap as OreHashMap;
 
 /// An e-class id. A bare index into the union-find; not a newtype.
 pub type Id = usize;
@@ -65,14 +67,14 @@ fn find_in(uf: &[Id], mut id: Id) -> Id {
 /// (`EGraph::rel_index`) instead, so this generic form is currently unused; it
 /// is retained as substrate for a future colored/scalar matcher (SP4b).
 #[allow(dead_code)]
-pub type Index<L> = HashMap<<L as Language>::Sym, Vec<(Id, <L as Language>::Node)>>;
+pub type Index<L> = OreHashMap<<L as Language>::Sym, Vec<(Id, <L as Language>::Node)>>;
 
 /// An e-graph over node language `L`: a union-find of e-classes, each a set of
 /// e-nodes, with a hash-cons memo for deduplication.
 pub struct EGraph<L: Language> {
     uf: Vec<Id>,
     pub(crate) classes: BTreeMap<Id, BTreeSet<L::Node>>,
-    memo: HashMap<L::Node, Id>,
+    memo: OreHashMap<L::Node, Id>,
     pub(crate) data: L::GraphData,
 }
 
@@ -82,7 +84,7 @@ impl<L: Language> Default for EGraph<L> {
         EGraph {
             uf: Vec::new(),
             classes: BTreeMap::new(),
-            memo: HashMap::new(),
+            memo: OreHashMap::new(),
             data: L::GraphData::default(),
         }
     }
@@ -143,7 +145,7 @@ impl<L: Language> EGraph<L> {
     pub fn rebuild(&mut self) {
         loop {
             let mut merged = false;
-            let mut memo: HashMap<L::Node, Id> = HashMap::new();
+            let mut memo: OreHashMap<L::Node, Id> = OreHashMap::new();
             let ids: Vec<Id> = self.classes.keys().copied().collect();
             for id in ids {
                 let rep = self.find(id);
@@ -193,7 +195,7 @@ impl<L: Language> EGraph<L> {
     /// colored/scalar matcher (SP4b).
     #[allow(dead_code)]
     pub(crate) fn index(&self) -> Index<L> {
-        let mut idx: Index<L> = HashMap::new();
+        let mut idx: Index<L> = OreHashMap::new();
         for (&id, nodes) in &self.classes {
             for n in nodes {
                 idx.entry(L::symbol(n)).or_default().push((id, n.clone()));
@@ -281,8 +283,8 @@ impl<L: Language> EGraph<L> {
         a: &A,
         ctx: A::Ctx<'_>,
         max_iters: usize,
-    ) -> HashMap<Id, A::Domain> {
-        let mut m: HashMap<Id, A::Domain> =
+    ) -> BTreeMap<Id, A::Domain> {
+        let mut m: BTreeMap<Id, A::Domain> =
             self.classes.keys().map(|&id| (id, a.bottom())).collect();
         for iter in 0..max_iters {
             let mut updates: Vec<(Id, A::Domain)> = Vec::new();
@@ -317,7 +319,7 @@ impl<L: Language> EGraph<L> {
     }
 
     /// Run a lattice analysis to a fixpoint with the default iteration bound.
-    pub fn run_analysis<A: Analysis<L>>(&self, a: &A, ctx: A::Ctx<'_>) -> HashMap<Id, A::Domain> {
+    pub fn run_analysis<A: Analysis<L>>(&self, a: &A, ctx: A::Ctx<'_>) -> BTreeMap<Id, A::Domain> {
         self.run_analysis_bounded(a, ctx, MAX_ANALYSIS_ITERS)
     }
 }
@@ -402,7 +404,7 @@ mod tests {
         let b = eg.add(Arith::Num(2));
         let _ = eg.add(Arith::Add(a, b));
         let _ = eg.add(Arith::Mul(a, b));
-        let idx: HashMap<ArithSym, Vec<(Id, Arith)>> = eg.index();
+        let idx: Index<ArithLang> = eg.index();
         assert_eq!(idx[&ArithSym::Num].len(), 2);
         assert_eq!(idx[&ArithSym::Add].len(), 1);
         assert_eq!(idx[&ArithSym::Mul].len(), 1);

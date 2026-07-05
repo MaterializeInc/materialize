@@ -41,7 +41,7 @@ pub(crate) type EqFact = Option<EquivalenceClasses>;
 /// `LetRec` fragments. `derive_facts` operates on a self-contained e-graph with
 /// no externally-supplied recursion facts, matching what `saturate` passes for a
 /// `Let`-free fragment (`LocalFacts::default().equivalences`, an empty map).
-pub(crate) fn derive_facts(eg: &EGraph) -> HashMap<Id, EqFact> {
+pub(crate) fn derive_facts(eg: &EGraph) -> BTreeMap<Id, EqFact> {
     let analysis = Equivalences {
         locals: BTreeMap::new(),
     };
