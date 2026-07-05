@@ -7,7 +7,7 @@
 //! engine (`EGraph<RelLang>`). The scalar engine and colored e-graphs are added
 //! in later sub-projects. See `doc/developer/design/20260624_eqsat/20260627_eqsat_generic_core.md`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -19,6 +19,10 @@ pub type Id = usize;
 /// symbol). One implementor per sort (relational `RelLang`; scalar later).
 pub trait Language {
     /// The e-node type. Operator nodes carry child `Id`s; leaves carry payload.
+    ///
+    /// `Ord` is a determinism contract, not a convenience: congruence-merge
+    /// survivor selection in `rebuild` and matcher enumeration order must be
+    /// order-stable, which requires a total order on nodes.
     type Node: Clone + Eq + Hash + Ord + Debug;
     /// The operator symbol used to bucket e-nodes in the matcher index.
     type Sym: Eq + Hash + Clone;
@@ -67,7 +71,7 @@ pub type Index<L> = HashMap<<L as Language>::Sym, Vec<(Id, <L as Language>::Node
 /// e-nodes, with a hash-cons memo for deduplication.
 pub struct EGraph<L: Language> {
     uf: Vec<Id>,
-    pub(crate) classes: HashMap<Id, HashSet<L::Node>>,
+    pub(crate) classes: BTreeMap<Id, BTreeSet<L::Node>>,
     memo: HashMap<L::Node, Id>,
     pub(crate) data: L::GraphData,
 }
@@ -77,7 +81,7 @@ impl<L: Language> Default for EGraph<L> {
     fn default() -> Self {
         EGraph {
             uf: Vec::new(),
-            classes: HashMap::new(),
+            classes: BTreeMap::new(),
             memo: HashMap::new(),
             data: L::GraphData::default(),
         }
@@ -97,7 +101,7 @@ impl<L: Language> EGraph<L> {
     fn new_class(&mut self) -> Id {
         let id = self.uf.len();
         self.uf.push(id);
-        self.classes.insert(id, HashSet::new());
+        self.classes.insert(id, BTreeSet::new());
         id
     }
 
@@ -159,8 +163,8 @@ impl<L: Language> EGraph<L> {
                     }
                 }
             }
-            let mut new_classes: HashMap<Id, HashSet<L::Node>> = HashMap::new();
-            let old: Vec<(Id, HashSet<L::Node>)> = self.classes.drain().collect();
+            let mut new_classes: BTreeMap<Id, BTreeSet<L::Node>> = BTreeMap::new();
+            let old = std::mem::take(&mut self.classes);
             for (id, nodes) in old {
                 let rep = self.find(id);
                 let entry = new_classes.entry(rep).or_default();
@@ -493,5 +497,26 @@ mod tests {
             "present node"
         );
         assert_eq!(eg.lookup(&Arith::Num(99)), None, "absent node");
+    }
+
+    #[mz_ore::test]
+    fn class_ids_iterate_in_sorted_order() {
+        // Determinism contract: `classes` iteration must be order-stable, so
+        // `class_ids()` is sorted. Congruence-merge survivor selection and matcher
+        // order depend on this. Adds create ascending ids; a HashMap would return
+        // them in seed-randomized order, a BTreeMap in sorted order.
+        let mut eg: EGraph<ArithLang> = EGraph::new();
+        let mut ids = Vec::new();
+        for k in 0..32 {
+            ids.push(eg.add(Arith::Num(k)));
+        }
+        eg.rebuild();
+        let got = eg.class_ids();
+        let mut want = got.clone();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "class_ids() must be sorted (deterministic iteration)"
+        );
     }
 }
