@@ -211,16 +211,27 @@ impl IlpExtractor {
             .map(|_| vars.add(variable().binary()))
             .collect();
 
-        // Topological level per class for MTZ acyclicity of the SELECTED
-        // subgraph (constraint 6). Bound [0, C-1] since a topological numbering
-        // of C classes needs levels 0..C-1. The big-M there is C = level_max + 1,
-        // so an unselected edge is never falsely binding at the boundary. Built
-        // over `class_order` so the variable order stays deterministic.
-        let num_classes = class_order.len();
-        let level_max = (num_classes.saturating_sub(1)) as f64;
-        let level: Vec<_> = (0..num_classes)
-            .map(|_| vars.add(variable().min(0.0).max(level_max)))
-            .collect();
+        // MTZ acyclicity (constraint 6) is only needed inside strongly-connected
+        // components of the candidate graph. Only a class that lies on a directed
+        // cycle can be selected into an infinite term, so a class in a trivial SCC
+        // needs no level variable and no constraint. Scoping this way keeps every
+        // surviving big-M tight (the SCC size, not the whole class count), which
+        // is what keeps the solver fast. `cyclic_classes` returns the SCC
+        // partition plus the set of classes that sit in a non-trivial SCC.
+        let (scc_of, scc_size, cyclic) = cyclic_classes(egraph, &reachable);
+
+        // Level var per class in a non-trivial SCC, bounded [0, |SCC| - 1]. The
+        // per-SCC big-M in constraint 6 is |SCC| = level_max + 1, tight, so an
+        // unselected edge is never falsely binding. Iterating `class_order` keeps
+        // the variable order deterministic.
+        let mut level_of: BTreeMap<Id, good_lp::Variable> = BTreeMap::new();
+        for &cls in &class_order {
+            if cyclic.contains(&cls) {
+                let k = scc_size[scc_of[&cls]];
+                let lvl_max = (k.saturating_sub(1)) as f64;
+                level_of.insert(cls, vars.add(variable().min(0.0).max(lvl_max)));
+            }
+        }
 
         // Build the objective expression, in strictly separated tiers:
         //   1. PRIMARY: count of non-oracle-covered arrangements (integer steps).
@@ -360,25 +371,32 @@ impl IlpExtractor {
             }
         }
 
-        // Constraint 6 (MTZ acyclicity of the selected subgraph): for every node
-        // n in class p and every child class c of n, a SELECTED n forces
-        // level[c] + 1 <= level[p]. An unselected n is relaxed by big-M = C.
-        // Invariant M >= level_max + 1 holds (M = num_classes, level_max =
-        // num_classes - 1), so an unselected edge is never falsely binding. A
-        // self-referential node (c == p) selected gives level[p] + 1 <= level[p],
+        // Constraint 6 (MTZ acyclicity of the selected subgraph), scoped to
+        // non-trivial SCCs. For a child edge whose parent and child sit in the
+        // SAME non-trivial SCC, a SELECTED parent node forces
+        // level[c] + 1 <= level[p]. The big-M is the SCC size, the tight per-SCC
+        // bound (M = |SCC| = level_max + 1), so an unselected edge is never
+        // falsely binding. A cross-SCC edge and an edge inside a trivial SCC can
+        // never lie on a cycle, so they get no constraint. A selected self-loop
+        // (c == p, in a non-trivial size-1 SCC) yields level[p] + 1 <= level[p],
         // infeasible, so the solver never selects it. Iterating `reachable` (a
         // BTreeMap) keeps the constraint order deterministic.
-        let big_m = num_classes as f64;
         for (&class, nodes) in &reachable {
-            let pp = class_pos[&class];
+            if !cyclic.contains(&class) {
+                continue;
+            }
+            let scc = scc_of[&class];
+            let m = scc_size[scc] as f64;
+            let lp = level_of[&class];
             for (pos, node) in nodes.iter().enumerate() {
                 let vi = node_idx[&(class, pos)];
                 for child in egraph.child_classes(node) {
-                    let cp = class_pos[&child];
-                    // level[child] + 1 <= level[parent] + big_m * (1 - node_sel[vi])
-                    lp_model = lp_model.with(constraint!(
-                        level[cp] + 1.0 <= level[pp] + big_m * (1.0 - node_sel[vi])
-                    ));
+                    if scc_of[&child] == scc {
+                        let lc = level_of[&child];
+                        // level[child] + 1 <= level[parent] + M * (1 - node_sel[vi])
+                        lp_model =
+                            lp_model.with(constraint!(lc + 1.0 <= lp + m * (1.0 - node_sel[vi])));
+                    }
                 }
             }
         }
@@ -768,6 +786,153 @@ fn node_scalar_count(node: &ENode, egraph: &EGraph) -> usize {
     interned + raw
 }
 
+/// Strongly-connected components of the reachable candidate graph, computed by
+/// Tarjan's algorithm. Edges run from a class to each child class of each of its
+/// e-nodes. Returns `scc_of[class]` (the component index of each class) and
+/// `scc_size[index]` (the number of classes in each component).
+///
+/// The traversal iterates the deterministic `reachable` BTreeMap and the
+/// `child_classes` order, so the component numbering is stable across runs.
+/// Recursion is expressed with an explicit stack, so depth is bounded by the
+/// heap not the call stack (class count is <= the 600-node model cap anyway).
+fn tarjan_sccs(
+    egraph: &EGraph,
+    reachable: &BTreeMap<Id, Vec<ENode>>,
+) -> (BTreeMap<Id, usize>, Vec<usize>) {
+    // Successor classes per class, in deterministic order. Duplicate successors
+    // are harmless for the component partition.
+    let mut succ: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
+    for (&class, nodes) in reachable {
+        let mut out = Vec::new();
+        for node in nodes {
+            out.extend(egraph.child_classes(node));
+        }
+        succ.insert(class, out);
+    }
+
+    // Tarjan bookkeeping. `index_of` is the DFS discovery number, `lowlink` the
+    // lowest discovery number reachable from a class, `component_stack` the set
+    // of classes not yet assigned to a component, and `on_stack` its membership.
+    let mut index_of: BTreeMap<Id, usize> = BTreeMap::new();
+    let mut lowlink: BTreeMap<Id, usize> = BTreeMap::new();
+    let mut on_stack: std::collections::BTreeSet<Id> = std::collections::BTreeSet::new();
+    let mut component_stack: Vec<Id> = Vec::new();
+    let mut next_index = 0usize;
+    let mut scc_of: BTreeMap<Id, usize> = BTreeMap::new();
+    let mut scc_size: Vec<usize> = Vec::new();
+
+    // Mark a class discovered and push it onto the component stack.
+    fn discover(
+        class: Id,
+        next_index: &mut usize,
+        index_of: &mut BTreeMap<Id, usize>,
+        lowlink: &mut BTreeMap<Id, usize>,
+        on_stack: &mut std::collections::BTreeSet<Id>,
+        component_stack: &mut Vec<Id>,
+    ) {
+        index_of.insert(class, *next_index);
+        lowlink.insert(class, *next_index);
+        *next_index += 1;
+        component_stack.push(class);
+        on_stack.insert(class);
+    }
+
+    for &start in reachable.keys() {
+        if index_of.contains_key(&start) {
+            continue;
+        }
+        discover(
+            start,
+            &mut next_index,
+            &mut index_of,
+            &mut lowlink,
+            &mut on_stack,
+            &mut component_stack,
+        );
+        // Explicit DFS: each frame is (class, next successor position).
+        let mut call_stack: Vec<(Id, usize)> = vec![(start, 0)];
+        while let Some(&(v, pos)) = call_stack.last() {
+            let neighbors = &succ[&v];
+            if pos < neighbors.len() {
+                call_stack.last_mut().unwrap().1 += 1;
+                let w = neighbors[pos];
+                if !index_of.contains_key(&w) {
+                    discover(
+                        w,
+                        &mut next_index,
+                        &mut index_of,
+                        &mut lowlink,
+                        &mut on_stack,
+                        &mut component_stack,
+                    );
+                    call_stack.push((w, 0));
+                } else if on_stack.contains(&w) {
+                    let iw = index_of[&w];
+                    let lv = lowlink[&v];
+                    lowlink.insert(v, lv.min(iw));
+                }
+            } else {
+                // v is fully explored. If it is a component root, pop the
+                // component off the stack.
+                if lowlink[&v] == index_of[&v] {
+                    let scc = scc_size.len();
+                    let mut size = 0;
+                    loop {
+                        let w = component_stack.pop().unwrap();
+                        on_stack.remove(&w);
+                        scc_of.insert(w, scc);
+                        size += 1;
+                        if w == v {
+                            break;
+                        }
+                    }
+                    scc_size.push(size);
+                }
+                call_stack.pop();
+                if let Some(&(parent, _)) = call_stack.last() {
+                    let lp = lowlink[&parent];
+                    let lv = lowlink[&v];
+                    lowlink.insert(parent, lp.min(lv));
+                }
+            }
+        }
+    }
+
+    (scc_of, scc_size)
+}
+
+/// The SCC partition of the reachable candidate graph plus the set of classes
+/// that sit in a non-trivial SCC. A non-trivial SCC is one that can carry a
+/// directed cycle: size `>= 2`, or a size-1 component whose class has a
+/// self-loop (an e-node with a child class equal to its own class). Tarjan
+/// reports a size-1 self-loop component as size 1, so the self-loop must be
+/// detected here, else a selected self-loop node would be extractable as an
+/// infinite term. A class outside every non-trivial SCC can never lie on a
+/// cycle, so it needs no MTZ level variable or acyclicity constraint.
+fn cyclic_classes(
+    egraph: &EGraph,
+    reachable: &BTreeMap<Id, Vec<ENode>>,
+) -> (
+    BTreeMap<Id, usize>,
+    Vec<usize>,
+    std::collections::BTreeSet<Id>,
+) {
+    let (scc_of, scc_size) = tarjan_sccs(egraph, reachable);
+    let has_self_loop = |cls: Id, nodes: &[ENode]| {
+        nodes
+            .iter()
+            .any(|n| egraph.child_classes(n).into_iter().any(|c| c == cls))
+    };
+    let cyclic: std::collections::BTreeSet<Id> = reachable
+        .iter()
+        .filter_map(|(&cls, nodes)| {
+            let non_trivial = scc_size[scc_of[&cls]] >= 2 || has_self_loop(cls, nodes);
+            non_trivial.then_some(cls)
+        })
+        .collect();
+    (scc_of, scc_size, cyclic)
+}
+
 /// The per-class cheapest output-size degree, by a bottom-up fixpoint over the
 /// reachable subgraph. A class's degree is the minimum over its nodes; a node's
 /// output degree mirrors `CostModel::size_degree`, except an `IndexedFilter`
@@ -873,8 +1038,10 @@ mod tests {
     /// Join commutativity is inherently cyclic: `Join(a, b)` and `Join(b, a)`
     /// are equal up to a column swap, so the two alternatives cross-reference
     /// through swap Projects and the reachable candidate graph has a directed
-    /// cycle. The MTZ level variables let the ILP extract the acyclic optimum
-    /// (the plain Join) directly rather than bailing to greedy on the cycle.
+    /// cycle. The two classes form one non-trivial SCC of size 2, so they get
+    /// level variables bounded `[0, 1]` with per-SCC big-M 2. The MTZ constraints
+    /// let the ILP extract the acyclic optimum (the plain Join) directly rather
+    /// than bailing to greedy on the cycle.
     ///
     /// The class also carries a self-referential identity Project whose input is
     /// its own class. Selecting it would force `level[A] + 1 <= level[A]`,
@@ -931,8 +1098,8 @@ mod tests {
         let model = CostModel::new();
 
         // Call `solve` directly so the assertion sees the ILP result, never a
-        // greedy fallback. Today `solve` bails to `None` on the cycle (RED); with
-        // the MTZ level variables it extracts the acyclic optimum (GREEN).
+        // greedy fallback. The SCC-scoped MTZ constraints let it extract the
+        // acyclic optimum rather than bailing to greedy on the cycle.
         let plan = IlpExtractor::default()
             .solve(&eg, root, &model, None)
             .expect("ILP must solve the cyclic candidate graph rather than bail on the cycle");
@@ -952,11 +1119,13 @@ mod tests {
         }
     }
 
-    /// MTZ big-M off-by-one guard. A selected chain that must span every level
-    /// `0..C-1`: the leaf sits at level 0 and the root at level `C-1`, exactly on
-    /// the `[0, C-1]` boundary. A too-tight level bound (or a too-small big-M)
-    /// would make the program infeasible and `solve` would bail, so asserting
-    /// `Some` proves the worst-case boundary level is reachable.
+    /// MTZ per-SCC big-M off-by-one guard. The two classes form one non-trivial
+    /// SCC of size 2, so their level variables are bounded `[0, 1]` with per-SCC
+    /// big-M 2. The selected chain must span every level in that range: the leaf
+    /// sits at level 0 and the root at level 1, exactly on the `[0, |SCC| - 1]`
+    /// boundary. A too-tight level bound (or a too-small big-M) would make the
+    /// program infeasible and `solve` would bail, so asserting `Some` proves the
+    /// worst-case boundary level is reachable.
     #[mz_ore::test]
     fn ilp_mtz_level_bound_reaches_full_depth() {
         use crate::eqsat::cost::CostModel;
@@ -965,8 +1134,9 @@ mod tests {
 
         // leaf <- p1 <- p2, then union(leaf, p2) closes a cycle through
         // congruence. Reachable from p1 are exactly two classes: p1 and the
-        // merged leaf/p2 class. The only acyclic selection is p1 = Project(leaf),
-        // leaf = Get, forcing levels leaf = 0 and p1 = 1 = C - 1.
+        // merged leaf/p2 class. They form one size-2 SCC. The only acyclic
+        // selection is p1 = Project(leaf), leaf = Get, forcing levels leaf = 0
+        // and p1 = 1 = |SCC| - 1.
         let mut eg = EGraph::new();
         let leaf = eg.add(CNode::Rel(ENode::Get {
             name: "r".into(),
@@ -991,6 +1161,106 @@ mod tests {
         assert!(
             matches!(&plan, Rel::Project { input, .. } if matches!(**input, Rel::Get { .. })),
             "expected the Project(Get) chain, got {plan:?}",
+        );
+    }
+
+    /// A size-1 SCC with a self-loop is still non-trivial. A class carries a
+    /// self-referential identity Project (its input is its own class) alongside a
+    /// finite ArrangeBy alternative. Tarjan reports the class as a size-1
+    /// component, so the self-loop rule is what keeps it non-trivial. Without that
+    /// rule the class would get no acyclicity constraint and the ILP would take
+    /// the zero-arrangement self Project, an infinite term. The self-loop
+    /// constraint `level[R] + 1 <= level[R]` is infeasible when the self Project
+    /// is selected, so the solver must take the finite ArrangeBy instead.
+    #[mz_ore::test]
+    fn ilp_size_one_self_loop_scc_never_extractable() {
+        use crate::eqsat::cost::CostModel;
+        use crate::eqsat::egraph::{CNode, EGraph, ENode};
+        use crate::eqsat::ir::Rel;
+
+        let mut eg = EGraph::new();
+        let base = eg.add(CNode::Rel(ENode::Get {
+            name: "t".into(),
+            arity: 1,
+        }));
+        // A key-less ArrangeBy maintains one arrangement, so this finite form
+        // costs strictly more than the zero-arrangement self Project below.
+        let arr = eg.add(CNode::Rel(ENode::ArrangeBy {
+            input: base,
+            key: vec![],
+        }));
+        // Identity Project whose input is the class it lands in, a self-loop.
+        let self_proj = eg.add(CNode::Rel(ENode::Project {
+            input: arr,
+            outputs: vec![0],
+        }));
+        eg.union(arr, self_proj);
+        eg.rebuild();
+
+        let root = eg.find(arr);
+        // Confirm the scoping classifies this as a non-trivial size-1 SCC.
+        let reachable = eg.reachable(root);
+        let (scc_of, scc_size, cyclic) = cyclic_classes(&eg, &reachable);
+        assert!(
+            cyclic.contains(&root),
+            "the self-loop class must be non-trivial, cyclic = {cyclic:?}",
+        );
+        assert_eq!(
+            scc_size[scc_of[&root]], 1,
+            "the self-loop class must be a size-1 SCC (Tarjan sees no larger cycle)",
+        );
+
+        let model = CostModel::new();
+        // The self Project is infeasible, so `solve` must extract the finite
+        // ArrangeBy rather than bail.
+        let plan = IlpExtractor::default()
+            .solve(&eg, root, &model, None)
+            .expect("ILP must solve rather than bail, only the self-loop form is infeasible");
+        assert!(
+            !matches!(&plan, Rel::Project { .. }),
+            "the self-loop Project must never be selected, got {plan:?}",
+        );
+        assert!(
+            matches!(&plan, Rel::ArrangeBy { input, .. } if matches!(**input, Rel::Get { .. })),
+            "expected the finite ArrangeBy(Get), got {plan:?}",
+        );
+    }
+
+    /// SCC-scoping restores base-ILP cost on acyclic structure: a purely acyclic
+    /// fragment has no non-trivial SCC, so `cyclic_classes` returns an empty set
+    /// and the program emits zero level variables and zero acyclicity
+    /// constraints. This is what removes the global-MTZ overhead on the common
+    /// acyclic case.
+    #[mz_ore::test]
+    fn ilp_acyclic_fragment_emits_no_level_constraints() {
+        use crate::eqsat::egraph::{CNode, EGraph, ENode};
+
+        // leaf <- p1 <- p2, a plain acyclic chain, no unions.
+        let mut eg = EGraph::new();
+        let leaf = eg.add(CNode::Rel(ENode::Get {
+            name: "r".into(),
+            arity: 1,
+        }));
+        let p1 = eg.add(CNode::Rel(ENode::Project {
+            input: leaf,
+            outputs: vec![0],
+        }));
+        let p2 = eg.add(CNode::Rel(ENode::Project {
+            input: p1,
+            outputs: vec![0],
+        }));
+        eg.rebuild();
+
+        let reachable = eg.reachable(eg.find(p2));
+        let (_scc_of, scc_size, cyclic) = cyclic_classes(&eg, &reachable);
+        assert!(
+            cyclic.is_empty(),
+            "an acyclic fragment must have no non-trivial SCC, cyclic = {cyclic:?}",
+        );
+        // Every class is its own singleton component.
+        assert!(
+            scc_size.iter().all(|&s| s == 1),
+            "every acyclic class must be a size-1 SCC, scc_size = {scc_size:?}",
         );
     }
 
