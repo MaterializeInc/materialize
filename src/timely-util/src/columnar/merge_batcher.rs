@@ -274,35 +274,6 @@ where
         &mut self,
         upper: Antichain<Self::Time>,
     ) -> (Vec<Self::Output>, Description<Self::Time>) {
-        let (chunks, description) = self.seal_paged(upper);
-        (chunks.collect(), description)
-    }
-
-    fn frontier(&mut self) -> AntichainRef<'_, Self::Time> {
-        self.frontier.borrow()
-    }
-}
-
-impl<D, T, R> ColumnMergeBatcher<D, T, R>
-where
-    D: Columnar,
-    for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Default + Timestamp + PartialOrder,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
-    for<'a> columnar::Ref<'a, R>: Ord,
-{
-    /// Seals like [`Batcher::seal`], but returns the ship side as
-    /// [`SealedChunks`]: chunk handles that stay paged until iterated,
-    /// rehydrating one chunk per `next` call.
-    ///
-    /// [`Batcher::seal`] materializes every shipped chunk into one `Vec`, so a
-    /// seal's transient memory is the full uncompressed ship side — unbounded
-    /// when a frontier advance releases a large backlog at once. A consumer
-    /// that processes chunks sequentially and drops each before the next keeps
-    /// that footprint to a single chunk by sealing through this method
-    /// instead.
-    pub fn seal_paged(&mut self, upper: Antichain<T>) -> (SealedChunks<D, T, R>, Description<T>) {
         let pager = self.pager();
         // Merge all remaining chains into one.
         while self.chains.len() > 1 {
@@ -351,38 +322,14 @@ where
         // may be a quiet stretch.
         self.stash.clear();
 
-        let chunks = SealedChunks {
-            chunks: readied.into_iter(),
-            pager,
-        };
+        let chunks = readied.into_iter().map(|paged| pager.take(paged)).collect();
         (chunks, description)
     }
-}
 
-/// The ship side of a [`ColumnMergeBatcher::seal_paged`] call: sorted,
-/// consolidated chunks that stay paged until iterated.
-///
-/// Each `next` call rehydrates exactly one chunk, so a consumer that drops
-/// each chunk before requesting the next holds at most one chunk resident,
-/// however large the sealed backlog.
-pub struct SealedChunks<D: Columnar, T: Columnar, R: Columnar> {
-    chunks: std::vec::IntoIter<PagedColumn<(D, T, R)>>,
-    pager: ColumnPager,
-}
-
-impl<D: Columnar, T: Columnar, R: Columnar> Iterator for SealedChunks<D, T, R> {
-    type Item = Column<(D, T, R)>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.chunks.next().map(|paged| self.pager.take(paged))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.chunks.size_hint()
+    fn frontier(&mut self) -> AntichainRef<'_, Self::Time> {
+        self.frontier.borrow()
     }
 }
-
-impl<D: Columnar, T: Columnar, R: Columnar> ExactSizeIterator for SealedChunks<D, T, R> {}
 
 impl<D, T, R> PushInto<Column<(D, T, R)>> for ColumnMergeBatcher<D, T, R>
 where
@@ -1147,44 +1094,6 @@ mod tests {
             out.iter().any(|e| !matches!(e, PagedColumn::Resident(..))),
             "at-threshold merges page their outputs",
         );
-    }
-
-    #[mz_ore::test]
-    fn seal_paged_ships_lazily() {
-        let policy = ForcePagePolicy::new();
-        let pager = ColumnPager::new(policy.clone());
-
-        let mut b: ColumnMergeBatcher<(u64, u64), u64, i64> =
-            differential_dataflow::trace::Batcher::new(None, 0);
-        b.set_pager(pager);
-
-        let n: u64 = 200;
-        for i in 0..n {
-            b.push_into(col(&[((i, 0), i % 10, 1)]));
-        }
-
-        let upper = Antichain::from_elem(5u64);
-        let (chunks, _description) = b.seal_paged(upper);
-
-        // The ship side must come out paged; rehydration happens per `next`.
-        for paged in chunks.chunks.as_slice() {
-            assert!(
-                !matches!(paged, PagedColumn::Resident(..)),
-                "ship side must stay paged until iterated",
-            );
-        }
-
-        let mut out: Vec<KvUpdate> = Vec::new();
-        for chunk in chunks {
-            out.extend(collect_column(&chunk));
-        }
-        out.sort();
-        let mut expected: Vec<KvUpdate> = (0..n)
-            .filter(|i| i % 10 < 5)
-            .map(|i| ((i, 0), i % 10, 1))
-            .collect();
-        expected.sort();
-        assert_eq!(out, expected);
     }
 
     #[mz_ore::test]
