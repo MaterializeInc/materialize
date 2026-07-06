@@ -1,29 +1,28 @@
 # WS2: MFP-part sharing and the width cost axis
 
-Status: WS2a-c BUILT and reviewed, LANDED INERT, acceptance NOT certified.
-Builds on WS0 + WS1 (landed, `20260704_eqsat_sharing_aware_cost.md`). Scope:
-WS2a (Map-split rule, peel-first) + WS2c (width cost axis) + WS2d (post-eqsat
-reconcile) built; WS2b (factoring extractor) and Project-splitting designed and
-deferred.
+Status: WS2a-c BUILT, reviewed, and CERTIFIED. The acceptance is
+`test/sqllogictest/eqsat_scalar_sharing.slt`. Builds on WS0 + WS1 (landed,
+`20260704_eqsat_sharing_aware_cost.md`). Scope: WS2a (Map-split rule,
+peel-first) + WS2c (width cost axis) + WS2d (post-eqsat reconcile) built; WS2b
+(factoring extractor) and Project-splitting designed and deferred.
 
 The Map-split rule, the width-aware `(degree, arity)` cost memory, and the ILP
 arity tier are implemented, each two-stage reviewed, and byte-identical
-flag-off. They do NOT yet produce a share end to end on the target shape, so
-scalar sharing is landed INERT and the acceptance is uncertified. The blocker is
-a pre-existing bug outside WS2: the join-shaped acceptance triggers a
-join-commutativity cycle that trips the ILP cycle-guard, silently falling back
-to the DAG-blind greedy extractor where the scalar-aware and width tiers do not
-apply. See `20260705_eqsat_ilp_join_commute_cycle_bail.md`. That is a live
-default-path degradation (the ILP is default-on), broader than WS2. WS2's Task 5
-acceptance re-runs once it is fixed.
+flag-off. The acceptance blocker that held WS2 inert has been removed: the
+join-shaped acceptance triggered a join-commutativity cycle that tripped the ILP
+cycle-guard, silently falling back to the DAG-blind greedy extractor where the
+scalar-aware and width tiers do not apply. The cycle-aware ILP extraction
+(`20260705_eqsat_ilp_cycle_aware_extraction.md`, landed) makes the ILP run on
+cyclic join SCCs, so the extractor now reaches the shared form. Under
+`enable_eqsat_scalar_sharing` the acceptance query computes the shared jsonb
+extraction once in a `Map` `Let` consumed by both join inputs (verified in the
+acceptance slt, flag on versus off).
 
-Note on why no acceptance shape exists today: WS2 needs two consumers that share
-a `Map` prefix and DIFFER in arity. `UNION` cannot express that (equal-arity,
-padding breaks the prefix into a diverging share), so the acceptance uses a join
-of two subqueries. But the join shape is exactly what trips the commutativity
-cycle above. So the UNION-cannot / join-blocked chain means no constructible
-acceptance shape exists today. This is the real sense in which WS2 is inert, not
-a flag-wiring triviality.
+The acceptance shape is a join of two subqueries, not `UNION`. WS2 needs two
+consumers that share a `Map` prefix and may DIFFER in arity. `UNION` cannot
+express that (equal-arity, padding breaks the prefix into a diverging share), so
+the acceptance uses the arity-free join-of-two-subqueries shape. That shape was
+what tripped the commutativity cycle, which the cycle-aware ILP resolved.
 
 ## Motivation
 
@@ -379,27 +378,29 @@ settled value or difficulty judgment. Revisit after the Map-prefix slice lands.
 
 ## Validation
 
-* Acceptance positive: a CROSS-CONSUMER subset-prefix jsonb query in an
-  ARITY-FREE two-consumer shape (a join of two subqueries, NOT `UNION`, which
-  cannot express the exact prefix, and NOT intra-Map, which prod already CSEs).
-  Consumer 1 is `Project(Map[s](r))` extracting `data->'obj'`, consumer 2 is
-  `Project(Map[s, g](r))` extracting `data->'obj'` plus one more field, so the
-  share is exact-prefix and arity-neutral. Under `enable_eqsat_scalar_sharing`
-  the extraction is computed once in a shared `Map` `Let`, won on the count/time
-  tie by the scalar-aware node tier. The plan MUST construct the concrete query,
-  generate the EXPLAIN, and VERIFY the node/time tie of the actual plan (Projects
-  included) before relying on it, treating this as an inspect-first step (a
-  likely failure mode is UNION-arity padding or any construction that breaks the
-  exact prefix into a diverging share, alongside post-eqsat re-fusion and
-  pruning). EXPLAIN OPTIMIZED PLAN, flag on versus off. Consumer 2's predicate
-  must NOT reference the extraction inline (that is cross-operator, WS2b).
-* Acceptance anti-case (as important as the positive): a subset-prefix share
-  whose shared column is carried into an arrangement it need not cross (a
-  widening carry) is NOT taken, because the arity term declines it. This proves
-  the width gate binds. A pure-widening share is declined by design. The arity
-  term is now always on (promoted, see Flag), so this anti-case holds under plain
-  ILP, independent of the flag. That strengthens acceptance, not weakens it: the
-  decline gate is live corpus-wide, not only under the flag.
+* Acceptance positive (CERTIFIED, `test/sqllogictest/eqsat_scalar_sharing.slt`):
+  a CROSS-CONSUMER subset-prefix jsonb query in an ARITY-FREE two-consumer shape
+  (a join of two subqueries, NOT `UNION`, which cannot express the exact prefix,
+  and NOT intra-Map, which prod already CSEs). Consumer 1 is `Project(Map[s](r))`
+  extracting `data->'obj'`, consumer 2 is `Project(Map[s, g](r))` extracting
+  `data->'obj'` plus `data->'foo'`, so the share is exact-prefix and
+  arity-neutral. Flag off, `data->'obj'` is extracted in both join inputs. Under
+  `enable_eqsat_scalar_sharing` it is computed once in a shared `Map` `Let`
+  (`l0`) consumed by both inputs, won on the count/time tie by the scalar-aware
+  node tier. Verified by inspecting the actual EXPLAIN plans flag on versus off,
+  Projects included.
+* Acceptance anti-case, in two parts. The width-decline gate (a shared column
+  carried into an arrangement it need not cross is NOT taken, because the arity
+  term declines the widening carry) is certified in isolation by the unit test
+  `width_aware_arity_tier_prefers_narrower_arrangement` in `eqsat/extract.rs`:
+  two arrangement forms tying on every tier above arity, the width-aware ILP
+  picks the narrow one. The arity term is always on (promoted, see Flag), so
+  this gate is live corpus-wide, independent of the flag. The acceptance slt
+  adds a plan-level negative: diverging consumers (`data->'f1'` versus
+  `data->'f2'`) share no `l0`, because a non-prefix common scalar loses on the
+  time tier (three Map nodes versus two). Together they show the extractor
+  shares only an arity-neutral subset prefix and declines both a widening carry
+  and a diverging share.
 * Corpus no-regression, flag off: full sqllogictest and the eqsat corpus
   byte-identical for the flag-gated pieces, which REQUIRES confirming the
   `cost.rs` width term is truly gated (flag-off runs the verbatim width-blind
@@ -448,19 +449,16 @@ open new work to shave bounded arity off a few files while the pipeline holds.
    solver swap. NOTE: accept-and-document does not waive the execution audit. The
    greedy drift still needs a worse-to-execute check on the final regen.
 
-2. **aggregation_nullability +10 (CSE-representative width).** The share is a
-   Let binding, and the determinism-canonical extraction now shares a wider `l0`
-   (arity 2, unprojected) and re-projects per consumer, where the merge-base
-   shared the narrow projected form (arity 1). The arity tier governs arrangement
-   COUNT and KEY ties, not which projected form becomes the CTE representative, so
-   the tier cannot reach this. The width of a shared Let representative is exactly
-   the territory of the `cost.rs` `(degree, arity)` pair, the deliberately
-   still-gated half of WS2's width work (it feeds the greedy and CSE paths, which
-   is where this decision lives). Fix vector: WS2 certification (Task 4) runs a
-   free experiment. When it flips `enable_eqsat_scalar_sharing` on, check whether
-   this file narrows. If yes, the residual has a built fix awaiting its promotion
-   decision. If no, it is a genuine CSE-ordering gap. Either outcome is learned
-   without new work now.
+2. **aggregation_nullability +10 (CSE-representative width). RESOLVED, moot.**
+   The residual was a determinism-canonical extraction sharing a wider `l0`
+   (arity 2, unprojected) where the merge-base shared the narrow projected form
+   (arity 1). The WS2 certification free experiment (Task 4) settled it. The
+   current committed plan already binds the narrow `l0` (arity 1) at flag off,
+   and flipping `enable_eqsat_scalar_sharing` on produces a byte-identical file,
+   so the gated `cost.rs` `(degree, arity)` pair is inert here. The wide-`l0`
+   form no longer reproduces: it was an artifact of the pre-HiGHS regen, undone
+   by the HiGHS solver swap and the determinism sweep upstream, not by the width
+   pair. No residual widening remains on this file and no new work is owed.
 
 3. **all_parts_essential (saturation coverage gap).** The projected
    broadcast-customer form is never an e-graph candidate, so no extractor choice
