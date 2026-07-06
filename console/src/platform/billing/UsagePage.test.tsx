@@ -383,6 +383,18 @@ describe("UsagePage", () => {
     );
     expect(totalRowBefore.getByText(formatCurrency(15))).toBeVisible();
 
+    const planDetails = within(
+      await screen.findByTestId("account-plan-details", {}, { timeout: 5_000 }),
+    );
+    const totalSpendLabel = await planDetails.findByText("Total spend");
+    // The plan-details summary must track the same region filter as the
+    // ledger, so it starts at the unfiltered $15 total too.
+    expect(
+      within(totalSpendLabel.parentElement as HTMLElement).getByText(
+        formatCurrency(15),
+      ),
+    ).toBeVisible();
+
     const regionSelect = screen.getByTestId<HTMLElement>(
       "account-region-select",
     );
@@ -399,6 +411,16 @@ describe("UsagePage", () => {
       await breakdown.findByTestId("account-total-row"),
     );
     expect(totalRowAfter.getByText(formatCurrency(10))).toBeVisible();
+
+    // The plan-details summary follows the same filter: total spend drops to
+    // the us-east-1-only figure, matching the ledger.
+    await waitFor(() => {
+      expect(
+        within(totalSpendLabel.parentElement as HTMLElement).getByText(
+          formatCurrency(10),
+        ),
+      ).toBeVisible();
+    });
   });
 
   it("displays the invoices table for direct-billed organizations", async () => {

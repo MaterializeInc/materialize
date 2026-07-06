@@ -148,6 +148,7 @@ const UsagePage = () => {
             <AccountSpendPlanDetails
               days={costBreakdownDays ?? null}
               last30Days={last30BreakdownDays ?? null}
+              regionFilter={regionFilter}
             />
           </GridItem>
           <GridItem area="invoices">

@@ -32,7 +32,12 @@ import { MaterializeTheme } from "~/theme";
 import { formatDateInUtc, FRIENDLY_DATE_FORMAT } from "~/utils/dateFormat";
 import { formatCurrency } from "~/utils/format";
 
-import { accountTotal, aggregateDays, shortAccountId } from "./dailyBreakdown";
+import {
+  accountTotal,
+  aggregateDays,
+  filterDaysByRegion,
+  shortAccountId,
+} from "./dailyBreakdown";
 import { useCreditBalance } from "./queries";
 import { calculateNextOnDemandPaymentDate, summarizePlanCosts } from "./utils";
 
@@ -301,24 +306,39 @@ function breakdownByAccount(
  * no dependency on the legacy daily-costs endpoint. Plan type and balance come
  * from the organization and credits, so the box still renders while the
  * breakdown is loading or empty. `days` is the selected window (drives total
- * spend and daily average); `last30Days` is a fixed 30-day window.
+ * spend and daily average); `last30Days` is a fixed 30-day window. Both are
+ * restricted to `regionFilter` so the totals here match the ledger.
  */
 export const AccountSpendPlanDetails = ({
   days,
   last30Days,
+  regionFilter,
 }: {
   days: CostBreakdownDay[] | null;
   last30Days: CostBreakdownDay[] | null;
+  regionFilter: "all" | string;
 }) => {
   const { organization } = useCurrentOrganization();
   const { colors } = useTheme<MaterializeTheme>();
   const { data: creditBalance } = useCreditBalance();
 
-  const total = useMemo(() => breakdownTotal(days), [days]);
+  const filteredDays = useMemo(
+    () => (days ? filterDaysByRegion(days, regionFilter) : null),
+    [days, regionFilter],
+  );
+  const filteredLast30Days = useMemo(
+    () => (last30Days ? filterDaysByRegion(last30Days, regionFilter) : null),
+    [last30Days, regionFilter],
+  );
+  const total = useMemo(() => breakdownTotal(filteredDays), [filteredDays]);
   // The window is dense (one bucket per UTC day), so `days.length` is the day
   // count the average divides by.
-  const dailyAverage = total !== null && days ? total / days.length : null;
-  const last30 = useMemo(() => breakdownByAccount(last30Days), [last30Days]);
+  const dailyAverage =
+    total !== null && filteredDays ? total / filteredDays.length : null;
+  const last30 = useMemo(
+    () => breakdownByAccount(filteredLast30Days),
+    [filteredLast30Days],
+  );
 
   return (
     <PlanDetailsContainer testId="account-plan-details">
