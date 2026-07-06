@@ -353,7 +353,17 @@ impl IlpExtractor {
             }
         }
 
-        let mut lp_model = vars.minimise(obj_expr).using(good_lp::microlp);
+        let mut lp_model = vars.minimise(obj_expr).using(good_lp::highs);
+
+        // Force deterministic single-threaded operation. Extracted plans must be
+        // byte-identical across two OS processes with different hash seeds, so any
+        // solver parallelism or unpinned RNG is disqualifying. threads = 1 and
+        // parallel = off pin serial branch-and-bound, random_seed pins the internal
+        // tie-breaking RNG.
+        lp_model = lp_model
+            .set_threads(1)
+            .set_parallel(good_lp::solvers::highs::HighsParallelType::Off)
+            .set_option("random_seed", 0);
 
         // Constraint 1: root class has exactly one selected node.
         let root_class = egraph.find(root);
@@ -487,8 +497,8 @@ impl IlpExtractor {
             }
         }
 
-        // Solve and read back the solution. microlp may panic or return an error
-        // on hard problems; catch either form and fall back to greedy.
+        // Solve and read back the solution. The solver may panic or return an
+        // error on hard problems, catch either form and fall back to greedy.
         let selected: BTreeMap<Id, ENode> =
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let solution = lp_model.solve().ok()?;
@@ -512,7 +522,7 @@ impl IlpExtractor {
                     record_ilp_fallback("solver_error");
                     return None;
                 }
-                // microlp panicked; fall back to greedy.
+                // The solver panicked; fall back to greedy.
                 Err(_) => {
                     record_ilp_fallback("solver_panic");
                     return None;
