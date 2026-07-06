@@ -268,9 +268,11 @@ Explained Query:
                 Get l5 // { arity: 2 }
   Return // { arity: 2 }
     Project (#2{f1}, #4{f1}) // { arity: 2 }
-      Join on=(#0{f1} = #1{f1} = #3{f1}) type=differential // { arity: 5 }
+      Join on=(#0{f1} = #1{f1} = #3{f1}) type=delta // { arity: 5 }
         implementation
-          %2[#0{f1}]K » %0:t2[#0{f1}]K » %1[#0{f1}]K
+          %0:t2 » %1[#0{f1}]K » %2[#0{f1}]K
+          %1 » %0:t2[#0{f1}]K » %2[#0{f1}]K
+          %2 » %0:t2[#0{f1}]K » %1[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -349,9 +351,11 @@ Explained Query:
         Get l2 // { arity: 2 }
   Return // { arity: 2 }
     Project (#2, #4) // { arity: 2 }
-      Join on=(#0{f1} = #1{f1} = #3{f1}) type=differential // { arity: 5 }
+      Join on=(#0{f1} = #1{f1} = #3{f1}) type=delta // { arity: 5 }
         implementation
-          %2[#0{f1}]K » %0:t2[#0{f1}]K » %1[#0{f1}]K
+          %0:t2 » %1[#0{f1}]K » %2[#0{f1}]K
+          %1 » %0:t2[#0{f1}]K » %2[#0{f1}]K
+          %2 » %0:t2[#0{f1}]K » %1[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -435,9 +439,11 @@ Explained Query:
             Get l0 // { arity: 1 }
   Return // { arity: 2 }
     Project (#2{min_f1}, #4{max_f1}) // { arity: 2 }
-      Join on=(#0{f1} = #1{f1} = #3{f1}) type=differential // { arity: 5 }
+      Join on=(#0{f1} = #1{f1} = #3{f1}) type=delta // { arity: 5 }
         implementation
-          %2[#0{f1}]UK » %0:t2[#0{f1}]K » %1[#0{f1}]UK
+          %0:t2 » %1[#0{f1}]UK » %2[#0{f1}]UK
+          %1 » %0:t2[#0{f1}]K » %2[#0{f1}]UK
+          %2 » %0:t2[#0{f1}]K » %1[#0{f1}]UK
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -709,9 +715,11 @@ Explained Query:
         ReadStorage materialize.public.t3 // { arity: 1 }
     cte l1 =
       Project (#0{f1}) // { arity: 1 }
-        Join on=(#0{f1} = #1{f1} = #2{f1}) type=differential // { arity: 3 }
+        Join on=(#0{f1} = #1{f1} = #2{f1}) type=delta // { arity: 3 }
           implementation
-            %2:t2[#0{f1}]K » %1:t1[#0{f1}]K » %0:l0[#0{f1}]UK
+            %0:l0 » %1:t1[#0{f1}]K » %2:t2[#0{f1}]K
+            %1:t1 » %0:l0[#0{f1}]UK » %2:t2[#0{f1}]K
+            %2:t2 » %0:l0[#0{f1}]UK » %1:t1[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               Get l0 // { arity: 1 }

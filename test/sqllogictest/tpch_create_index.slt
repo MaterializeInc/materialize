@@ -1301,12 +1301,14 @@ materialize.public.q15:
             ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
   Return // { arity: 5 }
     Project (#0{s_suppkey}..=#2{s_address}, #4{s_phone}, #8{sum}) // { arity: 5 }
-      Join on=(#0{s_suppkey} = #7{l_suppkey} AND #8{sum} = #9{max_sum}) type=differential // { arity: 10 }
+      Join on=(#0{s_suppkey} = #7{l_suppkey} AND #8{sum} = #9{max_sum}) type=delta // { arity: 10 }
         implementation
-          %2[#0{max_sum}]UK » %1:l0[#1{sum}]K » %0:supplier[#0{s_suppkey}]KA
+          %0:supplier » %1:l0[#0{l_suppkey}]UK » %2[#0{max_sum}]UK
+          %1:l0 » %2[#0{max_sum}]UK » %0:supplier[#0{s_suppkey}]KA
+          %2 » %1:l0[#1{sum}]K » %0:supplier[#0{s_suppkey}]KA
         ArrangeBy keys=[[#0{s_suppkey}]] // { arity: 7 }
-          ReadIndex on=supplier pk_supplier_suppkey=[differential join] // { arity: 7 }
-        ArrangeBy keys=[[#1{sum}]] // { arity: 2 }
+          ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] // { arity: 7 }
+        ArrangeBy keys=[[#0{l_suppkey}], [#1{sum}]] // { arity: 2 }
           Get l0 // { arity: 2 }
         ArrangeBy keys=[[#0{max_sum}]] // { arity: 1 }
           Reduce aggregates=[max(#0{sum})] // { arity: 1 }
@@ -1314,7 +1316,7 @@ materialize.public.q15:
               Get l0 // { arity: 2 }
 
 Used Indexes:
-  - materialize.public.pk_supplier_suppkey (differential join)
+  - materialize.public.pk_supplier_suppkey (delta join 1st input (full scan))
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 Target cluster: quickstart

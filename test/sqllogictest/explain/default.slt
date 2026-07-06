@@ -531,7 +531,7 @@ Explained Query:
             →Read materialize.public.mv
           →Arranged l2
   →Return
-    →Differential Join %2[#0] » %0:l0[#0] » %1[#0]
+    →Delta Join [%0:l0[#0] » %1[#0] » %2[#0]] [%1[#0] » %0:l0[#0] » %2[#0]] [%2[#0] » %0:l0[#0] » %1[#0]]
       →Arrange (#0)
         →Stream l0
       →Arrange (#0)
@@ -591,10 +591,10 @@ Explained Query:
       →Arrange (#1)
         →Stream l0
     cte l2 =
-      →Differential Join %2:l0[#0{b}] » %1:l1[#1] » %0:l1[#1]
+      →Delta Join [%0:l1[#1] » %2:l0[#0] » %1:l1[#1]] [%1:l1[#1] » %2:l0[#0] » %0:l1[#1]] [%2:l0[#0] » %0:l1[#1] » %1:l1[#1]]
         →Arranged l1
         →Arranged l1
-        →Arrange (#0{b})
+        →Arrange (#0)
           →Fused with Child Map/Filter/Project
             Project: #1
               →Read l0
@@ -840,10 +840,10 @@ Explained Query:
       →Arrange (#1)
         →Stream l0
   →Return
-    →Differential Join %2:l0[#0{b}] » %1:l1[#1] » %0:l1[#1]
+    →Delta Join [%0:l1[#1] » %2:l0[#0] » %1:l1[#1]] [%1:l1[#1] » %2:l0[#0] » %0:l1[#1]] [%2:l0[#0] » %0:l1[#1] » %1:l1[#1]]
       →Arranged l1
       →Arranged l1
-      →Arrange (#0{b})
+      →Arrange (#0)
         →Fused with Child Map/Filter/Project
           Project: #1
             →Read l0

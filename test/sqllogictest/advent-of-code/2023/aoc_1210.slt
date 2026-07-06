@@ -461,9 +461,11 @@ Explained Query:
                     Get l6 // { arity: 2 }
             Project (#0, #1, #8) // { arity: 3 }
               Map (case when ((#0{row_no} = #0{r1}) AND (#0{row_no} = (#6{r2} + 1)) AND (#1{col_no} = #7{c2}) AND (#1{col_no} = (#1{c1} + 1))) then "J" else case when ((#0{row_no} = #0{r1}) AND (#0{row_no} = #6{r2}) AND (#1{col_no} = (#1{c1} + 1)) AND (#1{col_no} = (#7{c2} - 1))) then "-" else case when ((#0{row_no} = #0{r1}) AND (#0{row_no} = (#6{r2} - 1)) AND (#1{col_no} = #7{c2}) AND (#1{col_no} = (#1{c1} + 1))) then "7" else case when ((#0{row_no} = #6{r2}) AND (#0{row_no} = (#0{r1} + 1)) AND (#1{col_no} = #1{c1}) AND (#1{col_no} = (#7{c2} - 1))) then "L" else case when ((#0{row_no} = (#0{r1} + 1)) AND (#0{row_no} = (#6{r2} - 1)) AND (#1{col_no} = #1{c1}) AND (#1{col_no} = #7{c2})) then "|" else case when ((#0{row_no} = #0{r1}) AND (#0{row_no} = #6{r2}) AND (#1{col_no} = (#1{c1} - 1)) AND (#1{col_no} = (#7{c2} - 1))) then "F" else "???" end end end end end end) // { arity: 9 }
-                Join on=(#0{c} = #2{c} = #4{c} AND #1{c} = #3{c} = #5{c1}) type=differential // { arity: 8 }
+                Join on=(#0{c} = #2{c} = #4{c} AND #1{c} = #3{c} = #5{c1}) type=delta // { arity: 8 }
                   implementation
-                    %2:l5[#0{c}, #1{c1}]KK » %1:l3[#0, #1]KK » %0:l4[#0, #1]KK
+                    %0:l4 » %1:l3[#0, #1]KK » %2:l5[#0, #1]KK
+                    %1:l3 » %0:l4[#0, #1]KKef » %2:l5[#0, #1]KK
+                    %2:l5 » %0:l4[#0, #1]KKef » %1:l3[#0, #1]KK
                   ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                     Get l4 // { arity: 2 }
                   ArrangeBy keys=[[#0, #1]] // { arity: 2 }

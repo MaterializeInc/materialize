@@ -402,54 +402,57 @@ Explained Query:
             Constant // { arity: 0 }
               - ()
     cte l10 =
-      ArrangeBy keys=[[#0{b}]] // { arity: 4 }
-        Get l1 // { arity: 4 }
-    cte l11 =
       Reduce aggregates=[sum((#0{r} - 1))] // { arity: 1 }
         Project (#1) // { arity: 1 }
           Filter (#2{count} = 1) // { arity: 3 }
             Reduce group_by=[#0{b}, #1] aggregates=[count(*)] // { arity: 3 }
               Project (#0, #1) // { arity: 2 }
                 Filter (#5{symbol} != #9{symbol}) AND (#3{r} < #7{r}) // { arity: 10 }
-                  Join on=(#0{b} = #2{b} = #6{b} AND #4{c} = #8{c} AND abs(((2 * #3{r}) - ((2 * #1{r}) - 1))) = abs(((2 * #7{r}) - ((2 * #1{r}) - 1)))) type=differential // { arity: 10 }
+                  Join on=(#0{b} = #2{b} = #6{b} AND #4{c} = #8{c} AND abs(((2 * #3{r}) - ((2 * #1{r}) - 1))) = abs(((2 * #7{r}) - ((2 * #1{r}) - 1)))) type=delta // { arity: 10 }
                     implementation
-                      %2:l10[#0{b}]K » %0:l4[#0]K » %1:l1[#0, #2]KK
+                      %0:l4 » %1:l1[#0]K » %2:l1[#0, #2]KK
+                      %1:l1 » %0:l4[#0]K » %2:l1[#0, #2]KK
+                      %2:l1 » %0:l4[#0]K » %1:l1[#0, #2]KK
                     Get l4 // { arity: 2 }
+                    ArrangeBy keys=[[#0], [#0, #2]] // { arity: 4 }
+                      Get l1 // { arity: 4 }
                     ArrangeBy keys=[[#0, #2]] // { arity: 4 }
                       Get l1 // { arity: 4 }
-                    Get l10 // { arity: 4 }
-    cte l12 =
+    cte l11 =
       Union // { arity: 1 }
-        Get l11 // { arity: 1 }
+        Get l10 // { arity: 1 }
         Map (null) // { arity: 1 }
           Union // { arity: 0 }
             Negate // { arity: 0 }
               Project () // { arity: 0 }
-                Get l11 // { arity: 1 }
+                Get l10 // { arity: 1 }
             Constant // { arity: 0 }
               - ()
-    cte l13 =
+    cte l12 =
       Reduce aggregates=[sum((#0{c} - 1))] // { arity: 1 }
         Project (#1) // { arity: 1 }
           Filter (#2{count} = 1) // { arity: 3 }
             Reduce group_by=[#0{b}, #1] aggregates=[count(*)] // { arity: 3 }
               Project (#0, #1) // { arity: 2 }
                 Filter (#5{symbol} != #9{symbol}) AND (#4{c} < #8{c}) // { arity: 10 }
-                  Join on=(#0{b} = #2{b} = #6{b} AND #3{r} = #7{r} AND abs(((2 * #4{c}) - ((2 * #1{c}) - 1))) = abs(((2 * #8{c}) - ((2 * #1{c}) - 1)))) type=differential // { arity: 10 }
+                  Join on=(#0{b} = #2{b} = #6{b} AND #3{r} = #7{r} AND abs(((2 * #4{c}) - ((2 * #1{c}) - 1))) = abs(((2 * #8{c}) - ((2 * #1{c}) - 1)))) type=delta // { arity: 10 }
                     implementation
-                      %2:l10[#0{b}]K » %0:l7[#0]K » %1:l1[#0, #1]KK
+                      %0:l7 » %1:l1[#0]K » %2:l1[#0, #1]KK
+                      %1:l1 » %0:l7[#0]K » %2:l1[#0, #1]KK
+                      %2:l1 » %0:l7[#0]K » %1:l1[#0, #1]KK
                     Get l7 // { arity: 2 }
+                    ArrangeBy keys=[[#0], [#0, #1]] // { arity: 4 }
+                      Get l1 // { arity: 4 }
                     ArrangeBy keys=[[#0, #1]] // { arity: 4 }
                       Get l1 // { arity: 4 }
-                    Get l10 // { arity: 4 }
-    cte l14 =
+    cte l13 =
       Union // { arity: 1 }
-        Get l13 // { arity: 1 }
+        Get l12 // { arity: 1 }
         Map (null) // { arity: 1 }
           Union // { arity: 0 }
             Negate // { arity: 0 }
               Project () // { arity: 0 }
-                Get l13 // { arity: 1 }
+                Get l12 // { arity: 1 }
             Constant // { arity: 0 }
               - ()
   Return // { arity: 2 }
@@ -483,22 +486,22 @@ Explained Query:
                     - ()
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
-              Get l12 // { arity: 1 }
+              Get l11 // { arity: 1 }
               Map (null) // { arity: 1 }
                 Union // { arity: 0 }
                   Negate // { arity: 0 }
                     Project () // { arity: 0 }
-                      Get l12 // { arity: 1 }
+                      Get l11 // { arity: 1 }
                   Constant // { arity: 0 }
                     - ()
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
-              Get l14 // { arity: 1 }
+              Get l13 // { arity: 1 }
               Map (null) // { arity: 1 }
                 Union // { arity: 0 }
                   Negate // { arity: 0 }
                     Project () // { arity: 0 }
-                      Get l14 // { arity: 1 }
+                      Get l13 // { arity: 1 }
                   Constant // { arity: 0 }
                     - ()
 

@@ -876,9 +876,11 @@ Explained Query:
       Map (((bigint_to_numeric(#3{count}) + (2 * #1{sum})) + (10 * #2{sum}))) // { arity: 5 }
         Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(case when (#2) IS NULL then 0 else coalesce(#1{count}, 0) end), sum(case when (#4) IS NULL then 0 else coalesce(#3{count}, 0) end), count(*)] // { arity: 4 }
           Project (#1{creatorpersonid}, #3{count}, #4, #6{count}, #7) // { arity: 5 }
-            Join on=(#0{messageid} = #2{parentmessageid} = #5{messageid}) type=differential // { arity: 8 }
+            Join on=(#0{messageid} = #2{parentmessageid} = #5{messageid}) type=delta // { arity: 8 }
               implementation
-                %2[#0{messageid}]K » %1[#0{parentmessageid}]K » %0:l0[#0{messageid}]K
+                %0:l0 » %1[#0{parentmessageid}]K » %2[#0{messageid}]K
+                %1 » %0:l0[#0{messageid}]Kef » %2[#0{messageid}]K
+                %2 » %0:l0[#0{messageid}]Kef » %1[#0{parentmessageid}]K
               ArrangeBy keys=[[#0{messageid}]] // { arity: 2 }
                 Project (#1{messageid}, #2{creatorpersonid}) // { arity: 2 }
                   Filter (#0{name} = "Sikh_Empire") // { arity: 3 }
@@ -3102,11 +3104,13 @@ Explained Query:
           ReadIndex on=message_hastag_tag message_hastag_tag_tagid=[differential join] // { arity: 3 }
       cte l3 =
         Project (#0{id}, #2{messageid}) // { arity: 2 }
-          Join on=(#0{id} = #1{creatorpersonid} AND #2{messageid} = #3{messageid}) type=differential // { arity: 4 }
+          Join on=(#0{id} = #1{creatorpersonid} AND #2{messageid} = #3{messageid}) type=delta // { arity: 4 }
             implementation
-              %2[#0{messageid}]UKA » %1[#1{messageid}]K » %0:l0[#0{id}]UK
+              %0:l0 » %1[#0{creatorpersonid}]K » %2[#0{messageid}]UKA
+              %1 » %0:l0[#0{id}]UK » %2[#0{messageid}]UKA
+              %2 » %1[#1{messageid}]K » %0:l0[#0{id}]UK
             Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#1{messageid}]] // { arity: 2 }
+            ArrangeBy keys=[[#0{creatorpersonid}], [#1{messageid}]] // { arity: 2 }
               Distinct project=[#1{creatorpersonid}, #0{messageid}] // { arity: 2 }
                 Project (#1{messageid}, #9{creatorpersonid}) // { arity: 2 }
                   Filter (2012-10-07 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0{creationdate}))) // { arity: 13 }
@@ -3139,11 +3143,13 @@ Explained Query:
                   Get l3 // { arity: 2 }
       cte l6 =
         Project (#0{id}, #2{messageid}) // { arity: 2 }
-          Join on=(#0{id} = #1{creatorpersonid} AND #2{messageid} = #3{messageid}) type=differential // { arity: 4 }
+          Join on=(#0{id} = #1{creatorpersonid} AND #2{messageid} = #3{messageid}) type=delta // { arity: 4 }
             implementation
-              %2[#0{messageid}]UKA » %1[#1{messageid}]K » %0:l0[#0{id}]UK
+              %0:l0 » %1[#0{creatorpersonid}]K » %2[#0{messageid}]UKA
+              %1 » %0:l0[#0{id}]UK » %2[#0{messageid}]UKA
+              %2 » %1[#1{messageid}]K » %0:l0[#0{id}]UK
             Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#1{messageid}]] // { arity: 2 }
+            ArrangeBy keys=[[#0{creatorpersonid}], [#1{messageid}]] // { arity: 2 }
               Distinct project=[#1{creatorpersonid}, #0{messageid}] // { arity: 2 }
                 Project (#1{messageid}, #9{creatorpersonid}) // { arity: 2 }
                   Filter (2012-12-14 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0{creationdate}))) // { arity: 13 }
@@ -3280,26 +3286,32 @@ Explained Query:
             ArrangeBy keys=[[#1{messageid}]] // { arity: 13 }
               ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
       cte l1 =
-        ArrangeBy keys=[[#1{forumid}]] // { arity: 3 }
-          ReadIndex on=forum_hasmember_person forum_hasmember_person_forumid=[differential join] // { arity: 3 }
+        Project (#1{forumid}, #2{personid}) // { arity: 2 }
+          ReadIndex on=forum_hasmember_person forum_hasmember_person_forumid=[*** full scan ***] // { arity: 3 }
       cte l2 =
         Project (#1{creatorpersonid}, #4{messageid}, #6{containerforumid}) // { arity: 3 }
-          Filter (#2{containerforumid} != #6{containerforumid}) AND (#5{creatorpersonid} != #7{creatorpersonid}) AND ((#0{creationdate} + 12:00:00) < #3{creationdate}) // { arity: 15 }
-            Join on=(#2{containerforumid} = #10{forumid} = #13{forumid} AND #4{messageid} = #8{parentmessageid} AND #5{creatorpersonid} = #14{personid} AND #7{creatorpersonid} = #11{personid}) type=differential // { arity: 15 }
+          Filter (#2{containerforumid} != #6{containerforumid}) AND (#5{creatorpersonid} != #7{creatorpersonid}) AND ((#0{creationdate} + 12:00:00) < #3{creationdate}) // { arity: 13 }
+            Join on=(#2{containerforumid} = #9{forumid} = #11{forumid} AND #4{messageid} = #8{parentmessageid} AND #5{creatorpersonid} = #12{personid} AND #7{creatorpersonid} = #10{personid}) type=delta // { arity: 13 }
               implementation
-                %4:l1[#1{forumid}]KA » %3:l1[#1{forumid}]KA » %2:l0[#0{creatorpersonid}]K » %1:l0[#1{messageid}, #2{creatorpersonid}]KK » %0:l0[#2{containerforumid}]K
+                %0:l0 » %3:l1[#0{forumid}]KA » %2:l0[#0{creatorpersonid}]K » %1:l0[#1{messageid}]K » %4:l1[#0{forumid}, #1{personid}]KK
+                %1:l0 » %2:l0[#1{parentmessageid}]K » %3:l1[#1{personid}]KA » %4:l1[#0{forumid}, #1{personid}]KK » %0:l0[#2{containerforumid}]K
+                %2:l0 » %1:l0[#1{messageid}]K » %3:l1[#1{personid}]KA » %4:l1[#0{forumid}, #1{personid}]KK » %0:l0[#2{containerforumid}]K
+                %3:l1 » %0:l0[#2{containerforumid}]K » %2:l0[#0{creatorpersonid}]K » %1:l0[#1{messageid}]K » %4:l1[#0{forumid}, #1{personid}]KK
+                %4:l1 » %0:l0[#2{containerforumid}]K » %1:l0[#2{creatorpersonid}]K » %2:l0[#1{parentmessageid}]K » %3:l1[#0{forumid}, #1{personid}]KK
               ArrangeBy keys=[[#2{containerforumid}]] // { arity: 3 }
                 Project (#0{creationdate}, #2{creatorpersonid}, #3{containerforumid}) // { arity: 3 }
                   Get l0 // { arity: 5 }
-              ArrangeBy keys=[[#1{messageid}, #2{creatorpersonid}]] // { arity: 4 }
+              ArrangeBy keys=[[#1{messageid}], [#2{creatorpersonid}]] // { arity: 4 }
                 Project (#0{creationdate}..=#3{containerforumid}) // { arity: 4 }
                   Get l0 // { arity: 5 }
-              ArrangeBy keys=[[#0{creatorpersonid}]] // { arity: 2 }
+              ArrangeBy keys=[[#0{creatorpersonid}], [#1{parentmessageid}]] // { arity: 2 }
                 Project (#2{creatorpersonid}, #4{parentmessageid}) // { arity: 2 }
                   Filter (#4{parentmessageid}) IS NOT NULL // { arity: 5 }
                     Get l0 // { arity: 5 }
-              Get l1 // { arity: 3 }
-              Get l1 // { arity: 3 }
+              ArrangeBy keys=[[#0{forumid}], [#0{forumid}, #1{personid}], [#1{personid}]] // { arity: 2 }
+                Get l1 // { arity: 2 }
+              ArrangeBy keys=[[#0{forumid}, #1{personid}]] // { arity: 2 }
+                Get l1 // { arity: 2 }
       cte l3 =
         Distinct project=[#0{creatorpersonid}, #1{containerforumid}] // { arity: 2 }
           Project (#0{creatorpersonid}, #2{containerforumid}) // { arity: 2 }
@@ -3323,13 +3335,12 @@ Explained Query:
                         Get l3 // { arity: 2 }
                       ArrangeBy keys=[[#0{personid}, #1{forumid}]] // { arity: 2 }
                         Distinct project=[#1{personid}, #0{forumid}] // { arity: 2 }
-                          Project (#1{forumid}, #2{personid}) // { arity: 2 }
-                            ReadIndex on=forum_hasmember_person forum_hasmember_person_forumid=[*** full scan ***] // { arity: 3 }
+                          Get l1 // { arity: 2 }
                 Get l3 // { arity: 2 }
 
 Used Indexes:
   - materialize.public.tag_name (lookup)
-  - materialize.public.forum_hasmember_person_forumid (*** full scan ***, differential join)
+  - materialize.public.forum_hasmember_person_forumid (*** full scan ***)
   - materialize.public.message_hastag_tag_tagid (differential join)
   - materialize.public.message_messageid (differential join)
 

@@ -220,7 +220,7 @@ Explained Query:
     cte l6 =
       Project (#0{product_id}..=#2{base_price}, #10..=#12)
         Map (case when (#5) IS NULL then null else #4 end, case when (#8) IS NULL then null else #7{min_promotion_discount} end)
-          Join on=(#0{product_id} = #3{product_id} = #6{product_id} = #9{product_id}) type=differential
+          Join on=(#0{product_id} = #3{product_id} = #6{product_id} = #9{product_id}) type=delta
             ArrangeBy keys=[[#0{product_id}]]
               Project (#0{product_id}..=#2{base_price})
                 ReadIndex on=products idx_products_product_name=[*** full scan ***]
@@ -291,7 +291,7 @@ Explained Query:
   Return
     Project (#0{product_id}, #13, #11{last_update_time})
       Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3{popularity_rank} <= 3) then 1.2 else case when ((#3{popularity_rank} <= 10) AND (#3{popularity_rank} >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5{promotion_discount} / 100)), 1)) * case when (#12{stock_rank} <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4{avg_price}) then (1 + ((#2{base_price} - #4{avg_price}) / #4{avg_price})) else (1 - ((#4{avg_price} - #2{base_price}) / #4{avg_price})) end) * case when ilike["%cheap%"](#1{product_name}) then 0.8 else 1 end))
-        Join on=(#0{product_id} = #6{product_id} = #9{product_id} = #10{product_id}) type=differential
+        Join on=(#0{product_id} = #6{product_id} = #9{product_id} = #10{product_id}) type=delta
           ArrangeBy keys=[[#0{product_id}]]
             Get l6
           ArrangeBy keys=[[#0{product_id}]]
@@ -539,18 +539,18 @@ Explained Query:
   With
     cte l0 =
       Project (#0{product_id}, #1{product_name}, #3{category_id}, #5{category_name}, #7{adjusted_price})
-        Join on=(#0{product_id} = #2{product_id} = #6{product_id} AND #3{category_id} = #4{category_id}) type=differential
+        Join on=(#0{product_id} = #2{product_id} = #6{product_id} AND #3{category_id} = #4{category_id}) type=delta
           ArrangeBy keys=[[#0{product_id}]]
             Project (#0{product_id}, #1{product_name})
               ReadStorage materialize.public.shopping_cart
-          ArrangeBy keys=[[#0{product_id}]]
+          ArrangeBy keys=[[#0{product_id}], [#1{category_id}]]
             Project (#0{product_id}, #3{category_id})
               ReadIndex on=products idx_products_product_name=[*** full scan ***]
           ArrangeBy keys=[[#0{category_id}]]
             Project (#0{category_id}, #1{category_name})
               ReadStorage materialize.public.categories
           ArrangeBy keys=[[#0{product_id}]]
-            ReadIndex on=dynamic_pricing dynamic_pricing_product_id_idx=[differential join]
+            ReadIndex on=dynamic_pricing dynamic_pricing_product_id_idx=[delta join lookup]
     cte l1 =
       ArrangeBy keys=[[#0{product_id}]]
         Get l0
@@ -584,7 +584,7 @@ Source materialize.public.shopping_cart
 Used Indexes:
   - materialize.public.idx_products_product_name (*** full scan ***)
   - materialize.public.idx_inventory_product_id (differential join)
-  - materialize.public.dynamic_pricing_product_id_idx (differential join)
+  - materialize.public.dynamic_pricing_product_id_idx (delta join lookup)
 
 Target cluster: quickstart
 
@@ -1078,7 +1078,7 @@ Explained Query:
     cte l6 =
       Project (#0{product_id}..=#2{base_price}, #10..=#12)
         Map (case when (#5) IS NULL then null else #4 end, case when (#8) IS NULL then null else #7{min_promotion_discount} end)
-          Join on=(#0{product_id} = #3{product_id} = #6{product_id} = #9{product_id}) type=differential
+          Join on=(#0{product_id} = #3{product_id} = #6{product_id} = #9{product_id}) type=delta
             ArrangeBy keys=[[#0{product_id}]]
               Project (#0{product_id}..=#2{base_price})
                 ReadIndex on=products idx_products_product_name=[*** full scan ***]
@@ -1149,7 +1149,7 @@ Explained Query:
   Return
     Project (#0{product_id}, #13, #11{last_update_time})
       Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3{popularity_rank} <= 3) then 1.2 else case when ((#3{popularity_rank} <= 10) AND (#3{popularity_rank} >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5{promotion_discount} / 100)), 1)) * case when (#12{stock_rank} <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4{avg_price}) then (1 + ((#2{base_price} - #4{avg_price}) / #4{avg_price})) else (1 - ((#4{avg_price} - #2{base_price}) / #4{avg_price})) end) * case when ilike["%cheap%"](#1{product_name}) then 0.8 else 1 end))
-        Join on=(#0{product_id} = #6{product_id} = #9{product_id} = #10{product_id}) type=differential
+        Join on=(#0{product_id} = #6{product_id} = #9{product_id} = #10{product_id}) type=delta
           ArrangeBy keys=[[#0{product_id}]]
             Get l6
           ArrangeBy keys=[[#0{product_id}]]

@@ -383,23 +383,26 @@ GROUP BY 1,
 ----
 Explained Query:
   Reduce group_by=[(#2{l_quantity} * #3{l_extendedprice}), #4{c_nationkey}] aggregates=[max(#1{l_linenumber}), max(#0{l_suppkey})] // { arity: 4 }
-    Project (#0{l_suppkey}..=#3{l_extendedprice}, #17{c_nationkey}) // { arity: 5 }
-      Filter (#19{c_acctbal} < #8{o_totalprice}) AND (#19{c_acctbal} <= #3{l_extendedprice}) // { arity: 22 }
-        Join on=(#4{l_receiptdate} = #9{o_orderdate} AND #6{o_custkey} = #14{c_custkey}) type=differential // { arity: 22 }
+    Project (#0{l_suppkey}..=#3{l_extendedprice}, #11{c_nationkey}) // { arity: 5 }
+      Filter (#13{c_acctbal} < #6{o_totalprice}) AND (#13{c_acctbal} <= #3{l_extendedprice}) // { arity: 16 }
+        Join on=(#4{l_receiptdate} = #7{o_orderdate} AND #5{o_custkey} = #8{c_custkey}) type=delta // { arity: 16 }
           implementation
-            %2:customer[#0{c_custkey}]KA » %1:orders[#1{o_custkey}]KA » %0:lineitem[#4{l_receiptdate}]K
+            %0:lineitem » %1:orders[#2{o_orderdate}]K » %2:customer[#0{c_custkey}]KA
+            %1:orders » %0:lineitem[#4{l_receiptdate}]Kf » %2:customer[#0{c_custkey}]KA
+            %2:customer » %1:orders[#0{o_custkey}]KA » %0:lineitem[#4{l_receiptdate}]Kf
           ArrangeBy keys=[[#4{l_receiptdate}]] // { arity: 5 }
             Project (#2{l_suppkey}..=#5{l_extendedprice}, #12{l_receiptdate}) // { arity: 5 }
               Filter (#3{l_linenumber} != 1) AND (#3{l_linenumber} != 2) AND (#3{l_linenumber} != 6) // { arity: 16 }
                 ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
-          ArrangeBy keys=[[#1{o_custkey}]] // { arity: 9 }
-            ReadIndex on=orders fk_orders_custkey=[differential join] // { arity: 9 }
+          ArrangeBy keys=[[#0{o_custkey}], [#2{o_orderdate}]] // { arity: 3 }
+            Project (#1{o_custkey}, #3{o_totalprice}, #4{o_orderdate}) // { arity: 3 }
+              ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
           ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
-            ReadIndex on=customer pk_customer_custkey=[differential join] // { arity: 8 }
+            ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey (differential join)
-  - materialize.public.fk_orders_custkey (differential join)
+  - materialize.public.pk_customer_custkey (delta join lookup)
+  - materialize.public.pk_orders_orderkey (*** full scan ***)
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
 
 Target cluster: quickstart

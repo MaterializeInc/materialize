@@ -247,11 +247,13 @@ Explained Query:
                     Distinct project=[#0{color}] // { arity: 1 }
                       Project (#0) // { arity: 1 }
                         Filter (#3{number} > #5{number}) // { arity: 6 }
-                          Join on=(#0{color} = #1{color} AND #2{color} = #4{color}) type=differential // { arity: 6 }
+                          Join on=(#0{color} = #1{color} AND #2{color} = #4{color}) type=delta // { arity: 6 }
                             implementation
-                              %1:l0[#0{color}]K » %0:l2[#0]K » %2[#0]UK
+                              %0:l2 » %1:l0[#0]K » %2[#0]UK
+                              %1:l0 » %0:l2[#0]K » %2[#0]UK
+                              %2 » %1:l0[#1]K » %0:l2[#0]K
                             Get l2 // { arity: 1 }
-                            ArrangeBy keys=[[#0{color}]] // { arity: 3 }
+                            ArrangeBy keys=[[#0], [#1]] // { arity: 3 }
                               Filter (#0{game}) IS NOT NULL AND (#1{color}) IS NOT NULL // { arity: 3 }
                                 Get l0 // { arity: 3 }
                             ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -269,9 +271,11 @@ Explained Query:
         Project (#1{count}) // { arity: 1 }
           Reduce group_by=[#0{game}] aggregates=[count(*)] // { arity: 2 }
             Project (#0) // { arity: 1 }
-              Join on=(#0{game} = #1{game} = #2{game}) type=differential // { arity: 3 }
+              Join on=(#0{game} = #1{game} = #2{game}) type=delta // { arity: 3 }
                 implementation
-                  %2[#0{game}]K » %1[#0]K » %0[#0]K
+                  %0 » %1[#0]K » %2[#0]K
+                  %1 » %0[#0]K » %2[#0]K
+                  %2 » %0[#0]K » %1[#0]K
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
                     FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then integer_to_bigint(#1{max}) else 0 end) // { arity: 2 }
@@ -284,7 +288,7 @@ Explained Query:
                       Project (#0, #2{max}) // { arity: 2 }
                         Filter (#1{color} = "blue") // { arity: 3 }
                           Get l4 // { arity: 3 }
-                ArrangeBy keys=[[#0{game}]] // { arity: 1 }
+                ArrangeBy keys=[[#0]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
                     FlatMap repeat_row_non_negative(case when (#1{max} >= 1) then integer_to_bigint(#1{max}) else 0 end) // { arity: 2 }
                       Project (#0, #2{max}) // { arity: 2 }

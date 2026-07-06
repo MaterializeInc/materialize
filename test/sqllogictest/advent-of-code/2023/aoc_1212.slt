@@ -105,26 +105,28 @@ Explained Query:
             Project (#0, #1) // { arity: 2 }
               Get l0 // { arity: 3 }
     cte l2 =
-      Project (#0, #1) // { arity: 2 }
-        Filter (#2{symb} != "#") // { arity: 3 }
-          Get l1 // { arity: 3 }
+      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Filter (#2{symb} != "#") // { arity: 3 }
+            Get l1 // { arity: 3 }
   Return // { arity: 1 }
     With Mutually Recursive
       cte l3 =
         Project (#0..=#2, #5) // { arity: 4 }
-          Join on=(#0{r} = #3{r} = #6{r} AND #4{pos} = (#2{spring} + 1) AND #7{pos} = ((#1{chars} + #5{len}) + 1)) type=differential // { arity: 8 }
+          Join on=(#0{r} = #3{r} = #6{r} AND #4{pos} = (#2{spring} + 1) AND #7{pos} = ((#1{chars} + #5{len}) + 1)) type=delta // { arity: 8 }
             implementation
-              %2:l2[#0{r}]K » %1[#0]K » %0:l5[#0]K
+              %0:l5 » %1[#0, #1]KK » %2:l2[#0, #1]KKf
+              %1 » %0:l5[#0]K » %2:l2[#0, #1]KKf
+              %2:l2 » %0:l5[#0]K » %1[#0, #1]KK
             ArrangeBy keys=[[#0]] // { arity: 3 }
               Get l5 // { arity: 3 }
-            ArrangeBy keys=[[#0]] // { arity: 3 }
+            ArrangeBy keys=[[#0, #1]] // { arity: 3 }
               Project (#0, #2, #3) // { arity: 3 }
                 Map (text_to_integer(array_index(regexp_split_to_array[",", case_insensitive=false](#1{springs}), integer_to_bigint(#2{pos})))) // { arity: 4 }
                   FlatMap generate_series(1, array_length(regexp_split_to_array[",", case_insensitive=false](#1{springs}), 1), 1) // { arity: 3 }
                     Project (#0, #2) // { arity: 2 }
                       Get l0 // { arity: 3 }
-            ArrangeBy keys=[[#0{r}]] // { arity: 2 }
-              Get l2 // { arity: 2 }
+            Get l2 // { arity: 2 }
       cte l4 =
         Distinct project=[#0..=#2] // { arity: 3 }
           Project (#0, #1, #3) // { arity: 3 }
@@ -138,8 +140,7 @@ Explained Query:
             Join on=(#0{pos} = #2{pos} AND #1{pos} = (#3{chars} + 1)) type=differential // { arity: 5 }
               implementation
                 %1:l5[#0{pos}, (#1{chars} + 1)]KK » %0:l2[#0, #1]KK
-              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                Get l2 // { arity: 2 }
+              Get l2 // { arity: 2 }
               ArrangeBy keys=[[#0{pos}, (#1{chars} + 1)]] // { arity: 3 }
                 Get l5 // { arity: 3 }
           Project (#3, #7, #8) // { arity: 3 }

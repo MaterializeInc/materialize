@@ -274,10 +274,12 @@ Explained Query:
             Get l6 // { arity: 1 }
     cte l9 =
       Project (#0, #1, #3{count}, #5{count}) // { arity: 4 }
-        Join on=(#0 = #2 AND #1 = #4) type=differential // { arity: 6 }
+        Join on=(#0 = #2 AND #1 = #4) type=delta // { arity: 6 }
           implementation
-            %2[#0]UK » %0:l1[#1]K » %1[#0]UK
-          ArrangeBy keys=[[#1]] // { arity: 2 }
+            %0:l1 » %1[#0]UK » %2[#0]UK
+            %1 » %0:l1[#0]Kef » %2[#0]UK
+            %2 » %0:l1[#1]Kef » %1[#0]UK
+          ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
             Get l1 // { arity: 2 }
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Union // { arity: 2 }

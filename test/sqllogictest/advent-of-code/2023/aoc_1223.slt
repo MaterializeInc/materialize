@@ -433,7 +433,7 @@ Explained Query:
             Filter ((#2{c} != #4{r1}) OR (#3{c} != #5{c1})) // { arity: 9 }
               Join on=(#0{c} = #7{r2} AND #1{c} = #8{c2}) type=differential // { arity: 9 }
                 implementation
-                  %1:l14[#3{c}, #4{c}]KK » %0:l10[#0{c}, #1{c}]KK
+                  %1:l14[#3{r2}, #4{c2}]KK » %0:l10[#0{c}, #1{c}]KK
                 Get l10 // { arity: 4 }
                 ArrangeBy keys=[[#3{c}, #4{c}]] // { arity: 5 }
                   Get l14 // { arity: 5 }
@@ -477,12 +477,15 @@ Explained Query:
                 Project (#7{c}, #8{c}, #15, #16) // { arity: 4 }
                   Filter (1 != ((#3{v} >> #14) % 2)) // { arity: 17 }
                     Map (bigint_to_integer(#13{count}), (#2{d} + #6{min}), (#3{v} + (1 << #14{id}))) // { arity: 17 }
-                      Join on=(#0{r} = #4{c} AND #1{c} = #5{c} AND #7{c} = #9{c} = #11{c} AND #8{c} = #10{c} = #12{c}) type=differential // { arity: 14 }
+                      Join on=(#0{r} = #4{c} AND #1{c} = #5{c} AND #7{c} = #9{c} = #11{c} AND #8{c} = #10{c} = #12{c}) type=delta // { arity: 14 }
                         implementation
-                          %3[#0{c}, #1{c}]UKK » %2:l5[#0{c}, #1{c}]KK » %1:l14[#3{c}, #4{c}]KK » %0:l15[#0, #1]KK
+                          %0:l15 » %1:l14[#0{c}, #1{c}]KK » %2:l5[#0{c}, #1{c}]KK » %3[#0{c}, #1{c}]UKK
+                          %1:l14 » %2:l5[#0{c}, #1{c}]KK » %0:l15[#0, #1]KK » %3[#0{c}, #1{c}]UKK
+                          %2:l5 » %1:l14[#3{c}, #4{c}]KK » %0:l15[#0, #1]KK » %3[#0{c}, #1{c}]UKK
+                          %3 » %2:l5[#0{c}, #1{c}]KK » %1:l14[#3{c}, #4{c}]KK » %0:l15[#0, #1]KK
                         ArrangeBy keys=[[#0{c}, #1{c}]] // { arity: 4 }
                           Get l15 // { arity: 4 }
-                        ArrangeBy keys=[[#3{c}, #4{c}]] // { arity: 5 }
+                        ArrangeBy keys=[[#0{c}, #1{c}], [#3{c}, #4{c}]] // { arity: 5 }
                           Get l14 // { arity: 5 }
                         ArrangeBy keys=[[#0{c}, #1{c}]] // { arity: 2 }
                           Get l5 // { arity: 2 }

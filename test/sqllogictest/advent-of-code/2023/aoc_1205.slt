@@ -1343,10 +1343,12 @@ Explained Query:
         Distinct project=[#0..=#2] // { arity: 3 }
           Union // { arity: 3 }
             Project (#1, #7, #23) // { arity: 3 }
-              Join on=(#0 = #9 = #18{src_name} AND #1 = #10 = #19{dst_name} AND #2 = #11 = #20{start_idx} AND #3 = #12 = #21{end_idx} AND #4 = #13 AND #5 = #14 AND #6 = #15 AND #7 = #16 = #22 AND #8 = #17) type=differential // { arity: 24 }
+              Join on=(#0 = #9 = #18{src_name} AND #1 = #10 = #19{dst_name} AND #2 = #11 = #20{start_idx} AND #3 = #12 = #21{end_idx} AND #4 = #13 AND #5 = #14 AND #6 = #15 AND #7 = #16 = #22 AND #8 = #17) type=delta // { arity: 24 }
                 implementation
-                  %1:l12[#0..=#8]UKKKKKKKKK » %0:l11[#0..=#8]KKKKKKKKK » %2[#0{src_name}..=#4]KKKKK
-                ArrangeBy keys=[[#0..=#8]] // { arity: 9 }
+                  %0:l11 » %1:l12[#0..=#8]UKKKKKKKKK » %2[#0{src_name}..=#4]KKKKK
+                  %1:l12 » %0:l11[#0..=#8]KKKKKKKKK » %2[#0{src_name}..=#4]KKKKK
+                  %2 » %0:l11[#0..=#3, #7]KKKKK » %1:l12[#0..=#8]UKKKKKKKKK
+                ArrangeBy keys=[[#0..=#8], [#0..=#3, #7]] // { arity: 9 }
                   Get l11 // { arity: 9 }
                 ArrangeBy keys=[[#0..=#8]] // { arity: 9 }
                   Get l12 // { arity: 9 }
@@ -1362,12 +1364,14 @@ Explained Query:
                               Get l15 // { arity: 6 }
             Distinct project=[#1, #0, #2] // { arity: 3 }
               Project (#1, #3, #12) // { arity: 3 }
-                Join on=(#0 = #4 = #8{dst_name} AND #1 = #5 = #10{dst_name} AND #2 = #6 = #11{dst_name} AND #3 = #7 = #9{dst_name}) type=differential // { arity: 13 }
+                Join on=(#0 = #4 = #8{dst_name} AND #1 = #5 = #10{dst_name} AND #2 = #6 = #11{dst_name} AND #3 = #7 = #9{dst_name}) type=delta // { arity: 13 }
                   implementation
-                    %2[#0{dst_name}, #2{dst_name}, #3{dst_name}, #1{dst_name}]KKKK » %1:l18[#0..=#3]KKKK » %0:l18[#0..=#3]KKKK
+                    %0:l18 » %1:l18[#0..=#3]KKKK » %2[#0{dst_name}..=#3{dst_name}]KKKK
+                    %1:l18 » %0:l18[#0..=#3]KKKK » %2[#0{dst_name}..=#3{dst_name}]KKKK
+                    %2 » %0:l18[#0..=#3]KKKK » %1:l18[#0..=#3]KKKK
                   Get l18 // { arity: 4 }
                   Get l18 // { arity: 4 }
-                  ArrangeBy keys=[[#0{dst_name}, #2{dst_name}, #3{dst_name}, #1{dst_name}]] // { arity: 5 }
+                  ArrangeBy keys=[[#0{dst_name}..=#3{dst_name}]] // { arity: 5 }
                     Union // { arity: 5 }
                       Filter (#2{dst_name} < #4) // { arity: 5 }
                         Get l17 // { arity: 5 }
