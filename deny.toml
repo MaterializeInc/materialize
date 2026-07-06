@@ -204,6 +204,7 @@ wrappers = [
     "eventsource-client",
     "fail",
     "globset",
+    "highs",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "microlp",

@@ -1,3 +1,8 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+
 //! The language-agnostic equality-saturation substrate shared by the relational
 //! and scalar engines: the e-class id type, the [`Language`] trait that
 //! describes a node language, the [`EGraph`] data structure with its congruence
