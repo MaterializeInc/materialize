@@ -126,7 +126,7 @@ impl<T> ParserStatementErrorMapper<T> for Result<T, ParserError> {
 pub fn parse_statements_with_limit(
     sql: &str,
 ) -> Result<Result<Vec<StatementParseResult<'_>>, ParserStatementError>, String> {
-    if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
+    if sql.len() > MAX_STATEMENT_BATCH_SIZE {
         return Err(format!(
             "statement batch size cannot exceed {}",
             ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
@@ -215,7 +215,7 @@ pub fn parse_item_name(sql: &str) -> Result<UnresolvedItemName, ParserError> {
 pub fn parse_item_name_with_limit(
     sql: &str,
 ) -> Result<Result<UnresolvedItemName, ParserError>, String> {
-    if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
+    if sql.len() > MAX_STATEMENT_BATCH_SIZE {
         return Err(format!(
             "statement batch size cannot exceed {}",
             ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
