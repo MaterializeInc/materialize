@@ -237,24 +237,27 @@ impl IlpExtractor {
             }
         }
 
-        // Perf gate on the pathological many-cycles tail. The 0/1 ILP over a join
-        // fragment holding many commute cycles is a large binary program that
-        // microlp's bounds-as-constraints branch-and-bound solves slowly, tens of
-        // seconds on a 7-way join. The cost is separable at INPUT time by the
-        // non-trivial-SCC count (each commute cycle is one size-2 SCC, one binary
-        // exclusion), so bail to the greedy extractor above a fixed threshold.
+        // Deterministic backstop on the pathological many-cycles tail. The 0/1 ILP
+        // over a join fragment holding many commute cycles is a large binary
+        // program, and MILP is NP-hard, so a sufficiently wide join (many-way, tens
+        // of commute pairs) can stall any backend. The cost is separable at INPUT
+        // time by the non-trivial-SCC count (each commute cycle is one size-2 SCC,
+        // one binary exclusion), so bail to the greedy extractor above a fixed
+        // threshold.
         //
-        // `MAX_CYCLIC_SCCS` is calibrated from the measured knee of solve time
-        // versus non-trivial-SCC count over the join corpus (chbench, tpch, ldbc):
-        // up to 6 SCCs solve in <= 6.3s, then 7 jumps to >= 12s and 10 to 52s.
-        // Deliberately a count, not a wall-clock budget: a time bail would make
-        // the chosen plan depend on solver speed and so move goldens across
-        // machines, the cross-machine nondeterminism this extractor otherwise
-        // avoids. Greedy is a sound, deterministic fallback already used on the
-        // size cap. This threshold is a stopgap. The tail's real fix is a
-        // production MILP backend (HiGHS, single-thread for determinism), after
-        // which this widens or is removed.
-        const MAX_CYCLIC_SCCS: usize = 6;
+        // `MAX_CYCLIC_SCCS` is a count, never a wall-clock budget. A time bail
+        // would make the chosen plan depend on solver speed and so move goldens
+        // across machines, the cross-machine nondeterminism this extractor
+        // otherwise avoids. Greedy is a sound, deterministic fallback also used on
+        // the node-count size cap.
+        //
+        // The threshold sits well above the real corpus: the widest join is
+        // chbench's 7-way at 21 non-trivial SCCs, which the HiGHS backend solves in
+        // ~5.7s. 30 keeps that plus generous headroom inside the ILP while still
+        // shedding a hypothetical 12-way-plus join (40-plus pairs) that even HiGHS
+        // could stall on. The node-count cap below bounds fragment size on the
+        // other axis.
+        const MAX_CYCLIC_SCCS: usize = 30;
         if scc_members.len() > MAX_CYCLIC_SCCS {
             record_ilp_fallback("cyclic_join_size");
             return None;
