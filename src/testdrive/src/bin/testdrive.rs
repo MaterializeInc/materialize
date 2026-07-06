@@ -300,6 +300,14 @@ struct Args {
 async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from(args.log_filter))
         .with_writer(io::stdout)

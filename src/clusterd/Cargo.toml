@@ -40,6 +40,7 @@ mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 nix.workspace = true
 num_cpus.workspace = true
+rustls.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tower.workspace = true

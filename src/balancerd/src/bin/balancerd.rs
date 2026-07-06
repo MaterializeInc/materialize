@@ -172,6 +172,14 @@ pub struct ServiceArgs {
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     // Mirror the tokio Runtime configuration in our production binaries.
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let runtime = tokio::runtime::Builder::new_multi_thread()

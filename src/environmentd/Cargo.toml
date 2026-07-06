@@ -96,6 +96,7 @@ rand.workspace = true
 regex = { workspace = true, optional = true }
 reqwest.workspace = true
 rlimit.workspace = true
+rustls.workspace = true
 semver.workspace = true
 sentry-tracing.workspace = true
 serde.workspace = true
