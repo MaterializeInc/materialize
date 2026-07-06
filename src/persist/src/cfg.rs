@@ -38,6 +38,13 @@ use crate::s3::{S3Blob, S3BlobConfig};
 /// rotation that would flood KMS with `GenerateDataKey` calls.
 const MIN_DEK_ROTATION_SECS: u64 = 60;
 
+/// Default DEK rotation interval: 30 days. Each rotation costs one KMS
+/// `GenerateDataKey` call per process (plus one `Encrypt` in two-party mode),
+/// so short intervals multiply KMS spend across the fleet for no security
+/// benefit. See the nonce-safety analysis in `crypto.rs` for why 30 days is
+/// well within AES-256-GCM per-key limits at realistic write rates.
+const DEFAULT_DEK_ROTATION_SECS: u64 = 30 * 24 * 60 * 60;
+
 /// URL query params that configure KMS envelope encryption.
 ///
 /// Must contain every param that [BlobConfig::try_from] and
@@ -228,7 +235,8 @@ impl BlobConfig {
                     .map(|x| x.into_owned());
 
                 let encryption = kms_key_id.map(|key_id| {
-                    let requested_secs = dek_rotation_interval_secs.unwrap_or(300);
+                    let requested_secs =
+                        dek_rotation_interval_secs.unwrap_or(DEFAULT_DEK_ROTATION_SECS);
                     let clamped_secs = requested_secs.max(MIN_DEK_ROTATION_SECS);
                     if requested_secs < MIN_DEK_ROTATION_SECS {
                         warn!(
@@ -434,7 +442,8 @@ impl ConsensusConfig {
                     .map(|x| x.into_owned());
 
                 let encryption = kms_key_id.map(|key_id| {
-                    let requested_secs = dek_rotation_interval_secs.unwrap_or(300);
+                    let requested_secs =
+                        dek_rotation_interval_secs.unwrap_or(DEFAULT_DEK_ROTATION_SECS);
                     let clamped_secs = requested_secs.max(MIN_DEK_ROTATION_SECS);
                     if requested_secs < MIN_DEK_ROTATION_SECS {
                         warn!(
@@ -572,6 +581,20 @@ mod tests {
         assert_eq!(
             pg_params,
             vec![("sslmode".to_string(), "require".to_string())]
+        );
+    }
+
+    #[mz_ore::test]
+    fn consensus_config_try_from_default_dek_rotation_interval() {
+        let config = consensus_config(
+            "postgres://host:5432/db?sslmode=require&kms_key_id=alias%2Fpersist_key_x&kms_region=us-east-1",
+        );
+        let ConsensusConfig::Postgres(_, Some(encryption)) = config else {
+            panic!("expected Postgres config with encryption enabled");
+        };
+        assert_eq!(
+            encryption.dek_rotation_interval,
+            Duration::from_secs(DEFAULT_DEK_ROTATION_SECS)
         );
     }
 
