@@ -2000,6 +2000,32 @@ impl CatalogItem {
         }
     }
 
+    /// Overwrites the `create_sql` of this item, without replanning.
+    ///
+    /// Only used when applying temporary item updates. A temporary item's
+    /// in-memory `create_sql` must stay byte-identical to the update that
+    /// created it, so that re-serializing the item, for example when a later
+    /// op in the same transaction retracts it, yields a value that
+    /// consolidates away against that update. Persistent items get this
+    /// guarantee from the durable catalog, which stores the exact bytes.
+    pub fn set_create_sql(&mut self, create_sql: String) {
+        match self {
+            CatalogItem::View(view) => view.create_sql = create_sql,
+            CatalogItem::Index(index) => index.create_sql = create_sql,
+            CatalogItem::Table(table) => table.create_sql = Some(create_sql),
+            CatalogItem::Log(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Connection(_) => {
+                unreachable!("only views, indexes, and tables can be temporary")
+            }
+        }
+    }
+
     /// Indicates whether this item is temporary or not.
     pub fn is_temporary(&self) -> bool {
         self.conn_id().is_some()
