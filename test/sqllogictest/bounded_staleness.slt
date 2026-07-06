@@ -172,6 +172,19 @@ RESET transaction_isolation
 statement ok
 CREATE TABLE bs_as_of (a int)
 
+# A freshly created table has no readable timestamp until its upper advances
+# past its registration timestamp, and the write frontier the coordinator
+# consults catches up asynchronously. Bump the upper with a write and block on
+# a read before switching isolation levels, so that the bounded staleness
+# freshness check below does not race the frontier reporting.
+statement ok
+INSERT INTO bs_as_of (a) VALUES (1)
+
+query I
+SELECT * FROM bs_as_of
+----
+1
+
 statement ok
 SET transaction_isolation TO 'bounded staleness 5s'
 
