@@ -30,51 +30,64 @@ statement ok
 CREATE TABLE t_twocol (a INT, b INT);
 INSERT INTO t_twocol VALUES (1,2)
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_unqualified_onecol() RETURNS INT AS
 $$
   SELECT * FROM t_onecol;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_subquery() RETURNS INT AS
 $$
   SELECT * FROM (SELECT a FROM (SELECT * FROM t_onecol) AS foo) AS bar;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_subquery_unaliased() RETURNS INT AS
 $$
   SELECT * FROM (SELECT a FROM (SELECT * FROM t_onecol));
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_unqualified_twocol() RETURNS t_twocol AS
 $$
   SELECT * FROM t_twocol;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_allcolsel() RETURNS t_twocol AS
 $$
   SELECT t_twocol.* FROM t_twocol;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_allcolsel_alias() RETURNS t_twocol AS
 $$
   SELECT t1.* FROM t_twocol AS t1, t_twocol AS t2 WHERE t1.a = t2.a;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_tuplestar() RETURNS t_twocol AS
 $$
   SELECT (t_twocol.*).* FROM t_twocol;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_unqualified_multicol() RETURNS INT AS
 $$
@@ -82,6 +95,8 @@ $$
   SELECT 1;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_unqualified_doublestar() RETURNS INT AS
 $$
@@ -89,12 +104,16 @@ $$
   SELECT 1;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_exprstar() RETURNS STRING AS
 $$
   SELECT word FROM (SELECT (pg_get_keywords()).* ORDER BY word LIMIT 1) AS foo;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_anon_subqueries() RETURNS INT AS
 $$
@@ -102,13 +121,15 @@ $$
   SELECT 1;
 $$ LANGUAGE SQL;
 
-statement error pq: column reference "a" is ambiguous
+statement error Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, \[TEMPORARY\] TABLE, SECRET, \[OR REPLACE\] \[TEMPORARY\] VIEW, or \[OR REPLACE\] MATERIALIZED VIEW after CREATE, found FUNCTION
 CREATE FUNCTION f_ambiguous() RETURNS INT AS
 $$
   SELECT a FROM (SELECT * FROM (SELECT a FROM t_onecol) AS foo JOIN (SELECT a FROM t_twocol) AS bar ON true) AS baz;
   SELECT 1;
 $$ LANGUAGE SQL;
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT
 SELECT oid, proname, prosrc
 FROM pg_catalog.pg_proc WHERE proname LIKE 'f\_%' ORDER BY oid;
@@ -129,6 +150,8 @@ FROM pg_catalog.pg_proc WHERE proname LIKE 'f\_%' ORDER BY oid;
                                   SELECT 1;
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE FUNCTION f_subquery
 ----
@@ -142,6 +165,8 @@ f_subquery  CREATE FUNCTION public.f_subquery()
               SELECT bar.a FROM (SELECT a FROM (SELECT t_onecol.a FROM test.public.t_onecol) AS foo) AS bar;
             $$
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE FUNCTION f_allcolsel_alias
 ----
@@ -155,85 +180,115 @@ f_allcolsel_alias  CREATE FUNCTION public.f_allcolsel_alias()
                      SELECT t1.a, t1.b FROM test.public.t_twocol AS t1, test.public.t_twocol AS t2 WHERE t1.a = t2.a;
                    $$
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT f_unqualified_onecol()
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT f_subquery()
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT f_exprstar()
 ----
 abort
 
+# Not supported by Materialize.
+onlyif cockroach
 # Adding a column to a table should not change the UDFs that reference it.
 statement ok
 ALTER TABLE t_onecol ADD COLUMN b INT DEFAULT 5;
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT f_unqualified_onecol()
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT f_subquery()
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 # It's ok to drop a column that was not used by the original UDF.
 statement ok
 ALTER TABLE t_onecol DROP COLUMN b;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT f_unqualified_twocol()
 ----
 (1,2)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT f_allcolsel()
 ----
 (1,2)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT f_allcolsel_alias()
 ----
 (1,2)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Return an error after adding a column when the table is used as the return
 # type. Note that this behavior is ok for late binding.
 statement ok
 ALTER TABLE t_twocol ADD COLUMN c INT DEFAULT 5;
 
-statement error pq: return type mismatch in function declared to return t_twocol
+statement error function "f_unqualified_twocol" does not exist
 SELECT f_unqualified_twocol()
 
+# Not supported by Materialize.
+onlyif cockroach
 # Dropping the new column renders the function usable again.
 statement ok
 ALTER TABLE t_twocol DROP COLUMN c;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT f_unqualified_twocol()
 
 # Altering a column type is not allowed in postgres or CRDB.
-statement error pq: cannot alter type of column "b" because function "f_unqualified_twocol" depends on it
+statement error Expected one of SET or RENAME or OWNER or RESET or ADD, found ALTER
 ALTER TABLE t_twocol ALTER b TYPE FLOAT;
 
 # TODO(harding): Postgres allows column renaming when only referenced by UDFs.
-statement error pq: cannot rename column "a" because function "f_unqualified_twocol" depends on it
+statement error Expected TO, found COLUMN
 ALTER TABLE t_twocol RENAME COLUMN a TO d;
 
+# Not supported by Materialize.
+onlyif cockroach
 # TODO(harding): Postgres allows table renaming when only referenced by UDFs.
 statement error pq: cannot rename relation "t_twocol" because function "f_unqualified_twocol" depends on it
 ALTER TABLE t_twocol RENAME TO t_twocol_prime;
 
 # Dropping a column a UDF depends on is not allowed.
-statement error pq: cannot drop column "b" because function "f_unqualified_twocol" depends on it
+statement error Expected one of SET or RENAME or OWNER or RESET or ADD, found DROP
 ALTER TABLE t_twocol DROP COLUMN b;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Drop all but one of the functions with an implicit record return value.
 # TODO(96368): Allow these UDFs to be dropped in the CASCADE when the cross-
 # references are fixed instead.
@@ -241,24 +296,26 @@ statement ok
 DROP FUNCTION f_tuplestar;
 DROP FUNCTION f_allcolsel_alias;
 
-# Dropping a column using CASCADE is ok,
-# although the legacy schema changer has troubles with it,
-# see: https://github.com/cockroachdb/cockroach/issues/97546
-skipif config local-legacy-schema-changer
-statement ok
-ALTER TABLE t_twocol DROP COLUMN b CASCADE;
+# Record disabled, not supported by Materialize:
+# # Dropping a column using CASCADE is ok,
+# # although the legacy schema changer has troubles with it,
+# # see: https://github.com/cockroachdb/cockroach/issues/97546
+# skipif config local-legacy-schema-changer
+# statement ok
+# ALTER TABLE t_twocol DROP COLUMN b CASCADE;
 
 statement ok
 DROP TABLE t_onecol CASCADE;
 
-# The only remaining function should not reference the tables.
-# NB: remove the skipif directive when #97546 is resolved.
-skipif config local-legacy-schema-changer
-query TTT
-SELECT oid, proname, prosrc
-FROM pg_catalog.pg_proc WHERE proname LIKE 'f\_%' ORDER BY oid;
-----
-100117  f_exprstar  SELECT word FROM (SELECT (pg_get_keywords()).word, (pg_get_keywords()).catcode, (pg_get_keywords()).catdesc ORDER BY word LIMIT 1) AS foo;
+# Record disabled, not supported by Materialize:
+# # The only remaining function should not reference the tables.
+# # NB: remove the skipif directive when #97546 is resolved.
+# skipif config local-legacy-schema-changer
+# query TTT
+# SELECT oid, proname, prosrc
+# FROM pg_catalog.pg_proc WHERE proname LIKE 'f\_%' ORDER BY oid;
+# ----
+# 100117  f_exprstar  SELECT word FROM (SELECT (pg_get_keywords()).word, (pg_get_keywords()).catcode, (pg_get_keywords()).catdesc ORDER BY word LIMIT 1) AS foo;
 
 # Remove this when #97546 is resolved.
 onlyif config local-legacy-schema-changer

@@ -40,9 +40,7 @@ user root
 statement ok
 CREATE INDEX foo ON t (b)
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error pgcode 42P07 index with name \"foo\" already exists
+statement error pgcode 42P07 index "materialize\.public\.foo" already exists
 CREATE INDEX foo ON t (a)
 
 statement error column "c" does not exist
@@ -117,9 +115,7 @@ t           t_pkey      false       1             a            a           ASC  
 t           t_pkey      false       2             b            b           N/A        true     false     true
 t           t_pkey      false       3             c            c           N/A        true     false     true
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error pgcode 42P01 relation "foo" does not exist
+statement error pgcode 42P01 unknown catalog item 'foo'
 CREATE INDEX fail ON foo (b DESC)
 
 statement ok
@@ -135,11 +131,10 @@ CREATE TABLE privs (a INT PRIMARY KEY, b INT)
 
 user testuser
 
-# Record disabled, not supported by Materialize:
-# skipif config local-legacy-schema-changer
-# skipif config local-mixed-22.2-23.1
-# statement error must be owner of table privs or have CREATE privilege on table privs
-# CREATE INDEX foo ON privs (b)
+skipif config local-legacy-schema-changer
+skipif config local-mixed-22.2-23.1
+statement error must be owner of TABLE materialize\.public\.privs
+CREATE INDEX foo ON privs (b)
 
 onlyif config local-legacy-schema-changer
 onlyif config local-mixed-22.2-23.1
@@ -149,6 +144,8 @@ CREATE INDEX foo ON privs (b)
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBITTTBBB colnames
 SHOW INDEXES FROM privs
 ----
@@ -163,6 +160,8 @@ GRANT CREATE ON privs TO testuser
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX foo ON privs (b)
 
@@ -219,17 +218,10 @@ query T noticetrace
 CREATE INDEX CONCURRENTLY IF NOT EXISTS create_index_concurrently_idx ON create_index_concurrently_tbl(a)
 ----
 
-# Not supported by Materialize.
-onlyif cockroach
 query TT
 SHOW CREATE TABLE create_index_concurrently_tbl
 ----
-create_index_concurrently_tbl  CREATE TABLE public.create_index_concurrently_tbl (
-                                 a INT8 NULL,
-                                 rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
-                                 CONSTRAINT create_index_concurrently_tbl_pkey PRIMARY KEY (rowid ASC),
-                                 INDEX create_index_concurrently_idx (a ASC)
-                               )
+materialize.public.create_index_concurrently_tbl  CREATE␠TABLE␠materialize.public.create_index_concurrently_tbl␠(a␠pg_catalog.int4);
 
 query T noticetrace
 DROP INDEX CONCURRENTLY create_index_concurrently_idx
@@ -243,16 +235,10 @@ DROP INDEX CONCURRENTLY IF EXISTS create_index_concurrently_idx
 ----
 NOTICE: CONCURRENTLY is not required as all indexes are dropped concurrently
 
-# Not supported by Materialize.
-onlyif cockroach
 query TT
 SHOW CREATE TABLE create_index_concurrently_tbl
 ----
-create_index_concurrently_tbl  CREATE TABLE public.create_index_concurrently_tbl (
-                                 a INT8 NULL,
-                                 rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
-                                 CONSTRAINT create_index_concurrently_tbl_pkey PRIMARY KEY (rowid ASC)
-                               )
+materialize.public.create_index_concurrently_tbl  CREATE␠TABLE␠materialize.public.create_index_concurrently_tbl␠(a␠pg_catalog.int4);
 
 statement ok
 DROP TABLE create_index_concurrently_tbl
@@ -290,9 +276,7 @@ CREATE TABLE "'t1-esc'"(name int);
 statement ok
 CREATE INDEX "'t1-esc-index'" ON "'t1-esc'"(name)
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error index with name "'t1-esc-index'" already exists
+statement error index "materialize\.public\.'t1\-esc\-index'" already exists
 CREATE INDEX "'t1-esc-index'" ON "'t1-esc'"(name)
 
 subtest resume-with-diff-tenant-resume-spans
@@ -487,24 +471,18 @@ CREATE TABLE public.t_hash (
 statement ok
 CREATE TABLE opclasses (a INT PRIMARY KEY, b TEXT, c JSON)
 
-# Not supported by Materialize.
-onlyif cockroach
 # Make sure that we don't permit creating indexes with opclasses that aren't
 # inverted.
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
+statement error pgcode 42804 Expected right parenthesis, found identifier "blah_ops"
 CREATE INDEX ON opclasses(b blah_ops)
 
-# Not supported by Materialize.
-onlyif cockroach
 # Make sure that we don't permit creating indexes with opclasses that aren't
 # inverted, even if the type is invertible.
-statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
+statement error pgcode 42804 Expected right parenthesis, found identifier "blah_ops"
 CREATE INDEX ON opclasses(c blah_ops)
 
-# Not supported by Materialize.
-onlyif cockroach
 # Make sure that we don't permit creating indexes with opclasses that don't exist
-statement error pgcode 42704 operator class "blah_ops" does not exist
+statement error pgcode 42704 Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, \[TEMPORARY\] TABLE, SECRET, \[OR REPLACE\] \[TEMPORARY\] VIEW, or \[OR REPLACE\] MATERIALIZED VIEW after CREATE, found identifier "inverted"
 CREATE INVERTED INDEX ON opclasses(c blah_ops)
 
 subtest create_index_on_materialized_view

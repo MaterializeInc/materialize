@@ -33,27 +33,34 @@ CREATE TABLE ab (
 statement ok
 INSERT INTO ab SELECT i, i*10 FROM generate_series(1, 4) g(i)
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION empty() RETURNS SETOF INT LANGUAGE SQL AS $$
   SELECT a FROM ab WHERE a < 0
 $$
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT * FROM empty()
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 query II rowsort
 SELECT b, empty() FROM ab
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION all_a() RETURNS SETOF INT LANGUAGE SQL AS $$
   SELECT a FROM ab ORDER BY a
 $$
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT * FROM all_a()
 ----
@@ -62,6 +69,8 @@ SELECT * FROM all_a()
 3
 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query II rowsort
 select b, all_a() from ab
 ----
@@ -82,11 +91,15 @@ select b, all_a() from ab
 40  3
 40  4
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION some_a() RETURNS SETOF INT LANGUAGE SQL AS $$
   SELECT a FROM ab WHERE a < 3 ORDER BY a
 $$
 
+# Not supported by Materialize.
+onlyif cockroach
 query III rowsort
 select b, all_a(), some_a() from ab
 ----
@@ -107,6 +120,8 @@ select b, all_a(), some_a() from ab
 40  3  NULL
 40  4  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # Note: This query errors in Postgres with "ERROR: 42804: argument of IN must
 # not return a set". We've allowed built-in, set-returning functions as
 # arguments to IN, so we allow set-returning UDFs as well.
@@ -118,17 +133,23 @@ false
 false
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION all_a_lt(i INT) RETURNS SETOF INT LANGUAGE SQL AS $$
   SELECT a FROM ab WHERE a < i ORDER BY a
 $$
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT * FROM all_a_lt(3)
 ----
 1
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query II rowsort
 SELECT a, all_a_lt(a) FROM ab
 ----
@@ -139,11 +160,15 @@ SELECT a, all_a_lt(a) FROM ab
 4  2
 4  3
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION all_a_desc() RETURNS SETOF INT STABLE LANGUAGE SQL AS $$
   SELECT a FROM ab ORDER BY a DESC
 $$
 
+# Not supported by Materialize.
+onlyif cockroach
 # The order of a set-returning UDF should be maintained.
 query T
 SELECT array_agg(a) FROM all_a_desc() g(a)
@@ -151,18 +176,24 @@ SELECT array_agg(a) FROM all_a_desc() g(a)
 {4,3,2,1}
 
 # Nested set-returning functions are not yet supported.
-statement error unimplemented: nested set-returning functions
+statement error function "all_a_lt" does not exist
 SELECT all_a_lt(all_a())
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION all_a_strict(INT) RETURNS SETOF INT STRICT LANGUAGE SQL AS $$
   SELECT a FROM ab
 $$
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT * FROM all_a_strict(NULL)
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT * FROM all_a_strict(3)
 ----
@@ -175,6 +206,8 @@ statement ok
 CREATE TABLE n (n INT);
 INSERT INTO n VALUES (NULL), (3);
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT all_a_strict(n) FROM n
 ----
@@ -183,16 +216,20 @@ SELECT all_a_strict(n) FROM n
 3
 4
 
-statement error pgcode 42P13 return type mismatch in function declared to return int\nDETAIL: Actual return type is record
+statement error pgcode 42P13 Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, \[TEMPORARY\] TABLE, SECRET, \[OR REPLACE\] \[TEMPORARY\] VIEW, or \[OR REPLACE\] MATERIALIZED VIEW after CREATE, found FUNCTION
 CREATE FUNCTION err(INT) RETURNS SETOF INT STRICT LANGUAGE SQL AS $$
   SELECT a, b FROM ab ORDER BY a
 $$
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION all_ab() RETURNS SETOF ab LANGUAGE SQL AS $$
   SELECT a, b FROM ab
 $$
 
+# Not supported by Materialize.
+onlyif cockroach
 # TODO(mgartner): This should return separate columns, not a tuple. See #97059.
 query T rowsort
 SELECT * FROM all_ab()
@@ -202,11 +239,15 @@ SELECT * FROM all_ab()
 (3,30)
 (4,40)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION all_ab_tuple() RETURNS SETOF ab LANGUAGE SQL AS $$
   SELECT (a, b) FROM ab
 $$
 
+# Not supported by Materialize.
+onlyif cockroach
 # TODO(mgartner): This should return separate columns, not a tuple. See #97059.
 query T rowsort
 SELECT * FROM all_ab_tuple()

@@ -41,9 +41,8 @@ SELECT * FROM kv
 a b
 c d
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # error if either statement returns an error
 # first statement returns an error. Second stmt shouldn't execute.
 statement error duplicate key value violates unique constraint "kv_pkey"\nDETAIL: Key \(k\)=\('a'\) already exists\.
@@ -55,6 +54,8 @@ SELECT * FROM kv
 a b
 c d
 
+# Not supported by Materialize.
+onlyif cockroach
 # second statement returns an error, and causes the whole batch to rollbacl
 statement error duplicate key value violates unique constraint "kv_pkey"\nDETAIL: Key \(k\)=\('a'\) already exists\.
 INSERT INTO kv (k,v) VALUES ('g', 'h'); INSERT INTO kv (k,v) VALUES ('a', 'b')
@@ -66,7 +67,7 @@ a b
 c d
 
 # parse error runs nothing
-statement error at or near "k": syntax error
+statement error Expected identifier, found string literal "k"
 INSERT INTO kv (k,v) VALUES ('i', 'j'); INSERT INTO VALUES ('k', 'l')
 
 query TT rowsort
@@ -75,14 +76,16 @@ SELECT * FROM kv
 a b
 c d
 
-statement error pq: relation "x.y" does not exist
+statement error Unexpected keyword END at the beginning of a statement
 BEGIN; INSERT INTO x.y(a) VALUES (1); END
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pq: current transaction is aborted, commands ignored until end of transaction block
 SELECT * from kv; ROLLBACK
 
 statement ok
 ROLLBACK
 
-statement error pgcode 42P01 relation "system.t" does not exist
+statement error pgcode 42P01 unknown schema 'system'
 BEGIN TRANSACTION; SELECT * FROM system.t; INSERT INTO t(a) VALUES (1)

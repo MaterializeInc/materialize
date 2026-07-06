@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,209 +9,296 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/collatedstring
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/collatedstring
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
-statement error pq: invalid locale bad_locale: language: subtag "locale" is well-formed but unknown
+statement error COLLATE not yet supported
 SELECT 'a' COLLATE bad_locale
 
-statement error pq: unsupported comparison operator: <collatedstring{en}> = <string>
+statement error COLLATE not yet supported
 SELECT 'A' COLLATE en = 'a'
 
-statement error pq: unsupported comparison operator: <collatedstring{en}> = <collatedstring{de}>
+statement error COLLATE not yet supported
 SELECT 'A' COLLATE en = 'a' COLLATE de
 
-statement error pq: unsupported comparison operator: \('a' COLLATE en_u_ks_level1\) IN \('A' COLLATE en_u_ks_level1, 'b' COLLATE en\): expected 'b' COLLATE en to be of type collatedstring{en_u_ks_level1}, found type collatedstring{en}
+statement error COLLATE not yet supported
 SELECT ('a' COLLATE en_u_ks_level1) IN ('A' COLLATE en_u_ks_level1, 'b' COLLATE en)
 
-statement error pq: tuples \('a' COLLATE en_u_ks_level1, 'a' COLLATE en\), \('A' COLLATE en, 'B' COLLATE en\) are not comparable at index 1: unsupported comparison operator: <collatedstring{en_u_ks_level1}> < <collatedstring{en}
+statement error COLLATE not yet supported
 SELECT ('a' COLLATE en_u_ks_level1, 'a' COLLATE en) < ('A' COLLATE en, 'B' COLLATE en)
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT 'A' COLLATE en
 ----
 A
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT ('A' COLLATE de) COLLATE en
+----
+A
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT NAME 'A' COLLATE en
+----
+A
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT (NAME 'A' COLLATE de) COLLATE en
+----
+A
+
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT NULL COLLATE en
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'a' COLLATE en < ('B' COLLATE de) COLLATE en
 ----
 true
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT (1, 'a' COLLATE en) < (1, 'B' COLLATE en)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT ('a' COLLATE en_u_ks_level1, 'a' COLLATE en) < ('A' COLLATE en_u_ks_level1, 'B' COLLATE en)
 ----
 true
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'A' COLLATE en_u_ks_level1 = 'a' COLLATE en_u_ks_level1
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'A' COLLATE en_u_ks_level1 <> 'a' COLLATE en_u_ks_level1
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'A' COLLATE en_u_ks_level1 < 'a' COLLATE en_u_ks_level1
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'A' COLLATE en_u_ks_level1 >= 'a' COLLATE en_u_ks_level1
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'A' COLLATE en_u_ks_level1 <= 'a' COLLATE en_u_ks_level1
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'A' COLLATE en_u_ks_level1 > 'a' COLLATE en_u_ks_level1
 ----
 false
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'a' COLLATE en_u_ks_level1 = 'B' COLLATE en_u_ks_level1
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'a' COLLATE en_u_ks_level1 <> 'B' COLLATE en_u_ks_level1
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'a' COLLATE en_u_ks_level1 < 'B' COLLATE en_u_ks_level1
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'a' COLLATE en_u_ks_level1 >= 'B' COLLATE en_u_ks_level1
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'a' COLLATE en_u_ks_level1 <= 'B' COLLATE en_u_ks_level1
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'a' COLLATE en_u_ks_level1 > 'B' COLLATE en_u_ks_level1
 ----
 false
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'B' COLLATE en_u_ks_level1 = 'A' COLLATE en_u_ks_level1
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'B' COLLATE en_u_ks_level1 <> 'A' COLLATE en_u_ks_level1
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'B' COLLATE en_u_ks_level1 < 'A' COLLATE en_u_ks_level1
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'B' COLLATE en_u_ks_level1 >= 'A' COLLATE en_u_ks_level1
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'B' COLLATE en_u_ks_level1 <= 'A' COLLATE en_u_ks_level1
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'B' COLLATE en_u_ks_level1 > 'A' COLLATE en_u_ks_level1
 ----
 true
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT ('a' COLLATE en_u_ks_level1) IN ('A' COLLATE en_u_ks_level1, 'b' COLLATE en_u_ks_level1)
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT ('a' COLLATE en_u_ks_level1) NOT IN ('A' COLLATE en_u_ks_level1, 'b' COLLATE en_u_ks_level1)
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT ('a' COLLATE en) IN ('A' COLLATE en, 'b' COLLATE en)
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT ('a' COLLATE en) NOT IN ('A' COLLATE en, 'b' COLLATE en)
 ----
 true
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'Fussball' COLLATE de = 'Fußball' COLLATE de
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'Fussball' COLLATE de_u_ks_level1 = 'Fußball' COLLATE de_u_ks_level1
 ----
 true
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'ü' COLLATE da < 'x' COLLATE da
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'ü' COLLATE de < 'x' COLLATE de
 ----
 true
 
 
-statement error invalid locale e: language: tag is not well-formed at or near "\)"
+# Not supported by Materialize.
+onlyif cockroach
+statement error syntax error: invalid locale e: language: tag is not well-formed
 CREATE TABLE e1 (
   a STRING COLLATE e
 )
 
-statement error multiple COLLATE declarations for column "a" at or near "\)"
+statement error Expected column option, found COLLATE
 CREATE TABLE e2 (
   a STRING COLLATE en COLLATE de
 )
 
-statement error COLLATE declaration for non-string-typed column "a" at or near "\)"
+# Not supported by Materialize.
+onlyif cockroach
+statement error COLLATE declaration for non-string-typed column "a"
 CREATE TABLE e3 (
   a INT COLLATE en
 )
@@ -224,11 +311,10 @@ CREATE TABLE t (
 query TT
 SHOW CREATE TABLE t
 ----
-t  CREATE TABLE t (
-     a STRING COLLATE en NULL,
-     FAMILY "primary" (a, rowid)
-   )
+materialize.public.t  CREATE␠TABLE␠materialize.public.t␠(a␠pg_catalog.text␠COLLATE␠en);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES
   ('A' COLLATE en),
@@ -238,19 +324,20 @@ INSERT INTO t VALUES
   ('x' COLLATE en),
   ('ü' COLLATE en)
 
-statement error value type collatedstring{de} doesn't match type collatedstring{en} of column "a"
-INSERT INTO t VALUES ('X' COLLATE de)
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t VALUES
+  ('X' COLLATE de),
+  ('y' COLLATE de)
 
 query T
 SELECT a FROM t ORDER BY t.a
 ----
-a
-A
-b
-B
-ü
-x
 
+
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT a FROM t ORDER BY t.a COLLATE da
 ----
@@ -259,53 +346,82 @@ A
 b
 B
 x
+X
+y
 ü
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT a FROM t WHERE a = 'A' COLLATE en;
 ----
 A
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT 'a' COLLATE en::STRING || 'b'
 ----
 ab
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT 'a🐛b🏠c' COLLATE en::VARCHAR(3)
+----
+a🐛b
+
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 't' COLLATE en::BOOLEAN
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT '42' COLLATE en::INTEGER
 ----
 42
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT '42.0' COLLATE en::FLOAT
 ----
 42
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT '42.0' COLLATE en::DECIMAL
 ----
 42.0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT 'a' COLLATE en::BYTES
 ----
 a
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2017-01-10 16:05:50.734049+00:00' COLLATE en::TIMESTAMP
 ----
 2017-01-10 16:05:50.734049 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2017-01-10 16:05:50.734049+00:00' COLLATE en::TIMESTAMPTZ
 ----
 2017-01-10 16:05:50.734049 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '40 days' COLLATE en::INTERVAL
 ----
@@ -314,9 +430,13 @@ SELECT '40 days' COLLATE en::INTERVAL
 statement ok
 CREATE TABLE foo(a STRING COLLATE en_u_ks_level2)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 PREPARE x AS INSERT INTO foo VALUES ($1 COLLATE en_u_ks_level2) RETURNING a
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 EXECUTE x(NULL)
 ----
@@ -325,18 +445,24 @@ NULL
 query T
 SELECT a FROM foo
 ----
-NULL
 
-# Regression test for database-issues#7300
 
+# Regression test for #24449
+
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO foo VALUES ('aBcD' COLLATE en_u_ks_level2)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM foo WHERE a = 'aBcD' COLLATE en_u_ks_level2
 ----
 aBcD
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM foo WHERE a = 'abcd' COLLATE en_u_ks_level2
 ----
@@ -344,23 +470,255 @@ aBcD
 
 # Test quoted collations.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE quoted_coll (
   a STRING COLLATE "en",
   b STRING COLLATE "en_US",
   c STRING COLLATE "en-Us" DEFAULT ('c' COLLATE "en-Us"),
   d STRING COLLATE "en-u-ks-level1" DEFAULT ('d'::STRING COLLATE "en-u-ks-level1"),
-  e STRING COLLATE "en-us" AS (a COLLATE "en-us") STORED
+  e STRING COLLATE "en-us" AS (a COLLATE "en-us") STORED,
+  FAMILY "primary" (a, b, c, d, e, rowid)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE quoted_coll
 ----
-quoted_coll  CREATE TABLE quoted_coll (
-  a STRING COLLATE en NULL,
-  b STRING COLLATE en_US NULL,
-  c STRING COLLATE en_Us NULL DEFAULT 'c':::STRING COLLATE en_Us,
-  d STRING COLLATE en_u_ks_level1 NULL DEFAULT 'd':::STRING::STRING COLLATE en_u_ks_level1,
-  e STRING COLLATE en_us NULL AS (a COLLATE en_us) STORED,
-  FAMILY "primary" (a, b, c, d, e, rowid)
+quoted_coll  CREATE TABLE public.quoted_coll (
+               a STRING COLLATE en NULL,
+               b STRING COLLATE en_US NULL,
+               c STRING COLLATE en_US NULL DEFAULT 'c':::STRING COLLATE en_US,
+               d STRING COLLATE en_u_ks_level1 NULL DEFAULT 'd':::STRING COLLATE en_u_ks_level1,
+               e STRING COLLATE en_US NULL AS (a COLLATE en_US) STORED,
+               rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+               CONSTRAINT quoted_coll_pkey PRIMARY KEY (rowid ASC)
+             )
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression for #46570.
+statement ok
+CREATE TABLE t46570(c0 BOOL, c1 STRING COLLATE en);
+CREATE INDEX ON t46570(rowid, c1 DESC);
+INSERT INTO t46570(c1, rowid) VALUES('' COLLATE en, 0);
+UPSERT INTO t46570(rowid) VALUES (0), (1)
+
+# Test trailing spaces are truncated for char types.
+subtest regression_50015
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT
+	t
+FROM
+	(
+		VALUES
+			('hello '::CHAR(100) COLLATE en_US),
+			('hello t'::CHAR(100) COLLATE en_US),
+			('hello '::STRING::CHAR(100) COLLATE en_US),
+			('hello t'::STRING::CHAR(100) COLLATE en_US)
+	) g(t)
+----
+hello
+hello t
+hello
+hello t
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t50015(id int PRIMARY KEY, a char(100), b char(100) COLLATE en);
+INSERT INTO t50015 VALUES
+  (1, 'hello', 'hello' COLLATE en),
+  (2, 'hello ', 'hello ' COLLATE en),
+  (3, repeat('hello ', 2), repeat('hello ', 2) COLLATE en)
+
+# Not supported by Materialize.
+onlyif cockroach
+query ITITI
+SELECT id, a, length(a), b, length(b::string) FROM t50015 ORDER BY id ASC
+----
+1  hello                                                                                                 5   hello        5
+2  hello                                                                                                 5   hello        5
+3  hello hello                                                                                           11  hello hello  11
+
+statement ok
+CREATE TABLE t54989(
+  no_collation_str text,
+  no_collation_str_array text[],
+  collated_str text COLLATE en,
+  default_collation text COLLATE "default"
 )
+
+query TT
+SELECT
+    a.attname AS column_name,
+    collname AS collation
+FROM pg_attribute a
+LEFT JOIN pg_collation co ON a.attcollation = co.oid
+JOIN pg_class c ON a.attrelid = c.oid
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE c.relname = 't54989'
+ORDER BY column_name
+----
+collated_str  NULL
+default_collation  NULL
+no_collation_str  NULL
+no_collation_str_array  NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+# "default", "C", and "POSIX" all behave the same as normal strings when
+# used in an expression.
+query BBB
+SELECT 'cat' = ('cat'::text collate "default"), 'cat' = ('cat'::VARCHAR(64) collate "C"), 'cat' = ('cat'::CHAR(3) collate "POSIX")
+----
+true  true  true
+
+statement ok
+INSERT INTO t54989 VALUES ('a', '{b}', 'c', 'd')
+
+# Not supported by Materialize.
+onlyif cockroach
+query BB
+SELECT default_collation = 'd' COLLATE "C", no_collation_str = 'a' COLLATE "POSIX" FROM t54989
+----
+true  true
+
+# Not supported by Materialize.
+onlyif cockroach
+# Creating a "C" or "POSIX" column is not allowed. In the future, we may
+# add better support for collations, and it would be hard to do that if we
+# start allowing columns like these.
+statement error invalid locale C: language: tag is not well-formed
+CREATE TABLE disallowed(a text COLLATE "C")
+
+# Not supported by Materialize.
+onlyif cockroach
+statement error invalid locale POSIX: language: tag is not well-formed
+CREATE TABLE disallowed(a text COLLATE "POSIX")
+
+# Regression test for collated string lowercase and hyphen/underscore equality.
+subtest nocase_strings
+
+statement ok
+CREATE TABLE nocase_strings (s STRING COLLATE "en-US-u-ks-level2");
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO nocase_strings VALUES ('Aaa' COLLATE "en-US-u-ks-level2"), ('Bbb' COLLATE "en-US-u-ks-level2");
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT s FROM nocase_strings WHERE s = ('bbb' COLLATE "en-US-u-ks-level2")
+----
+Bbb
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT s FROM nocase_strings WHERE s = ('bbb' COLLATE "en-us-u-ks-level2")
+----
+Bbb
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT s FROM nocase_strings WHERE s = ('bbb' COLLATE "en_US_u_ks_level2")
+----
+Bbb
+
+statement ok
+CREATE TABLE collation_name_case (s STRING COLLATE en_us_u_ks_level2);
+
+query TT
+SHOW CREATE TABLE collation_name_case
+----
+materialize.public.collation_name_case  CREATE␠TABLE␠materialize.public.collation_name_case␠(s␠pg_catalog.text␠COLLATE␠en_us_u_ks_level2);
+
+statement error table "materialize\.public\.nocase_strings" already exists
+CREATE TABLE nocase_strings (s STRING COLLATE "en-US-u-ks-le""vel2");
+
+statement error unterminated quoted identifier
+CREATE TABLE nocase_strings (s STRING COLLATE "en-US-u-ks-le"vel2");
+
+statement error WHERE clause error: COLLATE not yet supported
+SELECT s FROM nocase_strings WHERE s = ('bbb' COLLATE "en-us-u-ks-l""evel2")
+
+statement error unterminated quoted identifier
+SELECT s FROM nocase_strings WHERE s = ('bbb' COLLATE "en-us-u-ks-l"evel2")
+
+statement ok
+CREATE TABLE nocase_strings2 (
+  i INT,
+  s STRING COLLATE "en-US-u-ks-level2"
+);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO nocase_strings2 VALUES (1, 'Aaa' COLLATE "en-US-u-ks-level2"), (2, 'Bbb' COLLATE "en-US-u-ks-level2");
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT s FROM nocase_strings2 WHERE s = ('bbb' COLLATE "en-US-u-ks-level2")
+----
+Bbb
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT s FROM nocase_strings2 WHERE s = ('bbb' COLLATE "en-us-u-ks-level2")
+----
+Bbb
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT s FROM nocase_strings2 WHERE s = ('bbb' COLLATE "en_US_u_ks_level2")
+----
+Bbb
+
+# Test "char" is supposed to truncate long values
+subtest char_long_values
+
+statement ok
+CREATE TABLE t65631(a "char", b "char" COLLATE en)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t65631 VALUES ('abc', 'abc' COLLATE en)
+
+query TT
+SELECT a, b FROM t65631
+----
+
+
+subtest regression_45142
+
+statement ok
+CREATE TABLE t45142(c STRING COLLATE en);
+
+# Not supported by Materialize.
+onlyif cockroach
+query error unsupported comparison operator
+SELECT * FROM t45142 WHERE c < SOME ('' COLLATE de, '' COLLATE en);
+
+# Not supported by Materialize.
+onlyif cockroach
+query error unsupported comparison operator
+SELECT * FROM t45142 WHERE c < SOME ('' COLLATE en, '' COLLATE de);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT * FROM t45142 WHERE c < SOME (CASE WHEN true THEN NULL END, '' COLLATE en);
+SELECT * FROM t45142 WHERE c < SOME ('' COLLATE en, CASE WHEN true THEN NULL END);

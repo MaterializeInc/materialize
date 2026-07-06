@@ -22,21 +22,24 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (
   a INT REFERENCES t,
   FAMILY "primary" (a, rowid)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE v (
   "'" INT REFERENCES t, s STRING UNIQUE REFERENCES v (s),
   FAMILY "primary" ("'", s, rowid)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE c (
 	a INT NOT NULL,
@@ -46,15 +49,23 @@ CREATE TABLE c (
 	FAMILY fam_1_b (b)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON TABLE c IS 'table'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON COLUMN c.a IS 'column'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON INDEX c_a_b_idx IS 'index'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT colnames
 SELECT
   regexp_replace(create_statement, '\n', ' ', 'g'),
@@ -78,6 +89,8 @@ CREATE UNLOGGED TABLE unlogged_tbl (col int PRIMARY KEY)
 ----
 NOTICE: UNLOGGED TABLE will behave as a regular table in CockroachDB
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE unlogged_tbl
 ----
@@ -86,13 +99,13 @@ unlogged_tbl  CREATE TABLE public.unlogged_tbl (
                 CONSTRAINT unlogged_tbl_pkey PRIMARY KEY (col ASC)
               )
 
-statement error pgcode 22023 invalid storage parameter "foo"
+statement error pgcode 22023 Expected one of PARTITION or RETAIN, found identifier "foo"
 CREATE TABLE a (b INT) WITH (foo=100);
 
-statement error parameter "fillfactor" requires a float value
+statement error Expected one of PARTITION or RETAIN, found identifier "fillfactor"
 CREATE TABLE a (b INT) WITH (fillfactor=true);
 
-statement error unimplemented: storage parameter "toast_tuple_target"
+statement error Expected one of PARTITION or RETAIN, found identifier "toast_tuple_target"
 CREATE TABLE a (b INT) WITH (toast_tuple_target=100);
 
 query T noticetrace
@@ -105,6 +118,8 @@ CREATE INDEX a_idx ON a(b) WITH (fillfactor=50)
 ----
 NOTICE: storage parameter "fillfactor" is ignored
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE a CASCADE;
 
@@ -113,6 +128,8 @@ CREATE TABLE a (b INT) WITH (autovacuum_enabled=off)
 ----
 NOTICE: storage parameter "autovacuum_enabled = 'off'" is ignored
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE a CASCADE;
 
@@ -120,8 +137,10 @@ query T noticetrace
 CREATE TABLE a (b INT) WITH (autovacuum_enabled=on)
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE a CASCADE;
 
-statement error parameter "autovacuum_enabled" requires a Boolean value
+statement error Expected one of PARTITION or RETAIN, found identifier "autovacuum_enabled"
 CREATE TABLE a (b INT) WITH (autovacuum_enabled='11')

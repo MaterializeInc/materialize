@@ -22,43 +22,58 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR UPDATE
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR NO KEY UPDATE
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR SHARE
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR KEY SHARE
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR UPDATE FOR SHARE FOR NO KEY UPDATE FOR KEY SHARE
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR UPDATE clause not found in FROM clause
 SELECT 1 FOR UPDATE OF a
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR SHARE clause not found in FROM clause
 SELECT 1 FOR SHARE OF a, b
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR UPDATE clause not found in FROM clause
 SELECT 1 FOR UPDATE OF a FOR SHARE OF b, c FOR NO KEY UPDATE OF d FOR KEY SHARE OF e, f
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FROM
     (SELECT 1) a,
@@ -74,90 +89,132 @@ FOR UPDATE OF a FOR SHARE OF b, c FOR NO KEY UPDATE OF d FOR KEY SHARE OF e, f
 # However, we do mirror Postgres in that we require FOR UPDATE targets to be
 # unqualified names and reject anything else.
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42601 FOR UPDATE must specify unqualified relation names
 SELECT 1 FOR UPDATE OF public.a
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42601 FOR UPDATE must specify unqualified relation names
 SELECT 1 FOR UPDATE OF db.public.a
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR UPDATE SKIP LOCKED
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR NO KEY UPDATE SKIP LOCKED
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR SHARE SKIP LOCKED
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR KEY SHARE SKIP LOCKED
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR UPDATE clause not found in FROM clause
 SELECT 1 FOR UPDATE OF a SKIP LOCKED
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR UPDATE clause not found in FROM clause
 SELECT 1 FOR UPDATE OF a SKIP LOCKED FOR NO KEY UPDATE OF b SKIP LOCKED
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR UPDATE clause not found in FROM clause
 SELECT 1 FOR UPDATE OF a SKIP LOCKED FOR NO KEY UPDATE OF b NOWAIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR UPDATE clause not found in FROM clause
 SELECT 1 FOR UPDATE OF a SKIP LOCKED FOR SHARE OF b, c SKIP LOCKED FOR NO KEY UPDATE OF d SKIP LOCKED FOR KEY SHARE OF e, f SKIP LOCKED
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR UPDATE NOWAIT
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR NO KEY UPDATE NOWAIT
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR SHARE NOWAIT
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1 FOR KEY SHARE NOWAIT
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR UPDATE clause not found in FROM clause
 SELECT 1 FOR UPDATE OF a NOWAIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR UPDATE clause not found in FROM clause
 SELECT 1 FOR UPDATE OF a NOWAIT FOR NO KEY UPDATE OF b NOWAIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 42P01 relation "a" in FOR UPDATE clause not found in FROM clause
 SELECT 1 FOR UPDATE OF a NOWAIT FOR SHARE OF b, c NOWAIT FOR NO KEY UPDATE OF d NOWAIT FOR KEY SHARE OF e, f NOWAIT
 
 # Locking clauses both inside and outside of parenthesis are handled correctly.
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 ((SELECT 1)) FOR UPDATE SKIP LOCKED
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 ((SELECT 1) FOR UPDATE SKIP LOCKED)
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 ((SELECT 1 FOR UPDATE SKIP LOCKED))
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 # FOR READ ONLY is ignored, like in Postgres.
 query I
 SELECT 1 FOR READ ONLY
@@ -167,54 +224,56 @@ SELECT 1 FOR READ ONLY
 # Various operations are not supported when locking clauses are provided.
 # FeatureNotSupported errors are thrown for each of them.
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with UNION/INTERSECT/EXCEPT
+statement error pgcode 0A000 Expected end of statement, found UPDATE
 SELECT 1 UNION SELECT 1 FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with UNION/INTERSECT/EXCEPT
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT * FROM (SELECT 1 UNION SELECT 1) a FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with VALUES
+statement error pgcode 0A000 Expected end of statement, found FOR
 VALUES (1) FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with VALUES
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT * FROM (VALUES (1)) a FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with DISTINCT clause
+statement error pgcode 0A000 Expected end of statement, found UPDATE
 SELECT DISTINCT 1 FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with DISTINCT clause
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT * FROM (SELECT DISTINCT 1) a FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with GROUP BY clause
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT 1 GROUP BY 1 FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with GROUP BY clause
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT * FROM (SELECT 1 GROUP BY 1) a FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with HAVING clause
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT 1 HAVING TRUE FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with HAVING clause
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT * FROM (SELECT 1 HAVING TRUE) a FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with aggregate functions
+statement error pgcode 0A000 Expected end of statement, found UPDATE
 SELECT count(1) FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with aggregate functions
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT * FROM (SELECT count(1)) a FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with window functions
+statement error pgcode 0A000 Expected end of statement, found UPDATE
 SELECT count(1) OVER () FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with window functions
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT * FROM (SELECT count(1) OVER ()) a FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with set-returning functions in the target list
+statement error pgcode 0A000 Expected end of statement, found UPDATE
 SELECT generate_series(1, 2) FOR UPDATE
 
-statement error pgcode 0A000 FOR UPDATE is not allowed with set-returning functions in the target list
+statement error pgcode 0A000 Expected end of statement, found FOR
 SELECT * FROM (SELECT generate_series(1, 2)) a FOR UPDATE
 
+# Not supported by Materialize.
+onlyif cockroach
 # Set-returning functions in the from list are allowed.
 query I
 SELECT * FROM generate_series(1, 2) FOR UPDATE
@@ -222,6 +281,8 @@ SELECT * FROM generate_series(1, 2) FOR UPDATE
 1
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT * FROM (SELECT * FROM generate_series(1, 2)) a FOR UPDATE
 ----
@@ -235,13 +296,13 @@ CREATE TABLE t (k INT PRIMARY KEY, v int, FAMILY (k, v))
 
 user testuser
 
-statement error pgcode 42501 user testuser does not have SELECT privilege on relation t
+statement error pgcode 42501 permission denied for TABLE "materialize\.public\.t"
 SELECT * FROM t
 
-statement error pgcode 42501 user testuser does not have SELECT privilege on relation t
+statement error pgcode 42501 Expected end of statement, found UPDATE
 SELECT * FROM t FOR UPDATE
 
-statement error pgcode 42501 user testuser does not have SELECT privilege on relation t
+statement error pgcode 42501 Expected end of statement, found identifier "share"
 SELECT * FROM t FOR SHARE
 
 user root
@@ -254,10 +315,10 @@ user testuser
 statement ok
 SELECT * FROM t
 
-statement error pgcode 42501 user testuser does not have UPDATE privilege on relation t
+statement error pgcode 42501 Expected end of statement, found UPDATE
 SELECT * FROM t FOR UPDATE
 
-statement error pgcode 42501 user testuser does not have UPDATE privilege on relation t
+statement error pgcode 42501 Expected end of statement, found identifier "share"
 SELECT * FROM t FOR SHARE
 
 user root
@@ -270,13 +331,13 @@ GRANT UPDATE ON t TO testuser
 
 user testuser
 
-statement error pgcode 42501 user testuser does not have SELECT privilege on relation t
+statement error pgcode 42501 permission denied for TABLE "materialize\.public\.t"
 SELECT * FROM t
 
-statement error pgcode 42501 user testuser does not have SELECT privilege on relation t
+statement error pgcode 42501 Expected end of statement, found UPDATE
 SELECT * FROM t FOR UPDATE
 
-statement error pgcode 42501 user testuser does not have SELECT privilege on relation t
+statement error pgcode 42501 Expected end of statement, found identifier "share"
 SELECT * FROM t FOR SHARE
 
 user root
@@ -289,9 +350,13 @@ user testuser
 statement ok
 SELECT * FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM t FOR UPDATE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM t FOR SHARE
 
@@ -302,7 +367,7 @@ user root
 statement ok
 BEGIN READ ONLY
 
-statement error cannot execute FOR UPDATE in a read-only transaction
+statement error Expected end of statement, found UPDATE
 SELECT * FROM t FOR UPDATE
 
 statement ok
@@ -311,7 +376,7 @@ ROLLBACK
 statement ok
 BEGIN READ ONLY
 
-statement error cannot execute FOR NO KEY UPDATE in a read-only transaction
+statement error Expected end of statement, found NO
 SELECT * FROM t FOR NO KEY UPDATE
 
 statement ok
@@ -320,7 +385,7 @@ ROLLBACK
 statement ok
 BEGIN READ ONLY
 
-statement error cannot execute FOR SHARE in a read-only transaction
+statement error Expected end of statement, found identifier "share"
 SELECT * FROM t FOR SHARE
 
 statement ok
@@ -329,7 +394,7 @@ ROLLBACK
 statement ok
 BEGIN READ ONLY
 
-statement error cannot execute FOR KEY SHARE in a read-only transaction
+statement error Expected end of statement, found KEY
 SELECT * FROM t FOR KEY SHARE
 
 statement ok
@@ -340,20 +405,30 @@ ROLLBACK
 statement ok
 INSERT INTO t VALUES (1, 1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; UPDATE t SET v = 2 WHERE k = 1
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
 SELECT * FROM t FOR UPDATE NOWAIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
 SELECT * FROM t FOR SHARE FOR UPDATE OF t NOWAIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
 SELECT * FROM t FOR SHARE NOWAIT FOR UPDATE OF t
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
 BEGIN; SELECT * FROM t FOR UPDATE NOWAIT
 
@@ -379,29 +454,43 @@ GRANT UPDATE ON t2 TO testuser
 statement ok
 INSERT INTO t2 VALUES (1, 11)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; UPDATE t SET v = 2 WHERE k = 1
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
 SELECT v, v2 FROM t JOIN t2 USING (k) FOR SHARE FOR SHARE OF t NOWAIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
 SELECT v, v2 FROM t JOIN t2 USING (k) FOR SHARE OF t2 FOR SHARE OF t NOWAIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
 SELECT v, v2 FROM t JOIN t2 USING (k) FOR SHARE NOWAIT FOR SHARE OF t
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
 SELECT v, v2 FROM t JOIN t2 USING (k) FOR SHARE NOWAIT FOR SHARE OF t2
 
 statement ok
 SET statement_timeout = '10ms'
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 57014 query execution canceled due to statement timeout
 SELECT v, v2 FROM t JOIN t2 USING (k) FOR SHARE FOR SHARE OF t2 NOWAIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 57014 query execution canceled due to statement timeout
 SELECT v, v2 FROM t JOIN t2 USING (k) FOR SHARE OF t FOR SHARE OF t2 NOWAIT
 
@@ -418,6 +507,8 @@ ROLLBACK
 statement ok
 INSERT INTO t VALUES (2, 2), (3, 3), (4, 4)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t3 (
   k INT PRIMARY KEY,
@@ -430,6 +521,8 @@ INSERT INTO t3 VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3), (4, 4, 2);
 GRANT SELECT ON t3 TO testuser;
 GRANT UPDATE ON t3 TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; UPDATE t SET v = 3 WHERE k = 2; UPDATE t3 SET v = 3 WHERE k = 2
 
@@ -438,6 +531,8 @@ user testuser
 statement ok
 BEGIN
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT * FROM t FOR UPDATE SKIP LOCKED
 ----
@@ -445,9 +540,13 @@ SELECT * FROM t FOR UPDATE SKIP LOCKED
 3  3
 4  4
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE t SET v = 4 WHERE k = 3
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT * FROM t FOR UPDATE SKIP LOCKED
 ----
@@ -455,6 +554,8 @@ SELECT * FROM t FOR UPDATE SKIP LOCKED
 3  4
 4  4
 
+# Not supported by Materialize.
+onlyif cockroach
 # All columns are available from the secondary index on u, so no index join is
 # needed. The secondary index can produce the row where k=2 since the row is
 # only locked in the primary index.
@@ -464,6 +565,8 @@ SELECT k, u FROM t3 WHERE u = 2 FOR UPDATE SKIP LOCKED
 2  2
 4  2
 
+# Not supported by Materialize.
+onlyif cockroach
 # An index join is needed to fetch column v. The index join filters out the
 # first row, which is locked.
 query III
@@ -471,6 +574,8 @@ SELECT * FROM t3 WHERE u = 2 FOR UPDATE SKIP LOCKED
 ----
 4  4  2
 
+# Not supported by Materialize.
+onlyif cockroach
 # Since the limit is not pushed below the index join, we still see the second row.
 query III
 SELECT * FROM t3 WHERE u = 2 LIMIT 1 FOR UPDATE SKIP LOCKED
@@ -479,6 +584,8 @@ SELECT * FROM t3 WHERE u = 2 LIMIT 1 FOR UPDATE SKIP LOCKED
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT * FROM t FOR UPDATE SKIP LOCKED
 ----
@@ -494,6 +601,8 @@ ROLLBACK
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for not propagating lock spans with leaf txns (#94290).
 statement ok
 CREATE TABLE t94290 (a INT, b INT, c INT, PRIMARY KEY(a), UNIQUE INDEX(b));
@@ -504,9 +613,13 @@ INSERT INTO t94290 VALUES (1,2,3);
 statement ok
 SET statement_timeout = '2s';
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM t94290 WHERE b = 2 FOR UPDATE;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM t94290 WHERE b = 2 FOR UPDATE;
 

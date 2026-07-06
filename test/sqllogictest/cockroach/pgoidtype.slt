@@ -682,18 +682,26 @@ SELECT o, i, o > i, i > o FROM (VALUES
 4294967295  4294967295   false  false
 4294967295  -2147483648  true   false
 
+# Not supported by Materialize.
+onlyif cockroach
 # 4294967296 is (MaxUint32 + 1).
-query error Expected a data type name, found colon
+query error OID out of range: 4294967296
 SELECT 1:::OID >= 4294967296:::INT8
 
-query error Expected a data type name, found colon
+# Not supported by Materialize.
+onlyif cockroach
+query error OID out of range: 4294967296
 SELECT 4294967296:::INT8 >= 1:::OID
 
+# Not supported by Materialize.
+onlyif cockroach
 # -2147483649 is (MinInt32 - 1).
-query error Expected a data type name, found colon
+query error OID out of range: -2147483649
 SELECT 1:::OID >= -2147483649:::INT8
 
-query error Expected a data type name, found colon
+# Not supported by Materialize.
+onlyif cockroach
+query error OID out of range: -2147483649
 SELECT -2147483649:::INT8 >= 1:::OID
 
 # Test that we can cast index names to a regclass, and vice-versa.

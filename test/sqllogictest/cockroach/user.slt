@@ -24,14 +24,13 @@ mode cockroach
 
 # LogicTest: local 3node-tenant
 
-# not supported yet
-halt
-
 query T
 SHOW is_superuser
 ----
-on
+off
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT colnames
 SHOW USERS
 ----
@@ -40,9 +39,13 @@ admin     ·        {}
 root      ·        {admin}
 testuser  ·        {}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user1
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT colnames
 SHOW USERS
 ----
@@ -52,69 +55,89 @@ root      ·        {admin}
 testuser  ·        {}
 user1     ·        {}
 
-statement error pgcode 42710 a role/user named admin already exists
+statement error pgcode 42710 CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER admin
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER IF NOT EXISTS admin
 
-statement error pgcode 42710 a role/user named user1 already exists
+statement error pgcode 42710 CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER user1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER IF NOT EXISTS user1
 
-statement error pgcode 42710 a role/user named user1 already exists
+statement error pgcode 42710 CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER UsEr1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER Ομηρος
 
-statement error pgcode 42939 role name "node" is reserved
+statement error pgcode 42939 CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER node
 
-statement error pgcode 42939 role name "public" is reserved
+statement error pgcode 42939 CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER public
 
-statement error pgcode 42939 role name "none" is reserved
+statement error pgcode 42939 CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER "none"
 
-statement error empty passwords are not permitted
+statement error CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER test WITH PASSWORD ''
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER uSEr2 WITH PASSWORD 'cockroach'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user3 WITH PASSWORD '蟑螂'
 
-statement error pq: "foo☂": username is invalid
+statement error CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER foo☂
 
-statement error pq: "-foo": username is invalid
+statement error CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER "-foo"
 
-statement error at or near "-": syntax error
+statement error CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER foo-bar
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER "foo-bar"
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 PREPARE pcu AS CREATE USER foo WITH PASSWORD $1;
   EXECUTE pcu('bar')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER USER foo WITH PASSWORD 'somepass'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 PREPARE chpw AS ALTER USER foo WITH PASSWORD $1;
   EXECUTE chpw('bar')
 
-statement error user "blix" does not exist
+statement error Expected literal string, found parameter "\$1"
 PREPARE chpw2 AS ALTER USER blix WITH PASSWORD $1;
   EXECUTE chpw2('baz')
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT colnames
 SHOW USERS
 ----
@@ -129,14 +152,18 @@ user2     ·        {}
 user3     ·        {}
 ομηρος    ·        {}
 
-statement error "": username is empty
+statement error CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER ""
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTT
 SELECT current_user, current_user(), session_user, session_user(), user
 ----
 root  root  root  root  root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER testuser2;
 GRANT admin TO testuser2
@@ -146,7 +173,7 @@ user testuser2
 query T
 SHOW is_superuser
 ----
-on
+off
 
 user testuser
 
@@ -155,23 +182,31 @@ SHOW is_superuser
 ----
 off
 
-statement error pq: user testuser does not have CREATEROLE privilege
+statement error CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER user4
 
-statement error pq: user testuser does not have INSERT privilege on relation users
+statement error Unexpected keyword UPSERT at the beginning of a statement
 UPSERT INTO system.users VALUES (user1, 'newpassword', false)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pq: user testuser does not have SELECT privilege on relation user
 SHOW USERS
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTT
 SELECT current_user, current_user(), session_user, session_user(), user
 ----
 testuser  testuser  testuser  testuser  testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET SESSION AUTHORIZATION DEFAULT
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW session_user
 ----
@@ -179,9 +214,13 @@ testuser
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET SESSION AUTHORIZATION DEFAULT
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW session_user
 ----
@@ -189,19 +228,27 @@ root
 
 # Test CREATEROLE privilege.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER USER testuser CREATEROLE
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE ROLE user4 CREATEROLE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER user5 NOLOGIN
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTO
 SELECT * FROM system.role_options
 ----
@@ -217,9 +264,13 @@ SHOW is_superuser
 ----
 off
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP ROLE user4
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP ROLE user5
 
@@ -227,20 +278,28 @@ subtest min_password_length
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET CLUSTER SETTING server.user_login.min_password_length = 12
 
-statement error password too short
+statement error CREATE USER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/create\-role/#details
 CREATE USER baduser WITH PASSWORD 'abc'
 
-statement error password too short
+statement error permission denied to alter password of role
 ALTER USER testuser WITH PASSWORD 'abc'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER userlongpassword WITH PASSWORD '012345678901'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER USER userlongpassword WITH PASSWORD '987654321021'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP USER userlongpassword

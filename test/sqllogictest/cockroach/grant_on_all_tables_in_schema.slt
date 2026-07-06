@@ -22,9 +22,8 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER testuser2
 
@@ -32,10 +31,14 @@ statement ok
 CREATE SCHEMA s;
 CREATE SCHEMA s2;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Granting in a schema with no tables should be okay.
 statement ok
 GRANT SELECT ON ALL TABLES IN SCHEMA s TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser
 ----
@@ -45,18 +48,26 @@ statement ok
 CREATE TABLE s.t();
 CREATE TABLE s2.t();
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON ALL TABLES IN SCHEMA s TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser
 ----
 database_name  schema_name  relation_name  grantee   privilege_type  is_grantable
 test           s            t              testuser  SELECT          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON ALL TABLES IN SCHEMA s, s2 TO testuser, testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser, testuser2
 ----
@@ -66,9 +77,13 @@ test           s            t              testuser2  SELECT          false
 test           s2           t              testuser   SELECT          false
 test           s2           t              testuser2  SELECT          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT ALL ON ALL TABLES IN SCHEMA s, s2 TO testuser, testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser, testuser2
 ----
@@ -78,9 +93,13 @@ test           s            t              testuser2  ALL             false
 test           s2           t              testuser   ALL             false
 test           s2           t              testuser2  ALL             false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE SELECT ON ALL TABLES IN SCHEMA s, s2 FROM testuser, testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser, testuser2
 ----
@@ -118,9 +137,13 @@ test           s2           t              testuser2  INSERT          false
 test           s2           t              testuser2  UPDATE          false
 test           s2           t              testuser2  ZONECONFIG      false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE ALL ON ALL TABLES IN SCHEMA s, s2 FROM testuser, testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser, testuser2
 ----
@@ -133,9 +156,13 @@ CREATE DATABASE otherdb
 statement ok
 CREATE TABLE otherdb.public.tbl (a int)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON ALL TABLES IN SCHEMA otherdb.public TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS ON TABLE otherdb.public.tbl
 ----

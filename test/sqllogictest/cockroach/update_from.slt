@@ -28,9 +28,8 @@ CREATE TABLE abc (a int primary key, b int, c int)
 statement ok
 INSERT INTO abc VALUES (1, 20, 300), (2, 30, 400)
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # Updating using self join.
 statement ok
 UPDATE abc SET b = other.b + 1, c = other.c + 1 FROM abc AS other WHERE abc.a = other.a
@@ -38,9 +37,11 @@ UPDATE abc SET b = other.b + 1, c = other.c + 1 FROM abc AS other WHERE abc.a = 
 query III rowsort
 SELECT * FROM abc
 ----
-1  21  301
-2  31  401
+1  20  300
+2  30  400
 
+# Not supported by Materialize.
+onlyif cockroach
 # Update only some columns.
 statement ok
 UPDATE abc SET b = other.b + 1 FROM abc AS other WHERE abc.a = other.a
@@ -48,9 +49,11 @@ UPDATE abc SET b = other.b + 1 FROM abc AS other WHERE abc.a = other.a
 query III rowsort
 SELECT * FROM abc
 ----
-1  22  301
-2  32  401
+1  20  300
+2  30  400
 
+# Not supported by Materialize.
+onlyif cockroach
 # Update only some rows.
 statement ok
 UPDATE abc SET b = other.b + 1 FROM abc AS other WHERE abc.a = other.a AND abc.a = 1
@@ -58,8 +61,8 @@ UPDATE abc SET b = other.b + 1 FROM abc AS other WHERE abc.a = other.a AND abc.a
 query III rowsort
 SELECT * FROM abc
 ----
-1  23  301
-2  32  401
+1  20  300
+2  30  400
 
 # Update from another table.
 statement ok
@@ -68,14 +71,16 @@ CREATE TABLE new_abc (a int, b int, c int)
 statement ok
 INSERT INTO new_abc VALUES (1, 2, 3), (2, 3, 4)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE abc SET b = new_abc.b, c = new_abc.c FROM new_abc WHERE abc.a = new_abc.a
 
 query III rowsort
 SELECT * FROM abc
 ----
-1  2  3
-2  3  4
+1  20  300
+2  30  400
 
 # Multiple matching values for a given row. When this happens, we pick
 # the first matching value for the row (this is arbitrary). This behavior
@@ -83,15 +88,19 @@ SELECT * FROM abc
 statement ok
 INSERT INTO new_abc VALUES (1, 1, 1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE abc SET b = new_abc.b, c = new_abc.c FROM new_abc WHERE abc.a = new_abc.a
 
 query III rowsort
 SELECT * FROM abc
 ----
-1  2  3
-2  3  4
+1  20  300
+2  30  400
 
+# Not supported by Materialize.
+onlyif cockroach
 # Returning old values.
 query IIIII colnames,rowsort
 UPDATE abc
@@ -108,6 +117,8 @@ a  new_b  old_b  new_c  old_c
 1  3      2      5      3
 2  4      3      6      4
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check if RETURNING * returns everything
 query IIIIII colnames,rowsort
 UPDATE abc SET b = old.b + 1, c = old.c + 2 FROM abc AS old WHERE abc.a = old.a RETURNING *
@@ -116,13 +127,19 @@ a  b  c  a  b  c
 1  4  7  1  3  5
 2  5  8  2  4  6
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure UPDATE FROM works properly in the presence of check columns.
 statement ok
 CREATE TABLE abc_check (a int primary key, b int, c int, check (a > 0), check (b > 0 AND b < 10))
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO abc_check VALUES (1, 2, 3), (2, 3, 4)
 
+# Not supported by Materialize.
+onlyif cockroach
 query III colnames,rowsort
 UPDATE abc_check
 SET
@@ -141,9 +158,11 @@ a  b  c
 query III rowsort
 SELECT * FROM abc
 ----
-1  4  7
-2  5  8
+1  20  300
+2  30  400
 
+# Not supported by Materialize.
+onlyif cockroach
 # Update values of table from values expression
 statement ok
 UPDATE abc SET b = other.b, c = other.c FROM (values (1, 2, 3), (2, 3, 4)) as other ("a", "b", "c") WHERE abc.a = other.a
@@ -151,8 +170,8 @@ UPDATE abc SET b = other.b, c = other.c FROM (values (1, 2, 3), (2, 3, 4)) as ot
 query III rowsort
 SELECT * FROM abc
 ----
-1  2  3
-2  3  4
+1  20  300
+2  30  400
 
 # Check if UPDATE ... FROM works with multiple tables.
 statement ok
@@ -167,15 +186,19 @@ INSERT INTO ab VALUES (1, 200), (2, 300)
 statement ok
 INSERT INTO ac VALUES (1, 300), (2, 400)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE abc SET b = ab.b, c = ac.c FROM ab, ac WHERE abc.a = ab.a AND abc.a = ac.a
 
 query III rowsort
 SELECT * FROM abc
 ----
-1  200  300
-2  300  400
+1  20  300
+2  30  400
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure UPDATE ... FROM works with LATERAL.
 query IIIIIII colnames,rowsort
 UPDATE abc
@@ -194,7 +217,7 @@ a  b    c    a  b    a  c
 2  300  400  2  300  2  400
 
 # Make sure the FROM clause cannot reference the target table.
-statement error no data source matches prefix: abc
+statement error Expected end of statement, found FROM
 UPDATE abc SET a = other.a FROM (SELECT abc.a FROM abc AS x) AS other WHERE abc.a=other.a
 
 # Regression test for #89779. Do not update the same row twice when the target
@@ -203,6 +226,8 @@ statement ok
 CREATE TABLE t89779 (a INT);
 INSERT INTO t89779 VALUES (1)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 UPDATE t89779 SET a = 2 FROM (VALUES (1), (1)) v(i) WHERE a = i RETURNING a
 ----

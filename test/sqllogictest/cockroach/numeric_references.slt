@@ -34,12 +34,11 @@ CREATE VIEW view_ref AS SELECT a, 1 FROM x
 let $v_id
 SELECT id FROM system.namespace WHERE name='view_ref'
 
-# not supported yet
-halt
-
-statement error cannot specify an explicit column list when accessing a view by reference
+statement error unterminated dollar\-quoted string
 SELECT * FROM [$v_id(1) AS _]
 
+# Not supported by Materialize.
+onlyif cockroach
 query II rowsort
 SELECT * FROM [$v_id AS _]
 ----
@@ -47,6 +46,8 @@ SELECT * FROM [$v_id AS _]
 2  1
 3  1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT foo.a FROM [$v_id AS foo]
 ----
@@ -54,23 +55,31 @@ SELECT foo.a FROM [$v_id AS foo]
 2
 3
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SEQUENCE seq
 
 let $seq_id
 SELECT id FROM system.namespace WHERE name='seq'
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIB
 SELECT * FROM [$seq_id AS _]
 ----
 0 0 true
 
+# Not supported by Materialize.
+onlyif cockroach
 # Col refs in sequences are ignored.
 query IIB
 SELECT * FROM [$seq_id(1) AS _]
 ----
 0 0 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIB
 SELECT * FROM [$seq_id(1, 2) AS _]
 ----
@@ -82,12 +91,18 @@ CREATE TABLE num_ref (a INT PRIMARY KEY, xx INT, b INT, c INT, INDEX bc (b,c))
 statement ok
 CREATE TABLE num_ref_hidden (a INT, b INT)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE num_ref RENAME COLUMN b TO d
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE num_ref RENAME COLUMN a TO p
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE num_ref DROP COLUMN xx
 
@@ -97,6 +112,8 @@ INSERT INTO num_ref VALUES (1, 10, 101), (2, 20, 200), (3, 30, 300)
 statement ok
 INSERT INTO num_ref_hidden VALUES (1, 10), (2, 20), (3, 30)
 
+# Not supported by Materialize.
+onlyif cockroach
 query III rowsort
 SELECT * FROM num_ref
 ----
@@ -107,6 +124,8 @@ SELECT * FROM num_ref
 let $num_ref_id
 SELECT id FROM system.namespace WHERE name='num_ref'
 
+# Not supported by Materialize.
+onlyif cockroach
 query III rowsort
 SELECT * FROM [$num_ref_id as num_ref_alias]
 ----
@@ -114,6 +133,8 @@ SELECT * FROM [$num_ref_id as num_ref_alias]
 2  20  200
 3  30  300
 
+# Not supported by Materialize.
+onlyif cockroach
 query III rowsort
 SELECT * FROM [$num_ref_id(4,3,1) AS num_ref_alias]
 ----
@@ -133,6 +154,8 @@ SELECT index_id
  WHERE descriptor_id = $num_ref_id
    AND index_name = 'num_ref_pkey';
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT * FROM [$num_ref_id(4) AS num_ref_alias]@[$num_ref_bc]
 ----
@@ -140,6 +163,8 @@ SELECT * FROM [$num_ref_id(4) AS num_ref_alias]@[$num_ref_bc]
 200
 300
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT * FROM [$num_ref_id(1) AS num_ref_alias]@[$num_ref_pkey]
 ----
@@ -147,6 +172,8 @@ SELECT * FROM [$num_ref_id(1) AS num_ref_alias]@[$num_ref_pkey]
 2
 3
 
+# Not supported by Materialize.
+onlyif cockroach
 query III colnames,rowsort
 SELECT * FROM [$num_ref_id(1,3,4) AS num_ref_alias(col1,col2,col3)]
 ----
@@ -155,12 +182,18 @@ col1  col2  col3
 2     20    200
 3     30    300
 
+# Not supported by Materialize.
+onlyif cockroach
 statement OK
 UPSERT INTO [$num_ref_id AS num_ref_alias] VALUES (4, 40, 400)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement OK
 INSERT INTO [$num_ref_id(1) AS num_ref_alias] VALUES (5)
 
+# Not supported by Materialize.
+onlyif cockroach
 query III rowsort
 SELECT * FROM [$num_ref_id as num_ref_alias]
 ----
@@ -170,14 +203,20 @@ SELECT * FROM [$num_ref_id as num_ref_alias]
 4     40    400
 5     NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 statement OK
 DELETE FROM [$num_ref_id AS num_ref_alias]@bc WHERE p=5
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 DELETE FROM [$num_ref_id AS num_ref_alias] WHERE d=40 RETURNING num_ref_alias.c
 ----
 400
 
+# Not supported by Materialize.
+onlyif cockroach
 query III rowsort
 SELECT * FROM [$num_ref_id AS num_ref_alias]
 ----
@@ -185,14 +224,20 @@ SELECT * FROM [$num_ref_id AS num_ref_alias]
 2     20    200
 3     30    300
 
+# Not supported by Materialize.
+onlyif cockroach
 statement OK
 INSERT INTO [$num_ref_id AS num_ref_alias] (p, c) VALUES (4, 400)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 INSERT INTO [$num_ref_id(1,4) AS num_ref_alias] VALUES (5, 500) RETURNING num_ref_alias.d
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query III rowsort
 SELECT * FROM [$num_ref_id AS num_ref_alias]
 ----
@@ -202,11 +247,15 @@ SELECT * FROM [$num_ref_id AS num_ref_alias]
 4     NULL  400
 5     NULL  500
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 UPDATE [$num_ref_id AS num_ref_alias] SET d=40 WHERE p=4 RETURNING num_ref_alias.c
 ----
 400
 
+# Not supported by Materialize.
+onlyif cockroach
 query III rowsort
 SELECT * FROM [$num_ref_id AS num_ref_alias]
 ----
@@ -216,18 +265,20 @@ SELECT * FROM [$num_ref_id AS num_ref_alias]
 4     40    400
 5     NULL  500
 
-statement error pq: cannot specify both a list of column IDs and a list of column names
+statement error unterminated dollar\-quoted string
 INSERT INTO [$num_ref_id(1,4) AS num_ref_alias] (p,c) VALUES (6, 600)
 
-statement error pq: cannot specify a list of column IDs with DELETE
+statement error unterminated dollar\-quoted string
 DELETE FROM [$num_ref_id(1) AS num_ref_alias]
 
-statement error pq: cannot specify a list of column IDs with UPDATE
+statement error unterminated dollar\-quoted string
 UPDATE [$num_ref_id(1) AS num_ref_alias] SET d=10
 
 let $num_ref_hidden_id
 SELECT id FROM system.namespace WHERE name='num_ref_hidden'
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT * FROM [$num_ref_hidden_id(1,3) AS num_ref_hidden]
 ----
@@ -235,6 +286,8 @@ SELECT * FROM [$num_ref_hidden_id(1,3) AS num_ref_hidden]
 2
 3
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(rowid) FROM [$num_ref_hidden_id(3) AS num_ref_hidden]
 ----
@@ -243,20 +296,20 @@ SELECT count(rowid) FROM [$num_ref_hidden_id(3) AS num_ref_hidden]
 # Ensure that privileges are checked when using numeric references.
 user testuser
 
-statement error pq: user testuser does not have SELECT privilege on relation num_ref
+statement error unterminated dollar\-quoted string
 SELECT * FROM [$num_ref_id AS t]
 
-statement error pq: user testuser does not have INSERT privilege on relation num_ref
+statement error unterminated dollar\-quoted string
 INSERT INTO [$num_ref_id AS t] VALUES (1)
 
-statement error pq: user testuser does not have DELETE privilege on relation num_ref
+statement error unterminated dollar\-quoted string
 DELETE FROM [$num_ref_id AS t]
 
-statement error pq: user testuser does not have UPDATE privilege on relation num_ref
+statement error unterminated dollar\-quoted string
 UPDATE [$num_ref_id AS t] SET d=1
 
 # The @<num> reference is by type OID, which is
 # type desc ID + oid.CockroachPredefinedOIDMax. This error reports that the
 # type desc with ID 15210 is not found, hence the slightly different error message.
-statement error pq: type with ID 15210 does not exist
+statement error Expected a data type name, found operator "@"
 SELECT 1::@115210

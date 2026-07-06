@@ -30,9 +30,7 @@ CREATE TABLE large_numbers (a INT8)
 statement ok
 INSERT INTO large_numbers VALUES (9223372036854775807),(1)
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error integer out of range
+statement error function "sum_int" does not exist
 SELECT sum_int(a) FROM large_numbers
 
 statement ok
@@ -41,9 +39,7 @@ DELETE FROM large_numbers
 statement ok
 INSERT INTO large_numbers VALUES (-9223372036854775808),(-1)
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error integer out of range
+statement error function "sum_int" does not exist
 SELECT sum_int(a) FROM large_numbers
 
 subtest regression_88128

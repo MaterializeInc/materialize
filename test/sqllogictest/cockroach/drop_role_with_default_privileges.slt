@@ -22,95 +22,120 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER testuser1;
 CREATE USER testuser2;
 GRANT testuser1 TO ROOT;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 GRANT SELECT ON TABLES TO testuser2;
 
-statement error pq: role testuser1 cannot be dropped because some objects depend on it\nowner of default privileges on new relations belonging to role testuser1 in database test
+statement error unknown role 'testuser1'
 DROP ROLE testuser1
 
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nprivileges for default privileges on new relations belonging to role testuser1 in database test
+statement error unknown role 'testuser2'
 DROP ROLE testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 REVOKE SELECT ON TABLES FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 GRANT USAGE ON SCHEMAS TO testuser2;
 
-statement error pq: role testuser1 cannot be dropped because some objects depend on it\nowner of default privileges on new schemas belonging to role testuser1 in database test
+statement error unknown role 'testuser1'
 DROP ROLE testuser1
 
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nprivileges for default privileges on new schemas belonging to role testuser1 in database test
+statement error unknown role 'testuser2'
 DROP ROLE testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 REVOKE USAGE ON SCHEMAS FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 GRANT USAGE ON TYPES TO testuser2;
 
-statement error pq: role testuser1 cannot be dropped because some objects depend on it\nowner of default privileges on new types belonging to role testuser1 in database test
+statement error unknown role 'testuser1'
 DROP ROLE testuser1
 
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nprivileges for default privileges on new types belonging to role testuser1 in database test
+statement error unknown role 'testuser2'
 DROP ROLE testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 REVOKE USAGE ON TYPES FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 GRANT SELECT ON SEQUENCES TO testuser2;
 
-statement error pq: role testuser1 cannot be dropped because some objects depend on it\nowner of default privileges on new sequences belonging to role testuser1 in database test
+statement error unknown role 'testuser1'
 DROP ROLE testuser1
 
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nprivileges for default privileges on new sequences belonging to role testuser1 in database test
+statement error unknown role 'testuser2'
 DROP ROLE testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 REVOKE SELECT ON TABLES FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 REVOKE USAGE ON SCHEMAS FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 REVOKE USAGE ON TYPES FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser1 REVOKE SELECT ON SEQUENCES FROM testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP ROLE testuser1;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP ROLE testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO testuser2
 
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nprivileges for default privileges on new relations for all roles in database test
+statement error unknown role 'testuser2'
 DROP ROLE testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE SELECT ON TABLES FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT USAGE ON SCHEMAS TO testuser2;
 
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nprivileges for default privileges on new schemas for all roles in database test
+statement error unknown role 'testuser2'
 DROP ROLE testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE USAGE ON SCHEMAS FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT USAGE ON TYPES TO testuser2;
 
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nprivileges for default privileges on new types for all roles in database test
+statement error unknown role 'testuser2'
 DROP ROLE testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE USAGE ON TYPES FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON SEQUENCES TO testuser2;
 
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nprivileges for default privileges on new sequences for all roles in database test
+statement error unknown role 'testuser2'
 DROP ROLE testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 # Grant default privileges to testuser2 in a second database.
 statement ok
 CREATE ROLE testuser3;
@@ -122,63 +147,83 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON SEQUENCES TO testuser2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser3 GRANT SELECT ON SEQUENCES TO testuser2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser2 GRANT SELECT ON SEQUENCES TO testuser3;
 
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nowner of default privileges on new sequences belonging to role testuser2 in database testdb2\nprivileges for default privileges on new sequences belonging to role testuser3 in database testdb2\nprivileges for default privileges on new sequences for all roles in database test\nprivileges for default privileges on new sequences for all roles in database testdb2
+statement error unknown role 'testuser2'
 DROP ROLE testuser2
 
 # Check the hint output.
-statement error pq: role testuser2 cannot be dropped because some objects depend on it\nowner of default privileges on new sequences belonging to role testuser2 in database testdb2\nprivileges for default privileges on new sequences belonging to role testuser3 in database testdb2\nprivileges for default privileges on new sequences for all roles in database test\nprivileges for default privileges on new sequences for all roles in database testdb2\nHINT: USE testdb2; ALTER DEFAULT PRIVILEGES FOR ROLE testuser2 REVOKE ALL ON SEQUENCES FROM testuser3;\nUSE testdb2; ALTER DEFAULT PRIVILEGES FOR ROLE testuser3 REVOKE ALL ON SEQUENCES FROM testuser2;\nUSE test; ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE ALL ON SEQUENCES FROM testuser2;\nUSE testdb2; ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE ALL ON SEQUENCES FROM testuser2;
+statement error unknown role 'testuser2'
 DROP ROLE testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 # Tests where default privileges are defined on the schema.
 statement ok
 CREATE ROLE testuser4;
 GRANT testuser4 TO root;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA PUBLIC GRANT SELECT ON SEQUENCES TO testuser4;
 
-statement error pq: role testuser4 cannot be dropped because some objects depend on it\nprivileges for default privileges on new sequences for all roles in database testdb2 in schema public
+statement error unknown role 'testuser4'
 DROP ROLE testuser4
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA s;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA s GRANT SELECT ON SEQUENCES TO testuser4;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser3 IN SCHEMA s GRANT SELECT ON SEQUENCES TO testuser4;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser4 IN SCHEMA s GRANT SELECT ON SEQUENCES TO testuser3;
 
-statement error pq: role testuser4 cannot be dropped because some objects depend on it\nowner of default privileges on new sequences belonging to role testuser4 in database testdb2 in schema s\nprivileges for default privileges on new sequences belonging to role testuser3 in database testdb2 in schema s\nprivileges for default privileges on new sequences for all roles in database testdb2 in schema public\nprivileges for default privileges on new sequences for all roles in database testdb2 in schema s
+statement error unknown role 'testuser4'
 DROP ROLE testuser4
 
-statement error pq: role testuser4 cannot be dropped because some objects depend on it\nowner of default privileges on new sequences belonging to role testuser4 in database testdb2 in schema s\nprivileges for default privileges on new sequences belonging to role testuser3 in database testdb2 in schema s\nprivileges for default privileges on new sequences for all roles in database testdb2 in schema public\nprivileges for default privileges on new sequences for all roles in database testdb2 in schema s\nHINT: USE testdb2; ALTER DEFAULT PRIVILEGES FOR ROLE testuser4 IN SCHEMA S REVOKE ALL ON SEQUENCES FROM testuser3;\nUSE testdb2; ALTER DEFAULT PRIVILEGES FOR ROLE testuser3 IN SCHEMA S REVOKE ALL ON SEQUENCES FROM testuser4;\nUSE testdb2; ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA PUBLIC REVOKE ALL ON SEQUENCES FROM testuser4;\nUSE testdb2; ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA S REVOKE ALL ON SEQUENCES FROM testuser4;
+statement error unknown role 'testuser4'
 DROP ROLE testuser4
 
 # Now let's ensure we can revoke all the privileges and drop testuser2/3/4.
 
+# Not supported by Materialize.
+onlyif cockroach
 # Prepare to drop testuser2.
 statement ok
 USE test;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE ALL ON SEQUENCES FROM testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE testdb2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser3 REVOKE ALL ON SEQUENCES FROM testuser2;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser2 REVOKE ALL ON SEQUENCES FROM testuser3;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE ALL ON SEQUENCES FROM testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP ROLE testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Prepare to drop testuser3.
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser3 IN SCHEMA s REVOKE ALL ON SEQUENCES FROM testuser4;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser4 IN SCHEMA s REVOKE ALL ON SEQUENCES FROM testuser3;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP ROLE testuser3;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA s REVOKE ALL ON SEQUENCES FROM testuser4;
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM testuser4;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP ROLE testuser4;

@@ -22,9 +22,8 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA s;
 CREATE SEQUENCE seq;
@@ -32,32 +31,42 @@ CREATE SEQUENCE s.seq;
 CREATE USER testuser2
 
 # Ensure user must exist for set owner.
-statement error pq: role/user "fake_user" does not exist
+statement error Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier "sequence"
 ALTER SEQUENCE seq OWNER TO fake_user
 
+# Not supported by Materialize.
+onlyif cockroach
 # Superusers can alter owner to any user which has CREATE privileges on the
 # parent schema. This succeeds since all users have CREATE on the public schema
 # by default.
 statement ok
 ALTER SEQUENCE seq OWNER TO testuser
 
-statement error pq: user testuser does not have CREATE privilege on schema s
+statement error Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier "sequence"
 ALTER SEQUENCE s.seq OWNER TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 # ALTER SEQUENCE IF EXISTS OWNER succeeds if the sequence does not exist.
 statement ok
 ALTER SEQUENCE IF EXISTS does_not_exist OWNER TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON SCHEMA s TO testuser, testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE seq OWNER TO root
 
 # ALTER VIEW cannot be used for sequences.
-statement error pq: "seq" is not a view
+statement error unknown role 'testuser'
 ALTER VIEW seq OWNER TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER SEQUENCE seq OWNER TO testuser;
 ALTER SEQUENCE s.seq OWNER TO testuser;
@@ -67,26 +76,32 @@ ALTER SEQUENCE s.seq OWNER TO root;
 # Other users must be owner to alter the owner.
 user testuser
 
-statement error pq: must be owner of table seq
+statement error Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier "sequence"
 ALTER SEQUENCE seq OWNER TO testuser2
 
 # Non-superusers also must be a member of the new owning role.
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER SEQUENCE seq OWNER TO testuser
 
 user testuser
 
-statement error must be member of role "testuser2"
+statement error Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier "sequence"
 ALTER SEQUENCE seq OWNER TO testuser2
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT testuser2 TO testuser
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER SEQUENCE seq OWNER TO testuser2

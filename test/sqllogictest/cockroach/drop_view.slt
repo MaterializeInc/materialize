@@ -81,14 +81,10 @@ public  diamond  view   root  0  NULL
 
 user testuser
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error user testuser does not have DROP privilege on relation diamond
+statement error must be owner of VIEW materialize\.public\.diamond
 DROP VIEW diamond
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error cannot drop relation "d" because view "diamond" depends on it
+statement error cannot drop view "d": still depended upon by view "diamond"
 DROP VIEW d
 
 user root
@@ -102,18 +98,12 @@ CREATE VIEW testuser2 AS SELECT k,v FROM testuser1
 statement ok
 CREATE VIEW testuser3 AS SELECT k,v FROM testuser2
 
-# Not supported by Materialize.
-onlyif cockroach
 statement ok
 GRANT ALL ON testuser1 to testuser
 
-# Not supported by Materialize.
-onlyif cockroach
 statement ok
 GRANT ALL ON testuser2 to testuser
 
-# Not supported by Materialize.
-onlyif cockroach
 statement ok
 GRANT ALL ON testuser3 to testuser
 
@@ -139,6 +129,8 @@ REVOKE CONNECT ON DATABASE test FROM public
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP VIEW testuser3
 
@@ -157,6 +149,8 @@ DROP VIEW testuser1
 statement error cannot drop view "testuser1": still depended upon by view "testuser2"
 DROP VIEW testuser1 RESTRICT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP VIEW testuser1 CASCADE
 
@@ -167,42 +161,30 @@ SHOW TABLES FROM test
 ----
 public  d  view  root  0  NULL
 
-statement error pgcode 42P01 unknown catalog item 'testuser2'
+statement error pgcode 42P01 cannot drop view "testuser2": still depended upon by view "testuser3"
 DROP VIEW testuser2
 
 user root
 
-# Not supported by Materialize.
-onlyif cockroach
 statement ok
 GRANT ALL ON a to testuser
 
-# Not supported by Materialize.
-onlyif cockroach
 statement ok
 GRANT ALL ON b to testuser
 
-# Not supported by Materialize.
-onlyif cockroach
 statement ok
 GRANT ALL ON c to testuser
 
-# Not supported by Materialize.
-onlyif cockroach
 statement ok
 GRANT ALL ON d to testuser
 
 user testuser
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error user testuser does not have DROP privilege on relation diamond
+statement error must be owner of TABLE materialize\.public\.a
 DROP TABLE a CASCADE
 
 user root
 
-# Not supported by Materialize.
-onlyif cockroach
 statement ok
 DROP TABLE a CASCADE
 

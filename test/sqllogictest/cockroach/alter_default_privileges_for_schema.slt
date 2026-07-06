@@ -22,9 +22,8 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE DATABASE d;
 GRANT CREATE ON DATABASE d TO testuser
@@ -32,9 +31,13 @@ GRANT CREATE ON DATABASE d TO testuser
 # By default, testuser should have ALL privileges on a schema it creates.
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE d;
 
+# Not supported by Materialize.
+onlyif cockroach
 # The public schema is special and has hard-coded privileges for the public role.
 # When https://github.com/cockroachdb/cockroach/issues/70266 is resolved,
 # the public role will no longer have CREATE privilege.
@@ -47,9 +50,13 @@ d              public       public   CREATE          false
 d              public       public   USAGE           false
 d              public       root     ALL             true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA testuser_s;
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA testuser_s;
 ----
@@ -58,12 +65,18 @@ d              testuser_s   admin     ALL             true
 d              testuser_s   root      ALL             true
 d              testuser_s   testuser  ALL             true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES REVOKE ALL ON SCHEMAS FROM testuser;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA testuser_s2;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Note that CREATE is still present for testuser due to our current inheritance
 # behavior.
 # TODO(richardjcai): Remove this when we remove our current inheritance logic.
@@ -77,18 +90,26 @@ d              testuser_s2  testuser  ALL             true
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE test;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO testuser, testuser2
 
 statement ok
 CREATE SCHEMA s
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA s
 ----
@@ -98,12 +119,16 @@ test           s            root       ALL             true
 test           s            testuser   ALL             false
 test           s            testuser2  ALL             false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES REVOKE USAGE ON SCHEMAS FROM testuser, testuser2
 
 statement ok
 CREATE SCHEMA s2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA s2
 ----
@@ -113,12 +138,16 @@ test           s2           root       ALL             true
 test           s2           testuser   CREATE          false
 test           s2           testuser2  CREATE          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES REVOKE ALL ON SCHEMAS FROM testuser, testuser2
 
 statement ok
 CREATE SCHEMA s3
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA s3
 ----
@@ -126,19 +155,28 @@ database_name  schema_name  grantee  privilege_type  is_grantable
 test           s3           admin    ALL             true
 test           s3           root     ALL             true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON DATABASE d TO testuser
 
+# Record disabled, not supported by Materialize:
 user testuser
-statement ok
-USE d
+# statement ok
+# USE d
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser REVOKE ALL ON SCHEMAS FROM testuser, testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA s4
 
+# Not supported by Materialize.
+onlyif cockroach
 # testuser still has CREATE due to "inheriting" it from the parent database.
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA s4
@@ -148,24 +186,34 @@ d              s4           admin     ALL             true
 d              s4           root      ALL             true
 d              s4           testuser  ALL             true
 
+# Record disabled, not supported by Materialize:
 user root
-statement ok
-USE d
+# statement ok
+# USE d
 
+# Not supported by Materialize.
+onlyif cockroach
 # root must be a member of testuser to ALTER DEFAULT PRIVILEGES FOR ROLE testuser.
 statement ok
 GRANT testuser TO root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser REVOKE ALL ON SCHEMAS FROM testuser, testuser2
 
+# Record disabled, not supported by Materialize:
 user testuser
-statement ok
-USE d
+# statement ok
+# USE d
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA s5
 
+# Not supported by Materialize.
+onlyif cockroach
 # testuser still has CREATE due to "inheriting" it from the parent database.
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA s5
@@ -175,6 +223,8 @@ d              s5           admin     ALL             true
 d              s5           root      ALL             true
 d              s5           testuser  ALL             true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO testuser, testuser2
 
@@ -183,6 +233,8 @@ user root
 statement ok
 CREATE SCHEMA s_72322
 
+# Not supported by Materialize.
+onlyif cockroach
 # When root creates the table, testuser and testuser2 should not get privileges.
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA s_72322

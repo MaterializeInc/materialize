@@ -22,14 +22,15 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE priv_t (pk INT PRIMARY KEY);
 CREATE TABLE no_priv_t (pk INT PRIMARY KEY);
 GRANT SELECT ON priv_t TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA root;
 CREATE TABLE root.root_table ();
@@ -42,21 +43,25 @@ GRANT ALL ON TABLE testuser.testuser_table TO testuser
 statement error role name "public" is reserved
 CREATE ROLE public
 
-statement error pgcode 42704 role/user \"public\" does not exist
+statement error pgcode 42704 Expected equals sign or TO, found PUBLIC
 SET ROLE public
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error role name "node" is reserved
 CREATE ROLE node
 
-statement error pgcode 42704 role/user \"node\" does not exist
+statement error pgcode 42704 Expected equals sign or TO, found NODE
 SET ROLE node
 
 # Check root can reset and become itself.
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-root  root  root  root
+materialize  materialize  materialize  materialize
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW ROLE
 ----
@@ -65,14 +70,16 @@ none
 statement ok
 RESET ROLE
 
-statement error pgcode 42704 role/user \"non_existent_user\" does not exist
+statement error pgcode 42704 Expected equals sign or TO, found identifier "non_existent_user"
 SET ROLE non_existent_user
 
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-root  root  root  root
+materialize  materialize  materialize  materialize
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW ROLE
 ----
@@ -84,17 +91,21 @@ SET ROLE = root
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-root  root  root  root
+materialize  materialize  materialize  materialize
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW ROLE
 ----
 root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM root_table
 
-statement error relation "testuser_table" does not exist
+statement error unknown catalog item 'testuser_table'
 SELECT * FROM testuser_table
 
 statement ok
@@ -103,45 +114,55 @@ SET ROLE = 'testuser'
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-testuser  testuser  root  root
+materialize  materialize  materialize  materialize
 
 query T
 SHOW is_superuser
 ----
 off
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM priv_t
 
-statement error user testuser does not have SELECT privilege on relation no_priv_t
+statement error unknown catalog item 'no_priv_t'
 SELECT * FROM no_priv_t
 
-statement error relation "root_table" does not exist
+statement error unknown catalog item 'root_table'
 SELECT * FROM root_table
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM testuser_table
 
 statement ok
 RESET ROLE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM root_table
 
-statement error relation "testuser_table" does not exist
+statement error unknown catalog item 'testuser_table'
 SELECT * FROM testuser_table
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check root can transition between testuser and testuser2.
 statement ok
 CREATE USER testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testuser2
 
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-testuser2  testuser2  root  root
+materialize  materialize  materialize  materialize
 
 query T
 SHOW is_superuser
@@ -154,12 +175,12 @@ SET ROLE = 'NoNe'
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-root  root  root  root
+materialize  materialize  materialize  materialize
 
 query T
 SHOW is_superuser
 ----
-on
+off
 
 # Check testuser cannot transition to other users as it has no privileges.
 user testuser
@@ -169,11 +190,15 @@ SELECT current_user(), current_user, session_user(), session_user
 ----
 testuser  testuser  testuser  testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW ROLE
 ----
 none
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testuser
 
@@ -182,21 +207,25 @@ SELECT current_user(), current_user, session_user(), session_user
 ----
 testuser  testuser  testuser  testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW ROLE
 ----
 testuser
 
-statement error pgcode 42501 only root can become root
+statement error pgcode 42501 Expected equals sign or TO, found identifier "root"
 SET ROLE root
 
-statement error pgcode 42501 permission denied to set role "testuser2"
+statement error pgcode 42501 Expected equals sign or TO, found identifier "testuser2"
 SET ROLE testuser2
 
 # Grant admin to testuser.
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT admin TO testuser
 
@@ -204,26 +233,28 @@ GRANT admin TO testuser
 
 user testuser
 
-statement error pgcode 42501 only root can become root
+statement error pgcode 42501 Expected equals sign or TO, found identifier "root"
 SET ROLE root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testuser2
 
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-testuser2  testuser2  testuser  testuser
+testuser  testuser  testuser  testuser
 
 query T
 SHOW is_superuser
 ----
 off
 
-statement error pgcode 42501 user testuser2 does not have SELECT privilege on relation priv_t
+statement error pgcode 42501 unknown catalog item 'priv_t'
 SELECT * FROM priv_t
 
-statement error pgcode 42501 user testuser2 does not have SELECT privilege on relation no_priv_t
+statement error pgcode 42501 unknown catalog item 'no_priv_t'
 SELECT * FROM no_priv_t
 
 statement ok
@@ -237,18 +268,20 @@ testuser  testuser  testuser  testuser
 query T
 SHOW is_superuser
 ----
-on
+off
 
 # testuser2 cannot become anyone.
 
 user testuser2
 
-statement error pgcode 42501 only root can become root
+statement error pgcode 42501 Expected equals sign or TO, found identifier "root"
 SET ROLE root
 
-statement error pgcode 42501 permission denied to set role "testuser"
+statement error pgcode 42501 Expected equals sign or TO, found identifier "testuser"
 SET ROLE testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testuser2
 
@@ -268,18 +301,22 @@ testuser2  testuser2  testuser2  testuser2
 # Set testuser2 as admin, check testuser2 can become testuser
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT admin TO testuser2
 
 user testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testuser
 
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-testuser  testuser  testuser2  testuser2
+testuser2  testuser2  testuser2  testuser2
 
 statement ok
 RESET ROLE
@@ -290,6 +327,8 @@ RESET ROLE
 # "admin" when impersonating testuser.
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE ROLE testrole;
 REVOKE admin FROM testuser2;
@@ -300,21 +339,25 @@ RESET ROLE
 
 user testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testuser
 
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-testuser  testuser  testuser2  testuser2
+testuser2  testuser2  testuser2  testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testrole
 
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-testrole  testrole  testuser2  testuser2
+testuser2  testuser2  testuser2  testuser2
 
 statement ok
 RESET ROLE
@@ -324,11 +367,15 @@ RESET ROLE
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testuser2
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE admin FROM testuser
 
@@ -337,11 +384,13 @@ user testuser
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-testuser2  testuser2  testuser  testuser
+testuser  testuser  testuser  testuser
 
-statement error pgcode 42501 permission denied to set role "testuser2"
+statement error pgcode 42501 Expected equals sign or TO, found identifier "testuser2"
 SET ROLE testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE 'none'
 
@@ -357,9 +406,13 @@ testuser  testuser  testuser  testuser
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT ADMIN TO testuser;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 SET LOCAL ROLE testuser
@@ -367,8 +420,10 @@ SET LOCAL ROLE testuser
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-testuser  testuser  root  root
+materialize  materialize  materialize  materialize
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT user_name FROM crdb_internal.node_sessions
 WHERE active_queries LIKE 'SELECT user_name%'
@@ -381,8 +436,10 @@ ROLLBACK
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-root  root  root  root
+materialize  materialize  materialize  materialize
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testuser
 
@@ -393,14 +450,18 @@ RESET ALL
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-testuser  testuser  root  root
+materialize  materialize  materialize  materialize
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT user_name FROM crdb_internal.node_sessions
 WHERE active_queries LIKE 'SELECT user_name%'
 ----
 root
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that SET SESSION AUTHORIZATION *does* reset the role.
 statement ok
 SET SESSION AUTHORIZATION DEFAULT
@@ -408,4 +469,4 @@ SET SESSION AUTHORIZATION DEFAULT
 query TTTT
 SELECT current_user(), current_user, session_user(), session_user
 ----
-root  root  root  root
+materialize  materialize  materialize  materialize

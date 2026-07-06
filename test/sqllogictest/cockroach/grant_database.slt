@@ -25,9 +25,8 @@ mode cockroach
 statement ok
 CREATE DATABASE a
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB colnames
 SHOW GRANTS ON DATABASE a
 ----
@@ -36,30 +35,38 @@ a              admin    ALL             true
 a              public   CONNECT         false
 a              root     ALL             true
 
-statement error user root must have exactly ALL privileges on database "a"
+statement error Expected FROM, found ON
 REVOKE CONNECT ON DATABASE a FROM root
 
-statement error user admin must have exactly ALL privileges on database "a"
+statement error Expected FROM, found ON
 REVOKE CONNECT ON DATABASE a FROM admin
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER readwrite
 
-statement error pq: role/user "test-user" does not exist
+statement error unknown role 'readwrite'
 GRANT ALL ON DATABASE a TO readwrite, "test-user"
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO system.users VALUES('test-user','',false,3);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT ALL PRIVILEGES ON DATABASE a TO readwrite, "test-user" WITH GRANT OPTION
 
-statement error syntax error
+statement error Expected ON, found ALL
 GRANT SELECT,ALL ON DATABASE a TO readwrite
 
-statement error syntax error
+statement error Expected ON, found ALL
 REVOKE SELECT,ALL ON DATABASE a FROM readwrite
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB
 SHOW GRANTS ON DATABASE a
 ----
@@ -69,15 +76,21 @@ a  readwrite  ALL      true
 a  root       ALL      true
 a  test-user  ALL      true
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB
 SHOW GRANTS ON DATABASE a FOR readwrite, "test-user"
 ----
 a  readwrite  ALL  true
 a  test-user  ALL  true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE CONNECT ON DATABASE a FROM "test-user",readwrite
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB
 SHOW GRANTS ON DATABASE a
 ----
@@ -95,6 +108,8 @@ a  test-user  DROP        true
 a  test-user  RESTORE     true
 a  test-user  ZONECONFIG  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB
 SHOW GRANTS ON DATABASE a FOR readwrite, "test-user"
 ----
@@ -109,9 +124,13 @@ a  test-user  DROP        true
 a  test-user  RESTORE     true
 a  test-user  ZONECONFIG  true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE CREATE ON DATABASE a FROM "test-user"
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB
 SHOW GRANTS ON DATABASE a
 ----
@@ -128,9 +147,13 @@ a  test-user  DROP        true
 a  test-user  RESTORE     true
 a  test-user  ZONECONFIG  true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE ALL PRIVILEGES ON DATABASE a FROM "test-user"
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB
 SHOW GRANTS ON DATABASE a FOR readwrite, "test-user"
 ----
@@ -140,9 +163,13 @@ a  readwrite  DROP        true
 a  readwrite  RESTORE     true
 a  readwrite  ZONECONFIG  true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE ALL ON DATABASE a FROM readwrite,"test-user"
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB
 SHOW GRANTS ON DATABASE a
 ----
@@ -150,28 +177,36 @@ a  admin   ALL      true
 a  public  CONNECT  false
 a  root    ALL      true
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB
 SHOW GRANTS ON DATABASE a FOR readwrite, "test-user"
 ----
 
 # Usage privilege should not be grantable on databases.
 
-statement error pq: invalid privilege type USAGE for database
+statement error unknown role 'testuser'
 GRANT USAGE ON DATABASE a TO testuser
 
 statement ok
 CREATE DATABASE b
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE, CONNECT ON DATABASE b TO testuser
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE b.t()
 
 # CONNECT privilege should not be inherited from DB when creating a table.
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS ON b.t
 ----
@@ -182,30 +217,42 @@ b              public       t           testuser  ALL             true
 
 # Calling SHOW GRANTS on an invalid user should error out.
 
-statement error role/user "invaliduser" does not exist
+statement error Expected end of statement, found FOR
 SHOW GRANTS FOR invaliduser
 
 # Verify that owner and child of owner have is_grantable implicitly.
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER owner_grant_option_child
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT testuser to owner_grant_option_child
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER USER testuser WITH createdb
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE DATABASE owner_grant_option
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CONNECT ON DATABASE owner_grant_option TO owner_grant_option_child
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB colnames
 SHOW GRANTS ON DATABASE owner_grant_option
 ----
@@ -223,9 +270,13 @@ user root
 statement ok
 CREATE ROLE other_owner
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DATABASE owner_grant_option OWNER TO other_owner
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTB colnames
 SHOW GRANTS ON DATABASE owner_grant_option
 ----

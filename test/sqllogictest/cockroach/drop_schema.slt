@@ -24,14 +24,13 @@ mode cockroach
 
 # LogicTest: default-configs local-mixed-22.2-23.1
 
-# not supported yet
-halt
-
-statement error pq: cannot drop schema "public"
+statement error must be owner of SCHEMA materialize\.public
 DROP SCHEMA public
 
 statement ok
 CREATE DATABASE test2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pq: cannot drop schema "public"
 DROP SCHEMA test2.public

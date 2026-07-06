@@ -22,21 +22,15 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
 # Default privileges start with an implicit set, the creator role has ALL
 # and Public has usage.
 query TBTTTB
 SHOW DEFAULT PRIVILEGES
 ----
-root  false  functions  root    ALL    true
-root  false  schemas    root    ALL    true
-root  false  sequences  root    ALL    true
-root  false  tables     root    ALL    true
-root  false  types      public  USAGE  false
-root  false  types      root    ALL    true
+PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure revoking "default" default privileges reflects in show default
 # privileges.
 statement ok
@@ -46,11 +40,10 @@ ALTER DEFAULT PRIVILEGES REVOKE USAGE ON TYPES FROM public;
 query TBTTTB
 SHOW DEFAULT PRIVILEGES
 ----
-root  false  functions  root  ALL  true
-root  false  schemas    root  ALL  true
-root  false  sequences  root  ALL  true
-root  false  types      root  ALL  true
+PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO PUBLIC;
 ALTER DEFAULT PRIVILEGES GRANT USAGE ON TYPES TO PUBLIC;
@@ -60,39 +53,33 @@ ALTER DEFAULT PRIVILEGES GRANT SELECT ON SEQUENCES TO PUBLIC;
 query TBTTTB
 SHOW DEFAULT PRIVILEGES
 ----
-root  false  functions  root    ALL     true
-root  false  schemas    public  USAGE   false
-root  false  schemas    root    ALL     true
-root  false  sequences  public  SELECT  false
-root  false  sequences  root    ALL     true
-root  false  tables     public  SELECT  false
-root  false  types      public  USAGE   false
-root  false  types      root    ALL     true
+PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER foo
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER bar
 
 query TBTTTB
 SHOW DEFAULT PRIVILEGES
 ----
-root  false  functions  root    ALL     true
-root  false  schemas    public  USAGE   false
-root  false  schemas    root    ALL     true
-root  false  sequences  public  SELECT  false
-root  false  sequences  root    ALL     true
-root  false  tables     public  SELECT  false
-root  false  types      public  USAGE   false
-root  false  types      root    ALL     true
+PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO foo, bar;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON TYPES TO foo, bar;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO foo, bar;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO foo, bar;
 
+# Not supported by Materialize.
+onlyif cockroach
 query TBTTTB
 SHOW DEFAULT PRIVILEGES FOR ROLE foo, bar, root
 ----
@@ -125,9 +112,13 @@ root  false  types      foo     ALL     false
 root  false  types      public  USAGE   false
 root  false  types      root    ALL     true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT foo, bar TO root;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar GRANT ALL ON TABLES TO foo, bar;
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar GRANT ALL ON TYPES TO foo, bar;
@@ -137,23 +128,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar GRANT ALL ON SEQUENCES TO foo, bar;
 query TBTTTB
 SHOW DEFAULT PRIVILEGES
 ----
-root  false  functions  root    ALL     true
-root  false  schemas    bar     ALL     false
-root  false  schemas    foo     ALL     false
-root  false  schemas    public  USAGE   false
-root  false  schemas    root    ALL     true
-root  false  sequences  bar     ALL     false
-root  false  sequences  foo     ALL     false
-root  false  sequences  public  SELECT  false
-root  false  sequences  root    ALL     true
-root  false  tables     bar     ALL     false
-root  false  tables     foo     ALL     false
-root  false  tables     public  SELECT  false
-root  false  types      bar     ALL     false
-root  false  types      foo     ALL     false
-root  false  types      public  USAGE   false
-root  false  types      root    ALL     true
+PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar REVOKE ALL ON TABLES FROM foo, bar;
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar REVOKE ALL ON TYPES FROM foo, bar;
@@ -163,23 +141,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar REVOKE ALL ON SEQUENCES FROM foo, bar
 query TBTTTB
 SHOW DEFAULT PRIVILEGES
 ----
-root  false  functions  root    ALL     true
-root  false  schemas    bar     ALL     false
-root  false  schemas    foo     ALL     false
-root  false  schemas    public  USAGE   false
-root  false  schemas    root    ALL     true
-root  false  sequences  bar     ALL     false
-root  false  sequences  foo     ALL     false
-root  false  sequences  public  SELECT  false
-root  false  sequences  root    ALL     true
-root  false  tables     bar     ALL     false
-root  false  tables     foo     ALL     false
-root  false  tables     public  SELECT  false
-root  false  types      bar     ALL     false
-root  false  types      foo     ALL     false
-root  false  types      public  USAGE   false
-root  false  types      root    ALL     true
+PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM foo, bar, public;
 ALTER DEFAULT PRIVILEGES REVOKE ALL ON TYPES FROM foo, bar, public;
@@ -189,27 +154,10 @@ ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM foo, bar, public;
 query TBTTTB
 SHOW DEFAULT PRIVILEGES
 ----
-root  false  functions  root  ALL         true
-root  false  schemas    root  ALL         true
-root  false  sequences  root  ALL         true
-root  false  tables     bar   BACKUP      false
-root  false  tables     bar   CHANGEFEED  false
-root  false  tables     bar   CREATE      false
-root  false  tables     bar   DELETE      false
-root  false  tables     bar   DROP        false
-root  false  tables     bar   INSERT      false
-root  false  tables     bar   UPDATE      false
-root  false  tables     bar   ZONECONFIG  false
-root  false  tables     foo   BACKUP      false
-root  false  tables     foo   CHANGEFEED  false
-root  false  tables     foo   CREATE      false
-root  false  tables     foo   DELETE      false
-root  false  tables     foo   DROP        false
-root  false  tables     foo   INSERT      false
-root  false  tables     foo   UPDATE      false
-root  false  tables     foo   ZONECONFIG  false
-root  false  types      root  ALL         true
+PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES REVOKE ALL ON TABLES FROM foo, bar, public;
 ALTER DEFAULT PRIVILEGES GRANT DROP, ZONECONFIG ON TABLES TO foo WITH GRANT OPTION;
@@ -217,23 +165,24 @@ ALTER DEFAULT PRIVILEGES GRANT DROP, ZONECONFIG ON TABLES TO foo WITH GRANT OPTI
 query TBTTTB
 SHOW DEFAULT PRIVILEGES
 ----
-root  false  functions  root  ALL         true
-root  false  schemas    root  ALL         true
-root  false  sequences  root  ALL         true
-root  false  tables     foo   DROP        true
-root  false  tables     foo   ZONECONFIG  true
-root  false  types      root  ALL         true
+PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 
+# Not supported by Materialize.
+onlyif cockroach
 # Create a second database.
 statement ok
 CREATE DATABASE test2;
 use test2;
 CREATE USER testuser2;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT testuser TO root;
 ALTER DEFAULT PRIVILEGES FOR ROLE testuser GRANT DROP, ZONECONFIG ON TABLES TO foo WITH GRANT OPTION;
 
+# Not supported by Materialize.
+onlyif cockroach
 query TBTTTB
 SHOW DEFAULT PRIVILEGES FOR ROLE testuser
 ----
@@ -251,15 +200,12 @@ user testuser
 query TBTTTB
 SHOW DEFAULT PRIVILEGES
 ----
-testuser  false  functions  testuser  ALL    true
-testuser  false  schemas    testuser  ALL    true
-testuser  false  sequences  testuser  ALL    true
-testuser  false  tables     testuser  ALL    true
-testuser  false  types      public    USAGE  false
-testuser  false  types      testuser  ALL    true
+PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 query TBTTTB
 SHOW DEFAULT PRIVILEGES FOR ROLE testuser
 ----
@@ -272,9 +218,13 @@ testuser  false  tables     testuser  ALL         true
 testuser  false  types      public    USAGE       false
 testuser  false  types      testuser  ALL         true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE root GRANT DROP, ZONECONFIG ON TABLES TO foo WITH GRANT OPTION;
 
+# Not supported by Materialize.
+onlyif cockroach
 query TBTTTB
 SHOW DEFAULT PRIVILEGES FOR ROLE root, testuser
 ----
@@ -295,9 +245,13 @@ testuser  false  tables     testuser  ALL         true
 testuser  false  types      public    USAGE       false
 testuser  false  types      testuser  ALL         true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT DROP, ZONECONFIG ON TABLES TO foo WITH GRANT OPTION;
 
+# Not supported by Materialize.
+onlyif cockroach
 # ForAllRoles is not a real role and thus is not the grantee for any privileges.
 query TBTTTB
 SHOW DEFAULT PRIVILEGES FOR ALL ROLES

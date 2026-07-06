@@ -61,9 +61,7 @@ SELECT * FROM kview
 5 6
 7 8
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error "kview" is not a table
+statement error cannot mutate view 'materialize\.public\.kview'
 DELETE FROM kview
 
 query II rowsort
@@ -95,11 +93,11 @@ DELETE FROM kv RETURNING k, v
 1 2
 7 8
 
-# Not supported by Materialize.
-onlyif cockroach
 query II
 SELECT * FROM kv
 ----
+1  2
+7  8
 
 statement error column "nonexistent" does not exist
 DELETE FROM kv WHERE nonexistent = 1
@@ -121,11 +119,11 @@ DELETE FROM unindexed RETURNING k, v
 1 2
 7 8
 
-# Not supported by Materialize.
-onlyif cockroach
 query II
 SELECT * FROM unindexed
 ----
+1  2
+7  8
 
 statement count 4
 INSERT INTO unindexed VALUES (1, 2), (3, 4), (5, 6), (7, 8)
@@ -151,16 +149,20 @@ k v
 statement count 4
 INSERT INTO unindexed VALUES (1, 2), (3, 4), (5, 6), (7, 8)
 
-# Not supported by Materialize.
-onlyif cockroach
 query II colnames,rowsort
 SELECT k, v FROM unindexed
 ----
 k v
-1 2
-3 4
-5 6
-7 8
+1  2
+1  2
+1  2
+3  4
+3  4
+5  6
+5  6
+7  8
+7  8
+7  8
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -176,27 +178,48 @@ onlyif cockroach
 statement count 1
 DELETE FROM unindexed WHERE k >= 4 ORDER BY k LIMIT 1
 
-# Not supported by Materialize.
-onlyif cockroach
 query II colnames,rowsort
 SELECT k, v FROM unindexed
 ----
 k v
-1 2
-3 4
-7 8
+1  2
+1  2
+1  2
+1  2
+3  4
+3  4
+3  4
+5  6
+5  6
+5  6
+7  8
+7  8
+7  8
+7  8
 
 # Not supported by Materialize.
 onlyif cockroach
 statement count 3
 DELETE FROM unindexed
 
-# Not supported by Materialize.
-onlyif cockroach
 query II colnames
 SELECT k, v FROM unindexed
 ----
 k v
+1  2
+1  2
+1  2
+1  2
+3  4
+3  4
+3  4
+5  6
+5  6
+5  6
+7  8
+7  8
+7  8
+7  8
 
 # Confirm ONLY and * are no-ops
 
@@ -208,41 +231,84 @@ onlyif cockroach
 statement count 1
 DELETE FROM ONLY unindexed WHERE k >= 4 ORDER BY k LIMIT 1
 
-# Not supported by Materialize.
-onlyif cockroach
 query II colnames,rowsort
 SELECT k, v FROM unindexed
 ----
 k v
-1 2
-3 4
-7 8
+1  2
+1  2
+1  2
+1  2
+1  2
+3  4
+3  4
+3  4
+3  4
+5  6
+5  6
+5  6
+5  6
+7  8
+7  8
+7  8
+7  8
+7  8
 
 # Not supported by Materialize.
 onlyif cockroach
 statement count 1
 DELETE FROM unindexed * WHERE k >= 7
 
-# Not supported by Materialize.
-onlyif cockroach
 query II colnames,rowsort
 SELECT k, v FROM unindexed
 ----
 k v
-1 2
-3 4
+1  2
+1  2
+1  2
+1  2
+1  2
+3  4
+3  4
+3  4
+3  4
+5  6
+5  6
+5  6
+5  6
+7  8
+7  8
+7  8
+7  8
+7  8
 
 # Not supported by Materialize.
 onlyif cockroach
 statement count 2
 DELETE FROM ONLY unindexed * WHERE k <=3
 
-# Not supported by Materialize.
-onlyif cockroach
 query II colnames,rowsort
 SELECT k, v FROM unindexed
 ----
 k v
+1  2
+1  2
+1  2
+1  2
+1  2
+3  4
+3  4
+3  4
+3  4
+5  6
+5  6
+5  6
+5  6
+7  8
+7  8
+7  8
+7  8
+7  8
 
 statement ok
 CREATE TABLE indexed (id int primary key, value int, other int, index (value))
@@ -318,10 +384,8 @@ CREATE TABLE public.t29494 (
   CONSTRAINT t29494_pkey PRIMARY KEY (x ASC)
 )
 
-# Not supported by Materialize.
-onlyif cockroach
 # Check that the new column is not usable in RETURNING
-statement error column "y" does not exist
+statement error Expected end of statement, found RETURNING
 DELETE FROM t29494 RETURNING y
 
 statement ok
@@ -352,9 +416,7 @@ onlyif cockroach
 statement ok
 BEGIN; ALTER TABLE t33361 DROP COLUMN y
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error column "y" does not exist
+statement error Expected end of statement, found RETURNING
 DELETE FROM t33361 RETURNING y
 
 statement ok
@@ -524,11 +586,11 @@ a   b  a  b
 10  a  1  a
 20  b  2  b
 
-# Not supported by Materialize.
-onlyif cockroach
 query ITI rowsort
 SELECT * FROM u_a;
 ----
+1  a  10
+2  b  20
 
 statement ok
 INSERT INTO u_a VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (4, 'd', 40);
@@ -552,13 +614,11 @@ TRUNCATE u_a
 statement ok
 INSERT INTO u_a VALUES (1, 'a', 5), (2, 'b', 10), (3, 'c', 15), (4, 'd', 20), (5, 'd', 25), (6, 'd', 30), (7, 'd', 35), (8, 'd', 40), (9, 'd', 45)
 
-# Not supported by Materialize.
-onlyif cockroach
 # Using ORDER BY and LIMIT with a `DELETE ... USING` where ORDER BY and LIMIT references the USING
 # table is not supported.
 # TODO(#89817): Add support in DELETE ... USING for ORDER BY clauses to reference the USING
 # table. This is not supported in UPDATE ... FROM either: #89817.
-statement error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
+statement error Expected end of statement, found ORDER
 DELETE FROM u_a AS foo USING u_b AS bar WHERE bar.a > foo.c ORDER BY bar.a DESC LIMIT 3 RETURNING *;
 
 # Not supported by Materialize.
@@ -572,15 +632,22 @@ DELETE FROM u_a AS foo USING u_b AS bar WHERE bar.a > foo.c ORDER BY foo.a DESC 
 6  d  30
 5  d  25
 
-# Not supported by Materialize.
-onlyif cockroach
 query ITI rowsort
 SELECT * FROM u_a;
 ----
+1  a  10
+1  a  10
 1  a  5
 2  b  10
+2  b  20
+2  b  20
 3  c  15
+3  c  30
 4  d  20
+4  d  40
+5  d  25
+6  d  30
+7  d  35
 8  d  40
 9  d  45
 
@@ -609,15 +676,21 @@ SELECT * FROM u_c;
 statement ok
 DELETE FROM u_a USING u_b, LATERAL (SELECT u_c.a, u_c.b, u_c.c FROM u_c WHERE u_b.b = u_c.b) AS other WHERE other.c = 1 AND u_a.c = 35
 
-# Not supported by Materialize.
-onlyif cockroach
 query ITI rowsort
 SELECT * FROM u_a
 ----
+1  a  10
+1  a  10
 1  a  5
 2  b  10
+2  b  20
+2  b  20
 3  c  15
+3  c  30
 4  d  20
+4  d  40
+5  d  25
+6  d  30
 8  d  40
 9  d  45
 
@@ -635,16 +708,14 @@ INSERT INTO pindex VALUES (1.0), (2.0), (3.0), (4.0), (5.0), (8.0)
 statement ok
 DELETE FROM pindex USING (VALUES (5.0), (6.0)) v(b) WHERE pindex.a = v.b
 
-# Not supported by Materialize.
-onlyif cockroach
 query F rowsort
 SELECT * FROM pindex;
 ----
-1.00
-2.00
-3.00
-4.00
-8.00
+1
+2
+3
+4
+8
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -659,14 +730,14 @@ onlyif cockroach
 statement ok
 DELETE FROM pindex USING (VALUES (2.0), (4.0)) v(b) WHERE pindex.a = v.b RETURNING v.b
 
-# Not supported by Materialize.
-onlyif cockroach
 query F rowsort
 SELECT * FROM pindex;
 ----
-1.00
-3.00
-8.00
+1
+2
+3
+4
+8
 
 # Not supported by Materialize.
 onlyif cockroach

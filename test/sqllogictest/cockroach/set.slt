@@ -30,12 +30,13 @@ SET foo = bar
 statement error unrecognized configuration parameter "foo"
 SHOW foo
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement error database "foo" does not exist
 SET database = foo
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure that the failing SET DATABASE call did not alter the session.
 # The default session.database value is "test".
 statement ok
@@ -51,12 +52,16 @@ SET database = foo
 statement ok
 CREATE TABLE bar (k INT PRIMARY KEY)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that the table is indeed in "foo".
 query TTTTIT
 SHOW TABLES FROM foo
 ----
 public  bar  table  root  0  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify set to empty string.
 statement ok
 SET database = ""
@@ -65,11 +70,15 @@ query T colnames
 SHOW database
 ----
 database
-·
+foo
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error no database or schema specified
 SHOW TABLES
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify SHOW TABLES FROM works when there is no current database.
 query TTTTIT
 SHOW TABLES FROM foo
@@ -77,7 +86,7 @@ SHOW TABLES FROM foo
 public  bar  table  root  0  NULL
 
 # SET statement succeeds, CREATE TABLE fails.
-statement error pgcode 42P07 relation \"foo.public.bar\" already exists
+statement error pgcode 42P07 table "foo\.public\.bar" already exists
 SET database = foo; CREATE TABLE bar (k INT PRIMARY KEY)
 
 query T colnames
@@ -86,13 +95,15 @@ SHOW database
 database
 foo
 
+# Not supported by Materialize.
+onlyif cockroach
 # SET succeeds
 query TTTTIT
 SHOW TABLES from foo
 ----
 public  bar  table  root  0  NULL
 
-statement error invalid variable name: ""
+statement error Expected equals sign or TO, found left parenthesis
 SET ROW (1, TRUE, NULL)
 
 statement ok
@@ -104,6 +115,8 @@ SHOW application_name
 application_name
 helloworld
 
+# Not supported by Materialize.
+onlyif cockroach
 # SESSION_USER is a special keyword, check that SHOW knows about it.
 query T
 SHOW session_user
@@ -115,6 +128,8 @@ root
 statement ok
 SET distsql TO ON
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW distsql
 ----
@@ -124,6 +139,8 @@ on
 statement ok
 SET distsql TO DEFAULT
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW distsql
 ----
@@ -138,6 +155,8 @@ SET application_name = 'hello'
 statement ok
 SET extra_float_digits = 0
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error 123 is outside the valid range for parameter "extra_float_digits"
 SET extra_float_digits = 123
 
@@ -147,33 +166,39 @@ SET client_min_messages = 'debug1'
 statement ok
 SET standard_conforming_strings = 'on'
 
-statement error invalid value for parameter "standard_conforming_strings": "off"
+statement error parameter "standard_conforming_strings" can only be set to "on"
 SET standard_conforming_strings = 'off'
 
 statement ok
 SET client_encoding = 'UTF8'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET client_encoding = 'UT! '' @#!$%%F------!@!!!8 ''   '
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET client_encoding = 'unicode'
 
-statement error unimplemented client encoding: "other"
+statement error invalid value for parameter "client_encoding": "other"
 SET client_encoding = 'other'
 
-statement error parameter "server_encoding" cannot be changed
+statement error unrecognized configuration parameter "server_encoding"
 SET server_encoding = 'UTF8'
 
-statement error parameter "server_encoding" cannot be changed
+statement error unrecognized configuration parameter "server_encoding"
 SET server_encoding = 'other'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW ssl
 ----
 on
 
-statement error parameter "ssl" cannot be changed
+statement error unrecognized configuration parameter "ssl"
 SET ssl = 'off'
 
 statement ok
@@ -206,40 +231,48 @@ SHOW datestyle
 ----
 ISO, MDY
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET datestyle = 'ymd'
 
 query T
 SHOW datestyle
 ----
-ISO, YMD
+ISO, MDY
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET datestyle = 'DMY,   ISo'
 
 query T
 SHOW datestyle
 ----
-ISO, DMY
+ISO, MDY
 
-statement error only ISO style is supported
+statement error parameter "DateStyle" can only be set to "ISO, MDY"
 SET datestyle = 'postgres'
 
-statement error only ISO style is supported
+statement error parameter "DateStyle" can only be set to "ISO, MDY"
 SET datestyle = 'german'
 
-statement error only ISO style is supported
+statement error parameter "DateStyle" can only be set to "ISO, MDY"
 SET datestyle = 'sql'
 
-statement error invalid value for parameter "DateStyle": "other"
+statement error parameter "DateStyle" can only be set to "ISO, MDY"
 SET datestyle = 'other'
 
 statement ok
 SET intervalstyle = 'postgres'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET intervalstyle = 'iso_8601'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET intervalstyle = 'sql_standard'
 
@@ -258,7 +291,7 @@ SET distsql = on
 statement ok
 SET distsql = off
 
-statement error invalid value for parameter "distsql": "bogus"
+statement error unrecognized configuration parameter "distsql"
 SET distsql = bogus
 
 statement ok
@@ -270,19 +303,19 @@ SET vectorize = experimental_always
 statement ok
 SET vectorize = off
 
-statement error invalid value for parameter "vectorize": "bogus"
+statement error unrecognized configuration parameter "vectorize"
 SET vectorize = bogus
 
 statement ok
 SET optimizer = on
 
-statement error invalid value for parameter "optimizer": "local"
+statement error unrecognized configuration parameter "optimizer"
 SET optimizer = local
 
-statement error invalid value for parameter "optimizer": "off"
+statement error unrecognized configuration parameter "optimizer"
 SET optimizer = off
 
-statement error invalid value for parameter "optimizer": "bogus"
+statement error unrecognized configuration parameter "optimizer"
 SET optimizer = bogus
 
 statement ok
@@ -291,42 +324,46 @@ SET bytea_output = escape
 statement ok
 SET bytea_output = hex
 
-statement error invalid value for parameter "bytea_output": "bogus"
+statement error unrecognized configuration parameter "bytea_output"
 SET bytea_output = bogus
 
 statement ok
 SET default_tablespace = ''
 
-statement error invalid value for parameter "default_tablespace": "bleepis"
+statement error unrecognized configuration parameter "default_tablespace"
 SET default_tablespace = 'bleepis'
 
 query T colnames
 SHOW server_version
 ----
 server_version
-13.0.0
+9.5.0
 
 query T colnames
 SHOW server_version_num
 ----
 server_version_num
-130000
+90500
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW log_timezone
 ----
 UTC
 
 # Test read-only variables
-statement error parameter "max_index_keys" cannot be changed
+statement error unrecognized configuration parameter "max_index_keys"
 SET max_index_keys = 32
 
-statement error parameter "node_id" cannot be changed
+statement error unrecognized configuration parameter "node_id"
 SET node_id = 123
 
-statement error invalid value for parameter "log_timezone"
+statement error unrecognized configuration parameter "log_timezone"
 SET log_timezone = 'Australia/South'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT name, value FROM system.settings WHERE name = 'testing.str'
 ----
@@ -340,6 +377,8 @@ SET "timezone" = 'UTC'
 statement ok
 SET "TIMEZONE" = 'UTC'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW "TIMEZONE"
 ----
@@ -363,6 +402,8 @@ SHOW TIME ZONE
 ----
 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #19727 - invalid EvalContext used to evaluate arguments to set.
 statement ok
 SET application_name = current_timestamp()::string
@@ -371,7 +412,7 @@ SET application_name = current_timestamp()::string
 statement ok
 SET statement_timeout = 1
 
-statement error query execution canceled due to statement timeout
+statement error canceling statement due to statement timeout
 SELECT * FROM generate_series(1,1000000)
 
 # Test that statement_timeout can be set with an interval string.
@@ -386,7 +427,7 @@ SET statement_timeout = '10000'
 query T
 SHOW statement_timeout
 ----
-10000
+10 s
 
 # Set the statement timeout to something absurdly small, so that no query would
 # presumably be able to go through. It should still be possible to get out of
@@ -396,6 +437,8 @@ subtest impossible_statement_timeout_recovery
 statement ok
 SET statement_timeout = '1us'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error query execution canceled due to statement timeout
 SHOW statement_timeout
 
@@ -405,11 +448,13 @@ SET statement_timeout = 0
 query T
 SHOW statement_timeout
 ----
-0
+0 s
 
 statement ok
 SET lock_timeout = '1ms'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW lock_timeout
 ----
@@ -418,6 +463,8 @@ SHOW lock_timeout
 statement ok
 SET lock_timeout = 0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW lock_timeout
 ----
@@ -426,11 +473,15 @@ SHOW lock_timeout
 statement ok
 SET idle_in_session_timeout = 10000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW idle_in_session_timeout
 ----
 10000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW idle_session_timeout
 ----
@@ -439,11 +490,15 @@ SHOW idle_session_timeout
 statement ok
 SET idle_session_timeout = 100000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW idle_in_session_timeout
 ----
 100000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW idle_session_timeout
 ----
@@ -456,18 +511,18 @@ SET idle_in_transaction_session_timeout = 123456
 query T
 SHOW idle_in_transaction_session_timeout
 ----
-123456
+2 min
 
 statement ok
 SET idle_in_transaction_session_timeout = 0
 
-statement error invalid value for parameter "ssl_renegotiation_limit"
+statement error unrecognized configuration parameter "ssl_renegotiation_limit"
 SET ssl_renegotiation_limit = 123
 
 statement ok
 SET SESSION tracing=false
 
-statement error pgcode 42601 expected string or boolean for set tracing argument
+statement error pgcode 42601 unrecognized configuration parameter "tracing"
 SET SESSION tracing=1
 
 subtest regression_35109_flowable
@@ -484,13 +539,13 @@ SET DATESTYLE = ISO;
 
 subtest regression_41567_subqueries
 
-statement error subqueries are not allowed in SET
+statement error Expected end of statement, found left parenthesis
 SET SESSION SCHEMA EXISTS ( TABLE ( ( ( ( ( ( ( ( TABLE error ) ) ) ) ) ) ) ) ORDER BY INDEX FAMILY . IS . MAXVALUE @ OF DESC , INDEX FAMILY . FOR . ident @ ident ASC )
 
-statement error subqueries are not allowed in SET
+statement error Expected a keyword at the beginning of a statement, found identifier "use"
 USE EXISTS ( TABLE error ) IS NULL
 
-statement error subqueries are not allowed in SET
+statement error Expected a keyword at the beginning of a statement, found identifier "use"
 PREPARE a AS USE EXISTS ( TABLE error ) IS NULL
 
 subtest bools
@@ -510,7 +565,7 @@ SET enable_zigzag_join = yes;
 SET enable_zigzag_join = no
 
 # Check error code.
-statement error pgcode 22023 parameter "enable_zigzag_join" requires a Boolean value
+statement error pgcode 22023 unrecognized configuration parameter "enable_zigzag_join"
 SET enable_zigzag_join = nonsense
 
 statement ok
@@ -526,12 +581,16 @@ SET synchronous_commit = off; SET enable_seqscan = false
 WARNING: setting session var "synchronous_commit" is a no-op
 WARNING: setting session var "enable_seqscan" is a no-op
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW synchronous_commit
 ----
 synchronous_commit
 off
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW enable_seqscan
 ----
@@ -544,12 +603,16 @@ SET synchronous_commit = on; SET enable_seqscan = true
 WARNING: setting session var "synchronous_commit" is a no-op
 WARNING: setting session var "enable_seqscan" is a no-op
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW synchronous_commit
 ----
 synchronous_commit
 on
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW enable_seqscan
 ----
@@ -559,10 +622,12 @@ on
 statement ok
 BEGIN
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TRANSACTION NOT DEFERRABLE
 
-statement error pq: unimplemented: DEFERRABLE transactions
+statement error Expected transaction mode, found identifier "deferrable"
 SET TRANSACTION DEFERRABLE
 
 statement ok
@@ -579,6 +644,8 @@ SET standard_conforming_strings='on'
 
 subtest default_table_access_method_test
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW default_table_access_method
 ----
@@ -587,16 +654,20 @@ heap
 statement ok
 SET default_table_access_method = 'heap'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW default_table_access_method
 ----
 heap
 
-statement error invalid value for parameter "default_table_access_method": "not-heap"
+statement error unrecognized configuration parameter "default_table_access_method"
 SET default_table_access_method = 'not-heap'
 
 subtest default_with_oids_test
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW default_with_oids
 ----
@@ -605,16 +676,20 @@ off
 statement ok
 SET default_with_oids = 'false'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW default_with_oids
 ----
 off
 
-statement error invalid value for parameter "default_with_oids": "true"
+statement error unrecognized configuration parameter "default_with_oids"
 SET default_with_oids = 'true'
 
 subtest xmloption_test
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW xmloption
 ----
@@ -623,12 +698,14 @@ content
 statement ok
 SET xmloption = 'content'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW xmloption
 ----
 content
 
-statement error invalid value for parameter "xmloption": "document"
+statement error unrecognized configuration parameter "xmloption"
 SET xmloption = 'document'
 
 subtest backslash_quote_test
@@ -636,20 +713,24 @@ subtest backslash_quote_test
 statement ok
 SET backslash_quote = 'safe_encoding';
 
-statement error invalid value for parameter "backslash_quote"
+statement error unrecognized configuration parameter "backslash_quote"
 SET backslash_quote = 'on';
 
-statement error invalid value for parameter "backslash_quote"
+statement error unrecognized configuration parameter "backslash_quote"
 SET backslash_quote = 'off';
 
-statement error invalid value for parameter "backslash_quote"
+statement error unrecognized configuration parameter "backslash_quote"
 SET backslash_quote = '123';
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for not being able to set sql.trace.txn.enable_threshold
 # cluster setting to non-zero value (#68005).
 statement ok
 SET cluster setting sql.trace.txn.enable_threshold='1s'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET cluster setting sql.trace.txn.enable_threshold='0s'
 
@@ -665,40 +746,52 @@ SET index_recommendations_enabled = 'true'
 statement ok
 SET index_recommendations_enabled = 'false'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW LC_COLLATE
 ----
 C.UTF-8
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW LC_CTYPE
 ----
 C.UTF-8
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW LC_MESSAGES
 ----
 C.UTF-8
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW LC_MONETARY
 ----
 C.UTF-8
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW LC_NUMERIC
 ----
 C.UTF-8
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW LC_TIME
 ----
 C.UTF-8
 
-statement error parameter "lc_collate" cannot be changed
+statement error unrecognized configuration parameter "lc_collate"
 SET LC_COLLATE = 'C.UTF-8'
 
-statement error parameter "lc_ctype" cannot be changed
+statement error unrecognized configuration parameter "lc_ctype"
 SET LC_CTYPE = 'C.UTF-8'
 
 statement ok
@@ -713,16 +806,16 @@ SET LC_NUMERIC = 'C.UTF-8'
 statement ok
 SET LC_TIME = 'C.UTF-8'
 
-statement error invalid value for parameter "lc_messages": "en_US.UTF-8"
+statement error unrecognized configuration parameter "lc_messages"
 SET LC_MESSAGES = 'en_US.UTF-8'
 
-statement error invalid value for parameter "lc_monetary": "en_US.UTF-8"
+statement error unrecognized configuration parameter "lc_monetary"
 SET LC_MONETARY = 'en_US.UTF-8'
 
-statement error invalid value for parameter "lc_numeric": "en_US.UTF-8"
+statement error unrecognized configuration parameter "lc_numeric"
 SET LC_NUMERIC = 'en_US.UTF-8'
 
-statement error invalid value for parameter "lc_time": "en_US.UTF-8"
+statement error unrecognized configuration parameter "lc_time"
 SET LC_TIME = 'en_US.UTF-8'
 
 subtest check_function_bodies_test
@@ -730,6 +823,8 @@ subtest check_function_bodies_test
 statement ok
 SET check_function_bodies = true
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW check_function_bodies
 ----
@@ -738,6 +833,8 @@ on
 statement ok
 SET check_function_bodies = false
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW check_function_bodies
 ----
@@ -745,12 +842,16 @@ off
 
 # Test custom session variables
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET custom_option.set_SQL = 'abc';
 SELECT set_config('custom_option.set_config', 'def', false);
 RESET custom_option.use_default;
 SET tracing.custom = 'ijk'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Custom options are case insensitive.
 query T colnames
 SHOW Custom_option.set_sql
@@ -758,24 +859,34 @@ SHOW Custom_option.set_sql
 custom_option.set_sql
 abc
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW custom_option.set_config
 ----
 def
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT current_setting('custom_option.use_default')
 ----
 ·
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 RESET custom_option.set_config
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW custom_option.set_config
 ----
 ·
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure it does not show up on SHOW ALL or pg_settings.
 query T
 SELECT variable FROM [SHOW ALL] WHERE variable LIKE 'custom_option.%'
@@ -785,11 +896,15 @@ query T
 SELECT name FROM pg_catalog.pg_settings WHERE name LIKE 'custom_option.%'
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW tracing
 ----
 off
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW tracing.custom
 ----
@@ -806,20 +921,24 @@ HINT: did you mean SET CLUSTER SETTING?
 statement ok
 RESET ALL
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW tracing.custom
 ----
 ·
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW custom_option.set_sql
 ----
 ·
 
-statement error unrecognized configuration parameter "custom_option.does_not_yet_exist"
+statement error Expected end of statement, found dot
 SHOW custom_option.does_not_yet_exist
 
-statement error join_reader_ordering_strategy_batch_size can only be set to a positive value
+statement error unrecognized configuration parameter "join_reader_ordering_strategy_batch_size"
 SET join_reader_ordering_strategy_batch_size = '-1B'
 
 statement ok
@@ -831,20 +950,24 @@ SET parallelize_multi_key_lookup_joins_enabled = true
 statement ok
 SET parallelize_multi_key_lookup_joins_enabled = false
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW opt_split_scan_limit
 ----
 2048
 
-statement error pq: cannot set opt_split_scan_limit to a negative value: -1
+statement error unrecognized configuration parameter "opt_split_scan_limit"
 SET opt_split_scan_limit = -1
 
-statement error pq: cannot set opt_split_scan_limit to a value greater than 2147483647
+statement error unrecognized configuration parameter "opt_split_scan_limit"
 SET opt_split_scan_limit = 2147483648
 
 statement ok
 SET opt_split_scan_limit = 100000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW opt_split_scan_limit
 ----
@@ -853,16 +976,22 @@ SHOW opt_split_scan_limit
 statement ok
 RESET opt_split_scan_limit
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW opt_split_scan_limit
 ----
 2048
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW enable_auto_rehoming
 ----
 off
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW experimental_enable_auto_rehoming
 ----
@@ -871,11 +1000,15 @@ off
 statement ok
 SET enable_auto_rehoming = on
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW enable_auto_rehoming
 ----
 on
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW experimental_enable_auto_rehoming
 ----
@@ -884,18 +1017,22 @@ on
 statement ok
 SET experimental_enable_auto_rehoming = off
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW experimental_enable_auto_rehoming
 ----
 off
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW enable_auto_rehoming
 ----
 off
 
-statement error pq: parameter "enable_auto_rehoming" requires a Boolean value
+statement error unrecognized configuration parameter "enable_auto_rehoming"
 SET enable_auto_rehoming = bogus
 
-statement error pq: parameter "enable_auto_rehoming" requires a Boolean value
+statement error unrecognized configuration parameter "experimental_enable_auto_rehoming"
 SET experimental_enable_auto_rehoming = bogus

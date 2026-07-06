@@ -36,12 +36,10 @@ foo
 statement ok
 RESET SEARCH_PATH
 
-# Not supported by Materialize.
-onlyif cockroach
 query T
 SHOW SEARCH_PATH
 ----
-"$user", public
+public
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -66,12 +64,10 @@ foo
 statement ok
 RESET search_path
 
-# Not supported by Materialize.
-onlyif cockroach
 query T
 SHOW search_path
 ----
-"$user", public
+public
 
 statement ok
 RESET client_encoding; RESET NAMES

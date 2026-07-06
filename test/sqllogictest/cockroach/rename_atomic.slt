@@ -28,20 +28,23 @@ statement ok
 CREATE DATABASE db;
 CREATE DATABASE db_new
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 ALTER DATABASE db RENAME TO db_old;
 ALTER DATABASE db_new RENAME TO db
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 3D000 database "db_new" does not exist
 CREATE SCHEMA db_new.sc
 
 statement ok
 ROLLBACK
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 ALTER DATABASE db RENAME TO db_old;
@@ -49,18 +52,24 @@ ALTER DATABASE db_new RENAME TO db;
 CREATE SCHEMA db.sc;
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 DROP DATABASE db CASCADE;
 ALTER DATABASE db_old RENAME TO db;
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 ALTER DATABASE db RENAME TO db_old;
 CREATE DATABASE db;
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 DROP DATABASE db;
@@ -78,12 +87,14 @@ BEGIN;
 ALTER SCHEMA sc RENAME TO sc_old;
 ALTER SCHEMA sc_new RENAME TO sc
 
-statement error pgcode 3F000 cannot create "sc_new.v" because the target database or schema does not exist
+statement error pgcode 3F000 transactions which modify objects are restricted to just modifying objects
 CREATE VIEW sc_new.v AS SELECT 1
 
 statement ok
 ROLLBACK
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 ALTER SCHEMA sc RENAME TO sc_old;
@@ -91,18 +102,24 @@ ALTER SCHEMA sc_new RENAME TO sc;
 CREATE VIEW sc.v AS SELECT 1;
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 DROP SCHEMA sc CASCADE;
 ALTER SCHEMA sc_old RENAME TO sc;
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 ALTER SCHEMA sc RENAME TO sc_old;
 CREATE SCHEMA sc;
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 DROP SCHEMA sc;
@@ -125,6 +142,8 @@ BEGIN;
 ALTER VIEW v RENAME TO v_old;
 ALTER VIEW v_new RENAME TO v
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT * FROM v
 ----
@@ -138,6 +157,8 @@ SELECT * FROM v
 ----
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 DROP VIEW v;
@@ -146,7 +167,7 @@ ALTER VIEW v_old RENAME TO v
 query I
 SELECT * FROM v
 ----
-1
+2
 
 statement ok
 COMMIT
@@ -154,14 +175,18 @@ COMMIT
 query I
 SELECT * FROM v
 ----
-1
+2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 ALTER VIEW v RENAME TO v_old;
 CREATE VIEW v AS SELECT 1;
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 DROP VIEW v;
@@ -174,6 +199,8 @@ subtest regression_93002
 statement ok
 CREATE SCHEMA sc93002
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 SHOW TABLES FROM sc93002;

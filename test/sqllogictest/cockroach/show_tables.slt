@@ -27,9 +27,8 @@ mode cockroach
 statement ok
 CREATE TABLE show_this_table()
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTIT
 SHOW TABLES
 ----
@@ -39,6 +38,8 @@ statement ok
 CREATE DATABASE other;
 SET DATABASE = 'other'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTIT
 SHOW TABLES FROM test
 ----
@@ -47,19 +48,27 @@ public  show_this_table  table  root  0  NULL
 statement ok
 SET DATABASE = 'test'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET CLUSTER SETTING sql.show_tables.estimated_row_count.enabled = false
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTT
 SHOW TABLES
 ----
 public  show_this_table  table  root  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTT
 SHOW TABLES WITH COMMENT
 ----
 public  show_this_table  table  root  NULL  ·
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET CLUSTER SETTING sql.show_tables.estimated_row_count.enabled = default
 
@@ -70,6 +79,8 @@ CREATE SCHEMA sc;
 CREATE TABLE sc.foo (i INT8);
 CREATE TABLE foo (i INT8);
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTIT
 SHOW TABLES
 ----
@@ -77,9 +88,13 @@ public  foo  table  root  0  NULL
 sc      foo  table  root  0  NULL
 
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE other
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTIT
 SHOW TABLES FROM "Do you like this for a database name?".sc
 ----

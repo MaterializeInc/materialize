@@ -191,11 +191,10 @@ CREATE VIEW v0(c0) AS SELECT DISTINCT t0.c0 FROM t0;
 statement ok
 INSERT INTO t0 (c0) VALUES (NULL), (NULL);
 
-# Not supported by Materialize.
-onlyif cockroach
 query I
 SELECT * FROM v0 WHERE v0.c0 IS NULL
 ----
+NULL
 NULL
 
 # Not supported by Materialize.
@@ -224,15 +223,13 @@ INSERT INTO t VALUES
   ('[1, 2]'),
   ('{"foo": {"bar" : "baz"}}')
 
-# Not supported by Materialize.
-onlyif cockroach
 query T rowsort
 SELECT DISTINCT (x) FROM t
 ----
-[2, 1]
-[1, 2]
-{"foo": {"bar": "baz"}}
-{"foo": "bar"}
+[1,2]
+[2,1]
+{"foo":"bar"}
+{"foo":{"bar":"baz"}}
 
 statement ok
 DROP TABLE IF EXISTS t;
@@ -264,9 +261,7 @@ INSERT INTO t VALUES
   (2, 1, 2, 'hello'),
   (3, 1, 2, 'hello there')
 
-# Not supported by Materialize.
-onlyif cockroach
 query IT
 SELECT x, jsonb_agg(DISTINCT jsonb_build_object('y', y, 'z', z)) FROM (SELECT * FROM t ORDER BY i) GROUP BY x
 ----
-1 [{"y": 2, "z": "hello"}, {"y": 2, "z": "hello there"}]
+1  [{"y":2,"z":"hello"},{"y":2,"z":"hello␠there"}]

@@ -33,7 +33,5 @@ statement ok
 CREATE TABLE t93396 (c1 TIME PRIMARY KEY, c2 INT8);
 INSERT INTO t93396 VALUES ('0:0:0'::TIME, 0);
 
-# Not supported by Materialize.
-onlyif cockroach
-query error unsupported comparison: time to decimal
+query error WHERE clause error: Expected subselect to return 1 column, got 2 columns
 SELECT * FROM t93396 WHERE (c1, c2) = (SELECT 0.0, 0);

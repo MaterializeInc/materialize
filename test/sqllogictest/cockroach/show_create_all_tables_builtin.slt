@@ -22,20 +22,23 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
-statement error pq: crdb_internal.show_create_all_tables: database "d" does not exist
+statement error unknown schema 'crdb_internal'
 SELECT crdb_internal.show_create_all_tables('d')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE DATABASE d;
 REVOKE CONNECT ON DATABASE d FROM public
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('d')
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE d.parent (
     x INT,
@@ -46,6 +49,8 @@ CREATE TABLE d.parent (
     UNIQUE (x)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE d.full_test (
     x INT,
@@ -56,15 +61,23 @@ CREATE TABLE d.full_test (
     UNIQUE (x)
   );
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE d.full_test ADD CONSTRAINT test_fk FOREIGN KEY (x) REFERENCES d.parent (x) ON DELETE CASCADE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW d.vx AS SELECT 1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SEQUENCE d.s
 
+# Not supported by Materialize.
+onlyif cockroach
 # parent should come before full_test due to dependency ordering.
 # if dependency's aren't considered, full_test will appear first due to
 # lexicographical ordering.
@@ -103,15 +116,21 @@ ALTER TABLE public.full_test VALIDATE CONSTRAINT test_fk;
 # testuser does not have CONNECT on database d and cannot see any tables.
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('d')
 ----
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE on DATABASE d TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 # testuser should be able to see the descriptors with
 # CREATE privilege on the database.
 # TODO(richardjcai): Replace this with CONNECT and
@@ -154,6 +173,8 @@ user root
 statement ok
 CREATE DATABASE temp_test
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE temp_test
 
@@ -163,10 +184,14 @@ SET experimental_enable_temp_tables = 'on'
 statement ok
 CREATE TEMPORARY TABLE t()
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('temp_test')
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test that a database with foreign keys has the right order.
 statement ok
 CREATE DATABASE test_fk_order;
@@ -188,6 +213,8 @@ CREATE TABLE c (i int REFERENCES d);
 CREATE SEQUENCE s;
 CREATE TABLE s_tbl (id INT PRIMARY KEY DEFAULT nextval('s'), v INT,  FAMILY f1 (id, v));
 
+# Not supported by Materialize.
+onlyif cockroach
 # Table order should be B, A, E, G, F, D, C, sequence s, s_tbl.
 query T
 SELECT crdb_internal.show_create_all_tables('test_fk_order')
@@ -250,6 +277,8 @@ ALTER TABLE public.c VALIDATE CONSTRAINT c_i_fkey;
 statement ok
 CREATE DATABASE test_cycle;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE test_cycle;
 
@@ -261,6 +290,8 @@ CREATE TABLE loop_a (
   FAMILY f1 (id, b_id)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE loop_b (
   id INT PRIMARY KEY,
@@ -268,10 +299,14 @@ CREATE TABLE loop_b (
   FAMILY f1 (id, a_id)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE loop_a ADD CONSTRAINT b_id_delete_constraint
 FOREIGN KEY (b_id) REFERENCES loop_b (id) ON DELETE CASCADE;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('test_cycle')
 ----
@@ -298,12 +333,16 @@ ALTER TABLE public.loop_a VALIDATE CONSTRAINT b_id_delete_constraint;
 statement ok
 CREATE DATABASE test_primary_key;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE test_primary_key.t (
 	i int,
 	CONSTRAINT pk_name PRIMARY KEY (i)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('test_primary_key')
 ----
@@ -312,6 +351,8 @@ CREATE TABLE public.t (
     CONSTRAINT pk_name PRIMARY KEY (i ASC)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test that computed columns are shown correctly.
 statement ok
 CREATE DATABASE test_computed_column;
@@ -321,6 +362,8 @@ CREATE TABLE test_computed_column.t (
 	FAMILY f1 (a, b)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('test_computed_column')
 ----
@@ -331,6 +374,8 @@ CREATE TABLE public.t (
     FAMILY f1 (a, b)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test showing a table with a semicolon in the table, index, and
 # column names properly escapes.
 statement ok
@@ -338,6 +383,8 @@ CREATE DATABASE test_escaping;
 CREATE TABLE test_escaping.";" (";" int, index (";"));
 INSERT INTO test_escaping.";" VALUES (1);
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('test_escaping')
 ----
@@ -348,6 +395,8 @@ CREATE TABLE public.";" (
     INDEX ";_;_idx" (";" ASC)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure quotes in comments are properly escaped, also that the object names
 # are properly escaped in the output of the COMMENT statements.
 statement ok
@@ -357,6 +406,8 @@ COMMENT ON TABLE test_comment."t   t" IS 'has '' quotes';
 COMMENT ON INDEX test_comment."t   t"@"t   t_pkey" IS 'has '' more '' quotes';
 COMMENT ON COLUMN test_comment."t   t"."x'" IS 'i '' just '' love '' quotes';
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('test_comment')
 ----
@@ -368,6 +419,8 @@ COMMENT ON TABLE public."t   t" IS e'has \' quotes';
 COMMENT ON COLUMN public."t   t"."x'" IS e'i \' just \' love \' quotes';
 COMMENT ON INDEX public."t   t"@"t   t_pkey" IS e'has \' more \' quotes';
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure schemas are shown correctly.
 statement ok
 CREATE DATABASE test_schema;
@@ -377,6 +430,8 @@ CREATE SCHEMA sc2;
 CREATE TABLE sc1.t (x int);
 CREATE TABLE sc2.t (x int);
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('test_schema')
 ----
@@ -391,12 +446,16 @@ CREATE TABLE sc2.t (
     CONSTRAINT t_pkey PRIMARY KEY (rowid ASC)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure sequences are shown correctly.
 statement ok
 CREATE DATABASE test_sequence;
 USE test_sequence;
 CREATE SEQUENCE s1 INCREMENT 123;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.show_create_all_tables('test_sequence')
 ----
@@ -404,9 +463,13 @@ CREATE SEQUENCE public.s1 MINVALUE 1 MAXVALUE 9223372036854775807 INCREMENT 123 
 
 # Ensure that the builtin can be run in unused and used transactions.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE test_schema;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 BEGIN;
 SELECT crdb_internal.show_create_all_tables('test_schema');
@@ -423,6 +486,8 @@ CREATE TABLE sc2.t (
     CONSTRAINT t_pkey PRIMARY KEY (rowid ASC)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 BEGIN;
 SELECT * FROM sc1.t;
@@ -440,6 +505,8 @@ CREATE TABLE sc2.t (
     CONSTRAINT t_pkey PRIMARY KEY (rowid ASC)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for not closing the ValueGenerators when they are recreated
 # multiple times (#85418).
 statement ok
@@ -455,6 +522,8 @@ CREATE TABLE dbs_85418(db STRING);
 INSERT INTO dbs_85418 VALUES ('db_85418_1'), ('db_85418_2');
 SELECT crdb_internal.show_create_all_tables(db) FROM dbs_85418;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure database names with hyphens work well.
 statement ok
 CREATE DATABASE "d-d";
@@ -462,6 +531,8 @@ USE "d-d";
 CREATE TABLE t();
 SELECT crdb_internal.show_create_all_tables('d-d');
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure database names with quotes work well.
 statement ok
 CREATE DATABASE "a""bc";

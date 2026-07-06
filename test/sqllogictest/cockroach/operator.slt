@@ -22,15 +22,18 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query error cannot take square root of a negative number
 SELECT |/ -1.0::float
 
+# Not supported by Materialize.
+onlyif cockroach
 query error cannot take square root of a negative number
 SELECT |/ -1.0::decimal
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT ~-1;
 ----
@@ -51,23 +54,27 @@ SELECT ~2;
 ----
 -3
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT ~B'0';
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT ~B'1';
 ----
 0
 
-statement error lexical error
+statement error type "b" does not exist
 SELECT ~B'2';
 
-statement error ambiguous unary operator
+statement error operator is not unique: \~ unknown
 SELECT ~'0';
 
-statement error ambiguous unary operator
+statement error operator is not unique: \~ unknown
 SELECT ~'1';
 
 query I

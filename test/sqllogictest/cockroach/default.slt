@@ -22,18 +22,17 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
-statement error expected DEFAULT \(in CREATE TABLE\) expression to have type int, but 'false' has type bool
+statement error DEFAULT expression does not support casting from boolean to integer
 CREATE TABLE t (a INT PRIMARY KEY DEFAULT false)
 
-statement error variable sub-expressions are not allowed in DEFAULT
+statement error DEFAULT expression does not allow subqueries
 CREATE TABLE t (a INT PRIMARY KEY DEFAULT (SELECT 1))
 
-statement error variable sub-expressions are not allowed in DEFAULT
+statement error column "b" does not exist
 CREATE TABLE t (a INT PRIMARY KEY DEFAULT b)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Issue #14308: support tables with DEFAULT NULL columns.
 statement ok
 CREATE TABLE null_default (ts TIMESTAMP PRIMARY KEY NULL DEFAULT NULL)
@@ -46,6 +45,8 @@ CREATE TABLE bad (a INT DEFAULT count(1))
 statement error window functions are not allowed in DEFAULT
 CREATE TABLE bad (a INT DEFAULT count(1) OVER ())
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (
   a INT PRIMARY KEY DEFAULT 42,
@@ -54,6 +55,8 @@ CREATE TABLE t (
   d DATE DEFAULT now()
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBTTTB colnames
 SHOW COLUMNS FROM t
 ----
@@ -63,9 +66,13 @@ b            TIMESTAMP  true         now()           ·                      {t_
 c            FLOAT8     true         random()        ·                      {t_pkey}  false
 d            DATE       true         now()           ·                      {t_pkey}  false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON COLUMN t.a IS 'a'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBTTTBT colnames
 SHOW COLUMNS FROM t WITH COMMENT
 ----
@@ -75,66 +82,100 @@ b            TIMESTAMP  true         now()           ·                      {t_
 c            FLOAT8     true         random()        ·                      {t_pkey}  false      NULL
 d            DATE       true         now()           ·                      {t_pkey}  false      NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES (DEFAULT, DEFAULT, DEFAULT, DEFAULT)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBBB
 SELECT a, b <= now(), c >= 0.0, d <= now() FROM t
 ----
 42 true true true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 TRUNCATE TABLE t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t DEFAULT VALUES
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBBB
 SELECT a, b <= now(), c >= 0.0, d <= now() FROM t
 ----
 42 true true true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t (a) VALUES (1)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBBB
 SELECT a, b <= now(), c >= 0.0, d <= now() FROM t WHERE a = 1
 ----
 1 true true true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES (2)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBBB
 SELECT a, b <= now(), c >= 0.0, d <= now() FROM t WHERE a = 2
 ----
 2 true true true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE t SET (b, c) = ('2015-09-18 00:00:00', -1.0)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE t SET b = DEFAULT WHERE a = 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBBB
 SELECT a, b <= now(), c = -1.0, d <= now() FROM t WHERE a = 1
 ----
 1 true true true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE t SET (b, c) = (DEFAULT, DEFAULT) WHERE a = 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBBB
 SELECT a, b <= now(), c >= 0.0, d <= now() FROM t WHERE a = 2
 ----
 2 true true true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE t SET b = DEFAULT, c = DEFAULT, d = DEFAULT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE t SET (b) = (DEFAULT), (c) = (DEFAULT), (d) = (DEFAULT)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test a table without a default and with a null default
 statement ok
 CREATE TABLE v (
@@ -143,12 +184,18 @@ CREATE TABLE v (
   c INT
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE v SET a = DEFAULT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE v SET (a, c) = (DEFAULT, DEFAULT)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBTTTB colnames
 SHOW COLUMNS FROM v
 ----
@@ -165,9 +212,13 @@ CREATE TABLE t34901 (x STRING)
 statement ok
 INSERT INTO t34901 VALUES ('a')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE t34901 ADD COLUMN y STRING DEFAULT (concat('b', 'c'))
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT * FROM t34901
 ----

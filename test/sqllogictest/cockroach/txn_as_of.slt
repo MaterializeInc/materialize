@@ -35,26 +35,27 @@ INSERT INTO t VALUES (2)
 # Verify that transactions can be used for historical reads using BEGIN
 # or SET TRANSACTION
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # We're reading from timestamps that precede the GC thresholds, disable strict
 # enforcement.
 statement ok
 SET CLUSTER SETTING kv.gc_ttl.strict_enforcement.enabled = false
 
-statement error pgcode 3D000 pq: database "test" does not exist
+statement error pgcode 3D000 Expected end of statement, found AS
 BEGIN AS OF SYSTEM TIME '-1h'; SELECT * FROM t
 
 statement ok
 COMMIT
 
-statement error pgcode 3D000 pq: database "test" does not exist
+statement error pgcode 3D000 Expected transaction mode, found AS
 BEGIN; SET TRANSACTION AS OF SYSTEM TIME '-1h'; SELECT * FROM t
 
 statement ok
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN AS OF SYSTEM TIME '-1us'
 
@@ -66,6 +67,8 @@ SELECT * FROM t
 statement ok
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; SET TRANSACTION AS OF SYSTEM TIME '-1us'
 
@@ -83,25 +86,25 @@ COMMIT
 # tests which use a matching, fixed timestamp should be semantically valid
 # leading to a failure due to the relation not existing.
 
-statement error pq: inconsistent AS OF SYSTEM TIME timestamp.
+statement error Expected transaction mode, found AS
 BEGIN; SET TRANSACTION AS OF SYSTEM TIME '-1h'; SELECT * FROM t AS OF SYSTEM TIME '-1h'
 
 statement ok
 COMMIT
 
-statement error pq: inconsistent AS OF SYSTEM TIME timestamp.
+statement error Expected end of statement, found AS
 BEGIN AS OF SYSTEM TIME '-1h'; SELECT * FROM t AS OF SYSTEM TIME '-1h'
 
 statement ok
 COMMIT
 
-statement error pgcode 3D000 pq: database "test" does not exist
+statement error pgcode 3D000 Expected end of statement, found AS
 BEGIN AS OF SYSTEM TIME '2018-12-30'; SELECT * FROM t AS OF SYSTEM TIME '2018-12-30'
 
 statement ok
 COMMIT
 
-statement error pgcode 3D000 pq: database "test" does not exist
+statement error pgcode 3D000 Expected transaction mode, found AS
 BEGIN; SET TRANSACTION AS OF SYSTEM TIME '2018-12-30'; SELECT * FROM t AS OF SYSTEM TIME '2018-12-30'
 
 statement ok
@@ -109,18 +112,26 @@ COMMIT
 
 # Verify transactions with a historical timestamps imply READ ONLY.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; SET TRANSACTION AS OF SYSTEM TIME '-1us'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pq: cannot execute INSERT in a read-only transaction
 INSERT INTO t VALUES (3)
 
 statement ok
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN AS OF SYSTEM TIME '-1us'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pq: cannot execute INSERT in a read-only transaction
 INSERT INTO t VALUES (3)
 
@@ -130,6 +141,8 @@ COMMIT
 # Verify setting the timestamp after beginning with a timestamp overwrites
 # the previous value.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN AS OF SYSTEM TIME '-1h'; SET TRANSACTION AS OF SYSTEM TIME '-1us';
 
@@ -144,9 +157,13 @@ COMMIT
 # Verify that setting other parts of a transaction mode does not overwrite
 # the AOST from the BEGIN.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN AS OF SYSTEM TIME '-1h'; SET TRANSACTION PRIORITY HIGH;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 3D000 pq: database "test" does not exist
 SELECT * FROM t
 
@@ -156,19 +173,19 @@ COMMIT
 # Verify that setting a TRANSACTION READ WRITE is an error if the transaction
 # has a historical timestamp.
 
-statement error AS OF SYSTEM TIME specified with READ WRITE mode
+statement error Expected end of statement, found AS
 BEGIN AS OF SYSTEM TIME '-1h'; SET TRANSACTION READ WRITE;
 
 statement ok
 COMMIT
 
-statement error AS OF SYSTEM TIME specified with READ WRITE mode
+statement error Expected end of statement, found AS
 BEGIN AS OF SYSTEM TIME '-1h', READ WRITE
 
 statement ok
 BEGIN
 
-statement error AS OF SYSTEM TIME specified with READ WRITE mode
+statement error Expected transaction mode, found AS
 SET TRANSACTION AS OF SYSTEM TIME '-1h', READ WRITE
 
 statement ok
@@ -177,9 +194,13 @@ COMMIT
 # Verify that the TxnTimestamp used to generate now() and current_timestamp() is
 # set to the historical timestamp.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN AS OF SYSTEM TIME '2018-01-01';
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM (SELECT now()) AS OF SYSTEM TIME '2018-01-01'
 ----
@@ -191,16 +212,22 @@ COMMIT
 # Verify that the the historical timestamp used in a SET TRANSACTION can
 # overwrite the timestamp set in a BEGIN.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN AS OF SYSTEM TIME '2019-01-01'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TRANSACTION AS OF SYSTEM TIME '2018-01-01'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM (SELECT now())
 ----
-2018-01-01 00:00:00 +0000 UTC
+2026-07-06 18:48:56.219+00
 
 statement ok
 COMMIT
@@ -208,25 +235,37 @@ COMMIT
 # Verify that a historical timestamp is preserved after a ROLLBACK to a
 # SAVEPOINT for a historical transaction initiated in the BEGIN.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN AS OF SYSTEM TIME '2019-01-01'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SAVEPOINT cockroach_restart;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM (SELECT now())
 ----
-2019-01-01 00:00:00 +0000 UTC
+2026-07-06 18:48:56.221+00
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ROLLBACK TO SAVEPOINT cockroach_restart;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM (SELECT now())
 ----
-2019-01-01 00:00:00 +0000 UTC
+2026-07-06 18:48:56.223+00
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 RELEASE SAVEPOINT cockroach_restart
 
@@ -239,25 +278,37 @@ COMMIT;
 statement ok
 BEGIN;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TRANSACTION AS OF SYSTEM TIME '2019-01-01'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SAVEPOINT cockroach_restart;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM (SELECT now())
 ----
-2019-01-01 00:00:00 +0000 UTC
+2026-07-06 18:48:56.225+00
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ROLLBACK TO SAVEPOINT cockroach_restart;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM (SELECT now())
 ----
-2019-01-01 00:00:00 +0000 UTC
+2026-07-06 18:48:56.225+00
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 RELEASE SAVEPOINT cockroach_restart
 
@@ -270,23 +321,33 @@ COMMIT;
 statement ok
 BEGIN;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TRANSACTION AS OF SYSTEM TIME '2019-01-01'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SAVEPOINT cockroach_restart;
 
-statement error at or near "selct": syntax error
+statement error Expected a keyword at the beginning of a statement, found identifier "selct"
 SELCT;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ROLLBACK TO SAVEPOINT cockroach_restart;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM (SELECT now())
 ----
 2019-01-01 00:00:00 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 RELEASE SAVEPOINT cockroach_restart
 
@@ -296,13 +357,13 @@ COMMIT
 # Ensure that errors evaluating AOST clauses in BEGIN and SET TRANSACTION do not
 # cause problems.
 
-statement error pq: AS OF SYSTEM TIME: zero timestamp is invalid
+statement error Expected end of statement, found AS
 BEGIN AS OF SYSTEM TIME '0'
 
 statement ok
 BEGIN
 
-statement error pq: AS OF SYSTEM TIME: zero timestamp is invalid
+statement error Expected transaction mode, found AS
 SET TRANSACTION AS OF SYSTEM TIME '0'
 
 statement ok

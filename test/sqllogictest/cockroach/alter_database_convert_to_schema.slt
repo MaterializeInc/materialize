@@ -22,14 +22,13 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE DATABASE parent;
 USE parent;
 CREATE DATABASE pgdatabase;
 USE test;
 
-statement error pq: cannot perform ALTER DATABASE CONVERT TO SCHEMA
+statement error Expected OWNER, found identifier "convert"
 ALTER DATABASE parent CONVERT TO SCHEMA WITH PARENT pgdatabase

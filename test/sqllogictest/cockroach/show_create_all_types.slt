@@ -25,29 +25,38 @@ mode cockroach
 statement ok
 CREATE DATABASE d
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE d
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW CREATE ALL TYPES
 ----
 create_statement
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TYPE status AS ENUM ('open', 'closed', 'inactive');
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW CREATE ALL TYPES
 ----
 create_statement
 CREATE TYPE public.status AS ENUM ('open', 'closed', 'inactive');
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TYPE tableObj AS ENUM('row', 'col');
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW CREATE ALL TYPES
 ----
@@ -55,9 +64,13 @@ create_statement
 CREATE TYPE public.status AS ENUM ('open', 'closed', 'inactive');
 CREATE TYPE public.tableobj AS ENUM ('row', 'col');
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TYPE status
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW CREATE ALL TYPES
 ----
@@ -68,9 +81,13 @@ CREATE TYPE public.tableobj AS ENUM ('row', 'col');
 statement ok
 CREATE SCHEMA s
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TYPE s.status AS ENUM ('a', 'b', 'c');
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW CREATE ALL TYPES
 ----
@@ -78,12 +95,16 @@ create_statement
 CREATE TYPE public.tableobj AS ENUM ('row', 'col');
 CREATE TYPE s.status AS ENUM ('a', 'b', 'c');
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure database names with hyphens work well.
 statement ok
 CREATE DATABASE "d-d";
 USE "d-d";
 SHOW CREATE ALL TYPES;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure database names with quotes work well.
 statement ok
 CREATE DATABASE "a""bc";

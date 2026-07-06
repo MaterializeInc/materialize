@@ -26,15 +26,16 @@ mode cockroach
 statement ok
 CREATE TABLE t (k INT PRIMARY KEY, v int)
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT ALL ON t TO testuser
 
 statement ok
 INSERT INTO t VALUES (1, 1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; UPDATE t SET v = 2 WHERE k = 1
 
@@ -45,74 +46,88 @@ user testuser
 statement ok
 SET lock_timeout = '1ms'
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 SELECT * FROM t
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 Expected end of statement, found UPDATE
 SELECT * FROM t FOR UPDATE
 
-statement error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 Expected end of statement, found UPDATE
 SELECT * FROM t FOR UPDATE NOWAIT
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 SELECT * FROM t WHERE k = 1
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 Expected end of statement, found FOR
 SELECT * FROM t WHERE k = 1 FOR UPDATE
 
-statement error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 Expected end of statement, found FOR
 SELECT * FROM t WHERE k = 1 FOR UPDATE NOWAIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM t WHERE k = 2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM t WHERE k = 2 FOR UPDATE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM t WHERE k = 2 FOR UPDATE NOWAIT
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 SELECT * FROM t WHERE v = 9
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 Expected end of statement, found FOR
 SELECT * FROM t WHERE v = 9 FOR UPDATE
 
-statement error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 Expected end of statement, found FOR
 SELECT * FROM t WHERE v = 9 FOR UPDATE NOWAIT
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 INSERT INTO t VALUES (1, 3)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES (2, 3)
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 Unexpected keyword UPSERT at the beginning of a statement
 UPSERT INTO t VALUES (1, 3)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPSERT INTO t VALUES (2, 3)
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 UPDATE t SET v = 4
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 UPDATE t SET v = 4 WHERE k = 1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPDATE t SET v = 4 WHERE k = 2
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 UPDATE t SET v = 4 WHERE v = 9
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 DELETE FROM t
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 DELETE FROM t WHERE k = 1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DELETE FROM t WHERE k = 2
 
-statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+statement error pgcode 55P03 permission denied for TABLE "materialize\.public\.t"
 DELETE FROM t WHERE v = 9

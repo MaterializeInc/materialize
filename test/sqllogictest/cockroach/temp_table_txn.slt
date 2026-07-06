@@ -31,9 +31,8 @@ mode cockroach
 statement ok
 SET experimental_enable_temp_tables=true
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 CREATE TEMP TABLE tbl (a int primary key);
@@ -41,6 +40,8 @@ INSERT INTO tbl VALUES (1);
 SELECT crdb_internal.force_retry('1s');
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT * FROM tbl
 ----

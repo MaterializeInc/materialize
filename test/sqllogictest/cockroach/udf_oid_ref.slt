@@ -22,9 +22,8 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # 1074 is the OID of builtin function "string_to_array" with signature
 # "string_to_array(str: string, delimiter: string) -> string[]".
 query T
@@ -32,53 +31,75 @@ SELECT [FUNCTION 1074]('hello,world', ',')
 ----
 {hello,world}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t1(a INT PRIMARY KEY, b STRING DEFAULT ([FUNCTION 1074]('hello,world', ',')))
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t1(a) VALUES (1)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT
 SELECT * FROM t1
 ----
 1  {hello,world}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t1 VALUES (2, 'hello,new,world')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX idx ON t1([FUNCTION 1074](b,','))
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT
 SELECT * FROM t1@idx WHERE [FUNCTION 1074](b, ',') = ARRAY['hello','new','world']
 ----
 2  hello,new,world
 
+# Not supported by Materialize.
+onlyif cockroach
 # 814 is the OID of builtin function "length" with signature
 # "length(val: string) -> int".
 statement ok
 ALTER TABLE t1 ADD CONSTRAINT c_len CHECK ([FUNCTION 814](b) > 2)
 
-statement error pq: failed to satisfy CHECK constraint \(length\(b\) > 2:::INT8\)
+statement error unknown catalog item 't1'
 INSERT INTO t1 VALUES (3, 'a')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f1() RETURNS INT LANGUAGE SQL AS $$ SELECT 1 $$
 
 let $fn_oid
 SELECT oid FROM pg_catalog.pg_proc WHERE proname = 'f1'
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT [FUNCTION $fn_oid]()
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f2(a STRING) RETURNS STRING LANGUAGE SQL AS $$ SELECT a $$
 
 let $fn_oid
 SELECT oid FROM pg_catalog.pg_proc WHERE proname = 'f2'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT [FUNCTION $fn_oid]('hello world')
 ----
@@ -86,13 +107,17 @@ hello world
 
 # Make sure that argument types are still checked even we know which function
 # overload to use.
-statement error pq: unknown signature: public.f2\(int\)
+statement error unterminated dollar\-quoted string
 SELECT [FUNCTION $fn_oid](123)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure that renaming does not break the reference.
 statement ok
 ALTER FUNCTION f2(STRING) RENAME TO f2_new;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT [FUNCTION $fn_oid]('hello world')
 ----
@@ -101,23 +126,31 @@ hello world
 statement ok
 CREATE SCHEMA sc1;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER FUNCTION f2_new(STRING) SET SCHEMA sc1;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT [FUNCTION $fn_oid]('hello world')
 ----
 hello world
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure that function dropped cannot be resolved.
 statement ok
 DROP FUNCTION sc1.f2_new(STRING);
 
-statement error function undefined
+statement error unterminated dollar\-quoted string
 SELECT [FUNCTION $fn_oid]('maybe')
 
 # Referencing UDF OID within a UDF
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_in_udf() RETURNS INT LANGUAGE SQL AS $$ SELECT 1 $$;
 
@@ -125,14 +158,18 @@ let $fn_oid
 SELECT oid FROM pg_catalog.pg_proc WHERE proname = 'f_in_udf'
 
 # TODO(chengxiong,mgartner): Fix this test when we enable support of calling UDFs from UDFs.
-statement error pq: function \d+ not found: function undefined
+statement error Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, \[TEMPORARY\] TABLE, SECRET, \[OR REPLACE\] \[TEMPORARY\] VIEW, or \[OR REPLACE\] MATERIALIZED VIEW after CREATE, found FUNCTION
 CREATE FUNCTION f_using_udf() RETURNS INT LANGUAGE SQL AS $$ SELECT [FUNCTION $fn_oid]() $$;
 
+# Not supported by Materialize.
+onlyif cockroach
 # 814 is the OID of builtin function "length" with signature, and it's ok to
 # call it from a UDF.
 statement ok
 CREATE FUNCTION f_using_udf() RETURNS INT LANGUAGE SQL AS $$ SELECT [FUNCTION 814]('abc') $$;
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT f_using_udf();
 ----
@@ -143,18 +180,26 @@ SELECT f_using_udf();
 statement ok
 CREATE DATABASE db1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE db1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE FUNCTION f_cross_db() RETURNS INT LANGUAGE SQL AS $$ SELECT 321 $$;
 
 let $fn_oid
 SELECT oid FROM pg_catalog.pg_proc WHERE proname = 'f_cross_db'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE test
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT [FUNCTION $fn_oid]()
 ----

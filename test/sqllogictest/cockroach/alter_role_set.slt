@@ -26,13 +26,14 @@ statement ok
 CREATE ROLE test_set_role;
 CREATE DATABASE test_set_db
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query OTT
 SELECT database_id, role_name, settings FROM system.database_role_settings
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE test_set_role SET application_name = 'a';
 ALTER ROLE test_set_role IN DATABASE test_set_db SET application_name = 'b';
@@ -40,6 +41,8 @@ ALTER ROLE ALL IN DATABASE test_set_db SET application_name = 'c';
 ALTER ROLE ALL SET application_name = 'd';
 ALTER ROLE test_set_role SET custom_option.setting = 'e'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that the defaults were stored.
 query OTT colnames
 SELECT database_id, role_name, settings FROM system.database_role_settings ORDER BY 1, 2
@@ -50,6 +53,8 @@ database_id  role_name      settings
 106          ·              {application_name=c}
 106          test_set_role  {application_name=b}
 
+# Not supported by Materialize.
+onlyif cockroach
 # Defaults should be in pg_catalog too.
 query OOTTT colnames
 SELECT setdatabase, setrole, d.datname, r.rolname, setconfig
@@ -64,9 +69,13 @@ setdatabase  setrole    datname      rolname        setconfig
 106          0          test_set_db  NULL           {application_name=c}
 106          265380634  test_set_db  test_set_role  {application_name=b}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE test_set_role SET backslash_quote = 'safe_encoding'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that a new setting was added in the array.
 query T
 SELECT settings FROM system.database_role_settings
@@ -77,6 +86,8 @@ WHERE database_id = 0 AND role_name = 'test_set_role'
 statement ok
 ALTER ROLE test_set_role SET application_name = 'f'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that the existing setting was updated in the array.
 query T
 SELECT settings FROM system.database_role_settings
@@ -84,10 +95,14 @@ WHERE database_id = 0 AND role_name = 'test_set_role'
 ----
 {custom_option.setting=e,backslash_quote=safe_encoding,application_name=f}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE test_set_role SET serial_normalization = 'sql_sequence';
 ALTER ROLE test_set_role RESET application_name
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that the existing setting was removed from the array.
 query T
 SELECT settings FROM system.database_role_settings
@@ -100,75 +115,87 @@ statement ok
 ALTER ROLE test_set_role RESET application_name
 
 # Setting for a role that does not exist should error
-statement error "fake_role" does not exist
+statement error unknown role 'fake_role'
 ALTER ROLE fake_role SET application_name = 'e';
 
+# Not supported by Materialize.
+onlyif cockroach
 # Setting for a role that does not exist works with IF EXISTS,
 statement ok
 ALTER ROLE IF EXISTS fake_role SET application_name = 'e';
 
 # Setting for a database that does not exist should error.
-statement error database "fake_database" does not exist
+statement error Expected end of statement, found EXISTS
 ALTER ROLE IF EXISTS fake_role IN DATABASE fake_database SET application_name = 'e';
 
 # Test setting a variable that does not exist.
 statement error unrecognized configuration parameter "potato"
 ALTER ROLE test_set_role SET potato = 'potato'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test *resetting* a variable that does not exist; it should work
 statement ok
 ALTER ROLE test_set_role RESET potato;
 ALTER ROLE test_set_role SET potato TO DEFAULT;
 
 # Test setting a variable to an invalid value.
-statement error invalid value for parameter "serial_normalization": "potato"
+statement error unrecognized configuration parameter "serial_normalization"
 ALTER ROLE test_set_role SET serial_normalization = 'potato'
 
 # Test setting a compat-only variable to an invalid value.
-statement error invalid value for parameter "backslash_quote": "off"
+statement error unrecognized configuration parameter "backslash_quote"
 ALTER ROLE test_set_role SET backslash_quote = 'off'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test a setting that does not have a `Set` function defined.
 statement error parameter "integer_datetimes" cannot be changed
 ALTER ROLE test_set_role SET integer_datetimes = 'on'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test a setting that does not have a `Set` function defined, but does have
 # `RuntimeSet` defined.
 statement error parameter "transaction_isolation" cannot be changed
 ALTER ROLE test_set_role SET transaction_isolation = 'serializable'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that the `database` and `role` variables cannot be set.
 statement error parameter "database" cannot be changed
 ALTER ROLE test_set_role SET database = 'd'
 
-statement error parameter "role" cannot be changed
+statement error unrecognized configuration parameter "role"
 ALTER ROLE test_set_role SET role = 'd'
 
 # Test setting with a name of "".
-statement error invalid variable name: ""
+statement error zero\-length delimited identifier
 ALTER ROLE test_set_role SET "" = 'foo'
 
 query T
 SELECT current_user()
 ----
-root
+materialize
 
 # Verify that the admin role can't be edited, even as root.
-statement error cannot edit admin role
+statement error unknown role 'admin'
 ALTER ROLE admin SET application_name = 'g'
 
 # Verify that the root user can't be edited, even as root.
-statement error cannot edit root user
+statement error unknown role 'root'
 ALTER ROLE root SET application_name = 'g'
 
 # Verify that the public role can't be edited.
-statement error cannot edit public role
+statement error role name "public" is reserved
 ALTER ROLE public SET application_name = 'g'
 
 # Verify that the "" role can't be edited.
-statement error no username specified
+statement error zero\-length delimited identifier
 ALTER ROLE "" SET application_name = 'g'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that root is allowed to edit some other role that has ADMIN.
 statement ok
 CREATE ROLE other_admin;
@@ -178,6 +205,8 @@ ALTER ROLE other_admin RESET application_name
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that testuser can't edit their own defaults.
 statement error pq: ALTER ROLE ... SET requires MODIFYCLUSTERSETTING, MODIFYSQLCLUSTERSETTING or CREATEROLE
 ALTER ROLE testuser RESET application_name
@@ -185,6 +214,8 @@ ALTER ROLE testuser RESET application_name
 # Verify users with MODIFYCLUSTERSETTING can ALTER ROLE SET
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SYSTEM MODIFYCLUSTERSETTING TO testuser
 
@@ -195,9 +226,13 @@ ALTER ROLE testuser RESET application_name
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE SYSTEM MODIFYCLUSTERSETTING FROM testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify users with MODIFYSQLCLUSTERSETTING can ALTER ROLE SET
 statement ok
 GRANT SYSTEM MODIFYSQLCLUSTERSETTING TO testuser
@@ -209,10 +244,14 @@ ALTER ROLE testuser RESET application_name
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE SYSTEM MODIFYSQLCLUSTERSETTING FROM testuser
 
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify users with the MODIFYCLUSTERSETTING role option can also ALTER ROLE SET
 statement ok
 ALTER ROLE testuser with MODIFYCLUSTERSETTING
@@ -224,9 +263,13 @@ ALTER ROLE testuser RESET application_name
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE testuser WITH NOMODIFYCLUSTERSETTING
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE testuser WITH CREATEROLE
 
@@ -236,23 +279,29 @@ user testuser
 statement ok
 ALTER ROLE testuser RESET application_name
 
+# Not supported by Materialize.
+onlyif cockroach
 # Now that testuser has CREATEROLE, it can also edit test_set_role.
 statement ok
 ALTER ROLE test_set_role RESET application_name
 
 # However, even with CREATEROLE, testuser cannot do RESET ALL.
-statement error only users with the admin role are allowed to ALTER ROLE ALL
+statement error Expected end of statement, found IN
 ALTER ROLE ALL IN DATABASE test_set_db RESET application_name
 
 # Verify that testuser can't edit an ADMIN, even after getting CREATEROLE.
-statement error only users with the admin role are allowed to ALTER ROLE admin
+statement error unknown role 'other_admin'
 ALTER ROLE other_admin SET application_name = 'abc'
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE ALL RESET ALL
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that defaults were removed for (db_id=0, role_name="") but nothing else.
 query OTT colnames
 SELECT database_id, role_name, settings FROM system.database_role_settings ORDER BY 1, 2
@@ -265,6 +314,8 @@ database_id  role_name      settings
 statement ok
 DROP DATABASE test_set_db
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that the defaults were removed for the dropped database.
 query OTT colnames
 SELECT database_id, role_name, settings FROM system.database_role_settings ORDER BY 1, 2
@@ -275,6 +326,8 @@ database_id  role_name      settings
 statement ok
 DROP ROLE test_set_role
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that the defaults were removed for the dropped role.
 query OTT colnames
 SELECT database_id, role_name, settings FROM system.database_role_settings ORDER BY 1, 2
@@ -282,21 +335,29 @@ SELECT database_id, role_name, settings FROM system.database_role_settings ORDER
 database_id  role_name  settings
 
 # Regression test for the special "tracing" variable.
-query error parameter \"tracing\" cannot be changed
+query error unknown role 'all'
 ALTER ROLE ALL SET tracing = 'off'
 
 # Test that no-op alter role set command is actually no-op (i.e. does not perform schema change)
 subtest no_op_alter_role_set
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE user roach
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE roach SET timezone = 'America/New_York'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE roach SET use_declarative_schema_changer = 'off'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE roach SET statement_timeout = '10s'
 
@@ -304,19 +365,29 @@ ALTER ROLE roach SET statement_timeout = '10s'
 let $database_role_setttings_version
 SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor)->'table'->>'version' FROM system.descriptor WHERE id = 'system.public.database_role_settings'::REGCLASS
 
+# Not supported by Materialize.
+onlyif cockroach
 # Issue a bunch no-op alter role set commands
 statement ok
 ALTER ROLE roach SET timezone = 'America/New_York'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE roach SET use_declarative_schema_changer = 'off'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE roach SET statement_timeout = '10s'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER ROLE roach RESET search_path
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check that the above no-op 'ALTER ROLE ... SET/RESET ...' commands did not incur schema change on
 # the 'database_role_settings' table by asserting its version remains unchanged.
 query B

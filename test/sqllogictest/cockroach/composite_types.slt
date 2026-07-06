@@ -31,22 +31,19 @@ DROP TYPE t
 statement ok
 CREATE TYPE t AS (a INT, b INT)
 
-# not supported yet
-halt
-
-statement error pq: relation "t" does not exist
+statement error unknown catalog item 't'
 SELECT * FROM t
 
-statement error pq: type "test.public.t" already exists
+statement error type "materialize\.public\.t" already exists
 CREATE TABLE t (x INT)
 
-statement error pq: type "test.public.t" already exists
+statement error type "materialize\.public\.t" already exists
 CREATE TYPE t AS (a INT)
 
 statement ok
 CREATE TABLE torename (x INT)
 
-statement error pq: type "test.public.t" already exists
+statement error catalog item 't' already exists
 ALTER TABLE torename RENAME TO t
 
 query TII
@@ -54,7 +51,7 @@ SELECT (1, 2)::t, ((1, 2)::t).a, ((1, 2)::t).b
 ----
 (1,2)  1  2
 
-statement error could not identify column \"foo\"
+statement error field foo not found in data type t
 SELECT ((1, 2)::t).foo
 
 statement ok
@@ -66,6 +63,8 @@ INSERT INTO tab VALUES (NULL), ((1, 2))
 statement ok
 INSERT INTO tab VALUES ((1, NULL))
 
+# Not supported by Materialize.
+onlyif cockroach
 # TODO(jordan): this should work fine, but is blocked behind a type-system issue:
 # see #93349.
 statement error VALUES types tuple{int, unknown} and tuple{int, int} cannot be matched
@@ -78,13 +77,17 @@ NULL   NULL  NULL
 (1,2)  1     2
 (1,)   1     NULL
 
-statement error cannot drop type \"t\" because other objects .* still depend on it
+statement error cannot drop type "t": still depended upon by table "tab"
 DROP TYPE t
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test arrays of composite types.
 statement ok
 CREATE TABLE atyp(a t[])
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE atyp
 ----
@@ -94,17 +97,25 @@ atyp  CREATE TABLE public.atyp (
         CONSTRAINT atyp_pkey PRIMARY KEY (rowid ASC)
       )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO atyp VALUES(ARRAY[(1, 2), (3, 4), NULL, (5, NULL)])
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM atyp
 ----
 {"(1,2)","(3,4)",NULL,"(5,)"}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE atyp
 
+# Not supported by Materialize.
+onlyif cockroach
 # Nested types not supported. #91779
 statement error composite types that reference user-defined types not yet supported
 CREATE TYPE t2 AS (t1 t, t2 t)
@@ -150,6 +161,8 @@ CREATE TYPE t2 AS (t1 t, t2 t)
 statement ok
 DROP TABLE tab
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT
 SELECT database_name, schema_name, descriptor_name, create_statement FROM crdb_internal.create_type_statements
 ----
@@ -162,9 +175,13 @@ test  public  t   CREATE TYPE public.t AS (a INT8, b INT8)
 #statement ok
 #DROP TYPE t2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TYPE t
 
+# Not supported by Materialize.
+onlyif cockroach
 # An empty type is valid.
 statement ok
 CREATE TYPE t AS ()
@@ -172,6 +189,8 @@ CREATE TYPE t AS ()
 statement ok
 DROP TYPE t
 
+# Not supported by Materialize.
+onlyif cockroach
 # Composite types which reference other types of UDTs are not yet supported.
 statement ok
 CREATE TYPE e AS ENUM ('a', 'b', 'c')
@@ -180,14 +199,14 @@ CREATE TYPE e AS ENUM ('a', 'b', 'c')
 statement ok
 CREATE TABLE tab (a INT, b INT)
 
-statement error composite types that reference user-defined types not yet supported
+statement error type "e" does not exist
 CREATE TYPE t AS (e e)
 
 # This should fail - we shouldn't persist implicit table types.
-statement error composite types that reference user-defined types not yet supported
+statement error type "tab" does not exist
 CREATE TYPE t AS (a tab)
 
-statement error composite types that reference user-defined types not yet supported
+statement error type "pg_catalog\.pg_class" does not exist
 CREATE TYPE t AS (a pg_catalog.pg_class)
 
 # Test that if an composite type value is being used by a default expression or
@@ -200,7 +219,7 @@ CREATE TYPE t AS (a INT, b TEXT)
 statement ok
 CREATE TABLE a (a INT DEFAULT (((1, 'hi')::t).a))
 
-statement error cannot drop type \"t\" because other objects .* still depend on it
+statement error cannot drop type "t": still depended upon by table "a"
 DROP TYPE t
 
 # Re-enable when #91972 is resolved.
@@ -211,11 +230,13 @@ DROP TYPE t
 #DROP TYPE t;
 #CREATE TYPE t AS (a INT, b TEXT);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE a;
 CREATE TABLE a (a INT ON UPDATE (((1, 'hi')::t).a))
 
-statement error cannot drop type \"t\" because other objects .* still depend on it
+statement error cannot drop type "t": still depended upon by table "a"
 DROP TYPE t
 
 # Re-enable when #91972 is resolved.
@@ -226,11 +247,13 @@ DROP TYPE t
 #DROP TYPE t;
 #CREATE TYPE t AS (a INT, b TEXT);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE a;
 CREATE TABLE a (a INT AS (((1, 'hi')::t).a) STORED)
 
-statement error cannot drop type \"t\" because other objects .* still depend on it
+statement error cannot drop type "t": still depended upon by table "a"
 DROP TYPE t
 
 # Re-enable when #91972 is resolved.
@@ -241,25 +264,33 @@ DROP TYPE t
 #DROP TYPE t;
 #CREATE TYPE t AS (a INT, b TEXT);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE a;
 CREATE TABLE a (a INT, INDEX (a) WHERE a > (((1, 'hi')::t).a))
 
-statement error cannot drop type \"t\" because other objects .* still depend on it
+statement error cannot drop type "t": still depended upon by table "a"
 DROP TYPE t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE a;
 DROP TYPE t;
 CREATE TYPE t AS (a INT, b TEXT);
 CREATE TABLE a (a INT CHECK (a > (((1, 'hi')::t).a)))
 
-statement error cannot drop type \"t\" because other objects .* still depend on it
+statement error cannot drop type "t": still depended upon by table "a"
 DROP TYPE t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE a DROP CONSTRAINT check_a
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TYPE t;
 DROP TABLE a

@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,144 +9,219 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/bytes
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/bytes
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
 
-# query T
-# SHOW bytea_output
-# ----
-# hex
-
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT 'non-escaped-string'::bytea::text
+SHOW bytea_output
+----
+hex
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT 'non-escaped-string':::BYTES::STRING
 ----
 \x6e6f6e2d657363617065642d737472696e67
 
-# TODO(benesch): support escape string literals.
-#
-# query T
-# SELECT e'\x5c\x78'::text
-# ----
-# \x
-#
-# query T
-# SELECT e'a\\134b\nc\'e'::text::bytea::text
-# ----
-# \x615c620a632765
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT '\Xabcd':::BYTES::STRING
+----
+\xabcd
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT b'\x5c\x78':::BYTES
+----
+\x
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT b'\x5c\x78':::BYTES::STRING
+----
+\x5c78
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT b'\x5c\x58':::BYTES::STRING
+----
+\x5c58
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT e'\x5c\x78'::STRING
+----
+\x
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT '\X':::BYTES::STRING
+----
+\x
 
 query T
-SELECT '日本語'::text::bytea::text
+SELECT e'a\\134b\nc\'e'::STRING::BYTES::STRING
+----
+\x615c620a632765
+
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT '日本語':::STRING::BYTES::STRING
 ----
 \xe697a5e69cace8aa9e
 
-query error invalid input syntax for type bytea: invalid escape sequence
+query error invalid input syntax for type bytea: invalid escape sequence: "\\400"
 SELECT '\400'::bytea
 
-# TODO(benesch): support bytea_output.
-#
-# statement ok
-# SET bytea_output = escape
-#
-# query T
-# SELECT 'non-escaped-text'::bytea::text
-# ----
-# non-escaped-text
-#
-# query T
-# SELECT '\Xabcd'::bytea::text
-# ----
-# \253\315
-#
-# query T
-# SELECT b'\x5c\x78'::bytea
-# ----
-# \x
-#
-# query T
-# SELECT b'\x5c\x78'::bytea::text
-# ----
-# \\x
-#
-# query T
-# SELECT b'\x5c\x58'::bytea::text
-# ----
-# \\X
-#
-# query T
-# SELECT e'\x5c\x78'::text
-# ----
-# \x
-#
-# query T
-# SELECT '\X'::bytea::text
-# ----
-# ·
-#
-# query T
-# SELECT e'a\\134b\nc\'e'::text::bytea::text
-# ----
-# a\\b\012c'e
-#
-# query T
-# SELECT '日本語'::text::bytea::text
-# ----
-# \346\227\245\346\234\254\350\252\236
+statement ok
+SET bytea_output = escape
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT 'non-escaped-string':::BYTES::STRING
+----
+non-escaped-string
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT '\Xabcd':::BYTES::STRING
+----
+\253\315
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT b'\x5c\x78':::BYTES
+----
+\x
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT b'\x5c\x78':::BYTES::STRING
+----
+\\x
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT b'\x5c\x58':::BYTES::STRING
+----
+\\X
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT e'\x5c\x78'::STRING
+----
+\x
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT '\X':::BYTES::STRING
+----
+·
+
+query T
+SELECT e'a\\134b\nc\'e'::STRING::BYTES::STRING
+----
+\x615c620a632765
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT '日本語':::STRING::BYTES::STRING
+----
+\346\227\245\346\234\254\350\252\236
 
 subtest Regression_25841
 
-# statement ok
-# set bytea_output = hex
+statement ok
+set bytea_output = hex
 
 query T
-SELECT 'a\\b'::text::bytea
+SELECT e'a\\\\b'::STRING::BYTEA
 ----
 a\b
 
 query I
-SELECT length('a\\b'::text::bytea)
+SELECT length(e'a\\\\b'::STRING::BYTEA)
 ----
 3
 
-query error invalid input syntax for type bytea: invalid escape sequence
-SELECT 'a\bcde'::text::bytea
+query error invalid input syntax for type bytea: invalid escape sequence: "a\\bcde"
+SELECT e'a\\bcde'::STRING::BYTEA
 
-query error invalid input syntax for type bytea: invalid escape sequence
-SELECT 'a\01'::text::bytea
-
-query error invalid input syntax for type bytea: ends with escape character
-SELECT 'a\'::text::bytea
+query error invalid input syntax for type bytea: invalid escape sequence: "a\\01"
+SELECT e'a\\01'::STRING::BYTEA
 
 subtest Regression_27950
 
-# statement ok
-# set bytea_output = hex
+statement ok
+set bytea_output = hex
 
 statement ok
-CREATE TABLE t(b bytea)
-
-statement ok
-INSERT INTO t(b) VALUES ('\xe697a5e69cace8aa9e'::bytea)
+CREATE TABLE t(b BYTES); INSERT INTO t(b) VALUES ('\xe697a5e69cace8aa9e'::BYTES)
 
 query TT
-SELECT b, b::text FROM t
+SELECT b, b::STRING FROM t
 ----
 日本語  \xe697a5e69cace8aa9e
 
-# statement ok
-# set bytea_output = escape
-#
-# query TT
-# SELECT b, b::text FROM t
-# ----
-# 日本語  \346\227\245\346\234\254\350\252\236
+statement ok
+set bytea_output = escape
+
+query TT
+SELECT b, b::STRING FROM t
+----
+日本語  \xe697a5e69cace8aa9e
 
 statement ok
 DROP TABLE t
+
+subtest Regression_4312
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+PREPARE r1(bytes) AS SELECT descriptor::STRING FROM system.descriptor WHERE descriptor != $1 ORDER BY descriptor DESC LIMIT 1
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+EXECUTE r1('abc')
+----
+\022Y\012\011defaultdb\020d\0320\012\013\012\005admin\020\002\030\002\012\015\012\006public\020\200\020\030\000\012\012\012\004root\020\002\030\002\022\004root\030\002"\000(\001:\014\012\006public\022\002\010e@\000J\000Z\002\020\000
+
+statement ok
+create table regression_71444 (col bytes[]);
+insert into regression_71444 VALUES ('{"a"}'), ('{"b", "c"}')
+
+query T
+SELECT * FROM regression_71444 WHERE col = '{"a"}'
+----
+{"\\x61"}

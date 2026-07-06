@@ -36,24 +36,31 @@ CREATE TABLE a (id INT);
 statement ok
 BEGIN
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT pg_sleep(1.5)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SAVEPOINT s
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT pg_sleep(1.5)
 
 statement ok
 INSERT INTO a(id) VALUES (0);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ROLLBACK TO SAVEPOINT s
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT * FROM a
 ----

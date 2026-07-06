@@ -25,15 +25,18 @@ mode cockroach
 # Test that no-op grant role command is actually no-op (i.e. does not perform schema change)
 subtest no_op_grant_role
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER developer WITH CREATEDB
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER roach WITH PASSWORD NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT developer TO roach
 
@@ -41,10 +44,14 @@ GRANT developer TO roach
 let $role_members_version
 SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor)->'table'->>'version' FROM system.descriptor WHERE id = 'system.public.role_members'::REGCLASS
 
+# Not supported by Materialize.
+onlyif cockroach
 # Repeatedly grant membership of `developer` to `roach` which it's already a member of.
 statement ok
 GRANT developer TO roach
 
+# Not supported by Materialize.
+onlyif cockroach
 # Assert that it's indeed a no-op by checking the 'role_members' table's version remains the same
 query B
 SELECT crdb_internal.pb_to_json('cockroach.sql.sqlbase.Descriptor', descriptor)->'table'->>'version' = $role_members_version::STRING FROM system.descriptor WHERE id = 'system.public.role_members'::REGCLASS
@@ -54,8 +61,8 @@ true
 # GRANT or REVOKE on the public role should result in "not exists"
 subtest grant_revoke_public
 
-statement error pgcode 42704 role/user \"public\" does not exist
+statement error pgcode 42704 unknown role 'testuser'
 GRANT testuser TO public
 
-statement error pgcode 42704 role/user \"public\" does not exist
+statement error pgcode 42704 unknown role 'testuser'
 REVOKE testuser FROM public

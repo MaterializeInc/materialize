@@ -22,9 +22,8 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure updates that remove a k/v pair succeed.
 statement ok
 CREATE TABLE t (
@@ -38,6 +37,8 @@ CREATE TABLE t (
 INSERT INTO t VALUES (1, 2, 3, 4);
 UPDATE t SET z = NULL, w = NULL WHERE y = 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query III
 SELECT y, z, w FROM t@i WHERE y = 2
 ----
@@ -47,6 +48,8 @@ SELECT y, z, w FROM t@i WHERE y = 2
 statement ok
 DROP TABLE IF EXISTS t;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (
   x INT PRIMARY KEY,
@@ -58,15 +61,21 @@ CREATE TABLE t (
 INSERT INTO t VALUES (1, 2, '3', 4), (5, 6, '7', 8);
 INSERT INTO t VALUES (10, 2, '10', 10) ON CONFLICT (y) DO NOTHING
 
+# Not supported by Materialize.
+onlyif cockroach
 query ITI rowsort
 SELECT y, z, v FROM t@i
 ----
 2 3 4
 6 7 8
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES (10, 2, '10', 10) ON CONFLICT (y) DO UPDATE set x = 20, z = '20', v = 20 WHERE t.y = 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query ITI rowsort
 SELECT y, z, v FROM t@i
 ----
@@ -87,10 +96,14 @@ CREATE TABLE t (
   INDEX i (y) STORING (z, w)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES (1, '2', 3.0, 4), (5, '6', 7.00, 8);
 UPSERT INTO t VALUES (9, '10', 11.000, 12), (1, '3', 5.0, 16)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTI rowsort
 SELECT y, z, w FROM t@i
 ----
@@ -111,10 +124,14 @@ CREATE TABLE t (
   v INT
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES (1, 2, 3, 4, 5), (6, 7, 8, 9, 10), (11, 12, 13, 14, 15);
 CREATE INDEX i ON t (y) STORING (z, w, v)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TIII rowsort
 SELECT y, z, w, v FROM t@i
 ----
@@ -122,22 +139,28 @@ SELECT y, z, w, v FROM t@i
 7 8 9 10
 12 13 14 15
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP INDEX t@i
 
 query ITIII rowsort
 SELECT * FROM t
 ----
-1 2 3 4 5
-6 7 8 9 10
-11 12 13 14 15
 
+
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE t ADD COLUMN u INT DEFAULT (20) CREATE FAMILY new_fam;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX i ON t (y) STORING (z, w, v, u)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TIIII rowsort
 SELECT y, z, w, v, u FROM t@i
 ----
@@ -152,6 +175,8 @@ CREATE TABLE t42992 (x TIMESTAMP PRIMARY KEY, y INT, z INT, UNIQUE INDEX i (y) S
 statement ok
 INSERT INTO t42992 VALUES (now(), NULL, 2)
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT y, z FROM t42992@i
 ----

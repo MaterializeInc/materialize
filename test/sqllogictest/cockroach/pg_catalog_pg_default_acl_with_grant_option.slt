@@ -22,23 +22,24 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
-statement error grant options cannot be granted to \"public\" role
+statement error Expected FOR, found GRANT
 ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO PUBLIC WITH GRANT OPTION
 
-statement error grant options cannot be granted to \"public\" role
+statement error Expected FOR, found GRANT
 ALTER DEFAULT PRIVILEGES GRANT USAGE ON SCHEMAS TO PUBLIC WITH GRANT OPTION
 
-statement error grant options cannot be granted to \"public\" role
+statement error Expected FOR, found GRANT
 ALTER DEFAULT PRIVILEGES GRANT SELECT ON SEQUENCES TO PUBLIC WITH GRANT OPTION
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO PUBLIC;
 ALTER DEFAULT PRIVILEGES GRANT USAGE ON SCHEMAS TO PUBLIC;
 ALTER DEFAULT PRIVILEGES GRANT SELECT ON SEQUENCES TO PUBLIC;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Public should appear as an empty string with privileges.
 query OOOTT colnames,rowsort
 SELECT * FROM PG_CATALOG.PG_DEFAULT_ACL
@@ -48,12 +49,18 @@ oid         defaclrole  defaclnamespace  defaclobjtype  defaclacl
 1451375629  1546506610  0                S              {=r/}
 1451375629  1546506610  0                n              {=U/}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER foo
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER bar
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO foo, bar WITH GRANT OPTION;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON TYPES TO foo, bar WITH GRANT OPTION;
@@ -61,6 +68,8 @@ ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO foo, bar WITH GRANT OPTION;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO foo, bar WITH GRANT OPTION;
 ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO foo, bar WITH GRANT OPTION;
 
+# Not supported by Materialize.
+onlyif cockroach
 query OOOTT colnames,rowsort
 SELECT * FROM PG_CATALOG.PG_DEFAULT_ACL
 ----
@@ -71,6 +80,8 @@ oid         defaclrole  defaclnamespace  defaclobjtype  defaclacl
 1451375629  1546506610  0                n              {bar=C*U*/,foo=C*U*/,=U/}
 1451375629  1546506610  0                f              {bar=X*/,foo=X*/}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR SELECT, DELETE ON TABLES FROM foo, bar;
 ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR USAGE ON TYPES FROM foo, bar;
@@ -78,6 +89,8 @@ ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR CREATE ON SCHEMAS FROM foo, bar
 ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR CREATE, UPDATE ON SEQUENCES FROM foo, bar;
 ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR EXECUTE ON FUNCTIONS FROM foo, bar;
 
+# Not supported by Materialize.
+onlyif cockroach
 query OOOTT colnames,rowsort
 SELECT * FROM PG_CATALOG.PG_DEFAULT_ACL
 ----
@@ -88,6 +101,8 @@ oid         defaclrole  defaclnamespace  defaclobjtype  defaclacl
 1451375629  1546506610  0                n              {bar=CU*/,foo=CU*/,=U/}
 1451375629  1546506610  0                f              {bar=X/,foo=X/}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR ALL ON TABLES FROM foo, bar;
 ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR ALL ON TYPES FROM foo, bar;
@@ -95,6 +110,8 @@ ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR ALL ON SCHEMAS FROM foo, bar;
 ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR ALL ON SEQUENCES FROM foo, bar;
 ALTER DEFAULT PRIVILEGES REVOKE GRANT OPTION FOR ALL ON FUNCTIONS FROM foo, bar;
 
+# Not supported by Materialize.
+onlyif cockroach
 query OOOTT colnames,rowsort
 SELECT * FROM PG_CATALOG.PG_DEFAULT_ACL
 ----
@@ -105,9 +122,13 @@ oid         defaclrole  defaclnamespace  defaclobjtype  defaclacl
 1451375629  1546506610  0                n              {bar=CU/,foo=CU/,=U/}
 1451375629  1546506610  0                f              {bar=X/,foo=X/}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT foo, bar TO root;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar GRANT ALL ON TABLES TO foo, bar WITH GRANT OPTION;
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar GRANT ALL ON TYPES TO foo, bar WITH GRANT OPTION;
@@ -115,6 +136,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar GRANT ALL ON SCHEMAS TO foo, bar WITH
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar GRANT ALL ON SEQUENCES TO foo, bar WITH GRANT OPTION;
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar GRANT ALL ON FUNCTIONS TO foo, bar WITH GRANT OPTION;
 
+# Not supported by Materialize.
+onlyif cockroach
 # 12 rows should exist, 4 for each role, root, foo and bar.
 query OOOTT colnames,rowsort
 SELECT * FROM PG_CATALOG.PG_DEFAULT_ACL
@@ -136,6 +159,8 @@ oid         defaclrole  defaclnamespace  defaclobjtype  defaclacl
 1451375629  1546506610  0                n              {bar=CU/,foo=CU/,=U/}
 1451375629  1546506610  0                f              {bar=X/,foo=X/}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar REVOKE ALL ON TABLES FROM foo, bar;
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar REVOKE ALL ON TYPES FROM foo, bar;
@@ -143,6 +168,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar REVOKE ALL ON SCHEMAS FROM foo, bar;
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar REVOKE ALL ON SEQUENCES FROM foo, bar;
 ALTER DEFAULT PRIVILEGES FOR ROLE foo, bar REVOKE ALL ON FUNCTIONS FROM foo, bar;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Revoking all will result in rows with empty privileges since the privileges
 # are revoked from the creator role.
 query OOOTT colnames,rowsort
@@ -165,6 +192,8 @@ oid         defaclrole  defaclnamespace  defaclobjtype  defaclacl
 1451375629  1546506610  0                n              {bar=CU/,foo=CU/,=U/}
 1451375629  1546506610  0                f              {bar=X/,foo=X/}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE foo GRANT ALL ON TABLES TO foo;
 ALTER DEFAULT PRIVILEGES FOR ROLE foo GRANT ALL ON SEQUENCES TO foo;
@@ -177,6 +206,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE bar GRANT ALL ON SCHEMAS TO bar;
 ALTER DEFAULT PRIVILEGES FOR ROLE bar GRANT ALL ON TYPES TO bar;
 ALTER DEFAULT PRIVILEGES FOR ROLE bar GRANT ALL ON FUNCTIONS TO bar;
 
+# Not supported by Materialize.
+onlyif cockroach
 # remove this block once the GRANT privilege is removed in 22.2
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE foo REVOKE GRANT OPTION FOR ALL ON TABLES FROM foo;
@@ -190,6 +221,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE bar REVOKE GRANT OPTION FOR ALL ON SCHEMAS FRO
 ALTER DEFAULT PRIVILEGES FOR ROLE bar REVOKE GRANT OPTION FOR ALL ON TYPES FROM bar;
 ALTER DEFAULT PRIVILEGES FOR ROLE bar REVOKE GRANT OPTION FOR ALL ON FUNCTIONS FROM bar;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Entries should disappear since the previous ALTER DEFAULT PRIVILEGE commands
 # revert the default privileges to the default state.
 query OOOTT colnames,rowsort
@@ -202,9 +235,13 @@ oid         defaclrole  defaclnamespace  defaclobjtype  defaclacl
 1451375629  1546506610  0                n              {bar=CU/,foo=CU/,=U/}
 1451375629  1546506610  0                f              {bar=X/,foo=X/}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE foo GRANT USAGE ON TYPES TO foo WITH GRANT OPTION
 
+# Not supported by Materialize.
+onlyif cockroach
 # foo should show up in the table since it got modified
 query OOOTT colnames,rowsort
 SELECT * FROM PG_CATALOG.PG_DEFAULT_ACL
@@ -217,9 +254,13 @@ oid         defaclrole  defaclnamespace  defaclobjtype  defaclacl
 1451375629  1546506610  0                n              {bar=CU/,foo=CU/,=U/}
 1451375629  1546506610  0                f              {bar=X/,foo=X/}
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ROLE foo REVOKE GRANT OPTION FOR USAGE ON TYPES FROM foo
 
+# Not supported by Materialize.
+onlyif cockroach
 # foo should disappear since it's back in the "default state"
 query OOOTT colnames,rowsort
 SELECT * FROM PG_CATALOG.PG_DEFAULT_ACL

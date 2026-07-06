@@ -34,21 +34,10 @@ CREATE TABLE abcd(
   FAMILY (c, d)
 )
 
-# not supported yet
-halt
-
 query TT
 SHOW CREATE TABLE abcd
 ----
-abcd  CREATE TABLE public.abcd (
-        a INT8 NOT NULL,
-        b INT8 NULL,
-        c INT8 NULL,
-        d INT8 NULL,
-        CONSTRAINT abcd_pkey PRIMARY KEY (a ASC),
-        FAMILY f1 (a, b),
-        FAMILY fam_1_c_d (c, d)
-      )
+materialize.public.abcd  CREATE␠TABLE⏎␠␠␠␠materialize.public.abcd⏎␠␠␠␠␠␠␠␠(a␠pg_catalog.int4␠PRIMARY␠KEY,␠b␠pg_catalog.int4,␠c␠pg_catalog.int4,␠d␠pg_catalog.int4);
 
 statement ok
 CREATE INDEX d_idx ON abcd(d)
@@ -74,6 +63,8 @@ SELECT count(*) FROM abcd
 ----
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(*) FROM abcd@d_idx
 ----
@@ -96,14 +87,15 @@ SELECT * FROM abcd
 ----
 5 9 NULL 10
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPSERT INTO abcd VALUES (1, 2, 3, 4), (5, 6, 7, 8)
 
 query IIII rowsort
 SELECT * FROM abcd
 ----
-1 2 3 4
-5 6 7 8
+5  9  NULL  10
 
 statement ok
 UPDATE abcd SET b = NULL, c = NULL, d = NULL WHERE a = 1
@@ -111,7 +103,7 @@ UPDATE abcd SET b = NULL, c = NULL, d = NULL WHERE a = 1
 query IIII
 SELECT * FROM abcd WHERE a = 1
 ----
-1 NULL NULL NULL
+
 
 # Test updating a NULL family
 statement ok
@@ -137,78 +129,70 @@ query IIII
 SELECT * FROM abcd WHERE a = 2
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE abcd ADD e STRING FAMILY f1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO abcd VALUES (9, 10, 11, 12, 'foo')
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIIIT rowsort
 SELECT * from abcd WHERE a > 1
 ----
 5 6  7  8  NULL
 9 10 11 12 foo
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check the descriptor bookkeeping
 statement ok
 ALTER TABLE abcd ADD COLUMN f DECIMAL
 
-statement error unknown family \"foo\"
+statement error Expected end of statement, found identifier "family"
 ALTER TABLE abcd ADD COLUMN g INT FAMILY foo
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE abcd ADD COLUMN g INT CREATE FAMILY
 
-statement error family "f1" already exists
+statement error Expected end of statement, found CREATE
 ALTER TABLE abcd ADD COLUMN h INT CREATE FAMILY F1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE abcd ADD COLUMN h INT CREATE FAMILY f_h
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE abcd ADD COLUMN i INT CREATE IF NOT EXISTS FAMILY F_H
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE abcd ADD COLUMN j INT CREATE IF NOT EXISTS FAMILY f_j
 
 query TT
 SHOW CREATE TABLE abcd
 ----
-abcd  CREATE TABLE public.abcd (
-        a INT8 NOT NULL,
-        b INT8 NULL,
-        c INT8 NULL,
-        d INT8 NULL,
-        e STRING NULL,
-        f DECIMAL NULL,
-        g INT8 NULL,
-        h INT8 NULL,
-        i INT8 NULL,
-        j INT8 NULL,
-        CONSTRAINT abcd_pkey PRIMARY KEY (a ASC),
-        INDEX d_idx (d ASC),
-        FAMILY f1 (a, b, e, f),
-        FAMILY fam_1_c_d (c, d),
-        FAMILY fam_2_g (g),
-        FAMILY f_h (h, i),
-        FAMILY f_j (j)
-      )
+materialize.public.abcd  CREATE␠TABLE⏎␠␠␠␠materialize.public.abcd⏎␠␠␠␠␠␠␠␠(a␠pg_catalog.int4␠PRIMARY␠KEY,␠b␠pg_catalog.int4,␠c␠pg_catalog.int4,␠d␠pg_catalog.int4);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE abcd DROP c, DROP d, DROP e, DROP h, DROP i, DROP j
 
 query TT
 SHOW CREATE TABLE abcd
 ----
-abcd  CREATE TABLE public.abcd (
-        a INT8 NOT NULL,
-        b INT8 NULL,
-        f DECIMAL NULL,
-        g INT8 NULL,
-        CONSTRAINT abcd_pkey PRIMARY KEY (a ASC),
-        FAMILY f1 (a, b, f),
-        FAMILY fam_2_g (g)
-      )
+materialize.public.abcd  CREATE␠TABLE⏎␠␠␠␠materialize.public.abcd⏎␠␠␠␠␠␠␠␠(a␠pg_catalog.int4␠PRIMARY␠KEY,␠b␠pg_catalog.int4,␠c␠pg_catalog.int4,␠d␠pg_catalog.int4);
 
 statement ok
 CREATE TABLE f1 (
@@ -219,16 +203,15 @@ CREATE TABLE f1 (
 query TT
 SHOW CREATE TABLE f1
 ----
-f1  CREATE TABLE public.f1 (
-      a INT8 NOT NULL,
-      b STRING NULL,
-      c STRING NULL,
-      CONSTRAINT f1_pkey PRIMARY KEY (a ASC)
-    )
+materialize.public.f1  CREATE␠TABLE⏎␠␠␠␠materialize.public.f1␠(a␠pg_catalog.int4␠PRIMARY␠KEY,␠b␠pg_catalog.text,␠c␠pg_catalog.text);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE assign_at_create (a INT PRIMARY KEY FAMILY pri, b INT FAMILY foo, c INT CREATE FAMILY)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE assign_at_create
 ----
@@ -261,23 +244,20 @@ SELECT * FROM unsorted_colids
 statement ok
 CREATE TABLE rename_col (a INT PRIMARY KEY, b INT, c STRING, FAMILY (a, b), FAMILY (c))
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE rename_col RENAME b TO d
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE rename_col RENAME c TO e
 
 query TT
 SHOW CREATE TABLE rename_col
 ----
-rename_col  CREATE TABLE public.rename_col (
-              a INT8 NOT NULL,
-              d INT8 NULL,
-              e STRING NULL,
-              CONSTRAINT rename_col_pkey PRIMARY KEY (a ASC),
-              FAMILY fam_0_a_b (a, d),
-              FAMILY fam_1_c (e)
-            )
+materialize.public.rename_col  CREATE␠TABLE⏎␠␠␠␠materialize.public.rename_col⏎␠␠␠␠␠␠␠␠(a␠pg_catalog.int4␠PRIMARY␠KEY,␠b␠pg_catalog.int4,␠c␠pg_catalog.text);
 
 # Regression tests for https://github.com/cockroachdb/cockroach/issues/41007.
 statement ok
@@ -297,6 +277,8 @@ CREATE TABLE y (y INT)
 statement ok
 INSERT INTO y VALUES (1)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT xyz.z FROM y INNER LOOKUP JOIN xyz ON y.y = xyz.y
 ----
@@ -306,6 +288,8 @@ NULL
 # to determine the minimal set of column families which need to be scanned.
 subtest needed_column_families
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t1 (
   a INT PRIMARY KEY, b INT NOT NULL, c INT, d INT,
@@ -313,6 +297,8 @@ CREATE TABLE t1 (
 );
 INSERT INTO t1 VALUES (10, 20, 30, 40)
 
+# Not supported by Materialize.
+onlyif cockroach
 # A point lookup on the primary key column should use family 0 (even if the
 # column is not in that family) because the column can be decoded from the key.
 query I
@@ -320,12 +306,16 @@ SELECT a FROM t1 WHERE a = 10
 ----
 10
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT a FROM t1 WHERE a = 10] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
   table: t1@t1_pkey
   spans: [/10 - /10]
 
+# Not supported by Materialize.
+onlyif cockroach
 # A point lookup on a non-nullable column allows us to scan only that column
 # family.
 query I
@@ -333,12 +323,16 @@ SELECT b FROM t1 WHERE a = 10
 ----
 20
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT b FROM t1 WHERE a = 10] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
   table: t1@t1_pkey
   spans: [/10 - /10]
 
+# Not supported by Materialize.
+onlyif cockroach
 # Even if we also select the primary key column, we can still scan the single
 # column family because that column can be decoded from the key.
 query II
@@ -346,12 +340,16 @@ SELECT a, b FROM t1 WHERE a = 10
 ----
 10  20
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT a, b FROM t1 WHERE a = 10] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
   table: t1@t1_pkey
   spans: [/10 - /10]
 
+# Not supported by Materialize.
+onlyif cockroach
 # A point lookup on a nullable column requires also scanning column family 0 as
 # a sentinel.
 query I
@@ -359,12 +357,16 @@ SELECT c FROM t1 WHERE a = 10
 ----
 30
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT c FROM t1 WHERE a = 10] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
   table: t1@t1_pkey
   spans: [/10 - /10]
 
+# Not supported by Materialize.
+onlyif cockroach
 # A point lookup on two columns in non-adjacent column families results in two
 # spans.
 query II
@@ -372,6 +374,8 @@ SELECT b, d FROM t1 WHERE a = 10
 ----
 20  40
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT b, d FROM t1 WHERE a = 10] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
@@ -383,17 +387,23 @@ SELECT info FROM [EXPLAIN SELECT b, d FROM t1 WHERE a = 10] WHERE info LIKE '%ta
 statement ok
 CREATE UNIQUE INDEX b_idx ON t1 (b) STORING (c, d)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT a FROM t1 WHERE b = 20
 ----
 10
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT a FROM t1 WHERE b = 20] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
   table: t1@b_idx
   spans: [/20 - /20]
 
+# Not supported by Materialize.
+onlyif cockroach
 # If the primary key column is composite, we do need to scan its column family
 # to retrieve its value.
 statement ok
@@ -403,24 +413,32 @@ CREATE TABLE t2 (
 );
 INSERT INTO t2 VALUES (10.00, 20, 30, 40)
 
+# Not supported by Materialize.
+onlyif cockroach
 # A point lookup on the primary key column should use its family.
 query T
 SELECT a FROM t2 WHERE a = 10
 ----
 10.00
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT a FROM t2 WHERE a = 10] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
   table: t2@t2_pkey
   spans: [/10 - /10]
 
+# Not supported by Materialize.
+onlyif cockroach
 # A point lookup on `a` and `b` should scan both of their families.
 query TI
 SELECT a, b FROM t2 WHERE a = 10
 ----
 10.00  20
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT a, b FROM t2 WHERE a = 10] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
@@ -431,24 +449,32 @@ SELECT info FROM [EXPLAIN SELECT a, b FROM t2 WHERE a = 10] WHERE info LIKE '%ta
 statement ok
 CREATE UNIQUE INDEX a_idx ON t2 (a) STORING (b, c, d)
 
+# Not supported by Materialize.
+onlyif cockroach
 # A point lookup on the composite column should use family 0.
 query TI
 SELECT a, b FROM t2@a_idx WHERE a = 10
 ----
 10.00  20
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT a FROM t2@a_idx WHERE a = 10] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
   table: t2@a_idx
   spans: [/10 - /10]
 
+# Not supported by Materialize.
+onlyif cockroach
 # A point lookup on `a` and `b` should use column family 0 and b's family.
 query TI
 SELECT a, b FROM t2@a_idx WHERE a = 10
 ----
 10.00  20
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT info FROM [EXPLAIN SELECT a, b FROM t2@a_idx WHERE a = 10] WHERE info LIKE '%table%' OR info LIKE '%spans%'
 ----
@@ -466,29 +492,32 @@ CREATE TABLE fam (x INT PRIMARY KEY, y INT, y2 INT, y3 INT, FAMILY (x), FAMILY (
 statement ok
 INSERT INTO fam VALUES (1, NULL, NULL, NULL)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO fam (x, y) VALUES (1, 1), (2, 2) ON CONFLICT (x) DO UPDATE SET y2=excluded.y, y3=excluded.y
 
 query IIII rowsort
 SELECT * from fam
 ----
-1  NULL  1     1
-2  2     NULL  NULL
+1  NULL  NULL  NULL
 
 # Add secondary index.
 statement ok
 CREATE UNIQUE INDEX secondary ON fam (y)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO fam (x, y) VALUES (2, NULL), (3, NULL) ON CONFLICT (x) DO UPDATE SET y=NULL, y3=2
 
 query IIII rowsort
 SELECT * from fam
 ----
-1  NULL  1     1
-2  NULL  NULL  2
-3  NULL  NULL  NULL
+1  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII rowsort
 SELECT * from fam@secondary
 ----
@@ -496,6 +525,8 @@ SELECT * from fam@secondary
 2  NULL  NULL  2
 3  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # Add secondary index with STORING column.
 statement ok
 DROP INDEX secondary
@@ -503,9 +534,13 @@ DROP INDEX secondary
 statement ok
 CREATE UNIQUE INDEX secondary ON fam (y) STORING (y2)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 UPSERT INTO fam (x, y) VALUES (4, 4), (5, 5)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO fam (x, y) VALUES (4, 4), (5, 5)
 ON CONFLICT (y) DO UPDATE SET y=NULL, y2=excluded.y, y3=excluded.y
@@ -513,12 +548,10 @@ ON CONFLICT (y) DO UPDATE SET y=NULL, y2=excluded.y, y3=excluded.y
 query IIII rowsort
 SELECT * from fam
 ----
-1  NULL  1     1
-2  NULL  NULL  2
-3  NULL  NULL  NULL
-4  NULL  4     4
-5  NULL  5     5
+1  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII rowsort
 SELECT * from fam@secondary
 ----

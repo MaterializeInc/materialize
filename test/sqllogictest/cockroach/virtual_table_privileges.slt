@@ -24,13 +24,14 @@ mode cockroach
 
 user testuser
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # Public should have SELECT on virtual tables by default.
 statement ok
 SELECT * FROM crdb_internal.tables
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 
 query B
@@ -40,33 +41,47 @@ true
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE SELECT ON crdb_internal.tables FROM public
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTO
 SELECT * FROM system.privileges
 ----
 public  /vtable/crdb_internal/tables  {}  {}  4
 
+# Not supported by Materialize.
+onlyif cockroach
 # Note that after granting SELECT to public, there should be no row
 # since this is the default case, public with SELECT is represented as no row.
 statement ok
 GRANT SELECT ON crdb_internal.tables TO public
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTO
 SELECT * FROM system.privileges
 ----
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM crdb_internal.tables
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE SELECT ON TABLE crdb_internal.tables FROM public
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_table_privilege('testuser', 'crdb_internal.tables', 'select');
 ----
@@ -74,34 +89,46 @@ false
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pq: user testuser does not have SELECT privilege on relation tables
 SHOW TABLES
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON TABLE crdb_internal.tables TO public
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_table_privilege('testuser', 'crdb_internal.tables', 'select');
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE SELECT ON TABLE crdb_internal.tables FROM public
 
 user testuser
 
-statement error pq: user testuser does not have SELECT privilege on relation tables
+statement error unknown schema 'crdb_internal'
 SELECT * FROM crdb_internal.tables
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON TABLE crdb_internal.tables TO public
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM crdb_internal.tables
 
@@ -116,6 +143,8 @@ GRANT SELECT ON TABLE test2.information_schema.columns TO testuser
 ----
 NOTICE: virtual table privileges are not database specific
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTO
 SELECT * FROM system.privileges
 ----
@@ -126,40 +155,52 @@ user testuser
 statement ok
 SELECT * FROM test2.information_schema.columns
 
+# Not supported by Materialize.
+onlyif cockroach
 # We're in database test, this is okay.
 statement ok
 SELECT * FROM crdb_internal.cluster_sessions
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 use test2
 
 # virtual table privileges are not database specific so qualifying it should
 # do nothing.
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 select has_table_privilege('testuser', 'test2.crdb_internal.tables', 'select');
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 use test
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 select has_table_privilege('testuser', 'test.crdb_internal.tables', 'select');
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 # Second select tests the cache. Rudimentary test to ensure the cache works.
 statement ok
 SELECT * FROM crdb_internal.tables
 
-statement error pq: invalid privilege type USAGE for virtual_table
+statement error unknown schema 'crdb_internal'
 GRANT USAGE ON TABLE crdb_internal.tables TO testuser
 
-statement error pq: invalid privilege type ZONECONFIG for virtual_table
+statement error Expected TO, found ON
 GRANT ZONECONFIG ON TABLE crdb_internal.tables TO testuser
 
-statement error pq: invalid privilege type CREATE for virtual_table
+statement error invalid privilege types CREATE for VIEW "information_schema\.tables"
 GRANT CREATE ON TABLE information_schema.tables TO testuser

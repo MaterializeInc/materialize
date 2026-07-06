@@ -111,20 +111,28 @@ GRANT CREATE ON DATABASE test TO testuser
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA s
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE s.t()
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 # Being the owner of schema s should allow testuser to drop table s.t.
 statement ok
 DROP TABLE s.t
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that a table can successfully be dropped after performing
 # a schema change to the table in the same transaction.
 # See https://github.com/cockroachdb/cockroach/issues/56235.
@@ -143,17 +151,25 @@ ALTER TABLE to_drop ADD COLUMN foo int;
 statement ok
 DROP TABLE to_drop;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMIT;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42P01 unknown catalog item 'to_drop'
 DROP TABLE to_drop;
 
 subtest drop_table_with_not_valid_constraints
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t_with_not_valid_constraints_1 (i INT PRIMARY KEY, j INT);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t_with_not_valid_constraints_2 (i INT PRIMARY KEY, j INT);
 
@@ -173,18 +189,26 @@ onlyif cockroach
 statement ok
 ALTER TABLE t_with_not_valid_constraints_1 ADD FOREIGN KEY (i) REFERENCES t_with_not_valid_constraints_2 (i) NOT VALID;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE t_with_not_valid_constraints_1;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE t_with_not_valid_constraints_2;
 
 # Tests for #97783 where unvalidated FK references were not cleaned up
 subtest drop_table_with_not_valid_fk_and_check
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t_not_valid_src (i INT PRIMARY KEY, j INT);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t_not_valid_dst (i INT PRIMARY KEY, j INT, c CHAR);
 
@@ -203,6 +227,8 @@ onlyif cockroach
 statement ok
 ALTER TABLE t_not_valid_dst ADD CHECK (j > currval('t_not_valid_sq')) NOT VALID;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE t_not_valid_src CASCADE;
 
@@ -211,11 +237,12 @@ onlyif cockroach
 statement ok;
 DROP SEQUENCE t_not_valid_sq CASCADE;
 
-# Sequence related check constraint should be cleaned, so inserts should work.
-# Also the destination descriptor should be valid after the FK clean up. Note:
-# skip on older configs since this is an existing bug, not a new regression
-# (see #97871).
-skipif config local-mixed-22.2-23.1
-skipif config local-legacy-schema-changer
-statement ok
-INSERT INTO t_not_valid_dst VALUES(5,5,5);
+# Record disabled, not supported by Materialize:
+# # Sequence related check constraint should be cleaned, so inserts should work.
+# # Also the destination descriptor should be valid after the FK clean up. Note:
+# # skip on older configs since this is an existing bug, not a new regression
+# # (see #97871).
+# skipif config local-mixed-22.2-23.1
+# skipif config local-legacy-schema-changer
+# statement ok
+# INSERT INTO t_not_valid_dst VALUES(5,5,5);

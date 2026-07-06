@@ -25,12 +25,13 @@ mode cockroach
 statement ok
 CREATE DATABASE d
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 USE d
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW CREATE ALL SCHEMAS
 ----
@@ -40,6 +41,8 @@ CREATE SCHEMA public;
 statement ok
 CREATE SCHEMA test
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW CREATE ALL SCHEMAS
 ----
@@ -50,6 +53,8 @@ CREATE SCHEMA test;
 statement ok
 CREATE SCHEMA test2
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW CREATE ALL SCHEMAS
 ----
@@ -61,6 +66,8 @@ CREATE SCHEMA test2;
 statement ok
 DROP SCHEMA test
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SHOW CREATE ALL SCHEMAS
 ----
@@ -68,12 +75,16 @@ create_statement
 CREATE SCHEMA public;
 CREATE SCHEMA test2;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure database names with hyphens work well.
 statement ok
 CREATE DATABASE "d-d";
 USE "d-d";
 SHOW CREATE ALL SCHEMAS;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure database names with quotes work well.
 statement ok
 CREATE DATABASE "a""bc";

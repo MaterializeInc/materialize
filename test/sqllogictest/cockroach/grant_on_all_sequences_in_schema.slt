@@ -22,9 +22,8 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER testuser2
 
@@ -32,42 +31,60 @@ statement ok
 CREATE SCHEMA s;
 CREATE SCHEMA s2;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Granting in a schema with no sequences should be okay.
 statement ok
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA s TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser
 ----
 database_name  schema_name  relation_name  grantee  privilege_type  is_grantable
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SEQUENCE s.q;
 CREATE SEQUENCE s2.q;
 CREATE TABLE s.t();
 CREATE TABLE s2.t();
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE testuser
 
-statement error pq: user testuser does not have USAGE privilege on schema s
+statement error unknown catalog item 's\.q'
 SELECT * FROM s.q;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET ROLE root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA s TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser
 ----
 database_name  schema_name  relation_name  grantee   privilege_type  is_grantable
 test           s            q              testuser  SELECT          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA s TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser
 ----
@@ -75,9 +92,13 @@ database_name  schema_name  relation_name  grantee   privilege_type  is_grantabl
 test           s            q              testuser  SELECT          false
 test           s            q              testuser  USAGE           false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA s, s2 TO testuser, testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser, testuser2
 ----
@@ -88,9 +109,13 @@ test           s            q              testuser2  SELECT          false
 test           s2           q              testuser   SELECT          false
 test           s2           q              testuser2  SELECT          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT ALL ON ALL SEQUENCES IN SCHEMA s, s2 TO testuser, testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser, testuser2
 ----
@@ -100,13 +125,19 @@ test           s            q              testuser2  ALL             false
 test           s2           q              testuser   ALL             false
 test           s2           q              testuser2  ALL             false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER testuser3
 
+# Not supported by Materialize.
+onlyif cockroach
 # Sequences are treated as a subset of tables.
 statement ok
 GRANT ALL ON ALL TABLES IN SCHEMA s2 TO testuser3
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS FOR testuser3
 ----

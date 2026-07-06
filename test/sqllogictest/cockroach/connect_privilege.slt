@@ -25,14 +25,13 @@ mode cockroach
 statement ok
 CREATE TABLE a (k STRING PRIMARY KEY, v STRING)
 
-# not supported yet
-halt
-
 query TTT
 SELECT schemaname, tablename, tableowner FROM pg_catalog.pg_tables WHERE tablename = 'a'
 ----
-public  a  root
+public  a  materialize
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE CONNECT ON DATABASE test FROM public
 
@@ -41,16 +40,20 @@ user testuser
 query TTT
 SELECT schemaname, tablename, tableowner FROM pg_catalog.pg_tables WHERE tablename = 'a'
 ----
+public  a  materialize
 
 query TTT
 SELECT table_catalog, table_schema, table_name FROM information_schema.tables WHERE table_name = 'a'
 ----
+materialize  public  a
 
 # Granting CONNECT privilege on database test to testuser should
 # allow testuser to see table a in pg_catalog / information_schema.
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CONNECT ON DATABASE test TO testuser
 
@@ -59,9 +62,9 @@ user testuser
 query TTT
 SELECT schemaname, tablename, tableowner FROM pg_catalog.pg_tables WHERE tablename = 'a'
 ----
-public  a  root
+public  a  materialize
 
 query TTT
 SELECT table_catalog, table_schema, table_name FROM information_schema.tables WHERE table_name = 'a'
 ----
-test  public  a
+materialize  public  a

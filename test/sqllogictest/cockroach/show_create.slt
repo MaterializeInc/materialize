@@ -25,9 +25,8 @@ mode cockroach
 statement ok
 SET experimental_enable_unique_without_index_constraints = true
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE c (
   a INT NOT NULL,
@@ -39,18 +38,26 @@ CREATE TABLE c (
   FAMILY fam_1_b (b)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON TABLE c IS 'table'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON COLUMN c.a IS 'column'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON INDEX c_a_b_idx IS 'index'
 
 statement ok
 CREATE TABLE d (d INT PRIMARY KEY)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT colnames
 SHOW CREATE c
 ----
@@ -70,6 +77,8 @@ c           CREATE TABLE public.c (
             COMMENT ON COLUMN public.c.a IS 'column';
             COMMENT ON INDEX public.c@c_a_b_idx IS 'index'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE c ADD CONSTRAINT check_b CHECK (b IN (1, 2, 3)) NOT VALID;
 ALTER TABLE c ADD CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES d (d) NOT VALID;
@@ -77,6 +86,8 @@ ALTER TABLE c ADD CONSTRAINT unique_a UNIQUE (a);
 ALTER TABLE c ADD CONSTRAINT unique_b UNIQUE WITHOUT INDEX (b) NOT VALID;
 ALTER TABLE c ADD CONSTRAINT unique_b_partial UNIQUE WITHOUT INDEX (b) WHERE a > 0 NOT VALID;
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE c
 ----
@@ -100,6 +111,8 @@ c  CREATE TABLE public.c (
    COMMENT ON COLUMN public.c.a IS 'column';
    COMMENT ON INDEX public.c@c_a_b_idx IS 'index'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE c VALIDATE CONSTRAINT check_b;
 ALTER TABLE c VALIDATE CONSTRAINT fk_a;
@@ -108,6 +121,8 @@ ALTER TABLE c VALIDATE CONSTRAINT unique_b;
 ALTER TABLE c VALIDATE CONSTRAINT unique_a_b;
 ALTER TABLE c VALIDATE CONSTRAINT unique_b_partial;
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE c
 ----
@@ -131,6 +146,8 @@ c  CREATE TABLE public.c (
    COMMENT ON COLUMN public.c.a IS 'column';
    COMMENT ON INDEX public.c@c_a_b_idx IS 'index'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE c WITH REDACT
 ----
@@ -165,6 +182,8 @@ CREATE TABLE t (c INT);
 statement ok
 COMMENT ON COLUMN t.c IS 'first comment';
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE TABLE t];
 ----
@@ -175,9 +194,13 @@ CREATE TABLE public.t (
 );
 COMMENT ON COLUMN public.t.c IS 'first comment'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE t ALTER COLUMN c TYPE character varying;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE TABLE t];
 ----
@@ -188,6 +211,8 @@ CREATE TABLE public.t (
 );
 COMMENT ON COLUMN public.t.c IS 'first comment'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE TABLE t WITH REDACT];
 ----
@@ -207,6 +232,8 @@ CREATE TABLE t1 (
   INDEX (a, b)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE INDEXES FROM t1
 ----
@@ -214,14 +241,16 @@ t1_pkey     CREATE UNIQUE INDEX t1_pkey ON public.t1 (k ASC)
 t1_a_key    CREATE UNIQUE INDEX t1_a_key ON public.t1 (a ASC)
 t1_a_b_idx  CREATE INDEX t1_a_b_idx ON public.t1 (a ASC, b ASC)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE SECONDARY INDEXES FROM t1
 ----
 t1_a_key    CREATE UNIQUE INDEX t1_a_key ON public.t1 (a ASC)
 t1_a_b_idx  CREATE INDEX t1_a_b_idx ON public.t1 (a ASC, b ASC)
 
-statement error relation "nonexistent" does not exist
+statement error Expected end of statement, found INDEXES
 SHOW CREATE INDEXES FROM nonexistent
 
-statement error relation "nonexistent" does not exist
+statement error Expected end of statement, found identifier "secondary"
 SHOW CREATE SECONDARY INDEXES FROM nonexistent

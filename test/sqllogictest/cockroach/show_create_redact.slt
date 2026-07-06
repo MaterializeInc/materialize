@@ -27,9 +27,8 @@ mode cockroach
 statement ok
 CREATE TABLE a (a STRING DEFAULT 'a')
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE a WITH REDACT
 ----
@@ -42,6 +41,8 @@ a  CREATE TABLE public.a (
 statement ok
 CREATE TABLE b (b BOOLEAN DEFAULT false)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE b WITH REDACT
 ----
@@ -54,6 +55,8 @@ b  CREATE TABLE public.b (
 statement ok
 CREATE TABLE c (c CHAR DEFAULT 'c')
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE c WITH REDACT
 ----
@@ -66,6 +69,8 @@ c  CREATE TABLE public.c (
 statement ok
 CREATE TABLE d (d DATE DEFAULT '1999-12-31')
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE d WITH REDACT
 ----
@@ -78,6 +83,8 @@ d  CREATE TABLE public.d (
 statement ok
 CREATE TABLE i (i INT DEFAULT 0)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE i WITH REDACT
 ----
@@ -90,6 +97,8 @@ i  CREATE TABLE public.i (
 statement ok
 CREATE TABLE j (j JSON DEFAULT '{}')
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE j WITH REDACT
 ----
@@ -102,6 +111,8 @@ j  CREATE TABLE public.j (
 statement ok
 CREATE TABLE n (n INT DEFAULT NULL)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE n WITH REDACT
 ----
@@ -113,9 +124,13 @@ n  CREATE TABLE public.n (
 
 # Test that constants in computed columns are redacted.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE ef (e INT, f INT AS (e + 1) VIRTUAL)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE ef WITH REDACT
 ----
@@ -126,9 +141,13 @@ ef  CREATE TABLE public.ef (
       CONSTRAINT ef_pkey PRIMARY KEY (rowid ASC)
     )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE g (g GEOMETRY AS ('POINT (0 0)') VIRTUAL)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE g WITH REDACT
 ----
@@ -138,9 +157,13 @@ g  CREATE TABLE public.g (
      CONSTRAINT g_pkey PRIMARY KEY (rowid ASC)
    )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE hi (h INTERVAL PRIMARY KEY, i INTERVAL AS (h - '12:00:00') STORED, FAMILY (h, i))
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE hi WITH REDACT
 ----
@@ -151,9 +174,13 @@ hi  CREATE TABLE public.hi (
       FAMILY fam_0_h_i (h, i)
     )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE jk (j JSONB, k STRING PRIMARY KEY, jk JSONB AS (j->k->'foo') STORED, INVERTED INDEX (jk), FAMILY (k, j, jk))
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE jk WITH REDACT
 ----
@@ -168,9 +195,13 @@ jk  CREATE TABLE public.jk (
 
 # Test that constants in constraints are redacted.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE k (k INT PRIMARY KEY, CHECK (k > 0), CHECK (true))
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE k WITH REDACT
 ----
@@ -181,9 +212,13 @@ k  CREATE TABLE public.k (
      CONSTRAINT "check" CHECK (‹×›)
    )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE dl (d DECIMAL PRIMARY KEY, l DECIMAL, CHECK (d != l + 2.0), FAMILY (d, l))
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE dl WITH REDACT
 ----
@@ -200,6 +235,8 @@ dl  CREATE TABLE public.dl (
 statement ok
 CREATE TABLE m (m STRING[], INDEX (array_cat(m, ARRAY['', NULL, 'm'])))
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE m WITH REDACT
 ----
@@ -213,6 +250,8 @@ m  CREATE TABLE public.m (
 statement ok
 CREATE TABLE no (n NUMERIC PRIMARY KEY, o FLOAT, UNIQUE INDEX ((o / 1.1e7)), FAMILY (n, o))
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE no WITH REDACT
 ----
@@ -229,6 +268,8 @@ no  CREATE TABLE public.no (
 statement ok
 CREATE TABLE p (p UUID PRIMARY KEY, INDEX (p) WHERE p != 'acde070d-8c4c-4f0d-9d8a-162843c10333')
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE p WITH REDACT
 ----
@@ -243,6 +284,8 @@ p  CREATE TABLE public.p (
 statement ok
 CREATE VIEW q (q) AS SELECT 0
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE VIEW q WITH REDACT
 ----
@@ -250,9 +293,13 @@ q  CREATE VIEW public.q (
      q
    ) AS SELECT ‹×›
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW r (r) AS SELECT TIMESTAMP '1999-12-31 23:59:59' + i FROM hi WHERE h != '00:00:01'
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE VIEW r WITH REDACT
 ----
@@ -260,9 +307,13 @@ r  CREATE VIEW public.r (
      r
    ) AS SELECT TIMESTAMP ‹×› + i FROM test.public.hi WHERE h != ‹×›
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW s (s) AS SELECT IF(b, 'abc', 'def') FROM b ORDER BY b AND NOT false LIMIT 10
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE VIEW s WITH REDACT
 ----
@@ -277,9 +328,13 @@ s  CREATE VIEW public.s (
      LIMIT
        ‹×›
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW t (t, u) AS SELECT jk || '[null]', j->a FROM a JOIN jk ON a = k || 'u' ORDER BY concat(a, 'ut')
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE VIEW t WITH REDACT
 ----

@@ -29,9 +29,8 @@ INSERT INTO t VALUES (1, 2), (3, 4), (5, 6)
 statement ok
 CREATE MATERIALIZED VIEW v AS SELECT x, y FROM t
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure that materialized views show up in SHOW TABLES.
 query T
 SELECT table_name FROM [SHOW TABLES] WHERE type = 'materialized view'
@@ -52,13 +51,16 @@ INSERT INTO t VALUES (7, 8)
 query II rowsort
 SELECT * FROM v
 ----
-1 2
-3 4
-5 6
+1  2
+3  4
+5  6
+7  8
 
 let $orig_crdb_timestamp
 SELECT max(crdb_internal_mvcc_timestamp) FROM v
 
+# Not supported by Materialize.
+onlyif cockroach
 # Now refresh the view.
 statement ok
 REFRESH MATERIALIZED VIEW v
@@ -72,6 +74,8 @@ SELECT * FROM v
 5 6
 7 8
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that crdb_internal_mvcc_timestamp is updated for all rows.
 query I
 SELECT count(*) FROM v WHERE crdb_internal_mvcc_timestamp > $orig_crdb_timestamp
@@ -82,6 +86,8 @@ SELECT count(*) FROM v WHERE crdb_internal_mvcc_timestamp > $orig_crdb_timestamp
 statement ok
 CREATE INDEX i ON v (y)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT y FROM v@i WHERE y > 4
 ----
@@ -92,6 +98,8 @@ SELECT y FROM v@i WHERE y > 4
 statement ok
 INSERT INTO t VALUES (9, 10)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REFRESH MATERIALIZED VIEW v
 
@@ -102,6 +110,8 @@ SELECT y FROM v WHERE y > 4
 8
 10
 
+# Not supported by Materialize.
+onlyif cockroach
 # Drop the index now.
 statement ok
 DROP INDEX v@i
@@ -117,22 +127,22 @@ SELECT y FROM v WHERE y > 4
 statement ok
 BEGIN
 
-statement error  pq: cannot refresh view in a multi-statement transaction
+statement error Unexpected keyword REFRESH at the beginning of a statement
 REFRESH MATERIALIZED VIEW v
 
 statement ok
 ROLLBACK
 
-statement error pq: cannot mutate materialized view "v"
+statement error cannot insert into materialized view 'materialize\.public\.v'
 INSERT INTO v VALUES (1, 2)
 
-statement error pq: cannot mutate materialized view "v"
+statement error cannot mutate materialized view 'materialize\.public\.v'
 UPDATE v SET x = 1 WHERE y = 1
 
-statement error pq: cannot mutate materialized view "v"
+statement error cannot mutate materialized view 'materialize\.public\.v'
 DELETE FROM v WHERE x = 1
 
-statement error pq: "v" is not a table
+statement error Expected a keyword at the beginning of a statement, found identifier "truncate"
 TRUNCATE v
 
 # Test that a materialized view with a unique index errors out if the refresh
@@ -149,7 +159,7 @@ CREATE UNIQUE INDEX i ON v_dup (x);
 statement ok
 INSERT INTO dup VALUES (1), (1);
 
-statement error pq: duplicate key value violates unique constraint "i"\nDETAIL: Key \(x\)=\(1\) already exists\.
+statement error Unexpected keyword REFRESH at the beginning of a statement
 REFRESH MATERIALIZED VIEW v_dup
 
 # We shouldn't be able to mix materialized and non materialized views in DDLs.
@@ -157,22 +167,22 @@ statement ok
 CREATE VIEW normal_view AS SELECT 1;
 CREATE MATERIALIZED VIEW materialized_view AS SELECT 1;
 
-statement error pq: "materialized_view" is a materialized view
+statement error materialized_view is not a view
 ALTER VIEW materialized_view RENAME TO newname
 
-statement error pq: "normal_view" is not a materialized view
+statement error normal_view is a view not a materialized view
 ALTER MATERIALIZED VIEW normal_view RENAME TO newname
 
-statement error pq: "materialized_view" is a materialized view
+statement error Expected left parenthesis, found SCHEMA
 ALTER VIEW materialized_view SET SCHEMA public
 
-statement error pq: "normal_view" is not a materialized view
+statement error Expected left parenthesis, found SCHEMA
 ALTER MATERIALIZED VIEW normal_view SET SCHEMA public
 
-statement error pq: "materialized_view" is a materialized view
+statement error materialized_view is not a view
 DROP VIEW materialized_view
 
-statement error pq: "normal_view" is not a materialized view
+statement error normal_view is a view not a materialized view
 DROP MATERIALIZED VIEW normal_view
 
 # Using REFRESH MATERIALIZED VIEW ... WITH NO DATA should result in
@@ -180,6 +190,8 @@ DROP MATERIALIZED VIEW normal_view
 statement ok
 CREATE MATERIALIZED VIEW with_options AS SELECT 1;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REFRESH MATERIALIZED VIEW with_options WITH DATA
 
@@ -188,11 +200,15 @@ SELECT * FROM with_options
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REFRESH MATERIALIZED VIEW with_options WITH NO DATA
 
 query I
 SELECT * FROM with_options
+----
+1
 
 # Regression test for null data in materialized views.
 statement ok
@@ -210,47 +226,65 @@ user testuser
 
 # testuser should not be able to refresh the materialized view without
 # ownership.
-statement error pq: must be owner of materialized view with_options
+statement error Unexpected keyword REFRESH at the beginning of a statement
 REFRESH MATERIALIZED VIEW with_options WITH NO DATA
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT root TO testuser
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 # testuser should now be able to refresh the materialized view as a member of
 # root.
 statement ok
 REFRESH MATERIALIZED VIEW with_options WITH NO DATA
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE root FROM testuser
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON DATABASE test TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER MATERIALIZED VIEW with_options OWNER TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 # root should still be able to refresh the view.
 statement ok
 REFRESH MATERIALIZED VIEW with_options WITH NO DATA
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 # testuser should now be able to refresh the materialized view as the owner.
 statement ok
 REFRESH MATERIALIZED VIEW with_options WITH NO DATA
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test CREATE MATERIALIZED VIEW referring to a sequence.
 statement ok
 CREATE SEQUENCE seq;
 CREATE MATERIALIZED VIEW view_from_seq AS (SELECT nextval('seq'))
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT * FROM view_from_seq
 ----
@@ -264,11 +298,15 @@ BEGIN
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM system.descriptor;
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SEQUENCE seq_2;
 CREATE MATERIALIZED VIEW view_from_seq_2 AS (SELECT nextval('seq_2'));

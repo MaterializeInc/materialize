@@ -24,9 +24,8 @@ mode cockroach
 
 subtest digest
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # NB: CockroachDB currently differs from Postgres, since the shaX functions
 # return a string in CockroachDB, while Postgres returns bytea.
 query BTT
@@ -56,7 +55,7 @@ SELECT digest(NULL, 'made up alg')
 ----
 NULL
 
-statement error pgcode 22023 cannot use "made up alg", no such hash algorithm
+statement error pgcode 22023 invalid hash algorithm 'made up alg'
 SELECT digest('cat', 'made up alg')
 
 subtest end
@@ -81,13 +80,15 @@ SELECT hmac('abc', 'key', NULL), hmac('abc', NULL, 'made up alg'), hmac(NULL, 'k
 ----
 NULL  NULL  NULL
 
-statement error pgcode 22023 cannot use "made up alg", no such hash algorithm
+statement error pgcode 22023 invalid hash algorithm 'made up alg'
 SELECT hmac('dog', 'key', 'made up alg')
 
 subtest end
 
 subtest gen_random_uuid
 
+# Not supported by Materialize.
+onlyif cockroach
 query IB
 SELECT length(gen_random_uuid()::BYTES), gen_random_uuid() = gen_random_uuid()
 ----
@@ -97,21 +98,25 @@ subtest end
 
 subtest gen_salt_invalid_algo
 
-statement error pgcode 22023 unknown salt algorithm
+statement error pgcode 22023 function "gen_salt" does not exist
 SELECT gen_salt('invalid')
 
-statement error pgcode 22023 unknown salt algorithm
+statement error pgcode 22023 function "gen_salt" does not exist
 SELECT gen_salt('invalid', 0)
 
 subtest end
 
 subtest gen_salt_des
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT char_length(gen_salt('des'))
 ----
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT char_length(gen_salt('des', rounds))
 FROM (VALUES (0), (25)) AS t (rounds)
@@ -120,19 +125,23 @@ FROM (VALUES (0), (25)) AS t (rounds)
 2
 
 # invalid rounds
-statement error pgcode 22023 invalid number of rounds
+statement error pgcode 22023 function "gen_salt" does not exist
 SELECT gen_salt('des', 1)
 
 subtest end
 
 subtest gen_salt_xdes
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT substr(salt, 1, 5), char_length(salt)
 FROM (SELECT gen_salt('xdes') AS salt)
 ----
 _J9..  9
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT substr(salt, 1, 5), char_length(salt)
 FROM (SELECT gen_salt('xdes', rounds) AS salt FROM (VALUES (0), (1), (16777215)) AS t (rounds))
@@ -142,27 +151,31 @@ _/...  9
 _zzzz  9
 
 # invalid even rounds
-statement error pgcode 22023 invalid number of rounds
+statement error pgcode 22023 function "gen_salt" does not exist
 SELECT gen_salt('xdes', 2)
 
 # invalid min rounds
-statement error pgcode 22023 invalid number of rounds
+statement error pgcode 22023 function "gen_salt" does not exist
 SELECT gen_salt('xdes', -1)
 
 # invalid max rounds
-statement error pgcode 22023 invalid number of rounds
+statement error pgcode 22023 function "gen_salt" does not exist
 SELECT gen_salt('xdes', 16777216)
 
 subtest end
 
 subtest gen_salt_md5
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT substr(salt, 1, 3), char_length(salt)
 FROM (SELECT gen_salt('md5') AS salt)
 ----
 $1$ 11
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT substr(salt, 1, 3), char_length(salt)
 FROM (SELECT gen_salt('md5', rounds) AS salt FROM (VALUES (0), (1000)) AS t (rounds))
@@ -171,13 +184,15 @@ $1$ 11
 $1$ 11
 
 # invalid rounds
-statement error pgcode 22023 invalid number of rounds
+statement error pgcode 22023 function "gen_salt" does not exist
 SELECT gen_salt('md5', 1)
 
 subtest end
 
 subtest gen_salt_bf
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT substr(salt, 1, 7), char_length(salt)
 FROM (SELECT gen_salt('bf', rounds) AS salt FROM (VALUES (0), (4), (31)) AS t (rounds))
@@ -187,27 +202,29 @@ $2a$04$ 29
 $2a$31$ 29
 
 # invalid min rounds
-statement error pgcode 22023 invalid number of salt rounds
+statement error pgcode 22023 function "gen_salt" does not exist
 SELECT gen_salt('bf', 3)
 
 # invalid max rounds
-statement error pgcode 22023 invalid number of salt rounds
+statement error pgcode 22023 function "gen_salt" does not exist
 SELECT gen_salt('bf', 32)
 
 subtest crypt_invalid_algo
 
 # invalid header
-statement error pgcode 22023 invalid salt algorithm
+statement error pgcode 22023 function "crypt" does not exist
 SELECT crypt('password', '')
 
 # invalid header
-statement error pgcode 22023 invalid salt algorithm
+statement error pgcode 22023 function "crypt" does not exist
 SELECT crypt('password', '$')
 
 subtest end
 
 subtest crypt_md5
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crypt(password, '$1$aRnqRmeP')
 FROM (VALUES
@@ -222,6 +239,8 @@ $1$aRnqRmeP$zSsYGTxby0DLjRezdRBT50
 $1$aRnqRmeP$79.GOqWdD1jolSFx6PGg5.
 $1$aRnqRmeP$Qtrye90cHoHamBO08sQKC1
 
+# Not supported by Materialize.
+onlyif cockroach
 # salt is truncated to 11 chars
 query TB
 SELECT hash1, hash1 = hash2
@@ -232,6 +251,8 @@ FROM (SELECT
 ----
 $1$aRnqRmeP$79.GOqWdD1jolSFx6PGg5.  true
 
+# Not supported by Materialize.
+onlyif cockroach
 # random salt can be less than 8 characters
 query T
 SELECT crypt('password', '$1$')
@@ -242,6 +263,8 @@ subtest end
 
 subtest crypt_bf
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crypt(password, '$2a$06$Ukv6DxN3PpZo4YboQRrIVO')
 FROM (VALUES
@@ -256,6 +279,8 @@ $2a$06$Ukv6DxN3PpZo4YboQRrIVOBxB6sdGuSnn.PViRLXxUFUiihB30ukm
 $2a$06$Ukv6DxN3PpZo4YboQRrIVO6UrBIvyPUuhsGQvYZyAvmsIjt02Ze3O
 $2a$06$Ukv6DxN3PpZo4YboQRrIVO9DZGS27nWDW5eSzsL/ckOByIGwpxf0a
 
+# Not supported by Materialize.
+onlyif cockroach
 # password is truncated to 72 chars
 query TBB
 SELECT hash72, hash71 != hash72, hash72 = hash73
@@ -268,6 +293,8 @@ FROM (SELECT
 ----
 $2a$06$Ukv6DxN3PpZo4YboQRrIVOIQPDI39RHxEgW32.ICmqRFFBxkR8ddC  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 # salt is truncated to 29 chars
 query TB
 SELECT hash1, hash1 = hash2
@@ -278,6 +305,8 @@ FROM (SELECT
 ----
 $2a$06$Ukv6DxN3PpZo4YboQRrIVO6UrBIvyPUuhsGQvYZyAvmsIjt02Ze3O  true
 
+# Not supported by Materialize.
+onlyif cockroach
 # test min and average num rounds (large num rounds take too long to run for a test)
 query T
 SELECT crypt('password', concat('$2a$', rounds, '$Ukv6DxN3PpZo4YboQRrIVO'))
@@ -287,31 +316,31 @@ $2a$04$Ukv6DxN3PpZo4YboQRrIVOSgyjUD9vDt2W.RjRVhm7XC2QTQrtLSK
 $2a$10$Ukv6DxN3PpZo4YboQRrIVOwLm63.TplP3REdrq258BBo3lUBnEbrm
 
 # invalid salt length
-statement error pgcode 22023 invalid salt length
+statement error pgcode 22023 function "crypt" does not exist
 SELECT crypt('password', '$2a$06$')
 
 # invalid salt length
-statement error pgcode 22023 invalid salt length
+statement error pgcode 22023 function "crypt" does not exist
 SELECT crypt('password', '$2a$06$Ukv6DxN3PpZo4YboQRrIV')
 
 # invalid round syntax
-statement error pgcode 22023 invalid salt rounds
+statement error pgcode 22023 function "crypt" does not exist
 SELECT crypt('password', '$2a$AA$Ukv6DxN3PpZo4YboQRrIVO')
 
 # invalid min rounds
-statement error pgcode 22023 invalid number of salt rounds
+statement error pgcode 22023 function "crypt" does not exist
 SELECT crypt('password', '$2a$03$Ukv6DxN3PpZo4YboQRrIVO')
 
 # invalid max rounds
-statement error pgcode 22023 invalid number of salt rounds
+statement error pgcode 22023 function "crypt" does not exist
 SELECT crypt('password', '$2a$32$Ukv6DxN3PpZo4YboQRrIVO')
 
 # invalid salt formatting
-statement error pgcode 22023 invalid salt format
+statement error pgcode 22023 function "crypt" does not exist
 SELECT crypt('password', '$2a$06AUkv6DxN3PpZo4YboQRrIVO')
 
 # invalid salt encoding
-statement error pgcode 22023 invalid salt encoding
+statement error pgcode 22023 function "crypt" does not exist
 SELECT crypt('password', '$2a$06$#kv6DxN3PpZo4YboQRrIVO')
 
 subtest end

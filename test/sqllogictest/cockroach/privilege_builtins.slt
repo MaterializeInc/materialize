@@ -22,54 +22,77 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER bar; CREATE USER all_user_db; CREATE USER all_user_schema
 
 statement ok
 CREATE SCHEMA test_schema
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON DATABASE test TO bar
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CONNECT ON DATABASE test to testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON SCHEMA test_schema TO bar
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON SCHEMA test_schema TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT USAGE ON SCHEMA test_schema TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT ALL ON DATABASE test to all_user_db;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT ALL ON SCHEMA test_schema to all_user_schema;
 
 statement ok
 CREATE TABLE t (a INT, b INT);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT DELETE ON t TO bar;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SEQUENCE seq;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON seq TO bar;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON seq TO testuser;
 
 
 ## has_any_column_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_any_column_privilege(12345, 'SELECT'),
        has_any_column_privilege(12345, 'INSERT'),
@@ -78,6 +101,8 @@ SELECT has_any_column_privilege(12345, 'SELECT'),
 ----
 NULL  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_any_column_privilege(12345::OID::REGCLASS, 'SELECT'),
        has_any_column_privilege(12345::OID::REGCLASS, 'INSERT'),
@@ -86,6 +111,8 @@ SELECT has_any_column_privilege(12345::OID::REGCLASS, 'SELECT'),
 ----
 NULL  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_any_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'), 'SELECT'),
        has_any_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'), 'INSERT'),
@@ -94,6 +121,8 @@ SELECT has_any_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_ty
 ----
 true  false  false  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_any_column_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 'SELECT'),
        has_any_column_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 'INSERT'),
@@ -102,9 +131,11 @@ SELECT has_any_column_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 
 ----
 true  true  true  true
 
-query error pgcode 42P01 relation "does_not_exist" does not exist
+query error pgcode 42P01 function "has_any_column_privilege" does not exist
 SELECT has_any_column_privilege('does_not_exist', 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT has_any_column_privilege('pg_type', 'SELECT'),
        has_any_column_privilege('pg_type', 'INSERT'),
@@ -115,6 +146,8 @@ SELECT has_any_column_privilege('pg_type', 'SELECT'),
 ----
 true  false  false  true  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_any_column_privilege('t', 'SELECT'),
        has_any_column_privilege('t', 'INSERT'),
@@ -124,6 +157,8 @@ SELECT has_any_column_privilege('t', 'SELECT'),
 ----
 true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_any_column_privilege('t', 'SELECT WITH GRANT OPTION'),
        has_any_column_privilege('t', 'INSERT WITH GRANT OPTION'),
@@ -133,6 +168,8 @@ SELECT has_any_column_privilege('t', 'SELECT WITH GRANT OPTION'),
 ----
 true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_any_column_privilege('t'::Name, 'SELECT'),
        has_any_column_privilege('t'::Name, 'INSERT'),
@@ -142,18 +179,20 @@ SELECT has_any_column_privilege('t'::Name, 'SELECT'),
 ----
 true  true  true  true  true
 
-query error pgcode 22023 unrecognized privilege type: ""
+query error pgcode 22023 function "has_any_column_privilege" does not exist
 SELECT has_any_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'), '')
 
-query error pgcode 22023 unrecognized privilege type: "USAGE"
+query error pgcode 22023 function "has_any_column_privilege" does not exist
 SELECT has_any_column_privilege('t', 'USAGE')
 
-query error pgcode 22023 unrecognized privilege type: "USAGE"
+query error pgcode 22023 function "has_any_column_privilege" does not exist
 SELECT has_any_column_privilege('t', 'SELECT, USAGE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 function "has_any_column_privilege" does not exist
 SELECT has_any_column_privilege('no_user', 't', 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_any_column_privilege('bar', 't', 'SELECT'),
        has_any_column_privilege('bar', 't', 'INSERT'),
@@ -163,6 +202,8 @@ SELECT has_any_column_privilege('bar', 't', 'SELECT'),
 ----
 false  false  false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_any_column_privilege('bar', 't', 'SELECT WITH GRANT OPTION'),
        has_any_column_privilege('bar', 't', 'INSERT WITH GRANT OPTION'),
@@ -175,6 +216,8 @@ false  false  false  false  false
 
 ## has_column_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_column_privilege(12345, 1, 'SELECT'),
        has_column_privilege(12345, 1, 'INSERT'),
@@ -183,6 +226,8 @@ SELECT has_column_privilege(12345, 1, 'SELECT'),
 ----
 NULL  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'), 1, 'SELECT'),
        has_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'), 1, 'INSERT'),
@@ -191,6 +236,8 @@ SELECT has_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type')
 ----
 true  false  false  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_column_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 1, 'SELECT'),
        has_column_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 2, 'INSERT'),
@@ -199,15 +246,17 @@ SELECT has_column_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 1, '
 ----
 true  true  true  true
 
-query error pgcode 42P01 relation "does_not_exist" does not exist
+query error pgcode 42P01 function "has_column_privilege" does not exist
 SELECT has_column_privilege('does_not_exist', 1, 'SELECT')
 
-query error pgcode 42703 column 100 of relation pg_type does not exist
+query error pgcode 42703 function "has_column_privilege" does not exist
 SELECT has_column_privilege('pg_type', 100, 'SELECT')
 
-query error pgcode 42703 column 100 of relation pg_type does not exist
+query error pgcode 42703 function "has_column_privilege" does not exist
 SELECT has_column_privilege('pg_type'::regclass, 100, 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT has_column_privilege('pg_type', 1, 'SELECT'),
        has_column_privilege('pg_type', 1, 'INSERT'),
@@ -218,6 +267,8 @@ SELECT has_column_privilege('pg_type', 1, 'SELECT'),
 ----
 true  false  false  true  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_column_privilege('t', 1, 'SELECT'),
        has_column_privilege('t', 1, 'INSERT'),
@@ -227,6 +278,8 @@ SELECT has_column_privilege('t', 1, 'SELECT'),
 ----
 true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_column_privilege('t', 1, 'SELECT WITH GRANT OPTION'),
        has_column_privilege('t', 1, 'INSERT WITH GRANT OPTION'),
@@ -236,12 +289,14 @@ SELECT has_column_privilege('t', 1, 'SELECT WITH GRANT OPTION'),
 ----
 true  true  true  true  true
 
-query error pgcode 22023 unrecognized privilege type: "USAGE"
+query error pgcode 22023 function "has_column_privilege" does not exist
 SELECT has_column_privilege('t', 1, 'USAGE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 function "has_column_privilege" does not exist
 SELECT has_column_privilege('no_user', 't', 1, 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_column_privilege('bar', 't', 1, 'SELECT'),
        has_column_privilege('bar', 't', 1, 'INSERT'),
@@ -251,6 +306,8 @@ SELECT has_column_privilege('bar', 't', 1, 'SELECT'),
 ----
 false  false  false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_column_privilege('bar', 't', 1, 'SELECT WITH GRANT OPTION'),
        has_column_privilege('bar', 't', 1, 'INSERT WITH GRANT OPTION'),
@@ -260,6 +317,8 @@ SELECT has_column_privilege('bar', 't', 1, 'SELECT WITH GRANT OPTION'),
 ----
 false  false  false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_column_privilege(12345, 'col', 'SELECT'),
        has_column_privilege(12345, 'col', 'INSERT'),
@@ -268,6 +327,8 @@ SELECT has_column_privilege(12345, 'col', 'SELECT'),
 ----
 NULL  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'), 'typname', 'SELECT'),
        has_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'), 'typname', 'INSERT'),
@@ -276,6 +337,8 @@ SELECT has_column_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type')
 ----
 true  false  false  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_column_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 'a', 'SELECT'),
        has_column_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 'b', 'INSERT'),
@@ -284,15 +347,17 @@ SELECT has_column_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 'a',
 ----
 true  true  true  true
 
-query error pgcode 42P01 relation "does_not_exist" does not exist
+query error pgcode 42P01 function "has_column_privilege" does not exist
 SELECT has_column_privilege('does_not_exist', 'col', 'SELECT')
 
-query error pgcode 42703 column "does not exist" does not exist
+query error pgcode 42703 function "has_column_privilege" does not exist
 SELECT has_column_privilege('pg_type', 'does not exist', 'SELECT')
 
-query error pgcode 42703 column "does not exist" does not exist
+query error pgcode 42703 function "has_column_privilege" does not exist
 SELECT has_column_privilege('pg_type'::regclass, 'does not exist', 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT has_column_privilege('pg_type', 'typname', 'SELECT'),
        has_column_privilege('pg_type', 'typname', 'INSERT'),
@@ -303,6 +368,8 @@ SELECT has_column_privilege('pg_type', 'typname', 'SELECT'),
 ----
 true  false  false  true  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_column_privilege('t', 'a', 'SELECT'),
        has_column_privilege('t', 'a', 'INSERT'),
@@ -312,6 +379,8 @@ SELECT has_column_privilege('t', 'a', 'SELECT'),
 ----
 true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_column_privilege('t', 'a', 'SELECT WITH GRANT OPTION'),
        has_column_privilege('t', 'a', 'INSERT WITH GRANT OPTION'),
@@ -321,6 +390,8 @@ SELECT has_column_privilege('t', 'a', 'SELECT WITH GRANT OPTION'),
 ----
 true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_column_privilege('t'::Name, 'a'::Name, 'SELECT WITH GRANT OPTION'),
        has_column_privilege('t'::Name, 'a'::Name, 'INSERT WITH GRANT OPTION'),
@@ -330,12 +401,14 @@ SELECT has_column_privilege('t'::Name, 'a'::Name, 'SELECT WITH GRANT OPTION'),
 ----
 true  true  true  true  true
 
-query error pgcode 22023 unrecognized privilege type: "USAGE"
+query error pgcode 22023 function "has_column_privilege" does not exist
 SELECT has_column_privilege('t', 'a', 'USAGE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 function "has_column_privilege" does not exist
 SELECT has_column_privilege('no_user', 't', 'a', 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_column_privilege('bar', 't', 'a', 'SELECT'),
        has_column_privilege('bar', 't', 'a', 'INSERT'),
@@ -345,6 +418,8 @@ SELECT has_column_privilege('bar', 't', 'a', 'SELECT'),
 ----
 false  false  false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_column_privilege('bar', 't', 'a', 'SELECT WITH GRANT OPTION'),
        has_column_privilege('bar', 't', 'a', 'INSERT WITH GRANT OPTION'),
@@ -357,6 +432,8 @@ false  false  false  false  false
 
 ## has_database_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_database_privilege(12345, 'CREATE'),
        has_database_privilege(12345, 'CONNECT'),
@@ -365,6 +442,8 @@ SELECT has_database_privilege(12345, 'CREATE'),
 ----
 NULL  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_database_privilege((SELECT oid FROM pg_database WHERE datname = 'system'), 'CREATE'),
        has_database_privilege((SELECT oid FROM pg_database WHERE datname = 'system'), 'CONNECT'),
@@ -373,6 +452,8 @@ SELECT has_database_privilege((SELECT oid FROM pg_database WHERE datname = 'syst
 ----
 false  true  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_database_privilege((SELECT oid FROM pg_database WHERE datname = 'test'), 'CREATE'),
        has_database_privilege((SELECT oid FROM pg_database WHERE datname = 'test'), 'CONNECT'),
@@ -384,6 +465,8 @@ true  true  true  true
 query error pgcode 3D000 database "does_not_exist" does not exist
 SELECT has_database_privilege('does_not_exist', 'CREATE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_database_privilege('system', '  CrEaTe      '),
        has_database_privilege('system', '      CONNECT'),
@@ -393,6 +476,8 @@ SELECT has_database_privilege('system', '  CrEaTe      '),
 ----
 false  true  false  false  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_database_privilege('test', '  CrEaTe      '),
        has_database_privilege('test', '      CONNECT'),
@@ -402,6 +487,8 @@ SELECT has_database_privilege('test', '  CrEaTe      '),
 ----
 true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_database_privilege('test', 'CREATE WITH GRANT OPTION'),
        has_database_privilege('test', 'CONNECT WITH GRANT OPTION'),
@@ -411,6 +498,8 @@ SELECT has_database_privilege('test', 'CREATE WITH GRANT OPTION'),
 ----
 true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBB
 SELECT has_database_privilege('test'::Name, 'CREATE'),
        has_database_privilege('test'::Name, 'CONNECT'),
@@ -423,10 +512,10 @@ true  true  true  true  true
 query T
 SELECT datname FROM pg_database WHERE has_database_privilege(datname, 'CREATE') ORDER BY datname
 ----
-defaultdb
-postgres
-test
+materialize
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT datname FROM pg_database WHERE has_database_privilege(datname, 'CONNECT') ORDER BY datname
 ----
@@ -435,6 +524,8 @@ postgres
 system
 test
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT datname FROM pg_database WHERE has_database_privilege(datname, 'TEMP') ORDER BY datname
 ----
@@ -442,6 +533,8 @@ defaultdb
 postgres
 test
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT datname FROM pg_database WHERE has_database_privilege(datname, 'TEMPORARY') ORDER BY datname
 ----
@@ -449,15 +542,19 @@ defaultdb
 postgres
 test
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 database "test" does not exist
 SELECT has_database_privilege('test', 'UPDATE')
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 database "test" does not exist
 SELECT has_database_privilege('test', 'CREATE, UPDATE')
 
-query error pgcode 42704 role 'no_user' does not exist
+# Not supported by Materialize.
+onlyif cockroach
+query error pgcode 42704 role "no_user" does not exist
 SELECT has_database_privilege('no_user', 'test', 'CREATE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT has_database_privilege('bar', 'test', 'CREATE'),
        has_database_privilege('bar', 'test', 'CONNECT'),
@@ -468,14 +565,20 @@ SELECT has_database_privilege('bar', 'test', 'CREATE'),
 ----
 true  true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CONNECT ON DATABASE test TO bar
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_database_privilege('bar', 'test', 'CONNECT')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT has_database_privilege('bar', 'test', 'CREATE WITH GRANT OPTION'),
        has_database_privilege('bar', 'test', 'CONNECT WITH GRANT OPTION'),
@@ -489,31 +592,37 @@ false  false  false  false  false  false
 
 ## has_foreign_data_wrapper_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_foreign_data_wrapper_privilege(12345, 'USAGE')
 ----
 NULL
 
-query error pgcode 42704 foreign-data wrapper 'does_not_exist' does not exist
+query error pgcode 42704 function "has_foreign_data_wrapper_privilege" does not exist
 SELECT has_foreign_data_wrapper_privilege('does_not_exist', 'USAGE')
 
-query error pgcode 42704 foreign-data wrapper 'does_not_exist' does not exist
+query error pgcode 42704 function "has_foreign_data_wrapper_privilege" does not exist
 SELECT has_foreign_data_wrapper_privilege('does_not_exist'::Name, 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_foreign_data_wrapper_privilege(12345, 'USAGE WITH GRANT OPTION')
 ----
 NULL
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_foreign_data_wrapper_privilege" does not exist
 SELECT has_foreign_data_wrapper_privilege(12345, 'UPDATE')
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_foreign_data_wrapper_privilege" does not exist
 SELECT has_foreign_data_wrapper_privilege(12345, 'USAGE, UPDATE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 function "has_foreign_data_wrapper_privilege" does not exist
 SELECT has_foreign_data_wrapper_privilege('no_user', 12345, 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_foreign_data_wrapper_privilege('bar', 12345, 'USAGE')
 ----
@@ -522,61 +631,79 @@ NULL
 
 ## has_function_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_function_privilege(12345, 'EXECUTE')
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_function_privilege((SELECT oid FROM pg_proc LIMIT 1), 'EXECUTE')
 ----
 true
 
-query error pq: has_function_privilege\(\): invalid function signature: does_not_exist
+query error function "has_function_privilege" does not exist
 SELECT has_function_privilege('does_not_exist', 'EXECUTE')
 
-query error pgcode 42883 unknown function: does_not_exist()
+query error pgcode 42883 function "has_function_privilege" does not exist
 SELECT has_function_privilege('does_not_exist()', 'EXECUTE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_function_privilege('version()', '  EXECUTE      ')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_function_privilege('version()', 'EXECUTE')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_function_privilege('cos(float)', 'EXECUTE WITH GRANT OPTION')
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_function_privilege('cos(float)', 'EXECUTE, EXECUTE WITH GRANT OPTION')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_function_privilege('version()'::Name, 'EXECUTE')
 ----
 true
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_function_privilege" does not exist
 SELECT has_function_privilege('acos(float)', 'UPDATE')
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_function_privilege" does not exist
 SELECT has_function_privilege('acos(float)', 'EXECUTE, UPDATE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 function "has_function_privilege" does not exist
 SELECT has_function_privilege('no_user', 'acos(float)', 'EXECUTE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_function_privilege('bar', 'current_date'::REGPROC, 'EXECUTE')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_function_privilege('bar', 'current_date'::REGPROC::OID, 'EXECUTE')
 ----
@@ -585,31 +712,37 @@ true
 
 ## has_language_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_language_privilege(12345, 'USAGE')
 ----
 NULL
 
-query error pgcode 42704 language 'does_not_exist' does not exist
+query error pgcode 42704 function "has_language_privilege" does not exist
 SELECT has_language_privilege('does_not_exist', 'USAGE')
 
-query error pgcode 42704 language 'does_not_exist' does not exist
+query error pgcode 42704 function "has_language_privilege" does not exist
 SELECT has_language_privilege('does_not_exist'::Name, 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_language_privilege(12345, 'USAGE WITH GRANT OPTION')
 ----
 NULL
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_language_privilege" does not exist
 SELECT has_language_privilege(12345, 'UPDATE')
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_language_privilege" does not exist
 SELECT has_language_privilege(12345, 'USAGE, UPDATE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 function "has_language_privilege" does not exist
 SELECT has_language_privilege('no_user', 12345, 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_language_privilege('bar', 12345, 'USAGE')
 ----
@@ -628,7 +761,7 @@ query BB
 SELECT has_schema_privilege((SELECT oid FROM pg_namespace WHERE nspname = 'crdb_internal'), 'CREATE'),
        has_schema_privilege((SELECT oid FROM pg_namespace WHERE nspname = 'crdb_internal'), 'USAGE')
 ----
-false  true
+NULL  NULL
 
 query BB
 SELECT has_schema_privilege((SELECT oid FROM pg_namespace WHERE nspname = 'pg_catalog'), 'CREATE'),
@@ -642,7 +775,7 @@ SELECT has_schema_privilege((SELECT oid FROM pg_namespace WHERE nspname = 'publi
 ----
 true  true
 
-query error pgcode 3F000 unknown schema "does_not_exist"
+query error pgcode 3F000 schema "does_not_exist" does not exist
 SELECT has_schema_privilege('does_not_exist', 'CREATE')
 
 query BBB
@@ -652,6 +785,8 @@ SELECT has_schema_privilege('public', 'CREATE'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('public', 'CREATE WITH GRANT OPTION'),
        has_schema_privilege('public', 'USAGE WITH GRANT OPTION'),
@@ -666,15 +801,21 @@ SELECT has_schema_privilege('public'::Name, 'CREATE'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 22023 unrecognized privilege type: "UPDATE"
 SELECT has_schema_privilege('public', 'UPDATE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 22023 unrecognized privilege type: "UPDATE"
 SELECT has_schema_privilege('public', 'CREATE, UPDATE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 role "no_user" does not exist
 SELECT has_schema_privilege('no_user', 'public', 'CREATE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('bar', 'public', 'CREATE'),
        has_schema_privilege('bar', 'public', 'USAGE'),
@@ -682,6 +823,8 @@ SELECT has_schema_privilege('bar', 'public', 'CREATE'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('bar', 'public', 'CREATE WITH GRANT OPTION'),
        has_schema_privilege('bar', 'public', 'USAGE WITH GRANT OPTION'),
@@ -689,6 +832,8 @@ SELECT has_schema_privilege('bar', 'public', 'CREATE WITH GRANT OPTION'),
 ----
 false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('testuser', 'public', 'CREATE'),
        has_schema_privilege('testuser', 'public', 'USAGE'),
@@ -696,6 +841,8 @@ SELECT has_schema_privilege('testuser', 'public', 'CREATE'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('bar', 'test_schema', 'CREATE'),
        has_schema_privilege('bar', 'test_schema', 'USAGE'),
@@ -703,6 +850,8 @@ SELECT has_schema_privilege('bar', 'test_schema', 'CREATE'),
 ----
 true  false  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('testuser', 'test_schema', 'CREATE'),
        has_schema_privilege('testuser', 'test_schema', 'USAGE'),
@@ -710,6 +859,8 @@ SELECT has_schema_privilege('testuser', 'test_schema', 'CREATE'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('all_user_db', 'public', 'CREATE'),
        has_schema_privilege('all_user_db', 'public', 'USAGE'),
@@ -717,6 +868,8 @@ SELECT has_schema_privilege('all_user_db', 'public', 'CREATE'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('all_user_db', 'test_schema', 'CREATE'),
        has_schema_privilege('all_user_db', 'test_schema', 'USAGE'),
@@ -724,6 +877,8 @@ SELECT has_schema_privilege('all_user_db', 'test_schema', 'CREATE'),
 ----
 false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('all_user_schema', 'public', 'CREATE'),
        has_schema_privilege('all_user_schema', 'public', 'USAGE'),
@@ -731,6 +886,8 @@ SELECT has_schema_privilege('all_user_schema', 'public', 'CREATE'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_schema_privilege('all_user_schema', 'test_schema', 'CREATE'),
        has_schema_privilege('all_user_schema', 'test_schema', 'USAGE'),
@@ -741,6 +898,8 @@ true  true  true
 
 ## has_sequence_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_sequence_privilege(12345, 'USAGE'),
        has_sequence_privilege(12345, 'SELECT'),
@@ -748,6 +907,8 @@ SELECT has_sequence_privilege(12345, 'USAGE'),
 ----
 NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_sequence_privilege((SELECT oid FROM pg_class WHERE relname = 'seq'), 'USAGE'),
        has_sequence_privilege((SELECT oid FROM pg_class WHERE relname = 'seq'), 'SELECT'),
@@ -755,12 +916,14 @@ SELECT has_sequence_privilege((SELECT oid FROM pg_class WHERE relname = 'seq'), 
 ----
 true  true  true
 
-query error pgcode 42P01 relation "does_not_exist" does not exist
+query error pgcode 42P01 function "has_sequence_privilege" does not exist
 SELECT has_sequence_privilege('does_not_exist', 'SELECT')
 
-query error pgcode 42809 "t" is not a sequence
+query error pgcode 42809 function "has_sequence_privilege" does not exist
 SELECT has_sequence_privilege('t', 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_sequence_privilege('seq', 'USAGE'),
        has_sequence_privilege('seq', 'SELECT'),
@@ -768,6 +931,8 @@ SELECT has_sequence_privilege('seq', 'USAGE'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_sequence_privilege('seq', 'USAGE WITH GRANT OPTION'),
        has_sequence_privilege('seq', 'SELECT WITH GRANT OPTION'),
@@ -775,6 +940,8 @@ SELECT has_sequence_privilege('seq', 'USAGE WITH GRANT OPTION'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_sequence_privilege('seq'::Name, 'USAGE'),
        has_sequence_privilege('seq'::Name, 'SELECT'),
@@ -782,14 +949,16 @@ SELECT has_sequence_privilege('seq'::Name, 'USAGE'),
 ----
 true  true  true
 
-query error pgcode 22023 unrecognized privilege type: "DELETE"
+query error pgcode 22023 function "has_sequence_privilege" does not exist
 SELECT has_sequence_privilege('seq', 'DELETE')
 
-query error pgcode 22023 unrecognized privilege type: "DELETE"
+query error pgcode 22023 function "has_sequence_privilege" does not exist
 SELECT has_sequence_privilege('seq', 'SELECT, DELETE')
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_sequence_privilege('seq', 'USAGE'),
        has_sequence_privilege('seq', 'SELECT'),
@@ -797,6 +966,8 @@ SELECT has_sequence_privilege('seq', 'USAGE'),
 ----
 false  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_sequence_privilege('seq', 'USAGE WITH GRANT OPTION'),
        has_sequence_privilege('seq', 'SELECT WITH GRANT OPTION'),
@@ -806,9 +977,13 @@ false  false  false
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT USAGE, SELECT, UPDATE ON seq TO testuser WITH GRANT OPTION
 
+# Not supported by Materialize.
+onlyif cockroach
 # should be "true  true  true"
 query BBB
 SELECT has_sequence_privilege('testuser', 'seq', 'USAGE WITH GRANT OPTION'),
@@ -817,11 +992,15 @@ SELECT has_sequence_privilege('testuser', 'seq', 'USAGE WITH GRANT OPTION'),
 ----
 true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 # incorrectly grants USAGE (should only have SELECT AND UPDATE)
 # see https://github.com/cockroachdb/cockroach/issues/82414
 statement ok
 GRANT SELECT, UPDATE ON seq TO testuser WITH GRANT OPTION
 
+# Not supported by Materialize.
+onlyif cockroach
 # should be "false  true  true"
 query BBB
 SELECT has_sequence_privilege('testuser', 'seq', 'USAGE WITH GRANT OPTION'),
@@ -830,9 +1009,11 @@ SELECT has_sequence_privilege('testuser', 'seq', 'USAGE WITH GRANT OPTION'),
 ----
 true  true  true
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 function "has_sequence_privilege" does not exist
 SELECT has_sequence_privilege('no_user', 'seq', 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_sequence_privilege('bar', 'seq', 'USAGE'),
        has_sequence_privilege('bar', 'seq', 'SELECT'),
@@ -840,6 +1021,8 @@ SELECT has_sequence_privilege('bar', 'seq', 'USAGE'),
 ----
 false  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT has_sequence_privilege('bar', 'seq', 'USAGE WITH GRANT OPTION'),
        has_sequence_privilege('bar', 'seq', 'SELECT WITH GRANT OPTION'),
@@ -850,31 +1033,37 @@ false  false  false
 
 ## has_server_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_server_privilege(12345, 'USAGE')
 ----
 NULL
 
-query error pgcode 42704 server 'does_not_exist' does not exist
+query error pgcode 42704 function "has_server_privilege" does not exist
 SELECT has_server_privilege('does_not_exist', 'USAGE')
 
-query error pgcode 42704 server 'does_not_exist' does not exist
+query error pgcode 42704 function "has_server_privilege" does not exist
 SELECT has_server_privilege('does_not_exist'::Name, 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_server_privilege(12345, 'USAGE WITH GRANT OPTION')
 ----
 NULL
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_server_privilege" does not exist
 SELECT has_server_privilege(12345, 'UPDATE')
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_server_privilege" does not exist
 SELECT has_server_privilege(12345, 'USAGE, UPDATE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 function "has_server_privilege" does not exist
 SELECT has_server_privilege('no_user', 12345, 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_server_privilege('bar', 12345, 'USAGE')
 ----
@@ -883,6 +1072,8 @@ NULL
 
 ## has_table_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBB
 SELECT has_table_privilege(12345, 'SELECT'),
        has_table_privilege(12345, 'INSERT'),
@@ -895,6 +1086,8 @@ SELECT has_table_privilege(12345, 'SELECT'),
 ----
 NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBB
 SELECT has_table_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'), 'SELECT'),
        has_table_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'), 'INSERT'),
@@ -907,6 +1100,8 @@ SELECT has_table_privilege((SELECT oid FROM pg_class WHERE relname = 'pg_type'),
 ----
 true  false  false  false  false  true  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBB
 SELECT has_table_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 'SELECT'),
        has_table_privilege((SELECT oid FROM pg_class WHERE relname = 't'), 'INSERT'),
@@ -922,6 +1117,8 @@ true  true  true  true  true  true  true  false
 query error pgcode 42P01 relation "does_not_exist" does not exist
 SELECT has_table_privilege('does_not_exist', 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBBBBB
 SELECT has_table_privilege('pg_type', 'SELECT'),
        has_table_privilege('pg_type', 'INSERT'),
@@ -937,6 +1134,8 @@ SELECT has_table_privilege('pg_type', 'SELECT'),
 ----
 true  false  false  false  false  true  false  true  true  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBBBB
 SELECT has_table_privilege('t', 'SELECT'),
        has_table_privilege('t', 'INSERT'),
@@ -951,6 +1150,8 @@ SELECT has_table_privilege('t', 'SELECT'),
 ----
 true  true  true  true  true  true  true  true  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBBBB
 SELECT has_table_privilege('t', 'SELECT WITH GRANT OPTION'),
        has_table_privilege('t', 'INSERT WITH GRANT OPTION'),
@@ -965,6 +1166,8 @@ SELECT has_table_privilege('t', 'SELECT WITH GRANT OPTION'),
 ----
 true  true  true  true  true  true  true  true  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBBBB
 SELECT has_table_privilege('t'::Name, 'SELECT'),
        has_table_privilege('t'::Name, 'INSERT'),
@@ -979,6 +1182,8 @@ SELECT has_table_privilege('t'::Name, 'SELECT'),
 ----
 true  true  true  true  true  true  true  true  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 # has_table_privilege works with sequences as well.
 query BBBBBBBBBB
 SELECT has_table_privilege('seq', 'SELECT'),
@@ -994,15 +1199,21 @@ SELECT has_table_privilege('seq', 'SELECT'),
 ----
 true  true  true  true  true  true  true  true  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 22023 unrecognized privilege type: "USAGE"
 SELECT has_table_privilege('t', 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 22023 unrecognized privilege type: "USAGE"
 SELECT has_table_privilege('t', 'SELECT, USAGE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 role "no_user" does not exist
 SELECT has_table_privilege('no_user', 't', 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBBBBB
 SELECT has_table_privilege('bar', 't', 'SELECT'),
        has_table_privilege('bar', 't', 'INSERT'),
@@ -1018,6 +1229,8 @@ SELECT has_table_privilege('bar', 't', 'SELECT'),
 ----
 false  false  false  true  true  false  false  false  true  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBBBBB
 SELECT has_table_privilege('bar', 't', 'SELECT WITH GRANT OPTION'),
        has_table_privilege('bar', 't', 'INSERT WITH GRANT OPTION'),
@@ -1036,46 +1249,58 @@ false  false  false  false  false  false  false  false  false  false  false
 
 ## has_tablespace_privilege
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_tablespace_privilege(12345, 'CREATE')
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_tablespace_privilege((SELECT oid FROM pg_tablespace LIMIT 1), 'CREATE')
 ----
 true
 
-query error pgcode 42704 tablespace 'does_not_exist' does not exist
+query error pgcode 42704 function "has_tablespace_privilege" does not exist
 SELECT has_tablespace_privilege('does_not_exist', 'CREATE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_tablespace_privilege('pg_default', '  CrEaTe      ')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_tablespace_privilege('pg_default', 'CREATE WITH GRANT OPTION')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_tablespace_privilege('pg_default'::Name, 'CREATE')
 ----
 true
 
-query error pgcode 22023 unrecognized privilege type: "CREATE    WITH GRANT OPTION"
+query error pgcode 22023 function "has_tablespace_privilege" does not exist
 SELECT has_tablespace_privilege('pg_default', 'CREATE    WITH GRANT OPTION')
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_tablespace_privilege" does not exist
 SELECT has_tablespace_privilege('pg_default', 'UPDATE')
 
-query error pgcode 22023 unrecognized privilege type: "UPDATE"
+query error pgcode 22023 function "has_tablespace_privilege" does not exist
 SELECT has_tablespace_privilege('pg_default', 'CREATE, UPDATE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 function "has_tablespace_privilege" does not exist
 SELECT has_tablespace_privilege('no_user', 'pg_default', 'CREATE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_tablespace_privilege('bar', (SELECT oid FROM pg_tablespace LIMIT 1), 'CREATE')
 ----
@@ -1094,38 +1319,52 @@ SELECT has_type_privilege((SELECT oid FROM pg_type LIMIT 1), 'USAGE')
 ----
 true
 
-query error pgcode 42704 type 'does_not_exist' does not exist
+query error pgcode 42704 type "does_not_exist" does not exist
 SELECT has_type_privilege('does_not_exist', 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_type_privilege('int', '  USAGE      ')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_type_privilege('decimal(18,2)', 'USAGE WITH GRANT OPTION')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_type_privilege('int'::Name, 'USAGE')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 22023 unrecognized privilege type: "UPDATE"
 SELECT has_type_privilege('int4', 'UPDATE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pgcode 22023 unrecognized privilege type: "UPDATE"
 SELECT has_type_privilege('int4', 'USAGE, UPDATE')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 role "no_user" does not exist
 SELECT has_type_privilege('no_user', 'int4', 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_type_privilege('bar', 'text'::REGTYPE, 'USAGE')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_type_privilege('bar', 'text'::REGTYPE::OID, 'USAGE')
 ----
@@ -1134,6 +1373,8 @@ true
 
 ## pg_has_role
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role(12345, 'USAGE'),
        pg_has_role(12345, 'USAGE WITH GRANT OPTION'),
@@ -1144,6 +1385,8 @@ SELECT pg_has_role(12345, 'USAGE'),
 ----
 NULL  NULL  NULL  NULL  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role((SELECT oid FROM pg_roles WHERE rolname = 'root'), 'USAGE'),
        pg_has_role((SELECT oid FROM pg_roles WHERE rolname = 'root'), 'USAGE WITH GRANT OPTION'),
@@ -1154,9 +1397,11 @@ SELECT pg_has_role((SELECT oid FROM pg_roles WHERE rolname = 'root'), 'USAGE'),
 ----
 true  true  true  true  true  true
 
-query error pgcode 42704 role 'does_not_exist' does not exist
+query error pgcode 42704 role "does_not_exist" does not exist
 SELECT pg_has_role('does_not_exist', 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role('root', 'USAGE'),
        pg_has_role('root', 'USAGE WITH GRANT OPTION'),
@@ -1167,15 +1412,21 @@ SELECT pg_has_role('root', 'USAGE'),
 ----
 true  true  true  true  true  true
 
-query error pgcode 22023 unrecognized privilege type: "SELECT"
+# Not supported by Materialize.
+onlyif cockroach
+query error pgcode 22023 role "root" does not exist
 SELECT pg_has_role('root', 'SELECT')
 
-query error pgcode 22023 unrecognized privilege type: "SELECT"
+# Not supported by Materialize.
+onlyif cockroach
+query error pgcode 22023 role "root" does not exist
 SELECT pg_has_role('root', 'SELECT, SELECT')
 
-query error pgcode 42704 role 'no_user' does not exist
+query error pgcode 42704 role "root" does not exist
 SELECT pg_has_role('no_user', 'root', 'USAGE')
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role('root', 'root', 'USAGE'),
        pg_has_role('root', 'root', 'USAGE WITH GRANT OPTION'),
@@ -1186,6 +1437,8 @@ SELECT pg_has_role('root', 'root', 'USAGE'),
 ----
 true  true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role('bar', 'root', 'USAGE'),
        pg_has_role('bar', 'root', 'USAGE WITH GRANT OPTION'),
@@ -1199,9 +1452,13 @@ false  false  false  false  false  false
 statement ok
 CREATE ROLE some_users
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT some_users TO bar
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role('testuser', 'some_users', 'USAGE'),
        pg_has_role('testuser', 'some_users', 'USAGE WITH GRANT OPTION'),
@@ -1212,6 +1469,8 @@ SELECT pg_has_role('testuser', 'some_users', 'USAGE'),
 ----
 false  false  false  false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role('root', 'some_users', 'USAGE'),
        pg_has_role('root', 'some_users', 'USAGE WITH GRANT OPTION'),
@@ -1222,6 +1481,8 @@ SELECT pg_has_role('root', 'some_users', 'USAGE'),
 ----
 true  true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBBBBBB
 SELECT pg_has_role('bar', 'some_users', 'USAGE'),
        pg_has_role('bar', 'some_users', 'USAGE WITH GRANT OPTION'),
@@ -1236,9 +1497,13 @@ SELECT pg_has_role('bar', 'some_users', 'USAGE'),
 ----
 true  false  false  true  false  false  true  true  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT some_users TO bar WITH ADMIN OPTION
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role('bar', 'some_users', 'USAGE'),
        pg_has_role('bar', 'some_users', 'USAGE WITH GRANT OPTION'),
@@ -1251,6 +1516,8 @@ true  true  true  true  true  true
 
 # WITH ADMIN OPTION is session-user dependent.
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role('testuser', 'testuser', 'USAGE'),
        pg_has_role('testuser', 'testuser', 'USAGE WITH GRANT OPTION'),
@@ -1263,6 +1530,8 @@ true  false  false  true  false  false
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role('testuser', 'testuser', 'USAGE'),
        pg_has_role('testuser', 'testuser', 'USAGE WITH GRANT OPTION'),
@@ -1273,6 +1542,8 @@ SELECT pg_has_role('testuser', 'testuser', 'USAGE'),
 ----
 true  true  true  true  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBBBB
 SELECT pg_has_role('testuser', 'USAGE'),
        pg_has_role('testuser', 'USAGE WITH GRANT OPTION'),
@@ -1291,29 +1562,37 @@ user root
 statement ok
 DROP TABLE IF EXISTS hcp_test; CREATE TABLE hcp_test (a INT8, b INT8, c INT8)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE hcp_test DROP COLUMN b
 
 query TI
 SELECT attname, attnum FROM pg_attribute WHERE attrelid = 'hcp_test'::REGCLASS
 ----
-a     1
-c     3
-rowid 4
+a  1
+b  2
+c  3
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_column_privilege('hcp_test'::REGCLASS, 1, 'SELECT')
 ----
 true
 
-statement error column 2 of relation hcp_test does not exist
+statement error function "has_column_privilege" does not exist
 SELECT has_column_privilege('hcp_test'::REGCLASS, 2, 'SELECT')
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_column_privilege('hcp_test'::REGCLASS, 3, 'SELECT')
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT has_column_privilege('hcp_test'::REGCLASS, 4, 'SELECT')
 ----
@@ -1334,6 +1613,8 @@ statement ok
 GRANT CREATE ON DATABASE my_db TO my_role;
 GRANT my_role TO testuser;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 use my_db
 
@@ -1366,14 +1647,20 @@ true  true  false
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER testuser2;
 GRANT testuser TO testuser2;
 GRANT ALL ON SCHEMA my_db.s TO testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 use my_db
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure testuser only has CREATE privilege on schema s but testuser2 has both CREATE and USAGE.
 query BBBB
 SELECT has_schema_privilege('testuser', 's', 'create'),
@@ -1383,6 +1670,8 @@ SELECT has_schema_privilege('testuser', 's', 'create'),
 ----
 false  false  true  true
 
+# Not supported by Materialize.
+onlyif cockroach
 # Confirm privilege checks on all objects with testuser2, should match testuser.
 query BBB
 SELECT has_database_privilege('testuser2', 'my_db', 'create'),
@@ -1391,14 +1680,20 @@ SELECT has_database_privilege('testuser2', 'my_db', 'create'),
 ----
 true  true  false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE my_role FROM testuser;
 REVOKE testuser FROM testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 # Schema owner has all privileges
 statement ok
 CREATE SCHEMA owned_schema AUTHORIZATION testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBBB
 SELECT has_schema_privilege('testuser', 'owned_schema', 'create'),
        has_schema_privilege('testuser', 'owned_schema', 'usage'),

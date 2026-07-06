@@ -26,14 +26,15 @@ subtest regression45707
 
 user root
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE DATABASE d45707; CREATE TABLE d45707.t45707(x INT);
   GRANT CONNECT ON DATABASE d45707 TO testuser;
   GRANT SELECT ON d45707.t45707 TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON DATABASE d45707 IS 'd45707';
 COMMENT ON TABLE d45707.t45707 IS 't45707';
@@ -47,7 +48,7 @@ SET DATABASE = d45707
 
 # Verify the user cannot modify the comments
 
-statement error user testuser does not have CREATE privilege on database d45707
+statement error unknown database 'd45707'
 COMMENT ON DATABASE d45707 IS 'd45707'
 
 onlyif config local-legacy-schema-changer
@@ -55,7 +56,7 @@ statement error user testuser does not have CREATE privilege on relation t45707
 COMMENT ON TABLE d45707.t45707 IS 't45707'
 
 skipif config local-legacy-schema-changer
-statement error must be owner of table t45707 or have CREATE privilege on table t45707
+statement error unknown schema 'd45707'
 COMMENT ON TABLE d45707.t45707 IS 't45707'
 
 onlyif config local-legacy-schema-changer
@@ -63,7 +64,7 @@ statement error user testuser does not have CREATE privilege on relation t45707
 COMMENT ON COLUMN d45707.t45707.x IS 'x45707'
 
 skipif config local-legacy-schema-changer
-statement error must be owner of table t45707 or have CREATE privilege on table t45707
+statement error unknown schema 'd45707'
 COMMENT ON COLUMN d45707.t45707.x IS 'x45707'
 
 onlyif config local-legacy-schema-changer
@@ -71,11 +72,13 @@ statement error user testuser does not have CREATE privilege on relation t45707
 COMMENT ON INDEX d45707.t45707@t45707_pkey IS 'p45707'
 
 skipif config local-legacy-schema-changer
-statement error must be owner of table t45707 or have CREATE privilege on table t45707
+statement error Expected IS, found operator "@"
 COMMENT ON INDEX d45707.t45707@t45707_pkey IS 'p45707'
 
 # Verify that the user can view the comments
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT shobj_description(oid, 'pg_database')
   FROM pg_database
@@ -83,6 +86,8 @@ SELECT shobj_description(oid, 'pg_database')
 ----
 d45707
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT col_description(attrelid, attnum)
   FROM pg_attribute
@@ -90,11 +95,15 @@ SELECT col_description(attrelid, attnum)
 ----
 x45707
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT obj_description('t45707'::REGCLASS)
 ----
 t45707
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT obj_description(indexrelid)
   FROM pg_index
@@ -107,14 +116,20 @@ p45707
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT ALL ON DATABASE d45707 TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT ALL ON TABLE d45707.t45707 TO testuser
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 COMMENT ON DATABASE d45707 IS 'd45707_2';
 COMMENT ON TABLE d45707.t45707 IS 't45707_2';

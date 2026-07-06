@@ -28,9 +28,8 @@ mode cockroach
 statement ok
 SET statement_timeout = '10s';
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE DATABASE IF NOT EXISTS db1;
 CREATE DATABASE IF NOT EXISTS db2;
@@ -98,9 +97,13 @@ CREATE ROLE role_foo;
 statement ok;
 CREATE ROLE role_bar;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT role_bar TO role_foo WITH ADMIN OPTION;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok;
 GRANT role_foo TO testuser WITH ADMIN OPTION;
 
@@ -114,25 +117,32 @@ BEGIN;
 query TTT colnames
 SELECT * FROM information_schema.applicable_roles ORDER BY role_name;
 ----
-grantee   role_name  is_grantable
-role_foo  role_bar   YES
-testuser  role_foo   YES
+grantee role_name is_grantable
 
+
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 REVOKE role_foo FROM testuser;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SAVEPOINT before_invalid_grant
 
 # This grant should fail as testuser no longer has right to this grant
 # via role_foo.
 
-statement error testuser is not a superuser or role admin for role role_bar
+statement error transaction in read\-only mode
 GRANT role_bar TO testuser;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ROLLBACK TO SAVEPOINT before_invalid_grant
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT colnames
 SELECT * FROM information_schema.applicable_roles;
 ----

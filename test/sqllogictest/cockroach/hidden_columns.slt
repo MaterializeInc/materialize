@@ -22,9 +22,8 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (x INT NOT VISIBLE);
 CREATE TABLE kv (
@@ -34,22 +33,28 @@ CREATE TABLE kv (
 
 # Verify that hidden columns can be explicitly inserted into.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t(x) VALUES (123)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO kv(k,v) VALUES (123,456);
 
 # Verify that hidden columns cannot be implicitly inserted into
 
-statement error INSERT has more expressions than target columns, 1 expressions for 0 targets
+statement error unknown catalog item 't'
 INSERT INTO t VALUES (123)
 
-statement error INSERT has more expressions than target columns, 2 expressions for 0 targets
+statement error unknown catalog item 'kv'
 INSERT INTO kv VALUES (111, 222)
 
 # Verify the right columns are hidden.
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE t
 ----
@@ -61,11 +66,15 @@ t  CREATE TABLE public.t (
 
 # Check that stars expand to no columns.
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 42, * FROM t
 ----
 42
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 42, * FROM kv
 ----
@@ -73,6 +82,8 @@ SELECT 42, * FROM kv
 
 # Check that the hidden column can be selected explicitly.
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT 42, x FROM t
 ----
@@ -80,9 +91,13 @@ SELECT 42, x FROM t
 
 # Check that the hidden column can be renamed
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE kv RENAME COLUMN v to x;
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT x FROM t
 ----
@@ -90,32 +105,44 @@ SELECT x FROM t
 
 # Verify indexes can be created on hidden columns
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX ON kv(x);
 
 # Check that the hidden column can be droped
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE kv DROP COLUMN x;
 
-statement error column "x" does not exist
+statement error unknown catalog item 'kv'
 SELECT x FROM kv;
 
 # adding a foreign key constraint on a hidden column
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t1(a INT, b INT, c INT NOT VISIBLE , PRIMARY KEY(b));
 CREATE TABLE t2(b INT NOT VISIBLE, c INT, d INT, PRIMARY KEY (d));
 CREATE TABLE t5(b INT NOT VISIBLE, c INT, d INT, PRIMARY KEY (d), FOREIGN KEY(b) REFERENCES t1(b));
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB
 SHOW CONSTRAINTS FROM t2
 ----
 t2  t2_pkey  PRIMARY KEY  PRIMARY KEY (d ASC)  true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE t2 ADD FOREIGN KEY (b) REFERENCES t2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB
 SHOW CONSTRAINTS FROM t2
 ----
@@ -124,6 +151,8 @@ t2  t2_pkey    PRIMARY KEY  PRIMARY KEY (d ASC)               true
 
 # adding a foreign key constraint that references a hidden column
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t3(a INT, b INT NOT NULL, c INT NOT VISIBLE, PRIMARY KEY(c));
 CREATE TABLE t4(c INT, d INT, e INT NOT NULL NOT VISIBLE, PRIMARY KEY(d));
@@ -131,23 +160,33 @@ CREATE TABLE t6(c INT, d INT, e INT NOT NULL NOT VISIBLE, PRIMARY KEY(d), FOREIG
 
 # ALTER PRIMARY KEY on a primary key with hidden columns
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE t3 ALTER PRIMARY KEY USING COLUMNS(b);
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB
 SHOW CONSTRAINTS FROM t3
 ----
 t3  t3_c_key  UNIQUE       UNIQUE (c ASC)       true
 t3  t3_pkey   PRIMARY KEY  PRIMARY KEY (b ASC)  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB
 SHOW CONSTRAINTS FROM t4
 ----
 t4  t4_pkey  PRIMARY KEY  PRIMARY KEY (d ASC)  true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE t4 ALTER PRIMARY KEY USING COLUMNS(e);
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB
 SHOW CONSTRAINTS FROM t4
 ----

@@ -22,254 +22,323 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 0
 
 query T
 SHOW TIME ZONE
 ----
-<-00>+00
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 10
 
 query T
 SHOW TIME ZONE
 ----
-<+10>-10
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1000 +1000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE -10
 
 query T
 SHOW TIME ZONE
 ----
-<-10>+10
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1000 -1000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE '10'
 
 query T
 SHOW TIME ZONE
 ----
-<+10>-10
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1000 +1000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE '+10'
 
 query T
 SHOW TIME ZONE
 ----
-<+10>-10
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1000 +1000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE '-10'
 
 query T
 SHOW TIME ZONE
 ----
-<-10>+10
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1000 -1000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE '+10.5'
 
 query T
 SHOW TIME ZONE
 ----
-<+10:30>-10:30
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1030 +1030
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE '-10.5'
 
 query T
 SHOW TIME ZONE
 ----
-<-10:30>+10:30
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1030 -1030
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE '+10.555'
 
 query T
 SHOW TIME ZONE
 ----
-<+10:33:18>-10:33:18
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1033 +1033
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE '-10.555'
 
 query T
 SHOW TIME ZONE
 ----
-<-10:33:18>+10:33:18
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1033 -1033
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE '     +10'
 
 query T
 SHOW TIME ZONE
 ----
-<+10>-10
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1000 +1000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE '     -10'
 
 query T
 SHOW TIME ZONE
 ----
-<-10>+10
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1000 -1000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 'GMT+3'
 
 query T
 SHOW TIME ZONE
 ----
-GMT+3
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -0300 -0300
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 'GMT-3'
 
 query T
 SHOW TIME ZONE
 ----
-GMT-3
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +0300 +0300
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 'UTC+3'
 
 query T
 SHOW TIME ZONE
 ----
-UTC+3
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -0300 -0300
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 'UTC-3'
 
 query T
 SHOW TIME ZONE
 ----
-UTC-3
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +0300 +0300
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 'Asia/Tokyo'
 
 query T
 SHOW TIME ZONE
 ----
-Asia/Tokyo
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +0900 +0900
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 'zulu'
 
 query T
 SHOW TIME ZONE
 ----
-Zulu
+UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +0000 UTC
 
-statement error pq: invalid value for parameter "timezone": "'168'": cannot find time zone "168": UTC timezone offset is out of range.
+statement error invalid value for parameter "TimeZone": "168"
 SET TIME ZONE '168'
 
-statement error pq: invalid value for parameter "timezone": "'-168'": cannot find time zone "-168": UTC timezone offset is out of range.
+statement error invalid value for parameter "TimeZone": "\-168"
 SET TIME ZONE '-168'
 
-statement error pq: invalid value for parameter "timezone": "'-0500'": cannot find time zone "-0500": UTC timezone offset is out of range.
+statement error invalid value for parameter "TimeZone": "\-0500"
 SET TIME ZONE '-0500'
 
-statement error pq: invalid value for parameter "timezone": "'0500'": cannot find time zone "0500": UTC timezone offset is out of range.
+statement error invalid value for parameter "TimeZone": "0500"
 SET TIME ZONE '0500'
 
-statement error pq: invalid value for parameter "timezone": "'-0500'": cannot find time zone "-0500": UTC timezone offset is out of range.
+statement error invalid value for parameter "TimeZone": "\-0500"
 SET TIME ZONE '-0500'

@@ -22,15 +22,16 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO testuser
 
 statement ok
 CREATE TABLE t()
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS ON t
 ----
@@ -39,12 +40,16 @@ test           public       t           admin     ALL             true
 test           public       t           root      ALL             true
 test           public       t           testuser  SELECT          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES GRANT CREATE ON TABLES TO testuser
 
 statement ok
 CREATE TABLE t2()
 
+# Not supported by Materialize.
+onlyif cockroach
 # Taking the union of default privileges defined on ALL ROLES and testuser
 # testuser should have CREATE and SELECT on the table.
 query TTTTTB colnames
@@ -56,12 +61,16 @@ test           public       t2          root      ALL             true
 test           public       t2          testuser  CREATE          false
 test           public       t2          testuser  SELECT          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES REVOKE SELECT ON TABLES FROM testuser
 
 statement ok
 CREATE TABLE t3()
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS ON t3
 ----
@@ -70,12 +79,16 @@ test           public       t3          admin     ALL             true
 test           public       t3          root      ALL             true
 test           public       t3          testuser  CREATE          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT CREATE ON TABLES TO testuser
 
 statement ok
 CREATE TABLE t4()
 
+# Not supported by Materialize.
+onlyif cockroach
 # CREATE is defined as a default privilege when the table is created by
 # ALL ROLES and root.
 query TTTTTB colnames
@@ -86,15 +99,21 @@ test           public       t4          admin     ALL             true
 test           public       t4          root      ALL             true
 test           public       t4          testuser  CREATE          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT CREATE ON TABLES TO testuser, testuser2
 
 statement ok
 CREATE TABLE t5()
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS ON t5
 ----
@@ -104,12 +123,16 @@ test           public       t5          root       ALL             true
 test           public       t5          testuser   CREATE          false
 test           public       t5          testuser2  CREATE          false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL ON TABLES TO testuser, testuser2
 
 statement ok
 CREATE TABLE t6()
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS ON t6
 ----
@@ -119,6 +142,8 @@ test           public       t6          root       ALL             true
 test           public       t6          testuser   ALL             false
 test           public       t6          testuser2  ALL             false
 
+# Not supported by Materialize.
+onlyif cockroach
 # Revoking from the target role should not affect the default privileges
 # defined on ALL ROLES.
 statement ok
@@ -127,6 +152,8 @@ ALTER DEFAULT PRIVILEGES REVOKE ALL ON TABLES FROM testuser, testuser2
 statement ok
 CREATE TABLE t7()
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS ON t7
 ----
@@ -139,11 +166,13 @@ test           public       t7          testuser2  ALL             false
 user testuser
 
 # Must be an admin to alter default privileges for all roles.
-statement error pq: only users with the admin role are allowed to ALTER DEFAULT PRIVILEGES
+statement error permission denied to ALTER DEFAULT PRIVILEGES FOR ALL ROLES
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO testuser
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure default privileges can be defined for all roles on schemas, types
 # and sequences.
 statement ok
@@ -154,6 +183,8 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL ON TYPES TO testuser, testuser2
 statement ok
 CREATE SCHEMA s
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA s
 ----
@@ -163,9 +194,13 @@ test           s            root       ALL             true
 test           s            testuser   ALL             false
 test           s            testuser2  ALL             false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SEQUENCE seq
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS ON seq
 ----
@@ -175,9 +210,13 @@ test           public       seq         root       ALL             true
 test           public       seq         testuser   ALL             false
 test           public       seq         testuser2  ALL             false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TYPE typ AS ENUM()
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTB colnames
 SHOW GRANTS ON TYPE typ
 ----

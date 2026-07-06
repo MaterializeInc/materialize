@@ -22,9 +22,8 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE table1
 (
@@ -47,13 +46,15 @@ CREATE TABLE table1
     INDEX table1_expr_idx (col3 DESC) STORING (col1_1, col1_2, col1_4, col1_5, col1_7) WHERE table1.col1_5 < '+Inf':::FLOAT8
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 # The following query takes on the order of 1s to optimize, so we set the
 # timeout to a much shorter duration and verify that the optimization is
 # canceled accordingly.
 statement ok
 SET statement_timeout='0.1s';
 
-statement error pq: query execution canceled due to statement timeout
+statement error Expected end of statement, found operator "@"
 SELECT
   tab_124176.col1_4 AS col_298240, tab_124184.col1_8 AS col_298241
 FROM

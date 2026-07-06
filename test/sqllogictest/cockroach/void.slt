@@ -22,17 +22,18 @@
 
 mode cockroach
 
-# not supported yet
-halt
-
-statement error value type void cannot be used for table columns
+statement error type "void" does not exist
 CREATE TABLE invalid_void_table(col void)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT 'this will be ignored'::void
 ----
 ·
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #83791. row_to_json on a VOID should produce an
 # empty string, unadorned with single quotes, as in done in postgres.
 query T
@@ -40,34 +41,46 @@ SELECT row_to_json((''::VOID, null))::JSONB AS col_12295
 ----
 {"f1": "", "f2": null}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 select row (''::void, 2::int)
 ----
 ("",2)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 select row ('':::void, 2::int)
 ----
 ("",2)
 
-statement error pq: incompatible type annotation for 'foo' as void, found type: string
+statement error Expected a data type name, found colon
 select row ('foo':::void, 2::int)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT ('this will disappear too'::text)::void
 ----
 ·
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT ('gone'::void)::text
 ----
 ·
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT crdb_internal.void_func()
 ----
 ·
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #83754. Note that Postgres is inconsistent
 # in evaluation. For example, `SELECT ''::VOID IS DISTINCT FROM NULL::UNKNOWN;`
 # errors out, but `SELECT ''::VOID IS DISTINCT FROM NULL;` does not.
@@ -78,6 +91,8 @@ SELECT ''::VOID IS DISTINCT FROM NULL
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT ''::VOID IS DISTINCT FROM NULL::UNKNOWN
 ----
@@ -86,6 +101,8 @@ true
 statement ok
 SET vectorize=on
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #83754. Vectorized execution should not error out.
 query T
 SELECT
@@ -102,20 +119,22 @@ NULL
 
 # Regression test for #83754. Illegal type comparison should be caught in the
 # parser.
-statement error pq: incompatible NULLIF expressions: unsupported comparison operator: <void> = <unknown>
+statement error type "void" does not exist
 SELECT NULLIF(tab_115318.a, tab_115318.b) AS col_199169
 FROM
   (VALUES (''::VOID, NULL), (NULL, NULL)) AS tab_115318 (a, b)
 ORDER BY
   tab_115318.a;
 
-statement error pq: incompatible NULLIF expressions: unsupported comparison operator: <void> = <void>
+statement error type "void" does not exist
 SELECT NULLIF(tab_115318.a, tab_115318.b) AS col_199169
 FROM
   (VALUES (''::VOID, ''::VOID), (NULL, NULL)) AS tab_115318 (a, b)
 ORDER BY
   tab_115318.col_199168;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #83754. Tuple type should be handled properly.
 query T
 SELECT
@@ -131,6 +150,8 @@ NULL
 statement ok
 SET vectorize=off
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #83754.
 # Non-vectorized and vectorized results should match.
 query T
@@ -148,7 +169,7 @@ NULL
 
 # Regression test for #83754.
 # Non-vectorized and vectorized results should match.
-statement error pq: incompatible NULLIF expressions: unsupported comparison operator: <void> = <unknown>
+statement error type "void" does not exist
 SELECT NULLIF(tab_115318.a, tab_115318.b) AS col_199169
 FROM
   (VALUES (''::VOID, NULL), (NULL, NULL)) AS tab_115318 (a, b)
@@ -157,13 +178,15 @@ ORDER BY
 
 # Regression test for #83754.
 # Non-vectorized and vectorized results should match.
-statement error pq: incompatible NULLIF expressions: unsupported comparison operator: <void> = <void>
+statement error type "void" does not exist
 SELECT NULLIF(tab_115318.a, tab_115318.b) AS col_199169
 FROM
   (VALUES (''::VOID, ''::VOID), (NULL, NULL)) AS tab_115318 (a, b)
 ORDER BY
   tab_115318.col_199168;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #83754.
 # Non-vectorized and vectorized results should match.
 query T
@@ -180,22 +203,30 @@ NULL
 statement ok
 RESET vectorize
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #93572. This should not fail with an internal error.
 query B
 WITH tab(x) AS (VALUES ('':::VOID)) SELECT x IS NULL FROM tab
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 WITH tab(x) AS (VALUES (NULL:::VOID)) SELECT x IS NULL FROM tab
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 WITH tab(x) AS (VALUES ('':::VOID)) SELECT x IS NOT NULL FROM tab
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 WITH tab(x) AS (VALUES (NULL:::VOID)) SELECT x IS NOT NULL FROM tab
 ----

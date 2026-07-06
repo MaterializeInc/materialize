@@ -24,9 +24,8 @@ mode cockroach
 
 # LogicTest: default-configs
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON DATABASE test TO testuser;
 CREATE USER testuser2
@@ -37,6 +36,8 @@ CREATE SCHEMA IF NOT EXISTS derp
 # Don't run these tests as an admin.
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check pg_catalog grants.
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA pg_catalog
@@ -44,6 +45,8 @@ SHOW GRANTS ON SCHEMA pg_catalog
 database_name  schema_name  grantee  privilege_type  is_grantable
 test           pg_catalog   public   USAGE           false
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check information_schema grants.
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA information_schema
@@ -51,6 +54,8 @@ SHOW GRANTS ON SCHEMA information_schema
 database_name  schema_name         grantee  privilege_type  is_grantable
 test           information_schema  public   USAGE           false
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check public schema grants.
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA public
@@ -61,6 +66,8 @@ test           public       public   CREATE          false
 test           public       public   USAGE           false
 test           public       root     ALL             true
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA test.*
 ----
@@ -79,6 +86,8 @@ CREATE TEMP TABLE t(a INT)
 let $temp_schema
 SELECT schema_name FROM [show schemas] WHERE schema_name LIKE '%pg_temp%'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check pg_temp grants.
 query TT colnames
 SELECT grantee, privilege_type FROM [SHOW GRANTS ON SCHEMA $temp_schema]
@@ -89,10 +98,14 @@ public   CREATE
 public   USAGE
 root     ALL
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA s;
 GRANT CREATE ON SCHEMA s TO testuser2
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check user-defined schema grants.
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA s
@@ -103,6 +116,8 @@ test           s            root       ALL             true
 test           s            testuser   ALL             true
 test           s            testuser2  CREATE          false
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check grant information in backing table. We have to strip off the session
 # identifying information from the end of the pg_temp schema name.
 query TTTTT colnames
@@ -134,6 +149,8 @@ root       test           s                   ALL             YES
 testuser2  test           s                   CREATE          NO
 testuser   test           s                   ALL             YES
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check grants for testuser2, which should inherit from the public role.
 query TBB colnames,rowsort
 WITH schema_names(schema_name) AS (
@@ -158,20 +175,30 @@ s                   true        false
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE USER owner_grant_option_child
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT testuser to owner_grant_option_child
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SCHEMA owner_grant_option
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT USAGE ON SCHEMA owner_grant_option TO owner_grant_option_child
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA owner_grant_option
 ----
@@ -188,9 +215,13 @@ user root
 statement ok
 CREATE ROLE other_owner
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER SCHEMA owner_grant_option OWNER TO other_owner
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTB colnames
 SHOW GRANTS ON SCHEMA owner_grant_option
 ----

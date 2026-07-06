@@ -82,14 +82,10 @@ SELECT a, b, d FROM t@d_idx
 ----
 1 2 4
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error index "error" already contains column "d"
+statement error Expected end of statement, found identifier "storing"
 CREATE INDEX error ON t (d) STORING (d)
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error index "error" already contains column "a"
+statement error Expected end of statement, found identifier "storing"
 CREATE INDEX error ON t (d) STORING (a)
 
 # Not supported by Materialize.

@@ -33,9 +33,8 @@ mode cockroach
 statement ok
 SET distsql_workmem = '8MiB';
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # Populate two tables such that there will be very large input:output lookup
 # ratio.
 statement ok
@@ -43,12 +42,16 @@ CREATE TABLE small (n INT PRIMARY KEY);
 INSERT INTO small SELECT generate_series(0, 6);
 CREATE TABLE large (n INT, v STRING, INDEX (n) STORING (v));
 
+# Not supported by Materialize.
+onlyif cockroach
 # The data set has been carefully constructed so that the memory limit in the
 # join reader is reached when accounting for some internal state and not when
 # adding looked up rows into the row container.
 statement ok
 INSERT INTO large SELECT g % 7, repeat('a', 52) FROM generate_series(0, 69999) as g;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Read from the small table and perform the lookup join into the large table.
 # We want to make sure that the query succeeds and doesn't run into "budget
 # exceeded" error - the row container will have to spill to disk.
