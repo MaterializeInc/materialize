@@ -128,6 +128,28 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
+<!-- ================== Network policy syntax ==================  -->
+
+{{< tab "Network policy">}}
+
+For specific network policies:
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON NETWORK POLICY <name> [, ...]
+FROM <role_name> [, ... ];
+```
+
+For all network policies:
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON ALL POLICIES
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
 <!-- ==================== Schema syntax =====================  -->
 
 {{< tab "Schema">}}

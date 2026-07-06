@@ -9843,6 +9843,7 @@ impl<'a> Parser<'a> {
                 DATABASE,
                 SCHEMA,
                 FUNCTION,
+                NETWORK,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -9871,6 +9872,14 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
+                NETWORK => {
+                    if self.parse_keyword(POLICY) {
+                        ObjectType::NetworkPolicy
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 _ => unreachable!(),
             },
         )
