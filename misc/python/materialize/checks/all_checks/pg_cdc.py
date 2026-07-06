@@ -436,15 +436,17 @@ class PgCdcOidRetraction(Check):
                 > CREATE TABLE oid_retraction_table FROM SOURCE oid_retraction_source (REFERENCE oid_retraction_table);
 
                 # The above-i32::MAX row errors per-row on releases with the
-                # i32-only cast, but that is a data error in the `err` collection,
-                # not a source failure. Confirm the source and its table are
-                # healthy before the upgrade, so the retraction the delete
-                # produces later has a live source to apply against.
+                # legacy i32-only cast. That is a data error in the `err`
+                # collection: the source keeps running and replication
+                # continues, but the health operator reports the table export
+                # itself as stalled. Releases whose exports carry
+                # `cast_oid_full_range` ingest the row and report running, so
+                # accept both states for the table export.
                 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'oid_retraction_source';
                 running
 
-                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'oid_retraction_table' AND type = 'table';
-                running
+                > SELECT status IN ('running', 'stalled') FROM mz_internal.mz_source_statuses WHERE name = 'oid_retraction_table' AND type = 'table';
+                true
                 """))
 
     def manipulate(self) -> list[Testdrive]:
