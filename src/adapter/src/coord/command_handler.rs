@@ -35,9 +35,9 @@ use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
 use mz_sql::ast::{
-    AlterConnectionAction, AlterConnectionStatement, AlterSinkAction, AlterSourceAction, AstInfo,
-    ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement,
-    StatementKind, SubscribeStatement,
+    AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
+    CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, StatementKind,
+    SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -1716,17 +1716,13 @@ impl Coordinator {
             // users.
             Statement::AlterCluster(_) => false,
 
-            // `ALTER SINK SET FROM` waits for the old relation to make enough progress for a clean
-            // cutover. If the old collection is stalled, it may block forever. Checks in
+            // `ALTER SINK` waits for the sink to make enough progress for a clean cutover to the
+            // new configuration. If the sink is stalled, it may block forever. Checks in
             // sequencing ensure that the operation fails if any one of these happens concurrently:
             //   * the sink is dropped
-            //   * the new source relation is dropped
+            //   * the source relation is dropped
             //   * another `ALTER SINK` for the same sink is applied first
-            Statement::AlterSink(stmt)
-                if matches!(stmt.action, AlterSinkAction::ChangeRelation(_)) =>
-            {
-                false
-            }
+            Statement::AlterSink(_) => false,
 
             // `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` waits for the target MV to make
             // enough progress for a clean cutover. If the target MV is stalled, it may block

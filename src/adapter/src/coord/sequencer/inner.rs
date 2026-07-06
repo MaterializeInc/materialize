@@ -3435,9 +3435,11 @@ impl Coordinator {
             sink: sink_plan,
             with_snapshot,
             in_cluster,
+            set_options,
+            reset_options,
         } = ctx.plan.clone();
 
-        // We avoid taking the DDL lock for `ALTER SINK SET FROM` commands, see
+        // We avoid taking the DDL lock for `ALTER SINK` commands, see
         // `Coordinator::must_serialize_ddl`. We therefore must assume that the world has
         // arbitrarily changed since we performed planning, and we must re-assert that it still
         // matches our requirements.
@@ -3501,18 +3503,23 @@ impl Coordinator {
         };
 
         // Update the sink version.
-        stmt.with_options
-            .retain(|o| o.name != CreateSinkOptionName::Version);
-        stmt.with_options.push(CreateSinkOption {
-            name: CreateSinkOptionName::Version,
-            value: Some(WithOptionValue::Value(mz_sql::ast::Value::Number(
-                sink_plan.version.to_string(),
-            ))),
-        });
+        plan::apply_sink_option_edits(
+            &mut stmt.with_options,
+            &[CreateSinkOption {
+                name: CreateSinkOptionName::Version,
+                value: Some(WithOptionValue::Value(mz_sql::ast::Value::Number(
+                    sink_plan.version.to_string(),
+                ))),
+            }],
+            &[],
+        );
 
         let conn_catalog = self.catalog().for_system_session();
         let (mut stmt, resolved_ids) =
             mz_sql::names::resolve(&conn_catalog, stmt).expect("resolvable create_sql");
+
+        // Re-apply the option edits requested by the `ALTER SINK`.
+        plan::apply_sink_option_edits(&mut stmt.with_options, &set_options, &reset_options);
 
         // Update the `from` relation.
         let from_entry = self.catalog().get_entry_by_global_id(&sink_plan.from);

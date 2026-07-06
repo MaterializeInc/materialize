@@ -51,9 +51,9 @@ use mz_repr::{
     SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
-    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
-    Value, WithOptionValue,
+    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, CreateSinkOption,
+    CreateSinkOptionName, QualifiedReplica, RawDataType, SelectStatement,
+    TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
@@ -1282,6 +1282,27 @@ pub struct AlterSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub in_cluster: ClusterId,
+    /// The with-option edit requested by the `ALTER SINK`. Sequencing must
+    /// re-apply it to the catalog's `create_sql` (via
+    /// [`apply_sink_option_edits`]) because the `create_sql` may have changed
+    /// since planning, for example due to a schema swap.
+    pub set_options: Vec<CreateSinkOption<Aug>>,
+    pub reset_options: Vec<CreateSinkOptionName>,
+}
+
+/// Applies the option edits of an `ALTER SINK ... SET/RESET (...)` to the
+/// with-options of a `CREATE SINK` statement.
+pub fn apply_sink_option_edits<T: mz_sql_parser::ast::AstInfo>(
+    with_options: &mut Vec<CreateSinkOption<T>>,
+    set_options: &[CreateSinkOption<T>],
+    reset_options: &[CreateSinkOptionName],
+) where
+    CreateSinkOption<T>: Clone,
+{
+    with_options.retain(|o| {
+        set_options.iter().all(|s| s.name != o.name) && !reset_options.contains(&o.name)
+    });
+    with_options.extend(set_options.iter().cloned());
 }
 
 #[derive(Debug, Clone)]

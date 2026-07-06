@@ -3758,8 +3758,17 @@ fn iceberg_sink_builder(
     let Some(namespace) = namespace else {
         sql_bail!("Iceberg sink must specify NAMESPACE");
     };
-    if commit_interval.is_none() {
-        sql_bail!("Iceberg sink must specify COMMIT INTERVAL");
+    match commit_interval {
+        None => sql_bail!("Iceberg sink must specify COMMIT INTERVAL"),
+        // The sink truncates the interval to whole milliseconds, and a
+        // truncated interval of zero would make it mint zero-width batches in
+        // a busy loop, never committing any data. Require a full second so
+        // truncation is irrelevant, matching the TOPIC METADATA REFRESH
+        // INTERVAL minimum.
+        Some(interval) if interval < Duration::from_secs(1) => {
+            sql_bail!("COMMIT INTERVAL must be at least 1 second")
+        }
+        Some(_) => {}
     }
 
     Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
@@ -7318,40 +7327,93 @@ pub fn plan_alter_sink(
     // Always ALTER objects from their latest version.
     let item = item.at_version(RelationVersionSelector::Latest);
 
+    // First we reconstruct the original CREATE SINK statement
+    let create_sql = item.create_sql();
+    let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
+    let [stmt]: [StatementParseResult; 1] = stmts
+        .try_into()
+        .map_err(|_| internal_err!("create SQL of sink was not exactly one statement"))?;
+    let Statement::CreateSink(stmt) = stmt.ast else {
+        bail_internal!("create SQL of sink is not a CREATE SINK statement");
+    };
+    let (mut stmt, _) = crate::names::resolve(scx.catalog, stmt)?;
+
+    // Then apply the requested change to the statement
+    let mut set_options = vec![];
+    let mut reset_options = vec![];
     match action {
         AlterSinkAction::ChangeRelation(new_from) => {
-            // First we reconstruct the original CREATE SINK statement
-            let create_sql = item.create_sql();
-            let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
-            let [stmt]: [StatementParseResult; 1] = stmts
-                .try_into()
-                .map_err(|_| internal_err!("create SQL of sink was not exactly one statement"))?;
-            let Statement::CreateSink(stmt) = stmt.ast else {
-                bail_internal!("create SQL of sink is not a CREATE SINK statement");
-            };
-
-            // Then resolve and swap the resolved from relation to the new one
-            let (mut stmt, _) = crate::names::resolve(scx.catalog, stmt)?;
             stmt.from = new_from;
-
-            // Finally re-plan the modified create sink statement to verify the new configuration is valid
-            let Plan::CreateSink(mut plan) = plan_sink(scx, stmt)? else {
-                bail_internal!("plan_sink did not produce a CreateSink plan");
-            };
-
-            plan.sink.version += 1;
-
-            Ok(Plan::AlterSink(AlterSinkPlan {
-                item_id: item.id(),
-                global_id: item.global_id(),
-                sink: plan.sink,
-                with_snapshot: plan.with_snapshot,
-                in_cluster: plan.in_cluster,
-            }))
         }
-        AlterSinkAction::SetOptions(_) => bail_unsupported!("ALTER SINK SET options"),
-        AlterSinkAction::ResetOptions(_) => bail_unsupported!("ALTER SINK RESET option"),
+        AlterSinkAction::SetOptions(options) => {
+            for option in &options {
+                match &option.name {
+                    CreateSinkOptionName::CommitInterval => {}
+                    name => bail_unsupported!(format!(
+                        "ALTER SINK ... SET ({})",
+                        name.to_ast_string_simple()
+                    )),
+                }
+            }
+            // Setting every option to its current value would restart the
+            // sink dataflow without changing its behavior, so make it a
+            // no-op instead. The values are compared as ASTs, so spelling
+            // the same value differently (`'60s'` vs `'1m'`) still counts
+            // as a change.
+            //
+            // NOTE: This check races with other `ALTER SINK` statements,
+            // because `ALTER SINK` does not take the DDL lock. Example: the
+            // interval is '1s', we plan `SET (COMMIT INTERVAL = '1s')` as a
+            // no-op, and before we respond a concurrent `ALTER SINK` changes
+            // the interval to '2s'. We then report success even though the
+            // interval is now '2s', not the '1s' we were asked for. An alter
+            // that is not a no-op detects this in sequencing by checking the
+            // sink's version, but a no-op is never re-checked. We accept this
+            // because alters are last-writer-wins anyway.
+            if options.iter().all(|o| stmt.with_options.contains(o)) {
+                return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+            }
+            set_options = options;
+        }
+        AlterSinkAction::ResetOptions(names) => {
+            for name in &names {
+                match name {
+                    CreateSinkOptionName::CommitInterval => {}
+                    name => bail_unsupported!(format!(
+                        "ALTER SINK ... RESET ({})",
+                        name.to_ast_string_simple()
+                    )),
+                }
+                // Resetting an option that is not set would still restart the
+                // sink dataflow, so reject it instead of silently no-oping.
+                if !stmt.with_options.iter().any(|o| o.name == *name) {
+                    sql_bail!(
+                        "cannot RESET {}: option is not set",
+                        name.to_ast_string_simple()
+                    );
+                }
+            }
+            reset_options = names;
+        }
     }
+    crate::plan::apply_sink_option_edits(&mut stmt.with_options, &set_options, &reset_options);
+
+    // Finally re-plan the modified create sink statement to verify the new configuration is valid
+    let Plan::CreateSink(mut plan) = plan_sink(scx, stmt)? else {
+        bail_internal!("plan_sink did not produce a CreateSink plan");
+    };
+
+    plan.sink.version += 1;
+
+    Ok(Plan::AlterSink(AlterSinkPlan {
+        item_id: item.id(),
+        global_id: item.global_id(),
+        sink: plan.sink,
+        with_snapshot: plan.with_snapshot,
+        in_cluster: plan.in_cluster,
+        set_options,
+        reset_options,
+    }))
 }
 
 pub fn describe_alter_source(
