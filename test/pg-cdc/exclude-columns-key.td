@@ -40,6 +40,18 @@ CREATE TABLE uniq_table (id int NOT NULL, u int NOT NULL, val text NOT NULL, UNI
 INSERT INTO uniq_table VALUES (1, 10, 'a'), (2, 20, 'b');
 ALTER TABLE uniq_table REPLICA IDENTITY FULL;
 
+# A table with a composite PRIMARY KEY: `(id, sub_id)`. Excluding just one of the
+# two columns must drop the whole key, not leave a partial one behind.
+CREATE TABLE composite_pk_table (id int NOT NULL, sub_id int NOT NULL, val text NOT NULL, PRIMARY KEY (id, sub_id));
+INSERT INTO composite_pk_table VALUES (1, 10, 'a'), (2, 20, 'b');
+ALTER TABLE composite_pk_table REPLICA IDENTITY FULL;
+
+# A table with two independent keys: `PRIMARY KEY (id)` and `UNIQUE (u)`. Excluding
+# `id` must drop only the key that names it, leaving `UNIQUE (u)` intact.
+CREATE TABLE multi_key_table (id int NOT NULL, u int NOT NULL, val text NOT NULL, PRIMARY KEY (id), UNIQUE (u));
+INSERT INTO multi_key_table VALUES (1, 10, 'a'), (2, 20, 'b');
+ALTER TABLE multi_key_table REPLICA IDENTITY FULL;
+
 ANALYZE;
 
 > CREATE SOURCE mz_source
@@ -55,6 +67,17 @@ ANALYZE;
 > CREATE TABLE uniq_table
   FROM SOURCE mz_source (REFERENCE public.uniq_table)
   WITH (EXCLUDE COLUMNS (u));
+
+# Excluding one column of a composite PRIMARY KEY drops the whole key
+> CREATE TABLE composite_pk_table
+  FROM SOURCE mz_source (REFERENCE public.composite_pk_table)
+  WITH (EXCLUDE COLUMNS (id));
+
+# Excluding the PRIMARY KEY's column drops that key, but the unrelated
+# UNIQUE (u) constraint is unaffected
+> CREATE TABLE multi_key_table
+  FROM SOURCE mz_source (REFERENCE public.multi_key_table)
+  WITH (EXCLUDE COLUMNS (id));
 
 # Verify that the constraint is ignored on uniq_table
 > CREATE DEFAULT INDEX ON uniq_table;
@@ -72,6 +95,20 @@ Used Indexes:
   - materialize.public.uniq_table_primary_idx (*** full scan ***)
 
 Target cluster: quickstart
+
+# Verify that excluding one column of a composite key drops the whole key: no
+# unique key remains, so the default index is a full scan over every column.
+> CREATE DEFAULT INDEX ON composite_pk_table;
+
+> SELECT key FROM (SHOW INDEXES ON composite_pk_table);
+{sub_id,val}
+
+# Verify that excluding the PRIMARY KEY's column only drops that key; the
+# unrelated UNIQUE (u) constraint still makes `u` a valid index key.
+> CREATE DEFAULT INDEX ON multi_key_table;
+
+> SELECT key FROM (SHOW INDEXES ON multi_key_table);
+{u}
 
 # Sanity: excluding a non-key column on a keyed table still works, and the key
 # constraint is preserved on the resulting table.
