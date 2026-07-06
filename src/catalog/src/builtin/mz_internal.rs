@@ -1820,11 +1820,20 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     ),
     -- For getting the latest events, we first determine the latest per-replica
     -- events here and then apply precedence rules below.
+    --
+    -- We ignore per-replica events from replicas that no longer exist. A dropped
+    -- replica's last reported status is stale: without this filter a defunct
+    -- replica's lingering 'running' can outrank (see precedence below) a live
+    -- replica's 'stalled', hiding a genuinely broken source. '<source>' is the
+    -- sentinel for source-global events (replica_id was NULL), which are always
+    -- relevant and so are always retained.
     latest_per_replica_events AS
     (
         SELECT DISTINCT ON (source_id, replica_id)
             occurred_at, source_id, replica_id, status, error, details
         FROM uniform_status_history
+        WHERE replica_id = '<source>'
+            OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
         ORDER BY source_id, replica_id, occurred_at DESC
     ),
     -- We have a precedence list that determines the overall status in case
@@ -2090,11 +2099,20 @@ uniform_status_history AS
 ),
 -- For getting the latest events, we first determine the latest per-replica
 -- events here and then apply precedence rules below.
+--
+-- We ignore per-replica events from replicas that no longer exist. A dropped
+-- replica's last reported status is stale: without this filter a defunct
+-- replica's lingering 'running' can outrank (see precedence below) a live
+-- replica's 'stalled', hiding a genuinely broken sink. '<sink>' is the
+-- sentinel for sink-global events (replica_id was NULL), which are always
+-- relevant and so are always retained.
 latest_per_replica_events AS
 (
     SELECT DISTINCT ON (sink_id, replica_id)
         occurred_at, sink_id, replica_id, status, error, details
     FROM uniform_status_history
+    WHERE replica_id = '<sink>'
+        OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
     ORDER BY sink_id, replica_id, occurred_at DESC
 ),
 -- We have a precedence list that determines the overall status in case

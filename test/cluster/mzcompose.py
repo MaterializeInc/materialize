@@ -6535,15 +6535,23 @@ def workflow_test_slow_seqno_hold(c: Composition):
             2
             """))
 
-    # Down the postgres database, stalling out the source.
+    # Install a durable reader on the source's shard via a background SUBSCRIBE.
+    # A one-shot SELECT is a poor fit: if its read timestamp lands at or below
+    # the (soon to be frozen) upper it completes immediately, leaving no
+    # observable reader, and if it blocks it races replica hydration. Either way
+    # the reader shows up only intermittently. A SUBSCRIBE cursor keeps its
+    # reader installed for as long as the transaction is open, so the reader is
+    # reliably present for the whole test. We start it while the upstream is
+    # still healthy, so the initial FETCH returns and the reader is guaranteed
+    # installed before we stall the source below.
+    subscribe = c.sql_cursor()
+    subscribe.execute("BEGIN")
+    subscribe.execute("DECLARE c CURSOR FOR SUBSCRIBE source1_tbl")
+    subscribe.execute("FETCH 1 c")
+
+    # Down the postgres database, stalling out the source so its frontier stops
+    # advancing.
     c.stop("postgres")
-
-    # Start a long-running select in the background, which should be unable to make progress.
-    def select_from_postgres():
-        c.sql("SELECT count(*) FROM source1_tbl")
-
-    background_select = Thread(target=select_from_postgres)
-    background_select.start()
 
     try:
         [(gid,)] = c.sql_query("SELECT id FROM mz_tables where name = 'source1_tbl'")
@@ -6574,48 +6582,32 @@ def workflow_test_slow_seqno_hold(c: Composition):
                 f"last observed leased_readers={last}"
             )
 
-        # The blocked SELECT installs a reader on the source's shard that can't
-        # make progress. Wait for that single stalled reader to show up and grab
-        # its id + initial seqno. (The source restarts periodically while its
-        # upstream is down, which can briefly expose a second, transient reader;
-        # only latch on once exactly one reader is present.)
-        def single_reader(leased_readers):
-            if len(leased_readers) != 1:
-                return None
-            ((reader_id, value),) = leased_readers.items()
-            return reader_id, value["seqno"]
+        # Even though the upstream frontier is stuck, a leased reader should
+        # periodically downgrade (advance) its seqno hold, so persist state can
+        # still be collected. Record each reader's first observed seqno and wait
+        # until some reader advances past it. Tracking per reader id keeps us
+        # robust to the source exposing extra, transient readers as it restarts
+        # while its upstream is down.
+        first_seqno: dict[str, int] = {}
 
-        reader_id, initial_seqno = poll_until(
-            single_reader,
-            timeout=120,
-            description="a single leased reader to appear on the stalled shard",
-        )
-
-        print(
-            f"{reader_id} has initial seqno {initial_seqno}. Waiting for progress, which may take a minute..."
-        )
-
-        # Show that the seqno is making progress: even though the upstream
-        # frontier is stuck, the reader should periodically downgrade its seqno
-        # hold, advancing it past the initial value.
-        def seqno_advanced(leased_readers):
-            value = leased_readers.get(reader_id)
-            if value is None:
-                # The reader momentarily vanished (e.g. a source restart). Keep
-                # polling; a permanent disappearance surfaces at the deadline.
-                return None
-            return True if value["seqno"] > initial_seqno else None
+        def some_reader_advanced(leased_readers):
+            advanced = None
+            for reader_id, value in leased_readers.items():
+                seqno = value["seqno"]
+                if seqno > first_seqno.setdefault(reader_id, seqno):
+                    advanced = reader_id
+            return advanced
 
         poll_until(
-            seqno_advanced,
+            some_reader_advanced,
             timeout=300,
-            description=f"reader {reader_id} to advance its seqno past {initial_seqno}",
+            description="a leased reader to advance its seqno on the stalled shard",
         )
 
-    # Cleanup: unblock the select and wait for it to complete.
+    # Cleanup: drop the subscribe and bring postgres back up.
     finally:
+        subscribe.execute("ROLLBACK")
         c.up("postgres")
-        background_select.join()
 
 
 def workflow_github_9961(c: Composition):

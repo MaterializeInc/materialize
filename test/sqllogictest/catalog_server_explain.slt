@@ -2847,6 +2847,21 @@ mz_internal.mz_sink_statuses_ind:
 mz_internal.mz_sink_statuses:
   →With
     cte l0 =
+      →Fused with Child Map/Filter/Project
+        Project: #1, #0, #2..=#4, #6
+        Map: coalesce(#5{replica_id}, "<sink>")
+          →Arranged mz_internal.mz_sink_status_history
+            Key: (#1{sink_id})
+    cte l1 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #5
+            →Read l0
+    cte l2 =
+      →Differential Join %0:l1[#0] » %1:mz_cluster_replicas[#0{id}]
+        →Arranged l1
+        →Arranged mz_catalog.mz_cluster_replicas
+    cte l3 =
       →Differential Join %0:mz_sinks[#0{id}] » %1[#1]
         after %1:
           Project: #0, #3, #4, #15..=#18
@@ -2866,12 +2881,22 @@ mz_internal.mz_sink_statuses:
                       Group By #1, #5
                       Order By #0 desc nulls_first
                       Limit 1
-                      →Fused with Child Map/Filter/Project
-                        Project: #1, #0, #2..=#4, #6
-                        Filter: NOT(like["s%"](#0{sink_id}))
-                        Map: coalesce(#5{replica_id}, "<sink>")
-                          →Arranged mz_internal.mz_sink_status_history
-                            Key: (#1{sink_id})
+                      →Differential Join %0:l0[#5] » %1[#0]
+                        →Arrange (#5)
+                          →Fused with Child Map/Filter/Project
+                            Filter: NOT(like["s%"](#1{sink_id}))
+                              →Read l0
+                        →Arrange (#0)
+                          →Consolidating Union
+                            →Stream l2
+                            →Negate Diffs
+                              →Fused with Child Map/Filter/Project
+                                Filter: (#0 = "<sink>")
+                                  →Read l2
+                            →Fused with Child Map/Filter/Project
+                              Filter: (#0 = "<sink>")
+                                →Index Lookup on l1
+                                  Key: (#0) Value: ("<sink>")
   →Return
     →Map/Filter/Project
       Project: #0..=#3, #7, #5, #6
@@ -2884,17 +2909,18 @@ mz_internal.mz_sink_statuses:
                 →Negate Diffs
                   →Fused with Child Map/Filter/Project
                     Project: #0..=#2
-                      →Read l0
+                      →Read l3
                 →Fused with Child Map/Filter/Project
                   Project: #0, #3, #4
                   Filter: NOT(like["s%"](#0))
                     →Arranged mz_catalog.mz_sinks
                       Key: (#0{id})
-          →Stream l0
+          →Stream l3
 
 Used Indexes:
   - mz_catalog.mz_sinks_ind (*** full scan ***, differential join)
   - mz_internal.mz_sink_status_history_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replicas_ind (differential join)
 
 Target cluster: mz_catalog_server
 
@@ -3019,6 +3045,21 @@ mz_internal.mz_source_statuses_ind:
 mz_internal.mz_source_statuses:
   →With
     cte l0 =
+      →Fused with Child Map/Filter/Project
+        Project: #1, #0, #2..=#4, #6
+        Map: coalesce(#5{replica_id}, "<source>")
+          →Arranged mz_internal.mz_source_status_history
+            Key: (#1{source_id})
+    cte l1 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #5
+            →Read l0
+    cte l2 =
+      →Differential Join %0:l1[#0] » %1:mz_cluster_replicas[#0{id}]
+        →Arranged l1
+        →Arranged mz_catalog.mz_cluster_replicas
+    cte l3 =
       →Map/Filter/Project
         Project: #0..=#4
           →Non-monotonic TopK
@@ -3032,30 +3073,39 @@ mz_internal.mz_source_statuses:
                   Group By #1, #5
                   Order By #0 desc nulls_first
                   Limit 1
-                  →Fused with Child Map/Filter/Project
-                    Project: #1, #0, #2..=#4, #6
-                    Map: coalesce(#5{replica_id}, "<source>")
-                      →Arranged mz_internal.mz_source_status_history
-                        Key: (#1{source_id})
-    cte l1 =
+                  →Differential Join %0:l0[#5] » %1[#0]
+                    →Arrange (#5)
+                      →Stream l0
+                    →Arrange (#0)
+                      →Consolidating Union
+                        →Stream l2
+                        →Negate Diffs
+                          →Fused with Child Map/Filter/Project
+                            Filter: (#0 = "<source>")
+                              →Read l2
+                        →Fused with Child Map/Filter/Project
+                          Filter: (#0 = "<source>")
+                            →Index Lookup on l1
+                              Key: (#0) Value: ("<source>")
+    cte l4 =
       →Arranged mz_catalog.mz_sources
-    cte l2 =
-      →Delta Join [%0:l1[#0{id}] » %1:mz_object_dependencies[#0{object_id}] » %2:l1[#0{id}]] [%1:mz_object_dependencies[#0{object_id}] » %0:l1[#0{id}] » %2:l1[#0{id}]] [%2:l1[#0{id}] » %1:mz_object_dependencies[#1{referenced_object_id}] » %0:l1[#0{id}]]
-        →Arranged l1
+    cte l5 =
+      →Delta Join [%0:l4[#0{id}] » %1:mz_object_dependencies[#0{object_id}] » %2:l4[#0{id}]] [%1:mz_object_dependencies[#0{object_id}] » %0:l4[#0{id}] » %2:l4[#0{id}]] [%2:l4[#0{id}] » %1:mz_object_dependencies[#1{referenced_object_id}] » %0:l4[#0{id}]]
+        →Arranged l4
         →Arrange (#1{referenced_object_id})
           →Arranged mz_internal.mz_object_dependencies
-        →Arranged l1
-    cte l3 =
+        →Arranged l4
+    cte l6 =
       →Arrange (#0)
         →Fused with Child Map/Filter/Project
           Project: #1, #2
-            →Read l0
-    cte l4 =
+            →Read l3
+    cte l7 =
       →Fused with Child Map/Filter/Project
         Project: #1
-          →Read l0
-    cte l5 =
-      →Delta Join [%0:l3[#0] » %1[#0] » %2[#0]] [%1[#0] » %0:l3[#0] » %2[#0]] [%2[#0] » %0:l3[#0] » %1[#0]]
+          →Read l3
+    cte l8 =
+      →Delta Join [%0:l6[#0] » %1[#0] » %2[#0]] [%1[#0] » %0:l6[#0] » %2[#0]] [%2[#0] » %0:l6[#0] » %1[#0]]
         path %0:
           after %1:
             Project: #0, #1, #4
@@ -3071,13 +3121,13 @@ mz_internal.mz_source_statuses:
           after %1:
             Project: #1, #2, #6, #3
             Map: case when (#5) IS NULL then null else #4 end
-        →Arranged l3
+        →Arranged l6
         →Arrange (#0)
           →Union
             →Fused with Child Map/Filter/Project
               Project: #0..=#2
               Map: true
-                →Read l2
+                →Read l5
             →Map/Filter/Project
               Project: #0..=#2
               Map: null, null
@@ -3087,8 +3137,8 @@ mz_internal.mz_source_statuses:
                       →Negate Diffs
                         →Fused with Child Map/Filter/Project
                           Project: #0
-                            →Read l2
-                      →Stream l4
+                            →Read l5
+                      →Stream l7
         →Arrange (#0)
           →Union
             →Fused with Child Map/Filter/Project
@@ -3109,17 +3159,17 @@ mz_internal.mz_source_statuses:
                           Filter: (#8{source_id}) IS NOT NULL
                             →Arranged mz_catalog.mz_tables
                               Key: (#2{schema_id})
-                      →Stream l4
-    cte l6 =
-      →Differential Join %1:l3[#0] » %0:l5[coalesce(#2{parent}, #3{parent})]
+                      →Stream l7
+    cte l9 =
+      →Differential Join %1:l6[#0] » %0:l8[coalesce(#2{parent}, #3{parent})]
         →Arrange (coalesce(#2{parent}, #3{parent}))
           →Fused with Child Map/Filter/Project
             Filter: (coalesce(#2{parent}, #3{parent})) IS NOT NULL
-              →Read l5
-        →Arranged l3
-    cte l7 =
+              →Read l8
+        →Arranged l6
+    cte l10 =
       →Arrange (#0{source_id})
-        →Differential Join %1:l0[#1{source_id}] » %0[#1{id_to_use}]
+        →Differential Join %1:l3[#1{source_id}] » %0[#1{id_to_use}]
           →Arrange (#1{id_to_use})
             →Map/Filter/Project
               Project: #0, #4
@@ -3130,44 +3180,44 @@ mz_internal.mz_source_statuses:
                     Map: null, null
                       →Consolidating Union
                         →Negate Diffs
-                          →Differential Join %1[#0] » %0:l5[coalesce(#2{parent}, #3{parent})]
+                          →Differential Join %1[#0] » %0:l8[coalesce(#2{parent}, #3{parent})]
                             →Arrange (coalesce(#2{parent}, #3{parent}))
                               →Fused with Child Map/Filter/Project
                                 Filter: NOT(like["s%"](#0{source_id})) AND (case when (null AND (#1{status} != "ceased")) then null else #0{source_id} end) IS NOT NULL AND (coalesce(#2{parent}, #3{parent})) IS NOT NULL
-                                  →Read l5
+                                  →Read l8
                             →Distinct GroupAggregate
                               →Fused with Child Map/Filter/Project
                                 Project: #2
-                                  →Read l6
+                                  →Read l9
                         →Fused with Child Map/Filter/Project
                           Project: #0, #1
                           Filter: NOT(like["s%"](#0{source_id})) AND (case when (null AND (#1{status} != "ceased")) then null else #0{source_id} end) IS NOT NULL
-                            →Read l5
+                            →Read l8
                   →Fused with Child Map/Filter/Project
                     Filter: NOT(like["s%"](#0{source_id}))
-                      →Read l6
+                      →Read l9
           →Arrange (#1{source_id})
-            →Stream l0
-    cte l8 =
-      →Differential Join %0:l1[#0{id}] » %1:l7[#0{source_id}]
+            →Stream l3
+    cte l11 =
+      →Differential Join %0:l4[#0{id}] » %1:l10[#0{source_id}]
         after %1:
           Project: #0, #3, #4, #15..=#18
           Filter: NOT(like["s%"](#0))
-        →Arranged l1
-        →Arranged l7
-    cte l9 =
+        →Arranged l4
+        →Arranged l10
+    cte l12 =
       →Fused with Child Map/Filter/Project
         Project: #1, #3
         Filter: NOT(like["s%"](#1)) AND (#8{source_id}) IS NOT NULL
           →Arranged mz_catalog.mz_tables
             Key: (#2{schema_id})
-    cte l10 =
+    cte l13 =
       →Arrange (#0{self})
-        →Stream l9
-    cte l11 =
-      →Differential Join %0:l10[#0{self}] » %1:l7[#0{source_id}]
+        →Stream l12
+    cte l14 =
+      →Differential Join %0:l13[#0{self}] » %1:l10[#0{source_id}]
+        →Arranged l13
         →Arranged l10
-        →Arranged l7
   →Return
     →Map/Filter/Project
       Project: #0..=#3, #7, #5, #6
@@ -3178,21 +3228,21 @@ mz_internal.mz_source_statuses:
             Map: null, null, null, null
               →Consolidating Union
                 →Negate Diffs
-                  →Differential Join %0:l1[#0{id}] » %1[#0]
+                  →Differential Join %0:l4[#0{id}] » %1[#0]
                     after %1:
                       Project: #0, #3, #4
                       Filter: NOT(like["s%"](#0))
-                    →Arranged l1
+                    →Arranged l4
                     →Distinct GroupAggregate
                       →Fused with Child Map/Filter/Project
                         Project: #0
-                          →Read l8
+                          →Read l11
                 →Fused with Child Map/Filter/Project
                   Project: #0, #3, #4
                   Filter: NOT(like["s%"](#0))
                     →Arranged mz_catalog.mz_sources
                       Key: (#0{id})
-          →Stream l8
+          →Stream l11
           →Map/Filter/Project
             Project: #0, #1, #6, #2..=#5
             Map: "table"
@@ -3202,18 +3252,19 @@ mz_internal.mz_source_statuses:
                   Map: null, null, null, null
                     →Consolidating Union
                       →Negate Diffs
-                        →Differential Join %1[#0] » %0:l10[#0{self}]
-                          →Arranged l10
+                        →Differential Join %1[#0] » %0:l13[#0{self}]
+                          →Arranged l13
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
                               Project: #0
-                                →Read l11
-                      →Stream l9
-                →Stream l11
+                                →Read l14
+                      →Stream l12
+                →Stream l14
 
 Used Indexes:
   - mz_catalog.mz_sources_ind (*** full scan ***, differential join, delta join lookup, delta join 1st input (full scan))
   - mz_internal.mz_source_status_history_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replicas_ind (differential join)
   - mz_internal.mz_object_dependencies_ind (*** full scan ***, delta join lookup)
   - mz_catalog.mz_tables_ind (*** full scan ***)
 

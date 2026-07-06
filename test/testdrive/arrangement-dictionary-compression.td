@@ -80,12 +80,22 @@ true
 > SELECT count(*), count(DISTINCT v), min(length(v)), max(length(v)) FROM t
 280000 201 1 259
 
-# Catch the debug-assertions failure mode (merge panic + rehydration).
+# Catch the debug-assertions failure mode (merge panic + rehydration): the
+# replica goes offline after it has already come online, then rehydrates.
+# We must only count offline events that follow the replica's first online
+# event. Under the Kubernetes orchestrator a freshly created replica records a
+# benign offline entry while its pod is still provisioning, before it first
+# reports ready, so counting all offline events would spuriously trip here.
 > SELECT count(*)
   FROM mz_internal.mz_cluster_replica_status_history h
   JOIN mz_catalog.mz_cluster_replicas r ON h.replica_id = r.id
   JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
   WHERE c.name = 'dict_compression' AND h.status = 'offline'
+    AND h.occurred_at > (
+      SELECT min(o.occurred_at)
+      FROM mz_internal.mz_cluster_replica_status_history o
+      WHERE o.replica_id = h.replica_id AND o.status = 'online'
+    )
 0
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
