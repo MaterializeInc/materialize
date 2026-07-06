@@ -112,6 +112,102 @@ rounding could reintroduce a cycle. If microlp only relaxes, the acyclicity
 holds only at integral solutions and the fix needs the solver to branch, verify
 this before relying on the encoding.
 
+## Diagnostic result: the MTZ constraints are the cost, and SCC-scoping is the fix
+
+Measurement (the A/B pass: per fragment, solve WITH constraint 6 versus the same
+model WITHOUT it, timed, the second result discarded) over 93,645 `joins.slt`
+fragments settled the cause decisively:
+
+* WITHOUT MTZ (base ILP): median 90us, p99 884us, worst 3.8ms, even on a 110-node
+  fragment.
+* WITH MTZ: median 940us, p99 86ms, worst 89.9 SECONDS.
+* Total WITH 1738.8s versus WITHOUT 23.0s, so MTZ is 99% of solve time.
+* 75.6% of fragments are cyclic. The worst was 110 nodes, 145 MTZ constraints,
+  0.68ms without MTZ and 89.9s with it.
+
+So the base ILP is affordable even on the largest join fragments. The GLOBAL MTZ
+constraints (one per child-edge across the whole fragment, each with big-M = C)
+are what explode microlp's branch-and-bound. The global formulation of the
+mechanism above is superseded by the SCC-scoped one below.
+
+### SCC-scoped MTZ
+
+A directed cycle lies entirely within one strongly-connected component of the
+candidate graph. An edge that crosses an SCC boundary can never be on a cycle, so
+it needs no ordering constraint. Compute the SCCs of the reachable candidate
+graph (Tarjan), and emit level variables and constraint 6 ONLY inside NON-TRIVIAL
+SCCs. The commute cycles are localized two-class pairs, so the vast majority of
+classes are singleton trivial SCCs with zero level constraints, restoring the
+base-ILP-only cost (and the old E0 baseline) on all acyclic structure by
+construction.
+
+Two things this gets right, and they compound:
+
+* Per-SCC level variables AND per-SCC big-M, not global. Inside an SCC of size
+  `k`, levels are bounded `[0, k-1]` and big-M is `M = k`. For the dominant
+  two-class commute pair that is levels `[0, 1]` and `M = 2`, not `M = C`. Big-M
+  tightness is exactly what governs the LP-relaxation weakness driving the
+  branch-and-bound blowup, so SCC-scoping does not only cut the constraint count,
+  it shrinks every surviving big-M from `~C` to `~k`. The off-by-one invariant is
+  the same as before, now PER-SCC: `M = |SCC| = level_max + 1`.
+* Non-trivial SCC means size `>= 2` OR a self-loop edge. A self-referential node
+  (child class == its own class) is a length-1 cycle sitting in a size-1 SCC that
+  Tarjan does NOT report as non-trivial by size. It must still get its level
+  variable and constraint 6, else a selected self-loop becomes extractable (an
+  infinite term). So the 0.7% self-loop-only case is covered by the size-1-with-
+  self-loop rule. A size-1 SCC with a self-loop has `|SCC| = 1`, level `[0, 0]`,
+  `M = 1`, and the self-edge constraint `level[p] + 1 <= level[p]` is infeasible
+  when selected, so the solver never selects it. The unit test must cover this
+  size-1-with-self-loop SCC explicitly.
+
+The unit tests from the global formulation still apply (two-class commute cycle
+extracts to one order, never both cross-Projects; the boundary assignment), now
+with the per-SCC level bound and M, plus the explicit size-1-self-loop test.
+
+### Re-measure: SCC-scoped MTZ helped but did not collapse, so use exact DFJ cuts
+
+The SCC re-measure (110,708 `joins.slt` A/B samples) showed max SCC size = 2
+corpus-wide (every non-trivial SCC is a two-class commute pair, no fat SCCs), and
+the worst solve dropped from 89.9s to 15.5s. But WITH-MTZ was still median 702us
+(8x the 87us base), p99 31ms, 24% of solves over 10ms, MTZ still 97% of solve
+time. A big join fragment holds MANY two-class SCCs, so it still gets many
+continuous `level` variables and big-M constraints, and the big-M CONTINUOUS
+variables are what strain microlp's branch-and-bound even at M = 2.
+
+The fix, given max SCC size = 2: for the cycle sizes that actually occur, use the
+EXACT Dantzig-Fulkerson-Johnson (DFJ) subtour-elimination cut instead of the weak
+big-M MTZ. MTZ is a compact approximation of the DFJ cuts, and DFJ specialized to
+small components is a pure-binary constraint microlp handles far better:
+
+* Size-1 SCC with a self-loop: the DFJ cut at `|S| = 1` forbids the self-loop
+  node. Pick ONE mechanism and test it: either a `node_sel[self] = 0` constraint,
+  or exclude the self-referential node from the candidate set at construction. Do
+  not do both halfway.
+* Size-2 SCC `{A, B}`: the DFJ cut at `|S| = 2` is mutual exclusion. With the
+  existing exactly-one-node-per-used-class constraint, a selected 2-cycle exists
+  iff A's selected node has a child in B AND B's selected node has a child in A.
+  Forbid exactly that conjunction: `xA + xB <= 1`, where `xA` is the sum of
+  `node_sel` over every A-node with any child class in B, and `xB` symmetric. This
+  is sound (it forbids only genuinely cyclic selections) and complete (it forbids
+  every 2-cycle). No continuous variables, no big-M.
+* Size >= 3 SCC: keep the per-SCC MTZ as the GENERAL fallback. None occur in the
+  corpus today, but the SCC-size report is today's corpus, not forever, and a
+  future rule could build a bigger SCC.
+
+Requirements on the implementation:
+
+* Enumerate ALL cross-edges, not just the commute `Project`. `xA` must sum over
+  every A-node with ANY child in B, whatever the node type. Writing the cut
+  against the commute-Project specifically would let a future rule with a
+  different cross-edge shape silently escape it.
+* Keep the size >= 3 MTZ path tested SYNTHETICALLY. It is dormant corpus-wide, so
+  golden churn will never exercise it. Add a hand-built 3-class-cycle unit test so
+  the general-correctness fallback does not rot, and as insurance against a future
+  bigger SCC.
+* The re-measure after this change should show the WITH column collapse toward the
+  87us base (no continuous vars, no big-M, pure binary), with only a residual
+  0.02% pathological tail for the deterministic size gate (below).
+
 ## Requirement 1: solver-risk gates (measured, not assumed)
 
 MTZ has a weak LP relaxation (the big-M constraints are loose), `microlp` is
@@ -122,7 +218,16 @@ risk and must be measured, not assumed.
 * Corpus solve-time measurement. Instrument total ILP solve time and solve count
   per optimization, run the corpus before and after, and report the distribution
   (median, p95, worst). This is the gate: if solve time regresses beyond a
-  budget, tighten the size cap or add a per-solve timeout.
+  budget, tighten the size gate `K` below.
+
+NOTE: no fallback in this module may key on wall-clock time. A time-based bail
+makes the chosen plan a function of solver speed, so the same query yields an ILP
+plan on a fast machine and a greedy plan on a slow one. That is machine-dependent
+goldens, the exact cross-machine flake class the extraction-determinism work
+(`20260705_eqsat_extraction_determinism.md`) eliminated structurally at real
+cost. Every fallback keys on an input property (SCC count, node count), never on
+elapsed time. This strikes the earlier "per-solve timeout backstop" from the
+design permanently.
 * E0 compile-time gate re-run. Re-run the E0 optimize-time methodology (measure
   `enable_eqsat_physical_optimizer` optimize time versus the directional baseline,
   median and p95 and worst, as the original E0 gate did). E0 was measured while
@@ -131,18 +236,41 @@ risk and must be measured, not assumed.
 * Size cap. Keep the existing `total_nodes > 600` bail (a class-count bound also
   bounds the MTZ variable and constraint count). A cap hit falls back to greedy,
   counted and logged.
-* SCC-scoped MTZ (the first scaling lever, held in reserve). `level` variables
-  and constraints are only needed inside non-trivial strongly-connected components
-  of the candidate graph. An edge that crosses an SCC boundary can never lie on a
-  cycle, so it needs no ordering constraint. The commute cycles are localized
-  two-class pairs, so condensing the candidate graph into SCCs first and emitting
-  MTZ constraints only within non-trivial SCCs would cut the added constraint
-  count enormously (most classes are singleton SCCs with zero MTZ constraints).
-  Do NOT build this up front. But if the solve-time gate strains, it is the FIRST
-  lever to reach for, ahead of tightening the size cap: SCC-scoping preserves the
-  ILP's expressiveness (it still solves the whole fragment), whereas lowering the
-  cap concedes more queries to greedy. Name it here so the implementer reaches for
-  it in the right order.
+* SCC-size distribution (the re-measure gate). SCC-scoping is total only if the
+  SCCs stay small. The two-class-pair shape is measured so far, not guaranteed:
+  some rule combination could build a larger SCC, and MTZ inside a big SCC is
+  still the old cost (though with the tighter per-SCC `M = |SCC|`). So the
+  re-measure MUST report the SCC-size distribution corpus-wide (max SCC size, the
+  tail). If max SCC size is small everywhere, the DFJ fix is total up to the
+  many-pairs tail below. If a fat SCC appears, the deterministic size gate covers
+  it too, and its frequency decides how much the gate matters.
+* Deterministic size gate (the tail's stopgap, keyed on input, never time). Even
+  with size-2 DFJ cuts, a join fragment holding MANY two-class SCCs is a large
+  binary program that microlp's bounds-as-constraints branch-and-bound solves
+  slowly (a 7-way join is ~21 commute pairs and 54s, while 1-3 pairs are
+  sub-second). The pathological cases are separable at INPUT time by their
+  non-trivial-SCC count (equivalently binary-exclusion count), so `solve` bails
+  to greedy when that count exceeds a tuning knob `K`, via
+  `record_ilp_fallback("cyclic_join_size")`, counted and logged. `K` is picked
+  from the measured knee of the solve-time-versus-SCC-count curve and documented
+  with its origin, and it widens or is removed when the backend can afford the
+  tail (see below). This is deterministic and machine-independent, so it never
+  moves a golden across machines, unlike a wall-clock bail. It sheds only the
+  tail and keeps the DFJ wins on small and medium joins.
+* The tail's real fix is the HiGHS backend, not the gate. 54s for a ~100-node
+  MILP with ~21 binary exclusions is microlp's bounds-as-constraints B&B, not the
+  problem's difficulty. A production MILP solver (HiGHS, single-thread for
+  determinism) solves this sub-second and deterministically. The HiGHS spike is
+  pre-authorized and queued immediately after the join-parity audit and the WS2
+  certification. The size gate `K` is the honest stopgap that keeps the branch
+  green until then, and `K` widens or is retired once HiGHS lands.
+
+Validation sequence: SCC-scoped MTZ, then re-run the A/B (the WITH column should
+collapse toward the WITHOUT column and the SCC-size distribution reported), then
+the E0 gate re-run is the actual pass/fail, then calibrate the size gate `K` from
+the new distribution, then resume the join-parity audit and the WS2
+certification, then the HiGHS spike. The 93k-solves-per-file volume finding goes
+to the roadmap, not this fix.
 * Bail-to-greedy retained and OBSERVABLE. The fallback stays for solver failure,
   infeasibility, panic, and the size cap. Every fallback increments a counter and
   emits a debug log with the reason (solver-error, infeasible, size-cap, panic).
