@@ -434,6 +434,11 @@ pub struct Args {
     /// configuration parameters.
     #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
     launchdarkly_sdk_key: Option<String>,
+    /// Overrides the LaunchDarkly streaming, polling, and events endpoints with
+    /// a single base URL, as for a relay proxy. Primarily intended for pointing
+    /// the SDK at a mock LaunchDarkly server in tests.
+    #[clap(long, env = "LAUNCHDARKLY_BASE_URI", value_name = "URL")]
+    launchdarkly_base_uri: Option<String>,
     /// A list of PARAM_NAME=KEY_NAME pairs from system parameter names to
     /// LaunchDarkly feature keys.
     ///
@@ -1124,6 +1129,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 segment_client_side: args.segment_client_side,
                 test_only_dummy_segment_client: args.test_only_dummy_segment_client,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+                launchdarkly_base_uri: args.launchdarkly_base_uri,
                 launchdarkly_key_map: args
                     .launchdarkly_key_map
                     .into_iter()
