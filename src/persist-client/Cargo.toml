@@ -81,5 +81,8 @@ tonic-prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
+# Re-exports internal durable-state types (see `fuzz_exports`) for the
+# `src/persist-client/fuzz` cargo-fuzz crate. Not for production use.
+fuzzing = []
 turmoil = []
 foundationdb = ["mz-persist/foundationdb"]

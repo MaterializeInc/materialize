@@ -121,7 +121,7 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{Capability, CapabilitySet, Inspect};
+use timely::dataflow::operators::{Capability, CapabilitySet, InspectCore};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::Semaphore;
@@ -847,8 +847,21 @@ fn write_batches<'scope>(
         }
     });
 
+    // Use `InspectCore::inspect_container` instead of `Inspect::inspect`.
+    // `Inspect` carries a `where for<'a> &'a C: IntoIterator` bound, and on
+    // macOS the solver can satisfy that bound by chasing objc2's
+    // `&Retained<T>: IntoIterator` blanket impl into an endless
+    // `Retained<Retained<…>>` chain, overflowing the recursion limit.
+    // `InspectCore` has no such bound, so the cascade never starts. We
+    // iterate the container by hand to recover the per-item callback.
     let output_stream = if collection_id.is_user() {
-        output_stream.inspect(|d| trace!("batch: {:?}", d))
+        InspectCore::inspect_container(output_stream, |event| {
+            if let Ok((_, data)) = event {
+                for d in data {
+                    trace!("batch: {:?}", d);
+                }
+            }
+        })
     } else {
         output_stream
     };
