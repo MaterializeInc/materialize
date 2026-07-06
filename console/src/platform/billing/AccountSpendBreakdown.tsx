@@ -10,7 +10,6 @@
 import {
   Box,
   chakra,
-  Divider,
   Grid,
   HStack,
   Spinner,
@@ -58,7 +57,9 @@ import {
   StackedDailyRow,
   stackedDailyRows,
 } from "./dailyBreakdown";
+import RegionSelect from "./RegionSelect";
 import { SafariSafeCollapse } from "./SpendBreakdown";
+import TimeRangeSelect from "./TimeRangeSelect";
 
 const margin = { top: 10, right: 0, bottom: 36, left: 50 };
 const chartHeightPx = 245;
@@ -70,6 +71,10 @@ type AccountSpendBreakdownProps = {
   isLoading: boolean;
   isError: boolean;
   error: Error | null;
+  regionFilter: "all" | string;
+  setRegionFilter: (val: "all" | string) => void;
+  timeRange: number;
+  setTimeRange: (val: number) => void;
 };
 
 /**
@@ -609,6 +614,10 @@ const AccountSpendBreakdown = ({
   isLoading,
   isError,
   error,
+  regionFilter,
+  setRegionFilter,
+  timeRange,
+  setTimeRange,
 }: AccountSpendBreakdownProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -657,13 +666,14 @@ const AccountSpendBreakdown = ({
 
   return (
     <Box data-testid="account-spend-breakdown">
-      {/* Temporary boundary lines while this section runs alongside the
-          legacy chart/breakdown above and below it; drop once this section
-          replaces the top of the page. */}
-      <Divider mb={4} />
-      <Text textStyle="heading-sm" mb={4}>
-        Spend by account &amp; cluster
-      </Text>
+      <HStack gap={4} mb={4}>
+        <div data-testid="account-region-select">
+          <RegionSelect region={regionFilter} setRegion={setRegionFilter} />
+        </div>
+        <div data-testid="account-time-range-select">
+          <TimeRangeSelect timeRange={timeRange} setTimeRange={setTimeRange} />
+        </div>
+      </HStack>
       {isLoading ? (
         <Spinner data-testid="account-breakdown-loading" />
       ) : isError ? (
@@ -714,7 +724,6 @@ const AccountSpendBreakdown = ({
           />
         </Box>
       )}
-      <Divider mt={4} />
     </Box>
   );
 };

@@ -23,7 +23,7 @@ const TimeRangeSelect = ({ timeRange, setTimeRange }: TimeRangeSelectProps) => {
     14: "Last 14 days",
     30: "Last 30 days",
     90: "Last 90 days",
-    180: "Last 180 days",
+    100: "Last 100 days",
   };
   return (
     <SearchableSelect

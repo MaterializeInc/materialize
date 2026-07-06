@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { addDays, startOfDay, subDays } from "date-fns";
 import { useMemo } from "react";
 
 import { queryKeys as authQueryKeys } from "~/api/auth";
@@ -89,14 +88,23 @@ export function useRecentInvoices() {
   });
 }
 
+// `date-fns`'s `startOfDay`/`addDays` read and set calendar fields in the
+// browser's local time zone, not UTC. Near UTC midnight, "local tomorrow" can
+// actually be UTC "today" (or "the day after tomorrow"), silently shifting the
+// whole window by a day. Date.UTC's day component tolerates values outside
+// 1-31 (e.g. `date + 1`) and normalizes into the next/previous month, so this
+// stays entirely within UTC calendar arithmetic.
 function getDayAlignedRange(span: number): [Date, Date] {
-  const endDate = startOfDay(addDays(nowUTC(), 1));
-  endDate.setUTCHours(0, 0, 0, 0);
+  const now = nowUTC();
+  const endDate = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+  );
   const startDate = new Date(
-    subDays(endDate, span)
-      // Since we're bucketing these by day, start from the beginning of the
-      // UTC day.
-      .setUTCHours(0, 0, 0, 0),
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() + 1 - span,
+    ),
   );
   return [startDate, endDate];
 }

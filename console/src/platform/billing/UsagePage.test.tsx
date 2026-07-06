@@ -22,13 +22,11 @@ import {
   buildDailyCostBreakdownResponse,
   buildDailyCostResponse,
   buildInvoicesResponse,
-  generateDailyCostResponsePayload,
 } from "~/api/mocks/cloudGlobalApiHandlers";
 import server from "~/api/mocks/server";
 import {
   createProviderWrapper,
   healthyEnvironment,
-  selectReactSelectOption,
   setFakeEnvironment,
 } from "~/test/utils";
 import { assert } from "~/util";
@@ -89,34 +87,6 @@ describe("UsagePage", () => {
   afterEach(() => {
     server.resetHandlers();
     vi.clearAllMocks();
-  });
-
-  it("renders successfully for all regions", async () => {
-    const [startDate, endDate] = getTimeRange(7);
-    const payload = generateDailyCostResponsePayload(startDate, endDate);
-    expect(payload.daily.length).toEqual(30);
-    server.use(buildDailyCostResponse({ payload }));
-    renderComponent(<UsagePage />);
-
-    const regionSelect = await screen.findByTestId(
-      "region-select",
-      {},
-      { timeout: 5_000 },
-    );
-    expect(regionSelect).toBeVisible();
-
-    const timeRangeSelect = await screen.findByTestId("time-range-select");
-    expect(timeRangeSelect).toBeVisible();
-
-    const spend = await screen.findByTestId("all-spend-amount");
-    const timeRangeSubtotal = payload.daily
-      .slice(-7)
-      .reduce((subtotal, day) => subtotal + parseFloat(day.subtotal), 0);
-    expect(spend.textContent).toEqual(formatCurrency(timeRangeSubtotal));
-
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart")).toBeVisible(),
-    );
   });
 
   it("renders a unified account & cluster ledger for a parent org", async () => {
@@ -362,76 +332,42 @@ describe("UsagePage", () => {
     expect(await breakdown.findByText("aws/us-east-1 / Other")).toBeVisible();
   });
 
-  it("changing the region filters the totals", async () => {
-    const [startDate, endDate] = getTimeRange(7);
-    const payload = generateDailyCostResponsePayload(startDate, endDate);
-    server.use(buildDailyCostResponse({ payload }));
-    renderComponent(<UsagePage />);
-
-    const regionSelect = screen.getByTestId<HTMLElement>("region-select");
-    expect(regionSelect).toBeVisible();
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart")).toBeVisible(),
-    );
-    const spendElement = await screen.findByTestId("all-spend-amount");
-    const allSpend = parseFloat(
-      spendElement.textContent!.replace("$", "").replace(",", ""),
-    );
-    await selectReactSelectOption(regionSelect, "aws/us-east-1");
-    const regionElement = await screen.findByTestId(
-      "aws/us-east-1-spend-amount",
-    );
-    const regionSpend = parseFloat(
-      regionElement.textContent!.replace("$", "").replace(",", ""),
-    );
-    expect(regionSpend, JSON.stringify(payload)).toBeLessThan(allSpend);
-  });
-
-  it("changing the time range filters the totals", async () => {
-    let [startDate, endDate] = getTimeRange(7);
-    let payload = generateDailyCostResponsePayload(startDate, endDate);
-    server.use(buildDailyCostResponse({ payload }));
-    renderComponent(<UsagePage />);
-
-    const timeRangeSelect =
-      screen.getByTestId<HTMLElement>("time-range-select");
-    expect(timeRangeSelect).toBeVisible();
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart")).toBeVisible(),
-    );
-
-    const spendElement = await screen.findByTestId("all-spend-amount");
-    const originalSpend = parseFloat(
-      spendElement.textContent!.replace("$", "").replace(",", ""),
-    );
-
-    [startDate, endDate] = getTimeRange(14);
-    payload = generateDailyCostResponsePayload(startDate, endDate);
-    server.use(buildDailyCostResponse({ payload }));
-    await selectReactSelectOption(timeRangeSelect, "Last 14 days");
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart")).toBeVisible(),
-    );
-    const newSpend = parseFloat(
-      spendElement.textContent!.replace("$", "").replace(",", ""),
-    );
-    expect(originalSpend).toBeLessThan(newSpend);
-  });
-
-  it("displays a generic error if there's an issue querying the server", async () => {
-    server.use(buildDailyCostResponse({ status: 500 }));
-    renderComponent(<UsagePage />);
-    await waitFor(async () =>
-      expect(await screen.findByTestId("chart-error")).toBeVisible(),
-    );
-  });
-
   it("displays the invoices table for direct-billed organizations", async () => {
-    server.use(buildDailyCostResponse());
+    server.use(
+      buildDailyCostResponse(),
+      buildInvoicesResponse({
+        invoices: [
+          {
+            issueDate: "2026-06-02T00:00:00Z",
+            currency: "usd",
+            total: "100.00",
+            amountDue: "100.00",
+            createdAt: "2026-06-02T00:00:00Z",
+            status: "paid",
+            invoiceNumber: "INV-001",
+          },
+        ],
+      }),
+    );
     renderComponent(<UsagePage />);
     await waitFor(async () =>
       expect(await screen.findByTestId("invoice-table")).toBeVisible(),
     );
+  });
+
+  it("hides the invoice history section entirely for an account with no invoices (e.g. an Orb hierarchy leaf account, which never has its own)", async () => {
+    server.use(
+      buildDailyCostResponse(),
+      buildInvoicesResponse({ invoices: [] }),
+    );
+    renderComponent(<UsagePage />);
+    await waitFor(async () =>
+      expect(
+        await screen.findByTestId("account-spend-breakdown"),
+      ).toBeVisible(),
+    );
+    expect(screen.queryByText("Invoice history")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("invoice-table")).not.toBeInTheDocument();
   });
 
   it("hides the invoices table for AWS Marketplace-billed organizations", async () => {

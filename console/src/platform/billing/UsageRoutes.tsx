@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { HStack, Text, useTheme, VStack } from "@chakra-ui/react";
+import { Box, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
 import { Stripe } from "@stripe/stripe-js";
 import React from "react";
 import { Navigate, Outlet, Route } from "react-router-dom";
@@ -15,11 +15,13 @@ import { Navigate, Outlet, Route } from "react-router-dom";
 import { useCanViewBilling, useCurrentOrganization } from "~/api/auth";
 import { SupportButton } from "~/components/SupportLink";
 import { CloudRuntimeConfig } from "~/config/AppConfigSwitch";
-import { PageHeader, PageTabStrip, Tab } from "~/layouts/BaseLayout";
+import { PageHeader, PageTab, PageTabStrip, Tab } from "~/layouts/BaseLayout";
 import { SentryRoutes } from "~/sentry";
 import { MaterializeTheme } from "~/theme";
 
 import BillingPage from "./BillingPage";
+import PricingPage from "./PricingPage";
+import { useRecentInvoices } from "./queries";
 import UsagePage from "./UsagePage";
 import { getIsUpgradedPlan } from "./utils";
 
@@ -56,7 +58,25 @@ const UsageLayout = ({ isBillingVisible }: { isBillingVisible: boolean }) => {
             <SupportButton>Contact support</SupportButton>
           </HStack>
 
-          <PageTabStrip tabData={navItems} />
+          <HStack width="100%" spacing="3" pr="7">
+            <Box flex="1" minWidth="0">
+              <PageTabStrip tabData={navItems} />
+            </Box>
+            {/* Static reference material, not account-specific data, so it
+                lives here rather than behind the (root-only) Billing tab.
+                Styled as a PageTab (not a Button) to read as another pill in
+                the strip rather than an unrelated bordered button. */}
+            <PageTab
+              to="/usage/pricing"
+              tabProps={{
+                flexShrink: 0,
+                borderRadius: "4px",
+                _hover: { background: colors.background.secondary },
+              }}
+            >
+              Pricing
+            </PageTab>
+          </HStack>
         </VStack>
       </PageHeader>
       <Outlet />
@@ -74,7 +94,16 @@ const UsageRoutes = ({
   const { organization } = useCurrentOrganization();
 
   const isUpgradedPlan = getIsUpgradedPlan(organization?.subscription?.type);
-  const isBillingVisible = useCanViewBilling({ runtimeConfig });
+  const { data: invoices } = useRecentInvoices();
+  // Proxy for "is this a leaf account": a leaf's invoices always read as
+  // empty (SAS-148), same signal InvoiceHistorySection uses. Evaluation orgs
+  // are also invoice-less pre-upgrade, so carve those out to keep Billing
+  // reachable for a first-time "Upgrade & Pay". Known gap and the direct fix
+  // (an is_billing_child field, already written but undeployed): SAS-150.
+  const isBillingVisible =
+    useCanViewBilling({ runtimeConfig }) &&
+    (organization?.subscription?.type === "evaluation" ||
+      (invoices?.length ?? 0) > 0);
 
   const shouldRedirectToBilling = isBillingVisible && !isUpgradedPlan;
 
@@ -93,6 +122,9 @@ const UsageRoutes = ({
             }
           />
         )}
+        {/* Static reference material, not account-specific, so it's reachable
+            regardless of plan type or billing-child status. */}
+        <Route path="/pricing" element={<PricingPage />} />
 
         <Route
           index
