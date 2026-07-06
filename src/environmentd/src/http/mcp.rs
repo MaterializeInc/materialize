@@ -688,18 +688,26 @@ fn endpoint_instructions(
 ) -> Option<String> {
     match endpoint_type {
         McpEndpointType::Agent => {
-            // Only reference `read_data_product` when it is actually exposed;
-            // when disabled we tell the agent to use the `query` tool for
-            // reads instead. The hydration paragraph applies to any read
-            // path so it stays in both variants.
-            let read_paragraph = if read_data_product_tool_enabled {
-                "`read_data_product` automatically routes the \
-                 read to the cluster recorded in the data product catalog so indexes are used; \
-                 you only need to set the `cluster` parameter if you intentionally want the \
-                 read to run on a different cluster (e.g. one with larger or more replicas). "
-            } else {
-                "Use the `query` tool to read data products, passing the cluster from \
-                 `get_data_product_details` so indexed reads hit the arrangement. "
+            // Only reference tools that are actually exposed by tools/list.
+            // Both flags off is a valid (if unusual) config where the agent
+            // can only discover products, not read them — we say so instead
+            // of pointing at a hidden tool.
+            let read_paragraph = match (read_data_product_tool_enabled, query_tool_enabled) {
+                (true, _) => {
+                    "`read_data_product` automatically routes the \
+                     read to the cluster recorded in the data product catalog so indexes are used; \
+                     you only need to set the `cluster` parameter if you intentionally want the \
+                     read to run on a different cluster (e.g. one with larger or more replicas). "
+                }
+                (false, true) => {
+                    "Use the `query` tool to read data products, passing the cluster from \
+                     `get_data_product_details` so indexed reads hit the arrangement. "
+                }
+                (false, false) => {
+                    "This server is configured for discovery only: no read tool is exposed. \
+                     Use `get_data_products` and `get_data_product_details` to inspect what \
+                     is available. "
+                }
             };
             Some(format!(
                 "You have access to Materialize data products via MCP. \
@@ -1924,6 +1932,46 @@ mod tests {
         assert!(
             tool_names.contains(&"query"),
             "query tool should remain present when enabled"
+        );
+    }
+
+    /// Both read tools off is a valid (if unusual) config where the agent
+    /// is discovery-only. Pin the behavior: only get_data_products and
+    /// get_data_product_details are advertised, and the initialize
+    /// instructions do not tell the agent to use a tool that isn't listed.
+    #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_agent_both_read_tools_disabled() {
+        let result = handle_tools_list(McpEndpointType::Agent, false, false, 1_000_000)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            tool_names
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["get_data_product_details", "get_data_products"]
+                .into_iter()
+                .collect(),
+            "only discovery tools should be advertised when both read flags are off",
+        );
+
+        let instructions = endpoint_instructions(McpEndpointType::Agent, false, false)
+            .expect("agent instructions must be present");
+        assert!(
+            !instructions.contains("Use the `query` tool"),
+            "instructions must not point at query when it is hidden: {instructions}",
+        );
+        assert!(
+            !instructions.contains("`read_data_product` automatically"),
+            "instructions must not point at read_data_product when it is hidden: {instructions}",
+        );
+        assert!(
+            instructions.contains("discovery only"),
+            "instructions must tell the agent it is discovery-only: {instructions}",
         );
     }
 
