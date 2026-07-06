@@ -316,6 +316,17 @@ impl IdPool {
     }
 }
 
+/// A row for `mz_object_arrangement_size_history`, prepared off-thread by the
+/// arrangement sizes snapshot task and stamped with a collection timestamp at
+/// write time.
+#[derive(Debug)]
+pub struct ArrangementSizeRecord {
+    pub replica_id: String,
+    pub object_id: String,
+    pub size: i64,
+    pub hydration_complete: bool,
+}
+
 #[derive(Debug)]
 pub enum Message {
     Command(OpenTelemetryContext, Command),
@@ -359,6 +370,7 @@ pub enum Message {
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
     ArrangementSizesSchedule,
     ArrangementSizesSnapshot,
+    ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
@@ -510,6 +522,7 @@ impl Message {
             Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
+            Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
