@@ -133,6 +133,13 @@ SERVICES = [
                 key="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
                 value=STATIC_IPS["materialized"],
             ),
+            # An A record with no CNAME, to exercise the resolver's no-CNAME
+            # fallback path (see workflow_pgwire_with_sni_no_cname).
+            DnsmasqEntry(
+                type="address",
+                key="direct.test",
+                value=STATIC_IPS["materialized"],
+            ),
         ],
         networks={"balancerd": {"ipv4_address": STATIC_IPS["dnsmasq"]}},
     ),
@@ -776,6 +783,55 @@ def workflow_pgwire_with_sni(c: Composition) -> None:
     # This should mean that we need to rely on SNI to do tenant resolution
     cursor = sql_cursor(c)
     cursor.execute("select 1;")
+
+
+def workflow_pgwire_with_sni_no_cname(c: Composition) -> None:
+    """Like workflow_pgwire_with_sni, but the SNI templates resolve directly
+    to an A record with no CNAME, exercising the resolver's no-CNAME fallback
+    path (no tenant can be extracted, but routing must still work).
+
+    This mirrors self-managed deployments, where orchestratord points the
+    resolver templates at plain Kubernetes services that resolve to A records
+    without a CNAME. It is also the degraded path in cloud when a CNAME
+    lookup transiently fails."""
+    with c.override(
+        Balancerd(
+            command=[
+                "--startup-log-filter=debug",
+                "service",
+                "--pgwire-listen-addr=0.0.0.0:6875",
+                "--https-listen-addr=0.0.0.0:6876",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--frontegg-resolver-template=materialized:6875",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--https-sni-resolver-template=direct.test:6876",
+                "--pgwire-sni-resolver-template=direct.test:6875",
+                "--tls-key=/secrets/balancerd.key",
+                "--tls-cert=/secrets/balancerd.crt",
+                "--internal-tls",
+                "--tls-mode=require",
+                "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+                # Nonsensical but we don't need cancellations here
+                "--cancellation-resolver-dir=/secrets/",
+            ],
+            depends_on=["test-certs"],
+            volumes=[
+                "secrets:/secrets",
+            ],
+            dns=[STATIC_IPS["dnsmasq"]],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
+        ),
+    ):
+        c.up(
+            "balancerd",
+            "dnsmasq",
+            "materialized",
+            Service("testdrive", idle=True),
+        )
+        cursor = sql_cursor(c)
+        cursor.execute("select 1;")
 
 
 def workflow_split_proxy_header(c: Composition) -> None:

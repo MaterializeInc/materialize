@@ -15,13 +15,14 @@
 use std::error::Error;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
-    FronteggResolver, SniTemplate,
+    DEFAULT_DNS_CACHE_SIZE, FronteggResolver, SniTemplate, TenantDnsResolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -92,6 +93,9 @@ pub struct ServiceArgs {
     /// destinations.
     #[clap(long, value_name = "HOST.{}.NAME:PORT")]
     pgwire_sni_resolver_template: Option<String>,
+    /// Number of tenant CNAME responses to cache for SNI resolution.
+    #[clap(long, default_value_t = DEFAULT_DNS_CACHE_SIZE)]
+    dns_cache_size: usize,
     /// Cancellation resolver configmap directory. The org id part of the incoming connection id
     /// (the 12 bits after (and excluding) the first bit) converted to a 3-char UUID string is
     /// appended to this to make a file path. That file is read, and every newline-delimited line
@@ -255,7 +259,7 @@ pub async fn run(
 
             (
                 BalancerResolver::MultiTenant {
-                    dns: std::sync::Arc::new(mz_balancerd::TenantDnsResolver::new()),
+                    dns: Arc::new(TenantDnsResolver::new(args.dns_cache_size)?),
                     frontegg: FronteggResolver {
                         auth,
                         addr_template,

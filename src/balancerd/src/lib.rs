@@ -20,7 +20,7 @@ mod codec;
 mod dyncfgs;
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -32,10 +32,12 @@ use axum::{Router, routing};
 use bytes::BytesMut;
 use futures::TryFutureExt;
 use futures::stream::BoxStream;
-use hickory_resolver::{
-    Resolver, TokioResolver, config::*, name_server::TokioConnectionProvider,
-    proto::rr::RecordType, system_conf::read_system_conf,
-};
+use hickory_resolver::config::LookupIpStrategy;
+use hickory_resolver::lookup_ip::LookupIp;
+use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::proto::rr::RecordType;
+use hickory_resolver::system_conf::read_system_conf;
+use hickory_resolver::{Resolver, TokioResolver};
 use hyper::StatusCode;
 use hyper_util::rt::TokioIo;
 use launchdarkly_server_sdk as ld;
@@ -320,14 +322,14 @@ impl BalancerService {
         let https_addr = self.https.0.local_addr();
         let internal_http_addr = self.internal_http.0.local_addr();
 
-        // Extract shared DNS resolver before moving the resolver into PgwireBalancer.
-        // In multi-tenant mode, this allows HTTPS and pgwire to share the same resolver.
-        // In static mode, HTTPS creates its own resolver (though it won't be used for SNI).
-        let shared_dns = self
-            .cfg
-            .resolver
-            .shared_dns()
-            .unwrap_or_else(|| Arc::new(TenantDnsResolver::new()));
+        // The HTTPS balancer always resolves through a TenantDnsResolver. In
+        // multi-tenant mode it shares the pgwire resolver so both listeners
+        // use one CNAME cache. In static mode pgwire does not use DNS caching,
+        // so HTTPS gets its own resolver with the default cache size.
+        let shared_dns = match self.cfg.resolver.shared_dns() {
+            Some(dns) => dns,
+            None => Arc::new(TenantDnsResolver::new(DEFAULT_DNS_CACHE_SIZE)?),
+        };
 
         {
             let pgwire = PgwireBalancer {
@@ -664,11 +666,15 @@ impl PgwireBalancer {
         let resolved = match resolver.resolve(conn, user, metrics).await {
             Ok(v) => v,
             Err(err) => {
+                let sql_state = match &err {
+                    ResolveError::InvalidPassword => SqlState::INVALID_PASSWORD,
+                    ResolveError::Internal(details) => {
+                        error!("resolving connection destination: {details:#}");
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    }
+                };
                 return conn
-                    .send(ErrorResponse::fatal(
-                        SqlState::INVALID_PASSWORD,
-                        err.to_string(),
-                    ))
+                    .send(ErrorResponse::fatal(sql_state, err.to_string()))
                     .await;
             }
         };
@@ -1113,7 +1119,8 @@ impl HttpsBalancer {
         let (addr, tenant) = match servername {
             Some(sni) => resolver.resolve_sni(resolve_template, port, sni).await?,
             None => {
-                // No SNI - use template directly (shouldn't happen for HTTPS in practice)
+                // Without SNI, resolve the template as is. Not expected for
+                // HTTPS in practice.
                 debug!("https hostname (no SNI): {}:{}", resolve_template, port);
                 resolver.resolve(resolve_template, port).await?
             }
@@ -1281,6 +1288,8 @@ impl mz_server_core::Server for HttpsBalancer {
     }
 }
 
+/// Template for constructing the destination hostname from a TLS SNI
+/// servername. `{}` is replaced with the first label of the servername.
 #[derive(Debug)]
 pub struct SniTemplate {
     pub template: String,
@@ -1300,6 +1309,25 @@ pub enum BalancerResolver {
     },
 }
 
+/// An error resolving a connection's destination.
+///
+/// The `Display` of this error is sent to unauthenticated clients, so it must
+/// not contain internal details such as hostnames. Those belong in the
+/// `Internal` source error, which is only logged.
+#[derive(Debug, thiserror::Error)]
+enum ResolveError {
+    #[error("invalid password")]
+    InvalidPassword,
+    #[error("internal error")]
+    Internal(#[from] anyhow::Error),
+}
+
+impl From<io::Error> for ResolveError {
+    fn from(e: io::Error) -> Self {
+        ResolveError::Internal(e.into())
+    }
+}
+
 impl BalancerResolver {
     /// Returns a clone of the shared DNS resolver if in multi-tenant mode.
     /// This allows sharing the resolver with other components like HttpsBalancer.
@@ -1315,7 +1343,7 @@ impl BalancerResolver {
         conn: &mut FramedConn<A>,
         user: &str,
         metrics: &ServerMetrics,
-    ) -> Result<ResolvedAddr, anyhow::Error>
+    ) -> Result<ResolvedAddr, ResolveError>
     where
         A: AsyncRead + AsyncWrite + Unpin,
     {
@@ -1359,7 +1387,9 @@ impl BalancerResolver {
                         conn.flush().await?;
                         let password = match conn.recv().await? {
                             Some(FrontendMessage::Password { password }) => password,
-                            _ => anyhow::bail!("expected Password message"),
+                            _ => {
+                                return Err(anyhow::anyhow!("expected Password message").into());
+                            }
                         };
 
                         // balancerd only needs the validated tenant_id to route
@@ -1370,7 +1400,7 @@ impl BalancerResolver {
                             Ok((auth_session, _)) => auth_session,
                             Err(e) => {
                                 warn!("pgwire connection failed authentication: {}", e);
-                                anyhow::bail!("invalid password");
+                                return Err(ResolveError::InvalidPassword);
                             }
                         };
 
@@ -1382,7 +1412,9 @@ impl BalancerResolver {
                         let port: u16 = port_str.parse().with_context(|| {
                             format!("invalid port in addr_template: {}", port_str)
                         })?;
-                        let (addr, _) = dns_resolver.resolve(hostname, port).await?;
+                        // The tenant is already known from authentication, so
+                        // skip the CNAME lookup that resolve() would do.
+                        let addr = dns_resolver.resolve_addr(hostname, port).await?;
                         let tenant = auth_session.tenant_id().to_string();
                         debug!("Frontegg resolved tenant: {}", tenant);
                         ResolvedAddr {
@@ -1404,11 +1436,8 @@ impl BalancerResolver {
             BalancerResolver::Static(addr) => {
                 // We don't want any caching here so we just use the standard
                 // tokio resolver.
-                let addr = if let Some(a) = tokio::net::lookup_host(addr).await?.next() {
-                    a
-                } else {
-                    error!("{addr} did not resolve to any addresses");
-                    anyhow::bail!("internal error");
+                let Some(addr) = tokio::net::lookup_host(addr).await?.next() else {
+                    return Err(anyhow::anyhow!("{addr} did not resolve to any addresses").into());
                 };
 
                 Ok(ResolvedAddr {
@@ -1421,66 +1450,37 @@ impl BalancerResolver {
     }
 }
 
-/// Creates a default resolver with caching enabled for DNS lookups.
-fn create_default_resolver() -> TokioResolver {
-    let mut resolver_opts = ResolverOpts::default();
-    resolver_opts.cache_size = 10000;
-    resolver_opts.positive_max_ttl = Some(Duration::from_secs(10));
-    resolver_opts.positive_min_ttl = Some(Duration::from_secs(1));
-    resolver_opts.negative_min_ttl = Some(Duration::from_secs(1));
-    resolver_opts.negative_max_ttl = Some(Duration::from_secs(1));
-    resolver_opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
+/// The default number of CNAME responses cached by [`TenantDnsResolver`].
+///
+/// The cache holds one entry per distinct tenant hostname, so this bounds
+/// both memory use and the number of tenants that benefit from caching.
+pub const DEFAULT_DNS_CACHE_SIZE: usize = 1000;
 
-    // Read system DNS configuration or fall back to defaults
-    let (config, opts) = read_system_conf()
-        .map(|(config, mut opts)| {
-            // Override specific options while keeping system DNS servers
-            opts.cache_size = resolver_opts.cache_size;
-            opts.positive_max_ttl = resolver_opts.positive_max_ttl;
-            opts.positive_min_ttl = resolver_opts.positive_min_ttl;
-            opts.negative_min_ttl = resolver_opts.negative_min_ttl;
-            opts.negative_max_ttl = resolver_opts.negative_max_ttl;
-            opts.ip_strategy = resolver_opts.ip_strategy;
-            (config, opts)
-        })
-        .unwrap_or_else(|err| {
-            warn!(
-                "Failed to read system DNS configuration, using defaults: {}",
-                err
-            );
-            (ResolverConfig::default(), resolver_opts)
-        });
+/// Creates a resolver from the system DNS configuration.
+///
+/// A `cache_size` of 0 disables caching. Fails if the system DNS
+/// configuration cannot be read. We must not fall back to hickory's default
+/// config (Google public DNS) here, that would leak internal hostnames to an
+/// external party and could not resolve them anyway.
+fn create_resolver(cache_size: usize) -> Result<TokioResolver, anyhow::Error> {
+    let (config, mut opts) = read_system_conf().context("reading system DNS configuration")?;
+    opts.cache_size = cache_size;
+    // Cached entries are tenant CNAMEs, which are effectively static for the
+    // life of an environment. The 10 second cap bounds how long a re-pointed
+    // CNAME is served stale. The 1 second floors keep 0-TTL records and
+    // missing CNAMEs from forcing a DNS query on every connection.
+    opts.positive_max_ttl = Some(Duration::from_secs(10));
+    opts.positive_min_ttl = Some(Duration::from_secs(1));
+    opts.negative_min_ttl = Some(Duration::from_secs(1));
+    opts.negative_max_ttl = Some(Duration::from_secs(1));
+    // Query A records first and AAAA only on failure, rather than both.
+    opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
 
-    Resolver::builder_with_config(config, TokioConnectionProvider::default())
-        .with_options(opts)
-        .build()
-}
-
-/// Creates a resolver with caching disabled for DNS lookups.
-fn create_non_caching_resolver() -> TokioResolver {
-    let mut resolver_opts = ResolverOpts::default();
-    resolver_opts.cache_size = 0; // Disable caching
-    resolver_opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
-
-    // Read system DNS configuration or fall back to defaults
-    let (config, opts) = read_system_conf()
-        .map(|(config, mut opts)| {
-            // Override specific options while keeping system DNS servers
-            opts.cache_size = resolver_opts.cache_size;
-            opts.ip_strategy = resolver_opts.ip_strategy;
-            (config, opts)
-        })
-        .unwrap_or_else(|err| {
-            warn!(
-                "Failed to read system DNS configuration, using defaults: {}",
-                err
-            );
-            (ResolverConfig::default(), resolver_opts)
-        });
-
-    Resolver::builder_with_config(config, TokioConnectionProvider::default())
-        .with_options(opts)
-        .build()
+    Ok(
+        Resolver::builder_with_config(config, TokioConnectionProvider::default())
+            .with_options(opts)
+            .build(),
+    )
 }
 
 /// A resolver that uses separate caching and non-caching resolvers for different record types.
@@ -1491,12 +1491,13 @@ pub struct TenantDnsResolver {
 }
 
 impl TenantDnsResolver {
-    /// Creates a new TenantDnsResolver with default caching and non-caching resolvers.
-    pub fn new() -> Self {
-        Self {
-            caching_resolver: create_default_resolver(),
-            non_caching_resolver: create_non_caching_resolver(),
-        }
+    /// Creates a new resolver that caches up to `cname_cache_size` CNAME
+    /// responses. Fails if the system DNS configuration cannot be read.
+    pub fn new(cname_cache_size: usize) -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            caching_resolver: create_resolver(cname_cache_size)?,
+            non_caching_resolver: create_resolver(0)?,
+        })
     }
 
     /// Resolves a CNAME record using the caching resolver.
@@ -1524,14 +1525,11 @@ impl TenantDnsResolver {
     }
 
     /// Resolves A records without caching.
-    async fn resolve_arec_no_cache(
-        &self,
-        hostname: &str,
-    ) -> Result<hickory_resolver::lookup_ip::LookupIp, anyhow::Error> {
+    async fn resolve_arec_no_cache(&self, hostname: &str) -> Result<LookupIp, anyhow::Error> {
         self.non_caching_resolver
             .lookup_ip(hostname)
             .await
-            .with_context(|| format!("Failed to resolve A record for hostname: {}", hostname))
+            .with_context(|| format!("resolving A records for {}", hostname))
     }
 
     /// Resolves an address using SNI-based lookup.
@@ -1549,6 +1547,18 @@ impl TenantDnsResolver {
         self.resolve(&hostname, port).await
     }
 
+    /// Resolves the address for a hostname, skipping CNAME resolution and
+    /// tenant extraction. Use when the tenant is already known.
+    async fn resolve_addr(&self, host: &str, port: u16) -> Result<SocketAddr, anyhow::Error> {
+        // IP literals need no resolution. Resolving them through hickory
+        // would walk the search domain list first when ndots is large, as it
+        // is in Kubernetes.
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return Ok(SocketAddr::new(ip, port));
+        }
+        Self::first_addr(self.resolve_arec_no_cache(host).await?, port)
+    }
+
     /// Resolves the address and tenant from a hostname and port.
     ///
     /// CNAMEs are resolved with caching, while A records are resolved without caching.
@@ -1558,24 +1568,29 @@ impl TenantDnsResolver {
         host: &str,
         port: u16,
     ) -> Result<(SocketAddr, Option<String>), anyhow::Error> {
+        // IP literals need no resolution and carry no tenant CNAME.
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return Ok((SocketAddr::new(ip, port), None));
+        }
+
         // Resolve CNAME with caching (these are generally static).
         // Extract tenant from CNAME if present.
-        let (ip, tenant) = if let Some(cname) = self.resolve_cname(host).await {
+        let (ips, tenant) = if let Some(cname) = self.resolve_cname(host).await {
             let tenant = extract_tenant_from_cname(&cname);
-            let ip = self.resolve_arec_no_cache(&cname).await?;
-            (ip, tenant)
+            (self.resolve_arec_no_cache(&cname).await?, tenant)
         } else {
-            let ip = self.resolve_arec_no_cache(host).await?;
-            (ip, None)
+            (self.resolve_arec_no_cache(host).await?, None)
         };
 
-        let addr = ip
-            .iter()
-            .next()
-            .map(|r| SocketAddr::new(r, port))
-            .ok_or_else(|| anyhow::anyhow!("No A records found in DNS response"))?;
+        Ok((Self::first_addr(ips, port)?, tenant))
+    }
 
-        Ok((addr, tenant))
+    /// Returns the first resolved IP as a socket address.
+    fn first_addr(ips: LookupIp, port: u16) -> Result<SocketAddr, anyhow::Error> {
+        ips.iter()
+            .next()
+            .map(|ip| SocketAddr::new(ip, port))
+            .ok_or_else(|| anyhow::anyhow!("no A records found in DNS response"))
     }
 }
 
@@ -1602,6 +1617,12 @@ mod tests {
             ("", None),
             (
                 "environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
+                Some("58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"),
+            ),
+            (
+                // Trailing dot from an absolute DNS name, as returned by the
+                // resolver.
+                "environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local.",
                 Some("58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"),
             ),
             (

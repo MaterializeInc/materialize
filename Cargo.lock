@@ -3088,38 +3088,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "domain"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f7ff15f82df7d5086fb15dfc1c1e96598a6ded9829840a9bcfa1fa3ccd8d01d"
-dependencies = [
- "bumpalo",
- "bytes",
- "domain-macros",
- "futures-util",
- "hashbrown 0.14.5",
- "log",
- "moka",
- "octseq",
- "rand 0.8.5",
- "smallvec",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "domain-macros"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d1a6796ad411f6812d691955066ad27450196bfb181bb91b66a643cc3e8f5b7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "dtor"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4190,7 +4158,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
  "ahash 0.8.12",
- "allocator-api2",
 ]
 
 [[package]]
@@ -6241,7 +6208,6 @@ dependencies = [
  "bytesize",
  "chrono",
  "clap",
- "domain",
  "futures",
  "hickory-resolver",
  "humantime",
@@ -6274,6 +6240,7 @@ dependencies = [
  "rustls",
  "semver",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-metrics",
  "tokio-openssl",
@@ -9435,16 +9402,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "octseq"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "126c3ca37c9c44cec575247f43a3e4374d8927684f129d2beeb0d2cef262fe12"
-dependencies = [
- "bytes",
- "smallvec",
 ]
 
 [[package]]

@@ -17,7 +17,6 @@ bytes.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
-domain.workspace = true
 futures.workspace = true
 hickory-resolver.workspace = true
 humantime.workspace = true
@@ -45,6 +44,7 @@ prometheus.workspace = true
 proxy-header.workspace = true
 rustls.workspace = true
 semver.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tokio-openssl.workspace = true
 tokio-postgres.workspace = true
