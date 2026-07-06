@@ -1,0 +1,55 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/rename_sequence
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# see also file `sequences`
+
+# not supported yet
+halt
+
+statement ok
+CREATE SEQUENCE alter_test
+
+statement ok
+ALTER SEQUENCE alter_test RENAME TO renamed_alter_test
+
+# alter_test no longer there
+statement ok
+ALTER SEQUENCE IF EXISTS alter_test RENAME TO something
+
+statement ok
+ALTER SEQUENCE IF EXISTS renamed_alter_test RENAME TO renamed_again_alter_test
+
+statement ok
+DROP SEQUENCE renamed_again_alter_test
+
+# You can't rename a sequence with ALTER TABLE or ALTER VIEW.
+
+statement OK
+CREATE SEQUENCE foo
+
+statement error pgcode 42809 "foo" is not a table
+ALTER TABLE foo RENAME TO bar
+
+statement error pgcode 42809 "foo" is not a view
+ALTER VIEW foo RENAME TO bar

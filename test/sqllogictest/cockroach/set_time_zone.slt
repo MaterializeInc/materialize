@@ -1,0 +1,275 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/set_time_zone
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# not supported yet
+halt
+
+statement ok
+SET TIME ZONE 0
+
+query T
+SHOW TIME ZONE
+----
+<-00>+00
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +0000 UTC
+
+statement ok
+SET TIME ZONE 10
+
+query T
+SHOW TIME ZONE
+----
+<+10>-10
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +1000 +1000
+
+statement ok
+SET TIME ZONE -10
+
+query T
+SHOW TIME ZONE
+----
+<-10>+10
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 -1000 -1000
+
+statement ok
+SET TIME ZONE '10'
+
+query T
+SHOW TIME ZONE
+----
+<+10>-10
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +1000 +1000
+
+statement ok
+SET TIME ZONE '+10'
+
+query T
+SHOW TIME ZONE
+----
+<+10>-10
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +1000 +1000
+
+statement ok
+SET TIME ZONE '-10'
+
+query T
+SHOW TIME ZONE
+----
+<-10>+10
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 -1000 -1000
+
+statement ok
+SET TIME ZONE '+10.5'
+
+query T
+SHOW TIME ZONE
+----
+<+10:30>-10:30
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +1030 +1030
+
+statement ok
+SET TIME ZONE '-10.5'
+
+query T
+SHOW TIME ZONE
+----
+<-10:30>+10:30
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 -1030 -1030
+
+statement ok
+SET TIME ZONE '+10.555'
+
+query T
+SHOW TIME ZONE
+----
+<+10:33:18>-10:33:18
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +1033 +1033
+
+statement ok
+SET TIME ZONE '-10.555'
+
+query T
+SHOW TIME ZONE
+----
+<-10:33:18>+10:33:18
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 -1033 -1033
+
+statement ok
+SET TIME ZONE '     +10'
+
+query T
+SHOW TIME ZONE
+----
+<+10>-10
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +1000 +1000
+
+statement ok
+SET TIME ZONE '     -10'
+
+query T
+SHOW TIME ZONE
+----
+<-10>+10
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 -1000 -1000
+
+statement ok
+SET TIME ZONE 'GMT+3'
+
+query T
+SHOW TIME ZONE
+----
+GMT+3
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 -0300 -0300
+
+statement ok
+SET TIME ZONE 'GMT-3'
+
+query T
+SHOW TIME ZONE
+----
+GMT-3
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +0300 +0300
+
+statement ok
+SET TIME ZONE 'UTC+3'
+
+query T
+SHOW TIME ZONE
+----
+UTC+3
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 -0300 -0300
+
+statement ok
+SET TIME ZONE 'UTC-3'
+
+query T
+SHOW TIME ZONE
+----
+UTC-3
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +0300 +0300
+
+statement ok
+SET TIME ZONE 'Asia/Tokyo'
+
+query T
+SHOW TIME ZONE
+----
+Asia/Tokyo
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +0900 +0900
+
+statement ok
+SET TIME ZONE 'zulu'
+
+query T
+SHOW TIME ZONE
+----
+Zulu
+
+query T
+SELECT TIME '05:40:00'::TIMETZ
+----
+0000-01-01 05:40:00 +0000 UTC
+
+statement error pq: invalid value for parameter "timezone": "'168'": cannot find time zone "168": UTC timezone offset is out of range.
+SET TIME ZONE '168'
+
+statement error pq: invalid value for parameter "timezone": "'-168'": cannot find time zone "-168": UTC timezone offset is out of range.
+SET TIME ZONE '-168'
+
+statement error pq: invalid value for parameter "timezone": "'-0500'": cannot find time zone "-0500": UTC timezone offset is out of range.
+SET TIME ZONE '-0500'
+
+statement error pq: invalid value for parameter "timezone": "'0500'": cannot find time zone "0500": UTC timezone offset is out of range.
+SET TIME ZONE '0500'
+
+statement error pq: invalid value for parameter "timezone": "'-0500'": cannot find time zone "-0500": UTC timezone offset is out of range.
+SET TIME ZONE '-0500'

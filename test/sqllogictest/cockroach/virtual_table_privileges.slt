@@ -1,0 +1,165 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/virtual_table_privileges
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+user testuser
+
+# not supported yet
+halt
+
+# Public should have SELECT on virtual tables by default.
+statement ok
+SELECT * FROM crdb_internal.tables
+
+statement ok
+
+query B
+SELECT has_table_privilege('testuser', 'crdb_internal.tables', 'select');
+----
+true
+
+user root
+
+statement ok
+REVOKE SELECT ON crdb_internal.tables FROM public
+
+query TTTTO
+SELECT * FROM system.privileges
+----
+public  /vtable/crdb_internal/tables  {}  {}  4
+
+# Note that after granting SELECT to public, there should be no row
+# since this is the default case, public with SELECT is represented as no row.
+statement ok
+GRANT SELECT ON crdb_internal.tables TO public
+
+query TTTTO
+SELECT * FROM system.privileges
+----
+
+user testuser
+
+statement ok
+SELECT * FROM crdb_internal.tables
+
+user root
+
+statement ok
+REVOKE SELECT ON TABLE crdb_internal.tables FROM public
+
+query B
+SELECT has_table_privilege('testuser', 'crdb_internal.tables', 'select');
+----
+false
+
+user testuser
+
+statement error pq: user testuser does not have SELECT privilege on relation tables
+SHOW TABLES
+
+user root
+
+statement ok
+GRANT SELECT ON TABLE crdb_internal.tables TO public
+
+query B
+SELECT has_table_privilege('testuser', 'crdb_internal.tables', 'select');
+----
+true
+
+statement ok
+REVOKE SELECT ON TABLE crdb_internal.tables FROM public
+
+user testuser
+
+statement error pq: user testuser does not have SELECT privilege on relation tables
+SELECT * FROM crdb_internal.tables
+
+user root
+
+statement ok
+GRANT SELECT ON TABLE crdb_internal.tables TO public
+
+user testuser
+
+statement ok
+SELECT * FROM crdb_internal.tables
+
+user root
+
+# Test that we can specify the database name.
+statement ok
+CREATE DATABASE test2
+
+query T noticetrace
+GRANT SELECT ON TABLE test2.information_schema.columns TO testuser
+----
+NOTICE: virtual table privileges are not database specific
+
+query TTTTO
+SELECT * FROM system.privileges
+----
+testuser  /vtable/information_schema/columns  {SELECT}  {}  100
+
+user testuser
+
+statement ok
+SELECT * FROM test2.information_schema.columns
+
+# We're in database test, this is okay.
+statement ok
+SELECT * FROM crdb_internal.cluster_sessions
+
+user root
+
+statement ok
+use test2
+
+# virtual table privileges are not database specific so qualifying it should
+# do nothing.
+
+query B
+select has_table_privilege('testuser', 'test2.crdb_internal.tables', 'select');
+----
+true
+
+statement ok
+use test
+
+query B
+select has_table_privilege('testuser', 'test.crdb_internal.tables', 'select');
+----
+true
+
+# Second select tests the cache. Rudimentary test to ensure the cache works.
+statement ok
+SELECT * FROM crdb_internal.tables
+
+statement error pq: invalid privilege type USAGE for virtual_table
+GRANT USAGE ON TABLE crdb_internal.tables TO testuser
+
+statement error pq: invalid privilege type ZONECONFIG for virtual_table
+GRANT ZONECONFIG ON TABLE crdb_internal.tables TO testuser
+
+statement error pq: invalid privilege type CREATE for virtual_table
+GRANT CREATE ON TABLE information_schema.tables TO testuser

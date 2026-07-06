@@ -1,0 +1,450 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/temp_table
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# knob-opt: sync-event-log
+
+# not supported yet
+halt
+
+statement ok
+SET CLUSTER SETTING sql.cross_db_views.enabled = TRUE
+
+statement error temporary tables are only supported experimentally\nHINT:.*46260.*\n.*\n.*SET experimental_enable_temp_tables = 'on'
+CREATE TEMP TABLE a_temp(a INT PRIMARY KEY)
+
+statement ok
+SET experimental_enable_temp_tables=true
+
+subtest show_tables
+
+statement ok
+CREATE TEMP TABLE tbl (a int)
+
+query TT rowsort
+SELECT table_name, type FROM [SHOW TABLES]
+----
+tbl  table
+
+# Verify that temp schema is visible in pg_namespace index.
+let $tempSchemaOID
+SELECT oid FROM pg_namespace where nspname LIKE 'pg_temp%'
+
+query B
+SELECT nspname LIKE 'pg_temp%' FROM pg_namespace where oid = $tempSchemaOID
+----
+true
+
+statement ok
+DROP TABLE tbl
+
+subtest test_meta_tables
+
+statement ok
+CREATE TEMP TABLE temp_table_test (a timetz PRIMARY KEY) ON COMMIT PRESERVE ROWS
+
+statement ok
+CREATE TEMP TABLE temp_table_ref (a timetz PRIMARY KEY)
+
+statement ok
+ALTER TABLE temp_table_ref ADD CONSTRAINT fk_temp FOREIGN KEY (a) REFERENCES temp_table_test(a)
+
+query TT
+SELECT table_name, table_type FROM information_schema.tables WHERE table_name = 'temp_table_test' AND table_schema LIKE 'pg_temp_%'
+----
+temp_table_test  LOCAL TEMPORARY
+
+# query changes names, so we can only grab a count to be sure.
+query I
+SELECT count(1) FROM pg_namespace WHERE nspname LIKE 'pg_temp_%'
+----
+1
+
+query T rowsort
+SELECT table_name FROM [SHOW TABLES FROM pg_temp]
+----
+temp_table_test
+temp_table_ref
+
+statement ok
+DROP TABLE temp_table_ref CASCADE; DROP TABLE temp_table_test CASCADE
+
+# Tests foreign key errors with tables resolve to the correct name.
+subtest foreign_key_errors
+
+statement ok
+CREATE TEMP TABLE a (a int)
+
+statement error cannot add a SET NULL cascading action on column "test\.pg_temp.*\.b\.c" which has a NOT NULL constraint
+CREATE TEMP TABLE b (c int NOT NULL PRIMARY KEY, FOREIGN KEY (c) REFERENCES a ON UPDATE SET NULL)
+
+statement error cannot add a SET DEFAULT cascading action on column "test\.pg_temp_.*\.b\.c" which has a NOT NULL constraint and a NULL default expression
+CREATE TEMP TABLE b (c int DEFAULT NULL PRIMARY KEY, FOREIGN KEY (c) REFERENCES a ON UPDATE SET DEFAULT)
+
+statement ok
+DROP TABLE a
+
+# Test uncommitted temp tables do not clash with existing tables
+subtest test_uncommitted_tables
+
+statement ok
+BEGIN;
+CREATE TABLE table_a (a int); CREATE TEMP TABLE table_a (a int);
+INSERT INTO table_a VALUES (1); INSERT INTO pg_temp.table_a VALUES (2); INSERT INTO public.table_a VALUES (3);
+COMMIT
+
+query I
+SELECT * FROM pg_temp.table_a ORDER BY a
+----
+1
+2
+
+query I
+SELECT * FROM public.table_a ORDER BY a
+----
+3
+
+statement ok
+DROP TABLE pg_temp.table_a; DROP TABLE public.table_a
+
+# Test operations on a database with temp tables inside them.
+subtest test_database_operations
+
+statement ok
+CREATE DATABASE bob; USE bob; CREATE TEMP TABLE a(a int); USE defaultdb
+
+statement ok
+SET sql_safe_updates = true
+
+statement error DROP DATABASE on non-empty database without explicit CASCADE
+DROP DATABASE bob
+
+statement ok
+CREATE TEMP VIEW a_view AS SELECT a FROM bob.pg_temp.a
+
+statement error cannot rename database because relation "defaultdb.pg_temp_.*.a_view" depends on relation "bob.pg_temp_.*.a"
+ALTER DATABASE bob RENAME TO alice
+
+statement ok
+DROP VIEW a_view; ALTER DATABASE bob RENAME TO alice
+
+statement ok
+DROP DATABASE alice CASCADE
+
+# Test for temporary views.
+subtest temporary_views
+
+statement ok
+CREATE TABLE permanent_table(a int); CREATE TEMP TABLE temp_table(a int)
+
+statement ok
+INSERT INTO permanent_table VALUES (1); INSERT INTO temp_table VALUES (2)
+
+statement ok
+CREATE TEMP VIEW view_on_permanent AS SELECT a FROM permanent_table
+
+query I
+SELECT * from pg_temp.view_on_permanent
+----
+1
+
+statement ok
+CREATE TEMP VIEW view_on_temp AS SELECT a FROM temp_table
+
+query I
+SELECT * from pg_temp.view_on_temp
+----
+2
+
+# A "permanent" view on a temporary table gets upgraded to temporary.
+query T noticetrace
+CREATE VIEW upgrade_temp_view AS SELECT a FROM temp_table
+----
+NOTICE: view "upgrade_temp_view" will be a temporary view
+
+query I
+SELECT * from pg_temp.upgrade_temp_view
+----
+2
+
+statement ok
+DROP VIEW view_on_temp; DROP VIEW view_on_permanent; DROP VIEW upgrade_temp_view
+
+statement ok
+DROP TABLE permanent_table; DROP TABLE temp_table
+
+# Tests for temporary sequences working as expected.
+subtest temp_sequences
+
+statement ok
+CREATE TEMP SEQUENCE temp_seq; CREATE TABLE a (a int DEFAULT nextval('temp_seq'))
+
+statement ok
+INSERT INTO a VALUES (default), (default), (100)
+
+query I
+SELECT * FROM a ORDER BY a
+----
+1
+2
+100
+
+# Permanent tables can reference temporary schemas.
+statement ok
+CREATE TABLE perm_table(a int DEFAULT nextval('pg_temp.temp_seq'))
+
+statement ok
+INSERT INTO perm_table VALUES (default), (default), (101)
+
+query I
+SELECT * FROM perm_table ORDER BY a
+----
+3
+4
+101
+
+statement ok
+ALTER TABLE a ALTER COLUMN a DROP DEFAULT
+
+statement error cannot drop sequence temp_seq because other objects depend on it
+DROP SEQUENCE pg_temp.temp_seq
+
+# Allow temporary tables to use serial for temporary schemas.
+statement ok
+SET serial_normalization='sql_sequence'
+
+statement ok
+CREATE TEMP TABLE ref_temp_table (a SERIAL)
+
+query I
+SELECT nextval('pg_temp.ref_temp_table_a_seq')
+----
+1
+
+statement ok
+DROP TABLE perm_table; DROP TABLE ref_temp_table
+
+statement ok
+DROP SEQUENCE pg_temp.temp_seq; DROP TABLE a
+
+query ITT
+SELECT table_id, name, state
+FROM crdb_internal.tables WHERE name
+LIKE 'ref_temp_table%' AND state = 'PUBLIC'
+----
+
+statement ok
+SET serial_normalization='rowid'
+
+subtest table_with_on_commit
+
+statement error ON COMMIT can only be used on temporary tables
+CREATE TABLE a (a int) ON COMMIT PRESERVE ROWS
+
+subtest regression_47030
+
+statement ok
+CREATE TEMP TABLE regression_47030(c0 INT); INSERT INTO regression_47030 VALUES (1);
+
+query I
+SELECT * FROM regression_47030
+----
+1
+
+statement ok
+TRUNCATE regression_47030
+
+statement ok
+INSERT INTO regression_47030 VALUES (2)
+
+query I
+SELECT * FROM regression_47030
+----
+2
+
+# Renaming a temp table should not move it to the public schema.
+subtest regression_48233
+
+statement ok
+CREATE TEMP TABLE regression_48233(a int)
+
+statement ok
+ALTER TABLE regression_48233 RENAME TO reg_48233
+
+query IITI rowsort
+SELECT * FROM system.namespace WHERE name LIKE '%48233'
+----
+100  117  reg_48233  130
+
+statement error pq: cannot change schema of table with RENAME
+ALTER TABLE reg_48233 RENAME TO public.reg_48233
+
+statement ok
+CREATE TABLE persistent_48233(a int)
+
+statement error pq: cannot change schema of table with RENAME
+ALTER TABLE persistent_48233 RENAME TO pg_temp.pers_48233
+
+# Ensure that temporary schemas don't appear as user defined in the
+# information_schema.schemata vtable.
+query T
+SELECT schema_name FROM information_schema.schemata WHERE crdb_is_user_defined = 'YES'
+----
+public
+
+subtest test_53163
+statement ok
+CREATE DATABASE second_db
+
+statement ok
+USE second_db
+
+statement ok
+CREATE TEMP TABLE a(a INT)
+
+statement ok
+USE test
+
+statement ok
+CREATE TEMP VIEW a_view AS SELECT a FROM second_db.pg_temp.a
+
+statement ok
+grant testuser to root
+
+statement ok
+ALTER TABLE second_db.pg_temp.a OWNER TO testuser
+
+# Regression test for dropping a database which contains schemas from other
+# sessions.
+
+subtest drop_database_with_temp_schemas_from_other_sessions
+
+statement ok
+CREATE DATABASE to_drop;
+ALTER DATABASE to_drop OWNER TO testuser;
+
+user testuser
+
+statement ok
+USE to_drop;
+SET experimental_enable_temp_tables=true;
+CREATE TABLE not_temp (i INT PRIMARY KEY);
+CREATE TEMPORARY TABLE testuser_tmp (i INT PRIMARY KEY);
+CREATE TEMPORARY VIEW tempuser_view AS SELECT i FROM testuser_tmp;
+USE test
+
+user root
+
+statement ok
+USE to_drop;
+CREATE TEMPORARY TABLE root_temp (i INT PRIMARY KEY);
+
+let $before_drop
+SELECT now()
+
+statement ok
+USE test;
+DROP DATABASE to_drop CASCADE
+
+query T
+  SELECT regexp_replace(
+            json_array_elements_text(
+                (info::JSONB)->'DroppedSchemaObjects'
+            ),
+            'pg_temp_[^.]+.',
+            'pg_temp.'
+         ) AS name
+    FROM system.eventlog
+   WHERE "timestamp" > '$before_drop'
+ORDER BY name DESC;
+----
+to_drop.public.not_temp
+to_drop.pg_temp.testuser_tmp
+to_drop.pg_temp.tempuser_view
+to_drop.pg_temp.root_temp
+
+subtest create_after_discard_and_drop_database
+
+statement ok
+ALTER ROLE testuser WITH CREATEDB;
+
+user testuser
+
+statement ok
+CREATE DATABASE to_drop
+
+statement ok
+USE to_drop
+
+statement ok
+CREATE TEMPORARY TABLE t (i INT PRIMARY KEY);
+
+statement ok
+SELECT * FROM pg_temp.t
+
+statement ok
+DISCARD TEMP
+
+statement error pgcode 42P01 relation "pg_temp.t" does not exist
+SELECT * FROM pg_temp.t
+
+statement ok
+USE defaultdb;
+DROP DATABASE to_drop CASCADE;
+
+statement ok
+CREATE DATABASE to_drop
+
+statement ok
+CREATE TEMPORARY TABLE t (i INT PRIMARY KEY);
+
+statement ok
+SELECT * FROM pg_temp.t
+
+statement ok
+USE defaultdb;
+DROP DATABASE to_drop CASCADE;
+
+subtest end
+
+subtest temp_table_in_other_session
+
+user testuser
+
+statement ok
+USE defaultdb;
+CREATE TEMPORARY TABLE from_other_session(i INT PRIMARY KEY)
+
+user root
+
+statement ok
+USE defaultdb
+
+query TT
+SELECT c.relname, a.attname FROM pg_attribute a
+INNER LOOKUP JOIN pg_class c ON c.oid = a.attrelid
+WHERE c.relname = 'from_other_session'
+----
+from_other_session  i
+
+subtest end

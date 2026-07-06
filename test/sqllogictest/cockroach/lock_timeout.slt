@@ -1,0 +1,118 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/lock_timeout
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# Create a table, write a row, lock it, then switch users.
+statement ok
+CREATE TABLE t (k INT PRIMARY KEY, v int)
+
+# not supported yet
+halt
+
+statement ok
+GRANT ALL ON t TO testuser
+
+statement ok
+INSERT INTO t VALUES (1, 1)
+
+statement ok
+BEGIN; UPDATE t SET v = 2 WHERE k = 1
+
+user testuser
+
+# Set a lock timeout and begin issuing queries. Those that conflict with
+# the locked row should be rejected.
+statement ok
+SET lock_timeout = '1ms'
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+SELECT * FROM t
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+SELECT * FROM t FOR UPDATE
+
+statement error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
+SELECT * FROM t FOR UPDATE NOWAIT
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+SELECT * FROM t WHERE k = 1
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+SELECT * FROM t WHERE k = 1 FOR UPDATE
+
+statement error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
+SELECT * FROM t WHERE k = 1 FOR UPDATE NOWAIT
+
+statement ok
+SELECT * FROM t WHERE k = 2
+
+statement ok
+SELECT * FROM t WHERE k = 2 FOR UPDATE
+
+statement ok
+SELECT * FROM t WHERE k = 2 FOR UPDATE NOWAIT
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+SELECT * FROM t WHERE v = 9
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+SELECT * FROM t WHERE v = 9 FOR UPDATE
+
+statement error pgcode 55P03 could not obtain lock on row \(k\)=\(1\) in t@t_pkey
+SELECT * FROM t WHERE v = 9 FOR UPDATE NOWAIT
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+INSERT INTO t VALUES (1, 3)
+
+statement ok
+INSERT INTO t VALUES (2, 3)
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+UPSERT INTO t VALUES (1, 3)
+
+statement ok
+UPSERT INTO t VALUES (2, 3)
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+UPDATE t SET v = 4
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+UPDATE t SET v = 4 WHERE k = 1
+
+statement ok
+UPDATE t SET v = 4 WHERE k = 2
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+UPDATE t SET v = 4 WHERE v = 9
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+DELETE FROM t
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+DELETE FROM t WHERE k = 1
+
+statement ok
+DELETE FROM t WHERE k = 2
+
+statement error pgcode 55P03 canceling statement due to lock timeout on row \(k\)=\(1\) in t@t_pkey
+DELETE FROM t WHERE v = 9

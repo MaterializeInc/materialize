@@ -1,0 +1,125 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/udf_volatility_check
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+statement ok
+SET allow_ordinal_column_references=true
+
+statement ok
+CREATE TABLE t1(a INT PRIMARY KEY, b INT);
+CREATE TABLE t2(a INT PRIMARY KEY, b INT);
+
+# not supported yet
+halt
+
+statement error pq: referencing relations is not allowed in immutable function
+CREATE FUNCTION f() RETURNS FLOAT LANGUAGE SQL IMMUTABLE AS $$ SELECT a FROM t1 $$;
+
+statement error pq: volatile statement not allowed in immutable function: SELECT random\(\)
+CREATE FUNCTION f() RETURNS FLOAT LANGUAGE SQL IMMUTABLE AS $$ SELECT random() $$;
+
+statement error pq: stable statement not allowed in immutable function: SELECT statement_timestamp\(\)
+CREATE FUNCTION f() RETURNS TIMESTAMP LANGUAGE SQL IMMUTABLE AS $$ SELECT statement_timestamp() $$;
+
+statement error pq: volatile statement not allowed in stable function: SELECT random\(\)
+CREATE FUNCTION f() RETURNS FLOAT LANGUAGE SQL STABLE AS $$ SELECT random() $$;
+
+statement error pq: volatile statement not allowed in immutable function: SELECT @1 FROM ROWS FROM \(random\(\)\)
+CREATE FUNCTION f() RETURNS FLOAT LANGUAGE SQL IMMUTABLE AS $$ SELECT @1 FROM random() $$;
+
+statement error pq: volatile statement not allowed in immutable function: SELECT t1\.a FROM test\.public\.t1 JOIN test\.public\.t2 ON t1\.a = \(t2\.a \+ random\(\)::INT8\)
+CREATE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$
+  SELECT t1.a
+  FROM t1
+  JOIN t2 ON t1.a = t2.a + random()::INT
+$$;
+
+statement error pq: volatile statement not allowed in immutable function: SELECT a FROM test\.public\.t1 WHERE b = \(1\.0 \+ random\(\)\)
+CREATE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$
+  SELECT a
+  FROM t1
+  WHERE b = 1 + random()
+$$;
+
+subtest replace_func_volatility
+
+statement ok
+CREATE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$ SELECT 1 $$;
+
+statement error pq: referencing relations is not allowed in immutable function
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$ SELECT a FROM t1 $$;
+
+statement error pq: volatile statement not allowed in immutable function: SELECT random\(\)
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$ SELECT random()::INT $$;
+
+statement error pq: stable statement not allowed in immutable function: SELECT statement_timestamp\(\)
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$ SELECT statement_timestamp()::INT $$;
+
+statement error pq: volatile statement not allowed in stable function: SELECT random\(\)
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL STABLE AS $$ SELECT random() $$;
+
+statement error pq: volatile statement not allowed in immutable function: SELECT @1 FROM ROWS FROM \(random\(\)\)
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$ SELECT @1 FROM random() $$;
+
+statement error pq: volatile statement not allowed in immutable function: SELECT t1\.a FROM test\.public\.t1 JOIN test\.public\.t2 ON t1\.a = \(t2\.a \+ random\(\)::INT8\)
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$
+  SELECT t1.a
+  FROM t1
+  JOIN t2 ON t1.a = t2.a + random()::INT
+$$;
+
+statement error pq: volatile statement not allowed in immutable function: SELECT a FROM test\.public\.t1 WHERE b = \(1\.0 \+ random\(\)\)
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$
+  SELECT a
+  FROM t1
+  WHERE b = 1 + random()
+$$;
+
+subtest alter_func_volatility
+
+statement ok
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL IMMUTABLE AS $$ SELECT 1 $$;
+
+statement ok
+ALTER FUNCTION f STABLE
+
+statement ok
+ALTER FUNCTION f VOLATILE
+
+statement ok
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL STABLE AS $$ SELECT statement_timestamp()::INT $$;
+
+statement ok
+ALTER FUNCTION f VOLATILE
+
+statement error pq: stable statement not allowed in immutable function: SELECT statement_timestamp\(\)::INT8
+ALTER FUNCTION f IMMUTABLE
+
+statement ok
+CREATE OR REPLACE FUNCTION f() RETURNS INT LANGUAGE SQL VOLATILE AS $$ SELECT random()::INT $$;
+
+statement error pq: volatile statement not allowed in stable function: SELECT random\(\)::INT8
+ALTER FUNCTION f STABLE
+
+statement error pq: volatile statement not allowed in immutable function: SELECT random\(\)::INT8
+ALTER FUNCTION f IMMUTABLE
