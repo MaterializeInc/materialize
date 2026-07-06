@@ -32,9 +32,8 @@ CREATE TABLE t (
   UNIQUE INDEX c_idx (c) STORING (b, d)
 )
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query TTBITTTBBB colnames
 SHOW INDEXES FROM t
 ----
@@ -55,11 +54,15 @@ t           t_pkey      false       4             d            d           N/A  
 statement ok
 INSERT INTO t VALUES (1, 2, 3, 4)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII
 SELECT a, b, c, d FROM t@b_idx
 ----
 1 2 3 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII
 SELECT a, b, c, d FROM t@c_idx
 ----
@@ -67,20 +70,30 @@ SELECT a, b, c, d FROM t@c_idx
 
 # Test index backfill for UNIQUE and non-UNIQUE indexes with STORING columns.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX d_idx ON t (d) STORING ( b)
 
+# Not supported by Materialize.
+onlyif cockroach
 query III
 SELECT a, b, d FROM t@d_idx
 ----
 1 2 4
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error index "error" already contains column "d"
 CREATE INDEX error ON t (d) STORING (d)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error index "error" already contains column "a"
 CREATE INDEX error ON t (d) STORING (a)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error index "b_idx" already contains column "a"
 CREATE TABLE t30984 (
   a INT PRIMARY KEY,
@@ -89,6 +102,8 @@ CREATE TABLE t30984 (
   INDEX b_idx (b) STORING (c, a)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error index "b_idx" already contains column "a"
 CREATE TABLE t30984 (
   a INT PRIMARY KEY,
@@ -97,6 +112,8 @@ CREATE TABLE t30984 (
   UNIQUE INDEX b_idx (b) STORING (c, a)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error index "b_idx" already contains column "d"
 CREATE TABLE t30984 (
   a INT,
@@ -115,6 +132,8 @@ CREATE UNIQUE INDEX a_idx ON t (a) STORING (b)
 statement ok
 CREATE TABLE t14601 (a STRING, b BOOL)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX i14601 ON t14601 (a) STORING (b)
 
@@ -133,6 +152,8 @@ SELECT a FROM t14601 ORDER BY a
 a
 c
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP INDEX i14601
 
@@ -154,6 +175,8 @@ CREATE TABLE t14601a (
   FAMILY f3 (c)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX i14601a ON t14601a (a) STORING (b, c)
 
@@ -173,6 +196,8 @@ a  false
 b  false
 c  false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP INDEX i14601a
 
@@ -205,6 +230,8 @@ a  false
 b  false
 c  false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP INDEX i14601a CASCADE
 
@@ -237,6 +264,8 @@ INSERT INTO a VALUES(1,2,3)
 statement ok
 CREATE UNIQUE INDEX ON a(a) STORING(c)
 
+# Not supported by Materialize.
+onlyif cockroach
 query III
 SELECT * FROM a@foo
 ----

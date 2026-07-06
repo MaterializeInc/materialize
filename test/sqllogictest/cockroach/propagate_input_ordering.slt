@@ -25,9 +25,8 @@ mode cockroach
 statement ok
 SET propagate_input_ordering=true;
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query I
 WITH tmp AS (SELECT * FROM generate_series(1, 10) i ORDER BY i % 5 ASC, i ASC) SELECT * FROM tmp;
 ----
@@ -42,6 +41,8 @@ WITH tmp AS (SELECT * FROM generate_series(1, 10) i ORDER BY i % 5 ASC, i ASC) S
 4
 9
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 WITH tmp AS (SELECT * FROM generate_series(1, 10) i ORDER BY i % 5 ASC, i ASC) SELECT * FROM tmp;
 ----
@@ -56,6 +57,8 @@ WITH tmp AS (SELECT * FROM generate_series(1, 10) i ORDER BY i % 5 ASC, i ASC) S
 4
 9
 
+# Not supported by Materialize.
+onlyif cockroach
 # The internal ordering column for i%5 should not be present in the output.
 query T
 SELECT foo FROM (SELECT i, i%2 FROM generate_series(1, 10) i ORDER BY i % 5 ASC, i ASC) AS foo
@@ -71,6 +74,8 @@ SELECT foo FROM (SELECT i, i%2 FROM generate_series(1, 10) i ORDER BY i % 5 ASC,
 (4,0)
 (9,1)
 
+# Not supported by Materialize.
+onlyif cockroach
 # The internal ordering column for i%5 should not be present in the output.
 query II
 SELECT foo.* FROM (SELECT i, i%2 FROM generate_series(1, 10) i ORDER BY i % 5 ASC, i ASC) AS foo
@@ -86,6 +91,8 @@ SELECT foo.* FROM (SELECT i, i%2 FROM generate_series(1, 10) i ORDER BY i % 5 AS
 4   0
 9   1
 
+# Not supported by Materialize.
+onlyif cockroach
 # The subquery ordering is propagated to the aggregation.
 query T
 SELECT array_agg(i) FROM (SELECT * FROM generate_series(1, 5) i ORDER BY i%2 DESC, i)
@@ -155,6 +162,8 @@ CREATE TABLE xy (x int, y int);
 statement ok
 INSERT INTO xy VALUES (2, 20), (8, 80), (4, 41), (4, 40)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 WITH
   cte1 AS (SELECT b FROM ab ORDER BY a),
@@ -169,6 +178,8 @@ SELECT * FROM cte1 UNION ALL SELECT * FROM cte2
 41
 80
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 WITH
   cte1 AS (SELECT b FROM ab ORDER BY a+b),

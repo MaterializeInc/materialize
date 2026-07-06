@@ -36,17 +36,20 @@ foo
 statement ok
 RESET SEARCH_PATH
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW SEARCH_PATH
 ----
 "$user", public
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error parameter "server_version" cannot be changed
 RESET SERVER_VERSION
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error parameter "server_version_num" cannot be changed
 RESET SERVER_VERSION_NUM
 
@@ -63,6 +66,8 @@ foo
 statement ok
 RESET search_path
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW search_path
 ----
@@ -71,21 +76,29 @@ SHOW search_path
 statement ok
 RESET client_encoding; RESET NAMES
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SET timezone = 'Europe/Amsterdam'; SHOW TIMEZONE
 ----
 Europe/Amsterdam
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 RESET timezone; SHOW TIMEZONE
 ----
 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SET time zone 'Europe/Amsterdam'; SHOW TIME ZONE
 ----
 Europe/Amsterdam
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 RESET time zone; SHOW TIME ZONE
 ----

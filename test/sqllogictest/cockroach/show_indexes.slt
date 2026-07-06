@@ -34,9 +34,8 @@ CREATE TABLE t1 (
   INDEX expr_idx ((a+b), c)
 )
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query TTBITTTBBB colnames
 SHOW INDEXES from t1
 ----
@@ -70,6 +69,8 @@ CREATE TABLE t2 (
   INDEX d_idx (d ASC)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBITTTBBB colnames
 SHOW INDEXES from t2
 ----

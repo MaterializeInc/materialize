@@ -46,9 +46,8 @@ SELECT crdb_internal.notice('debug1', 'now you see this'), crdb_internal.notice(
 DEBUG1: now you see this
 WARNING: and you see this
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE DATABASE d;
 CREATE TABLE d.t (x int)
@@ -59,10 +58,14 @@ ALTER TABLE d.t RENAME TO d.t2
 NOTICE: renaming tables with a qualification is deprecated
 HINT: use ALTER TABLE d.t RENAME TO t2 instead
 
+# Not supported by Materialize.
+onlyif cockroach
 # Start off with an empty enum, and add values to it.
 statement ok
 CREATE TYPE color AS ENUM ()
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TYPE color ADD VALUE 'black'
 

@@ -77,9 +77,8 @@ SELECT c FROM abc WHERE NOT EXISTS (SELECT * FROM def WHERE a=d OR a=e)
 ----
 
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 # A semi-join emits exactly one row for every matching row in the LHS.
 # The following test ensures that the SemiJoin doesn't commute into an
 # InnerJoin as that guarantee would be lost.
@@ -92,12 +91,16 @@ INSERT INTO abc VALUES (1, 1, 1)
 statement ok
 INSERT INTO def VALUES (1, 1, 1), (2, 1, 1)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Exists with primary key columns selected
 query III rowsort
 SELECT a, b, c FROM abc WHERE EXISTS (SELECT * FROM def WHERE a=d OR a=e)
 ----
 1  1  1
 
+# Not supported by Materialize.
+onlyif cockroach
 # Exists with primary key columns not selected
 query I rowsort
 SELECT c FROM abc WHERE EXISTS (SELECT * FROM def WHERE a=d OR a=e)
@@ -130,6 +133,8 @@ SELECT c FROM abc WHERE NOT EXISTS (SELECT * FROM def WHERE a=d OR a=e)
 # This tests that the InnerJoin commute rule for semi joins behaves sanely in
 # these cases.
 
+# Not supported by Materialize.
+onlyif cockroach
 # InnerJoin with primary key columns selected
 query III rowsort
 SELECT a, b, c FROM abc, def WHERE a=d OR a=e
@@ -137,6 +142,8 @@ SELECT a, b, c FROM abc, def WHERE a=d OR a=e
 1  1  1
 1  1  1
 
+# Not supported by Materialize.
+onlyif cockroach
 # InnerJoin with primary key columns not selected
 query I rowsort
 SELECT c FROM abc, def WHERE a=d OR a=e
@@ -152,6 +159,8 @@ statement ok
 CREATE TABLE def_decimal (d DECIMAL, e DECIMAL, f DECIMAL);
 INSERT INTO def_decimal VALUES (1, 1, 1), (1.0, 1.0, 1.0), (1.00, 1.00, 1.00)
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR rowsort
 SELECT a, b, c FROM abc_decimal WHERE EXISTS (SELECT * FROM def_decimal WHERE a::string=d::string)
 ----
@@ -160,6 +169,8 @@ SELECT a, b, c FROM abc_decimal WHERE EXISTS (SELECT * FROM def_decimal WHERE a:
 1.0   1.0   1.0
 1.00  1.00  1.00
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR rowsort
 SELECT a, b, c FROM abc_decimal WHERE EXISTS (SELECT * FROM def_decimal WHERE a::string=d::string or a::string=e::string)
 ----
@@ -168,6 +179,8 @@ SELECT a, b, c FROM abc_decimal WHERE EXISTS (SELECT * FROM def_decimal WHERE a:
 1.0   1.0   1.0
 1.00  1.00  1.00
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRR rowsort
 SELECT a, b, c FROM abc_decimal, def_decimal WHERE a::string=d::string or a::string=e::string
 ----

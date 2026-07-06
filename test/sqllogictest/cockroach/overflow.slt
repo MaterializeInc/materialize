@@ -30,9 +30,8 @@ CREATE TABLE large_numbers (a INT8)
 statement ok
 INSERT INTO large_numbers VALUES (9223372036854775807),(1)
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement error integer out of range
 SELECT sum_int(a) FROM large_numbers
 
@@ -42,6 +41,8 @@ DELETE FROM large_numbers
 statement ok
 INSERT INTO large_numbers VALUES (-9223372036854775808),(-1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error integer out of range
 SELECT sum_int(a) FROM large_numbers
 

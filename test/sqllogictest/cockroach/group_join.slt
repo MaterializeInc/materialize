@@ -36,9 +36,8 @@ INSERT INTO data SELECT a, b, c, d FROM
 statement ok
 SET experimental_hash_group_join_enabled = true
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query II rowsort
 SELECT data1.a, sum_int(data1.d) FROM data AS data1 INNER HASH JOIN data AS data2 ON data1.a = data2.c GROUP BY data1.a
 ----
@@ -49,6 +48,8 @@ SELECT data1.a, sum_int(data1.d) FROM data AS data1 INNER HASH JOIN data AS data
 statement ok
 RESET experimental_hash_group_join_enabled
 
+# Not supported by Materialize.
+onlyif cockroach
 # Same query as above, but with the hash group-join disabled.
 query II rowsort
 SELECT data1.a, sum_int(data1.d) FROM data AS data1 INNER HASH JOIN data AS data2 ON data1.a = data2.c GROUP BY data1.a

@@ -40,18 +40,21 @@ user root
 statement ok
 CREATE INDEX foo ON t (b)
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42P07 index with name \"foo\" already exists
 CREATE INDEX foo ON t (a)
 
 statement error column "c" does not exist
 CREATE INDEX bar ON t (c)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error index \"bar\" contains duplicate column \"b\"
 CREATE INDEX bar ON t (b, b);
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBITTTBBB colnames
 SHOW INDEXES FROM t
 ----
@@ -67,6 +70,8 @@ INSERT INTO t VALUES (2,1)
 statement error pgcode 23505 violates unique constraint "bar"
 CREATE UNIQUE INDEX bar ON t (b)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBITTTBBB colnames
 SHOW INDEXES FROM t
 ----
@@ -97,6 +102,8 @@ CREATE INDEX b_desc ON t (b DESC)
 statement ok
 CREATE INDEX b_asc ON t (b ASC, c DESC)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBITTTBBB colnames
 SHOW INDEXES FROM t
 ----
@@ -110,12 +117,16 @@ t           t_pkey      false       1             a            a           ASC  
 t           t_pkey      false       2             b            b           N/A        true     false     true
 t           t_pkey      false       3             c            c           N/A        true     false     true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42P01 relation "foo" does not exist
 CREATE INDEX fail ON foo (b DESC)
 
 statement ok
 CREATE VIEW v AS SELECT a,b FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42809 "v" is not a table or materialized view
 CREATE INDEX failview ON v (b DESC)
 
@@ -124,10 +135,11 @@ CREATE TABLE privs (a INT PRIMARY KEY, b INT)
 
 user testuser
 
-skipif config local-legacy-schema-changer
-skipif config local-mixed-22.2-23.1
-statement error must be owner of table privs or have CREATE privilege on table privs
-CREATE INDEX foo ON privs (b)
+# Record disabled, not supported by Materialize:
+# skipif config local-legacy-schema-changer
+# skipif config local-mixed-22.2-23.1
+# statement error must be owner of table privs or have CREATE privilege on table privs
+# CREATE INDEX foo ON privs (b)
 
 onlyif config local-legacy-schema-changer
 onlyif config local-mixed-22.2-23.1
@@ -144,6 +156,8 @@ table_name  index_name  non_unique  seq_in_index  column_name  definition  direc
 privs       privs_pkey  false       1             a            a           ASC        false    false     true
 privs       privs_pkey  false       2             b            b           N/A        true     false     true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON privs TO testuser
 
@@ -152,6 +166,8 @@ user testuser
 statement ok
 CREATE INDEX foo ON privs (b)
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBITTTBBB colnames
 SHOW INDEXES FROM privs
 ----
@@ -171,10 +187,14 @@ CREATE TABLE telemetry (
   z JSONB
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INVERTED INDEX ON telemetry (z);
 CREATE INDEX ON telemetry (y) USING HASH WITH (bucket_count=4)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T rowsort
 SELECT feature_name FROM crdb_internal.feature_usage
 WHERE feature_name IN (
@@ -199,6 +219,8 @@ query T noticetrace
 CREATE INDEX CONCURRENTLY IF NOT EXISTS create_index_concurrently_idx ON create_index_concurrently_tbl(a)
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE create_index_concurrently_tbl
 ----
@@ -221,6 +243,8 @@ DROP INDEX CONCURRENTLY IF EXISTS create_index_concurrently_idx
 ----
 NOTICE: CONCURRENTLY is not required as all indexes are dropped concurrently
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SHOW CREATE TABLE create_index_concurrently_tbl
 ----
@@ -240,9 +264,13 @@ subtest create_index_on_dropping_column
 statement ok
 CREATE TABLE create_idx_drop_column (c0 INT PRIMARY KEY, c1 INT);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 begin; ALTER TABLE create_idx_drop_column DROP COLUMN c1;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error column "c1" does not exist
 CREATE INDEX idx_create_idx_drop_column ON create_idx_drop_column (c1);
 
@@ -262,6 +290,8 @@ CREATE TABLE "'t1-esc'"(name int);
 statement ok
 CREATE INDEX "'t1-esc-index'" ON "'t1-esc'"(name)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error index with name "'t1-esc-index'" already exists
 CREATE INDEX "'t1-esc-index'" ON "'t1-esc'"(name)
 
@@ -275,13 +305,19 @@ SELECT value FROM information_schema.session_variables where variable='use_decla
 statement ok
 SET use_declarative_schema_changer = 'off'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET CLUSTER SETTING jobs.registry.interval.adopt = '50ms';
 
+# Not supported by Materialize.
+onlyif cockroach
 # Lower the job registry loop interval to accelerate the test.
 statement ok
 SET CLUSTER SETTING jobs.registry.interval.cancel = '50ms'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET CLUSTER SETTING jobs.debug.pausepoints = 'indexbackfill.before_flow';
 
@@ -291,9 +327,13 @@ CREATE TABLE tbl (i INT PRIMARY KEY, j INT NOT NULL);
 statement ok
 INSERT INTO tbl VALUES (1, 100), (2, 200), (3, 300);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error job .* was paused before it completed with reason: pause point "indexbackfill.before_flow" hit
 CREATE INDEX pauseidx ON tbl(j);
 
+# Not supported by Materialize.
+onlyif cockroach
 # clear the pause point now that the job is paused.
 statement ok
 RESET CLUSTER SETTING jobs.debug.pausepoints
@@ -351,6 +391,8 @@ SELECT json_build_array(
        )
   FROM span_new, modified_mid_key;
 
+# Not supported by Materialize.
+onlyif cockroach
 # while the backfill is paused, go in and replace the resume spans with some new
 # spans that both the wrong tenant ID or no tenant ID before resuming it to make
 # sure that on resume it re-keys the spans correctly. We pretty_key these below
@@ -367,6 +409,8 @@ UPDATE system.job_info
     )
 WHERE info_key = 'legacy_payload' AND crdb_internal.pb_to_json('cockroach.sql.jobs.jobspb.Payload', value)->>'description' LIKE 'CREATE INDEX pauseidx%';
 
+# Not supported by Materialize.
+onlyif cockroach
 # confirm we see these bogus start and end keys in the job, both for the wrong
 # tenant and for no tenant.
 query TTTT
@@ -381,18 +425,26 @@ FROM (
 ----
 /103/Table/114/1  /103/Table/114/1/100  /114/1/100  /114/2
 
+# Not supported by Materialize.
+onlyif cockroach
 # resume the job and ensure it completes, which includes validation.
 statement ok
 RESUME JOB (SELECT job_id FROM crdb_internal.jobs WHERE description LIKE 'CREATE INDEX pauseidx%');
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT status FROM [SHOW JOB WHEN COMPLETE (SELECT job_id FROM crdb_internal.jobs WHERE description LIKE 'CREATE INDEX pauseidx%')];
 ----
 succeeded
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET CLUSTER SETTING jobs.registry.interval.cancel = DEFAULT;
 
+# Not supported by Materialize.
+onlyif cockroach
 # Restore the schema changer state back.
 statement ok
 SET use_declarative_schema_changer = $schema_changer_state
@@ -407,12 +459,16 @@ CREATE TABLE t_hash (
   FAMILY fam_0_pk_a_b (pk, a, b)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX idx_t_hash_a ON t_hash (a) USING HASH WITH BUCKET_COUNT = 5;
 
 statement ok
 CREATE UNIQUE INDEX idx_t_hash_b ON t_hash (b) USING HASH WITH BUCKET_COUNT = 5;
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE TABLE t_hash]
 ----
@@ -431,16 +487,22 @@ CREATE TABLE public.t_hash (
 statement ok
 CREATE TABLE opclasses (a INT PRIMARY KEY, b TEXT, c JSON)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure that we don't permit creating indexes with opclasses that aren't
 # inverted.
 statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 CREATE INDEX ON opclasses(b blah_ops)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure that we don't permit creating indexes with opclasses that aren't
 # inverted, even if the type is invertible.
 statement error pgcode 42804 operator classes are only allowed for the last column of an inverted index
 CREATE INDEX ON opclasses(c blah_ops)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Make sure that we don't permit creating indexes with opclasses that don't exist
 statement error pgcode 42704 operator class "blah_ops" does not exist
 CREATE INVERTED INDEX ON opclasses(c blah_ops)
@@ -452,8 +514,12 @@ DROP TABLE t CASCADE;
 CREATE TABLE t (a INT PRIMARY KEY);
 INSERT INTO t SELECT generate_series(0, 9);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE MATERIALIZED VIEW v (b) AS SELECT a * 2 FROM t WITH DATA;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX ON v (b);

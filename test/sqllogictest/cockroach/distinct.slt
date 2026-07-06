@@ -162,9 +162,8 @@ NULL
 2
 5
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT DISTINCT v FROM kv@idx
 ----
@@ -173,6 +172,8 @@ NULL
 2
 5
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT DISTINCT v FROM kv@idx WHERE v > 0
 ----
@@ -190,16 +191,22 @@ CREATE VIEW v0(c0) AS SELECT DISTINCT t0.c0 FROM t0;
 statement ok
 INSERT INTO t0 (c0) VALUES (NULL), (NULL);
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT * FROM v0 WHERE v0.c0 IS NULL
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #44079.
 statement ok
 CREATE TABLE t44079 (x INT[]);
 INSERT INTO t44079 VALUES (NULL), (ARRAY[NULL])
 
+# Not supported by Materialize.
+onlyif cockroach
 query T rowsort
 SELECT DISTINCT * FROM t44079
 ----
@@ -217,6 +224,8 @@ INSERT INTO t VALUES
   ('[1, 2]'),
   ('{"foo": {"bar" : "baz"}}')
 
+# Not supported by Materialize.
+onlyif cockroach
 query T rowsort
 SELECT DISTINCT (x) FROM t
 ----
@@ -255,6 +264,8 @@ INSERT INTO t VALUES
   (2, 1, 2, 'hello'),
   (3, 1, 2, 'hello there')
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT
 SELECT x, jsonb_agg(DISTINCT jsonb_build_object('y', y, 'z', z)) FROM (SELECT * FROM t ORDER BY i) GROUP BY x
 ----

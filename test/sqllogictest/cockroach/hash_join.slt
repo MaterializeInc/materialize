@@ -52,9 +52,8 @@ CREATE TABLE c (a INT, b STRING)
 statement ok
 INSERT INTO c VALUES (1, 'a'), (1, 'b'), (2, 'c')
 
-# not supported yet
-halt
-
+# Not supported by Materialize.
+onlyif cockroach
 query IIII
 SELECT * FROM t1 INNER HASH JOIN t2 ON t1.k = t2.x ORDER BY 1
 ----
@@ -75,6 +74,8 @@ SELECT * FROM a AS a2 JOIN a AS a1 ON a1.k = a2.v ORDER BY 1
 1  2  2  0
 2  0  0  1
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT t2.y, t1.v FROM t1 INNER HASH JOIN t2 ON t1.k = t2.x ORDER BY 1 DESC
 ----
@@ -139,6 +140,8 @@ CREATE TABLE empty (x INT)
 statement ok
 CREATE TABLE onecolumn (x INT); INSERT INTO onecolumn(x) VALUES (44), (NULL), (42)
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames
 SELECT * FROM empty AS a(x) FULL OUTER JOIN onecolumn AS b(y) ON a.x = b.y ORDER BY b.y
 ----
@@ -147,6 +150,8 @@ NULL  NULL
 NULL  42
 NULL  44
 
+# Not supported by Materialize.
+onlyif cockroach
 # Regression test for #41407.
 statement ok
 CREATE TABLE t41407 AS
@@ -159,6 +164,8 @@ CREATE TABLE t41407 AS
 	FROM
 		generate_series(NULL, NULL) AS g;
 
+# Not supported by Materialize.
+onlyif cockroach
 query TRTTRRBR
 SELECT
   tab_1688._bytes,
@@ -212,6 +219,8 @@ CREATE TABLE t44797_0(a FLOAT, b DECIMAL); CREATE TABLE t44797_1(c INT2, d INT4)
 statement ok
 INSERT INTO t44797_0 VALUES (1.0, 1.0), (2.0, 2.0); INSERT INTO t44797_1 VALUES (1, 1), (2, 2)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Note that mixed-type comparisons - of what appears to be "same" values - do
 # not consider those values equal.
 query RRII rowsort
@@ -228,6 +237,8 @@ CREATE TABLE t44797_2(a FLOAT); CREATE TABLE t44797_3(b DECIMAL)
 statement ok
 INSERT INTO t44797_2 VALUES (1.0), (2.0); INSERT INTO t44797_3 VALUES (1.0), (2.0)
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR rowsort
 SELECT * FROM t44797_2 NATURAL JOIN t44797_3
 ----
@@ -248,5 +259,7 @@ SELECT * FROM t44797_2 WHERE EXISTS (SELECT * FROM t44797_2 AS l, t44797_3 AS r 
 statement ok
 CREATE TABLE table57696(col_table TIME NOT NULL)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error unable to encode JSON as a table key\nHINT:.*\n.*35706.*
 WITH cte (col_cte) AS ( SELECT * FROM ( VALUES ( ( 'false':::JSONB, '1970-01-05 16:57:40.000665+00:00':::TIMESTAMPTZ ) ) ) EXCEPT ALL SELECT * FROM ( VALUES ( ( ' [ [[true], [], {}, "b", {}], {"a": []}, {"c": 2.05750813403415} ] ':::JSONB, '1970-01-10 05:23:26.000428+00:00':::TIMESTAMPTZ ) ) ) ) SELECT * FROM cte, table57696
