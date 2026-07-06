@@ -26,6 +26,7 @@ from typing import Any
 from urllib.parse import quote
 
 import pg8000
+import psycopg
 import requests
 from pg8000.exceptions import InterfaceError
 from psycopg import Cursor
@@ -243,6 +244,29 @@ def sql_cursor(
         sslmode="require",
         startup_params=startup_params,
     )
+
+
+def sni_sql_cursor(
+    c: Composition, service="balancerd", email="u1@example.com"
+) -> Cursor:
+    """Connect so that the client sends TLS SNI, unlike sql_cursor.
+
+    libpq only sends SNI when host is a hostname, so connecting to 127.0.0.1
+    silently takes balancerd's Frontegg resolver path instead of the SNI
+    path. host=localhost supplies the SNI while hostaddr pins the TCP
+    connection to 127.0.0.1.
+    """
+    conn = psycopg.connect(
+        host="localhost",
+        hostaddr="127.0.0.1",
+        port=c.default_port(service),
+        user=email,
+        password=app_password(email),
+        dbname="materialize",
+        sslmode="require",
+    )
+    conn.autocommit = True
+    return conn.cursor()
 
 
 def pg8000_sql_cursor(
@@ -779,10 +803,17 @@ def workflow_pgwire_with_sni(c: Composition) -> None:
         "materialized",
         Service("testdrive", idle=True),
     )
-    # We're going to run this using ssl and, notably, without frontegg mock.
-    # This should mean that we need to rely on SNI to do tenant resolution
-    cursor = sql_cursor(c)
+    # The cursor must send SNI for balancerd to take the SNI resolution path,
+    # and frontegg mock is not necessarily up, so Frontegg resolution cannot
+    # be relied on as a fallback.
+    cursor = sni_sql_cursor(c)
     cursor.execute("select 1;")
+    # The tenant is extracted from the CNAME behind the SNI template (see the
+    # dnsmasq entries).
+    assert_metrics(
+        c,
+        'mz_balancer_tenant_pgwire_sni_count{has_sni="true",tenant="58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"}',
+    )
 
 
 def workflow_pgwire_with_sni_no_cname(c: Composition) -> None:
@@ -830,8 +861,13 @@ def workflow_pgwire_with_sni_no_cname(c: Composition) -> None:
             "materialized",
             Service("testdrive", idle=True),
         )
-        cursor = sql_cursor(c)
+        cursor = sni_sql_cursor(c)
         cursor.execute("select 1;")
+        # Routing worked, but with no CNAME there is no tenant to extract.
+        assert_metrics(
+            c,
+            'mz_balancer_tenant_pgwire_sni_count{has_sni="true",tenant="unknown"}',
+        )
 
 
 def workflow_split_proxy_header(c: Composition) -> None:
