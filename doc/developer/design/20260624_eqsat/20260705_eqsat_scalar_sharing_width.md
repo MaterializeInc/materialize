@@ -151,11 +151,14 @@ K columns widens by K the arranged rows it crosses.
 
 ## WS2c: the width cost axis, in two coordinated places
 
-The width term lives in TWO places, both gated, both flag-off verbatim. The
-reason is not that arrangement count is "backwards". The reason is that the ILP
-objective is a SEPARATE scalarized proxy (arrangement count, then time, then
-nodes, the extract.rs objective) that NEVER consults `cost.rs`'s memory-degree
-vector. A width term in `cost.rs` is therefore invisible to the ILP's decision,
+The width term lives in TWO places. The reason is not that arrangement count is
+"backwards". The reason is that the ILP objective is a SEPARATE scalarized proxy
+(arrangement count, then time, then nodes, the extract.rs objective) that NEVER
+consults `cost.rs`'s memory-degree vector. NOTE: the two places are now gated
+differently. The ILP-objective place (the arity term) is promoted and always on
+(a cost-model correctness property, see Flag), because the ILP is the extractor
+that makes the width decision and it now runs on joins. The `cost.rs` place stays
+flag-gated (it feeds greedy and recommendation, no regression there). A width term in `cost.rs` is therefore invisible to the ILP's decision,
 and the ILP is the extractor that makes the share decision (greedy is DAG-blind
 and does not pick shared forms, the same reason WS1 forced the ILP). So width
 must be injected into the ILP objective to be operative. This is the WS0 lesson
@@ -255,18 +258,27 @@ A dedicated `enable_eqsat_scalar_sharing` (default off), distinct from WS1's
 `enable_eqsat_filter_sharing`. This decouples the higher-blast `cost.rs` width
 axis (shared by greedy and the ILP fallback) from WS1's memory-free
 extract.rs-only path, so WS1 can graduate to default-on independently of the
-riskier width change. The flag gates FOUR things: the Map-split rule, the
-`cost.rs` `(degree, arity)` memory pair, the ILP objective arity term, and the
-scalar-aware node tier (`weight_scalar_nodes = filter_sharing || scalar_sharing`,
-because the Map-share pick is won by that tier, see the compute-once section). It
-forces the ILP for its run (the greedy extractor cannot realize the share),
-mirroring `filter_sharing`.
+riskier width change. The flag gates THREE things: the Map-split rule, the
+`cost.rs` `(degree, arity)` memory pair, and the scalar-aware node tier
+(`weight_scalar_nodes = filter_sharing || scalar_sharing`, because the Map-share
+pick is won by that tier, see the compute-once section). It forces the ILP for
+its run (the greedy extractor cannot realize the share), mirroring
+`filter_sharing`.
 
-Byte-identical off, by construction. Both the `cost.rs` memory computation and
-the ILP objective branch on the flag, and the flag-off arm is the verbatim
-width-blind original (a branch, not an algebraic reduction), so flag-off is
-byte-identical corpus-wide. This is stricter than WS1 because `cost.rs` is shared
-with the greedy extractor.
+The ILP objective arity term is NO LONGER gated by this flag. It was built here
+but it is not a sharing feature, it is a cost-model correctness property: among
+arrangements that tie on count, width is a cost, so the ILP must prefer the
+narrower one. Its flag-off-byte-identical rationale held only while the ILP never
+ran on joins. The cycle-aware ILP now runs on joins, so a width-blind objective
+became a live plan-quality regression against greedy (measured: 7 of 70 net-wider
+golden files, lost projection pushdowns). The tier is therefore promoted to the
+production objective, always on for every ILP solve (`extract.rs`,
+`width_aware: true` set at the `use_ilp` extractor construction in `eqsat.rs`).
+See `20260705_eqsat_extraction_determinism.md`. The remaining two gated pieces
+(`cost.rs` `(degree, arity)`, the scalar-node tier) stay byte-identical off by
+construction: their flag-off arm is the verbatim width-blind original. They feed
+the greedy and recommendation paths, where no regression was demonstrated, so
+dragging them along would churn greedy plans to fix nothing.
 
 ## WS2a: the Map-split rule
 
@@ -384,11 +396,17 @@ settled value or difficulty judgment. Revisit after the Map-prefix slice lands.
 * Acceptance anti-case (as important as the positive): a subset-prefix share
   whose shared column is carried into an arrangement it need not cross (a
   widening carry) is NOT taken, because the arity term declines it. This proves
-  the width gate binds. A pure-widening share is declined by design.
+  the width gate binds. A pure-widening share is declined by design. The arity
+  term is now always on (promoted, see Flag), so this anti-case holds under plain
+  ILP, independent of the flag. That strengthens acceptance, not weakens it: the
+  decline gate is live corpus-wide, not only under the flag.
 * Corpus no-regression, flag off: full sqllogictest and the eqsat corpus
-  byte-identical, which REQUIRES confirming the `cost.rs` width term and the ILP
-  arity term are truly gated (flag-off runs the verbatim width-blind path).
-  Stricter than WS1 because `cost.rs` is shared with greedy.
+  byte-identical for the flag-gated pieces, which REQUIRES confirming the
+  `cost.rs` width term is truly gated (flag-off runs the verbatim width-blind
+  path). Stricter than WS1 because `cost.rs` is shared with greedy. The ILP arity
+  term is NOT part of this byte-identical-off expectation: it is promoted and
+  always on, so its plan changes are the reviewed
+  `20260705_eqsat_extraction_determinism.md` regen, not a flag toggle.
 * Unit tests. The `cost.rs` `(degree, arity)` memory comparison (a wider
   arrangement costs more than a narrower one of equal cardinality degree, and a
   higher degree still dominates any arity). The ILP arity term (a widening carry
@@ -408,6 +426,53 @@ settled value or difficulty judgment. Revisit after the Map-prefix slice lands.
   (already handled by `ArrId` dedup), HIR rewrites, sub-join sharing, cardinality
   estimation.
 
+## Known width residuals, accepted with fix vectors named
+
+After the arity-tier promotion (always on for the ILP), a corpus regen against
+merge-base `4637c747` narrowed or held five of the seven previously net-wider
+files (tpch_select, tpch_create_materialized_view, tpch_create_index each -6;
+aoc_1212 -4; mir_arity 0). Three residual widenings remain. Each is OUTSIDE the
+arity tier's reach, and each has a fix vector already on the schedule, so all
+three are accepted and documented here rather than chased now. Chasing any would
+open new work to shave bounded arity off a few files while the pipeline holds.
+
+1. **chbench +66 (greedy-gated join).** The 7-way TPC-CH join has more than
+   `MAX_CYCLIC_SCCS` (6) non-trivial SCCs, so extraction sheds it to the greedy
+   fallback, which is width-blind. The merge-base plan was also greedy here (the
+   cycle-guard bailed before the size gate existed), so the delta is
+   determinism-canonicalization drift in a GREEDY plan, not a width regression:
+   the arity tier never runs on this query. Fix vector: the HiGHS solver swap
+   (scheduled after the cycle-aware ILP Tasks 3 and 4). A real solver makes the
+   7-way affordable, `MAX_CYCLIC_SCCS` rises or is retired, and the join returns
+   to width-aware ILP where the tier narrows it. Gate-shed, recovers with the
+   solver swap. NOTE: accept-and-document does not waive the execution audit. The
+   greedy drift still needs a worse-to-execute check on the final regen.
+
+2. **aggregation_nullability +10 (CSE-representative width).** The share is a
+   Let binding, and the determinism-canonical extraction now shares a wider `l0`
+   (arity 2, unprojected) and re-projects per consumer, where the merge-base
+   shared the narrow projected form (arity 1). The arity tier governs arrangement
+   COUNT and KEY ties, not which projected form becomes the CTE representative, so
+   the tier cannot reach this. The width of a shared Let representative is exactly
+   the territory of the `cost.rs` `(degree, arity)` pair, the deliberately
+   still-gated half of WS2's width work (it feeds the greedy and CSE paths, which
+   is where this decision lives). Fix vector: WS2 certification (Task 4) runs a
+   free experiment. When it flips `enable_eqsat_scalar_sharing` on, check whether
+   this file narrows. If yes, the residual has a built fix awaiting its promotion
+   decision. If no, it is a genuine CSE-ordering gap. Either outcome is learned
+   without new work now.
+
+3. **all_parts_essential (saturation coverage gap).** The projected
+   broadcast-customer form is never an e-graph candidate, so no extractor choice
+   (greedy or ILP, width-blind or width-aware) can select it. Filed as a
+   saturation coverage gap, not a cost or extraction problem. No fix vector on the
+   near schedule: closing it means adding the missing rewrite to saturation.
+
+The `MAX_CYCLIC_SCCS = 6` size gate is confirmed doing its job: chbench's
+`PhysicalEqSatTransform` fell from 54s (ungated cyclic ILP) to 1.775s (greedy
+shed). That is the deterministic-tail-shed working as designed, pending the
+HiGHS-era recalibration named in residual 1.
+
 ## Decisions recorded
 
 1. Scope: WS2a cross-BRANCH subset-prefix Map sharing only. Diverging consumers
@@ -421,11 +486,16 @@ settled value or difficulty judgment. Revisit after the Map-prefix slice lands.
    cross-axis tradeoff. The arity term is purely a DECLINE gate against a
    widening share. The sharing win comes from the scalar-aware node tier, not the
    width term.
-3. Flag: dedicated `enable_eqsat_scalar_sharing`, default off, gating FOUR pieces
-   (the Map-split rule, the `cost.rs` `(degree, arity)` memory, the ILP arity
-   term, and the scalar-aware node tier via `weight_scalar_nodes = filter_sharing
-   || scalar_sharing`), forcing the ILP, flag-off verbatim width-blind. The
-   scalar-aware node tier must be on because it is what wins the share pick.
+3. Flag: dedicated `enable_eqsat_scalar_sharing`, default off, gating THREE pieces
+   (the Map-split rule, the `cost.rs` `(degree, arity)` memory, and the
+   scalar-aware node tier via `weight_scalar_nodes = filter_sharing ||
+   scalar_sharing`), forcing the ILP, flag-off verbatim width-blind for those
+   three. The scalar-aware node tier must be on because it is what wins the share
+   pick. The ILP objective arity term is NOT gated: it is a cost-model
+   correctness property (width is a cost), promoted to the production objective
+   and always on for the ILP, because the cycle-aware ILP now runs on joins where
+   width-blindness is a live regression. Certification toggles the rule and the
+   `cost.rs` pair only, the tier is already on.
 4. WS0 left untouched, orthogonal (work tier versus memory tier), composes with
    the width term. WS0's real future subsumption is a `cost.rs` time-axis
    scalar-work term, unrelated to the width axis.

@@ -233,6 +233,19 @@ design permanently.
   median and p95 and worst, as the original E0 gate did). E0 was measured while
   the ILP bailed on all joins, so its numbers do not reflect real join ILP solve
   time. This re-run is the corrected E0.
+
+  Result (corrected E0, HiGHS backend, 2026-07-06). Paired wall-clock on the
+  worst optimize-dominated file, chbench (the 7-way join with the 5.73s ILP
+  solve): `enable_eqsat_physical_optimizer` on 29.18s versus the directional
+  baseline (flag off) 16.40s, a 1.78x ratio for the whole file. The full corpus
+  golden regeneration completed with zero statement-timeout stalls, which the
+  microlp+ungated configuration could not do (chbench did not finish in 10
+  minutes). So the corrected E0 passes: the join ILP that now actually runs is
+  survivable. The chosen costs, on record with magnitudes: a per-solve median
+  tax from the C++ setup (microlp 201us versus HiGHS 702us), bought back by an
+  ~80x better tail (microlp worst 10.8s versus HiGHS 130ms on the small-solve
+  corpus), and a 5.73s worst single solve on the gate-lifted 7-way (versus
+  microlp's 54s). The tail win is why the size gate could widen from 6 to 30.
 * Size cap. Keep the existing `total_nodes > 600` bail (a class-count bound also
   bounds the MTZ variable and constraint count). A cap hit falls back to greedy,
   counted and logged.
@@ -256,7 +269,17 @@ design permanently.
   with its origin, and it widens or is removed when the backend can afford the
   tail (see below). This is deterministic and machine-independent, so it never
   moves a golden across machines, unlike a wall-clock bail. It sheds only the
-  tail and keeps the DFJ wins on small and medium joins.
+  tail and keeps the ILP on small and medium joins.
+
+  Those kept ILP plans are a win only with the width-aware arity tier ON. The
+  gate lets the ILP run on the small and medium joins, but the ILP is a win over
+  greedy there only if its objective values arrangement width. Left width-blind,
+  the ILP loses projection pushdowns greedy keeps (measured: 7 of 70 net-wider
+  golden files), so the gate is net-NEGATIVE without the tier. The tier is
+  therefore promoted to the production objective (always on for the ILP), which
+  is the precondition that makes this gate net-positive. See
+  `20260705_eqsat_scalar_sharing_width.md` and
+  `20260705_eqsat_extraction_determinism.md`.
 * The tail's real fix is the HiGHS backend, not the gate. 54s for a ~100-node
   MILP with ~21 binary exclusions is microlp's bounds-as-constraints B&B, not the
   problem's difficulty. A production MILP solver (HiGHS, single-thread for
@@ -264,6 +287,15 @@ design permanently.
   pre-authorized and queued immediately after the join-parity audit and the WS2
   certification. The size gate `K` is the honest stopgap that keeps the branch
   green until then, and `K` widens or is retired once HiGHS lands.
+
+  Realized instance: chbench (7-way TPC-CH join, ~21 commute pairs) is the query
+  that measured 54s ungated and shed to greedy under `K=6`, dropping its
+  `PhysicalEqSatTransform` to 1.775s. Because it sheds to width-blind greedy it
+  stays net-wider than merge-base (+66 arity), tracked as an accepted residual in
+  `20260705_eqsat_scalar_sharing_width.md` (known-width-residuals section) with
+  this HiGHS swap as its named recovery: a real solver makes the 7-way affordable,
+  `K` rises or retires, and the join returns to width-aware ILP. NOTE: the greedy
+  drift still owes a worse-to-execute check on the final regen before landing.
 
 Validation sequence: SCC-scoped MTZ, then re-run the A/B (the WITH column should
 collapse toward the WITHOUT column and the SCC-size distribution reported), then
@@ -322,6 +354,17 @@ the tie arithmetic not holding on the real shape). Land the acceptance slt and t
 anti-case (widening declined). Update the WS2 design-doc status from landed-inert
 to certified, or report exactly what still blocks. This is now the smallest
 consequence of the fix, not the point.
+
+Fold in the CSE-width free experiment. The aggregation_nullability residual (a
+shared `Let` representative that widened from arity 1 to arity 2 under the
+determinism-canonical extraction, tracked in the width doc's known-residuals) is
+governed by the `cost.rs` `(degree, arity)` pair, the still-gated half of WS2's
+width work that feeds the greedy and CSE paths. When this certification flips
+`enable_eqsat_scalar_sharing` on, check whether aggregation_nullability (and the
+same-family all_parts_essential shape, to the extent the candidate exists)
+narrows. If it narrows, the residual has a built fix awaiting only its promotion
+decision. If it does not, it is a genuine CSE-ordering gap. Either way the answer
+comes free from the certification run, with no new work now.
 
 ## Files
 

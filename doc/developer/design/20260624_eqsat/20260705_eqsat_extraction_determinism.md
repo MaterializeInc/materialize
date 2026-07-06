@@ -330,58 +330,59 @@ eqsat feature flags are on in tests, the big-join sqllogictest files
 (chbench, ldbc, tpch) do not just regenerate slowly, they fail at HEAD with a
 statement timeout. That is a branch breakage the determinism regen had to clear.
 
-### Why the obvious gates do not work
+### Choosing the gate predicate
 
-The instrumented data refutes a size-based gate. Across the chbench queries the
-ILP programs are small (<= 110 binary variables) and every cyclic SCC is size 2,
-so the expensive MTZ big-M path is never even used. Solve time does not track
-size: two 91-variable programs took 1.4s and 6.3s, a 4x spread at identical size,
-and the times form a continuum from 300ms to 21.9s with no gap. The hardness is
-intrinsic to each program's branch-and-bound search, not its size, so no
-variable or constraint count cleanly separates fast from slow.
+The variable count is the wrong predicate. Across the chbench queries the ILP
+programs are small (<= 110 binary variables) and every cyclic SCC is size 2, so
+the expensive MTZ big-M path is never used, and solve time does not track
+variable count: two 91-variable programs took 1.4s and 6.3s. But the number of
+commute cycles does track it, because each cycle is one size-2 SCC and one binary
+exclusion, and it is the count of those exclusions that grows the
+branch-and-bound. Binning the same 121 cyclic solves by non-trivial-SCC count
+instead of by variable count gives a clean knee (see the calibration in The gate
+below), so the correct predicate is the non-trivial-SCC count, an input property.
 
 A wall-clock time limit (microlp exposes one through good_lp's `with_time_limit`)
-is also rejected, for a determinism reason specific to this module's goal:
+is rejected outright, for a determinism reason specific to this module's goal:
 bailing on elapsed time makes the chosen plan depend on how fast the solver ran,
 so the same query yields an ILP plan on a fast machine and a greedy plan on a
 slow one. That is cross-machine golden nondeterminism, the same class of bug this
-work otherwise eliminates, so it cannot be used to pick a plan that gets frozen
-into a golden.
+work otherwise eliminates, so it cannot pick a plan that gets frozen into a
+golden. Every fallback in this extractor keys on an input property, never on
+time.
 
 ### The gate
 
-The only deterministic, machine-independent, guaranteed-bounded option is a
-structural gate: bail to the greedy extractor whenever the reachable subgraph is
-cyclic (`extract.rs`, right after `cyclic_classes`). Greedy is the sound fallback
-the ILP already uses on the size cap, and its content-keyed tie-break is
-process-independent, so the plan stays deterministic. Because the committed
-goldens predate the cycle-aware ILP (they are greedy plans), this gate also
-restores them, so join files see no golden move and the determinism moves stay
-isolated to non-join cost-tie files.
+The gate keys on an input property, never on wall-clock time. A time-based bail
+would make the chosen plan a function of solver speed, so the same query yields
+an ILP plan on a fast machine and a greedy plan on a slow one, which is
+machine-dependent goldens, the exact cross-machine flake this whole document
+eliminates. That option is struck permanently. The pathological cost is instead
+separable at input time: each commute cycle is one size-2 SCC and one binary
+exclusion, and solve time tracks the non-trivial-SCC count. `IlpExtractor::solve`
+bails to greedy when that count exceeds `MAX_CYCLIC_SCCS` (currently 6), via
+`record_ilp_fallback("cyclic_join_size")`, counted and logged. Greedy is the
+sound fallback the ILP already uses on the size cap, and its content-keyed
+tie-break is process-independent, so the plan stays deterministic and
+machine-independent.
 
-The cost is that the cycle-aware ILP no longer runs (cyclic joins are its only
-input), so its value is shelved pending a bounded-time cyclic ILP. This is a
-significant walk-back of that feature and is landed as its own reversible commit,
-flagged for review. Removing the gate requires giving the cyclic ILP a bounded,
-deterministic work budget (for example a node-count cap inside branch-and-bound,
-which microlp does not currently expose, as opposed to a wall-clock limit).
+`K = 6` is calibrated from the measured knee of solve time versus non-trivial-SCC
+count over the join corpus (chbench, tpch, ldbc, 121 cyclic solves): up to 6 SCCs
+solve in <= 6.3s, then 7 jumps to >= 12s, 8 to 12.8s, and 10 (chbench's 7-way) to
+52.5s. So the gate sheds only the pathological many-cycles tail and keeps the DFJ
+wins on the small and medium joins (1 to 6 pairs) the cycle-aware ILP was built
+for. `K` is a documented tuning knob: tighten toward 5 for faster CI, widen or
+remove it once the real tail fix lands.
 
-### Relationship to the SCC-scoped DFJ plan
+### The tail's real fix is HiGHS, not the gate
 
-This gate overlaps an in-progress plan in
-`20260705_eqsat_ilp_cycle_aware_extraction.md` (uncommitted at the time of this
-writing) that independently measured the same slowness and designs exact
-Dantzig-Fulkerson-Johnson cuts (pure-binary size-1 and size-2 cuts, per-SCC MTZ
-only for size >= 3) to collapse the ILP solve toward the base cost, plus a
-"timeout backstop" for a residual pathological tail. The current code already
-carries those size-1 and size-2 cuts, and chbench's 7-way join, whose SCCs are
-all size 2, is nonetheless in that pathological tail (54s), so the DFJ cuts alone
-do not make it fast. The open decision is which backstop to use for that tail:
-the wall-clock "timeout backstop" from that plan, which makes the chosen plan and
-so the golden depend on solver speed (cross-machine nondeterminism, the failure
-mode this whole document is about), or the deterministic structural gate landed
-here, which bails all cyclic joins to greedy and so also forgoes the fast DFJ
-cases. A middle option would be a deterministic, machine-independent work budget
-inside the solver (a branch-and-bound node cap), which microlp does not currently
-expose. This gate is a stopgap that keeps the branch green and the goldens
-deterministic until that decision is made.
+54s for a ~100-node MILP with ~21 binary exclusions is microlp's
+bounds-as-constraints branch-and-bound, not the problem's inherent difficulty. A
+production MILP backend (HiGHS, single-thread for determinism) solves this
+sub-second and deterministically. The HiGHS spike is the queued tail fix (after
+the join-parity audit and WS2 certification); this size gate is the honest
+stopgap that keeps the branch green and the goldens deterministic until then, at
+which point `K` widens or is retired. The cyclic-ILP design and its measurement
+lineage (MTZ, SCC-scoping, DFJ cuts) live in
+`20260705_eqsat_ilp_cycle_aware_extraction.md`; the tail this gate covers is the
+known open end of that arc, not a separately discovered problem.
