@@ -688,10 +688,11 @@ where
             .await;
 
         // Fetch one part on a per-call clone of the fetcher (cheap: shares the
-        // schema cache), returning the part's mint time with the result. The
-        // missing-blob diagnostics round-trip happens inside the future, so the
-        // error surfaces only after the fetch has truly failed.
-        let fetch_one = |time: TInner, part: ExchangeableBatchPart<T>| {
+        // schema cache), carrying the part's input capabilities through so they
+        // come back with the result. The missing-blob diagnostics round-trip
+        // happens inside the future, so the error surfaces only after the fetch
+        // has truly failed.
+        let fetch_one = |caps: [Capability<TInner>; 2], part: ExchangeableBatchPart<T>| {
             let mut fetcher = fetcher.clone();
             async move {
                 let reader_id = part.reader_id().clone();
@@ -721,67 +722,56 @@ where
                         ))
                     }
                 };
-                (time, fetched)
+                (caps, fetched)
             }
         };
 
-        // Outstanding fetches, keyed by the time the part was minted at. For each
-        // time we retain a capability on each output (data + completed-fetches)
-        // and count how many fetches at that time are in flight. When the count
-        // reaches zero we drop both capabilities, advancing the data and
-        // completed-fetches frontiers past that time; the latter releases the
-        // parts' leases on the chosen worker (whose `LeaseManager` is likewise
-        // keyed by time). Keying by time rather than by arrival order makes the
-        // operator robust to the fetches completing in any order.
-        let mut outstanding: BTreeMap<TInner, (Capability<TInner>, Capability<TInner>, usize)> =
-            BTreeMap::new();
         // Descs accepted from the input but not yet handed to a fetch, FIFO.
-        // Their capabilities are already retained in `outstanding`, so buffering
-        // here holds no progress hostage; it only bounds how many fetches run at
-        // once (and thus how many parts are resident in memory).
-        let mut pending: VecDeque<(TInner, ExchangeableBatchPart<T>)> = VecDeque::new();
+        // Each carries its input capabilities (data + completed-fetches), so
+        // buffering here holds no progress hostage; it only bounds how many
+        // fetches run at once (and thus how many parts are resident in memory).
+        // Timely tracks the frontier through these capabilities: it advances
+        // past a time only once every fetch minted at that time has completed
+        // and dropped its clones, releasing the parts' leases on the chosen
+        // worker via the completed-fetches feedback. Carrying capabilities
+        // rather than a separate time-keyed map makes correctness independent of
+        // the order results come back in.
+        let mut pending: VecDeque<([Capability<TInner>; 2], ExchangeableBatchPart<T>)> =
+            VecDeque::new();
         let mut in_flight = FuturesUnordered::new();
         let mut input_done = false;
 
         loop {
             // Start fetches up to the concurrency cap.
             while in_flight.len() < max_concurrency {
-                let Some((time, part)) = pending.pop_front() else {
+                let Some((caps, part)) = pending.pop_front() else {
                     break;
                 };
-                in_flight.push(fetch_one(time, part));
+                in_flight.push(fetch_one(caps, part));
             }
 
             tokio::select! {
                 // Emit completed fetches first, so `in_flight` drains and we do
                 // not hold more than `max_concurrency` parts in memory.
                 biased;
-                Some((time, fetched)) = in_flight.next(), if !in_flight.is_empty() => {
+                Some((caps, fetched)) = in_flight.next(), if !in_flight.is_empty() => {
                     match fetched {
                         Ok(fetched) => {
-                            let entry = outstanding
-                                .get_mut(&time)
-                                .expect("capability for every in-flight fetch time");
-                            // Do very fine-grained output activation/session
-                            // creation to ensure that we don't hold activated
-                            // outputs or sessions across await points, which
-                            // would prevent messages from being flushed from the
-                            // shared timely output buffer.
-                            fetched_output.give(&entry.0, fetched);
-                            entry.2 -= 1;
-                            if entry.2 == 0 {
-                                // Drops both capabilities, advancing the data and
-                                // completed-fetches frontiers past `time`.
-                                outstanding.remove(&time);
-                            }
+                            // Emit at the data capability, then drop both caps.
+                            // Dropping them advances the data and completed-fetches
+                            // frontiers once this time's last outstanding fetch is
+                            // done.
+                            fetched_output.give(&caps[0], fetched);
+                            drop(caps);
                         }
                         Err(e) => {
                             // Report the missing blob and freeze. `report_and_stop`
                             // never returns, so we stop draining results and retain
-                            // every outstanding capability, including this failed
-                            // part's. Crucially, a later successfully fetched part
-                            // must NOT be allowed to release a capability and let the
-                            // frontier advance past the part we never emitted.
+                            // every in-flight and pending capability, including this
+                            // failed part's `caps`. Crucially, a later successfully
+                            // fetched part must NOT be allowed to drop its capability
+                            // and let the frontier advance past the part we never
+                            // emitted.
                             error_handler.report_and_stop(e).await;
                         }
                     }
@@ -790,16 +780,11 @@ where
                 // throttled by the `pending` queue above, not here.
                 event = descs_input.next(), if !input_done => {
                     match event {
-                        Some(Event::Data([fetched_cap, completed_cap], data)) => {
+                        Some(Event::Data(caps, data)) => {
                             // `LeasedBatchPart`es cannot be dropped at this point
                             // w/o panicking, so swap them to an owned version.
                             for (_idx, part) in data {
-                                let time = fetched_cap.time().clone();
-                                let entry = outstanding.entry(time.clone()).or_insert_with(|| {
-                                    (fetched_cap.delayed(&time), completed_cap.delayed(&time), 0)
-                                });
-                                entry.2 += 1;
-                                pending.push_back((time, part));
+                                pending.push_back((caps.clone(), part));
                             }
                         }
                         Some(Event::Progress(_)) => {}
