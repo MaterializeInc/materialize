@@ -754,24 +754,14 @@ where
                 // Emit completed fetches first, so `in_flight` drains and we do
                 // not hold more than `max_concurrency` parts in memory.
                 biased;
-                Some((caps, fetched)) = in_flight.next(), if !in_flight.is_empty() => {
+                Some(([cap, _], fetched)) = in_flight.next(), if !in_flight.is_empty() => {
                     match fetched {
-                        Ok(fetched) => {
-                            // Emit at the data capability, then drop both caps.
-                            // Dropping them advances the data and completed-fetches
-                            // frontiers once this time's last outstanding fetch is
-                            // done.
-                            fetched_output.give(&caps[0], fetched);
-                            drop(caps);
-                        }
+                        Ok(fetched) => fetched_output.give(&cap, fetched),
                         Err(e) => {
-                            // Report the missing blob and freeze. `report_and_stop`
-                            // never returns, so we stop draining results and retain
-                            // every in-flight and pending capability, including this
-                            // failed part's `caps`. Crucially, a later successfully
-                            // fetched part must NOT be allowed to drop its capability
-                            // and let the frontier advance past the part we never
-                            // emitted.
+                            // `report_and_stop` never returns, freezing the
+                            // operator: `cap` (and every other in-flight and
+                            // pending capability) stays held, so the data frontier
+                            // never advances past the part we failed to emit.
                             error_handler.report_and_stop(e).await;
                         }
                     }
