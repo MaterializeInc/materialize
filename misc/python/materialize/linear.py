@@ -25,6 +25,7 @@ from materialize.github import (
 )
 
 LINEAR_CLOSED_STATE_TYPES = {"completed", "canceled"}
+LINEAR_STALE_STATE_NAMES = {"stale"}
 
 
 def _search_issues_graphql(token: str) -> list[dict[str, Any]]:

@@ -8,9 +8,13 @@
       [, START OFFSET ( <partition_offset> [, ...] ) ]
       [, START TIMESTAMP <timestamp> ]
     )
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
-      [KEY STRATEGY <key_strategy>]
-      [VALUE STRATEGY <value_strategy>]
+    FORMAT AVRO
+        USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
+          [KEY STRATEGY <key_strategy>]
+          [VALUE STRATEGY <value_strategy>]
+      | USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name> (
+          SCHEMA NAME = '<schema_name>'
+        )
     [INCLUDE
         KEY [AS <name>]
       | PARTITION [AS <name>]
@@ -54,7 +58,23 @@
         Optional. Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). See [Time-based offsets](#time-based-offsets) for details.
     - name: "`<csr_connection_name>`"
       description: |
-        The Confluent Schema Registry connection to use in the source.
+        The [Confluent Schema Registry connection](/sql/create-connection/#confluent-schema-registry)
+        to use in the source. Applies to both the key and value.
+    - name: "`<glue_connection_name>` (**SCHEMA NAME** `'<schema_name>'`)"
+      description: |
+        ***Private preview.** This feature is under active development.*
+
+        Decode Avro messages using a schema managed in AWS Glue Schema
+        Registry. `<glue_connection_name>` is the [AWS Glue Schema Registry
+        connection](/sql/create-connection/#aws-glue-schema-registry), and
+        `SCHEMA NAME` (**required**) is the name of the schema to read from
+        the connection's registry. The schema is pinned at the time the
+        source is created.
+
+        A single `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` clause resolves
+        one schema. To set the key and value independently (for example,
+        under `ENVELOPE UPSERT` or `ENVELOPE DEBEZIUM`), specify `KEY FORMAT
+        ... VALUE FORMAT ...` explicitly.
     - name: "**KEY STRATEGY** `<key_strategy>`"
       description: |
         Optional. Define how an Avro reader schema will be chosen for the
@@ -473,6 +493,7 @@
     -- AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
     --     [KEY STRATEGY <strategy>]
     --     [VALUE STRATEGY <strategy>]
+    -- | AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_conn_name> (SCHEMA NAME = '<schema_name>')
     -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
     -- | JSON | TEXT | BYTES
     -- | PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
@@ -520,10 +541,10 @@
         Optional. Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). See [Time-based offsets](#time-based-offsets) for details.
     - name: "**KEY FORMAT** `<key_format_spec>`"
       description: |
-        **Required.** Set the key encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `JSON`, `PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'`, `TEXT`, `BYTES`.
+        **Required.** Set the key encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name> (SCHEMA NAME = '<schema_name>')`, `JSON`, `PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'`, `TEXT`, `BYTES`.
     - name: "**VALUE FORMAT** `<value_format_spec>`"
       description: |
-        **Required.** Set the value encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `JSON`, `PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'`, `TEXT`, `BYTES`. By default, the message key is decoded using the same format as the message value.
+        **Required.** Set the value encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name> (SCHEMA NAME = '<schema_name>')`, `JSON`, `PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'`, `TEXT`, `BYTES`. By default, the message key is decoded using the same format as the message value.
     - name: "**INCLUDE** `<include_option>`"
       description: |
         Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:

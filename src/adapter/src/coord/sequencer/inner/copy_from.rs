@@ -69,17 +69,24 @@ impl Coordinator {
         // CopyData/CopyDone exchange. URL/S3 sources stage a one-shot ingestion
         // server-side and fall through to the rest of this function.
         if let CopyFromSource::Stdin = plan.source {
-            let (tx, _, session, ctx_extra) = ctx.into_parts();
-            tx.send(
-                Ok(ExecuteResponse::CopyFrom {
-                    target_id: plan.target_id,
-                    target_name: plan.target_name,
-                    columns: plan.columns,
-                    params: plan.params,
-                    ctx_extra,
-                }),
-                session,
-            );
+            let (tx, _, session, ctx_extra, response_barriers) = ctx.into_parts();
+            let response = Ok(ExecuteResponse::CopyFrom {
+                target_id: plan.target_id,
+                target_name: plan.target_name,
+                columns: plan.columns,
+                params: plan.params,
+                ctx_extra,
+            });
+            if response_barriers.is_empty() {
+                tx.send(response, session);
+            } else {
+                mz_ore::task::spawn(|| "copy_from_stdin_after_response_barriers", async move {
+                    for barrier in response_barriers {
+                        barrier.await;
+                    }
+                    tx.send(response, session);
+                });
+            }
             return;
         }
 

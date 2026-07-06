@@ -46,7 +46,7 @@ a
 query T
 SELECT pg_typeof('a'::"char"::varchar);
 ----
-character
+character varying
 
 query T
 SELECT 'a'::"char"::text;

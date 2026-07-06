@@ -22,7 +22,7 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan as ComputePlan;
+use mz_compute_types::plan::LirRelationExpr as ComputePlan;
 use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
@@ -2000,6 +2000,32 @@ impl CatalogItem {
         }
     }
 
+    /// Overwrites the `create_sql` of this item, without replanning.
+    ///
+    /// Only used when applying temporary item updates. A temporary item's
+    /// in-memory `create_sql` must stay byte-identical to the update that
+    /// created it, so that re-serializing the item, for example when a later
+    /// op in the same transaction retracts it, yields a value that
+    /// consolidates away against that update. Persistent items get this
+    /// guarantee from the durable catalog, which stores the exact bytes.
+    pub fn set_create_sql(&mut self, create_sql: String) {
+        match self {
+            CatalogItem::View(view) => view.create_sql = create_sql,
+            CatalogItem::Index(index) => index.create_sql = create_sql,
+            CatalogItem::Table(table) => table.create_sql = Some(create_sql),
+            CatalogItem::Log(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Connection(_) => {
+                unreachable!("only views, indexes, and tables can be temporary")
+            }
+        }
+    }
+
     /// Indicates whether this item is temporary or not.
     pub fn is_temporary(&self) -> bool {
         self.conn_id().is_some()
@@ -3575,7 +3601,10 @@ impl mz_sql::catalog::CatalogSchema for Schema {
     }
 
     fn has_items(&self) -> bool {
-        !self.items.is_empty()
+        // A schema holds items, types, and functions in separate maps (see
+        // `item_ids`). All three keep the schema non-empty, so e.g. DROP SCHEMA
+        // without CASCADE must be rejected when only a type or function remains.
+        !self.items.is_empty() || !self.types.is_empty() || !self.functions.is_empty()
     }
 
     fn item_ids(&self) -> Box<dyn Iterator<Item = CatalogItemId> + '_> {

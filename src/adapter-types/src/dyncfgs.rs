@@ -204,6 +204,15 @@ pub const ENABLE_MCP_AGENT_QUERY_TOOL: Config<bool> = Config::new(
     "Whether the MCP agent query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Agents can still discover and inspect data products.",
 );
 
+/// Whether the MCP agent read_data_product tool is enabled.
+/// When false, the `read_data_product` tool is hidden from tools/list and calls to it return an error.
+/// The `query` tool is the general-purpose alternative for reading data products.
+pub const ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL: Config<bool> = Config::new(
+    "enable_mcp_agent_read_data_product_tool",
+    true,
+    "Whether the MCP agent read_data_product tool is enabled. When false, the read_data_product tool is not advertised and calls to it are rejected. Agents can use the query tool to read data products.",
+);
+
 /// Whether the MCP developer endpoint is enabled.
 pub const ENABLE_MCP_DEVELOPER: Config<bool> = Config::new(
     "enable_mcp_developer",
@@ -314,10 +323,32 @@ pub const ENABLE_SCOPED_SYSTEM_PARAMETERS: Config<bool> = Config::new(
     "Whether per-cluster and per-replica scoped system parameters are evaluated and applied.",
 );
 
+/// Top-level gate for the cluster controller. When on, the controller owns the
+/// managed-cluster replica set and the legacy paths (the graceful 3-stage
+/// machine and `cluster_scheduling.rs`) are bypassed. The replica set cannot
+/// have two writers, so this is a clean switch, not a per-strategy toggle.
+pub const ENABLE_CLUSTER_CONTROLLER: Config<bool> = Config::new(
+    "enable_cluster_controller",
+    false,
+    "Whether the cluster controller owns the managed-cluster replica set. When false, the legacy scheduling and graceful-reconfiguration paths run instead.",
+);
+
+/// Cadence of the cluster controller's reconcile tick.
+///
+/// Replaces `cluster_check_scheduling_policies_interval` once the controller is
+/// the sole owner; while the controller is dark both intervals exist.
+pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
+    "cluster_controller_tick_interval",
+    Duration::from_secs(5),
+    "How often the cluster controller runs a reconcile tick.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
+        .add(&ENABLE_CLUSTER_CONTROLLER)
+        .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
@@ -343,6 +374,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
         .add(&ENABLE_MCP_AGENT)
         .add(&ENABLE_MCP_AGENT_QUERY_TOOL)
+        .add(&ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
         .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)

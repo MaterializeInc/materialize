@@ -1676,7 +1676,9 @@ impl WithOptionName for TableOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            TableOptionName::PartitionBy => false,
+            // The value is an arbitrary user expression/literal that may embed
+            // sensitive data, so redact it (mirrors `KafkaSinkConfigOptionName`).
+            TableOptionName::PartitionBy => true,
             TableOptionName::RetainHistory => false,
             TableOptionName::RedactedTest => true,
         }
@@ -1730,8 +1732,10 @@ impl WithOptionName for TableFromSourceOptionName {
             TableFromSourceOptionName::Details
             | TableFromSourceOptionName::TextColumns
             | TableFromSourceOptionName::ExcludeColumns
-            | TableFromSourceOptionName::RetainHistory
-            | TableFromSourceOptionName::PartitionBy => false,
+            | TableFromSourceOptionName::RetainHistory => false,
+            // The value is an arbitrary user expression/literal that may embed
+            // sensitive data, so redact it (mirrors `KafkaSinkConfigOptionName`).
+            TableFromSourceOptionName::PartitionBy => true,
         }
     }
 }
@@ -5772,9 +5776,15 @@ impl<T: AstInfo> AstDisplay for CommentStatement<T> {
         f.write_str(" IS ");
         match &self.comment {
             Some(s) => {
-                f.write_str("'");
-                f.write_node(&display::escape_single_quote_string(s));
-                f.write_str("'");
+                if f.redacted() {
+                    // The comment body is arbitrary free text and may contain PII,
+                    // so redact it like every other user-supplied value.
+                    f.write_str("'<REDACTED>'");
+                } else {
+                    f.write_str("'");
+                    f.write_node(&display::escape_single_quote_string(s));
+                    f.write_str("'");
+                }
             }
             None => f.write_str("NULL"),
         }

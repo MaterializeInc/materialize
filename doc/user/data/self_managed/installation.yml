@@ -74,7 +74,7 @@
     ```bash
     kubectl -n materialize get all
     ```
-    {{< /tabs >}}
+    {{< /tab >}}
     {{< tab "Materialize instance" >}}
     To check the status of the Materialize instance, which runs in the `materialize-environment` namespace:
     ```bash
@@ -86,9 +86,18 @@
     If you run into an error during deployment, refer to the
     [Troubleshooting](/self-managed-deployments/troubleshooting/).
 
+- name: installation-tfvars-crd-version-tip
+  content: |
+    {{< tip >}}
+    [CRD API version `v1`](/self-managed-deployments/upgrading/adopting-the-v1-crd/) is available starting in Materialize v26.30 and
+    Materialize Terraform module version v3.1.1.
+    For earlier versions, or if you want to remain on the default `v1alpha1`,
+    comment out the `crd_version` line or set it to `v1alpha1`.
+    {{< /tip >}}
+
 - name: installation-tfvars-variables-optional
   content: |
-    **Optional variables**:
+    **Additional variables**:
 
     - `internal_load_balancer`: Flag that determines whether the load balancer
       is internal (default) or public.

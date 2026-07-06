@@ -795,6 +795,15 @@ where
         &self.since
     }
 
+    /// A less-stale cached version of the shard-global `upper` frontier.
+    ///
+    /// This is the most recently known upper for this shard process-wide. It
+    /// requires a mutex and a clone. This will always be less or equal to the
+    /// shard-global `upper`.
+    pub fn shared_upper(&self) -> Antichain<T> {
+        self.machine.applier.clone_upper()
+    }
+
     #[cfg(test)]
     fn outstanding_seqno(&self) -> SeqNo {
         let current_seqno = self.machine.seqno();

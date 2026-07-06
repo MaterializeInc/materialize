@@ -213,6 +213,11 @@ impl Coordinator {
                     .boxed_local()
                     .await;
             }
+            Message::ClusterControllerRequest(request) => {
+                self.handle_cluster_controller_request(request)
+                    .boxed_local()
+                    .await;
+            }
             Message::DeferredStatementReady => {
                 self.handle_deferred_statement().boxed_local().await;
             }
@@ -673,10 +678,14 @@ impl Coordinator {
                 {
                     let finished = active_subscribe.process_response(response);
                     if finished {
-                        self.retire_compute_sinks(btreemap! {
-                            sink_id => ActiveComputeSinkRetireReason::Finished,
-                        })
-                        .await;
+                        let retire_notify = self
+                            .retire_compute_sinks(btreemap! {
+                                sink_id => ActiveComputeSinkRetireReason::Finished,
+                            })
+                            .await;
+                        // `retire_compute_sinks` waits before sending the terminal
+                        // SUBSCRIBE response. There is no separate statement response here.
+                        drop(retire_notify);
                     }
 
                     soft_assert_or_log!(
@@ -694,7 +703,7 @@ impl Coordinator {
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
                 match self.drop_compute_sink(sink_id).await {
-                    Some(ActiveComputeSink::CopyTo(active_copy_to)) => {
+                    Some((ActiveComputeSink::CopyTo(active_copy_to), _write_notify)) => {
                         active_copy_to.retire_with_response(response);
                     }
                     _ => {

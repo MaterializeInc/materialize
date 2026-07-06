@@ -141,3 +141,54 @@ Source materialize.public.y
 Target cluster: quickstart
 
 EOF
+
+## -------------------- Regression: false unique keys from lossy array casts --------------------
+#
+# `arraytolist` and `arraytojsonb` drop the array's dimension metadata (including
+# lower bounds), so arrays that differ only in a lower bound cast to the same
+# list / jsonb value. These casts must therefore NOT report
+# `preserves_uniqueness = true`. Otherwise the optimizer infers a false unique key
+# on the derived column and `ReduceElision` drops a required aggregation, giving
+# wrong results.
+
+statement ok
+CREATE TABLE lb (arr int[] primary key);
+
+# `{42}` (lower bound 1) and `[2:2]={42}` (lower bound 2): distinct arrays.
+statement ok
+INSERT INTO lb VALUES (array_fill(42, ARRAY[1], ARRAY[1])), (array_fill(42, ARRAY[1], ARRAY[2]));
+
+# Baseline: the arrays are genuinely distinct, so DISTINCT on the array column (a
+# real unique key) keeps both.
+query I
+SELECT count(*) FROM (SELECT DISTINCT arr FROM lb) s
+----
+2
+
+# Index-backed views so the cast lands in a `Map` whose (false) unique key
+# survives to the outer GROUP BY instead of fusing into the group-by expression.
+statement ok
+CREATE VIEW lb_list AS SELECT arr::int list AS l FROM lb;
+
+statement ok
+CREATE INDEX lb_list_idx ON lb_list (l);
+
+statement ok
+CREATE VIEW lb_json AS SELECT to_jsonb(arr) AS j FROM lb;
+
+statement ok
+CREATE INDEX lb_json_idx ON lb_json (j);
+
+# Both arrays cast to a single list / jsonb value, so each GROUP BY must yield one
+# group of 2. The bug elides the reduce, wrongly emitting two groups of 1.
+query TI
+SELECT l::text, count(*) FROM lb_list GROUP BY l
+----
+{42}
+2
+
+query TI
+SELECT j::text, count(*) FROM lb_json GROUP BY j
+----
+[42]
+2

@@ -543,7 +543,8 @@ impl Coordinator {
                 }
                 Plan::DiscardAll => {
                     let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
-                        self.clear_transaction(ctx.session_mut()).await;
+                        let (_, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
+                        ctx.delay_response_until(retire_notify);
                         self.drop_temp_items(ctx.session().conn_id()).await;
                         ctx.session_mut().reset();
                         Ok(ExecuteResponse::DiscardedAll)
@@ -603,18 +604,32 @@ impl Coordinator {
                 Plan::Execute(plan) => {
                     match self.sequence_execute(ctx.session_mut(), plan) {
                         Ok(portal_name) => {
-                            let (tx, _, session, extra) = ctx.into_parts();
-                            self.internal_cmd_tx
-                                .send(Message::Command(
-                                    OpenTelemetryContext::obtain(),
-                                    Command::Execute {
-                                        portal_name,
-                                        session,
-                                        tx: tx.take(),
-                                        outer_ctx_extra: Some(extra),
+                            let (tx, _, session, extra, response_barriers) = ctx.into_parts();
+                            let command = Message::Command(
+                                OpenTelemetryContext::obtain(),
+                                Command::Execute {
+                                    portal_name,
+                                    session,
+                                    tx: tx.take(),
+                                    outer_ctx_extra: Some(extra),
+                                },
+                            );
+                            if response_barriers.is_empty() {
+                                self.internal_cmd_tx
+                                    .send(command)
+                                    .expect("sending to self.internal_cmd_tx cannot fail");
+                            } else {
+                                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                                mz_ore::task::spawn(
+                                    || "execute_after_response_barriers",
+                                    async move {
+                                        for barrier in response_barriers {
+                                            barrier.await;
+                                        }
+                                        let _ = internal_cmd_tx.send(command);
                                     },
-                                ))
-                                .expect("sending to self.internal_cmd_tx cannot fail");
+                                );
+                            }
                         }
                         Err(err) => ctx.retire(Err(err)),
                     };
@@ -701,7 +716,7 @@ impl Coordinator {
         params: Params,
     ) {
         // Put the session into single statement implicit so anything can execute.
-        let (tx, internal_cmd_tx, mut session, extra) = ctx.into_parts();
+        let (tx, internal_cmd_tx, mut session, extra, response_barriers) = ctx.into_parts();
         assert!(matches!(session.transaction(), TransactionStatus::Default));
         session.start_transaction_single_stmt(self.now_datetime());
         let conn_id = session.conn_id().unhandled();
@@ -709,7 +724,13 @@ impl Coordinator {
         // Execute the saved statement in a temp transmitter so we can run COMMIT.
         let (sub_tx, sub_rx) = oneshot::channel();
         let sub_ct = ClientTransmitter::new(sub_tx, self.internal_cmd_tx.clone());
-        let sub_ctx = ExecuteContext::from_parts(sub_ct, internal_cmd_tx, session, extra);
+        let sub_ctx = ExecuteContext::from_parts_with_response_barriers(
+            sub_ct,
+            internal_cmd_tx,
+            session,
+            extra,
+            response_barriers,
+        );
         self.handle_execute_inner(stmt, params, sub_ctx).await;
 
         // The response can need off-thread processing. Wait for it elsewhere so the coordinator can

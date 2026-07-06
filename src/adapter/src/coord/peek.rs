@@ -137,7 +137,7 @@ impl DroppedDependency {
 
 #[derive(Clone, Debug)]
 pub struct PeekDataflowPlan {
-    pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan, ()>,
+    pub(crate) desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
     pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: Vec<usize>,
@@ -146,7 +146,7 @@ pub struct PeekDataflowPlan {
 
 impl PeekDataflowPlan {
     pub fn new(
-        desc: DataflowDescription<mz_compute_types::plan::Plan, ()>,
+        desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
         id: GlobalId,
         typ: &SqlRelationType,
     ) -> Self {
@@ -1404,7 +1404,7 @@ impl crate::coord::Coordinator {
     /// All errors (setup or execution) are sent through tx.
     pub(crate) async fn implement_copy_to(
         &mut self,
-        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
@@ -1446,10 +1446,7 @@ impl crate::coord::Coordinator {
         };
 
         // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
-        drop(
-            self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
-                .await,
-        );
+        drop(self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to)));
 
         // Try to ship the dataflow. We handle errors gracefully because dependencies might have
         // disappeared during sequencing.

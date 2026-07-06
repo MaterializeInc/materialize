@@ -995,7 +995,7 @@ class DifferentialJoinHydration(Dataflow):
     """Non-leaf parent for the linear-join hydration benchmark family.
 
     Holds the shared `init` / `benchmark` so Baseline and File variants only
-    need to override `shared()` with the dyncfgs they want set. Has
+    need to override `dyncfgs()` with the settings they want applied. Has
     subclasses, so the feature-benchmark runner treats it as non-leaf and
     never executes it directly — pick one of the leaf classes via
     `--root-scenario`.
@@ -1019,8 +1019,24 @@ class DifferentialJoinHydration(Dataflow):
         # why dev versions can't distinguish the dyncfg's presence.
         return version > MzVersion.create(26, 28, 0)
 
+    def dyncfgs(self) -> str:
+        """`ALTER SYSTEM SET` statements that distinguish the leaf variants.
+
+        Applied from `init()`, which runs against both the `this` and `other`
+        instances under measurement. These are per-replica settings, so they
+        must not go in `shared()`: that hook runs only against `this`, which
+        would leave the baseline instance on the defaults and turn every run
+        into a spurious spill-vs-no-spill comparison.
+        """
+        raise NotImplementedError
+
     def init(self) -> list[Action]:
         return [
+            TdAction(f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+{self.dyncfgs()}
+"""),
             self.view_ten(),
             TdAction(f"""
 > CREATE MATERIALIZED VIEW v1
@@ -1054,12 +1070,8 @@ class DifferentialJoinHydrationBaseline(DifferentialJoinHydration):
     the all-in-memory path.
     """
 
-    def shared(self) -> Action:
-        return TdAction("""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_column_paged_batcher = false;
-""")
+    def dyncfgs(self) -> str:
+        return "ALTER SYSTEM SET enable_column_paged_batcher = false;"
 
 
 class DifferentialJoinHydrationFile(DifferentialJoinHydration):
@@ -1074,14 +1086,10 @@ class DifferentialJoinHydrationFile(DifferentialJoinHydration):
     transient, so the bulk of the input spills.
     """
 
-    def shared(self) -> Action:
-        return TdAction("""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_column_paged_batcher = true;
+    def dyncfgs(self) -> str:
+        return """ALTER SYSTEM SET enable_column_paged_batcher = true;
 ALTER SYSTEM SET enable_column_paged_batcher_spill = true;
-ALTER SYSTEM SET column_paged_batcher_budget_fraction = 0.01;
-""")
+ALTER SYSTEM SET column_paged_batcher_budget_fraction = 0.01;"""
 
 
 class FullOuterJoin(Dataflow):

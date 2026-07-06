@@ -12,10 +12,11 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::GlobalId;
+use mz_repr::Timestamp;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
@@ -23,17 +24,18 @@ use mz_sql::session::metadata::SessionMetadata;
 use std::collections::BTreeSet;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::Span;
+use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
-use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
     Coordinator, ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
-    SubscribeExplain, SubscribeFinish, SubscribeOptimizeMir, SubscribeStage,
-    SubscribeTimestampOptimizeLir, TargetCluster,
+    SubscribeExplain, SubscribeFinish, SubscribeLinearizeTimestamp, SubscribeOptimizeMir,
+    SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -49,6 +51,7 @@ impl Staged for SubscribeStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             SubscribeStage::OptimizeMir(stage) => &mut stage.validity,
+            SubscribeStage::LinearizeTimestamp(stage) => &mut stage.validity,
             SubscribeStage::TimestampOptimizeLir(stage) => &mut stage.validity,
             SubscribeStage::Finish(stage) => &mut stage.validity,
             SubscribeStage::Explain(stage) => &mut stage.validity,
@@ -62,6 +65,11 @@ impl Staged for SubscribeStage {
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             SubscribeStage::OptimizeMir(stage) => coord.subscribe_optimize_mir(stage),
+            SubscribeStage::LinearizeTimestamp(stage) => {
+                coord
+                    .subscribe_linearize_timestamp(ctx.session(), stage)
+                    .await
+            }
             SubscribeStage::TimestampOptimizeLir(stage) => {
                 coord.subscribe_timestamp_optimize_lir(ctx, stage).await
             }
@@ -79,7 +87,10 @@ impl Staged for SubscribeStage {
     }
 
     fn cancel_enabled(&self) -> bool {
-        true
+        // `Finish` installs the sink before it waits for the builtin-table write
+        // off-loop. If cancellation won during that wait, the active sink would
+        // outlive the canceled execution.
+        !matches!(self, SubscribeStage::Finish(_))
     }
 }
 
@@ -303,21 +314,60 @@ impl Coordinator {
                             .map(|id| catalog.resolve_item_id(&id)),
                     );
 
-                    let stage =
-                        SubscribeStage::TimestampOptimizeLir(SubscribeTimestampOptimizeLir {
-                            validity,
-                            plan,
-                            timeline,
-                            optimizer,
-                            global_mir_plan,
-                            dependency_ids,
-                            replica_id,
-                            explain_ctx,
-                        });
+                    let stage = SubscribeStage::LinearizeTimestamp(SubscribeLinearizeTimestamp {
+                        validity,
+                        plan,
+                        timeline,
+                        optimizer,
+                        global_mir_plan,
+                        dependency_ids,
+                        replica_id,
+                        explain_ctx,
+                    });
                     Ok(Box::new(stage))
                 })
             },
         )))
+    }
+
+    /// Possibly linearize a timestamp from a `TimestampOracle`, off the
+    /// coordinator loop.
+    #[instrument]
+    async fn subscribe_linearize_timestamp(
+        &self,
+        session: &Session,
+        SubscribeLinearizeTimestamp {
+            validity,
+            plan,
+            timeline,
+            optimizer,
+            global_mir_plan,
+            dependency_ids,
+            replica_id,
+            explain_ctx,
+        }: SubscribeLinearizeTimestamp,
+    ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
+        let oracle = self.linearized_read_ts_oracle(session, &timeline, &plan.when);
+
+        let build_stage = move |oracle_read_ts: Option<Timestamp>| {
+            SubscribeStage::TimestampOptimizeLir(SubscribeTimestampOptimizeLir {
+                validity,
+                plan,
+                timeline,
+                optimizer,
+                global_mir_plan,
+                dependency_ids,
+                replica_id,
+                oracle_read_ts,
+                explain_ctx,
+            })
+        };
+
+        Ok(spawn_linearized_read_ts(
+            oracle,
+            "subscribe linearize timestamp",
+            build_stage,
+        ))
     }
 
     #[instrument]
@@ -332,13 +382,14 @@ impl Coordinator {
             global_mir_plan,
             dependency_ids,
             replica_id,
+            oracle_read_ts,
             explain_ctx,
         }: SubscribeTimestampOptimizeLir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan { when, .. } = &plan;
 
-        // Timestamp selection
-        let oracle_read_ts = self.oracle_read_ts(ctx.session(), &timeline, when).await;
+        // Timestamp selection. The linearized read timestamp was already
+        // obtained off the coordinator loop in the preceding stage.
         let bundle = &global_mir_plan.id_bundle(optimizer.cluster_id());
         let (determination, read_holds) = self.determine_timestamp(
             ctx.session(),
@@ -454,7 +505,7 @@ impl Coordinator {
             .txn_read_holds
             .remove(&conn_id)
             .expect("must have previously installed read holds");
-        let resp = self
+        let (resp, write_notify) = self
             .implement_subscribe(
                 ctx.extra_mut(),
                 df_desc,
@@ -467,14 +518,25 @@ impl Coordinator {
                 plan,
             )
             .await?;
-        Ok(StageResult::Response(resp))
+        // Wait for the `mz_subscriptions` bookkeeping write off the coordinator
+        // loop before returning the `SUBSCRIBE` response to the subscribing
+        // session.
+        let span = Span::current();
+        Ok(StageResult::HandleRetire(mz_ore::task::spawn(
+            || "subscribe_finish::await_bookkeeping",
+            async move {
+                write_notify.await;
+                Ok(resp)
+            }
+            .instrument(span),
+        )))
     }
 
     #[instrument]
     pub(crate) async fn implement_subscribe(
         &mut self,
         ctx_extra: &mut ExecuteContextGuard,
-        df_desc: DataflowDescription<Plan>,
+        df_desc: DataflowDescription<LirRelationExpr>,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,
@@ -482,7 +544,7 @@ impl Coordinator {
         session_uuid: Uuid,
         read_holds: ReadHolds,
         plan: plan::SubscribePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
         let sink_id = df_desc.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -511,16 +573,15 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        // Add metadata for the new SUBSCRIBE.
-        let write_notify_fut = self
-            .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
-            .await;
-        // Ship dataflow.
-        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id, replica_id);
-
-        // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
-        // requests to external services, which can take time, so we run them concurrently.
-        let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
+        // Register bookkeeping for the new SUBSCRIBE and ship its dataflow. The
+        // `mz_subscriptions` write is deferred to a group commit (see
+        // `add_active_compute_sink`) rather than committed inline, so it does not block
+        // the coordinator loop on a timestamp-oracle round trip. We hand the notify back
+        // so the caller can wait before returning the `SUBSCRIBE` response to the
+        // subscribing session.
+        let write_notify =
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
+        self.ship_dataflow(df_desc, cluster_id, replica_id).await;
 
         // Explicitly drop read holds, just to make it obvious what's happening.
         drop(read_holds);
@@ -537,7 +598,7 @@ impl Coordinator {
                 resp: Box::new(resp),
             },
         };
-        Ok(resp)
+        Ok((resp, write_notify))
     }
 
     #[instrument]

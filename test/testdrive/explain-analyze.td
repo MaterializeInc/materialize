@@ -72,19 +72,19 @@ operator                     total_elapsed
 "  Stream <XXX>" <null>
 "Returning Map/Filter/Project" <XXX>
 "  Union" <XXX>
-"    Read l4" <XXX>
+"    Read l5" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Consolidating Union" <XXX>
-"        Read l3" <XXX>
+"        Read l4" <XXX>
 "        Negate Diffs" <XXX>
-"          Read l4" <XXX>
-"With l4 = Differential Join %0 » %1" <XXX>
+"          Read l5" <XXX>
+"With l5 = Differential Join %0 » %1" <XXX>
 "  Arrange (#1, #0)" <XXX>
 "    Non-incremental GroupAggregate" <XXX>
 "      Arranged <XXX>" <XXX>
-"  Arrange (#0{replica_id}, #3{bucket_start})" <XXX>
-"    Stream l3" <null>
-"l3 = Differential Join %0 » %1" <XXX>
+"  Arrange (#1{replica_id}, #3{bucket_start})" <XXX>
+"    Stream l4" <null>
+"l4 = Differential Join %0 » %1" <XXX>
 "  Arrange (#0, #1)" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
@@ -92,44 +92,43 @@ operator                     total_elapsed
 "          Arranged <XXX>" <null>
 "          Arrange (#0{replica_id})" <XXX>
 "            Distinct GroupAggregate" <XXX>
-"              Read l2" <XXX>
-"  Arrange (#0, #3)" <XXX>
-"    Stream l2" <null>
-"l2 = Delta Join [%0 » %1 » %2 » %3 » %4 » %5] [%1 » %0 » %2 » %3 » %4 » %5] [%2 » %0 » %1 » %3 » %4 » %5] [%3 » %0 » %1 » %2 » %4 » %5] [%4 » %0 » %1 » %2 » %3 » %5] [%5 » %0 » %1 » %2 » %3 » %4]" <XXX>
+"              Read l3" <XXX>
+"  Arrange (#1, #3)" <XXX>
+"    Stream l3" <null>
+"l3 = Delta Join [%0 » %1 » %2 » %3 » %4 » %5] [%1 » %0 » %2 » %3 » %4 » %5] [%2 » %0 » %1 » %3 » %4 » %5] [%3 » %0 » %1 » %2 » %4 » %5] [%4 » %0 » %1 » %2 » %3 » %5] [%5 » %0 » %1 » %2 » %3 » %4]" <XXX>
 "  Arrange (#0{replica_id})" <XXX>
 "    Arranged l0" <null>
-"  Arrange (#0{replica_id}, #3{bucket_start})" <XXX>
+"  Arrange (#1{replica_id}, #3{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"  Arrange (#0{replica_id}, #4{bucket_start})" <XXX>
+"        Read l2" <XXX>
+"  Arrange (#1{replica_id}, #4{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"  Arrange (#0{replica_id}, #3{bucket_start})" <XXX>
+"        Read l2" <XXX>
+"  Arrange (#1{replica_id}, #3{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"  Arrange (#0{replica_id}, #3{bucket_start})" <XXX>
+"        Read l2" <XXX>
+"  Arrange (#1{replica_id}, #3{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"  Arrange (#0{replica_id}) (#0{replica_id}, #3{bucket_start})" <XXX>
+"        Read l2" <XXX>
+"  Arrange (#1{replica_id}) (#1{replica_id}, #3{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"l1 = Differential Join %0 » %1" <XXX>
-"  Arrange (#1{replica_id})" <XXX>
-"    Map/Filter/Project" <XXX>
-"      Accumulable GroupAggregate" <XXX>
-"        Map/Filter/Project" <XXX>
-"          Delta Join [%0 » %2 » %1] [%1 » %0 » %2] [%2 » %0 » %1]" <XXX>
-"            Arranged <XXX>" <null>
-"            Arranged <XXX>" <null>
-"            Arrange (#0{replica_id}) (#1{size})" <XXX>
-"              Arranged l0" <XXX>
-"  Arrange (#0{replica_id})" <XXX>
-"    Arranged l0" <XXX>
+"        Read l2" <XXX>
+"l2 = Differential Join %0 » %1" <XXX>
+"  Accumulable GroupAggregate" <XXX>
+"    Read l1" <XXX>
+"  Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)" <XXX>
+"    Read l1" <XXX>
+"l1 = Map/Filter/Project" <XXX>
+"  Delta Join [%0 » %2 » %1] [%1 » %0 » %2] [%2 » %0 » %1]" <XXX>
+"    Arranged <XXX>" <null>
+"    Arranged <XXX>" <null>
+"    Arrange (#0{replica_id}) (#1{size})" <XXX>
+"      Arranged l0" <XXX>
 "l0 = Distinct GroupAggregate" <XXX>
 "  Union" <XXX>
 "    Arranged <XXX>" <XXX>

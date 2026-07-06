@@ -23,7 +23,10 @@ from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
 from materialize.docker import image_registry
-from materialize.mz_env_util import get_cloud_hostname
+from materialize.mz_env_util import (
+    connect_and_print_environment_id,
+    get_cloud_hostname,
+)
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -408,6 +411,7 @@ def run_once(
             port=6875,
             ssl=True,
         )
+        connect_and_print_environment_id(target.host, target.user, target.password)
     elif args.canary_env:
         assert not args.mz_url
         assert not args.benchmarking_env
@@ -427,6 +431,7 @@ def run_once(
             port=6875,
             ssl=True,
         )
+        connect_and_print_environment_id(target.host, target.user, target.password)
     elif args.mz_url:
         overrides = [
             Testdrive(

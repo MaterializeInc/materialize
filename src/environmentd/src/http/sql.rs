@@ -180,12 +180,17 @@ async fn execute_promsql_query(
         });
 
     for row in rows {
+        // Non-value columns become Prometheus label values. A SQL `NULL`
+        // arrives as JSON `null` and yields `None` from `as_str()`; fall back
+        // to an empty label rather than panicking. The query author is
+        // responsible for `COALESCE`ing nullable columns to a meaningful
+        // value; this is a defensive backstop.
         let mut label_values = desc
             .columns
             .iter()
             .zip_eq(row)
             .filter(|(col, _)| col.name != query.value_column_name)
-            .map(|(_, val)| val.as_str().expect("must be string"))
+            .map(|(_, val)| val.as_str().unwrap_or(""))
             .collect::<Vec<_>>();
 
         let value = desc

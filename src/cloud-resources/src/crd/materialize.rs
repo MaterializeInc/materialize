@@ -45,7 +45,9 @@ pub enum MaterializeRolloutStrategy {
     ///
     /// When using `ManuallyPromote`, the new generation can be promoted at any
     /// time, even if it has dataflows that are not fully caught up, by setting
-    /// `forcePromote` to the same value as `requestRollout` in the Materialize spec.
+    /// `forcePromote` to the current rollout identifier: in `v1`, the value of
+    /// `status.requestedRolloutHash`; in `v1alpha1`, the `requestRollout` value
+    /// in the spec.
     ///
     /// To minimize downtime, promotion should occur when the new generation
     /// has caught up to the prior generation. To determine if the new
@@ -974,7 +976,7 @@ pub mod v1 {
         /// operator cancels the rollout once this timeout is exceeded: the new
         /// generation is torn down and the previously-active generation
         /// continues serving. A new rollout can then be triggered by setting
-        /// `requestRollout` to a new value.
+        /// `forceRollout` to a new value.
         ///
         /// This does not apply to the `ImmediatelyPromoteCausingDowntime`
         /// rollout strategy or to force-promoted rollouts, since by the time

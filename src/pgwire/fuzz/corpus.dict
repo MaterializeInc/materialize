@@ -1,0 +1,34 @@
+# libFuzzer dictionary for the pgwire codec_decode target.
+#
+# Frontend messages are a 1-byte type tag + 4-byte big-endian length + payload
+# (startup/SSL/cancel messages omit the tag). Seeding the type tags and the
+# special startup/SSL/cancel magic version codes lets the mutator reach the
+# per-message decoders instead of being rejected as an unknown tag.
+
+# Frontend message type tags.
+"Q"
+"P"
+"B"
+"E"
+"D"
+"C"
+"H"
+"S"
+"X"
+"d"
+"c"
+"f"
+"p"
+"F"
+# Untagged startup-phase length+version prefixes.
+"\x00\x00\x00\x08\x04\xd2\x16\x2f"
+"\x00\x00\x00\x10\x04\xd2\x16\x2e"
+"\x00\x03\x00\x00"
+# Common startup parameter keys.
+"user\x00"
+"database\x00"
+"application_name\x00"
+"client_encoding\x00"
+# SASL mechanism names.
+"SCRAM-SHA-256"
+"SCRAM-SHA-256-PLUS"

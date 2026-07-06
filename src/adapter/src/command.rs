@@ -291,7 +291,7 @@ pub enum Command {
     },
 
     ExecuteSubscribe {
-        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,
@@ -316,7 +316,7 @@ pub enum Command {
     },
 
     ExecuteCopyTo {
-        df_desc: Box<DataflowDescription<mz_compute_types::plan::Plan>>,
+        df_desc: Box<DataflowDescription<mz_compute_types::plan::LirRelationExpr>>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,

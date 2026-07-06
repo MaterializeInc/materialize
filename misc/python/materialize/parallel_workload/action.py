@@ -941,8 +941,7 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
-        temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
+        temp = self.rng.choice([True, False])
         if (
             not temp
             and len([table for table in exe.db.tables if not table.temp]) >= MAX_TABLES
@@ -1003,6 +1002,12 @@ class DropTableAction(Action):
 
 
 class RenameTableAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        # Renaming a temporary item referenced by another temporary object is
+        # refused as ambiguous: temp references are only 2-part (mz_temp.item),
+        # and the item-rename check treats a non-3-part reference as ambiguous.
+        return ["potentially used ambiguously"] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
@@ -1056,6 +1061,12 @@ class AlterTableAddColumnAction(Action):
 
 
 class RenameViewAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        # Renaming a temporary item referenced by another temporary object is
+        # refused as ambiguous: temp references are only 2-part (mz_temp.item),
+        # and the item-rename check treats a non-3-part reference as ambiguous.
+        return ["potentially used ambiguously"] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
@@ -1532,6 +1543,12 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_source_fetch_concurrency"] = [
+            "1",
+            "2",
+            "8",
+            "16",
+        ]
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -1558,6 +1575,14 @@ class FlipFlagsAction(Action):
             "134217728",
             "536870912",
             "1073741824",
+        ]
+        self.flags_with_values["persist_source_hydration_frontier_coalesce_bytes"] = [
+            # 0 disables; otherwise coalesce frontier downgrades until this
+            # many encoded bytes have been emitted (1 MiB, 16 MiB, 128 MiB).
+            "0",
+            "1048576",
+            "16777216",
+            "134217728",
         ]
         self.flags_with_values["persist_part_decode_format"] = [
             "row_with_validate",
@@ -1868,6 +1893,7 @@ class FlipFlagsAction(Action):
             "persist_fast_path_order",
             "enable_mcp_agent",
             "enable_mcp_agent_query_tool",
+            "enable_mcp_agent_read_data_product_tool",
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
             "mcp_max_response_size",
@@ -1899,6 +1925,8 @@ class FlipFlagsAction(Action):
             "oidc_group_role_sync_strict",
             "console_oidc_client_id",
             "console_oidc_scopes",
+            "enable_cluster_controller",
+            "cluster_controller_tick_interval",
         ]
 
     def run(self, exe: Executor) -> bool:
@@ -1949,8 +1977,7 @@ class CreateViewAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Also in rename when https://linear.app/materializeinc/issue/SQL-401 and https://linear.app/materializeinc/issue/SQL-400 are fixed
-        temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
+        temp = self.rng.choice([True, False])
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
                 return False

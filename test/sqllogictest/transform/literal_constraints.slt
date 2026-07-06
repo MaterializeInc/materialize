@@ -1464,3 +1464,29 @@ query T rowsort
 SELECT b FROM t_bytea_cast WHERE b::text = '\x41'
 ----
 A
+
+# Regression test: `uint4_to_uint2`, `uint4_to_smallint`, and `uint4_to_integer`
+# are injective but partial (they error for `u32` values above the target range).
+# Cast inversion in `invert_casts_on_expr_eq_literal_inner` must NOT rewrite
+# `cast(col) = lit` into an `IndexedFilter` lookup on `col`, because the lookup
+# skips the cast and silently drops the out-of-range error. Each query below must
+# error on the row 3000000000, not complete with it filtered out. The literals
+# are typed to the target so the cast stays single-layered and the rewrite fires.
+
+statement ok
+CREATE TABLE t_uint_cast (u uint4)
+
+statement ok
+INSERT INTO t_uint_cast VALUES (3000000000)
+
+statement ok
+CREATE DEFAULT INDEX ON t_uint_cast
+
+query error "3000000000" integer out of range
+SELECT u FROM t_uint_cast WHERE u::int4 = 5
+
+query error "3000000000" smallint out of range
+SELECT u FROM t_uint_cast WHERE u::int2 = 5::int2
+
+query error "3000000000" uint2 out of range
+SELECT u FROM t_uint_cast WHERE u::uint2 = 5::uint2

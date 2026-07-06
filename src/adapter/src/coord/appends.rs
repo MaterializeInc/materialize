@@ -727,10 +727,30 @@ pub struct BuiltinTableAppend<'a> {
 
 /// `Future` that notifies when a builtin table write has completed.
 ///
+/// Callers that expose completion of an operation whose builtin-table write is
+/// user-observable should await this future before sending that completion. It
+/// is safe to drop the future only when the caller does not provide such an
+/// ordering guarantee, or when the future is known to resolve immediately.
+///
 /// Note: builtin table writes need to talk to persist, which can take 100s of milliseconds. This
 /// type allows you to execute a builtin table write, e.g. via [`BuiltinTableAppend::execute`], and
 /// wait for it to complete, while other long running tasks are concurrently executing.
 pub type BuiltinTableAppendNotify = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
+
+/// Completion handle for a builtin-table append response barrier.
+pub struct BuiltinTableAppendCompletion {
+    notify: BuiltinTableAppendNotify,
+}
+
+impl BuiltinTableAppendCompletion {
+    pub fn new(notify: BuiltinTableAppendNotify) -> Self {
+        Self { notify }
+    }
+
+    pub fn into_notify(self) -> BuiltinTableAppendNotify {
+        self.notify
+    }
+}
 
 impl<'a> BuiltinTableAppend<'a> {
     /// Submit a write to a system table to be executed during the next group commit. This method
@@ -834,19 +854,6 @@ impl<'a> BuiltinTableAppend<'a> {
         self.coord.advance_timelines_interval.reset();
 
         (Box::pin(rx.map(|_| ())), Some(write_ts))
-    }
-
-    /// Submit a write to a system table, blocking until complete.
-    ///
-    /// Note: if possible you should use the `execute(...)` method, which returns a `Future` that
-    /// can be `await`-ed concurrently with other tasks.
-    ///
-    /// Note: When in read-only mode, this will buffer the update and the
-    /// returned future will resolve immediately, without the update actually
-    /// having been written.
-    pub async fn blocking(self, updates: Vec<BuiltinTableUpdate>) {
-        let (notify, _) = self.execute(updates).await;
-        notify.await;
     }
 }
 

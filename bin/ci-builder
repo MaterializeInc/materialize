@@ -342,6 +342,9 @@ case "$cmd" in
             for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE|CI)' | sed 's/=.*//'); do
                 args+=(--env "$env")
             done
+            for env in $(printenv | grep -E '^E2E_STAGING_TEST_FRONTEGG_DATABASE_' | sed 's/=.*//'); do
+                args+=(--env "$env")
+            done
             # Forward the host's SSH agent, if available.
             if [[ "${SSH_AUTH_SOCK:-}" ]]; then
                 args+=(

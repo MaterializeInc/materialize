@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::VecCollection;
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
 use mz_ore::soft_assert_or_log;
@@ -76,10 +77,11 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
                 .expect("Invariant violated: at least one collection must be present.");
             let unthinned_arity = sink.from_desc.arity();
             let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
-            let mut mfp = MapFilterProject::new(unthinned_arity);
+            let mut mfp = MapFilterProject::<LirScalarExpr>::new(unthinned_arity);
             mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
+            let mfp_plan = mfp.into_plan().expect("MFP planning failed");
             bundle.as_collection_core(
-                mfp,
+                mfp_plan,
                 Some((key.clone(), None)),
                 self.until.clone(),
                 &self.config_set,
