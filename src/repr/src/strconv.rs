@@ -236,13 +236,19 @@ where
 
 /// Parses an OID from `s`.
 pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
-    // For historical reasons in PostgreSQL, OIDs are parsed as `i32`s and then
-    // reinterpreted as `u32`s.
+    // For historical reasons, PostgreSQL accepts OID inputs whose value fits in
+    // the range of either `u32` or `i32`. The full `u32` range is accepted
+    // directly, while values given with a minus sign are parsed as `i32` and
+    // reinterpreted as `u32` (e.g. `-1` becomes `4294967295`). Anything outside
+    // both ranges is rejected.
     //
     // Do not use this as a model for behavior in other contexts. OIDs should
     // not in general be thought of as freely convertible from `i32`s.
-    let oid: i32 = s
-        .trim()
+    let trimmed = s.trim();
+    if let Ok(oid) = trimmed.parse::<u32>() {
+        return Ok(oid);
+    }
+    let oid: i32 = trimmed
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("oid", s).with_details(e))?;
     Ok(u32::reinterpret_cast(oid))
@@ -2197,5 +2203,26 @@ mod tests {
 
         let s = format!("{}{}", "x".repeat(62), "א");
         assert_eq!("x".repeat(62), parse_pg_legacy_name(&s));
+    }
+
+    #[mz_ore::test]
+    fn test_parse_oid() {
+        // The full u32 range is accepted, matching PostgreSQL.
+        assert_eq!(parse_oid("0").unwrap(), 0);
+        assert_eq!(parse_oid("2147483647").unwrap(), 2147483647);
+        assert_eq!(parse_oid("2147483648").unwrap(), 2147483648);
+        assert_eq!(parse_oid("4294967295").unwrap(), 4294967295);
+
+        // Negative values in the i32 range are reinterpreted as u32.
+        assert_eq!(parse_oid("-1").unwrap(), 4294967295);
+        assert_eq!(parse_oid("-2147483648").unwrap(), 2147483648);
+
+        // Surrounding whitespace is ignored.
+        assert_eq!(parse_oid("  42 ").unwrap(), 42);
+
+        // Values outside both the u32 and i32 ranges are rejected.
+        assert!(parse_oid("4294967296").is_err());
+        assert!(parse_oid("-2147483649").is_err());
+        assert!(parse_oid("nope").is_err());
     }
 }
