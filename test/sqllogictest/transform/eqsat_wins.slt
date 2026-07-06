@@ -7,13 +7,50 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Query shapes where the equality-saturation optimizer finds a better plan than
-# the legacy pipeline. Each shape is explained twice: once with the eqsat passes
-# disabled (the legacy plan) and once with them enabled (the default), so the
-# improvement is visible in one file. Small fully-indexed joins do not
-# differentiate the two optimizers, so these are subquery-derived plans where
-# saturation shares a duplicated read or cancels a cross join that the legacy
-# pipeline leaves in place.
+# SINGLE SOURCE OF TRUTH for eqsat-over-directional wins.
+#
+# Every plan-quality win claimed for the equality-saturation optimizer must be
+# recorded here. A win is either a self-contained reproducing exhibit in this
+# file (explained twice, eqsat disabled then enabled, so the improvement is
+# visible in one place) or, for a corpus-aggregate win that does not reduce to
+# one compact plan, a verified pointer below to where it reproduces. If a win's
+# mechanism is later deleted, strike it here too. Do not leave a dead win
+# advertised in a scattered test, and do not make the next reader re-derive a
+# win from git archaeology.
+#
+# Reproducing exhibits in this file:
+#   Shape A: EXCEPT over two reads of one table. Eqsat binds the shared read as a
+#            single CTE, so the source is scanned once, not twice.
+#   Shape B: doubly-nested EXISTS. Eqsat shares the base read and cancels a
+#            CrossJoin, replacing it with a Union, losing both the duplicated
+#            read and the join.
+# (Small fully-indexed joins do not differentiate the two optimizers, so these
+# are subquery-derived shapes.)
+#
+# Gated sharing wins, each with its own acceptance file (flag on versus off):
+#   test/sqllogictest/eqsat_filter_sharing.slt  (WS1): shares Filter[a>0](r) via
+#     a Let across two consumers under enable_eqsat_filter_sharing.
+#   test/sqllogictest/eqsat_scalar_sharing.slt  (WS2): computes a jsonb Map
+#     prefix once in a shared Let under enable_eqsat_scalar_sharing, declining a
+#     diverging-consumer share.
+#
+# Corpus-aggregate width wins (verified eqsat-on versus directional-off, both
+# enable_eqsat_optimizer and enable_eqsat_physical_optimizer off for the
+# baseline). These are distributed across many plans and do not reduce to one
+# compact exhibit, so they are recorded as verified pointers, not query blocks:
+#   test/sqllogictest/transform/relation_cse.slt: 65 versus 70 ArrangeBy nodes,
+#     a net -5 maintained arrangements corpus-wide.
+#   chbench: arity sum 3094 versus 3135, a net -41 arranged-row columns, with
+#     arrangement count and join types held at parity.
+#
+# Retired wins, do NOT re-add (their mechanism was deleted by the
+# delta-availability fix, commit 5fe2a40666, which removed eqsat's native join
+# orderer and delegates commit_join to directional's plan_join_min_arrangements):
+#   VOJ delta cross-avoidance: at HEAD eqsat and directional produce the same
+#     delta plan with the cross kept. eqsat_delta_join_cost.slt is now a
+#     delegation-parity check, not a win.
+#   E4 join_fusion superiority: at HEAD eqsat delegates to and matches
+#     directional, so there is no beats-directional case to reproduce.
 
 mode cockroach
 

@@ -1,27 +1,31 @@
 mode cockroach
 
 # ============================================================================
-# eqsat_native_join_commit: cost-model-native join commit (SP-B1)
+# eqsat physical join commit on the variable-outer-join (VOJ) case.
 #
-# This is the flagship variable-outer-join (VOJ) case: a chain of LEFT JOINs
-# whose second join key is a null-pad CASE expression. Under the legacy delta
-# planner it cross-products t1 on the t3-driven delta path.
+# The query is a chain of LEFT JOINs whose second join key is a null-pad CASE
+# expression (`case when (#4) IS NULL then null else #0 end`). This is the case
+# that once motivated a cost-model-native join commit path in eqsat.
 #
-# flag-ON  (enable_eqsat_physical_optimizer + enable_eqsat_delta_join_cost +
-#           enable_eqsat_native_join_commit, all on):
-#   The eqsat physical pass commits the join as a cost-model-chosen DIFFERENTIAL
-#   plan at raise time (keyed-ness-primary order), so JoinImplementation no-ops
-#   on it. The equivalences are run through the production canonicalizer first
-#   (so the committed spelling, `else #0 end`, and the chosen order are stable
-#   across build profiles). The resulting differential order is fully keyed:
-#   NO cross (`[×]`) on any path.
+# CURRENT BEHAVIOR: flag-on and flag-off produce the SAME plan. Both commit
+# type=delta with t1 crossed on the t3-driven delta path
+# (`%2 » %0:t1[×] » %1[#0]K`). The `enable_eqsat_native_join_commit` toggle no
+# longer changes the plan. So this file is a DELEGATION-PARITY check: it pins
+# that the eqsat physical pass matches the directional planner on the VOJ.
 #
-# flag-OFF (enable_eqsat_native_join_commit=false):
-#   Prior behavior, byte-identical: JoinImplementation delta-plans it as
-#   type=delta with the t3 path crossing t1 (`%2 » %0:t1[×] » %1[#0]K`).
+# WHERE THE ADVERTISED WIN WENT: an earlier native commit path chose a fully
+# keyed DIFFERENTIAL order at raise time and avoided the cross. The
+# delta-availability fix (commit 5fe2a40666) deleted eqsat's parallel join
+# planner (best_left_deep_sequence, delta_join_order, frontier_key_cols, the
+# whole join_commit.rs module) and routed commit_join through directional's
+# plan_join_min_arrangements. So the physical plan is now whatever directional
+# picks, which for this VOJ keeps the cross. The cross-avoidance was a property
+# of the deleted native path, not of directional, and is not reachable at either
+# flag setting today. `enable_eqsat_native_join_commit` is retained but inert on
+# this shape.
 #
-# So flag-on (differential, no cross) now DIFFERS from flag-off (delta cross) —
-# the fix is live, not inert.
+# This is NOT a cross-avoidance win. Do not re-advertise it as one. The genuine
+# eqsat wins live in test/sqllogictest/transform/eqsat_wins.slt.
 # ============================================================================
 
 simple conn=mz_system,user=mz_system
