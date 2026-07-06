@@ -1570,6 +1570,14 @@ class FlipFlagsAction(Action):
             "536870912",
             "1073741824",
         ]
+        self.flags_with_values["persist_source_hydration_frontier_coalesce_bytes"] = [
+            # 0 disables; otherwise coalesce frontier downgrades until this
+            # many encoded bytes have been emitted (1 MiB, 16 MiB, 128 MiB).
+            "0",
+            "1048576",
+            "16777216",
+            "134217728",
+        ]
         self.flags_with_values["persist_part_decode_format"] = [
             "row_with_validate",
             "arrow",
