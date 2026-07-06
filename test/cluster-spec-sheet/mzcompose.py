@@ -2827,12 +2827,12 @@ class ClusterObjectLimitsScenario(Scenario):
         for replica_scale in REPLICA_SCALES:
             if replica_scale > max_scale:
                 break
-            size = target.replica_size_for_scale(replica_scale)
-            yield ScalePoint(
-                label=f"replica_size={size}",
-                cluster_size=size,
-                replica_scale=replica_scale,
-            )
+            for size in target.replica_sizes_for_scale(replica_scale):
+                yield ScalePoint(
+                    label=f"replica_size={size}",
+                    cluster_size=size,
+                    replica_scale=replica_scale,
+                )
 
     def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
         assert point.cluster_size is not None
@@ -3145,12 +3145,12 @@ class _ClusterSizeSweepBase(Scenario):
         for replica_scale in REPLICA_SCALES:
             if replica_scale > max_scale:
                 break
-            size = target.replica_size_for_scale(replica_scale)
-            yield ScalePoint(
-                label=f"replica_size={size}",
-                cluster_size=size,
-                replica_scale=replica_scale,
-            )
+            for size in target.replica_sizes_for_scale(replica_scale):
+                yield ScalePoint(
+                    label=f"replica_size={size}",
+                    cluster_size=size,
+                    replica_scale=replica_scale,
+                )
 
 
 class StrongScalingSweep(_ClusterSizeSweepBase):
@@ -3812,11 +3812,20 @@ class BenchTarget:
     @abstractmethod
     def cleanup(self) -> None: ...
     @abstractmethod
-    def replica_size_for_scale(self, scale: int) -> str:
+    def replica_sizes_for_scale(self, scale: int) -> list[str]:
         """
-        Returns the replica size for a given scale.
+        Returns all replica sizes to test at a given scale. Sweeps over
+        ``REPLICA_SCALES`` emit one ``ScalePoint`` per returned size so that
+        equivalent cc and M.1 cluster sizes can be compared side by side.
         """
         ...
+
+    def replica_size_for_scale(self, scale: int) -> str:
+        """
+        Returns the default (first) replica size for a given scale. Used for
+        setup-only clusters where a single size is sufficient.
+        """
+        return self.replica_sizes_for_scale(scale)[0]
 
     def max_scale(self) -> int | None:
         """
@@ -3908,11 +3917,21 @@ class CloudTarget(BenchTarget):
     def cleanup(self) -> None:
         disable_region(self.composition, hard=True)
 
-    def replica_size_for_scale(self, scale: int) -> str:
-        """
-        Returns the replica size for a given scale.
-        """
-        return f"{scale}00cc"
+    # M.1 size with the same worker count as the {scale}00cc size. Scales
+    # above 8 have no available M.1 equivalent.
+    M1_REPLICA_SIZES: dict[int, str] = {
+        1: "M.1-xsmall",
+        2: "M.1-small",
+        4: "M.1-large",
+        8: "M.1-2xlarge",
+    }
+
+    def replica_sizes_for_scale(self, scale: int) -> list[str]:
+        sizes = [f"{scale}00cc"]
+        m1_size = self.M1_REPLICA_SIZES.get(scale)
+        if m1_size is not None:
+            sizes.append(m1_size)
+        return sizes
 
 
 class DockerTarget(BenchTarget):
@@ -3946,9 +3965,9 @@ class DockerTarget(BenchTarget):
         print("Stopping local Materialize instance ...")
         self.composition.stop("materialized")
 
-    def replica_size_for_scale(self, scale: int) -> str:
+    def replica_sizes_for_scale(self, scale: int) -> list[str]:
         # 100cc == 2 workers
-        return f"scale=1,workers={2*scale}"
+        return [f"scale=1,workers={2*scale}"]
 
     def max_scale(self) -> int | None:
         return 16
@@ -4190,11 +4209,33 @@ def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> N
             )
 
 
+# M.1 sizes are named tiers, so map each one to (credits/hour, workers).
+M1_SIZES: dict[str, tuple[float, int]] = {
+    "M.1-nano": (0.75, 1),
+    "M.1-micro": (1.5, 1),
+    "M.1-xsmall": (3, 2),
+    "M.1-small": (6, 4),
+    "M.1-medium": (9, 6),
+    "M.1-large": (12, 8),
+    "M.1-1.5xlarge": (18, 12),
+    "M.1-2xlarge": (24, 16),
+    "M.1-3xlarge": (36, 24),
+    "M.1-4xlarge": (48, 31),
+    "M.1-8xlarge": (96, 62),
+    "M.1-16xlarge": (192, 62),
+    "M.1-32xlarge": (384, 62),
+    "M.1-64xlarge": (768, 62),
+    "M.1-128xlarge": (1536, 62),
+}
+
+
 def extract_cluster_size(s: str) -> float:
     """Parse a `cluster_size` label (e.g. ``"100cc"``, ``"1600cc"``,
-    ``"1C"``, ``"scale=1,workers=2"``) into a numeric credits/hour value
-    suitable for ordering and as a continuous x-axis.
+    ``"1C"``, ``"M.1-large"``, ``"scale=1,workers=2"``) into a numeric
+    credits/hour value suitable for ordering and as a continuous x-axis.
     """
+    if s in M1_SIZES:
+        return M1_SIZES[s][0]
     match = re.search(r"(\d+)(?:(cc)|(C))", s)
     if match:
         if match.group(2):  # 'cc' match
@@ -4208,6 +4249,12 @@ def extract_cluster_size(s: str) -> float:
         if match.group(1) and match.group(2):
             return float(match.group(1)) * float(match.group(2)) / 2
     raise ValueError(f"Invalid cluster size format: {s}")
+
+
+def extract_workers(s: str, credits_per_h: float) -> float:
+    if s in M1_SIZES:
+        return float(M1_SIZES[s][1])
+    return round(credits_per_h * 1.9375)
 
 
 def _open_results_for_plotting(
@@ -4240,7 +4287,9 @@ def analyze_cluster_results_file(file: str) -> None:
     # Cluster replica size as centi-credits/s
     df["ccredit_per_s"] = df["credits_per_h"] / 3600 * 100
     # Number of timely workers
-    df["workers"] = round(df["credits_per_h"] * 1.9375)
+    df["workers"] = df.apply(
+        lambda r: extract_workers(r["cluster_size"], r["credits_per_h"]), axis=1
+    )
     # Throughput in MiB/s
     df["throughput_mb_per_s"] = df["size_bytes"] / df["time_ms"] * 1000 / 1024 / 1024
     # Throughput in MiB/s/worker
