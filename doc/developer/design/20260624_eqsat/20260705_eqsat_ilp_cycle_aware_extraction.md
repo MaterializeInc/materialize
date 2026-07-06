@@ -237,7 +237,11 @@ design permanently.
   Result (corrected E0, HiGHS backend, 2026-07-06). Paired wall-clock on the
   worst optimize-dominated file, chbench (the 7-way join with the 5.73s ILP
   solve): `enable_eqsat_physical_optimizer` on 29.18s versus the directional
-  baseline (flag off) 16.40s, a 1.78x ratio for the whole file. The full corpus
+  baseline (flag off) 16.40s, a 1.78x ratio for the whole file. This is a
+  single-file paired number on the heaviest optimize-dominated case, not a
+  corpus aggregate. A corpus median and p95 comparable to the original E0
+  gate's 1.28x median is one measurement run away if a distribution is wanted
+  later. It is not owed for this pass. The full corpus
   golden regeneration completed with zero statement-timeout stalls, which the
   microlp+ungated configuration could not do (chbench did not finish in 10
   minutes). So the corrected E0 passes: the join ILP that now actually runs is
