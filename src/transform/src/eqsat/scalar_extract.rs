@@ -27,7 +27,7 @@ fn scalar_nodes(eg: &EGraph, id: Id) -> Vec<SNode> {
         .into_iter()
         .filter_map(|n| match n {
             CNode::Scalar(s) => Some(s),
-            _ => None,
+            CNode::Rel(_) => None,
         })
         .collect()
 }

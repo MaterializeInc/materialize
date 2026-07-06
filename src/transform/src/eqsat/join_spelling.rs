@@ -100,11 +100,11 @@ pub(crate) fn select_join_spelling(
                 if c != target {
                     // Real Equivalences classes are column-disjoint: a column
                     // never appears in two distinct choice classes, so this
-                    // insert always replaces a missing entry.
-                    debug_assert!(
-                        colmap.insert(c, target).is_none(),
-                        "analysis classes must be column-disjoint"
-                    );
+                    // insert always replaces a missing entry. Bind the insert
+                    // outside the debug_assert so the mutation runs in release
+                    // too (the assert is compiled out there).
+                    let prev = colmap.insert(c, target);
+                    debug_assert!(prev.is_none(), "analysis classes must be column-disjoint");
                 }
             }
         }

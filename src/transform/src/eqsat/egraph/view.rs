@@ -136,7 +136,7 @@ impl<'a> MatchGraph for BaseView<'a> {
             .into_iter()
             .filter_map(|n| match n {
                 crate::eqsat::egraph::combined::CNode::Scalar(s) => Some(s),
-                _ => None,
+                crate::eqsat::egraph::combined::CNode::Rel(_) => None,
             })
             .collect()
     }
