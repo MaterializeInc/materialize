@@ -204,6 +204,15 @@ pub const ENABLE_MCP_AGENT_QUERY_TOOL: Config<bool> = Config::new(
     "Whether the MCP agent query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Agents can still discover and inspect data products.",
 );
 
+/// Whether the MCP agent read_data_product tool is enabled.
+/// When false, the `read_data_product` tool is hidden from tools/list and calls to it return an error.
+/// The `query` tool is the general-purpose alternative for reading data products.
+pub const ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL: Config<bool> = Config::new(
+    "enable_mcp_agent_read_data_product_tool",
+    true,
+    "Whether the MCP agent read_data_product tool is enabled. When false, the read_data_product tool is not advertised and calls to it are rejected. Agents can use the query tool to read data products.",
+);
+
 /// Whether the MCP developer endpoint is enabled.
 pub const ENABLE_MCP_DEVELOPER: Config<bool> = Config::new(
     "enable_mcp_developer",
@@ -365,6 +374,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
         .add(&ENABLE_MCP_AGENT)
         .add(&ENABLE_MCP_AGENT_QUERY_TOOL)
+        .add(&ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
         .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)

@@ -32,8 +32,8 @@ use axum::Json;
 use axum::response::IntoResponse;
 use http::{HeaderMap, HeaderValue, StatusCode};
 use mz_adapter_types::dyncfgs::{
-    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_DEVELOPER,
-    ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
+    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
+    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
 };
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
@@ -479,6 +479,10 @@ async fn handle_mcp_request(
         McpEndpointType::Agent => ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs),
         McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
     };
+    // Only meaningful on the agent endpoint; the developer endpoint doesn't
+    // expose `read_data_product`. Read it unconditionally so the plumbing
+    // matches `query_tool_enabled` above.
+    let read_data_product_tool_enabled = ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
 
     // Tag MCP-originated sessions so they're distinguishable in
@@ -528,6 +532,7 @@ async fn handle_mcp_request(
                 request,
                 endpoint_type,
                 query_tool_enabled,
+                read_data_product_tool_enabled,
                 max_response_size,
                 metrics_inner,
             )
@@ -570,6 +575,7 @@ async fn handle_mcp_request_inner(
     request: McpRequest,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
     max_response_size: usize,
     metrics: McpMetrics,
 ) -> (McpResponse, &'static str) {
@@ -581,6 +587,7 @@ async fn handle_mcp_request_inner(
         &request,
         endpoint_type,
         query_tool_enabled,
+        read_data_product_tool_enabled,
         max_response_size,
         &metrics,
     )
@@ -623,6 +630,7 @@ async fn handle_mcp_method(
     request: &McpRequest,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
     max_response_size: usize,
     metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
@@ -635,11 +643,22 @@ async fn handle_mcp_method(
     match &request.method {
         McpMethod::Initialize(_) => {
             debug!(endpoint = %endpoint_type, "Processing initialize");
-            handle_initialize(endpoint_type, query_tool_enabled).await
+            handle_initialize(
+                endpoint_type,
+                query_tool_enabled,
+                read_data_product_tool_enabled,
+            )
+            .await
         }
         McpMethod::ToolsList => {
             debug!(endpoint = %endpoint_type, "Processing tools/list");
-            handle_tools_list(endpoint_type, query_tool_enabled, max_response_size).await
+            handle_tools_list(
+                endpoint_type,
+                query_tool_enabled,
+                read_data_product_tool_enabled,
+                max_response_size,
+            )
+            .await
         }
         McpMethod::ToolsCall(params) => {
             debug!(tool = %params, endpoint = %endpoint_type, "Processing tools/call");
@@ -648,6 +667,7 @@ async fn handle_mcp_method(
                 params,
                 endpoint_type,
                 query_tool_enabled,
+                read_data_product_tool_enabled,
                 max_response_size,
                 metrics,
             )
@@ -664,26 +684,44 @@ async fn handle_mcp_method(
 fn endpoint_instructions(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
 ) -> Option<String> {
     match endpoint_type {
-        McpEndpointType::Agent => Some(
-            concat!(
-                "You have access to Materialize data products via MCP. ",
-                "Prefer indexed objects (served from memory) over unindexed materialized views ",
-                "(read from persistent storage). `read_data_product` automatically routes the ",
-                "read to the cluster recorded in the data product catalog so indexes are used; ",
-                "you only need to set the `cluster` parameter if you intentionally want the ",
-                "read to run on a different cluster (e.g. one with larger or more replicas). ",
-                "`get_data_product_details` returns a `hydration` object with `hydrated`, ",
-                "`replica_count`, and `hydrated_replica_count` fields. Reads never return ",
-                "partial data: a read against a not-yet-hydrated product blocks until the ",
-                "dataflow catches up, and may hit the request timeout. Check `hydrated` ",
-                "before reading: if it is false and `replica_count` is greater than 0, the ",
-                "dataflow is still warming up, so wait and retry; if `replica_count` is 0 the ",
-                "cluster has no replicas and the read cannot make progress until one is added.",
-            )
-            .to_string(),
-        ),
+        McpEndpointType::Agent => {
+            // Only reference tools that are actually exposed by tools/list.
+            // Both flags off is a valid (if unusual) config where the agent
+            // can only discover products, not read them — we say so instead
+            // of pointing at a hidden tool.
+            let read_paragraph = match (read_data_product_tool_enabled, query_tool_enabled) {
+                (true, _) => {
+                    "`read_data_product` automatically routes the \
+                     read to the cluster recorded in the data product catalog so indexes are used; \
+                     you only need to set the `cluster` parameter if you intentionally want the \
+                     read to run on a different cluster (e.g. one with larger or more replicas). "
+                }
+                (false, true) => {
+                    "Use the `query` tool to read data products, passing the cluster from \
+                     `get_data_product_details` so indexed reads hit the arrangement. "
+                }
+                (false, false) => {
+                    "This server is configured for discovery only: no read tool is exposed. \
+                     Use `get_data_products` and `get_data_product_details` to inspect what \
+                     is available. "
+                }
+            };
+            Some(format!(
+                "You have access to Materialize data products via MCP. \
+                 Prefer indexed objects (served from memory) over unindexed materialized views \
+                 (read from persistent storage). {read_paragraph}\
+                 `get_data_product_details` returns a `hydration` object with `hydrated`, \
+                 `replica_count`, and `hydrated_replica_count` fields. Reads never return \
+                 partial data: a read against a not-yet-hydrated product blocks until the \
+                 dataflow catches up, and may hit the request timeout. Check `hydrated` \
+                 before reading: if it is false and `replica_count` is greater than 0, the \
+                 dataflow is still warming up, so wait and retry; if `replica_count` is 0 the \
+                 cluster has no replicas and the read cannot make progress until one is added.",
+            ))
+        }
         McpEndpointType::Developer => {
             // Only advertise the `query` tool when it is actually exposed:
             // otherwise the instructions would point agents at a tool that
@@ -717,6 +755,7 @@ fn endpoint_instructions(
 async fn handle_initialize(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
 ) -> Result<McpResult, McpRequestError> {
     Ok(McpResult::Initialize(InitializeResult {
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
@@ -725,13 +764,18 @@ async fn handle_initialize(
             name: format!("materialize-mcp-{}", endpoint_type),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
-        instructions: endpoint_instructions(endpoint_type, query_tool_enabled),
+        instructions: endpoint_instructions(
+            endpoint_type,
+            query_tool_enabled,
+            read_data_product_tool_enabled,
+        ),
     }))
 }
 
 async fn handle_tools_list(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     let size_hint = format!("Response limit: {} MB.", max_response_size / 1_000_000);
@@ -766,7 +810,9 @@ async fn handle_tools_list(
                     }),
                     annotations: Some(READ_ONLY_ANNOTATIONS),
                 },
-                ToolDefinition {
+            ];
+            if read_data_product_tool_enabled {
+                tools.push(ToolDefinition {
                     name: "read_data_product".to_string(),
                     title: Some("Read Data Product".to_string()),
                     description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
@@ -790,8 +836,8 @@ async fn handle_tools_list(
                         "required": ["name"]
                     }),
                     annotations: Some(READ_ONLY_ANNOTATIONS),
-                },
-            ];
+                });
+            }
             if query_tool_enabled {
                 tools.push(ToolDefinition {
                     name: "query".to_string(),
@@ -873,6 +919,7 @@ async fn handle_tools_call(
     params: &ToolsCallParams,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
     max_response_size: usize,
     metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
@@ -885,6 +932,14 @@ async fn handle_tools_call(
         }
         (McpEndpointType::Agent, ToolsCallParams::GetDataProductDetails(p)) => {
             get_data_product_details(client, &p.name, max_response_size).await
+        }
+        (McpEndpointType::Agent, ToolsCallParams::ReadDataProduct(_))
+            if !read_data_product_tool_enabled =>
+        {
+            Err(McpRequestError::ToolNotFound(
+                "read_data_product tool is not available. Use the query tool to read data products."
+                    .to_string(),
+            ))
         }
         (McpEndpointType::Agent, ToolsCallParams::ReadDataProduct(p)) => {
             read_data_product(
@@ -1801,7 +1856,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agent_query_tool_disabled() {
-        let result = handle_tools_list(McpEndpointType::Agent, false, 1_000_000)
+        let result = handle_tools_list(McpEndpointType::Agent, false, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1818,7 +1873,7 @@ mod tests {
         );
         assert!(
             tool_names.contains(&"read_data_product"),
-            "read_data_product should always be present"
+            "read_data_product should be present when its flag is on"
         );
         assert!(
             !tool_names.contains(&"query"),
@@ -1828,7 +1883,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agent_query_tool_enabled() {
-        let result = handle_tools_list(McpEndpointType::Agent, true, 1_000_000)
+        let result = handle_tools_list(McpEndpointType::Agent, true, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1845,7 +1900,7 @@ mod tests {
         );
         assert!(
             tool_names.contains(&"read_data_product"),
-            "read_data_product should always be present"
+            "read_data_product should be present when its flag is on"
         );
         assert!(
             tool_names.contains(&"query"),
@@ -1854,8 +1909,77 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_agent_read_data_product_tool_disabled() {
+        let result = handle_tools_list(McpEndpointType::Agent, true, false, 1_000_000)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            tool_names.contains(&"get_data_products"),
+            "get_data_products should always be present"
+        );
+        assert!(
+            tool_names.contains(&"get_data_product_details"),
+            "get_data_product_details should always be present"
+        );
+        assert!(
+            !tool_names.contains(&"read_data_product"),
+            "read_data_product should be hidden when disabled"
+        );
+        assert!(
+            tool_names.contains(&"query"),
+            "query tool should remain present when enabled"
+        );
+    }
+
+    /// Both read tools off is a valid (if unusual) config where the agent
+    /// is discovery-only. Pin the behavior: only get_data_products and
+    /// get_data_product_details are advertised, and the initialize
+    /// instructions do not tell the agent to use a tool that isn't listed.
+    #[mz_ore::test(tokio::test)]
+    async fn test_tools_list_agent_both_read_tools_disabled() {
+        let result = handle_tools_list(McpEndpointType::Agent, false, false, 1_000_000)
+            .await
+            .unwrap();
+        let McpResult::ToolsList(list) = result else {
+            panic!("Expected ToolsList result");
+        };
+        let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            tool_names
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["get_data_product_details", "get_data_products"]
+                .into_iter()
+                .collect(),
+            "only discovery tools should be advertised when both read flags are off",
+        );
+
+        let instructions = endpoint_instructions(McpEndpointType::Agent, false, false)
+            .expect("agent instructions must be present");
+        assert!(
+            !instructions.contains("Use the `query` tool"),
+            "instructions must not point at query when it is hidden: {instructions}",
+        );
+        assert!(
+            !instructions.contains("`read_data_product` automatically"),
+            "instructions must not point at read_data_product when it is hidden: {instructions}",
+        );
+        assert!(
+            instructions.contains("discovery only"),
+            "instructions must tell the agent it is discovery-only: {instructions}",
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn test_tools_list_developer_query_tool_disabled() {
-        let result = handle_tools_list(McpEndpointType::Developer, false, 1_000_000)
+        // Developer endpoint doesn't expose read_data_product; the flag is
+        // orthogonal, so pass whichever value.
+        let result = handle_tools_list(McpEndpointType::Developer, false, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1874,7 +1998,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_developer_query_tool_enabled() {
-        let result = handle_tools_list(McpEndpointType::Developer, true, 1_000_000)
+        let result = handle_tools_list(McpEndpointType::Developer, true, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
