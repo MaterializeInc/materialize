@@ -9,6 +9,7 @@ menu:
 Use `ALTER SINK` to:
 - Change the relation you want to sink from. This is useful in the context of
 [blue/green deployments](/manage/dbt/blue-green-deployments/).
+- Change the commit interval of an [Iceberg sink](/sql/create-sink/iceberg/).
 - Rename a sink.
 - Change owner of a sink.
 
@@ -22,6 +23,15 @@ Use `ALTER SINK` to:
 To change the relation you want to sink from:
 
 {{% include-syntax file="examples/alter_sink" example="syntax-set-from" %}}
+
+{{< /tab >}}
+{{< tab "Change commit interval" >}}
+
+### Change commit interval
+
+To change the commit interval of an [Iceberg sink](/sql/create-sink/iceberg/):
+
+{{% include-syntax file="examples/alter_sink" example="syntax-set-commit-interval" %}}
 
 {{< /tab >}}
 {{< tab "Rename" >}}
@@ -137,6 +147,19 @@ See [Example: Handle cutover scenarios](#handle-cutover-scenarios).
 
 - Alternatively, ensure that both the old and the new relations have identical
 keyspaces to avoid the scenario.
+
+### Changing the commit interval
+
+Changing the commit interval restarts the sink with the new setting. Data that
+was buffered but not yet committed at the time of the change may be committed
+immediately after the restart. All subsequent commits follow the new interval.
+
+Setting the commit interval to its current value is a no-op and does not restart the sink.
+However, the value is compared as written, so setting `'1m'` when the current value is `'60s'`
+counts as a change and restarts the sink.
+
+See [Commit interval tradeoffs](/sql/create-sink/iceberg/#commit-interval-tradeoffs)
+for guidance on choosing a value.
 
 ### Catalog objects
 

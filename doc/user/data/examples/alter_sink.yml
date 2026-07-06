@@ -10,6 +10,19 @@
         `<relation_name>`
       description: |
         The name of the relation you want to sink from.
+- name: "syntax-set-commit-interval"
+  code: |
+    ALTER SINK <name> SET (COMMIT INTERVAL = <interval>);
+  syntax_elements:
+    - name: |
+        `<name>`
+      description: |
+        The name of the sink you want to change.
+    - name: |
+        `<interval>`
+      description: |
+        The new commit interval, for example `'1m'`. Only [Iceberg
+        sinks](/sql/create-sink/iceberg/) support a commit interval.
 - name: "syntax-rename"
   code: |
     ALTER SINK <name> RENAME TO <new_name>;
