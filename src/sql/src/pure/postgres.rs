@@ -451,7 +451,20 @@ pub(super) async fn purify_source_exports(
             let exclude_columns = exclude_column_map.remove(&desc.oid);
 
             if let Some(exclude_cols) = &exclude_columns {
+                let excluded_col_nums: BTreeSet<u16> = desc
+                    .columns
+                    .iter()
+                    .filter(|c| exclude_cols.contains(&c.name))
+                    .map(|c| c.col_num)
+                    .collect();
                 desc.columns.retain(|c| !exclude_cols.contains(&c.name));
+                // A key naming an excluded column can never be re-verified against
+                // upstream, since the column (and any constraint on it) can be
+                // dropped independently of the columns we still track. Drop such
+                // keys now rather than carrying a stale key that will look like an
+                // incompatible schema change once the excluded column disappears.
+                desc.keys
+                    .retain(|k| k.cols.iter().all(|c| !excluded_col_nums.contains(c)));
             }
 
             if let (Some(text_cols), Some(exclude_cols)) = (&text_columns, &exclude_columns) {
