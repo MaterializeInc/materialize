@@ -1673,6 +1673,14 @@ class FlipFlagsAction(Action):
             "2",
             "4",
         ]
+        self.flags_with_values["column_paged_batcher_eager_backing"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["column_paged_batcher_pool_rss_target_fraction"] = [
+            "0.0",
+            "0.25",
+            "0.5",
+        ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["webhook_max_request_size_bytes"] = [
             # 1 MiB, 5 MiB (default), 10 MiB

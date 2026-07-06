@@ -87,6 +87,11 @@ sentry-tracing = { workspace = true, optional = true }
 turmoil = { workspace = true, optional = true }
 yansi = { workspace = true, optional = true }
 
+# `memory::host_memory_bytes` reads `hw.memsize` via sysctl on macOS, in every
+# feature configuration, so the dependency cannot be optional there.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 anyhow.workspace = true
 criterion.workspace = true

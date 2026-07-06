@@ -1315,7 +1315,7 @@ mod tests {
     fn settle_carry_commits_at_target() {
         // ~1.5 MiB per chunk: inside the dead zone of the periodic window
         // check (see `at_commit_size`).
-        let chunk_rows = (1_500_000usize / 24) as u64;
+        let chunk_rows = u64::cast_from(1_500_000usize / 24);
         let mut input: VecDeque<TestChunk> = (0..4u64)
             .map(|c| {
                 let data: Vec<Tuple> = (0..chunk_rows)

@@ -322,4 +322,8 @@ unknown-registry = "deny"
 # remain buildable even if upstream Git repositories disappear. If you don't
 # have permissions to create a fork in the MaterializeInc organization, ask in
 # #eng-infra on Slack.
-allow-org = { github = ["MaterializeInc"] }
+#
+# TODO: `DAlperin` carries the differential-dataflow Chunk-API prototype branch
+# this development branch builds against; fork it into MaterializeInc (or land
+# it upstream) before merging.
+allow-org = { github = ["MaterializeInc", "DAlperin"] }
