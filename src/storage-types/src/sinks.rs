@@ -458,6 +458,12 @@ pub enum KafkaSinkFormatType<C: ConnectionAccess = InlinedConnection> {
     Avro {
         schema: String,
         compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
+        /// The registry schema name to publish under. `None` means derive it
+        /// from the topic (`{topic}-key` / `{topic}-value`). Only ever `Some`
+        /// for Glue, where the user may override the name. Confluent always
+        /// uses the topic-derived subject.
+        #[serde(default)]
+        schema_name: Option<String>,
         /// Wire-format dispatch and the registry to publish to. Sinks
         /// require a registry
         wire_format: WireFormat<C>,
@@ -510,15 +516,18 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
+                    schema_name,
                     wire_format,
                 },
                 KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
+                    schema_name: other_schema_name,
                     wire_format: other_wire_format,
                 },
             ) => {
                 if schema != other_schema
+                    || schema_name != other_schema_name
                     || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
@@ -547,15 +556,18 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 Some(KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
+                    schema_name,
                     wire_format,
                 }),
                 Some(KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
+                    schema_name: other_schema_name,
                     wire_format: other_wire_format,
                 }),
             ) => {
                 if schema != other_schema
+                    || schema_name != other_schema_name
                     || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
@@ -602,10 +614,12 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
             KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
+                schema_name,
                 wire_format,
             } => KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
+                schema_name,
                 wire_format: wire_format.into_inline_connection(r),
             },
             KafkaSinkFormatType::Json => KafkaSinkFormatType::Json,
