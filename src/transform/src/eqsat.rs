@@ -33,7 +33,6 @@ pub mod engine;
 pub mod extract;
 pub(crate) mod filter_split;
 pub mod ir;
-pub(crate) mod join_commit;
 pub(crate) mod join_spelling;
 pub mod lean;
 pub mod lower;

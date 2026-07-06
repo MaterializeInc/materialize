@@ -39,29 +39,27 @@ use crate::reduce_reduction::ReduceReduction;
 use crate::typecheck::empty_typechecking_context;
 use crate::{Transform, TransformCtx};
 
-/// Flags controlling the physical join-commit path. Replaces the former lone
-/// `native_join_commit` bool so Part A (`prioritize_arranged`) and Part B
-/// (`eager_delta`) thread without growing the positional arg list.
+/// Flags controlling the physical join-commit path.
+///
+/// The commit path delegates delta/differential planning to directional's
+/// `plan_join_min_arrangements`, which it drives with a fixed
+/// `OptimizerFeatures::default()` (matching the `Rel::WcoJoin` path). So
+/// `enable_join_prioritize_arranged` does not steer eqsat's join ordering, and
+/// the delta choice is always min-arrangements (the eager rule, applied
+/// unconditionally). That is intentional. The physical eqsat pass is a distinct
+/// optimizer, not a re-run of `JoinImplementation` under its flags. Only the
+/// commit toggle is a flag, hence a single field.
 #[derive(Clone, Copy, Debug)]
 pub struct NativeJoinFlags {
-    /// Commit acyclic joins to a cost-model Differential/DeltaQuery so
-    /// `JoinImplementation` no-ops on them.
+    /// Commit acyclic joins to a Differential/DeltaQuery plan (chosen by the
+    /// directional planner) so `JoinImplementation` no-ops on them.
     pub commit: bool,
-    /// Select the V2 `JoinInputCharacteristics` layout (`enable_join_prioritize_arranged`).
-    pub prioritize_arranged: bool,
-    /// Allow delta when `delta_new <= diff_new` (not just `== 0`); reads
-    /// `enable_eager_delta_joins`.
-    pub eager_delta: bool,
 }
 
 impl NativeJoinFlags {
     /// All-off: no native commit. Used by logical/offline entry points and tests.
     pub fn none() -> Self {
-        NativeJoinFlags {
-            commit: false,
-            prioritize_arranged: false,
-            eager_delta: false,
-        }
+        NativeJoinFlags { commit: false }
     }
 }
 
@@ -183,7 +181,7 @@ fn raise_inner(
             // failure, fall back to the bare Unimplemented join and let
             // JoinImplementation handle it.
             if commit_wcoj && flags.commit {
-                commit_join(inputs, &raised_inputs, equivalences, available, flags).unwrap_or(join)
+                commit_join(&raised_inputs, equivalences, available).unwrap_or(join)
             } else {
                 join
             }
@@ -373,26 +371,29 @@ fn raise_inner(
     }
 }
 
-/// Commit an acyclic join to a cost-model-chosen Differential or DeltaQuery so
-/// `JoinImplementation` no-ops on it. Returns the committed join, or `None` to
-/// fall back to the bare `Unimplemented` join (a constant-singleton input, an
-/// unkeyed cross-join step, or a delta/differential planning failure).
+/// Commit an acyclic join to a Differential or DeltaQuery plan (chosen by the
+/// directional planner) so `JoinImplementation` no-ops on it. Returns the
+/// committed join, or `None` to fall back to the bare `Unimplemented` join (a
+/// constant-singleton input or a planning failure).
 ///
-/// `inputs` are the `Rel` join inputs (for the cost-model order search),
-/// `raised_inputs` their already-raised MIR forms (for arrangement
-/// installation), `equivalences` the join's equivalence classes, `available` the
-/// index availability map, and `flags` the native-commit flags. Takes the
-/// already-raised inputs so it needs no scope, callable on any single join.
+/// Planning runs with a fixed `OptimizerFeatures::default()`, matching the
+/// `Rel::WcoJoin` path. So `enable_join_prioritize_arranged` does not steer the
+/// order, and the delta choice is always min-arrangements (the eager rule,
+/// applied unconditionally). This is intentional. The physical eqsat pass is a
+/// distinct optimizer, not a flagged re-run of `JoinImplementation`.
+///
+/// `raised_inputs` are the already-raised MIR join inputs, `equivalences` the
+/// join's equivalence classes, and `available` the index availability map. Takes
+/// the already-raised inputs so it needs no scope, callable on any single join.
 fn commit_join(
-    inputs: &[Rel],
     raised_inputs: &[MirRelationExpr],
     equivalences: &[Vec<EScalar>],
     available: &BTreeMap<GlobalId, Vec<Vec<MirScalarExpr>>>,
-    flags: NativeJoinFlags,
 ) -> Option<MirRelationExpr> {
-    // Don't commit if any raised input is a constant singleton:
-    // join_scalars drops them, creating an index mismatch with the
-    // order computed from the original (pre-drop) Rel inputs.
+    // Don't commit if any raised input is a constant singleton: `join_scalars`
+    // drops such arity-0, 1-row join identities, so the planned join's inputs
+    // would not line up with the per-input availability computed over every
+    // raised input. Fall back and let JoinImplementation handle the drop.
     if raised_inputs.iter().any(|i| i.is_constant_singleton()) {
         return None;
     }
@@ -403,9 +404,7 @@ fn commit_join(
     // representative is substituted into expressions across classes,
     // deterministically. Without it, the eqsat-extracted spelling (e.g.
     // `#2` vs `#0` inside a null-pad CASE) can differ by build profile and
-    // flip the chosen join order, making goldens flaky. We commit a
-    // Differential, for which the canonical spelling is still fully keyed
-    // (no cross), so canonicalizing here is safe. Done only on the commit
+    // flip the chosen join order, making goldens flaky. Done only on the commit
     // path, so JoinImplementation still sees the original spelling on every
     // fallback (it canonicalizes Unimplemented joins itself).
     let mut canon_equivs: Vec<Vec<MirScalarExpr>> =
@@ -415,136 +414,21 @@ fn commit_join(
         &mut canon_equivs,
         input_types.iter().map(|t| &t.column_types),
     );
-    // Compute the order over the canonical equivalences (converted back to
-    // the cost model's `EScalar` IR) so the order matches the committed
-    // spelling and is build-profile-stable.
-    let canon_escalars: Vec<Vec<crate::eqsat::ir::EScalar>> = canon_equivs
-        .iter()
-        .map(|class| {
-            class
-                .iter()
-                .cloned()
-                .map(crate::eqsat::ir::EScalar::plain)
-                .collect()
-        })
-        .collect();
-    let model = if available.is_empty() {
-        crate::eqsat::cost::CostModel::new()
-    } else {
-        crate::eqsat::cost::CostModel::with_available(available.clone())
-    };
-    let order = model.binary_join_order(inputs, &canon_escalars)?;
-    // Abort if any non-start step has no key columns: that step would
-    // be a cross join in the Differential plan, which is no improvement
-    // over what JoinImplementation already produces, and the empty
-    // lookup key can trigger a `find_bound_expr` panic in LIR lowering
-    // for joins whose equivalences have complex (non-column) members.
-    // frontier_key_cols correctly returns an empty set when the chosen
-    // order lacks a frontier connection at that step.
-    if order.steps[1..].iter().any(|s| s.key_cols.is_empty()) {
-        return None;
-    }
+    // Delegate the differential-vs-delta choice to the directional planner, the
+    // same helper the cyclic `WcoJoin` path uses. It plans both strategies
+    // against the same availability, applies its own `n <= 2` -> differential
+    // guard, and commits delta only when it needs no more new arrangements than
+    // differential would (net-of-shared accounting included). It also plans
+    // expression join keys (e.g. an outer-join null-pad CASE) correctly, the
+    // case eqsat's own keyed-order search could not form a key for.
     let per_input = per_input_available(raised_inputs, available);
-    // Delta only helps for 3+ inputs: it avoids the intermediate
-    // arrangements a differential chain builds (k-2 of them). A 1-input
-    // "join" is a filter whose delta plan is unrenderable (empty
-    // per-driver path panics source_keys derivation in
-    // delta_join.rs:98-110); a 2-input join has no intermediate
-    // arrangement to save and delta would add a second path for nothing.
-    // Match JoinImplementation, which forces differential for
-    // num_inputs <= 2 (join_implementation.rs:408-429).
-    if inputs.len() > 2 {
-        // Try a delta commit first: it is preferred when it needs no new
-        // arrangements (strict) or no more than differential (eager).
-        // Viability is delta_join_order returning Some (every step
-        // keyed); a disconnected join has no delta plan and stays
-        // differential.
-        if let Some(paths) = model.delta_join_order(inputs, &canon_escalars) {
-            // Net-of-shared: the differential plan for this order builds an
-            // arrangement for each of its steps' `(input, key)`. A delta plan
-            // reuses those same per-input arrangements and drops the k-2
-            // intermediate arrangements a differential chain builds, so charging
-            // delta for the shared per-input set makes it lose a comparison it
-            // should win. Credit the differential-built arrangements before
-            // counting delta's, matched on exact `(input, key)` so a delta
-            // arrangement differential does not build (a key mismatch) still
-            // counts and delta stays uncommitted (under-commit, never over). This
-            // reaches in one pass the decision JoinImplementation reaches across
-            // its two-pass fixpoint, where run 1 builds these ArrangeBys and run 2
-            // credits its own builds to get `delta_new == 0`.
-            let mut delta_avail = per_input.clone();
-            for step in &order.steps {
-                let key: Vec<MirScalarExpr> = step
-                    .key_cols
-                    .iter()
-                    .map(|&c| MirScalarExpr::column(c))
-                    .collect();
-                if !delta_avail[step.input].contains(&key) {
-                    delta_avail[step.input].push(key);
-                }
-            }
-            let delta_new = crate::eqsat::join_commit::delta_new_arrangements(&paths, &delta_avail);
-            let commit_delta = if flags.eager_delta {
-                delta_new <= differential_new_arrangements(&order, &per_input)
-            } else {
-                delta_new == 0
-            };
-            if commit_delta {
-                let canon_join =
-                    MirRelationExpr::join_scalars(raised_inputs.to_vec(), canon_equivs.clone());
-                if let Some(j) = crate::eqsat::join_commit::commit_delta_query(
-                    canon_join,
-                    paths,
-                    &per_input,
-                    raised_inputs,
-                    flags.prioritize_arranged,
-                ) {
-                    return Some(j);
-                }
-            }
-        }
-    }
-    // Fall through to the SP-B1 differential commit. The committed join
-    // carries the canonical equivalences, matching the order computed
-    // above.
     let canon_join = MirRelationExpr::join_scalars(raised_inputs.to_vec(), canon_equivs);
-    crate::eqsat::join_commit::commit_differential(
-        canon_join,
-        order,
-        &per_input,
-        raised_inputs,
-        flags.prioritize_arranged,
-    )
-}
-
-/// New arrangements a differential plan needs, mirroring `differential::plan`
-/// (join_implementation.rs:898): `inputs.len().saturating_sub(2) + (start
-/// arrangement is new ? 1 : 0)`.
-///
-/// `available` is the per-input arrangement availability. The start's new
-/// arrangement counts iff its aligned start key is not already available, but at
-/// decision time we approximate with the start key the cost model produced (the
-/// eager comparison is heuristic in JI too).
-fn differential_new_arrangements(
-    order: &crate::eqsat::cost::JoinOrder,
-    available: &[Vec<Vec<MirScalarExpr>>],
-) -> usize {
-    let n = order.steps.len();
-    let start = &order.steps[0];
-    let start_key: Vec<MirScalarExpr> = start
-        .key_cols
-        .iter()
-        .map(|&c| MirScalarExpr::column(c))
-        .collect();
-    let start_new = if available[start.input]
-        .iter()
-        .any(|k| k.as_slice() == start_key.as_slice())
+    let features = OptimizerFeatures::default();
+    match crate::join_implementation::plan_join_min_arrangements(&canon_join, &per_input, &features)
     {
-        0
-    } else {
-        1
-    };
-    n.saturating_sub(2) + start_new
+        Ok(planned) => Some(planned),
+        Err(_) => None,
+    }
 }
 
 /// Build per-input arrangement availability for a join's raised inputs.
@@ -1457,6 +1341,119 @@ mod tests {
             per_input,
             vec![Vec::<Vec<MirScalarExpr>>::new()],
             "dropping the index col must credit no arrangement; got {per_input:?}"
+        );
+    }
+
+    /// A global `Get` with `arity` nullable Int64 columns, so a null-pad `CASE`
+    /// over its columns does not reduce away. A non-null column would make the
+    /// `IS NULL` test constant and collapse the expression to a plain column.
+    fn nullable_get(id: u64, arity: usize) -> MirRelationExpr {
+        use mz_repr::GlobalId;
+        let typ = ReprRelationType::new(
+            (0..arity)
+                .map(|_| ReprScalarType::Int64.nullable(true))
+                .collect(),
+        );
+        MirRelationExpr::Get {
+            id: Id::Global(GlobalId::Transient(id)),
+            typ,
+            access_strategy: AccessStrategy::UnknownOrLocal,
+        }
+    }
+
+    /// `CASE WHEN #is_null_col IS NULL THEN NULL ELSE #value_col END`, the shape
+    /// of an outer-join null-pad join key.
+    fn null_pad(is_null_col: usize, value_col: usize) -> MirScalarExpr {
+        MirScalarExpr::If {
+            cond: Box::new(MirScalarExpr::column(is_null_col).call_is_null()),
+            then: Box::new(MirScalarExpr::literal_null(ReprScalarType::Int64)),
+            els: Box::new(MirScalarExpr::column(value_col)),
+        }
+    }
+
+    #[mz_ore::test]
+    fn commit_join_expression_key_three_inputs_commits_delta() {
+        use crate::eqsat::ir::EScalar;
+        use mz_expr::JoinImplementation;
+        use mz_repr::GlobalId;
+
+        // A connected 3-input chain A-B-C whose B-C edge is an outer-join null-pad
+        // expression, not a plain column. eqsat's former delta-order search
+        // required plain-column keys and so committed differential here. The
+        // directional planner keys the delta lookup by the expression and, with an
+        // arrangement for every lookup, commits a DeltaQuery.
+        //   A(#0,#1)  B(#2,#3,#4)  C(#5,#6)
+        //   A.0 = B.0                                 (#0 = #2)       plain A-B edge
+        //   C.0 = CASE WHEN #4 IS NULL THEN NULL..#3  (#5 = null-pad) expr  B-C edge
+        let inputs = vec![nullable_get(1, 2), nullable_get(2, 3), nullable_get(3, 2)];
+        let equivalences = vec![
+            vec![
+                EScalar::plain(MirScalarExpr::column(0)),
+                EScalar::plain(MirScalarExpr::column(2)),
+            ],
+            vec![
+                EScalar::plain(MirScalarExpr::column(5)),
+                EScalar::plain(null_pad(4, 3)),
+            ],
+        ];
+        // Arrange every delta lookup: A[0], B[0] (A-B), B[null-pad] (B-C), C[0].
+        // B's null-pad key is in B's local column space (#3 -> #1, #4 -> #2).
+        let mut available: BTreeMap<GlobalId, Vec<Vec<MirScalarExpr>>> = BTreeMap::new();
+        available.insert(GlobalId::Transient(1), vec![vec![MirScalarExpr::column(0)]]);
+        available.insert(
+            GlobalId::Transient(2),
+            vec![vec![MirScalarExpr::column(0)], vec![null_pad(2, 1)]],
+        );
+        available.insert(GlobalId::Transient(3), vec![vec![MirScalarExpr::column(0)]]);
+
+        let out = super::commit_join(&inputs, &equivalences, &available)
+            .expect("connected 3-input join commits");
+        let MirRelationExpr::Join { implementation, .. } = &out else {
+            panic!("expected a Join, got {out:?}");
+        };
+        assert!(
+            matches!(implementation, JoinImplementation::DeltaQuery(_)),
+            "a 3-input join whose every lookup is arranged must commit DeltaQuery, got {implementation:?}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn commit_join_constant_singleton_input_bails_to_none() {
+        use crate::eqsat::ir::EScalar;
+
+        // `join_scalars` drops constant-singleton (arity-0, single-row) inputs, so
+        // committing over them would misalign the planned join with the per-input
+        // availability computed over every raised input. The commit bails to None
+        // and lets JoinImplementation handle the drop.
+        let singleton = MirRelationExpr::constant(vec![vec![]], ReprRelationType::new(vec![]));
+        let inputs = vec![singleton, global_get(1, 2), global_get(2, 2)];
+        let equivalences: Vec<Vec<EScalar>> = vec![];
+        assert!(
+            super::commit_join(&inputs, &equivalences, &BTreeMap::new()).is_none(),
+            "a constant-singleton input must bail the commit to None"
+        );
+    }
+
+    #[mz_ore::test]
+    fn commit_join_two_inputs_commits_differential() {
+        use crate::eqsat::ir::EScalar;
+        use mz_expr::JoinImplementation;
+
+        // n <= 2 always commits differential: there is no intermediate arrangement
+        // for delta to save. Mirrors JoinImplementation's num_inputs <= 2 guard.
+        let inputs = vec![global_get(1, 2), global_get(2, 2)];
+        let equivalences = vec![vec![
+            EScalar::plain(MirScalarExpr::column(0)),
+            EScalar::plain(MirScalarExpr::column(2)),
+        ]];
+        let out = super::commit_join(&inputs, &equivalences, &BTreeMap::new())
+            .expect("2-input join commits");
+        let MirRelationExpr::Join { implementation, .. } = &out else {
+            panic!("expected a Join, got {out:?}");
+        };
+        assert!(
+            matches!(implementation, JoinImplementation::Differential(..)),
+            "a 2-input join must commit Differential, got {implementation:?}"
         );
     }
 }
