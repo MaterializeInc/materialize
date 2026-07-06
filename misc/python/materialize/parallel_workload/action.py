@@ -1543,6 +1543,12 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_source_fetch_concurrency"] = [
+            "1",
+            "2",
+            "8",
+            "16",
+        ]
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
