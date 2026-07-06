@@ -65,6 +65,12 @@ reset-server
 # value; every other `mz_now()` stays symbolic in its plan.
 replace (> )\d{13}  ${1}<TIMESTAMP>
 
+# `mz_catalog.mz_kafka_sources` folds `mz_environment_id()` into the plan as a
+# literal (see the `expr: resolve mz_environment_id() to a plan-time literal`
+# commit). The literal embeds a per-run UUID, so mask it so the snapshot stays
+# stable across environments.
+replace local-az1-[0-9a-f-]{36}-0  local-az1-<ENV_ID>
+
 # Plan views against the cluster that actually maintains the catalog
 # arrangements, so unindexed views resolve the same indexes they would in
 # production.
@@ -4866,6 +4872,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_kafka_sources";
+----
+mz_catalog.mz_kafka_sources:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#4..=#6)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("kafka" = (parse_catalog_create_sql(#2) ->> "source_type")))
+  map=((#0{data} -> "value"), (((#1 -> "definition") -> "V1") ->> "create_sql"), parse_kafka_source_details(#2), parse_catalog_id(((#0{data} -> "key") -> "gid")), ((((((coalesce((#3{details} ->> "group_id_prefix"), "") || "materialize-") || "local-az1-<ENV_ID>") || "-") || (#3{details} ->> "connection_id")) || "-") || parse_catalog_id((#1 -> "global_id"))), (#3{details} ->> "topic"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_materialized_views";
 ----
 mz_catalog.mz_materialized_views:
@@ -5355,6 +5376,21 @@ Source mz_internal.mz_catalog_raw
   project=(#1)
   filter=((true = text_to_boolean((((((#0{data} -> "value") -> "config") -> "location") -> "Managed") ->> "pending"))) AND ("ClusterReplica" = (#0{data} ->> "kind")))
   map=(parse_catalog_id(((#0{data} -> "key") -> "id")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_postgres_sources";
+----
+mz_internal.mz_postgres_sources:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#3..=#5)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("postgres" = (parse_catalog_create_sql(#1) ->> "source_type")))
+  map=(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"), parse_postgres_source_details(#1), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#2{details} ->> "slot"), text_to_uint8((#2{details} ->> "timeline_id")))
 
 Target cluster: mz_catalog_server
 

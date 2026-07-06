@@ -1132,7 +1132,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
-        Builtin::Table(&MZ_KAFKA_SOURCES),
+        Builtin::MaterializedView(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
         Builtin::Table(&MZ_ICEBERG_SINKS),
         Builtin::MaterializedView(&MZ_DATABASES),
@@ -1143,7 +1143,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_TABLES),
         // mz_sources is generated dynamically below with inlined builtin VALUES.
         Builtin::Table(&MZ_SOURCE_REFERENCES),
-        Builtin::Table(&MZ_POSTGRES_SOURCES),
+        Builtin::MaterializedView(&MZ_POSTGRES_SOURCES),
         Builtin::Table(&MZ_POSTGRES_SOURCE_TABLES),
         Builtin::Table(&MZ_MYSQL_SOURCE_TABLES),
         Builtin::Table(&MZ_SQL_SERVER_SOURCE_TABLES),
