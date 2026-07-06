@@ -270,7 +270,16 @@ fn optimize_inner(
     let optimizer = if use_ilp {
         optimizer.with_extractor(std::sync::Arc::new(extract::IlpExtractor {
             weight_scalar_nodes: filter_sharing || scalar_sharing,
-            width_aware: scalar_sharing,
+            // The arity tier is a cost-model correctness property, not a sharing
+            // feature: among arrangements that tie on count, width is a cost, so
+            // the ILP must prefer the narrower one. WS2 built it, but its
+            // flag-off-byte-identical gating is superseded now that the ILP runs
+            // on joins. Left off, the production objective is width-blind and
+            // loses projection pushdowns greedy keeps, a live plan-quality
+            // regression. It is on for every ILP solve. The cost-model width pair
+            // (`with_width_aware_memory`) and the WS0 scalar-node tier stay on
+            // `scalar_sharing`, they feed greedy/recommendation paths only.
+            width_aware: true,
         }))
     } else {
         optimizer
