@@ -46,11 +46,9 @@ EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), array_agg(c) F
 Explained Query:
   Join::Linear
     linear_stage[0]
-      closure
-        project=(#0, #2, #1)
-      lookup={ relation=0, key=[#0] }
+      lookup={ relation=1, key=[#0] }
       stream={ key=[#0], thinning=(#1) }
-    source={ relation=1, key=[#0] }
+    source={ relation=0, key=[#0] }
     Reduce::Basic
       aggr=(array_agg[order_by=[]](row(array[#1{b}])))
       key_plan
@@ -82,11 +80,9 @@ EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), string_agg(c, 
 Explained Query:
   Join::Linear
     linear_stage[0]
-      closure
-        project=(#0, #2, #1)
-      lookup={ relation=0, key=[#0] }
+      lookup={ relation=1, key=[#0] }
       stream={ key=[#0], thinning=(#1) }
-    source={ relation=1, key=[#0] }
+    source={ relation=0, key=[#0] }
     Reduce::Basic
       aggr=(array_agg[order_by=[]](row(array[#1{b}])))
       key_plan
@@ -118,11 +114,9 @@ EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT a, array_agg(b), string_agg(c, 
 Explained Query:
   Join::Linear
     linear_stage[0]
-      closure
-        project=(#0, #2, #1)
-      lookup={ relation=0, key=[#0] }
+      lookup={ relation=1, key=[#0] }
       stream={ key=[#0], thinning=(#1) }
-    source={ relation=1, key=[#0] }
+    source={ relation=0, key=[#0] }
     Reduce::Basic
       aggr=(array_agg[order_by=[]](row(array[#1{b}])))
       key_plan
@@ -162,19 +156,9 @@ Explained Query:
       linear_stage[0]
         closure
           project=(#0, #2, #1)
-        lookup={ relation=0, key=[#0] }
+        lookup={ relation=1, key=[#0] }
         stream={ key=[#0], thinning=(#1) }
-      source={ relation=1, key=[#0] }
-      Reduce::Basic
-        aggr=(array_agg[order_by=[]](row(array[#1{b}])))
-        key_plan
-          project=(#0)
-        val_plan
-          project=(#2)
-          map=(row(array[#1{b}]))
-        Get::Collection l0
-          project=(#0, #1)
-          raw=true
+      source={ relation=0, key=[#0] }
       Reduce::Hierarchical
         aggr_funcs=[max]
         monotonic
@@ -185,6 +169,16 @@ Explained Query:
           project=(#1)
         Get::Collection l0
           project=(#0, #2)
+          raw=true
+      Reduce::Basic
+        aggr=(array_agg[order_by=[]](row(array[#1{b}])))
+        key_plan
+          project=(#0)
+        val_plan
+          project=(#2)
+          map=(row(array[#1{b}]))
+        Get::Collection l0
+          project=(#0, #1)
           raw=true
 
 Source materialize.public.t
@@ -314,11 +308,9 @@ Explained Query:
   Return
     Join::Linear
       linear_stage[0]
-        closure
-          project=(#0, #2, #1)
-        lookup={ relation=0, key=[#0] }
+        lookup={ relation=1, key=[#0] }
         stream={ key=[#0], thinning=(#1) }
-      source={ relation=1, key=[#0] }
+      source={ relation=0, key=[#0] }
       Reduce::Basic
         aggr=(array_agg[order_by=[#0 asc nulls_last]](row(array[#1{b}], #1{b})))
         key_plan
@@ -461,12 +453,12 @@ Explained Query:
           linear_stage[0]
             closure
               project=(#1, #0)
-            lookup={ relation=0, key=[#1] }
-            stream={ key=[#0{c}], thinning=() }
-          source={ relation=1, key=[#0{c}] }
+            lookup={ relation=1, key=[#0{c}] }
+            stream={ key=[#1{c}], thinning=(#0) }
+          source={ relation=0, key=[#1{c}] }
           ArrangeBy
             raw=true
-            arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            arrangements[0]={ key=[#1{c}], permutation={#0: #1, #1: #0}, thinning=(#0) }
             Get::PassArrangements l0
               raw=true
           ArrangeBy
@@ -586,9 +578,9 @@ Explained Query:
   Return
     Join::Linear
       linear_stage[0]
-        lookup={ relation=0, key=[#0, #1] }
+        lookup={ relation=1, key=[#0, #1] }
         stream={ key=[#0, #1], thinning=() }
-      source={ relation=1, key=[#0, #1] }
+      source={ relation=0, key=[#0, #1] }
       ArrangeBy
         input_key=[#0]
         raw=false
@@ -635,9 +627,11 @@ Explained Query:
   Return
     Join::Linear
       linear_stage[0]
-        lookup={ relation=0, key=[#0] }
+        closure
+          project=(#0, #2, #1)
+        lookup={ relation=1, key=[#0] }
         stream={ key=[#0], thinning=(#1) }
-      source={ relation=1, key=[#0] }
+      source={ relation=0, key=[#0] }
       Reduce::Basic
         aggr=(array_agg[order_by=[]](row(array[digest(text_to_bytea(#1{b}), "sha256")])))
         key_plan
@@ -676,11 +670,9 @@ Explained Query:
   Return
     Join::Linear
       linear_stage[0]
-        closure
-          project=(#0, #2, #1)
-        lookup={ relation=0, key=[#0] }
+        lookup={ relation=1, key=[#0] }
         stream={ key=[#0], thinning=(#1) }
-      source={ relation=1, key=[#0] }
+      source={ relation=0, key=[#0] }
       Reduce::Basic
         aggr=(array_agg[order_by=[]](row(array[#1{b}])))
         key_plan

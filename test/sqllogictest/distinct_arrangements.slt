@@ -83,6 +83,7 @@ query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
 ArrangeBy[[Column(0), Column(1)]]
+ArrangeBy[[Column(0), Column(1)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 Arranged DistinctBy
@@ -91,8 +92,6 @@ DistinctBy
 DistinctBy
 DistinctByErrorCheck
 DistinctByErrorCheck
-JoinStage
-JoinStage
 
 statement ok
 DROP TABLE squares CASCADE
@@ -382,10 +381,10 @@ Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
 Arrange recursive err
 ArrangeAccumulable [val: empty]
-ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0, "user_id")]]
 ArrangeBy[[Column(0, "user_id")]]
-ArrangeBy[[Column(2)]]
+ArrangeBy[[Column(0, "user_id")]]
+ArrangeBy[[Column(2, "user_id")]]
 Arranged DistinctBy
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
@@ -635,10 +634,10 @@ AccumulableErrorCheck
 AccumulableErrorCheck
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0, "a"), Column(1, "b")]]
 ArrangeBy[[Column(0, "a"), Column(1, "b")]]-errors
+ArrangeBy[[Column(0, "a")]]
+ArrangeBy[[Column(0, "a")]]
 ArrangeBy[[Column(0, "a")]]
 ArrangeBy[[Column(0, "a")]]
 ArrangeBy[[Column(0, "a")]]
@@ -734,15 +733,15 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]
 ArrangeBy[[Column(0, "num")]]
 ArrangeBy[[Column(0, "num")]]
 ArrangeBy[[Column(0, "num")]]
@@ -1062,10 +1061,8 @@ ORDER BY mdod.name
 AccumulableErrorCheck  4
 Arrange␠ReduceMinsMaxes  1
 ArrangeAccumulable␠[val:␠empty]  4
-ArrangeBy[[Column(0)]]  1
-ArrangeBy[[Column(0,␠"dataflow_id")]]  1
-ArrangeBy[[Column(1)]]  1
-JoinStage  1
+ArrangeBy[[Column(0,␠"dataflow_id")]]  2
+ArrangeBy[[Column(1,␠"dataflow_id")]]  2
 ReduceAccumulable  4
 ReduceMinsMaxes  1
 ReduceMinsMaxes␠Error␠Check  1

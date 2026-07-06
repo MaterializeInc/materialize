@@ -272,12 +272,10 @@ Explained Query:
       Project (#0{f1}) // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 2 }
   Return // { arity: 1 }
-    Project (#1) // { arity: 1 }
-      Join on=(#0{f1} = #1) type=differential // { arity: 2 }
+    Project (#0) // { arity: 1 }
+      Join on=(#0 = #1{f1}) type=differential // { arity: 2 }
         implementation
-          %1[#0]UKA » %0:l0[#0{f1}]K
-        ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
-          Get l0 // { arity: 1 }
+          %0[#0]KA » %1:l0[#0{f1}]K
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct project=[record_get[0](record_get[1](#0))] // { arity: 1 }
             Project (#1) // { arity: 1 }
@@ -293,6 +291,8 @@ Explained Query:
                             Get l0 // { arity: 1 }
                         ArrangeBy keys=[[]] // { arity: 2 }
                           ReadStorage materialize.public.t2 // { arity: 2 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+          Get l0 // { arity: 1 }
 
 Source materialize.public.t1
 Source materialize.public.t2

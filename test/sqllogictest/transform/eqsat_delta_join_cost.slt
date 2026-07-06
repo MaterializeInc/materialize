@@ -61,7 +61,7 @@ SELECT * FROM t1 LEFT JOIN t2 ON (f0 = f2) LEFT JOIN t3 ON (f2 = f4)
 Explained Query:
   With
     cte l0 =
-      Filter (#0) IS NOT NULL
+      Project (#0)
         ReadStorage materialize.public.t2
     cte l1 =
       Filter (#0) IS NOT NULL
@@ -69,20 +69,23 @@ Explained Query:
   Return
     Project (#0, #1, #9, #10, #12, #13)
       Map ((#4) IS NULL, case when #8 then null else #0 end, case when #8 then null else #3 end, (#7) IS NULL, case when #11 then null else #5 end, case when #11 then null else #6 end)
-        Join on=(#0 = #2 AND #5 = case when (#4) IS NULL then null else #0 end) type=differential
+        Join on=(#0 = #2 AND #5 = case when (#4) IS NULL then null else #0 end) type=delta
           implementation
-            %1[#0]K » %0:t1[#0]K » %2[#0]K
-          ArrangeBy keys=[[#0]]
+            %0:t1 » %1[#0]K » %2[#0]K
+            %1 » %0:t1[#0]K » %2[#0]K
+            %2 » %0:t1[×] » %1[#0]K
+          ArrangeBy keys=[[], [#0]]
             ReadStorage materialize.public.t1
           ArrangeBy keys=[[#0]]
             Union
-              Map (true)
-                Get l0
+              Filter (#0) IS NOT NULL
+                Map (true)
+                  ReadStorage materialize.public.t2
               Map (null, null)
                 Threshold
                   Union
                     Negate
-                      Project (#0)
+                      Filter (#0) IS NOT NULL
                         Get l0
                     Distinct project=[#0]
                       Union
@@ -102,8 +105,7 @@ Explained Query:
                         Get l1
                     Distinct project=[#0]
                       Union
-                        Project (#0)
-                          ReadStorage materialize.public.t2
+                        Get l0
                         Constant
                           - (null)
 
@@ -134,7 +136,7 @@ SELECT * FROM t1 LEFT JOIN t2 ON (f0 = f2) LEFT JOIN t3 ON (f2 = f4)
 Explained Query:
   With
     cte l0 =
-      Filter (#0) IS NOT NULL
+      Project (#0)
         ReadStorage materialize.public.t2
     cte l1 =
       Filter (#0) IS NOT NULL
@@ -151,13 +153,14 @@ Explained Query:
             ReadStorage materialize.public.t1
           ArrangeBy keys=[[#0]]
             Union
-              Map (true)
-                Get l0
+              Filter (#0) IS NOT NULL
+                Map (true)
+                  ReadStorage materialize.public.t2
               Map (null, null)
                 Threshold
                   Union
                     Negate
-                      Project (#0)
+                      Filter (#0) IS NOT NULL
                         Get l0
                     Distinct project=[#0]
                       Union
@@ -177,8 +180,7 @@ Explained Query:
                         Get l1
                     Distinct project=[#0]
                       Union
-                        Project (#0)
-                          ReadStorage materialize.public.t2
+                        Get l0
                         Constant
                           - (null)
 

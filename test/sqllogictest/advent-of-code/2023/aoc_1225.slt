@@ -191,10 +191,10 @@ Explained Query:
             Project (#0, #3..=#5) // { arity: 4 }
               Join on=(#1{dst} = #2{src}) type=delta // { arity: 6 }
                 implementation
-                  %0 » %2[×]U » %3[×]U » %1:l7[#0{src}]K
-                  %1:l7 » %2[×]U » %3[×]U » %0[#1{dst}]K
-                  %2 » %3[×]U » %0[×] » %1:l7[#0{src}]K
-                  %3 » %2[×]U » %0[×] » %1:l7[#0{src}]K
+                  %0 » %1:l7[#0{src}]K » %2[×] » %3[×]
+                  %1:l7 » %0[#1{dst}]K » %2[×] » %3[×]
+                  %2 » %0[×] » %1:l7[#0{src}]K » %3[×]
+                  %3 » %0[×] » %1:l7[#0{src}]K » %2[×]
                 ArrangeBy keys=[[], [#1{dst}]] // { arity: 2 }
                   Union // { arity: 2 }
                     Filter (#1{dst}) IS NOT NULL // { arity: 2 }
@@ -264,7 +264,7 @@ Explained Query:
           Map ((#0{count} * #1{count})) // { arity: 3 }
             CrossJoin type=differential // { arity: 2 }
               implementation
-                %0[×]U » %1[×]U
+                %0[×] » %1[×]
               ArrangeBy keys=[[]] // { arity: 1 }
                 Union // { arity: 1 }
                   Get l10 // { arity: 1 }

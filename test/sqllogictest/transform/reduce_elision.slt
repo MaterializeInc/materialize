@@ -37,16 +37,16 @@ FROM x, y
 WHERE x.f1 = y.f1
 ----
 Explained Query:
-  Project (#0{f0}..=#2{f0}, #1{f1}) // { arity: 4, keys: "([0, 1])" }
-    Join on=(#1{f1} = #3{f1}) type=differential // { arity: 4, keys: "([0, 1])" }
+  Project (#2{f0}, #3{f1}, #0{f0}, #3{f1}) // { arity: 4, keys: "()" }
+    Join on=(#1{f1} = #3{f1}) type=differential // { arity: 4, keys: "()" }
       implementation
-        %1:y[#1{f1}]UK » %0[#1{f1}]K
+        %0:y[#1{f1}]K » %1[#1{f1}]K
+      ArrangeBy keys=[[#1{f1}]] // { arity: 2, keys: "([1])" }
+        ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
       ArrangeBy keys=[[#1{f1}]] // { arity: 2, keys: "([0, 1])" }
         Distinct project=[#0{f0}, #1{f1}] // { arity: 2, keys: "([0, 1])" }
           Filter (#1{f1}) IS NOT NULL // { arity: 2, keys: "()" }
             ReadStorage materialize.public.x // { arity: 2, keys: "()" }
-      ArrangeBy keys=[[#1{f1}]] // { arity: 2, keys: "([1])" }
-        ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
 
 Source materialize.public.x
   filter=((#1{f1}) IS NOT NULL)
@@ -77,16 +77,16 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Union // { arity: 4, keys: "()" }
-        Project (#0{f0}..=#2{f0}, #1{f1}) // { arity: 4, keys: "([0, 1])" }
-          Join on=(#1{f1} = #3{f1}) type=differential // { arity: 4, keys: "([0, 1])" }
+        Project (#2{f0}, #3{f1}, #0{f0}, #3{f1}) // { arity: 4, keys: "()" }
+          Join on=(#1{f1} = #3{f1}) type=differential // { arity: 4, keys: "()" }
             implementation
-              %1:y[#1{f1}]UK » %0[#1{f1}]K
+              %0:y[#1{f1}]K » %1[#1{f1}]K
+            ArrangeBy keys=[[#1{f1}]] // { arity: 2, keys: "([1])" }
+              ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
             ArrangeBy keys=[[#1{f1}]] // { arity: 2, keys: "([0, 1])" }
               Distinct project=[#0{f0}, #1{f1}] // { arity: 2, keys: "([0, 1])" }
                 Filter (#1{f1}) IS NOT NULL // { arity: 2, keys: "()" }
                   ReadStorage materialize.public.x // { arity: 2, keys: "()" }
-            ArrangeBy keys=[[#1{f1}]] // { arity: 2, keys: "([1])" }
-              ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
         Get l0 // { arity: 4, keys: "()" }
   Return // { arity: 4, keys: "()" }
     Get l0 // { arity: 4, keys: "()" }
@@ -124,7 +124,7 @@ Explained Query:
           Project (#0{f0}..=#2{f0}, #1{f1}) // { arity: 4, keys: "()" }
             Join on=(#1{f1} = #3{f1}) type=differential // { arity: 4, keys: "()" }
               implementation
-                %1:y[#1{f1}]UK » %0:x[#1{f1}]K
+                %0:x[#1{f1}]K » %1:y[#1{f1}]K
               ArrangeBy keys=[[#1{f1}]] // { arity: 2, keys: "()" }
                 Filter (#1{f1}) IS NOT NULL // { arity: 2, keys: "()" }
                   ReadStorage materialize.public.x // { arity: 2, keys: "()" }

@@ -207,13 +207,13 @@ Explained Query:
           Union
             Project (#1{dst}, #1{dst})
               ReadStorage materialize.public.edges
-            Project (#1{dst}, #3)
-              Join on=(#0{src} = #2{node}) type=differential
-                ArrangeBy keys=[[#0{src}]]
-                  Get l0
+            Project (#3{dst}, #1)
+              Join on=(#0{node} = #2{src}) type=differential
                 ArrangeBy keys=[[#0{node}]]
                   Filter (#0{dst}) IS NOT NULL
                     Get l1
+                ArrangeBy keys=[[#0{src}]]
+                  Get l0
     Return
       With Mutually Recursive
         cte l2 =
@@ -455,13 +455,13 @@ Explained Query:
           Union
             Project (#1{dst}, #1{dst})
               ReadStorage materialize.public.edges
-            Project (#1{dst}, #3)
-              Join on=(#0{src} = #2{node}) type=differential
-                ArrangeBy keys=[[#0{src}]]
-                  Get l0
+            Project (#3{dst}, #1)
+              Join on=(#0{node} = #2{src}) type=differential
                 ArrangeBy keys=[[#0{node}]]
                   Filter (#0{dst}) IS NOT NULL
                     Get l1
+                ArrangeBy keys=[[#0{src}]]
+                  Get l0
     Return
       With Mutually Recursive [recursion_limit=23]
         cte l2 =
@@ -611,19 +611,19 @@ Explained Query:
                     - ("russet")
               Join::Linear
                 linear_stage[0]
-                  lookup={ relation=0, key=[#0] }
+                  lookup={ relation=1, key=[#0{a}] }
                   stream={ key=[#0{a}], thinning=(#1) }
-                source={ relation=1, key=[#0{a}] }
+                source={ relation=0, key=[#0{a}] }
+                Get::PassArrangements l0
+                  raw=false
+                  arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
                 ArrangeBy
                   raw=true
-                  arrangements[0]={ key=[#0], permutation=id, thinning=() }
+                  arrangements[0]={ key=[#0{a}], permutation=id, thinning=() }
                   Get::Collection l1
                     project=(#1)
                     filter=((#1{a}) IS NOT NULL)
                     raw=true
-                Get::PassArrangements l0
-                  raw=false
-                  arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Return
       Get::PassArrangements l1
         raw=true

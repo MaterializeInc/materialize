@@ -186,18 +186,18 @@ Explained Query:
         Project (#2, #1) // { arity: 2 }
           Join on=(#1{c} = #3{c} AND #2{r} = (#0{r} + 1)) type=differential // { arity: 4 }
             implementation
-              %1:l5[#1{c}]K » %0:l4[#1]K
-            ArrangeBy keys=[[#1]] // { arity: 2 }
+              %0:l4[(#0{r} + 1), #1{c}]KK » %1:l5[#0{r}, #1{c}]KK
+            ArrangeBy keys=[[(#0{r} + 1), #1{c}]] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
                 Filter (#2{symbol} = ".") // { arity: 3 }
                   Get l4 // { arity: 3 }
-            ArrangeBy keys=[[#1{c}]] // { arity: 2 }
+            ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
               Get l5 // { arity: 2 }
       cte l7 =
         Reduce aggregates=[sum(((1 + #1{max}) - #0{r}))] // { arity: 1 }
           CrossJoin type=differential // { arity: 2 }
             implementation
-              %1[×]U » %0:l5[×]ef
+              %0:l5[×] » %1[×]
             ArrangeBy keys=[[]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Get l5 // { arity: 2 }
@@ -639,12 +639,12 @@ Explained Query:
             Project (#2, #1) // { arity: 2 }
               Join on=(#1{c} = #3{c} AND #2{r} = (#0{r} + 1)) type=differential // { arity: 4 }
                 implementation
-                  %1:l5[#1{c}]K » %0:l5[#1]K
-                ArrangeBy keys=[[#1]] // { arity: 2 }
+                  %0:l5[(#0{r} + 1), #1{c}]KK » %1:l5[#0{r}, #1{c}]KK
+                ArrangeBy keys=[[(#0{r} + 1), #1{c}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
                     Filter (#2{symbol} = ".") // { arity: 3 }
                       Get l5 // { arity: 3 }
-                ArrangeBy keys=[[#1{c}]] // { arity: 2 }
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
                     Filter (#2{symbol} = "O") // { arity: 3 }
                       Get l5 // { arity: 3 }
@@ -681,12 +681,12 @@ Explained Query:
             Project (#0, #3) // { arity: 2 }
               Join on=(#0{r} = #2{r} AND #3{c} = (#1{c} + 1)) type=differential // { arity: 4 }
                 implementation
-                  %1:l9[#0{r}]K » %0:l9[#0]K
-                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  %0:l9[#0{r}, (#1{c} + 1)]KK » %1:l9[#0{r}, #1{c}]KK
+                ArrangeBy keys=[[#0{r}, (#1{c} + 1)]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
                     Filter (#2{symbol} = ".") // { arity: 3 }
                       Get l9 // { arity: 3 }
-                ArrangeBy keys=[[#0{r}]] // { arity: 2 }
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
                     Filter (#2{symbol} = "O") // { arity: 3 }
                       Get l9 // { arity: 3 }
@@ -723,12 +723,12 @@ Explained Query:
             Project (#2, #1) // { arity: 2 }
               Join on=(#1{c} = #3{c} AND #2{r} = (#0{r} - 1)) type=differential // { arity: 4 }
                 implementation
-                  %1:l13[#1{c}]K » %0:l13[#1]K
-                ArrangeBy keys=[[#1]] // { arity: 2 }
+                  %0:l13[(#0{r} - 1), #1{c}]KK » %1:l13[#0{r}, #1{c}]KK
+                ArrangeBy keys=[[(#0{r} - 1), #1{c}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
                     Filter (#2{symbol} = ".") // { arity: 3 }
                       Get l13 // { arity: 3 }
-                ArrangeBy keys=[[#1{c}]] // { arity: 2 }
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
                     Filter (#2{symbol} = "O") // { arity: 3 }
                       Get l13 // { arity: 3 }
@@ -765,12 +765,12 @@ Explained Query:
             Project (#0, #3) // { arity: 2 }
               Join on=(#0{r} = #2{r} AND #3{c} = (#1{c} - 1)) type=differential // { arity: 4 }
                 implementation
-                  %1:l17[#0{r}]K » %0:l17[#0]K
-                ArrangeBy keys=[[#0]] // { arity: 2 }
+                  %0:l17[#0{r}, (#1{c} - 1)]KK » %1:l17[#0{r}, #1{c}]KK
+                ArrangeBy keys=[[#0{r}, (#1{c} - 1)]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
                     Filter (#2{symbol} = ".") // { arity: 3 }
                       Get l17 // { arity: 3 }
-                ArrangeBy keys=[[#0{r}]] // { arity: 2 }
+                ArrangeBy keys=[[#0{r}, #1{c}]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
                     Filter (#2{symbol} = "O") // { arity: 3 }
                       Get l17 // { arity: 3 }
@@ -782,7 +782,7 @@ Explained Query:
         Reduce aggregates=[sum(((1 + #1{max}) - #0{r}))] // { arity: 1 }
           CrossJoin type=differential // { arity: 2 }
             implementation
-              %1[×]U » %0:l20[×]ef
+              %0:l20[×] » %1[×]
             ArrangeBy keys=[[]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#2{symbol} = "O") // { arity: 3 }

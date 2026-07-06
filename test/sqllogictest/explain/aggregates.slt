@@ -104,15 +104,15 @@ Explained Query:
       Filter (#2{c} != "x")
         ReadStorage materialize.public.t
   Return
-    Project (#2{a}, #1{array_agg}, #3{max_c})
+    Project (#0{a}, #3{array_agg}, #1{max_c})
       Join on=(#0{a} = #2{a}) type=differential
-        ArrangeBy keys=[[#0{a}]]
-          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
-            Project (#0{a}, #1{b})
-              Get l0
         ArrangeBy keys=[[#0{a}]]
           Reduce group_by=[#0{a}] aggregates=[max(#1{c})]
             Project (#0{a}, #2{c})
+              Get l0
+        ArrangeBy keys=[[#0{a}]]
+          Reduce group_by=[#0{a}] aggregates=[array_agg[order_by=[]](row(array[#1{b}]))]
+            Project (#0{a}, #1{b})
               Get l0
 
 Source materialize.public.t

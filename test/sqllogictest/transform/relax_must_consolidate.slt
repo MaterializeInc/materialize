@@ -420,10 +420,10 @@ Explained Query:
           linear_stage[0]
             closure
               project=(#0)
-              filter=((#0{b}) IS NOT NULL AND (#1{a} = 5) AND (1 = (#1{a} % 2)) AND (#2{a} = 5))
-            lookup={ relation=0, key=[#1] }
+              filter=((#0{b}) IS NOT NULL AND (#1{a} = 5) AND (#2{a} = 5) AND (1 = (#2{a} % 2)))
+            lookup={ relation=1, key=[#1{b}] }
             stream={ key=[#1{b}], thinning=(#0) }
-          source={ relation=1, key=[#1{b}] }
+          source={ relation=0, key=[#1{b}] }
           Get::PassArrangements l0
             raw=false
             arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
@@ -515,21 +515,21 @@ Explained Query:
         val_plan=id
         Join::Linear
           linear_stage[0]
-            lookup={ relation=0, key=[#0] }
+            lookup={ relation=1, key=[#0{b}] }
             stream={ key=[#0{b}], thinning=() }
-          source={ relation=1, key=[#0{b}] }
-          ArrangeBy
-            raw=true
-            arrangements[0]={ key=[#0], permutation=id, thinning=() }
-            Get::Collection materialize.public.t
-              project=(#1)
-              raw=true
+          source={ relation=0, key=[#0{b}] }
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
             Get::Collection materialize.public.t
               project=(#1)
               filter=((1 = (#0{a} % 2)))
+              raw=true
+          ArrangeBy
+            raw=true
+            arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
+            Get::Collection materialize.public.t
+              project=(#1)
               raw=true
   Return
     Union

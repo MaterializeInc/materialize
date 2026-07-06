@@ -21,18 +21,18 @@ FROM x, y
 WHERE x.f1 = y.f1
 ----
 Explained Query:
-  Project (#0{f0}, #1{f1}, #3{f0}, #1{f1}) // { arity: 4 }
-    Join on=(#1{f1} = #2{f1}) type=differential // { arity: 4 }
+  Project (#2{f0}, #3{f1}, #1{f0}, #3{f1}) // { arity: 4 }
+    Join on=(#0{f1} = #3{f1}) type=differential // { arity: 4 }
       implementation
-        %1[#0{f1}]K » %0[#1{f1}]K
-      ArrangeBy keys=[[#1{f1}]] // { arity: 2 }
-        Distinct project=[#0{f0}, #1{f1}] // { arity: 2 }
-          Filter (#1{f1}) IS NOT NULL // { arity: 2 }
-            ReadStorage materialize.public.x // { arity: 2 }
+        %0[#0{f1}]K » %1[#1{f1}]K
       ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
         Distinct project=[#1{f1}, #0{f0}] // { arity: 2 }
           Filter (#1{f1}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.y // { arity: 2 }
+      ArrangeBy keys=[[#1{f1}]] // { arity: 2 }
+        Distinct project=[#0{f0}, #1{f1}] // { arity: 2 }
+          Filter (#1{f1}) IS NOT NULL // { arity: 2 }
+            ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
   filter=((#1{f1}) IS NOT NULL)
@@ -66,7 +66,7 @@ Explained Query:
         Project (#0{f0}, #1{f1}, #3{f0}, #1{f1}) // { arity: 4 }
           Join on=(#1{f1} = #2{f1}) type=differential // { arity: 4 }
             implementation
-              %1[#0{f1}]K » %0[#1{f1}]K
+              %0[#1{f1}]K » %1[#0{f1}]K
             ArrangeBy keys=[[#1{f1}]] // { arity: 2 }
               Distinct project=[#0{f0}, #1{f1}] // { arity: 2 }
                 Filter (#1{f1}) IS NOT NULL // { arity: 2 }
@@ -198,14 +198,14 @@ Explained Query:
           Union // { arity: 2 }
             Negate // { arity: 2 }
               CrossJoin type=differential // { arity: 2 }
+                ArrangeBy keys=[[]] // { arity: 2 }
+                  Filter (#1{f2} != 4) // { arity: 2 }
+                    Get l0 // { arity: 2 }
                 ArrangeBy keys=[[]] // { arity: 0 }
                   Project () // { arity: 0 }
                     TopK order_by=[#0{f2} asc nulls_last] limit=1 offset=7 // { arity: 1 }
                       Project (#1{f2}) // { arity: 1 }
                         ReadStorage materialize.public.t2 // { arity: 2 }
-                ArrangeBy keys=[[]] // { arity: 2 }
-                  Filter (#1{f2} != 4) // { arity: 2 }
-                    Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
 
 Source materialize.public.t2

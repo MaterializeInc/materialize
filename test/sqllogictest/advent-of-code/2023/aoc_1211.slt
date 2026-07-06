@@ -226,7 +226,7 @@ Explained Query:
           Filter (#0{r} < #1{r}) // { arity: 2 }
             CrossJoin type=differential // { arity: 2 }
               implementation
-                %0[×]ef » %1:l3[×]ef
+                %0[×] » %1:l3[×]
               ArrangeBy keys=[[]] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Filter (#1{count} = 0) // { arity: 2 }
@@ -254,7 +254,7 @@ Explained Query:
           Filter (#0{c} < #1{c}) // { arity: 2 }
             CrossJoin type=differential // { arity: 2 }
               implementation
-                %0[×]ef » %1:l6[×]ef
+                %0[×] » %1:l6[×]
               ArrangeBy keys=[[]] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Filter (#1{count} = 0) // { arity: 2 }
@@ -276,9 +276,9 @@ Explained Query:
       Project (#0, #1, #3{count}, #5{count}) // { arity: 4 }
         Join on=(#0 = #2 AND #1 = #4) type=delta // { arity: 6 }
           implementation
-            %0:l1 » %1[#0]UK » %2[#0]UK
-            %1 » %0:l1[#0]Kef » %2[#0]UK
-            %2 » %0:l1[#1]Kef » %1[#0]UK
+            %0:l1 » %1[#0]K » %2[#0]K
+            %1 » %0:l1[#0]K » %2[#0]K
+            %2 » %0:l1[#1]K » %1[#0]K
           ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
             Get l1 // { arity: 2 }
           ArrangeBy keys=[[#0]] // { arity: 2 }
@@ -328,7 +328,7 @@ Explained Query:
   Return // { arity: 2 }
     CrossJoin type=differential // { arity: 2 }
       implementation
-        %0[×]U » %1[×]U
+        %0[×] » %1[×]
       ArrangeBy keys=[[]] // { arity: 1 }
         Union // { arity: 1 }
           Get l11 // { arity: 1 }

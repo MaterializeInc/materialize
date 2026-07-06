@@ -62,10 +62,10 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-u2  5  NULL  Differential␠Join␠%1␠»␠%0
+u2  5  NULL  Differential␠Join␠%0␠»␠%1
 u2  4  5  ␠␠Arrange␠(#0{x})
 u2  3  4  ␠␠␠␠Read␠u1
-u2  2  5  ␠␠Arrange␠(#0)
+u2  2  5  ␠␠Arrange␠(#0{x})
 u2  1  2  ␠␠␠␠Read␠u1
 u3  7  NULL  Arrange␠(#0{x})
 u3  6  7  ␠␠Stream␠u2
@@ -79,10 +79,10 @@ SELECT global_id, lir_id, parent_lir_id, repeat(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-u2  5  NULL  Differential␠Join␠%1␠»␠%0
+u2  5  NULL  Differential␠Join␠%0␠»␠%1
 u2  4  5  ␠␠Arrange␠(#0{x})
 u2  3  4  ␠␠␠␠Read␠u1
-u2  2  5  ␠␠Arrange␠(#0)
+u2  2  5  ␠␠Arrange␠(#0{x})
 u2  1  2  ␠␠␠␠Read␠u1
 u3  7  NULL  Arrange␠(#0{x})
 u3  6  7  ␠␠Stream␠u2
@@ -145,10 +145,10 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t<id>  5  NULL  Differential␠Join␠%1␠»␠%0
+t<id>  5  NULL  Differential␠Join␠%0␠»␠%1
 t<id>  4  5  ␠␠Arrange␠(#0{x})
 t<id>  3  4  ␠␠␠␠Read␠u4
-t<id>  2  5  ␠␠Arrange␠(#0)
+t<id>  2  5  ␠␠Arrange␠(#0{x})
 t<id>  1  2  ␠␠␠␠Read␠u4
 
 # omitting pg_size_pretty(sum(size)) as size
@@ -160,10 +160,10 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t<id>  5  NULL  Differential␠Join␠%1␠»␠%0
+t<id>  5  NULL  Differential␠Join␠%0␠»␠%1
 t<id>  4  5  ␠␠Arrange␠(#0{x})
 t<id>  3  4  ␠␠␠␠Read␠u4
-t<id>  2  5  ␠␠Arrange␠(#0)
+t<id>  2  5  ␠␠Arrange␠(#0{x})
 t<id>  1  2  ␠␠␠␠Read␠u4
 
 statement ok
@@ -423,22 +423,22 @@ ORDER BY global_id, lir_id DESC;
 t<id>  Returning␠Distinct␠GroupAggregate
 t<id>  ␠␠Union
 t<id>  ␠␠␠␠Differential␠Join␠%1␠»␠%0
+t<id>  ␠␠␠␠␠␠Arranged␠u15
 t<id>  ␠␠␠␠␠␠Arrange␠(#0{messageid})
 t<id>  ␠␠␠␠␠␠␠␠Stream␠l0
-t<id>  ␠␠␠␠␠␠Arranged␠u15
 t<id>  ␠␠␠␠Arranged␠u13
 t<id>  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
 t<id>  ␠␠Distinct␠GroupAggregate
 t<id>  ␠␠␠␠Union
-t<id>  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
-t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#9{id})
-t<id>  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
-t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#0)
+t<id>  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#0{id})
 t<id>  ␠␠␠␠␠␠␠␠␠␠Read␠l0
-t<id>  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
-t<id>  ␠␠␠␠␠␠␠␠Arranged␠u13
-t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#8)
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#1{id})
 t<id>  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t<id>  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
+t<id>  ␠␠␠␠␠␠␠␠Arrange␠(#1{id})
+t<id>  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t<id>  ␠␠␠␠␠␠␠␠Arranged␠u13
 t<id>  ␠␠␠␠␠␠Arranged␠u13
 u10  Arrange␠(#1{person1id})
 u10  ␠␠Stream␠u9
@@ -461,16 +461,17 @@ u21  ␠␠Read␠l0
 u21  ␠␠Stream␠l0
 u21  With␠l0␠=␠Map/Filter/Project
 u21  ␠␠Accumulable␠GroupAggregate
-u21  ␠␠␠␠Differential␠Join␠%1␠»␠%0␠»␠%2
+u21  ␠␠␠␠Delta␠Join␠[%0␠»␠%1␠»␠%2]␠[%1␠»␠%0␠»␠%2]␠[%2␠»␠%0␠»␠%1]
 u21  ␠␠␠␠␠␠Arranged␠u9
 u21  ␠␠␠␠␠␠Arranged␠u17
-u21  ␠␠␠␠␠␠Arranged␠u17
+u21  ␠␠␠␠␠␠Arrange␠(empty␠key)␠(#1{parentmessageid})
+u21  ␠␠␠␠␠␠␠␠Arranged␠u17
 u22  Arrange␠(#0{src})
 u22  ␠␠Stream␠u21
-u23  Returning␠Differential␠Join␠%1␠»␠%0
+u23  Returning␠Differential␠Join␠%0␠»␠%1
 u23  ␠␠Arrange␠(#2{w})
 u23  ␠␠␠␠Stream␠l5
-u23  ␠␠Arrange␠(#0)
+u23  ␠␠Arrange␠(#0{w})
 u23  ␠␠␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
 u23  ␠␠␠␠␠␠Read␠l5
 u23  With␠Recursive␠l7␠=␠Union
@@ -485,10 +486,10 @@ u23  ␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16
 u23  ␠␠␠␠Arranged␠l5
 u23  l5␠=␠Unarranged␠Raw␠Stream
 u23  ␠␠Bucketed␠Hierarchical␠GroupAggregate␠(buckets:␠268435456␠16777216␠1048576␠65536␠4096␠256␠16)
-u23  ␠␠␠␠Differential␠Join␠%1␠»␠%0
+u23  ␠␠␠␠Differential␠Join␠%0␠»␠%1
 u23  ␠␠␠␠␠␠Arrange␠(#1{dst})
 u23  ␠␠␠␠␠␠␠␠Read␠l4
-u23  ␠␠␠␠␠␠Arrange␠(#1)
+u23  ␠␠␠␠␠␠Arrange␠(#1{dst})
 u23  ␠␠␠␠␠␠␠␠Read␠l3
 u23  l4␠=␠Non-monotonic␠TopK
 u23  ␠␠Union

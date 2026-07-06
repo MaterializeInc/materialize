@@ -284,7 +284,7 @@ Explained Query:
     cte l10 =
       CrossJoin type=differential // { arity: 3 }
         implementation
-          %1[×]U » %0:l9[×]
+          %0:l9[×] » %1[×]
         ArrangeBy keys=[[]] // { arity: 2 }
           Get l9 // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 1 }
@@ -347,14 +347,14 @@ Explained Query:
           Project () // { arity: 0 }
             Join on=(#0{c} = #2{c} AND #1{c} = #3{c}) type=differential // { arity: 4 }
               implementation
-                %1[#0{c}, #1{c}]UKKA » %0[#0{c}, #1{c}]UKKA
-              ArrangeBy keys=[[#0{c}, #1{c}]] // { arity: 2 }
-                Distinct project=[#0{c}, #1{c}] // { arity: 2 }
-                  Get l9 // { arity: 2 }
+                %0[#0{c}, #1{c}]KKA » %1[#0{c}, #1{c}]KKA
               ArrangeBy keys=[[#0{c}, #1{c}]] // { arity: 2 }
                 Distinct project=[#0{c}, #1{c}] // { arity: 2 }
                   Project (#0{c}, #1{c}) // { arity: 2 }
                     Get l13 // { arity: 3 }
+              ArrangeBy keys=[[#0{c}, #1{c}]] // { arity: 2 }
+                Distinct project=[#0{c}, #1{c}] // { arity: 2 }
+                  Get l9 // { arity: 2 }
       cte l15 =
         Distinct project=[#0{min}..=#3{c}] // { arity: 4 }
           Union // { arity: 4 }
@@ -362,7 +362,7 @@ Explained Query:
               Map (("r" || integer_to_text(#0{r})), "r") // { arity: 4 }
                 CrossJoin type=differential // { arity: 2 }
                   implementation
-                    %1[×]U » %0:l6[×]
+                    %0:l6[×] » %1[×]
                   ArrangeBy keys=[[]] // { arity: 1 }
                     Get l6 // { arity: 1 }
                   ArrangeBy keys=[[]] // { arity: 1 }
@@ -382,7 +382,7 @@ Explained Query:
               Map (("d" || integer_to_text(#0{c})), "d") // { arity: 4 }
                 CrossJoin type=differential // { arity: 2 }
                   implementation
-                    %1[×]U » %0:l1[×]
+                    %0:l1[×] » %1[×]
                   ArrangeBy keys=[[]] // { arity: 1 }
                     Get l1 // { arity: 1 }
                   ArrangeBy keys=[[]] // { arity: 1 }
@@ -417,7 +417,7 @@ Explained Query:
                 Project (#2{c}) // { arity: 1 }
                   Join on=(#0{min} = #3{c} AND #1{min} = #4{c}) type=differential // { arity: 5 }
                     implementation
-                      %1[#0{c}, #1{c}]UKKA » %0[#0{min}, #1{min}]KK
+                      %1[#0{c}, #1{c}]KKA » %0[#0{min}, #1{min}]KK
                     ArrangeBy keys=[[#0{min}, #1{min}]] // { arity: 3 }
                       Distinct project=[#0{min}..=#2{c}] // { arity: 3 }
                         Project (#0{min}, #1{min}, #3{c}) // { arity: 3 }
@@ -430,7 +430,7 @@ Explained Query:
       Return // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
-            %0[×]U » %1[×]U
+            %0[×] » %1[×]
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l14 // { arity: 1 }

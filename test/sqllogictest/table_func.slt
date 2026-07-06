@@ -391,7 +391,7 @@ Explained Query:
         Project (#0{a}..=#2{a}) // { arity: 3 }
           Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
             implementation
-              %1:l0[#1{b}]K » %0:l0[#1{b}]K
+              %0:l0[#1{b}]K » %1:l0[#1{b}]K
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
 
@@ -417,7 +417,7 @@ Explained Query:
         Project (#0{a}..=#2{a}) // { arity: 3 }
           Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
             implementation
-              %1:l0[#1{b}]K » %0:l0[#1{b}]K
+              %0:l0[#1{b}]K » %1:l0[#1{b}]K
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
 
@@ -446,7 +446,7 @@ Explained Query:
           Project (#0{a}..=#2{a}) // { arity: 3 }
             Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
               implementation
-                %1:l0[#1{b}]K » %0:l0[#1{b}]K
+                %0:l0[#1{b}]K » %1:l0[#1{b}]K
               Get l0 // { arity: 2 }
               Get l0 // { arity: 2 }
 

@@ -239,8 +239,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
 Explained Query:
   With
     cte l0 =
-      Project (#1{a}, #2{b})
-        Join on=(#0{a} = #1{a}) type=differential
+      Project (#0{a}, #1{b})
+        Join on=(#0{a} = #2{a}) type=differential
+          ArrangeBy keys=[[#0{a}]]
+            ReadIndex on=t t_a_idx=[differential join]
           ArrangeBy keys=[[#0{a}]]
             Distinct project=[#0{a}]
               Project (#1{a})
@@ -253,25 +255,23 @@ Explained Query:
                       Distinct project=[#0{a}]
                         Project (#0{a})
                           ReadIndex on=t t_a_idx=[*** full scan ***]
-          ArrangeBy keys=[[#0{a}]]
-            ReadIndex on=t t_a_idx=[differential join]
   Return
-    Project (#1{a}, #0{b})
-      Join on=(#0{b} = #2{b}) type=differential
+    Project (#0{a}, #2{b})
+      Join on=(#1{b} = #2{b}) type=differential
+        ArrangeBy keys=[[#1{b}]]
+          Get l0
         ArrangeBy keys=[[#0{b}]]
           Distinct project=[#0{b}]
-            Project (#1{b})
-              Filter (#1{b} > #0{b})
+            Project (#0{b})
+              Filter (#0{b} > #1{b})
                 CrossJoin type=differential
-                  ArrangeBy keys=[[]]
-                    Project (#1{b})
-                      ReadStorage materialize.public.mv
                   ArrangeBy keys=[[]]
                     Distinct project=[#0{b}]
                       Project (#1{b})
                         Get l0
-        ArrangeBy keys=[[#1{b}]]
-          Get l0
+                  ArrangeBy keys=[[]]
+                    Project (#1{b})
+                      ReadStorage materialize.public.mv
 
 Source materialize.public.mv
 
@@ -301,19 +301,19 @@ Explained Query:
           Get l1
     cte l3 =
       TopK group_by=[#0{b}] limit=█
-        Project (#2{b}, #0{a})
-          Join on=(#1{b} = #2{b}) type=differential
+        Project (#0{b}, #1{a})
+          Join on=(#0{b} = #2{b}) type=differential
+            Get l2
             ArrangeBy keys=[[#1{b}]]
               ReadIndex on=iv iv_b_idx=[differential join]
-            Get l2
     cte l4 =
       TopK group_by=[#0{b}] limit=█
-        Project (#2{b}, #0{a})
-          Join on=(#1{b} = #2{b}) type=differential
+        Project (#0{b}, #1{a})
+          Join on=(#0{b} = #2{b}) type=differential
+            Get l2
             ArrangeBy keys=[[#1{b}]]
               Filter (#1{b}) IS NOT NULL
                 ReadStorage materialize.public.mv
-            Get l2
   Return
     Project (#2{a}, #4{a})
       Join on=(#0{b} = #1{b} = #3{b}) type=delta
@@ -357,8 +357,10 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
 Explained Query:
   With
     cte l0 =
-      Project (#1{a}, #2{b}) // { equivs: "[[█, (#0{a}) IS NULL]]" }
-        Join on=(#0{a} = #1{a}) type=differential // { equivs: "[[#0{a}, #1{a}], [█, (#0{a}) IS NULL]]" }
+      Project (#0{a}, #1{b}) // { equivs: "[[█, (#0{a}) IS NULL]]" }
+        Join on=(#0{a} = #2{a}) type=differential // { equivs: "[[#0{a}, #2{a}], [█, (#0{a}) IS NULL]]" }
+          ArrangeBy keys=[[#0{a}]] // { equivs: "[]" }
+            ReadIndex on=t t_a_idx=[differential join] // { equivs: "[]" }
           ArrangeBy keys=[[#0{a}]] // { equivs: "[[█, (#0{a}) IS NULL]]" }
             Distinct project=[#0{a}] // { equivs: "[[█, (#0{a}) IS NULL]]" }
               Project (#1{a}) // { equivs: "[[█, (#0{a}) IS NULL]]" }
@@ -371,25 +373,23 @@ Explained Query:
                       Distinct project=[#0{a}] // { equivs: "[]" }
                         Project (#0{a}) // { equivs: "[]" }
                           ReadIndex on=t t_a_idx=[*** full scan ***] // { equivs: "[]" }
-          ArrangeBy keys=[[#0{a}]] // { equivs: "[]" }
-            ReadIndex on=t t_a_idx=[differential join] // { equivs: "[]" }
   Return // { equivs: "[[█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
-    Project (#1{a}, #0{b}) // { equivs: "[[█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
-      Join on=(#0{b} = #2{b}) type=differential // { equivs: "[[#0{b}, #2{b}], [█, (#0{b}) IS NULL, (#1{a}) IS NULL]]" }
+    Project (#0{a}, #2{b}) // { equivs: "[[█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
+      Join on=(#1{b} = #2{b}) type=differential // { equivs: "[[#1{b}, #2{b}], [█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
+        ArrangeBy keys=[[#1{b}]] // { equivs: "[[█, (#0{a}) IS NULL]]" }
+          Get l0 // { equivs: "[[█, (#0{a}) IS NULL]]" }
         ArrangeBy keys=[[#0{b}]] // { equivs: "[[█, (#0{b}) IS NULL]]" }
           Distinct project=[#0{b}] // { equivs: "[[█, (#0{b}) IS NULL]]" }
-            Project (#1{b}) // { equivs: "[[█, (#0{b}) IS NULL]]" }
-              Filter (#1{b} > #0{b}) // { equivs: "[[█, (#0{b}) IS NULL, (#1{b}) IS NULL], [█, (#1{b} > #0{b})]]" }
+            Project (#0{b}) // { equivs: "[[█, (#0{b}) IS NULL]]" }
+              Filter (#0{b} > #1{b}) // { equivs: "[[█, (#0{b}) IS NULL, (#1{b}) IS NULL], [█, (#0{b} > #1{b})]]" }
                 CrossJoin type=differential // { equivs: "[]" }
-                  ArrangeBy keys=[[]] // { equivs: "[]" }
-                    Project (#1{b}) // { equivs: "[]" }
-                      ReadStorage materialize.public.mv // { equivs: "[[█, (#0{a}) IS NULL]]" }
                   ArrangeBy keys=[[]] // { equivs: "[]" }
                     Distinct project=[#0{b}] // { equivs: "[]" }
                       Project (#1{b}) // { equivs: "[]" }
                         Get l0 // { equivs: "[[█, (#0{a}) IS NULL]]" }
-        ArrangeBy keys=[[#1{b}]] // { equivs: "[[█, (#0{a}) IS NULL]]" }
-          Get l0 // { equivs: "[[█, (#0{a}) IS NULL]]" }
+                  ArrangeBy keys=[[]] // { equivs: "[]" }
+                    Project (#1{b}) // { equivs: "[]" }
+                      ReadStorage materialize.public.mv // { equivs: "[[█, (#0{a}) IS NULL]]" }
 
 Source materialize.public.mv
 
@@ -417,29 +417,31 @@ Explained Query:
       ArrangeBy keys=[[#1{b}]]
         Get l0
     cte l2 =
+      ArrangeBy keys=[[#0{b}]]
+        Project (#1{b})
+          Get l0
+    cte l3 =
       Project (#0{a}..=#2{a})
         Join on=(#1{b} = #3{b} = #4{b}) type=delta
           Get l1
           Get l1
-          ArrangeBy keys=[[#0{b}]]
-            Project (#1{b})
-              Get l0
+          Get l2
   Return
     Union
       Map (█, █)
         Union
           Negate
             Project ()
-              Join on=(#1{b} = #2{b}) type=differential
-                Get l1
+              Join on=(#0{b} = #1{b}) type=differential
                 ArrangeBy keys=[[#0{b}]]
                   Distinct project=[#0{b}]
                     Project (#1{b})
-                      Get l2
+                      Get l3
+                Get l2
           Project ()
             ReadIndex on=t t_a_idx=[*** full scan ***]
       Project (#0{a}, #2{a})
-        Get l2
+        Get l3
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -542,7 +544,7 @@ Explained Query:
         Filter (#0{f0}) IS NOT NULL AND (#2{f2}) IS NOT NULL AND (#3{f3}) IS NOT NULL AND (#4{f4}) IS NOT NULL AND (#6{f6}) IS NOT NULL AND (#8{f8}) IS NOT NULL AND (#9{f9}) IS NOT NULL AND (#11{f11}) IS NOT NULL AND (#12{f12}) IS NOT NULL AND (#13{f13}) IS NOT NULL AND (#15{f15}) IS NOT NULL AND (#16{f16}) IS NOT NULL
           ReadStorage materialize.public.r
   Return
-    Project (#0{f0}..=#16{f16}, #0{f0}, #18{f1}, #2{f2}..=#4{f4}, #22{f5}, #6{f6}, #24{f7}, #8{f8}, #9{f9}, #27{f10}, #11{f11}..=#13{f13}, #31{f14}, #15{f15}, #16{f16})
+    Project (#17{f0}..=#33{f16}, #17{f0}, #1{f1}, #19{f2}..=#21{f4}, #5{f5}, #23{f6}, #7{f7}, #25{f8}, #26{f9}, #10{f10}, #28{f11}..=#30{f13}, #14{f14}, #32{f15}, #33{f16})
       Join on=(#0{f0} = #17{f0} AND #2{f2} = #19{f2} AND #3{f3} = #20{f3} AND #4{f4} = #21{f4} AND #6{f6} = #23{f6} AND #8{f8} = #25{f8} AND #9{f9} = #26{f9} AND #11{f11} = #28{f11} AND #12{f12} = #29{f12} AND #13{f13} = #30{f13} AND #15{f15} = #32{f15} AND #16{f16} = #33{f16}) type=differential
         Get l0
         Get l0

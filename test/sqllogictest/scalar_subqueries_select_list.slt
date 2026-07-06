@@ -62,10 +62,7 @@ Explained Query:
     Project (#0{f1}, #0{f1}) // { arity: 2 }
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %0:t2[×] » %1[×]
-        ArrangeBy keys=[[]] // { arity: 0 }
-          Project () // { arity: 0 }
-            ReadStorage materialize.public.t2 // { arity: 1 }
+          %0[×] » %1:t2[×]
         ArrangeBy keys=[[]] // { arity: 1 }
           Union // { arity: 1 }
             Get l0 // { arity: 1 }
@@ -77,6 +74,9 @@ Explained Query:
                       Get l0 // { arity: 1 }
                 Constant // { arity: 0 }
                   - ()
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
 Source materialize.public.t2
@@ -98,16 +98,16 @@ Explained Query:
       Distinct project=[#0{f1}] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
     cte l1 =
-      Project (#1{f1}) // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:l0[#0{f1}]UK » %0:t1[#0{f1}]K
-          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
-            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
-              ReadStorage materialize.public.t1 // { arity: 1 }
+            %0:l0[#0{f1}]K » %1:t1[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
     cte l2 =
       Union // { arity: 2 }
         Project (#0{f1}, #0{f1}) // { arity: 2 }
@@ -120,7 +120,7 @@ Explained Query:
     Project (#2{f1}, #2{f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
         implementation
-          %1[#0{f1}]K » %0:t2[#0{f1}]K
+          %0:t2[#0{f1}]K » %1[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -195,7 +195,7 @@ Explained Query:
     Project (#2{f1}, #2{f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
         implementation
-          %1[#0{f1}]K » %0:t2[#0{f1}]K
+          %0:t2[#0{f1}]K » %1[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -324,16 +324,16 @@ Explained Query:
       Distinct project=[#0{f1}] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
     cte l1 =
-      Project (#1{f1}) // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:l0[#0{f1}]UK » %0:t1[#0{f1}]K
-          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
-            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
-              ReadStorage materialize.public.t1 // { arity: 1 }
+            %0:l0[#0{f1}]K » %1:t1[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
     cte l2 =
       Project (#0{f1}, #2) // { arity: 2 }
         FlatMap guard_subquery_size(#1{count}) // { arity: 3 }
@@ -403,16 +403,16 @@ Explained Query:
       Distinct project=[#0{f1}] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
     cte l1 =
-      Project (#1{f1}) // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:l0[#0{f1}]UK » %0:t1[#0{f1}]K
-          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
-            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
-              ReadStorage materialize.public.t1 // { arity: 1 }
+            %0:l0[#0{f1}]K » %1:t1[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
     cte l2 =
       Reduce group_by=[#0{f1}] aggregates=[min(#0{f1})] // { arity: 2 }
         Get l1 // { arity: 1 }
@@ -441,9 +441,9 @@ Explained Query:
     Project (#2{min_f1}, #4{max_f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1} = #3{f1}) type=delta // { arity: 5 }
         implementation
-          %0:t2 » %1[#0{f1}]UK » %2[#0{f1}]UK
-          %1 » %0:t2[#0{f1}]K » %2[#0{f1}]UK
-          %2 » %0:t2[#0{f1}]K » %1[#0{f1}]UK
+          %0:t2 » %1[#0{f1}]K » %2[#0{f1}]K
+          %1 » %0:t2[#0{f1}]K » %2[#0{f1}]K
+          %2 » %0:t2[#0{f1}]K » %1[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -493,29 +493,29 @@ Explained Query:
       Distinct project=[#0{f1}] // { arity: 1 }
         ReadStorage materialize.public.t3 // { arity: 1 }
     cte l1 =
-      Project (#1{f1}) // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:l0[#0{f1}]UK » %0:t2[#0{f1}]K
-          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
-            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
-              ReadStorage materialize.public.t2 // { arity: 1 }
+            %0:l0[#0{f1}]K » %1:t2[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t2 // { arity: 1 }
     cte l2 =
       Distinct project=[#0{f1}] // { arity: 1 }
         Get l1 // { arity: 1 }
     cte l3 =
-      Project (#1{f1}) // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:l2[#0{f1}]UK » %0:t1[#0{f1}]K
+            %0:l2[#0{f1}]K » %1:t1[#0{f1}]K
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Get l2 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 1 }
-          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
-            Get l2 // { arity: 1 }
     cte l4 =
       Union // { arity: 2 }
         Project (#0{f1}, #0{f1}) // { arity: 2 }
@@ -525,10 +525,12 @@ Explained Query:
             Reduce group_by=[#0{f1}] aggregates=[count(*)] // { arity: 2 }
               Get l3 // { arity: 1 }
     cte l5 =
-      Project (#2{f1}, #1{f1}) // { arity: 2 }
-        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
+      Project (#0{f1}, #2{f1}) // { arity: 2 }
+        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1:l1[#0{f1}]K » %0[#0{f1}]K
+            %0:l1[#0{f1}]K » %1[#0{f1}]K
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Get l1 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Union // { arity: 2 }
               Get l4 // { arity: 2 }
@@ -539,8 +541,6 @@ Explained Query:
                       Project (#0{f1}) // { arity: 1 }
                         Get l4 // { arity: 2 }
                   Get l2 // { arity: 1 }
-          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
-            Get l1 // { arity: 1 }
     cte l6 =
       Union // { arity: 2 }
         Get l5 // { arity: 2 }
@@ -553,7 +553,7 @@ Explained Query:
     Project (#2{f1}) // { arity: 1 }
       Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
         implementation
-          %1[#0{f1}]K » %0:t3[#0{f1}]K
+          %0:t3[#0{f1}]K » %1[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           ReadStorage materialize.public.t3 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -601,14 +601,14 @@ Explained Query:
         Filter (#0{f1}) IS NOT NULL // { arity: 1 }
           ReadStorage materialize.public.t1 // { arity: 1 }
     cte l2 =
-      Project (#1{f1}) // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:l0[#0{f1}]UK » %0:l1[#0{f1}]K
-          Get l1 // { arity: 1 }
+            %0:l0[#0{f1}]K » %1:l1[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               Get l0 // { arity: 1 }
+          Get l1 // { arity: 1 }
     cte l3 =
       Union // { arity: 2 }
         Project (#0{f1}, #0{f1}) // { arity: 2 }
@@ -621,7 +621,7 @@ Explained Query:
       Project (#0{f1}, #2{f1}) // { arity: 2 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
           implementation
-            %1[#0{f1}]K » %0:t2[#0{f1}]K
+            %0:t2[#0{f1}]K » %1[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             ReadStorage materialize.public.t2 // { arity: 1 }
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -639,14 +639,14 @@ Explained Query:
         Project (#0{f1}) // { arity: 1 }
           Get l4 // { arity: 2 }
     cte l6 =
-      Project (#1{f1}) // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
         Join on=(#0{f1} = #1{f1}) type=differential // { arity: 2 }
           implementation
-            %1:l5[#0{f1}]UK » %0:l1[#0{f1}]K
-          Get l1 // { arity: 1 }
+            %0:l5[#0{f1}]K » %1:l1[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               Get l5 // { arity: 1 }
+          Get l1 // { arity: 1 }
     cte l7 =
       Union // { arity: 2 }
         Project (#0{f1}, #0{f1}) // { arity: 2 }
@@ -660,7 +660,7 @@ Explained Query:
         Project (#1{f1}, #3{f1}) // { arity: 2 }
           Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
             implementation
-              %1[#0{f1}]K » %0:l4[#0{f1}]K
+              %0:l4[#0{f1}]K » %1[#0{f1}]K
             ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
               Get l4 // { arity: 2 }
             ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -718,8 +718,8 @@ Explained Query:
         Join on=(#0{f1} = #1{f1} = #2{f1}) type=delta // { arity: 3 }
           implementation
             %0:l0 » %1:t1[#0{f1}]K » %2:t2[#0{f1}]K
-            %1:t1 » %0:l0[#0{f1}]UK » %2:t2[#0{f1}]K
-            %2:t2 » %0:l0[#0{f1}]UK » %1:t1[#0{f1}]K
+            %1:t1 » %0:l0[#0{f1}]K » %2:t2[#0{f1}]K
+            %2:t2 » %0:l0[#0{f1}]K » %1:t1[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
             Filter (#0{f1}) IS NOT NULL // { arity: 1 }
               Get l0 // { arity: 1 }
@@ -741,7 +741,7 @@ Explained Query:
     Project (#2{f1}, #2{f1}) // { arity: 2 }
       Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
         implementation
-          %1[#0{f1}]K » %0:t3[#0{f1}]K
+          %0:t3[#0{f1}]K » %1[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           ReadStorage materialize.public.t3 // { arity: 1 }
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
@@ -800,16 +800,16 @@ Explained Query:
       Distinct project=[#0{f1}, #1{f1}] // { arity: 2 }
         Get l0 // { arity: 2 }
     cte l2 =
-      Project (#1{f1}, #2{f1}) // { arity: 2 }
-        Join on=(#0{f1} = #1{f1}) type=differential // { arity: 3 }
+      Project (#0{f1}, #1{f1}) // { arity: 2 }
+        Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
           implementation
-            %1:l1[#0{f1}]UK » %0:t1[#0{f1}]K
-          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
-            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
-              ReadStorage materialize.public.t1 // { arity: 1 }
+            %0:l1[#0{f1}]K » %1:t1[#0{f1}]K
           ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
             Filter (#0{f1} = #1{f1}) // { arity: 2 }
               Get l1 // { arity: 2 }
+          ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+            Filter (#0{f1}) IS NOT NULL // { arity: 1 }
+              ReadStorage materialize.public.t1 // { arity: 1 }
     cte l3 =
       Union // { arity: 3 }
         Project (#0{f1}, #1{f1}, #0{f1}) // { arity: 3 }
@@ -822,7 +822,7 @@ Explained Query:
     Project (#2{f1}, #2{f1}) // { arity: 2 }
       Join on=(#0{f1} = #3{f1} AND #1{f1} = #4{f1}) type=differential // { arity: 5 }
         implementation
-          %1:l0[#0{f1}, #1{f1}]KK » %0[#0{f1}, #1{f1}]KK
+          %0[#0{f1}, #1{f1}]KK » %1:l0[#0{f1}, #1{f1}]KK
         ArrangeBy keys=[[#0{f1}, #1{f1}]] // { arity: 3 }
           Union // { arity: 3 }
             Get l3 // { arity: 3 }
