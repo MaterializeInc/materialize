@@ -7118,3 +7118,39 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                   FROM mz_introspection.mz_cluster_prometheus_metrics
                 true
                 """))
+
+
+def workflow_test_metrics_null_label(c: Composition) -> None:
+    """SQL-198: `/metrics/mz_usage` must not abort environmentd when a
+    Prometheus label column is SQL NULL. An unorchestrated cluster replica has
+    `mz_cluster_replicas.size = NULL`, which used to reach an `.expect("must be
+    string")` in the label-values assembly."""
+    c.up("materialized")
+
+    # The default `Materialized()` in this composition already enables
+    # unorchestrated cluster replicas.
+    c.sql(
+        """CREATE CLUSTER sql198_unmgd REPLICAS (
+               r1 (STORAGECTL ADDRESSES ['s:1234'],
+                   COMPUTECTL ADDRESSES ['c:1234']))""",
+        port=6877,
+        user="mz_system",
+    )
+
+    try:
+        result = c.exec(
+            "materialized",
+            "curl",
+            "-sf",
+            "http://localhost:6878/metrics/mz_usage",
+            capture=True,
+        )
+        assert (
+            result.returncode == 0
+        ), f"metrics endpoint failed (rc={result.returncode})"
+        assert len(result.stdout) > 0, "metrics response was empty"
+
+        # Server is still alive.
+        assert c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1
+    finally:
+        c.sql("DROP CLUSTER sql198_unmgd CASCADE", port=6877, user="mz_system")
