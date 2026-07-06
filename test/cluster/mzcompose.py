@@ -15,6 +15,8 @@ usual clusterd included in the materialized container).
 import json
 import random
 import re
+import socket
+import struct
 import time
 from collections.abc import Callable
 from copy import copy
@@ -3945,6 +3947,65 @@ def workflow_test_github_7000(c: Composition, parser: WorkflowArgumentParser) ->
         c.up("materialized")
 
 
+def _char_param_survives(host: str, port: int) -> bool:
+    """Whether environmentd survives an untyped binary ``"char"`` param
+    whose byte is >= 0x80 (SQL-371 regression).
+
+    The param stays untyped (0 OIDs in Parse) so the server infers
+    ``PgLegacyChar`` from the query's cast. Binary format avoids the
+    text-param UTF-8 decode that would reject the byte first. This
+    routes an invalid UTF-8 byte through statement-logging's param
+    serialization, which used to panic and abort the process.
+
+    Returns False if the connection drops before ReadyForQuery, True
+    otherwise.
+    """
+
+    def frame(tag: bytes, body: bytes) -> bytes:
+        return tag + struct.pack(">I", len(body) + 4) + body
+
+    def drain_to_ready(s: socket.socket) -> bool:
+        buf = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                # Connection dropped: server aborted.
+                return False
+            buf += chunk
+            while len(buf) >= 5:
+                end = struct.unpack(">I", buf[1:5])[0] + 1
+                if len(buf) < end:
+                    break
+                ready = buf[0:1] == b"Z"  # ReadyForQuery
+                buf = buf[end:]
+                if ready:
+                    return True
+
+    with socket.create_connection((host, port), timeout=30) as s:
+        # Startup; the `materialize` user has no password in mzcompose.
+        s.sendall(
+            frame(
+                b"",
+                struct.pack(">I", 196608)
+                + b"user\x00materialize\x00database\x00materialize\x00\x00",
+            )
+        )
+        assert drain_to_ready(s), "startup failed"
+        s.sendall(
+            frame(b"P", b'\x00SELECT $1::"char"\x00' + struct.pack(">H", 0))
+            + frame(
+                b"B",
+                b"\x00\x00"
+                + struct.pack(">HHHi", 1, 1, 1, 1)
+                + b"\xff"
+                + struct.pack(">H", 0),
+            )
+            + frame(b"E", b"\x00" + struct.pack(">I", 0))
+            + frame(b"S", b"")
+        )
+        return drain_to_ready(s)
+
+
 def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Statement logging test needs to run with 100% logging of tests (as opposed to the default 1% )"""
 
@@ -3964,6 +4025,16 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         )
 
         c.run_testdrive_files("statement-logging/statement-logging.td")
+
+        # SQL-371: a `"char"` binary param with byte >= 0x80 must not
+        # abort environmentd via statement logging. Sampling is forced
+        # to 100% above, so this deterministically exercises the path.
+        assert _char_param_survives(
+            "127.0.0.1", c.port("materialized", 6875)
+        ), "environmentd aborted on non-UTF-8 char param"
+        assert (
+            c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1
+        ), "environmentd unreachable after char-param test"
 
 
 def workflow_blue_green_deployment(
