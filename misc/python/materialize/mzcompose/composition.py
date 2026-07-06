@@ -72,6 +72,13 @@ from materialize.ui import (
 from materialize.util import filter_cmd
 
 
+def _split_complete_lines(buffered: str) -> tuple[str, str]:
+    split = max(buffered.rfind("\n"), buffered.rfind("\r"))
+    if split == -1:
+        return "", buffered
+    return buffered[: split + 1], buffered[split + 1 :]
+
+
 class Service:
     def __init__(self, name: str, idle: bool = False):
         self.name = name
@@ -449,6 +456,26 @@ class Composition:
                     os.set_blocking(p.stdout.fileno(), False)
                     os.set_blocking(p.stderr.fileno(), False)
                     running = True
+                    # Hold each stream's trailing partial line and print only
+                    # complete lines, so a line from one stream is never split
+                    # in the merged output by a chunk of the other stream. The
+                    # raw bytes are still captured in full below for the
+                    # returned CompletedProcess. Keyed by is_stdout.
+                    emit_partial = {True: "", False: ""}
+
+                    def emit(is_stdout: bool, text: str) -> None:
+                        file = sys.stdout if is_stdout else sys.stderr
+                        if print_prefix:
+                            for line in text.splitlines(keepends=True):
+                                print(
+                                    f"{print_prefix}{line}",
+                                    end="",
+                                    file=file,
+                                    flush=True,
+                                )
+                        else:
+                            print(text, end="", file=file, flush=True)
+
                     while running:
                         running = False
                         for key, val in sel.select():
@@ -464,38 +491,20 @@ class Composition:
                                 continue
                             # Keep running as long as stdout or stderr have any content
                             running = True
-                            if key.fileobj is p.stdout:
-                                if print_prefix:
-                                    for line in contents.splitlines(keepends=True):
-                                        print(
-                                            f"{print_prefix}{line}",
-                                            end="",
-                                            flush=True,
-                                        )
-                                else:
-                                    print(
-                                        contents,
-                                        end="",
-                                        flush=True,
-                                    )
+                            is_stdout = key.fileobj is p.stdout
+                            complete, emit_partial[is_stdout] = _split_complete_lines(
+                                emit_partial[is_stdout] + contents
+                            )
+                            if complete:
+                                emit(is_stdout, complete)
+                            if is_stdout:
                                 stdout_result.write(contents)
                             else:
-                                if print_prefix:
-                                    for line in contents.splitlines(keepends=True):
-                                        print(
-                                            f"{print_prefix}{line}",
-                                            end="",
-                                            file=sys.stderr,
-                                            flush=True,
-                                        )
-                                else:
-                                    print(
-                                        contents,
-                                        end="",
-                                        file=sys.stderr,
-                                        flush=True,
-                                    )
                                 stderr_result.write(contents)
+                    # Flush any trailing partial line left without a newline.
+                    for is_stdout, partial in emit_partial.items():
+                        if partial:
+                            emit(is_stdout, partial)
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None

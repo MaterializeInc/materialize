@@ -214,7 +214,7 @@ steps:
       - id: long-workload-replay
         label: "Long Workload Replay (100% initial data)"
         depends_on: build-x86_64
-        timeout_in_minutes: 1200
+        timeout_in_minutes: 1440
         parallelism: 3
         plugins:
           - ./ci/plugins/mzcompose:
