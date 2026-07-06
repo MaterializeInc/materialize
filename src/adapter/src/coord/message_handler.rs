@@ -469,6 +469,10 @@ impl Coordinator {
     /// back as [`Message::ArrangementSizesWrite`] and are appended by
     /// [`Coordinator::arrangement_sizes_write`], which also reschedules the
     /// next collection. An empty or failed snapshot reschedules directly.
+    ///
+    /// Rows from replicas without fresh introspection data are excluded, so
+    /// sizes predating an environmentd or replica restart are not recorded.
+    /// See [`Coordinator::fresh_introspection_replicas`].
     #[mz_ore::instrument(level = "debug")]
     async fn arrangement_sizes_snapshot(&self) {
         // The catalog server is not writable in read-only mode. Skip the
@@ -476,6 +480,25 @@ impl Coordinator {
         // transitions out of read-only. The transition is one-way, so
         // `arrangement_sizes_write` needs no check of its own.
         if self.controller.read_only() {
+            self.schedule_arrangement_sizes_collection().await;
+            return;
+        }
+
+        // See `fresh_introspection_replicas` for why the margin is needed.
+        // 10s comfortably covers the collection manager's ~1s write batching
+        // plus the oracle read timestamp trailing the wall clock.
+        const FRESHNESS_MARGIN: Duration = Duration::from_secs(10);
+        let fresh_size_replicas = self.fresh_introspection_replicas(
+            IntrospectionType::ComputeObjectArrangementSizes,
+            FRESHNESS_MARGIN,
+        );
+        let fresh_hydration_replicas = self.fresh_introspection_replicas(
+            IntrospectionType::ComputeHydrationTimes,
+            FRESHNESS_MARGIN,
+        );
+        if fresh_size_replicas.is_empty() {
+            // No replica has reported sizes in this process yet, so the live
+            // collection contains only stale rows (or none). Skip the cycle.
             self.schedule_arrangement_sizes_collection().await;
             return;
         }
@@ -528,7 +551,12 @@ impl Coordinator {
                 }
             };
 
-            let records = arrangement_sizes_records(live_snapshot, hydration_snapshot);
+            let records = arrangement_sizes_records(
+                live_snapshot,
+                hydration_snapshot,
+                &fresh_size_replicas,
+                &fresh_hydration_replicas,
+            );
             collection_metric_timer.observe_duration();
 
             let msg = if records.is_empty() {
@@ -1128,9 +1156,15 @@ impl Coordinator {
 /// replica is finished (`time_ns IS NOT NULL`), `false` while still building.
 /// Consumers that want only stable sizes should filter
 /// `WHERE hydration_complete`.
+///
+/// Rows from replicas outside `fresh_size_replicas` are dropped, and the
+/// hydration flag is only trusted for replicas in `fresh_hydration_replicas`.
+/// Rows for other replicas may predate an environmentd or replica restart.
 fn arrangement_sizes_records(
     mut live_snapshot: Vec<(Row, StorageDiff)>,
     mut hydration_snapshot: Vec<(Row, StorageDiff)>,
+    fresh_size_replicas: &BTreeSet<String>,
+    fresh_hydration_replicas: &BTreeSet<String>,
 ) -> Vec<ArrangementSizeRecord> {
     differential_dataflow::consolidation::consolidate(&mut live_snapshot);
     differential_dataflow::consolidation::consolidate(&mut hydration_snapshot);
@@ -1155,8 +1189,12 @@ fn arrangement_sizes_records(
         if datums[HYDRATION_COL_TIME_NS].is_null() {
             continue;
         }
+        let replica_id = datums[HYDRATION_COL_REPLICA_ID].unwrap_str();
+        if !fresh_hydration_replicas.contains(replica_id) {
+            continue;
+        }
         hydrated.insert((
-            datums[HYDRATION_COL_REPLICA_ID].unwrap_str().to_string(),
+            replica_id.to_string(),
             datums[HYDRATION_COL_OBJECT_ID].unwrap_str().to_string(),
         ));
     }
@@ -1169,6 +1207,7 @@ fn arrangement_sizes_records(
 
     let mut skipped_malformed: u64 = 0;
     let mut skipped_null_size: u64 = 0;
+    let mut skipped_stale_replica: u64 = 0;
     let mut records = Vec::with_capacity(live_snapshot.len());
     for (row, diff) in &live_snapshot {
         if *diff != 1 {
@@ -1182,6 +1221,10 @@ fn arrangement_sizes_records(
             continue;
         }
         let replica_id = datums[LIVE_COL_REPLICA_ID].unwrap_str();
+        if !fresh_size_replicas.contains(replica_id) {
+            skipped_stale_replica += 1;
+            continue;
+        }
         let object_id = datums[LIVE_COL_OBJECT_ID].unwrap_str();
         let size_datum = datums[LIVE_COL_SIZE];
         // The history table's `size` is non-null; fabricating zero would
@@ -1208,11 +1251,19 @@ fn arrangement_sizes_records(
     if skipped_null_size > 0 {
         tracing::debug!("skipped {skipped_null_size} live rows with null size");
     }
+    if skipped_stale_replica > 0 {
+        tracing::debug!(
+            "skipped {skipped_stale_replica} live rows from replicas without fresh \
+             introspection data"
+        );
+    }
     records
 }
 
 #[cfg(test)]
 mod arrangement_sizes_records_tests {
+    use std::collections::BTreeSet;
+
     use mz_repr::{Datum, Row};
 
     use super::arrangement_sizes_records;
@@ -1237,6 +1288,10 @@ mod arrangement_sizes_records_tests {
         ])
     }
 
+    fn replicas(ids: &[&str]) -> BTreeSet<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
     #[mz_ore::test]
     fn hydration_flag_per_pair() {
         let live = vec![
@@ -1247,7 +1302,8 @@ mod arrangement_sizes_records_tests {
             (hydration_row("u1", "u100", true), 1),
             (hydration_row("u1", "u200", false), 1),
         ];
-        let records = arrangement_sizes_records(live, hydration);
+        let fresh = replicas(&["u1"]);
+        let records = arrangement_sizes_records(live, hydration, &fresh, &fresh);
         assert_eq!(records.len(), 2);
         assert!(
             records
@@ -1273,10 +1329,41 @@ mod arrangement_sizes_records_tests {
             (live_row("u1", "u200", Some(20)), -1),
             (live_row("u1", "u300", Some(30)), 1),
         ];
-        let records = arrangement_sizes_records(live, Vec::new());
+        let fresh = replicas(&["u1"]);
+        let records = arrangement_sizes_records(live, Vec::new(), &fresh, &fresh);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].object_id, "u300");
         assert_eq!(records[0].size, 30);
+        assert!(!records[0].hydration_complete);
+    }
+
+    #[mz_ore::test]
+    fn skips_rows_from_stale_replicas() {
+        // u1 has fresh introspection data, u2's rows predate a restart.
+        let live = vec![
+            (live_row("u1", "u100", Some(10)), 1),
+            (live_row("u2", "u100", Some(99)), 1),
+        ];
+        let hydration = vec![
+            (hydration_row("u1", "u100", true), 1),
+            (hydration_row("u2", "u100", true), 1),
+        ];
+        let fresh = replicas(&["u1"]);
+        let records = arrangement_sizes_records(live, hydration, &fresh, &fresh);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].replica_id, "u1");
+        assert!(records[0].hydration_complete);
+    }
+
+    #[mz_ore::test]
+    fn stale_hydration_data_is_not_trusted() {
+        // u1's sizes subscribe is fresh but its hydration subscribe is not,
+        // so its stale "hydrated" row must not mark the record complete.
+        let live = vec![(live_row("u1", "u100", Some(10)), 1)];
+        let hydration = vec![(hydration_row("u1", "u100", true), 1)];
+        let records =
+            arrangement_sizes_records(live, hydration, &replicas(&["u1"]), &replicas(&[]));
+        assert_eq!(records.len(), 1);
         assert!(!records[0].hydration_complete);
     }
 }

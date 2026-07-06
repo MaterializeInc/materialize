@@ -1136,6 +1136,110 @@ def workflow_rename_schema_types_functions(c: Composition) -> None:
     c.sql("DROP SCHEMA s2")
 
 
+def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> None:
+    """After a restart, mz_object_arrangement_size_history should not
+    contain rows with outdated sizes tagged hydration_complete = true.
+
+    The collections backing the history snapshots retain pre-restart rows
+    until the new introspection subscribes replace them, so snapshots taken
+    in that window would record outdated sizes (SQL-218).
+
+    Inserting data right after each restart makes the post-restart
+    steady-state sizes larger than the pre-restart sizes. Any
+    hydration_complete = true row still carrying the old size was
+    captured from the stale persist shard before the new introspection
+    subscribe replaced it.
+    """
+
+    num_replicas = 2
+    names = tuple(f"sidx{i}" for i in range(1, 21))
+    expected_count = len(names) * num_replicas
+    name_filter = "(" + ", ".join(f"'{n}'" for n in names) + ")"
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "arrangement_size_history_collection_interval": "500ms",
+            },
+            sanity_restart=False,
+        )
+    ):
+        c.up("materialized")
+        c.sql(dedent(f"""\
+                CREATE CLUSTER stale_test SIZE 'scale=1,workers=1', REPLICATION FACTOR {num_replicas};
+                CREATE TABLE stale_t (a int, b text);
+                INSERT INTO stale_t SELECT g, repeat('x', 1024) FROM generate_series(1, 30000) g;
+                CREATE VIEW stale_v AS SELECT a, b FROM stale_t;
+                {"".join(f"CREATE INDEX sidx{i} IN CLUSTER stale_test ON stale_v ((a + {i}));" for i in range(1, 21))}
+                """))
+
+        def wait_for_full_sample() -> None:
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                if c.sql_query(f"""
+                    SELECT 1 FROM mz_internal.mz_object_arrangement_size_history h
+                    JOIN mz_objects o ON o.id = h.object_id
+                    WHERE o.name IN {name_filter}
+                    GROUP BY h.collection_timestamp
+                    HAVING count(*) = {expected_count} LIMIT 1"""):
+                    return
+                time.sleep(0.5)
+            raise UIError("timed out waiting for a full sample")
+
+        def get_live_sizes() -> dict[tuple[str, str], int]:
+            return {(r, n): int(sz) for r, n, sz in c.sql_query(f"""
+                    SELECT s.replica_id, o.name, s.size
+                    FROM mz_internal.mz_object_arrangement_sizes s
+                    JOIN mz_objects o ON o.id = s.object_id
+                    WHERE o.name IN {name_filter}""")}
+
+        wait_for_full_sample()
+
+        for round_num in range(5):
+            pre_sizes = get_live_sizes()
+            max_ts = c.sql_query(f"""
+                SELECT max(h.collection_timestamp)::text
+                FROM mz_internal.mz_object_arrangement_size_history h
+                JOIN mz_objects o ON o.id = h.object_id
+                WHERE o.name IN {name_filter}""")[0][0]
+
+            c.kill("materialized")
+            c.up("materialized")
+
+            lo = 30001 + round_num * 30000
+            c.sql(
+                f"INSERT INTO stale_t SELECT g, repeat('x', 1024) FROM generate_series({lo}, {lo + 29999}) g"
+            )
+            time.sleep(8)
+
+            wait_for_full_sample()
+            post_sizes = get_live_sizes()
+            assert len(post_sizes) == expected_count
+
+            mismatches = [
+                (ts, rid, n, int(sz), int(post_sizes[(rid, n)]))
+                for ts, rid, n, sz in c.sql_query(f"""
+                    SELECT h.collection_timestamp::text, h.replica_id, o.name, h.size
+                    FROM mz_internal.mz_object_arrangement_size_history h
+                    JOIN mz_objects o ON o.id = h.object_id
+                    WHERE o.name IN {name_filter}
+                      AND h.hydration_complete
+                      AND h.collection_timestamp > '{max_ts}'::timestamptz
+                    ORDER BY h.collection_timestamp""")
+                if (rid, n) in post_sizes
+                and (rid, n) in pre_sizes
+                and int(sz) == pre_sizes[(rid, n)]
+                and int(sz) != post_sizes[(rid, n)]
+            ]
+
+            assert not mismatches, (
+                f"round {round_num}: {len(mismatches)} history rows with "
+                f"hydration_complete = true carry stale pre-restart sizes; "
+                f"first 10: {mismatches[:10]}"
+            )
+
+
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":

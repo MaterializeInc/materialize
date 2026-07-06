@@ -28,6 +28,9 @@
 //!   failure), `handle_introspection_subscribe_batch` reacts on the corresponding error responses
 //!   by reinstalling the failed introspection subscribes.
 
+use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
+
 use anyhow::bail;
 use derivative::Derivative;
 use mz_adapter_types::dyncfgs::ENABLE_INTROSPECTION_SUBSCRIBES;
@@ -72,6 +75,13 @@ pub(super) struct IntrospectionSubscribe {
     /// introspection data around in the meantime makes for a better UX than removing it.
     #[derivative(Debug = "ignore")]
     deferred_write: Option<StorageWriteOp>,
+    /// When this subscribe first appended data to the target storage collection, if it has.
+    ///
+    /// Until then, the target collection may still contain rows written by a previous incarnation
+    /// of this subscribe (before an environmentd restart, or before the target replica
+    /// reconnected). Consumers that must not observe such stale rows, like the
+    /// `mz_object_arrangement_size_history` snapshots, use this to judge per-replica freshness.
+    first_data_at: Option<Instant>,
 }
 
 impl IntrospectionSubscribe {
@@ -144,6 +154,7 @@ impl Coordinator {
             replica_id,
             spec,
             deferred_write: None,
+            first_data_at: None,
         };
         self.introspection_subscribes.insert(id, subscribe);
 
@@ -410,6 +421,9 @@ impl Coordinator {
         // Ensure that the contents of the target storage collection are cleaned when the new
         // subscribe starts reporting data.
         subscribe.deferred_write = Some(subscribe.delete_write_op());
+        // Until then, the collection serves the previous subscribe's data, which the replica may
+        // have invalidated by restarting.
+        subscribe.first_data_at = None;
 
         self.introspection_subscribes.insert(new_id, subscribe);
         self.sequence_introspection_subscribe(new_id, spec, cluster_id, replica_id)
@@ -468,12 +482,36 @@ impl Coordinator {
                 .update_introspection_collection(subscribe.spec.introspection_type, op);
         }
 
+        subscribe.first_data_at.get_or_insert_with(Instant::now);
+
         self.controller.storage.update_introspection_collection(
             subscribe.spec.introspection_type,
             StorageWriteOp::Append {
                 updates: new_updates,
             },
         );
+    }
+
+    /// Returns the IDs of replicas whose introspection subscribe of the given type first
+    /// delivered data at least `margin` ago.
+    ///
+    /// Rows for other replicas in the corresponding storage collection are not trustworthy: they
+    /// either predate this environmentd process or were written before the replica reconnected,
+    /// and may describe a previous incarnation of the replica. The margin accounts for the
+    /// subscribe's first append becoming visible to readers only asynchronously (the collection
+    /// manager flushes writes in batches, and snapshot reads use an oracle timestamp that trails
+    /// the wall clock).
+    pub(super) fn fresh_introspection_replicas(
+        &self,
+        introspection_type: IntrospectionType,
+        margin: Duration,
+    ) -> BTreeSet<String> {
+        self.introspection_subscribes
+            .values()
+            .filter(|s| s.spec.introspection_type == introspection_type)
+            .filter(|s| s.first_data_at.is_some_and(|at| at.elapsed() >= margin))
+            .map(|s| s.replica_id.to_string())
+            .collect()
     }
 }
 
