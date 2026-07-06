@@ -801,3 +801,63 @@ pub(crate) fn any_columnar_stats() -> impl Strategy<Value = ColumnarStats> {
             })
     })
 }
+
+/// Redacts scalar values in a [DynStats::debug_json] rendering.
+///
+/// Mirrors [mz_ore::str::redact]: when soft assertions are enabled the value
+/// is returned unchanged. Otherwise scalar leaves are rendered as strings
+/// with each character masked by [mz_ore::str::redact_char] and wrapped in
+/// `<>`. Object keys are left as is, they are column names, not data.
+pub(crate) fn redact_json(v: serde_json::Value) -> serde_json::Value {
+    if mz_ore::assert::soft_assertions_enabled() {
+        return v;
+    }
+    redact_json_masked(v)
+}
+
+fn redact_json_masked(v: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    fn mask(s: String) -> Value {
+        let mut out = String::with_capacity(s.len() + 2);
+        out.push('<');
+        out.extend(s.chars().map(mz_ore::str::redact_char));
+        out.push('>');
+        Value::String(out)
+    }
+    match v {
+        Value::Null => Value::Null,
+        Value::Bool(x) => mask(x.to_string()),
+        Value::Number(x) => mask(x.to_string()),
+        Value::String(x) => mask(x),
+        Value::Array(xs) => Value::Array(xs.into_iter().map(redact_json_masked).collect()),
+        Value::Object(kvs) => Value::Object(
+            kvs.into_iter()
+                .map(|(k, v)| (k, redact_json_masked(v)))
+                .collect(),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::redact_json_masked;
+
+    // Tests the masking directly: `redact_json` itself is a passthrough in
+    // test builds because soft assertions are enabled.
+    #[mz_ore::test]
+    fn redact_json_masks_scalars() {
+        assert_eq!(
+            redact_json_masked(json!("TEST_STRING")),
+            json!("<XXXX_XXXXXX>")
+        );
+        assert_eq!(redact_json_masked(json!(1.234)), json!("<#.###>"));
+        assert_eq!(redact_json_masked(json!(true)), json!("<XXXX>"));
+        assert_eq!(redact_json_masked(json!(null)), json!(null));
+        assert_eq!(
+            redact_json_masked(json!({"lower": "abc1", "upper": [2, "d"]})),
+            json!({"lower": "<XXX#>", "upper": ["<#>", "<X>"]})
+        );
+    }
+}
