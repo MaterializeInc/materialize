@@ -54,6 +54,8 @@ import {
   accountTotal,
   aggregateDays,
   clusterTotal,
+  filterDaysByRegion,
+  shortAccountId,
   StackedDailyRow,
   stackedDailyRows,
 } from "./dailyBreakdown";
@@ -76,15 +78,6 @@ type AccountSpendBreakdownProps = {
   timeRange: number;
   setTimeRange: (val: number) => void;
 };
-
-/**
- * Names aren't available yet (SAS-141/142), so accounts are labelled by their
- * `external_customer_id` UUID. The full id is very wide for a chip or a table
- * cell, so we show the first segment and keep the whole id in a tooltip.
- */
-function shortId(accountId: string): string {
-  return `${accountId.slice(0, 8)}…`;
-}
 
 /**
  * A cluster's region-qualified label, mirroring the "Spend between …" table:
@@ -324,7 +317,7 @@ const AccountSpendChartGraph = ({
                         borderRadius="sm"
                         backgroundColor={colorFor.get(id)}
                       />
-                      <Text textStyle="text-small">{shortId(id)}</Text>
+                      <Text textStyle="text-small">{shortAccountId(id)}</Text>
                     </HStack>
                     <Text textStyle="text-small">
                       {formatCurrency(tooltipData.row[id] as number)}
@@ -454,7 +447,7 @@ const AccountLedgerGroup = ({
           />
           <Tooltip label={account.external_customer_id}>
             <Text whiteSpace="nowrap">
-              {shortId(account.external_customer_id)}
+              {shortAccountId(account.external_customer_id)}
             </Text>
           </Tooltip>
         </Box>
@@ -621,19 +614,29 @@ const AccountSpendBreakdown = ({
 }: AccountSpendBreakdownProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
+  const filteredDays = useMemo(
+    () => (days ? filterDaysByRegion(days, regionFilter) : null),
+    [days, regionFilter],
+  );
   const accountIds = useMemo(
-    () => (days ? accountIdsByTotal(days) : []),
-    [days],
+    () => (filteredDays ? accountIdsByTotal(filteredDays) : []),
+    [filteredDays],
   );
   const rows = useMemo(
-    () => (days ? stackedDailyRows(days, accountIds) : []),
-    [days, accountIds],
+    () => (filteredDays ? stackedDailyRows(filteredDays, accountIds) : []),
+    [filteredDays, accountIds],
   );
   const colorFor = useAccountColors(accountIds);
-  const aggregate = useMemo(() => (days ? aggregateDays(days) : null), [days]);
+  const aggregate = useMemo(
+    () => (filteredDays ? aggregateDays(filteredDays) : null),
+    [filteredDays],
+  );
   const series = useMemo(
-    () => (days ? accountDailyTotals(days) : new Map<string, number[]>()),
-    [days],
+    () =>
+      filteredDays
+        ? accountDailyTotals(filteredDays)
+        : new Map<string, number[]>(),
+    [filteredDays],
   );
 
   // Order the aggregated accounts biggest-spender first, matching the chart's

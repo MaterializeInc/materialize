@@ -32,7 +32,7 @@ import { MaterializeTheme } from "~/theme";
 import { formatDateInUtc, FRIENDLY_DATE_FORMAT } from "~/utils/dateFormat";
 import { formatCurrency } from "~/utils/format";
 
-import { accountTotal, aggregateDays } from "./dailyBreakdown";
+import { accountTotal, aggregateDays, shortAccountId } from "./dailyBreakdown";
 import { useCreditBalance } from "./queries";
 import { calculateNextOnDemandPaymentDate, summarizePlanCosts } from "./utils";
 
@@ -292,12 +292,6 @@ function breakdownByAccount(
     .sort((a, b) => b.total - a.total);
   const total = accounts.reduce((sum, account) => sum + account.total, 0);
   return { total, accounts };
-}
-
-// Accounts are labelled by external_customer_id UUID until display names land
-// (SAS-141/142); show a short prefix to fit the plan-details column.
-function shortAccountId(accountId: string): string {
-  return `${accountId.slice(0, 8)}…`;
 }
 
 /**

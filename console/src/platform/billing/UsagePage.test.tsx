@@ -27,6 +27,7 @@ import server from "~/api/mocks/server";
 import {
   createProviderWrapper,
   healthyEnvironment,
+  selectReactSelectOption,
   setFakeEnvironment,
 } from "~/test/utils";
 import { assert } from "~/util";
@@ -330,6 +331,74 @@ describe("UsagePage", () => {
     );
     // The account renders expanded, so its one cluster row is visible inline.
     expect(await breakdown.findByText("aws/us-east-1 / Other")).toBeVisible();
+  });
+
+  it("filters the ledger by region", async () => {
+    server.use(buildDailyCostResponse());
+    server.use(
+      buildDailyCostBreakdownResponse({
+        payload: {
+          days: oneDay([
+            {
+              external_customer_id: "east-org",
+              clusters: [
+                {
+                  environment_id: "environment-east-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "10.00" },
+                },
+              ],
+            },
+            {
+              external_customer_id: "west-org",
+              clusters: [
+                {
+                  environment_id: "environment-west-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/eu-west-1",
+                  amounts: { "price-compute": "5.00" },
+                },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const breakdown = within(
+      await screen.findByTestId(
+        "account-spend-breakdown",
+        {},
+        { timeout: 5_000 },
+      ),
+    );
+    // Both accounts show before filtering.
+    expect(await breakdown.findAllByTestId("account-row")).toHaveLength(2);
+    const totalRowBefore = within(
+      await breakdown.findByTestId("account-total-row"),
+    );
+    expect(totalRowBefore.getByText(formatCurrency(15))).toBeVisible();
+
+    const regionSelect = screen.getByTestId<HTMLElement>(
+      "account-region-select",
+    );
+    await selectReactSelectOption(regionSelect, "aws/us-east-1");
+
+    // Only the us-east-1 account remains, and the grand total drops to just
+    // its cost — the eu-west-1 account is filtered out entirely.
+    await waitFor(async () => {
+      expect(await breakdown.findAllByTestId("account-row")).toHaveLength(1);
+    });
+    const accountRows = await breakdown.findAllByTestId("account-row");
+    expect(within(accountRows[0]).getByText(formatCurrency(10))).toBeVisible();
+    const totalRowAfter = within(
+      await breakdown.findByTestId("account-total-row"),
+    );
+    expect(totalRowAfter.getByText(formatCurrency(10))).toBeVisible();
   });
 
   it("displays the invoices table for direct-billed organizations", async () => {
