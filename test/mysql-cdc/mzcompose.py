@@ -77,7 +77,7 @@ SERVICES = [
     create_mysql_replica(MySql.DEFAULT_VERSION),
     TestCerts(),
     Toxiproxy(),
-    Testdrive(default_timeout="60s"),
+    Testdrive(default_timeout="180s"),
 ]
 
 

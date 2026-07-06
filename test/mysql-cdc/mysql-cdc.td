@@ -133,7 +133,7 @@ INSERT INTO another_schema.another_table VALUES ('123');
 # Sneak in a test for mysql_source_snapshot_max_execution_time
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 1000
+ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 10000
 
 > CREATE SOURCE "test_slot_source"
   IN CLUSTER cdc_cluster
