@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,16 +9,16 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/srfs
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/srfs
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
@@ -40,44 +40,44 @@ query T colnames
 SELECT * FROM generate_series('2017-11-11 00:00:00'::TIMESTAMP, '2017-11-11 03:00:00'::TIMESTAMP, '1 hour')
 ----
 generate_series
-2017-11-11 00:00:00 +0000 +0000
-2017-11-11 01:00:00 +0000 +0000
-2017-11-11 02:00:00 +0000 +0000
-2017-11-11 03:00:00 +0000 +0000
+2017-11-11 00:00:00
+2017-11-11 02:00:00
+2017-11-11 01:00:00
+2017-11-11 03:00:00
 
 query T colnames
 SELECT * FROM generate_series('2017-11-11 03:00:00'::TIMESTAMP, '2017-11-11 00:00:00'::TIMESTAMP, '-1 hour')
 ----
 generate_series
-2017-11-11 03:00:00 +0000 +0000
-2017-11-11 02:00:00 +0000 +0000
-2017-11-11 01:00:00 +0000 +0000
-2017-11-11 00:00:00 +0000 +0000
+2017-11-11 00:00:00
+2017-11-11 02:00:00
+2017-11-11 01:00:00
+2017-11-11 03:00:00
 
 query T colnames
 SELECT * FROM generate_series('2017-11-11 03:00:00'::TIMESTAMP, '2017-11-15 00:00:00'::TIMESTAMP, '1 day')
 ----
 generate_series
-2017-11-11 03:00:00 +0000 +0000
-2017-11-12 03:00:00 +0000 +0000
-2017-11-13 03:00:00 +0000 +0000
-2017-11-14 03:00:00 +0000 +0000
+2017-11-13 03:00:00
+2017-11-14 03:00:00
+2017-11-11 03:00:00
+2017-11-12 03:00:00
 
 query T colnames
 SELECT * FROM generate_series('2017-01-15 03:00:00'::TIMESTAMP, '2017-12-15 00:00:00'::TIMESTAMP, '1 month')
 ----
 generate_series
-2017-01-15 03:00:00 +0000 +0000
-2017-02-15 03:00:00 +0000 +0000
-2017-03-15 03:00:00 +0000 +0000
-2017-04-15 03:00:00 +0000 +0000
-2017-05-15 03:00:00 +0000 +0000
-2017-06-15 03:00:00 +0000 +0000
-2017-07-15 03:00:00 +0000 +0000
-2017-08-15 03:00:00 +0000 +0000
-2017-09-15 03:00:00 +0000 +0000
-2017-10-15 03:00:00 +0000 +0000
-2017-11-15 03:00:00 +0000 +0000
+2017-09-15 03:00:00
+2017-01-15 03:00:00
+2017-05-15 03:00:00
+2017-03-15 03:00:00
+2017-10-15 03:00:00
+2017-08-15 03:00:00
+2017-02-15 03:00:00
+2017-06-15 03:00:00
+2017-04-15 03:00:00
+2017-11-15 03:00:00
+2017-07-15 03:00:00
 
 # Check what happens when we step through February in a leap year, starting on Jan 31.
 # This output is consistent with PostgreSQL 10.
@@ -85,61 +85,63 @@ query T colnames
 SELECT * FROM generate_series('2016-01-31 03:00:00'::TIMESTAMP, '2016-12-31 00:00:00'::TIMESTAMP, '1 month')
 ----
 generate_series
-2016-01-31 03:00:00 +0000 +0000
-2016-02-29 03:00:00 +0000 +0000
-2016-03-29 03:00:00 +0000 +0000
-2016-04-29 03:00:00 +0000 +0000
-2016-05-29 03:00:00 +0000 +0000
-2016-06-29 03:00:00 +0000 +0000
-2016-07-29 03:00:00 +0000 +0000
-2016-08-29 03:00:00 +0000 +0000
-2016-09-29 03:00:00 +0000 +0000
-2016-10-29 03:00:00 +0000 +0000
-2016-11-29 03:00:00 +0000 +0000
-2016-12-29 03:00:00 +0000 +0000
+2016-03-29 03:00:00
+2016-10-29 03:00:00
+2016-02-29 03:00:00
+2016-01-31 03:00:00
+2016-08-29 03:00:00
+2016-06-29 03:00:00
+2016-04-29 03:00:00
+2016-11-29 03:00:00
+2016-07-29 03:00:00
+2016-09-29 03:00:00
+2016-05-29 03:00:00
+2016-12-29 03:00:00
 
 # Similar to the previous, but we don't hit a 30-day month until July.
 query T colnames
 SELECT * FROM generate_series('2016-01-31 03:00:00'::TIMESTAMP, '2016-12-31 00:00:00'::TIMESTAMP, '2 month')
 ----
 generate_series
-2016-01-31 03:00:00 +0000 +0000
-2016-03-31 03:00:00 +0000 +0000
-2016-05-31 03:00:00 +0000 +0000
-2016-07-31 03:00:00 +0000 +0000
-2016-09-30 03:00:00 +0000 +0000
-2016-11-30 03:00:00 +0000 +0000
+2016-09-30 03:00:00
+2016-01-31 03:00:00
+2016-07-31 03:00:00
+2016-05-31 03:00:00
+2016-03-31 03:00:00
+2016-11-30 03:00:00
 
 # Verify rollover when we're adding by months, days, and hours
 query T colnames
 SELECT * FROM generate_series('2016-01-30 22:00:00'::TIMESTAMP, '2016-12-31 00:00:00'::TIMESTAMP, '1 month 1 day 1 hour')
 ----
 generate_series
-2016-01-30 22:00:00 +0000 +0000
-2016-03-01 23:00:00 +0000 +0000
-2016-04-03 00:00:00 +0000 +0000
-2016-05-04 01:00:00 +0000 +0000
-2016-06-05 02:00:00 +0000 +0000
-2016-07-06 03:00:00 +0000 +0000
-2016-08-07 04:00:00 +0000 +0000
-2016-09-08 05:00:00 +0000 +0000
-2016-10-09 06:00:00 +0000 +0000
-2016-11-10 07:00:00 +0000 +0000
-2016-12-11 08:00:00 +0000 +0000
+2016-04-03 00:00:00
+2016-12-11 08:00:00
+2016-09-08 05:00:00
+2016-06-05 02:00:00
+2016-11-10 07:00:00
+2016-03-01 23:00:00
+2016-08-07 04:00:00
+2016-05-04 01:00:00
+2016-10-09 06:00:00
+2016-01-30 22:00:00
+2016-07-06 03:00:00
 
 query T colnames
 SELECT * FROM generate_series('1996-02-29 22:00:00'::TIMESTAMP, '2004-03-01 00:00:00'::TIMESTAMP, '4 year')
 ----
 generate_series
-1996-02-29 22:00:00 +0000 +0000
-2000-02-29 22:00:00 +0000 +0000
-2004-02-29 22:00:00 +0000 +0000
+2004-02-29 22:00:00
+2000-02-29 22:00:00
+1996-02-29 22:00:00
 
 query T colnames
 SELECT * FROM generate_series('2017-11-11 00:00:00'::TIMESTAMP, '2017-11-11 03:00:00'::TIMESTAMP, '-1 hour')
 ----
 generate_series
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames,rowsort
 SELECT * FROM generate_series(1, 2), generate_series(1, 2)
 ----
@@ -153,16 +155,16 @@ query I colnames
 SELECT * FROM generate_series(3, 1, -1)
 ----
 generate_series
-3
-2
 1
+2
+3
 
 query I colnames
 SELECT * FROM generate_series(3, 1)
 ----
 generate_series
 
-query error step cannot be 0
+query error step size cannot equal zero
 SELECT * FROM generate_series(1, 3, 0)
 
 query I colnames
@@ -191,7 +193,7 @@ SELECT * FROM generate_series(1, 1) WITH ORDINALITY AS c(x, y)
 x y
 1 1
 
-query error generator functions are not allowed in LIMIT
+query error table functions are not allowed in LIMIT \(function pg_catalog\.generate_series\)
 SELECT * FROM (VALUES (1)) LIMIT generate_series(1, 3)
 
 query I colnames
@@ -228,7 +230,7 @@ INSERT INTO t VALUES ('cat')
 statement ok
 INSERT INTO u VALUES ('bird')
 
-query TTII colnames
+query TTII colnames,rowsort
 SELECT t.*, u.*, generate_series(1,2), generate_series(3, 4) FROM t, u
 ----
 a    b     generate_series generate_series
@@ -286,10 +288,10 @@ x  generate_series
 
 subtest unnest
 
-statement error could not determine polymorphic type
+statement error function unnest\(unknown\) is not unique
 SELECT * FROM unnest(NULL)
 
-statement error could not determine polymorphic type
+statement error function unnest\(unknown\) is not unique
 SELECT unnest(NULL)
 
 query I colnames
@@ -334,9 +336,9 @@ ascii
 99
 
 subtest nested_SRF
-# See materialize#20511
+# See #20511
 
-query error unimplemented: nested set-returning functions
+query error table functions are not allowed in other table functions \(function pg_catalog\.generate_series\)
 SELECT generate_series(generate_series(1, 3), 3)
 
 query I
@@ -346,10 +348,10 @@ SELECT generate_series(1, 3) + generate_series(1, 3)
 4
 6
 
-query error pq: column "generate_series" does not exist
+query error WHERE clause error: column "generate_series" does not exist
 SELECT generate_series(1, 3) FROM t WHERE generate_series > 3
 
-# Regressions for materialize#15900: ensure that null parameters to generate_series don't
+# Regressions for #15900: ensure that null parameters to generate_series don't
 # cause issues.
 
 query T colnames
@@ -357,6 +359,8 @@ SELECT * from generate_series(1, (select * from generate_series(1, 0)))
 ----
 generate_series
 
+# Not supported by Materialize.
+onlyif cockroach
 # The following query is designed to produce a null array argument to unnest
 # in a way that the type system can't detect before evaluation.
 query T colnames
@@ -364,12 +368,16 @@ SELECT unnest((SELECT current_schemas((SELECT isnan((SELECT round(3.4, (SELECT g
 ----
 unnest
 
+# Not supported by Materialize.
+onlyif cockroach
 query T colnames
 SELECT information_schema._pg_expandarray((SELECT current_schemas((SELECT isnan((SELECT round(3.4, (SELECT generate_series(1, 0)))))))));
 ----
 information_schema._pg_expandarray
 
-# Regression for materialize#18021.
+# Not supported by Materialize.
+onlyif cockroach
+# Regression for #18021.
 query I colnames
 SELECT generate_series(9223372036854775807::int, -9223372036854775807::int, -9223372036854775807::int)
 ----
@@ -380,7 +388,9 @@ generate_series
 
 subtest pg_get_keywords
 
-# pg_get_keywords for compatibility (materialize#10291)
+# Not supported by Materialize.
+onlyif cockroach
+# pg_get_keywords for compatibility (#10291)
 query TTT colnames
 SELECT * FROM pg_get_keywords() WHERE word IN ('alter', 'and', 'between', 'cross') ORDER BY word
 ----
@@ -390,6 +400,8 @@ and      R       reserved
 between  C       unreserved (cannot be function or type name)
 cross    T       reserved (can be function or type name)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Postgres enables renaming both the source and the column name for
 # single-column generators, but not for multi-column generators.
 query IITTT colnames
@@ -397,7 +409,7 @@ SELECT a.*, b.*, c.* FROM generate_series(1,1) a, unnest(ARRAY[1]) b, pg_get_key
 ----
 a  b  word  catcode  catdesc
 
-# Regression for cockroach#36501: the column from a single-column SRF should not be
+# Regression for #36501: the column from a single-column SRF should not be
 # renamed because of a higher-level table alias.
 query I colnames
 SELECT * FROM (SELECT * FROM generate_series(1, 2)) AS a
@@ -427,13 +439,17 @@ ON uq.filter_id2 = ab.filter_id
 ----
 1  1
 
-# Beware of multi-valued SRFs in render position (database-issues#5675)
+# Not supported by Materialize.
+onlyif cockroach
+# Beware of multi-valued SRFs in render position (#19149)
 query TTT colnames
 SELECT 'a' AS a, pg_get_keywords(), 'c' AS c LIMIT 1
 ----
 a  pg_get_keywords       c
 a  (abort,U,unreserved)  c
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT colnames
 SELECT 'a' AS a, pg_get_keywords() AS b, 'c' AS c LIMIT 1
 ----
@@ -442,6 +458,8 @@ a  (abort,U,unreserved)  c
 
 subtest unary_table
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT colnames
 SELECT 'a' AS a, crdb_internal.unary_table() AS b, 'c' AS c LIMIT 1
 ----
@@ -450,7 +468,7 @@ a  ()  c
 
 subtest upper
 
-# Regular scalar functions can be used as functions too. materialize#22312
+# Regular scalar functions can be used as functions too. #22312
 query T colnames
 SELECT * FROM upper('abc')
 ----
@@ -467,16 +485,16 @@ public 1
 
 subtest expandArray
 
-query error pq: unknown signature: information_schema._pg_expandarray()
+query error function information_schema\._pg_expandarray\(\) does not exist
 SELECT information_schema._pg_expandarray()
 
-query error pq: unknown signature: information_schema._pg_expandarray()
+query error function information_schema\._pg_expandarray\(\) does not exist
 SELECT * FROM information_schema._pg_expandarray()
 
-query error pq: information_schema\._pg_expandarray\(\): cannot determine type of empty array\. Consider annotating with the desired type, for example ARRAY\[\]:::int\[\]
+query error cannot determine type of empty array
 SELECT information_schema._pg_expandarray(ARRAY[])
 
-query error pq: information_schema\._pg_expandarray\(\): cannot determine type of empty array\. Consider annotating with the desired type, for example ARRAY\[\]:::int\[\]
+query error cannot determine type of empty array
 SELECT * FROM information_schema._pg_expandarray(ARRAY[])
 
 statement error could not determine polymorphic type
@@ -485,11 +503,15 @@ SELECT * FROM information_schema._pg_expandarray(NULL)
 statement error could not determine polymorphic type
 SELECT information_schema._pg_expandarray(NULL)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT information_schema._pg_expandarray(ARRAY[]:::int[])
 ----
 information_schema._pg_expandarray
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames
 SELECT * FROM information_schema._pg_expandarray(ARRAY[]:::int[])
 ----
@@ -498,7 +520,7 @@ x  n
 query T colnames
 SELECT information_schema._pg_expandarray(ARRAY[100])
 ----
-information_schema._pg_expandarray
+_pg_expandarray
 (100,1)
 
 query II colnames
@@ -510,37 +532,37 @@ x   n
 query T colnames
 SELECT information_schema._pg_expandarray(ARRAY[2, 1])
 ----
-information_schema._pg_expandarray
-(2,1)
+_pg_expandarray
 (1,2)
+(2,1)
 
 query II colnames
 SELECT * FROM information_schema._pg_expandarray(ARRAY[2, 1])
 ----
 x n
-2 1
-1 2
+1  2
+2  1
 
 query T colnames
 SELECT information_schema._pg_expandarray(ARRAY[3, 2, 1])
 ----
-information_schema._pg_expandarray
-(3,1)
-(2,2)
+_pg_expandarray
 (1,3)
+(2,2)
+(3,1)
 
 query II colnames
 SELECT * FROM information_schema._pg_expandarray(ARRAY[3, 2, 1])
 ----
 x n
-3 1
-2 2
-1 3
+1  3
+2  2
+3  1
 
 query T colnames
 SELECT information_schema._pg_expandarray(ARRAY['a'])
 ----
-information_schema._pg_expandarray
+_pg_expandarray
 (a,1)
 
 query TI colnames
@@ -552,63 +574,63 @@ a 1
 query T colnames
 SELECT information_schema._pg_expandarray(ARRAY['b', 'a'])
 ----
-information_schema._pg_expandarray
-(b,1)
+_pg_expandarray
 (a,2)
+(b,1)
 
 query TI colnames
 SELECT * FROM information_schema._pg_expandarray(ARRAY['b', 'a'])
 ----
 x n
-b 1
-a 2
+a  2
+b  1
 
 query T colnames
 SELECT information_schema._pg_expandarray(ARRAY['c', 'b', 'a'])
 ----
-information_schema._pg_expandarray
-(c,1)
-(b,2)
+_pg_expandarray
 (a,3)
+(b,2)
+(c,1)
 
 query TI colnames
 SELECT * FROM information_schema._pg_expandarray(ARRAY['c', 'b', 'a'])
 ----
 x n
-c 1
-b 2
-a 3
+a  3
+b  2
+c  1
 
 subtest srf_accessor
 
-query error pq: type int is not composite
+query error type integer is not composite
 SELECT (1).*
 
-query error pq: type int is not composite
+query error type integer is not composite
 SELECT ((1)).*
 
-query error pq: type int is not composite
+query error column notation applied to type integer, which is not a composite type
 SELECT (1).x
 
-query error pq: type int is not composite
+query error column notation applied to type integer, which is not a composite type
 SELECT ((1)).x
 
-query error pq: type text is not composite
+query error type text is not composite
 SELECT ('a').*
 
-query error pq: type text is not composite
+query error type text is not composite
 SELECT (('a')).*
 
-query error pq: type text is not composite
+query error column notation applied to type text, which is not a composite type
 SELECT ('a').x
 
-query error pq: type text is not composite
+query error column notation applied to type text, which is not a composite type
 SELECT (('a')).x
 
-query error pq: unnest\(\): cannot determine type of empty array. Consider annotating with the desired type, for example ARRAY\[\]:::int\[\]
+query error cannot determine type of empty array
 SELECT (unnest(ARRAY[])).*
 
-query error type int is not composite
+query error Expected a data type name, found colon
 SELECT (unnest(ARRAY[]:::INT[])).*
 
 subtest multi_column
@@ -616,18 +638,18 @@ subtest multi_column
 query TI colnames
 SELECT (information_schema._pg_expandarray(ARRAY['c', 'b', 'a'])).*
 ----
-x  n
-c  1
-b  2
+x n
 a  3
+b  2
+c  1
 
 query T colnames
 SELECT (information_schema._pg_expandarray(ARRAY['c', 'b', 'a'])).x
 ----
 x
-c
-b
 a
+b
+c
 
 query I colnames
 SELECT (information_schema._pg_expandarray(ARRAY['c', 'b', 'a'])).n
@@ -637,16 +659,16 @@ n
 2
 3
 
-query error pq: could not identify column "other" in tuple{string AS x, int AS n}
+query error field other not found in data type record\(x: text\?,n: integer\?\)
 SELECT (information_schema._pg_expandarray(ARRAY['c', 'b', 'a'])).other
 
 query T colnames
 SELECT temp.x from information_schema._pg_expandarray(array['c','b','a']) AS temp;
 ----
 x
-c
-b
 a
+b
+c
 
 query I colnames
 SELECT temp.n from information_schema._pg_expandarray(array['c','b','a']) AS temp;
@@ -656,24 +678,24 @@ n
 2
 3
 
-query error pq: column "temp.other" does not exist
+query error column "temp\.other" does not exist
 SELECT temp.other from information_schema._pg_expandarray(array['c','b','a']) AS temp;
 
 query TI colnames
 SELECT temp.* from information_schema._pg_expandarray(array['c','b','a']) AS temp;
 ----
 x n
-c 1
-b 2
-a 3
+a  3
+b  2
+c  1
 
 query TI colnames
 SELECT * from information_schema._pg_expandarray(array['c','b','a']) AS temp;
 ----
 x n
-c 1
-b 2
-a 3
+a  3
+b  2
+c  1
 
 query I colnames
 SELECT (i.keys).n FROM (SELECT information_schema._pg_expandarray(ARRAY[3,2,1]) AS keys) AS i
@@ -686,22 +708,24 @@ n
 query II colnames
 SELECT (i.keys).* FROM (SELECT information_schema._pg_expandarray(ARRAY[3,2,1]) AS keys) AS i
 ----
-x  n
-3  1
-2  2
+x n
 1  3
+2  2
+3  1
 
 query T
 SELECT ((i.keys).*, 123) FROM (SELECT information_schema._pg_expandarray(ARRAY[3,2,1]) AS keys) AS i
 ----
-("(3,1)",123)
-("(2,2)",123)
 ("(1,3)",123)
+("(2,2)",123)
+("(3,1)",123)
 
 subtest generate_subscripts
 
 # Basic use cases
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[3,2,1])
 ----
@@ -718,6 +742,8 @@ generate_subscripts
 2
 3
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[3,2,1], 1, false)
 ----
@@ -726,6 +752,8 @@ generate_subscripts
 2
 3
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[3,2,1], 1, true)
 ----
@@ -743,6 +771,8 @@ s
 3
 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT generate_subscripts('{NULL,1,NULL,2}'::int[], 1, true) AS s
 ----
@@ -759,11 +789,15 @@ SELECT * FROM generate_subscripts(ARRAY[3,2,1], 2)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[3,2,1], 2, false)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[3,2,1], 2, true)
 ----
@@ -774,11 +808,15 @@ SELECT * FROM generate_subscripts(ARRAY[3,2,1], 0)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[3,2,1], 0, false)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[3,2,1], 0, true)
 ----
@@ -789,52 +827,72 @@ SELECT * FROM generate_subscripts(ARRAY[3,2,1], -1)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[3,2,1], -1, false)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[3,2,1], -1, true)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 # With an empty array
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[]:::int[])
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[]:::int[], 1)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[]:::string[], 1, false)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[]:::bool[], 1, true)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[]:::int[], 0)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[]:::string[], -1, false)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[]:::bool[], 2, true)
 ----
 generate_subscripts
 
+# Not supported by Materialize.
+onlyif cockroach
 # With an array with only one value
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[100])
@@ -848,12 +906,16 @@ SELECT * FROM generate_subscripts(ARRAY[100], 1)
 generate_subscripts
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY['b'], 1, false)
 ----
 generate_subscripts
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT * FROM generate_subscripts(ARRAY[true], 1, true)
 ----
@@ -862,39 +924,43 @@ generate_subscripts
 
 subtest srf_errors
 
-query error generator functions are not allowed in ORDER BY
+query error table functions are not allowed in ORDER BY clause \(function pg_catalog\.generate_series\)
 SELECT * FROM t ORDER BY generate_series(1, 3)
 
-query error generator functions are not allowed in WHERE
+query error WHERE clause error: table functions are not allowed in WHERE clause \(function pg_catalog\.generate_series\)
 SELECT * FROM t WHERE generate_series(1, 3) < 3
 
-query error generator functions are not allowed in HAVING
+query error table functions are not allowed in HAVING clause \(function pg_catalog\.generate_series\)
 SELECT * FROM t HAVING generate_series(1, 3) < 3
 
-query error generator functions are not allowed in LIMIT
+query error table functions are not allowed in LIMIT \(function pg_catalog\.generate_series\)
 SELECT * FROM t LIMIT generate_series(1, 3)
 
-query error generator functions are not allowed in OFFSET
+query error table functions are not allowed in OFFSET \(function pg_catalog\.generate_series\)
 SELECT * FROM t OFFSET generate_series(1, 3)
 
-query error generator functions are not allowed in VALUES
+query error table functions are not allowed in VALUES \(function pg_catalog\.generate_series\)
 VALUES (generate_series(1,3))
 
-statement error generator functions are not allowed in DEFAULT
+statement error table functions are not allowed in DEFAULT expression \(function pg_catalog\.generate_series\)
 CREATE TABLE uu (x INT DEFAULT generate_series(1, 3))
 
-statement error generator functions are not allowed in CHECK
+statement error CREATE TABLE with column constraint: CHECK \(pg_catalog\.generate_series\(1, 3\) < 3\) not yet supported
 CREATE TABLE uu (x INT CHECK (generate_series(1, 3) < 3))
 
-statement error generator functions are not allowed in computed column
+statement error Expected column option, found AS
 CREATE TABLE uu (x INT AS (generate_series(1, 3)) STORED)
 
 subtest correlated_srf
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE vals (x INT, y INT, INDEX woo (x, y));
    INSERT INTO vals VALUES (3, 4), (NULL, NULL), (5, 6);
 
+# Not supported by Materialize.
+onlyif cockroach
 query III colnames
 SELECT x, generate_series(1,x), generate_series(1,2) FROM vals ORDER BY 1,2,3
 ----
@@ -910,6 +976,8 @@ NULL  NULL             2
 5     4                NULL
 5     5                NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check that the expression is still valid if the dependent name
 # is not otherwise rendered (needed column elision).
 query I colnames,rowsort
@@ -925,6 +993,8 @@ generate_series
 4
 5
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check that the number of rows is still correct
 # even if the SRF is not needed.
 query I
@@ -935,14 +1005,594 @@ SELECT count(*) FROM (SELECT generate_series(1,x) FROM vals)
 query TI colnames
 SELECT relname, unnest(indkey) FROM pg_class, pg_index WHERE pg_class.oid = pg_index.indrelid ORDER BY relname, unnest
 ----
-relname    unnest
-ordered_t  1
-t          2
-u          2
-vals       1
-vals       2
-vals       3
+relname unnest
+mz_active_peeks_per_worker  1
+mz_active_peeks_per_worker  1
+mz_active_peeks_per_worker  1
+mz_active_peeks_per_worker  1
+mz_active_peeks_per_worker  1
+mz_active_peeks_per_worker  1
+mz_active_peeks_per_worker  2
+mz_active_peeks_per_worker  2
+mz_active_peeks_per_worker  2
+mz_active_peeks_per_worker  2
+mz_active_peeks_per_worker  2
+mz_active_peeks_per_worker  2
+mz_arrangement_batcher_allocations_raw  1
+mz_arrangement_batcher_allocations_raw  1
+mz_arrangement_batcher_allocations_raw  1
+mz_arrangement_batcher_allocations_raw  1
+mz_arrangement_batcher_allocations_raw  1
+mz_arrangement_batcher_allocations_raw  1
+mz_arrangement_batcher_allocations_raw  2
+mz_arrangement_batcher_allocations_raw  2
+mz_arrangement_batcher_allocations_raw  2
+mz_arrangement_batcher_allocations_raw  2
+mz_arrangement_batcher_allocations_raw  2
+mz_arrangement_batcher_allocations_raw  2
+mz_arrangement_batcher_capacity_raw  1
+mz_arrangement_batcher_capacity_raw  1
+mz_arrangement_batcher_capacity_raw  1
+mz_arrangement_batcher_capacity_raw  1
+mz_arrangement_batcher_capacity_raw  1
+mz_arrangement_batcher_capacity_raw  1
+mz_arrangement_batcher_capacity_raw  2
+mz_arrangement_batcher_capacity_raw  2
+mz_arrangement_batcher_capacity_raw  2
+mz_arrangement_batcher_capacity_raw  2
+mz_arrangement_batcher_capacity_raw  2
+mz_arrangement_batcher_capacity_raw  2
+mz_arrangement_batcher_records_raw  1
+mz_arrangement_batcher_records_raw  1
+mz_arrangement_batcher_records_raw  1
+mz_arrangement_batcher_records_raw  1
+mz_arrangement_batcher_records_raw  1
+mz_arrangement_batcher_records_raw  1
+mz_arrangement_batcher_records_raw  2
+mz_arrangement_batcher_records_raw  2
+mz_arrangement_batcher_records_raw  2
+mz_arrangement_batcher_records_raw  2
+mz_arrangement_batcher_records_raw  2
+mz_arrangement_batcher_records_raw  2
+mz_arrangement_batcher_size_raw  1
+mz_arrangement_batcher_size_raw  1
+mz_arrangement_batcher_size_raw  1
+mz_arrangement_batcher_size_raw  1
+mz_arrangement_batcher_size_raw  1
+mz_arrangement_batcher_size_raw  1
+mz_arrangement_batcher_size_raw  2
+mz_arrangement_batcher_size_raw  2
+mz_arrangement_batcher_size_raw  2
+mz_arrangement_batcher_size_raw  2
+mz_arrangement_batcher_size_raw  2
+mz_arrangement_batcher_size_raw  2
+mz_arrangement_batches_raw  1
+mz_arrangement_batches_raw  1
+mz_arrangement_batches_raw  1
+mz_arrangement_batches_raw  1
+mz_arrangement_batches_raw  1
+mz_arrangement_batches_raw  1
+mz_arrangement_batches_raw  2
+mz_arrangement_batches_raw  2
+mz_arrangement_batches_raw  2
+mz_arrangement_batches_raw  2
+mz_arrangement_batches_raw  2
+mz_arrangement_batches_raw  2
+mz_arrangement_heap_allocations_raw  1
+mz_arrangement_heap_allocations_raw  1
+mz_arrangement_heap_allocations_raw  1
+mz_arrangement_heap_allocations_raw  1
+mz_arrangement_heap_allocations_raw  1
+mz_arrangement_heap_allocations_raw  1
+mz_arrangement_heap_allocations_raw  2
+mz_arrangement_heap_allocations_raw  2
+mz_arrangement_heap_allocations_raw  2
+mz_arrangement_heap_allocations_raw  2
+mz_arrangement_heap_allocations_raw  2
+mz_arrangement_heap_allocations_raw  2
+mz_arrangement_heap_capacity_raw  1
+mz_arrangement_heap_capacity_raw  1
+mz_arrangement_heap_capacity_raw  1
+mz_arrangement_heap_capacity_raw  1
+mz_arrangement_heap_capacity_raw  1
+mz_arrangement_heap_capacity_raw  1
+mz_arrangement_heap_capacity_raw  2
+mz_arrangement_heap_capacity_raw  2
+mz_arrangement_heap_capacity_raw  2
+mz_arrangement_heap_capacity_raw  2
+mz_arrangement_heap_capacity_raw  2
+mz_arrangement_heap_capacity_raw  2
+mz_arrangement_heap_size_raw  1
+mz_arrangement_heap_size_raw  1
+mz_arrangement_heap_size_raw  1
+mz_arrangement_heap_size_raw  1
+mz_arrangement_heap_size_raw  1
+mz_arrangement_heap_size_raw  1
+mz_arrangement_heap_size_raw  2
+mz_arrangement_heap_size_raw  2
+mz_arrangement_heap_size_raw  2
+mz_arrangement_heap_size_raw  2
+mz_arrangement_heap_size_raw  2
+mz_arrangement_heap_size_raw  2
+mz_arrangement_records_raw  1
+mz_arrangement_records_raw  1
+mz_arrangement_records_raw  1
+mz_arrangement_records_raw  1
+mz_arrangement_records_raw  1
+mz_arrangement_records_raw  1
+mz_arrangement_records_raw  2
+mz_arrangement_records_raw  2
+mz_arrangement_records_raw  2
+mz_arrangement_records_raw  2
+mz_arrangement_records_raw  2
+mz_arrangement_records_raw  2
+mz_arrangement_sharing_raw  1
+mz_arrangement_sharing_raw  1
+mz_arrangement_sharing_raw  1
+mz_arrangement_sharing_raw  1
+mz_arrangement_sharing_raw  1
+mz_arrangement_sharing_raw  1
+mz_arrangement_sharing_raw  2
+mz_arrangement_sharing_raw  2
+mz_arrangement_sharing_raw  2
+mz_arrangement_sharing_raw  2
+mz_arrangement_sharing_raw  2
+mz_arrangement_sharing_raw  2
+mz_cluster_deployment_lineage  1
+mz_cluster_prometheus_metrics  1
+mz_cluster_prometheus_metrics  1
+mz_cluster_prometheus_metrics  1
+mz_cluster_prometheus_metrics  1
+mz_cluster_prometheus_metrics  1
+mz_cluster_prometheus_metrics  1
+mz_cluster_prometheus_metrics  2
+mz_cluster_prometheus_metrics  2
+mz_cluster_prometheus_metrics  2
+mz_cluster_prometheus_metrics  2
+mz_cluster_prometheus_metrics  2
+mz_cluster_prometheus_metrics  2
+mz_cluster_prometheus_metrics  4
+mz_cluster_prometheus_metrics  4
+mz_cluster_prometheus_metrics  4
+mz_cluster_prometheus_metrics  4
+mz_cluster_prometheus_metrics  4
+mz_cluster_prometheus_metrics  4
+mz_cluster_replica_frontiers  1
+mz_cluster_replica_history  7
+mz_cluster_replica_metrics  1
+mz_cluster_replica_metrics_history  1
+mz_cluster_replica_name_history  2
+mz_cluster_replica_size_internal  1
+mz_cluster_replica_sizes  1
+mz_cluster_replica_status_history  1
+mz_cluster_replica_statuses  1
+mz_cluster_replicas  1
+mz_clusters  1
+mz_columns  2
+mz_comments  1
+mz_compute_dataflow_global_ids_per_worker  1
+mz_compute_dataflow_global_ids_per_worker  1
+mz_compute_dataflow_global_ids_per_worker  1
+mz_compute_dataflow_global_ids_per_worker  1
+mz_compute_dataflow_global_ids_per_worker  1
+mz_compute_dataflow_global_ids_per_worker  1
+mz_compute_dataflow_global_ids_per_worker  2
+mz_compute_dataflow_global_ids_per_worker  2
+mz_compute_dataflow_global_ids_per_worker  2
+mz_compute_dataflow_global_ids_per_worker  2
+mz_compute_dataflow_global_ids_per_worker  2
+mz_compute_dataflow_global_ids_per_worker  2
+mz_compute_dataflow_global_ids_per_worker  3
+mz_compute_dataflow_global_ids_per_worker  3
+mz_compute_dataflow_global_ids_per_worker  3
+mz_compute_dataflow_global_ids_per_worker  3
+mz_compute_dataflow_global_ids_per_worker  3
+mz_compute_dataflow_global_ids_per_worker  3
+mz_compute_dependencies  2
+mz_compute_error_counts_raw  1
+mz_compute_error_counts_raw  1
+mz_compute_error_counts_raw  1
+mz_compute_error_counts_raw  1
+mz_compute_error_counts_raw  1
+mz_compute_error_counts_raw  1
+mz_compute_error_counts_raw  2
+mz_compute_error_counts_raw  2
+mz_compute_error_counts_raw  2
+mz_compute_error_counts_raw  2
+mz_compute_error_counts_raw  2
+mz_compute_error_counts_raw  2
+mz_compute_exports_per_worker  1
+mz_compute_exports_per_worker  1
+mz_compute_exports_per_worker  1
+mz_compute_exports_per_worker  1
+mz_compute_exports_per_worker  1
+mz_compute_exports_per_worker  1
+mz_compute_exports_per_worker  2
+mz_compute_exports_per_worker  2
+mz_compute_exports_per_worker  2
+mz_compute_exports_per_worker  2
+mz_compute_exports_per_worker  2
+mz_compute_exports_per_worker  2
+mz_compute_frontiers_per_worker  1
+mz_compute_frontiers_per_worker  1
+mz_compute_frontiers_per_worker  1
+mz_compute_frontiers_per_worker  1
+mz_compute_frontiers_per_worker  1
+mz_compute_frontiers_per_worker  1
+mz_compute_frontiers_per_worker  2
+mz_compute_frontiers_per_worker  2
+mz_compute_frontiers_per_worker  2
+mz_compute_frontiers_per_worker  2
+mz_compute_frontiers_per_worker  2
+mz_compute_frontiers_per_worker  2
+mz_compute_hydration_times  1
+mz_compute_hydration_times_per_worker  1
+mz_compute_hydration_times_per_worker  1
+mz_compute_hydration_times_per_worker  1
+mz_compute_hydration_times_per_worker  1
+mz_compute_hydration_times_per_worker  1
+mz_compute_hydration_times_per_worker  1
+mz_compute_hydration_times_per_worker  2
+mz_compute_hydration_times_per_worker  2
+mz_compute_hydration_times_per_worker  2
+mz_compute_hydration_times_per_worker  2
+mz_compute_hydration_times_per_worker  2
+mz_compute_hydration_times_per_worker  2
+mz_compute_import_frontiers_per_worker  1
+mz_compute_import_frontiers_per_worker  1
+mz_compute_import_frontiers_per_worker  1
+mz_compute_import_frontiers_per_worker  1
+mz_compute_import_frontiers_per_worker  1
+mz_compute_import_frontiers_per_worker  1
+mz_compute_import_frontiers_per_worker  2
+mz_compute_import_frontiers_per_worker  2
+mz_compute_import_frontiers_per_worker  2
+mz_compute_import_frontiers_per_worker  2
+mz_compute_import_frontiers_per_worker  2
+mz_compute_import_frontiers_per_worker  2
+mz_compute_import_frontiers_per_worker  3
+mz_compute_import_frontiers_per_worker  3
+mz_compute_import_frontiers_per_worker  3
+mz_compute_import_frontiers_per_worker  3
+mz_compute_import_frontiers_per_worker  3
+mz_compute_import_frontiers_per_worker  3
+mz_compute_lir_mapping_per_worker  1
+mz_compute_lir_mapping_per_worker  1
+mz_compute_lir_mapping_per_worker  1
+mz_compute_lir_mapping_per_worker  1
+mz_compute_lir_mapping_per_worker  1
+mz_compute_lir_mapping_per_worker  1
+mz_compute_lir_mapping_per_worker  2
+mz_compute_lir_mapping_per_worker  2
+mz_compute_lir_mapping_per_worker  2
+mz_compute_lir_mapping_per_worker  2
+mz_compute_lir_mapping_per_worker  2
+mz_compute_lir_mapping_per_worker  2
+mz_compute_lir_mapping_per_worker  3
+mz_compute_lir_mapping_per_worker  3
+mz_compute_lir_mapping_per_worker  3
+mz_compute_lir_mapping_per_worker  3
+mz_compute_lir_mapping_per_worker  3
+mz_compute_lir_mapping_per_worker  3
+mz_compute_operator_durations_histogram_raw  1
+mz_compute_operator_durations_histogram_raw  1
+mz_compute_operator_durations_histogram_raw  1
+mz_compute_operator_durations_histogram_raw  1
+mz_compute_operator_durations_histogram_raw  1
+mz_compute_operator_durations_histogram_raw  1
+mz_compute_operator_durations_histogram_raw  2
+mz_compute_operator_durations_histogram_raw  2
+mz_compute_operator_durations_histogram_raw  2
+mz_compute_operator_durations_histogram_raw  2
+mz_compute_operator_durations_histogram_raw  2
+mz_compute_operator_durations_histogram_raw  2
+mz_compute_operator_durations_histogram_raw  3
+mz_compute_operator_durations_histogram_raw  3
+mz_compute_operator_durations_histogram_raw  3
+mz_compute_operator_durations_histogram_raw  3
+mz_compute_operator_durations_histogram_raw  3
+mz_compute_operator_durations_histogram_raw  3
+mz_compute_operator_hydration_statuses_per_worker  1
+mz_compute_operator_hydration_statuses_per_worker  1
+mz_compute_operator_hydration_statuses_per_worker  1
+mz_compute_operator_hydration_statuses_per_worker  1
+mz_compute_operator_hydration_statuses_per_worker  1
+mz_compute_operator_hydration_statuses_per_worker  1
+mz_compute_operator_hydration_statuses_per_worker  2
+mz_compute_operator_hydration_statuses_per_worker  2
+mz_compute_operator_hydration_statuses_per_worker  2
+mz_compute_operator_hydration_statuses_per_worker  2
+mz_compute_operator_hydration_statuses_per_worker  2
+mz_compute_operator_hydration_statuses_per_worker  2
+mz_compute_operator_hydration_statuses_per_worker  3
+mz_compute_operator_hydration_statuses_per_worker  3
+mz_compute_operator_hydration_statuses_per_worker  3
+mz_compute_operator_hydration_statuses_per_worker  3
+mz_compute_operator_hydration_statuses_per_worker  3
+mz_compute_operator_hydration_statuses_per_worker  3
+mz_connections  3
+mz_console_cluster_utilization_overview  18
+mz_console_cluster_utilization_overview_24h  18
+mz_console_cluster_utilization_overview_3h  2
+mz_databases  3
+mz_dataflow_addresses_per_worker  1
+mz_dataflow_addresses_per_worker  1
+mz_dataflow_addresses_per_worker  1
+mz_dataflow_addresses_per_worker  1
+mz_dataflow_addresses_per_worker  1
+mz_dataflow_addresses_per_worker  1
+mz_dataflow_addresses_per_worker  2
+mz_dataflow_addresses_per_worker  2
+mz_dataflow_addresses_per_worker  2
+mz_dataflow_addresses_per_worker  2
+mz_dataflow_addresses_per_worker  2
+mz_dataflow_addresses_per_worker  2
+mz_dataflow_channels_per_worker  1
+mz_dataflow_channels_per_worker  1
+mz_dataflow_channels_per_worker  1
+mz_dataflow_channels_per_worker  1
+mz_dataflow_channels_per_worker  1
+mz_dataflow_channels_per_worker  1
+mz_dataflow_channels_per_worker  2
+mz_dataflow_channels_per_worker  2
+mz_dataflow_channels_per_worker  2
+mz_dataflow_channels_per_worker  2
+mz_dataflow_channels_per_worker  2
+mz_dataflow_channels_per_worker  2
+mz_dataflow_operator_reachability_raw  1
+mz_dataflow_operator_reachability_raw  1
+mz_dataflow_operator_reachability_raw  1
+mz_dataflow_operator_reachability_raw  1
+mz_dataflow_operator_reachability_raw  1
+mz_dataflow_operator_reachability_raw  1
+mz_dataflow_operator_reachability_raw  2
+mz_dataflow_operator_reachability_raw  2
+mz_dataflow_operator_reachability_raw  2
+mz_dataflow_operator_reachability_raw  2
+mz_dataflow_operator_reachability_raw  2
+mz_dataflow_operator_reachability_raw  2
+mz_dataflow_operator_reachability_raw  3
+mz_dataflow_operator_reachability_raw  3
+mz_dataflow_operator_reachability_raw  3
+mz_dataflow_operator_reachability_raw  3
+mz_dataflow_operator_reachability_raw  3
+mz_dataflow_operator_reachability_raw  3
+mz_dataflow_operator_reachability_raw  4
+mz_dataflow_operator_reachability_raw  4
+mz_dataflow_operator_reachability_raw  4
+mz_dataflow_operator_reachability_raw  4
+mz_dataflow_operator_reachability_raw  4
+mz_dataflow_operator_reachability_raw  4
+mz_dataflow_operator_reachability_raw  5
+mz_dataflow_operator_reachability_raw  5
+mz_dataflow_operator_reachability_raw  5
+mz_dataflow_operator_reachability_raw  5
+mz_dataflow_operator_reachability_raw  5
+mz_dataflow_operator_reachability_raw  5
+mz_dataflow_operator_reachability_raw  6
+mz_dataflow_operator_reachability_raw  6
+mz_dataflow_operator_reachability_raw  6
+mz_dataflow_operator_reachability_raw  6
+mz_dataflow_operator_reachability_raw  6
+mz_dataflow_operator_reachability_raw  6
+mz_dataflow_operators_per_worker  1
+mz_dataflow_operators_per_worker  1
+mz_dataflow_operators_per_worker  1
+mz_dataflow_operators_per_worker  1
+mz_dataflow_operators_per_worker  1
+mz_dataflow_operators_per_worker  1
+mz_dataflow_operators_per_worker  2
+mz_dataflow_operators_per_worker  2
+mz_dataflow_operators_per_worker  2
+mz_dataflow_operators_per_worker  2
+mz_dataflow_operators_per_worker  2
+mz_dataflow_operators_per_worker  2
+mz_frontiers  1
+mz_hydration_statuses  1
+mz_hydration_statuses  2
+mz_indexes  1
+mz_kafka_sources  1
+mz_materialized_views  1
+mz_message_batch_counts_received_raw  1
+mz_message_batch_counts_received_raw  1
+mz_message_batch_counts_received_raw  1
+mz_message_batch_counts_received_raw  1
+mz_message_batch_counts_received_raw  1
+mz_message_batch_counts_received_raw  1
+mz_message_batch_counts_received_raw  2
+mz_message_batch_counts_received_raw  2
+mz_message_batch_counts_received_raw  2
+mz_message_batch_counts_received_raw  2
+mz_message_batch_counts_received_raw  2
+mz_message_batch_counts_received_raw  2
+mz_message_batch_counts_received_raw  3
+mz_message_batch_counts_received_raw  3
+mz_message_batch_counts_received_raw  3
+mz_message_batch_counts_received_raw  3
+mz_message_batch_counts_received_raw  3
+mz_message_batch_counts_received_raw  3
+mz_message_batch_counts_sent_raw  1
+mz_message_batch_counts_sent_raw  1
+mz_message_batch_counts_sent_raw  1
+mz_message_batch_counts_sent_raw  1
+mz_message_batch_counts_sent_raw  1
+mz_message_batch_counts_sent_raw  1
+mz_message_batch_counts_sent_raw  2
+mz_message_batch_counts_sent_raw  2
+mz_message_batch_counts_sent_raw  2
+mz_message_batch_counts_sent_raw  2
+mz_message_batch_counts_sent_raw  2
+mz_message_batch_counts_sent_raw  2
+mz_message_batch_counts_sent_raw  3
+mz_message_batch_counts_sent_raw  3
+mz_message_batch_counts_sent_raw  3
+mz_message_batch_counts_sent_raw  3
+mz_message_batch_counts_sent_raw  3
+mz_message_batch_counts_sent_raw  3
+mz_message_counts_received_raw  1
+mz_message_counts_received_raw  1
+mz_message_counts_received_raw  1
+mz_message_counts_received_raw  1
+mz_message_counts_received_raw  1
+mz_message_counts_received_raw  1
+mz_message_counts_received_raw  2
+mz_message_counts_received_raw  2
+mz_message_counts_received_raw  2
+mz_message_counts_received_raw  2
+mz_message_counts_received_raw  2
+mz_message_counts_received_raw  2
+mz_message_counts_received_raw  3
+mz_message_counts_received_raw  3
+mz_message_counts_received_raw  3
+mz_message_counts_received_raw  3
+mz_message_counts_received_raw  3
+mz_message_counts_received_raw  3
+mz_message_counts_sent_raw  1
+mz_message_counts_sent_raw  1
+mz_message_counts_sent_raw  1
+mz_message_counts_sent_raw  1
+mz_message_counts_sent_raw  1
+mz_message_counts_sent_raw  1
+mz_message_counts_sent_raw  2
+mz_message_counts_sent_raw  2
+mz_message_counts_sent_raw  2
+mz_message_counts_sent_raw  2
+mz_message_counts_sent_raw  2
+mz_message_counts_sent_raw  2
+mz_message_counts_sent_raw  3
+mz_message_counts_sent_raw  3
+mz_message_counts_sent_raw  3
+mz_message_counts_sent_raw  3
+mz_message_counts_sent_raw  3
+mz_message_counts_sent_raw  3
+mz_notices  1
+mz_object_arrangement_size_history  2
+mz_object_arrangement_size_history  4
+mz_object_arrangement_sizes  1
+mz_object_dependencies  1
+mz_object_history  1
+mz_object_lifetimes  1
+mz_object_transitive_dependencies  1
+mz_objects  3
+mz_peek_durations_histogram_raw  1
+mz_peek_durations_histogram_raw  1
+mz_peek_durations_histogram_raw  1
+mz_peek_durations_histogram_raw  1
+mz_peek_durations_histogram_raw  1
+mz_peek_durations_histogram_raw  1
+mz_peek_durations_histogram_raw  2
+mz_peek_durations_histogram_raw  2
+mz_peek_durations_histogram_raw  2
+mz_peek_durations_histogram_raw  2
+mz_peek_durations_histogram_raw  2
+mz_peek_durations_histogram_raw  2
+mz_peek_durations_histogram_raw  3
+mz_peek_durations_histogram_raw  3
+mz_peek_durations_histogram_raw  3
+mz_peek_durations_histogram_raw  3
+mz_peek_durations_histogram_raw  3
+mz_peek_durations_histogram_raw  3
+mz_recent_activity_log_thinned  22
+mz_recent_sql_text  1
+mz_recent_storage_usage  1
+mz_roles  1
+mz_scheduling_elapsed_raw  1
+mz_scheduling_elapsed_raw  1
+mz_scheduling_elapsed_raw  1
+mz_scheduling_elapsed_raw  1
+mz_scheduling_elapsed_raw  1
+mz_scheduling_elapsed_raw  1
+mz_scheduling_elapsed_raw  2
+mz_scheduling_elapsed_raw  2
+mz_scheduling_elapsed_raw  2
+mz_scheduling_elapsed_raw  2
+mz_scheduling_elapsed_raw  2
+mz_scheduling_elapsed_raw  2
+mz_scheduling_parks_histogram_raw  1
+mz_scheduling_parks_histogram_raw  1
+mz_scheduling_parks_histogram_raw  1
+mz_scheduling_parks_histogram_raw  1
+mz_scheduling_parks_histogram_raw  1
+mz_scheduling_parks_histogram_raw  1
+mz_scheduling_parks_histogram_raw  2
+mz_scheduling_parks_histogram_raw  2
+mz_scheduling_parks_histogram_raw  2
+mz_scheduling_parks_histogram_raw  2
+mz_scheduling_parks_histogram_raw  2
+mz_scheduling_parks_histogram_raw  2
+mz_scheduling_parks_histogram_raw  3
+mz_scheduling_parks_histogram_raw  3
+mz_scheduling_parks_histogram_raw  3
+mz_scheduling_parks_histogram_raw  3
+mz_scheduling_parks_histogram_raw  3
+mz_scheduling_parks_histogram_raw  3
+mz_schemas  3
+mz_secrets  4
+mz_show_all_objects  1
+mz_show_cluster_replicas  1
+mz_show_clusters  1
+mz_show_columns  1
+mz_show_connections  1
+mz_show_databases  1
+mz_show_indexes  7
+mz_show_materialized_views  4
+mz_show_roles  1
+mz_show_schemas  1
+mz_show_secrets  1
+mz_show_sinks  5
+mz_show_sources  5
+mz_show_tables  1
+mz_show_types  1
+mz_show_views  1
+mz_sink_statistics  1
+mz_sink_statistics  2
+mz_sink_status_history  2
+mz_sink_statuses  1
+mz_sinks  1
+mz_source_statistics  1
+mz_source_statistics  2
+mz_source_statistics_with_history  1
+mz_source_statistics_with_history  2
+mz_source_status_history  2
+mz_source_statuses  1
+mz_sources  1
+mz_tables  3
+mz_types  3
+mz_views  3
+mz_wallclock_global_lag_recent_history  1
+mz_webhook_sources  1
+pg_attrdef_all_databases  1
+pg_attrdef_all_databases  2
+pg_attrdef_all_databases  3
+pg_attrdef_all_databases  4
+pg_attrdef_all_databases  5
+pg_attribute_all_databases  1
+pg_attribute_all_databases  2
+pg_attribute_all_databases  3
+pg_attribute_all_databases  4
+pg_attribute_all_databases  5
+pg_attribute_all_databases  6
+pg_attribute_all_databases  8
+pg_attribute_all_databases  9
+pg_attribute_all_databases  10
+pg_attribute_all_databases  11
+pg_attribute_all_databases  12
+pg_attribute_all_databases  13
+pg_attribute_all_databases  14
+pg_attribute_all_databases  15
+pg_authid_core  2
+pg_class_all_databases  2
+pg_description_all_databases  1
+pg_description_all_databases  2
+pg_description_all_databases  3
+pg_description_all_databases  4
+pg_description_all_databases  5
+pg_description_all_databases  6
+pg_namespace_all_databases  2
+pg_type_all_databases  1
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT colnames
 SELECT relname, information_schema._pg_expandarray(indkey) FROM pg_class, pg_index WHERE pg_class.oid = pg_index.indrelid ORDER BY relname, x, n
 ----
@@ -955,7 +1605,7 @@ vals       (2,2)
 vals       (3,1)
 
 # The following query needs indclass to become an oidvector.
-# See bug materialize#26504.
+# See bug #26504.
 # query III
 # SELECT
 #     indexrelid,
@@ -973,6 +1623,8 @@ CREATE TABLE j(x INT PRIMARY KEY, y JSON);
      (1, '{"a":123,"b":456}'),
      (2, '{"c":111,"d":222}')
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT rowsort
 SELECT x, y->>json_object_keys(y) FROM j
 ----
@@ -991,14 +1643,12 @@ SELECT tbl, idx, (i.keys).n
 	  JOIN pg_class ct2 ON ix.indexrelid = ct2.oid) AS i
 ORDER BY 1,2,3
 ----
-tbl   idx      n
-vals  primary  1
-vals  woo      1
-vals  woo      2
+tbl idx n
+
 
 subtest dbviz_example_query
 
-# DbVisualizer query from materialize#24649 listed in materialize#16971.
+# DbVisualizer query from #24649 listed in #16971.
 query TTI
 SELECT   a.attname, a.atttypid, atttypmod
     FROM pg_catalog.pg_class ct
@@ -1015,12 +1665,12 @@ SELECT   a.attname, a.atttypid, atttypmod
      AND i.indisprimary
 ORDER BY a.attnum
 ----
-x  20  -1
+
 
 subtest metabase_confluent_example_query
 
-# Test from metabase listed on materialize#16971.
-# Also Kafka Confluent sink query from materialize#25854.
+# Test from metabase listed on #16971.
+# Also Kafka Confluent sink query from #25854.
 query TTTTIT
 SELECT NULL AS TABLE_CAT,
        n.nspname AS TABLE_SCHEM,
@@ -1040,13 +1690,13 @@ SELECT NULL AS TABLE_CAT,
    WHERE true AND ct.relname = 'j' AND i.indisprimary
 ORDER BY table_name, pk_name, key_seq
 ----
-NULL  public  j  x  1  primary
+
 
 subtest liquibase_example_query
 
-# # Test from materialize#24713 (Liquibase) listed on materialize#16971.
+# # Test from #24713 (Liquibase) listed on #16971.
 # # TODO(knz) Needs support for pg_get_indexdef with 3 arguments,
-# # see database-issues#7870.
+# # see #26629.
 # query TTTBTTIITTTTT
 # SELECT NULL AS table_cat,
 #        n.nspname AS table_schem,
@@ -1107,8 +1757,12 @@ unnest
 (1,2)
 (3,4)
 
-query error pq: type tuple{int, int} is not composite
+query II colnames
 SELECT (unnest(ARRAY[(1,2),(3,4)])).*
+----
+f1 f2
+1  2
+3  4
 
 query T colnames
 SELECT * FROM unnest(ARRAY[(1,2),(3,4)])
@@ -1123,3 +1777,217 @@ SELECT t.* FROM unnest(ARRAY[(1,2),(3,4)]) AS t
 t
 (1,2)
 (3,4)
+
+
+subtest variadic_unnest
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT unnest(ARRAY[1,2], ARRAY['a','b'])
+----
+(1,a)
+(2,b)
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT unnest(ARRAY[1,2], ARRAY['a'], ARRAY[1.1, 2.2, 3.3])
+----
+(1,a,1.1)
+(2,,2.2)  
+(,,3.3)
+
+# Not supported by Materialize.
+onlyif cockroach
+query IT colnames
+SELECT * FROM unnest(ARRAY[1,2], ARRAY['a', 'b'])
+----
+unnest unnest
+1  a
+2  b
+
+# Not supported by Materialize.
+onlyif cockroach
+query ITT colnames
+SELECT * FROM unnest(ARRAY[1,2], ARRAY['a'], ARRAY[1.1, 2.2, 3.3])
+----
+unnest unnest unnest
+1    a    1.1
+2    NULL 2.2
+NULL NULL 3.3
+
+# Not supported by Materialize.
+onlyif cockroach
+query II colnames
+SELECT * FROM unnest(array[1,2], array[3,4,5]) AS t(a, b);
+----
+a    b
+1    3  
+2    4  
+NULL 5
+
+query I rowsort
+SELECT unnest(ARRAY[1,2,3]) FROM unnest(ARRAY[4,5,6])
+----
+1
+1
+1
+2
+2
+2
+3
+3
+3
+
+query I rowsort
+SELECT unnest(ARRAY[NULL,2,3]) FROM unnest(ARRAY[NULL,NULL,NULL])
+----
+NULL
+NULL
+NULL
+2
+2
+2
+3
+3
+3
+
+query I rowsort
+SELECT unnest(ARRAY[1,2,NULL]) FROM unnest(ARRAY[NULL,NULL,NULL])
+----
+1
+1
+1
+2
+2
+2
+NULL
+NULL
+NULL
+
+query I rowsort
+SELECT unnest(ARRAY[NULL,NULL,NULL]) FROM unnest(ARRAY[NULL,NULL,NULL])
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+statement ok
+CREATE TABLE xy (x INT PRIMARY KEY, y INT)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO xy (VALUES (1,1), (2,2), (3,4), (4,8), (5,NULL))
+
+query II rowsort
+SELECT * FROM xy WHERE x IN (SELECT unnest(ARRAY[NULL,x]))
+----
+
+
+query II rowsort
+SELECT * FROM xy
+WHERE EXISTS
+(SELECT t
+  FROM unnest(ARRAY[NULL,2,NULL,4,5,x])
+  AS f(t)
+  WHERE t=y
+)
+----
+
+
+query IT rowsort
+SELECT unnest(ARRAY[1,2,3,4]), unnest(ARRAY['one','two'])
+----
+1  one
+2  two
+3  NULL
+4  NULL
+
+query error type "varbit" does not exist
+SELECT unnest(ARRAY[1,2,3::varbit(3)])
+
+query error type "varbit" does not exist
+SELECT unnest(ARRAY[NULL,2,3::varbit(3)])
+
+query error function unnest\(unknown, unknown\) does not exist
+SELECT unnest(NULL, NULL)
+
+query error function unnest\(integer\[\], unknown\) does not exist
+SELECT unnest(ARRAY[1,2], NULL)
+
+query error function unnest\(unknown, unknown\) does not exist
+SELECT * FROM unnest(NULL, NULL)
+
+query error function unnest\(integer\[\], integer\[\]\) does not exist
+SELECT unnest FROM unnest(array[1,2], array[3,4,5])
+
+# Regression test for #58438 - handle the case when unnest outputs a tuple with
+# labels. The unnest should not panic.
+statement ok
+CREATE TABLE t58438(a INT, b INT);
+
+statement ok
+INSERT INTO t58438 VALUES (1, 2), (3, 4), (5, 6);
+
+query T rowsort
+SELECT unnest(ARRAY[t58438.*]) FROM t58438;
+----
+(1,2)
+(3,4)
+(5,6)
+
+query II rowsort
+SELECT (x).* FROM (SELECT unnest(ARRAY[t58438.*]) FROM t58438) v(x);
+----
+1  2
+3  4
+5  6
+
+subtest redundant_zip_expression
+
+statement ok
+SET testing_optimizer_disable_rule_probability = 1.0;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t95615 (c1 INET PRIMARY KEY)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t95615 VALUES ('192.168.0.1'::INET)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Test that a redundant function call in a ProjectSet doesn't crash due to
+# being built into more than one zip expression.
+query TTTI
+SELECT * FROM t95615, LATERAL ROWS FROM (hostmask(c1), hostmask(c1)) WITH ORDINALITY
+----
+192.168.0.1  0.0.0.0  0.0.0.0  1
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE FUNCTION f95615() RETURNS FLOAT IMMUTABLE LEAKPROOF LANGUAGE SQL AS 'SELECT 1.1'
+
+# Not supported by Materialize.
+onlyif cockroach
+# A redundant UDF call should be added only once in a zip expression and not
+# error out.
+query TFFI
+SELECT * FROM t95615, LATERAL ROWS FROM (f95615(), f95615()) WITH ORDINALITY
+----
+192.168.0.1  1.1  1.1  1
+
+statement ok
+RESET testing_optimizer_disable_rule_probability

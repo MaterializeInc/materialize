@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,16 +9,16 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/delete
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/delete
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
@@ -61,6 +61,8 @@ SELECT * FROM kview
 5 6
 7 8
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error "kview" is not a table
 DELETE FROM kview
 
@@ -85,12 +87,16 @@ SELECT * FROM kv
 statement count 0
 DELETE FROM kv WHERE k=5
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 DELETE FROM kv RETURNING k, v
 ----
 1 2
 7 8
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT * FROM kv
 ----
@@ -107,12 +113,16 @@ SELECT * FROM unindexed
 1 2
 7 8
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 DELETE FROM unindexed RETURNING k, v
 ----
 1 2
 7 8
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT * FROM unindexed
 ----
@@ -120,6 +130,8 @@ SELECT * FROM unindexed
 statement count 4
 INSERT INTO unindexed VALUES (1, 2), (3, 4), (5, 6), (7, 8)
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames
 DELETE FROM unindexed WHERE k=3 or v=6 RETURNING *
 ----
@@ -127,6 +139,8 @@ k v
 3 4
 5 6
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames
 DELETE FROM unindexed RETURNING unindexed.*
 ----
@@ -137,6 +151,8 @@ k v
 statement count 4
 INSERT INTO unindexed VALUES (1, 2), (3, 4), (5, 6), (7, 8)
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames,rowsort
 SELECT k, v FROM unindexed
 ----
@@ -146,6 +162,8 @@ k v
 5 6
 7 8
 
+# Not supported by Materialize.
+onlyif cockroach
 statement count 4
 DELETE FROM unindexed
 
@@ -153,9 +171,13 @@ DELETE FROM unindexed
 statement count 4
 INSERT INTO unindexed VALUES (1, 2), (3, 4), (5, 6), (7, 8)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement count 1
 DELETE FROM unindexed WHERE k >= 4 ORDER BY k LIMIT 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames,rowsort
 SELECT k, v FROM unindexed
 ----
@@ -164,10 +186,60 @@ k v
 3 4
 7 8
 
+# Not supported by Materialize.
+onlyif cockroach
 statement count 3
 DELETE FROM unindexed
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames
+SELECT k, v FROM unindexed
+----
+k v
+
+# Confirm ONLY and * are no-ops
+
+statement count 4
+INSERT INTO unindexed VALUES (1, 2), (3, 4), (5, 6), (7, 8)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement count 1
+DELETE FROM ONLY unindexed WHERE k >= 4 ORDER BY k LIMIT 1
+
+# Not supported by Materialize.
+onlyif cockroach
+query II colnames,rowsort
+SELECT k, v FROM unindexed
+----
+k v
+1 2
+3 4
+7 8
+
+# Not supported by Materialize.
+onlyif cockroach
+statement count 1
+DELETE FROM unindexed * WHERE k >= 7
+
+# Not supported by Materialize.
+onlyif cockroach
+query II colnames,rowsort
+SELECT k, v FROM unindexed
+----
+k v
+1 2
+3 4
+
+# Not supported by Materialize.
+onlyif cockroach
+statement count 2
+DELETE FROM ONLY unindexed * WHERE k <=3
+
+# Not supported by Materialize.
+onlyif cockroach
+query II colnames,rowsort
 SELECT k, v FROM unindexed
 ----
 k v
@@ -183,12 +255,16 @@ DELETE FROM indexed WHERE value = 5
 statement ok
 INSERT INTO unindexed VALUES (1, 9), (8, 2), (3, 7), (6, 4)
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 DELETE FROM unindexed WHERE k > 1 AND v < 7 ORDER BY v DESC LIMIT 2 RETURNING v,k
 ----
 4  6
 2  8
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 DELETE FROM unindexed ORDER BY v LIMIT 2 RETURNING k,v
 ----
@@ -200,16 +276,22 @@ DELETE FROM unindexed ORDER BY v LIMIT 2 RETURNING k,v
 statement count 4
 INSERT INTO unindexed VALUES (1, 2), (3, 4), (5, 6), (7, 8)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(*) FROM [DELETE FROM unindexed LIMIT 2 RETURNING v]
 ----
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(*) FROM [DELETE FROM unindexed LIMIT 1 RETURNING v]
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(*) FROM [DELETE FROM unindexed LIMIT 5 RETURNING v]
 ----
@@ -220,19 +302,24 @@ subtest regression_29494
 statement ok
 CREATE TABLE t29494(x INT PRIMARY KEY); INSERT INTO t29494 VALUES (12)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; ALTER TABLE t29494 ADD COLUMN y INT NOT NULL DEFAULT 123
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check that the new column is not visible
 query T
 SELECT create_statement FROM [SHOW CREATE t29494]
 ----
-CREATE TABLE t29494 (
-   x INT8 NOT NULL,
-   CONSTRAINT "primary" PRIMARY KEY (x ASC),
-   FAMILY "primary" (x)
+CREATE TABLE public.t29494 (
+  x INT8 NOT NULL,
+  CONSTRAINT t29494_pkey PRIMARY KEY (x ASC)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check that the new column is not usable in RETURNING
 statement error column "y" does not exist
 DELETE FROM t29494 RETURNING y
@@ -240,9 +327,13 @@ DELETE FROM t29494 RETURNING y
 statement ok
 ROLLBACK
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; ALTER TABLE t29494 ADD COLUMN y INT NOT NULL DEFAULT 123
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 DELETE FROM t29494 RETURNING *
 ----
@@ -253,30 +344,36 @@ COMMIT
 
 subtest regression_33361
 
-# Disable automatic stats to avoid flakiness (sometimes causes retry errors).
-statement ok
-SET CLUSTER SETTING sql.stats.automatic_collection.enabled = false
-
 statement ok
 CREATE TABLE t33361(x INT PRIMARY KEY, y INT UNIQUE, z INT); INSERT INTO t33361 VALUES (1, 2, 3)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; ALTER TABLE t33361 DROP COLUMN y
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error column "y" does not exist
 DELETE FROM t33361 RETURNING y
 
 statement ok
 ROLLBACK
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; ALTER TABLE t33361 DROP COLUMN y
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 DELETE FROM t33361 RETURNING *; COMMIT
 ----
 1 3
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test that delete works with column families (no indexes, so fast path).
 statement ok
 CREATE TABLE family (
@@ -287,17 +384,316 @@ CREATE TABLE family (
 );
 INSERT INTO family VALUES (1, 1), (2, 2), (3, 3)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN; ALTER TABLE family ADD COLUMN z INT CREATE FAMILY
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DELETE FROM family WHERE x=2
 
 statement ok
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query III rowsort
 SELECT x, y, z FROM family
 ----
 1  1  NULL
 3  3  NULL
+
+# Verify that the fast path does its deletes at the expected timestamp.
+statement ok
+CREATE TABLE a (a INT PRIMARY KEY)
+
+statement ok
+INSERT INTO a SELECT generate_series(1,5)
+
+let $ts
+SELECT cluster_logical_timestamp()
+
+statement ok
+DELETE FROM a WHERE a <= 3
+
+query I rowsort
+SELECT * FROM a
+----
+4
+5
+
+# Not supported by Materialize.
+onlyif cockroach
+query I rowsort
+SELECT * FROM a AS OF SYSTEM TIME $ts
+----
+1
+2
+3
+4
+5
+
+# Test that USING works.
+
+subtest delete_using
+
+statement ok
+CREATE TABLE u_a (
+    a INT NOT NULL PRIMARY KEY,
+    b STRING,
+    c INT
+)
+
+statement ok
+CREATE TABLE u_b (
+  a INT NOT NULL PRIMARY KEY,
+  b STRING
+)
+
+statement ok
+CREATE TABLE u_c (
+  a INT NOT NULL PRIMARY KEY,
+  b STRING,
+  c INT
+)
+
+statement ok
+CREATE TABLE u_d (
+  a INT,
+  b INT
+)
+
+statement ok
+INSERT INTO u_a VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (4, 'd', 40)
+
+statement ok
+INSERT INTO u_b VALUES (10, 'a'), (20, 'b'), (30, 'c'), (40, 'd')
+
+statement ok
+INSERT INTO u_c VALUES (1, 'a', 10), (2, 'b', 50), (3, 'c', 50), (4, 'd', 40)
+
+# Test a join with a filter.
+statement ok
+DELETE FROM u_a USING u_b WHERE c = u_b.a AND u_b.b = 'd'
+
+query ITI rowsort
+SELECT * FROM u_a;
+----
+1  a  10
+2  b  20
+3  c  30
+
+# Test a self join.
+statement ok
+INSERT INTO u_a VALUES (5, 'd', 5), (6, 'e', 6)
+
+statement ok
+DELETE FROM u_a USING u_a u_a2 WHERE u_a.a = u_a2.c
+
+query ITI rowsort
+SELECT * FROM u_a;
+----
+1  a  10
+2  b  20
+3  c  30
+
+# Test when USING uses multiple tables.
+
+statement ok
+INSERT INTO u_c VALUES (30, 'a', 1)
+
+statement ok
+DELETE FROM u_a USING u_b, u_c WHERE u_a.c = u_b.a AND u_a.c = u_c.a
+
+query ITI rowsort
+SELECT * FROM u_a;
+----
+1  a  10
+2  b  20
+
+# Not supported by Materialize.
+onlyif cockroach
+# Test if USING works well with RETURNING expressions that reference
+# the USING table and target table.
+query ITIT colnames,rowsort
+DELETE FROM u_a USING u_b WHERE u_a.c = u_b.a RETURNING u_b.a, u_b.b, u_a.a, u_a.b;
+----
+a   b  a  b
+10  a  1  a
+20  b  2  b
+
+# Not supported by Materialize.
+onlyif cockroach
+query ITI rowsort
+SELECT * FROM u_a;
+----
+
+statement ok
+INSERT INTO u_a VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (4, 'd', 40);
+
+# Not supported by Materialize.
+onlyif cockroach
+# Test if RETURNING * returns everything.
+query ITIITI colnames,rowsort
+DELETE FROM u_a USING u_c WHERE u_a.c = u_c.c RETURNING *;
+----
+a  b  c   a  b  c
+1  a  10  1  a  10
+4  d  40  4  d  40
+
+# Not supported by Materialize.
+onlyif cockroach
+# Clean u_a to input a new set of data, and to improve test readability.
+statement ok
+TRUNCATE u_a
+
+statement ok
+INSERT INTO u_a VALUES (1, 'a', 5), (2, 'b', 10), (3, 'c', 15), (4, 'd', 20), (5, 'd', 25), (6, 'd', 30), (7, 'd', 35), (8, 'd', 40), (9, 'd', 45)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Using ORDER BY and LIMIT with a `DELETE ... USING` where ORDER BY and LIMIT references the USING
+# table is not supported.
+# TODO(#89817): Add support in DELETE ... USING for ORDER BY clauses to reference the USING
+# table. This is not supported in UPDATE ... FROM either: #89817.
+statement error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
+DELETE FROM u_a AS foo USING u_b AS bar WHERE bar.a > foo.c ORDER BY bar.a DESC LIMIT 3 RETURNING *;
+
+# Not supported by Materialize.
+onlyif cockroach
+# Test aliased table names, ORDER BY and LIMIT where ORDER BY references the target
+# table.
+query ITI
+DELETE FROM u_a AS foo USING u_b AS bar WHERE bar.a > foo.c ORDER BY foo.a DESC LIMIT 3 RETURNING foo.*;
+----
+7  d  35
+6  d  30
+5  d  25
+
+# Not supported by Materialize.
+onlyif cockroach
+query ITI rowsort
+SELECT * FROM u_a;
+----
+1  a  5
+2  b  10
+3  c  15
+4  d  20
+8  d  40
+9  d  45
+
+statement ok
+INSERT INTO u_d VALUES (1, 10), (2, 20), (3, 30), (4, 40)
+
+query IT rowsort
+SELECT * FROM u_b;
+----
+10  a
+20  b
+30  c
+40  d
+
+query ITI rowsort
+SELECT * FROM u_c;
+----
+1   a  10
+2   b  50
+3   c  50
+4   d  40
+30  a  1
+
+# Test if DELETE FROM ... USING works with LATERAL.
+
+statement ok
+DELETE FROM u_a USING u_b, LATERAL (SELECT u_c.a, u_c.b, u_c.c FROM u_c WHERE u_b.b = u_c.b) AS other WHERE other.c = 1 AND u_a.c = 35
+
+# Not supported by Materialize.
+onlyif cockroach
+query ITI rowsort
+SELECT * FROM u_a
+----
+1  a  5
+2  b  10
+3  c  15
+4  d  20
+8  d  40
+9  d  45
+
+# Test if DELETE FROM ... USING works with partial indexes.
+
+statement ok
+CREATE TABLE pindex (
+  a DECIMAL(10, 2),
+  INDEX (a) WHERE a > 3
+)
+
+statement ok
+INSERT INTO pindex VALUES (1.0), (2.0), (3.0), (4.0), (5.0), (8.0)
+
+statement ok
+DELETE FROM pindex USING (VALUES (5.0), (6.0)) v(b) WHERE pindex.a = v.b
+
+# Not supported by Materialize.
+onlyif cockroach
+query F rowsort
+SELECT * FROM pindex;
+----
+1.00
+2.00
+3.00
+4.00
+8.00
+
+# Not supported by Materialize.
+onlyif cockroach
+query F rowsort
+SELECT a FROM pindex@pindex_a_idx WHERE a > 3
+----
+4.00
+8.00
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DELETE FROM pindex USING (VALUES (2.0), (4.0)) v(b) WHERE pindex.a = v.b RETURNING v.b
+
+# Not supported by Materialize.
+onlyif cockroach
+query F rowsort
+SELECT * FROM pindex;
+----
+1.00
+3.00
+8.00
+
+# Not supported by Materialize.
+onlyif cockroach
+query F rowsort
+SELECT a FROM pindex@pindex_a_idx WHERE a > 3
+----
+8.00
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #99630. Partial index DEL columns should come after
+# passthrough columns in the delete node's column list.
+statement ok
+CREATE TABLE t99630a (a INT, INDEX idx (a) WHERE a > 0);
+CREATE TABLE t99630b (b BOOL);
+INSERT INTO t99630a VALUES (11);
+INSERT INTO t99630b VALUES (false);
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+DELETE FROM t99630a USING t99630b RETURNING b
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT a FROM t99630a@idx WHERE a > 0
+----

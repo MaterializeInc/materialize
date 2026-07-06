@@ -190,6 +190,8 @@ INSERT INTO books2 VALUES
   ('Art of Computer Programming', 1, 2),
   ('Art of Computer Programming', 2, 2)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE books INJECT STATISTICS '[
   {
@@ -200,6 +202,8 @@ ALTER TABLE books INJECT STATISTICS '[
   }
 ]'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE books2 INJECT STATISTICS '[
   {
@@ -223,6 +227,8 @@ INSERT INTO authors VALUES
   ('Clifford Stein', 'Intro to Algo'),
   ('Donald Knuth', 'Art of Computer Programming')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE authors INJECT STATISTICS '[
   {
@@ -287,6 +293,8 @@ statement ok
 INSERT INTO large SELECT x, 2*x, 3*x, 4*x FROM
   generate_series(1, 10) AS a(x)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE small INJECT STATISTICS '[
   {
@@ -297,6 +305,8 @@ ALTER TABLE small INJECT STATISTICS '[
   }
 ]'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE large INJECT STATISTICS '[
   {
@@ -427,12 +437,16 @@ SELECT small.c, large.d FROM small LEFT JOIN large ON small.c = large.b AND larg
 statement ok
 CREATE TABLE parent (a INT, b INT, PRIMARY KEY(a, b))
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE child (a INT, b INT, c INT, PRIMARY KEY(a, b, c)) INTERLEAVE IN PARENT parent(a, b)
 
 statement ok
 CREATE TABLE source (a INT)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE source INJECT STATISTICS '[
   {
@@ -443,6 +457,8 @@ ALTER TABLE source INJECT STATISTICS '[
   }
 ]'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE child INJECT STATISTICS '[
   {
@@ -453,12 +469,16 @@ ALTER TABLE child INJECT STATISTICS '[
   }
 ]'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO child VALUES(1, 2, 3)
 
 statement ok
 INSERT INTO source VALUES(1)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII
 SELECT * FROM source JOIN child ON source.a = child.a
 ----
@@ -471,6 +491,8 @@ SELECT * FROM source JOIN child ON source.a = child.a
 statement ok
 CREATE TABLE t (a INT, b INT, c INT, d INT, e INT)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE u (a INT, b INT, c INT, d INT, e INT, PRIMARY KEY (a DESC, b, c))
 
@@ -478,21 +500,29 @@ statement ok
 INSERT INTO t VALUES
   (1, 2, 3, 4, 5)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u VALUES
   (1, 2, 3, 4, 5),
   (2, 3, 4, 5, 6),
   (3, 4, 5, 6, 7)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test index with all primary key columns implicit.
 statement ok
 CREATE INDEX idx ON u (d)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT u.a FROM t JOIN u ON t.d = u.d AND t.a = u.a WHERE t.e = 5
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test unique version of same index. (Lookup join should not use column a.)
 statement ok
 DROP INDEX u@idx
@@ -500,42 +530,62 @@ DROP INDEX u@idx
 statement ok
 CREATE UNIQUE INDEX idx ON u (d)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT u.a FROM t JOIN u ON t.d = u.d AND t.a = u.a WHERE t.e = 5
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test index with first primary key column explicit and the rest implicit.
 statement ok
 DROP INDEX u@idx CASCADE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX idx ON u (d, a)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT u.a FROM t JOIN u ON t.d = u.d AND t.a = u.a AND t.b = u.b WHERE t.e = 5
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test index with middle primary key column explicit and the rest implicit.
 statement ok
 DROP INDEX u@idx
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX idx ON u (d, b)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT u.a FROM t JOIN u ON t.d = u.d AND t.a = u.a AND t.b = u.b WHERE t.e = 5
 ----
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test index with last primary key column explicit and the rest implicit.
 statement ok
 DROP INDEX u@idx
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX idx ON u (d, c)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT u.a FROM t JOIN u ON t.d = u.d AND t.a = u.a AND t.d = u.d WHERE t.e = 5
 ----
