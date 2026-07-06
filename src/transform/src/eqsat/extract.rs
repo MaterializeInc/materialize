@@ -227,22 +227,6 @@ impl IlpExtractor {
         // continuous big-M level variables MTZ would use.
         let (scc_of, _scc_size, cyclic) = cyclic_classes(egraph, &reachable);
 
-        // Perf safety gate. The 0/1 ILP over a cyclic reachable subgraph (join
-        // commutativity is the source of cycles) is a branch-and-bound search
-        // whose runtime is not predictable from program size and reaches tens of
-        // seconds on a 7-way join, past the statement timeout. Bail to the greedy
-        // extractor, a sound and fast fallback already used on the size cap.
-        // Greedy's content-keyed tie-break is process-independent, so the plan
-        // stays deterministic and machine-independent. Deliberately NOT a
-        // wall-clock time limit: bailing on elapsed time would make the chosen
-        // plan depend on solver speed, reintroducing the cross-machine golden
-        // nondeterminism this module otherwise eliminates. Remove this gate once
-        // the cyclic ILP has a bounded, deterministic work budget.
-        if !cyclic.is_empty() {
-            record_ilp_fallback("cyclic_join_perf");
-            return None;
-        }
-
         // Group the non-trivial-SCC classes by SCC index. Iterating `class_order`
         // (BTreeMap key order) keeps the grouping and every downstream cut
         // deterministic.
@@ -251,6 +235,29 @@ impl IlpExtractor {
             if cyclic.contains(&cls) {
                 scc_members.entry(scc_of[&cls]).or_default().push(cls);
             }
+        }
+
+        // Perf gate on the pathological many-cycles tail. The 0/1 ILP over a join
+        // fragment holding many commute cycles is a large binary program that
+        // microlp's bounds-as-constraints branch-and-bound solves slowly, tens of
+        // seconds on a 7-way join. The cost is separable at INPUT time by the
+        // non-trivial-SCC count (each commute cycle is one size-2 SCC, one binary
+        // exclusion), so bail to the greedy extractor above a fixed threshold.
+        //
+        // `MAX_CYCLIC_SCCS` is calibrated from the measured knee of solve time
+        // versus non-trivial-SCC count over the join corpus (chbench, tpch, ldbc):
+        // up to 6 SCCs solve in <= 6.3s, then 7 jumps to >= 12s and 10 to 52s.
+        // Deliberately a count, not a wall-clock budget: a time bail would make
+        // the chosen plan depend on solver speed and so move goldens across
+        // machines, the cross-machine nondeterminism this extractor otherwise
+        // avoids. Greedy is a sound, deterministic fallback already used on the
+        // size cap. This threshold is a stopgap. The tail's real fix is a
+        // production MILP backend (HiGHS, single-thread for determinism), after
+        // which this widens or is removed.
+        const MAX_CYCLIC_SCCS: usize = 6;
+        if scc_members.len() > MAX_CYCLIC_SCCS {
+            record_ilp_fallback("cyclic_join_size");
+            return None;
         }
 
         // Level variables exist ONLY for size >= 3 SCCs (the MTZ fallback).
@@ -1125,13 +1132,7 @@ mod tests {
     /// The class also carries a self-referential identity Project whose input is
     /// its own class. The universal self-loop cut pins its `node_sel` to 0, so
     /// the solver must never select it.
-    // Shelved: the ILP is gated to bail to greedy on any cyclic reachable
-    // subgraph (see the perf gate in `IlpExtractor::solve`), so the cyclic
-    // subtour-cut machinery this test exercises is dormant in production. The
-    // test and the machinery are kept for revival once the cyclic ILP has a
-    // bounded-time solve. Un-ignore together with removing the gate.
     #[mz_ore::test]
-    #[ignore = "cyclic ILP gated to greedy for perf; un-ignore with the gate"]
     fn ilp_handles_join_commutativity_cycle() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::{CNode, EGraph, ENode};
@@ -1210,10 +1211,7 @@ mod tests {
     /// selection survives: `p1 = Project(leaf)`, `leaf = Get`. Asserting `Some`
     /// proves the cut does not over-constrain and rule out that valid selection,
     /// and the `Project(Get)` shape proves the 2-cycle was broken at the leaf.
-    // Shelved with the cyclic-ILP perf gate (bail to greedy on cyclic). See
-    // `ilp_handles_join_commutativity_cycle` for the rationale.
     #[mz_ore::test]
-    #[ignore = "cyclic ILP gated to greedy for perf; un-ignore with the gate"]
     fn ilp_size_two_cut_admits_acyclic_selection() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::{CNode, EGraph, ENode};
@@ -1257,10 +1255,7 @@ mod tests {
     /// cut the ILP would take the zero-arrangement self Project, an infinite term.
     /// The universal self-loop cut pins the self Project's `node_sel` to 0, so the
     /// solver must take the finite ArrangeBy instead.
-    // Shelved with the cyclic-ILP perf gate (bail to greedy on cyclic). See
-    // `ilp_handles_join_commutativity_cycle` for the rationale.
     #[mz_ore::test]
-    #[ignore = "cyclic ILP gated to greedy for perf; un-ignore with the gate"]
     fn ilp_size_one_self_loop_scc_never_extractable() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::{CNode, EGraph, ENode};
@@ -1361,10 +1356,7 @@ mod tests {
     /// (zero), so absent the MTZ cut the ILP would pick it, an infinite term that
     /// fails reconstruction. The MTZ level constraints make the 3-cycle
     /// infeasible, forcing the ILP to ground at a leaf and pay one arrangement.
-    // Shelved with the cyclic-ILP perf gate (bail to greedy on cyclic). See
-    // `ilp_handles_join_commutativity_cycle` for the rationale.
     #[mz_ore::test]
-    #[ignore = "cyclic ILP gated to greedy for perf; un-ignore with the gate"]
     fn ilp_size_three_cycle_mtz_fallback() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::{CNode, EGraph, ENode};
