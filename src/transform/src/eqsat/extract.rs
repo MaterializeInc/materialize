@@ -227,6 +227,22 @@ impl IlpExtractor {
         // continuous big-M level variables MTZ would use.
         let (scc_of, _scc_size, cyclic) = cyclic_classes(egraph, &reachable);
 
+        // Perf safety gate. The 0/1 ILP over a cyclic reachable subgraph (join
+        // commutativity is the source of cycles) is a branch-and-bound search
+        // whose runtime is not predictable from program size and reaches tens of
+        // seconds on a 7-way join, past the statement timeout. Bail to the greedy
+        // extractor, a sound and fast fallback already used on the size cap.
+        // Greedy's content-keyed tie-break is process-independent, so the plan
+        // stays deterministic and machine-independent. Deliberately NOT a
+        // wall-clock time limit: bailing on elapsed time would make the chosen
+        // plan depend on solver speed, reintroducing the cross-machine golden
+        // nondeterminism this module otherwise eliminates. Remove this gate once
+        // the cyclic ILP has a bounded, deterministic work budget.
+        if !cyclic.is_empty() {
+            record_ilp_fallback("cyclic_join_perf");
+            return None;
+        }
+
         // Group the non-trivial-SCC classes by SCC index. Iterating `class_order`
         // (BTreeMap key order) keeps the grouping and every downstream cut
         // deterministic.
