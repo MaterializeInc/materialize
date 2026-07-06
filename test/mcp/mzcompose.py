@@ -1137,3 +1137,57 @@ def workflow_oauth_metadata_extras(c: Composition) -> None:
                 port=6877,
                 print_statement=False,
             )
+
+
+# Error emitted by the 1 MB parser guard (MAX_STATEMENT_BATCH_SIZE in
+# src/sql-parser/src/parser.rs) before any lexing happens.
+SIZE_LIMIT_ERROR = "statement batch size cannot exceed"
+
+
+def workflow_parser_statement_size_limit_bypass(c: Composition) -> None:
+    """Regression test for DEX-64: the 1 MB parser guard lives in
+    `parse_with_limit` / `parse_item_name_with_limit`. Before the fix the MCP
+    handlers called the unbounded `parse()` and `parse_item_name()` directly,
+    so they lexed and parsed multi-megabyte input the guard should reject
+    (HTTP bodies go up to 5 MiB). These cases pin that MCP enforces the same
+    limit; the "statement batch size cannot exceed ..." message is the
+    fingerprint that the guard fired.
+    """
+    c.up("materialized")
+
+    # A >1 MB batch of valid statements. The guard rejects it before lexing;
+    # the unbounded parser instead parses all of them, so a "Found N
+    # statements" rejection would be the fingerprint that the guard was
+    # skipped.
+    batch = "SELECT 1;" * (1_200_000 // len("SELECT 1;"))
+
+    def tool_error(endpoint: str, tool: str, arguments: dict) -> str:
+        r = post_mcp(
+            c, endpoint, jsonrpc("tools/call", {"name": tool, "arguments": arguments})
+        )
+        assert r.status_code == 200, f"{r.status_code}: {r.text}"
+        err = r.json().get("error")
+        assert err is not None, f"oversized input should be rejected: {r.text[:500]}"
+        return err["message"]
+
+    with c.test_case("sql_http_endpoint_enforces_size_limit"):
+        # Control: the reference SQL path rejects it with the guard, on any build.
+        port = c.port("materialized", 6876)
+        r = requests.post(f"http://localhost:{port}/api/sql", json={"query": batch})
+        assert SIZE_LIMIT_ERROR in r.text, r.text[:500]
+
+    # `parse()` bypass, reached through `validate_readonly_query` in both tools.
+    for endpoint, tool, args in [
+        ("agent", "query", {"cluster": "quickstart", "sql_query": batch}),
+        ("developer", "query_system_catalog", {"sql_query": batch}),
+    ]:
+        with c.test_case(f"{endpoint}_{tool}_enforces_size_limit"):
+            msg = tool_error(endpoint, tool, args)
+            assert SIZE_LIMIT_ERROR in msg, f"{tool} parsed the oversized batch: {msg}"
+
+    # `parse_item_name()` bypass: an oversized, non-parseable data product name.
+    with c.test_case("agent_read_data_product_name_enforces_size_limit"):
+        msg = tool_error("agent", "read_data_product", {"name": "(" * 1_200_000})
+        assert (
+            SIZE_LIMIT_ERROR in msg
+        ), f"parse_item_name processed oversized name: {msg[:200]}"
