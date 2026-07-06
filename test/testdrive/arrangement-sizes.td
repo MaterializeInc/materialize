@@ -37,8 +37,8 @@ size                 bigint
 collection_timestamp "timestamp with time zone"
 hydration_complete   boolean
 
-# Set up a cluster with two replicas and arrangements large enough to
-# clear the 10 MiB floor that `mz_object_arrangement_sizes` applies.
+# Set up a cluster with two replicas and arrangements large enough that
+# `mz_object_arrangement_sizes` reports a nonzero quantized size.
 > CREATE CLUSTER test SIZE '${arg.default-replica-size}', REPLICATION FACTOR 2
 > SET cluster = test
 
@@ -72,6 +72,21 @@ idx_t2 r2 true
   WHERE o.name = 'mv_filter'
 0
 
+# Arrangements below the 5 MiB quantization threshold stay visible with a
+# size of 0 rather than being dropped.
+> CREATE TABLE small_t (a int, b text)
+> INSERT INTO small_t SELECT g, repeat('x', 10) FROM generate_series(1, 100) g
+> CREATE INDEX small_idx ON small_t (a)
+
+> SELECT o.name, r.name, s.size
+  FROM mz_internal.mz_object_arrangement_sizes s
+  JOIN mz_objects o ON o.id = s.object_id
+  JOIN mz_cluster_replicas r ON r.id = s.replica_id
+  WHERE o.name = 'small_idx'
+  ORDER BY r.name
+small_idx r1 0
+small_idx r2 0
+
 # History table: at least one snapshot row per (object_id, replica_id)
 # pair, all with size > 0, and at least one row tagged
 # `hydration_complete = true` for each pair once arrangements settle.
@@ -93,5 +108,20 @@ idx_t2 r2 true true true
   JOIN mz_objects o ON o.id = h.object_id
   WHERE o.name IN ('idx_t', 'idx_t2')
 true
+
+# The history skips size-0 rows: snapshots keep landing (fresh idx_t rows
+# appear) while small_idx, live above with size 0, never gets a history row.
+> SELECT count(*) > 0
+  FROM mz_internal.mz_object_arrangement_size_history h
+  JOIN mz_objects o ON o.id = h.object_id
+  WHERE o.name = 'idx_t'
+    AND h.collection_timestamp > now() - INTERVAL '10 seconds'
+true
+
+> SELECT count(*)
+  FROM mz_internal.mz_object_arrangement_size_history h
+  JOIN mz_objects o ON o.id = h.object_id
+  WHERE o.name = 'small_idx'
+0
 
 > DROP CLUSTER test CASCADE

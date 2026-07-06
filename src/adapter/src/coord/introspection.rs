@@ -614,11 +614,11 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
     // differential logs where each `+1` row represents one byte of heap delta;
     // after consolidation, `COUNT(*)` is the current arrangement size in bytes.
     //
-    // The `HAVING` floor drops objects below 10 MiB. Below that threshold the
-    // heap-size collection wiggles by a few bytes per second from ordinary
-    // allocator activity, and emitting exact bytes would push a downstream
-    // update on every wiggle. Quantizing to the nearest 10 MiB keeps the
-    // emitted size stable across in-bucket wiggle.
+    // Sizes are quantized to the nearest 10 MiB: the heap-size collection
+    // wiggles by a few bytes per second from ordinary allocator activity, and
+    // emitting exact bytes would push a downstream update on every wiggle.
+    // Arrangements below 5 MiB quantize to a size of 0. They are kept rather
+    // than dropped so that every arranged object is present in the collection.
     //
     // `mz_dataflow_addresses.address[1]` is the root of each operator's address
     // tree, which equals the owning `dataflow_id` — so we can go addresses →
@@ -648,7 +648,6 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
             ) AS rs ON rs.operator_id = od.operator_id
             WHERE ce.export_id NOT LIKE 't%'
             GROUP BY ce.export_id
-            HAVING COUNT(*) >= 10485760
         )",
     },
 ];

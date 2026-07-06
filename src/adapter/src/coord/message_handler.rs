@@ -1160,6 +1160,9 @@ impl Coordinator {
 /// Rows from replicas outside `fresh_size_replicas` are dropped, and the
 /// hydration flag is only trusted for replicas in `fresh_hydration_replicas`.
 /// Rows for other replicas may predate an environmentd or replica restart.
+///
+/// Rows with a size of 0 (arrangements below the live collection's 5 MiB
+/// quantization threshold) are not recorded.
 fn arrangement_sizes_records(
     mut live_snapshot: Vec<(Row, StorageDiff)>,
     mut hydration_snapshot: Vec<(Row, StorageDiff)>,
@@ -1207,6 +1210,7 @@ fn arrangement_sizes_records(
 
     let mut skipped_malformed: u64 = 0;
     let mut skipped_null_size: u64 = 0;
+    let mut skipped_zero_size: u64 = 0;
     let mut skipped_stale_replica: u64 = 0;
     let mut records = Vec::with_capacity(live_snapshot.len());
     for (row, diff) in &live_snapshot {
@@ -1233,6 +1237,13 @@ fn arrangement_sizes_records(
             skipped_null_size += 1;
             continue;
         }
+        // A quantized size of 0 means "below 5 MiB". The live collection
+        // keeps such rows so small objects stay visible, but recording them
+        // every cycle would bloat the history with rows carrying no signal.
+        if size_datum.unwrap_int64() == 0 {
+            skipped_zero_size += 1;
+            continue;
+        }
         let hydration_complete =
             hydrated.contains(&(replica_id.to_string(), object_id.to_string()));
         records.push(ArrangementSizeRecord {
@@ -1250,6 +1261,9 @@ fn arrangement_sizes_records(
     }
     if skipped_null_size > 0 {
         tracing::debug!("skipped {skipped_null_size} live rows with null size");
+    }
+    if skipped_zero_size > 0 {
+        tracing::debug!("skipped {skipped_zero_size} live rows with zero size");
     }
     if skipped_stale_replica > 0 {
         tracing::debug!(
@@ -1335,6 +1349,20 @@ mod arrangement_sizes_records_tests {
         assert_eq!(records[0].object_id, "u300");
         assert_eq!(records[0].size, 30);
         assert!(!records[0].hydration_complete);
+    }
+
+    #[mz_ore::test]
+    fn skips_zero_size_rows() {
+        // Size 0 means "below the live collection's quantization threshold".
+        // Such objects stay visible live but are not recorded in the history.
+        let live = vec![
+            (live_row("u1", "u100", Some(0)), 1),
+            (live_row("u1", "u200", Some(10485760)), 1),
+        ];
+        let fresh = replicas(&["u1"]);
+        let records = arrangement_sizes_records(live, Vec::new(), &fresh, &fresh);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].object_id, "u200");
     }
 
     #[mz_ore::test]

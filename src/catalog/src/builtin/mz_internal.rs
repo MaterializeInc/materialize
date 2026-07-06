@@ -4671,10 +4671,9 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinSource> = LazyLo
             ),
             (
                 "size",
-                "The total arrangement heap and batcher size in bytes for this object on this replica. \
-                 Objects smaller than 10 MiB are reported at their exact size; objects 10 MiB or larger \
-                 are rounded to the nearest 10 MiB boundary to reduce per-byte churn in the differential \
-                 collection.",
+                "The total arrangement heap and batcher size in bytes for this object on this replica, \
+                 rounded to the nearest 10 MiB boundary to reduce per-byte churn in the differential \
+                 collection. Objects with less than 5 MiB of arrangements report a size of 0.",
             ),
         ]),
         is_retained_metrics_object: true,
