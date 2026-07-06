@@ -391,6 +391,13 @@ class PgCdcOidRetraction(Check):
     leaving the error stuck (SELECT stays poisoned) and adding a phantom `-1`.
     The final SELECT below fails in that case and passes once the storage cast
     is stable across versions.
+
+    Exports created on releases with `cast_oid_full_range` in their statement
+    details use the full-range cast from the start, so the insert ingests as a
+    value and the delete retracts it symmetrically. In no-upgrade scenarios
+    this check therefore passes trivially. The asymmetry it guards against
+    only threatens exports whose details predate the flag, which must stay on
+    the legacy `i32`-range cast.
     """
 
     def initialize(self) -> Testdrive:

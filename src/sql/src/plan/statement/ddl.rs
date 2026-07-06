@@ -1650,16 +1650,18 @@ pub fn plan_create_subsource(
         let details =
             SourceExportStatementDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
         let details = match details {
-            SourceExportStatementDetails::Postgres { table } => {
-                SourceExportDetails::Postgres(PostgresSourceExportDetails {
-                    column_casts: crate::pure::postgres::generate_column_casts(
-                        scx,
-                        &table,
-                        &text_columns,
-                    )?,
-                    table,
-                })
-            }
+            SourceExportStatementDetails::Postgres {
+                table,
+                cast_oid_full_range,
+            } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
+                column_casts: crate::pure::postgres::generate_column_casts(
+                    scx,
+                    &table,
+                    &text_columns,
+                    cast_oid_full_range,
+                )?,
+                table,
+            }),
             SourceExportStatementDetails::MySql {
                 table,
                 initial_gtid_set,
@@ -1809,16 +1811,18 @@ pub fn plan_create_table_from_source(
     }
 
     let details = match details {
-        SourceExportStatementDetails::Postgres { table } => {
-            SourceExportDetails::Postgres(PostgresSourceExportDetails {
-                column_casts: crate::pure::postgres::generate_column_casts(
-                    scx,
-                    &table,
-                    &text_columns,
-                )?,
-                table,
-            })
-        }
+        SourceExportStatementDetails::Postgres {
+            table,
+            cast_oid_full_range,
+        } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
+            column_casts: crate::pure::postgres::generate_column_casts(
+                scx,
+                &table,
+                &text_columns,
+                cast_oid_full_range,
+            )?,
+            table,
+        }),
         SourceExportStatementDetails::MySql {
             table,
             initial_gtid_set,
