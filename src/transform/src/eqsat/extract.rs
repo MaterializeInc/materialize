@@ -1125,7 +1125,13 @@ mod tests {
     /// The class also carries a self-referential identity Project whose input is
     /// its own class. The universal self-loop cut pins its `node_sel` to 0, so
     /// the solver must never select it.
+    // Shelved: the ILP is gated to bail to greedy on any cyclic reachable
+    // subgraph (see the perf gate in `IlpExtractor::solve`), so the cyclic
+    // subtour-cut machinery this test exercises is dormant in production. The
+    // test and the machinery are kept for revival once the cyclic ILP has a
+    // bounded-time solve. Un-ignore together with removing the gate.
     #[mz_ore::test]
+    #[ignore = "cyclic ILP gated to greedy for perf; un-ignore with the gate"]
     fn ilp_handles_join_commutativity_cycle() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::{CNode, EGraph, ENode};
@@ -1204,7 +1210,10 @@ mod tests {
     /// selection survives: `p1 = Project(leaf)`, `leaf = Get`. Asserting `Some`
     /// proves the cut does not over-constrain and rule out that valid selection,
     /// and the `Project(Get)` shape proves the 2-cycle was broken at the leaf.
+    // Shelved with the cyclic-ILP perf gate (bail to greedy on cyclic). See
+    // `ilp_handles_join_commutativity_cycle` for the rationale.
     #[mz_ore::test]
+    #[ignore = "cyclic ILP gated to greedy for perf; un-ignore with the gate"]
     fn ilp_size_two_cut_admits_acyclic_selection() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::{CNode, EGraph, ENode};
@@ -1248,7 +1257,10 @@ mod tests {
     /// cut the ILP would take the zero-arrangement self Project, an infinite term.
     /// The universal self-loop cut pins the self Project's `node_sel` to 0, so the
     /// solver must take the finite ArrangeBy instead.
+    // Shelved with the cyclic-ILP perf gate (bail to greedy on cyclic). See
+    // `ilp_handles_join_commutativity_cycle` for the rationale.
     #[mz_ore::test]
+    #[ignore = "cyclic ILP gated to greedy for perf; un-ignore with the gate"]
     fn ilp_size_one_self_loop_scc_never_extractable() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::{CNode, EGraph, ENode};
@@ -1349,7 +1361,10 @@ mod tests {
     /// (zero), so absent the MTZ cut the ILP would pick it, an infinite term that
     /// fails reconstruction. The MTZ level constraints make the 3-cycle
     /// infeasible, forcing the ILP to ground at a leaf and pay one arrangement.
+    // Shelved with the cyclic-ILP perf gate (bail to greedy on cyclic). See
+    // `ilp_handles_join_commutativity_cycle` for the rationale.
     #[mz_ore::test]
+    #[ignore = "cyclic ILP gated to greedy for perf; un-ignore with the gate"]
     fn ilp_size_three_cycle_mtz_fallback() {
         use crate::eqsat::cost::CostModel;
         use crate::eqsat::egraph::{CNode, EGraph, ENode};
