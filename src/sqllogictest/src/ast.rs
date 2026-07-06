@@ -145,6 +145,10 @@ pub enum Record<'a> {
         table_name: &'a str,
         tsv_path: &'a str,
     },
+    /// A `user` directive. Switches the session user for subsequent records,
+    /// as in CockroachDB's logic tests. The role is created if it does not
+    /// exist yet.
+    User { location: Location, user: &'a str },
     /// A `reset-server` directive
     ResetServer,
     /// A `replace` directive. Registers a regular-expression substitution that

@@ -133,7 +133,16 @@ impl<'a> Parser<'a> {
             "halt" => Ok(Record::Halt),
 
             // this is some cockroach-specific thing, we don't care
-            "subtest" | "user" | "kv-batch-size" | "skip_on_retry" => self.parse_record(),
+            "subtest" | "kv-batch-size" | "skip_on_retry" => self.parse_record(),
+
+            // CockroachDB's `user` directive switches the session user for
+            // subsequent records.
+            "user" => Ok(Record::User {
+                location: self.location(),
+                user: words
+                    .next()
+                    .ok_or_else(|| anyhow!("user directive missing name"))?,
+            }),
 
             // CockroachDB's `let $var` binds the result of the following query
             // to a variable that later records reference. We don't support the

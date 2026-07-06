@@ -472,6 +472,9 @@ pub struct RunnerInner<'a> {
     client: tokio_postgres::Client,
     system_client: tokio_postgres::Client,
     clients: BTreeMap<String, tokio_postgres::Client>,
+    /// The user set by the most recent `user` directive, if any. Records run
+    /// on that user's connection (cached in `clients`) instead of `client`.
+    active_user: Option<String>,
     auto_index_tables: bool,
     auto_index_selects: bool,
     auto_transactions: bool,
@@ -963,6 +966,7 @@ impl<'a> Runner<'a> {
                 .batch_execute(sql!("DROP DATABASE {}", Sql::ident(name)).as_str())
                 .await?;
         }
+
         inner
             .system_client
             .batch_execute("CREATE DATABASE materialize")
@@ -1057,6 +1061,26 @@ impl<'a> Runner<'a> {
                 .await?;
         }
 
+        // Drop all user roles except the default one, so that roles created
+        // via the `user` directive or by the tests themselves do not leak
+        // into later files. Best-effort: a role that still owns objects (for
+        // example through default privileges) stays behind rather than
+        // failing the reset.
+        for row in inner
+            .system_client
+            .query(
+                "SELECT name FROM mz_roles WHERE id LIKE 'u%' AND name != 'materialize'",
+                &[],
+            )
+            .await?
+        {
+            let name: &str = row.get("name");
+            let _ = inner
+                .system_client
+                .batch_execute(sql!("DROP ROLE {}", Sql::ident(name)).as_str())
+                .await;
+        }
+
         // Grant initial privileges.
         inner
             .system_client
@@ -1100,6 +1124,7 @@ impl<'a> Runner<'a> {
             .await
             .unwrap();
         inner.clients = BTreeMap::new();
+        inner.active_user = None;
 
         Ok(())
     }
@@ -1446,6 +1471,7 @@ impl<'a> RunnerInner<'a> {
             client,
             system_client,
             clients: BTreeMap::new(),
+            active_user: None,
             auto_index_tables: config.auto_index_tables,
             auto_index_selects: config.auto_index_selects,
             auto_transactions: config.auto_transactions,
@@ -1477,6 +1503,69 @@ impl<'a> RunnerInner<'a> {
     }
 
     #[allow(clippy::disallowed_methods)]
+    /// The connection records run on: the `user` directive's connection when
+    /// one is active, the default connection otherwise.
+    fn active_client(&self) -> &tokio_postgres::Client {
+        match &self.active_user {
+            Some(user) => self
+                .clients
+                .get(user)
+                .expect("connection for the active user exists"),
+            None => &self.client,
+        }
+    }
+
+    /// Handles a `user` directive: ensures the role exists, connects as it,
+    /// and makes it the active user. CockroachDB's `root` maps to the
+    /// default `materialize` user.
+    async fn run_user<'r>(
+        &mut self,
+        user: &'r str,
+        location: &Location,
+        in_transaction: &mut bool,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        if self.auto_transactions && *in_transaction {
+            self.active_client().execute("COMMIT", &[]).await?;
+            *in_transaction = false;
+        }
+        if user == "root" || user == "materialize" {
+            self.active_user = None;
+            return Ok(Outcome::Success);
+        }
+        if !self.clients.contains_key(user) {
+            let create = sql!("CREATE ROLE {}", Sql::ident(user));
+            if let Err(error) = self.system_client.batch_execute(create.as_str()).await {
+                if !error.to_string_with_causes().contains("already exists") {
+                    return Ok(Outcome::Bail {
+                        cause: Box::new(Outcome::PlanFailure {
+                            error: anyhow!(error),
+                            expected_error: None,
+                            location: location.clone(),
+                        }),
+                        location: location.clone(),
+                    });
+                }
+            }
+            match connect(self.server_addr, Some(user), None).await {
+                Ok(client) => {
+                    self.clients.insert(user.to_string(), client);
+                }
+                Err(error) => {
+                    return Ok(Outcome::Bail {
+                        cause: Box::new(Outcome::PlanFailure {
+                            error: anyhow!(error),
+                            expected_error: None,
+                            location: location.clone(),
+                        }),
+                        location: location.clone(),
+                    });
+                }
+            }
+        }
+        self.active_user = Some(user.to_string());
+        Ok(Outcome::Success)
+    }
+
     async fn run_record<'r>(
         &mut self,
         record: &'r Record<'r>,
@@ -1484,6 +1573,7 @@ impl<'a> RunnerInner<'a> {
         replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
         match &record {
+            Record::User { user, location } => self.run_user(user, location, in_transaction).await,
             Record::Statement {
                 expected_error,
                 rows_affected,
@@ -1491,7 +1581,7 @@ impl<'a> RunnerInner<'a> {
                 location,
             } => {
                 if self.auto_transactions && *in_transaction {
-                    self.client.execute("COMMIT", &[]).await?;
+                    self.active_client().execute("COMMIT", &[]).await?;
                     *in_transaction = false;
                 }
                 match self
@@ -1502,7 +1592,7 @@ impl<'a> RunnerInner<'a> {
                         if self.auto_index_tables {
                             let additional = mutate(sql);
                             for stmt in additional {
-                                self.client.execute(&stmt, &[]).await?;
+                                self.active_client().execute(&stmt, &[]).await?;
                             }
                         }
                         Ok(Outcome::Success)
@@ -1612,14 +1702,14 @@ impl<'a> RunnerInner<'a> {
             Some(commands) => {
                 let mut result = Ok(0);
                 for command in &commands {
-                    if let Err(error) = self.client.execute(command, &[]).await {
+                    if let Err(error) = self.active_client().execute(command, &[]).await {
                         result = Err(error);
                         break;
                     }
                 }
                 result
             }
-            None => self.client.execute(sql, &[]).await,
+            None => self.active_client().execute(sql, &[]).await,
         };
         match result {
             Ok(actual) => {
@@ -1731,13 +1821,13 @@ impl<'a> RunnerInner<'a> {
             Ok(_) => {
                 if self.auto_transactions && !*in_transaction {
                     // No ISOLATION LEVEL SERIALIZABLE because of database-issues#5323
-                    self.client.execute("BEGIN", &[]).await?;
+                    self.active_client().execute("BEGIN", &[]).await?;
                     *in_transaction = true;
                 }
             }
             Err(_) => {
                 if self.auto_transactions && *in_transaction {
-                    self.client.execute("COMMIT", &[]).await?;
+                    self.active_client().execute("COMMIT", &[]).await?;
                     *in_transaction = false;
                 }
             }
@@ -1749,7 +1839,7 @@ impl<'a> RunnerInner<'a> {
         match statement {
             Statement::Show(..) => {
                 if self.auto_transactions && *in_transaction {
-                    self.client.execute("COMMIT", &[]).await?;
+                    self.active_client().execute("COMMIT", &[]).await?;
                     *in_transaction = false;
                 }
             }
@@ -1770,7 +1860,7 @@ impl<'a> RunnerInner<'a> {
         location: Location,
         replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
-        let rows = match self.client.query(sql, &[]).await {
+        let rows = match self.active_client().query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
                 let error_string = error.to_string_with_causes();
@@ -1925,7 +2015,7 @@ impl<'a> RunnerInner<'a> {
         location: Location,
     ) -> Result<Option<Outcome<'r>>, anyhow::Error> {
         print_sql_if(self.stdout, sql, self.verbose);
-        let sql_result = self.client.execute(sql, &[]).await;
+        let sql_result = self.active_client().execute(sql, &[]).await;
 
         // Evaluate if we already reached an outcome or not.
         let tentative_outcome = if let Err(view_error) = sql_result {
@@ -1999,7 +2089,9 @@ impl<'a> RunnerInner<'a> {
 
         // Remember to clean up after ourselves by dropping the view.
         print_sql_if(self.stdout, drop_view.as_str(), self.verbose);
-        self.client.execute(drop_view.as_str(), &[]).await?;
+        self.active_client()
+            .execute(drop_view.as_str(), &[])
+            .await?;
 
         Ok(view_outcome)
     }
@@ -2265,6 +2357,9 @@ fn print_record(config: &RunConfig<'_>, record: &Record) {
                 table_name,
                 tsv_path
             )
+        }
+        Record::User { user, .. } => {
+            writeln!(config.stdout, "{}user {}", " ".repeat(PRINT_INDENT), user)
         }
         Record::ResetServer => {
             writeln!(config.stdout, "{}reset-server", " ".repeat(PRINT_INDENT))
