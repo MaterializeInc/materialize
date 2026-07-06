@@ -225,19 +225,20 @@ pg_tbl         paused    "{\"hints\":[\"The replica running this source has been
 mysql          paused    "{\"hints\":[\"The replica running this source has been dropped\"]}"   ${replica_id_1}
 mysql_tbl      paused    "{\"hints\":[\"The replica running this source has been dropped\"]}"   ${replica_id_1}
 
-> SELECT o.name, s.status FROM mz_internal.mz_source_statuses s JOIN mz_objects o USING (id)
-accounts       paused
-auction        paused
-auctions       paused
-bids           paused
-organizations  paused
-users          paused
-kafka          paused
-kafka_tbl      paused
-pg             paused
-pg_tbl         paused
-mysql          paused
-mysql_tbl      paused
+# The dropped replica's 'paused' must win over the older source-global 'paused'.
+> SELECT o.name, s.status, s.details FROM mz_internal.mz_source_statuses s JOIN mz_objects o USING (id)
+accounts       paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+auction        paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+auctions       paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+bids           paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+organizations  paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+users          paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+kafka          paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+kafka_tbl      paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+pg             paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+pg_tbl         paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+mysql          paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+mysql_tbl      paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
 
 > ALTER CLUSTER sources SET (REPLICATION FACTOR 1)
 
@@ -426,9 +427,10 @@ kafka1  paused    "{\"hints\":[\"The replica running this sink has been dropped\
   LIMIT 1
 kafka2  paused    "{\"hints\":[\"The replica running this sink has been dropped\"]}"   ${replica_id_1}
 
-> SELECT o.name, s.status FROM mz_internal.mz_sink_statuses s JOIN mz_objects o USING (id)
-kafka1  paused
-kafka2  paused
+# The dropped replica's 'paused' must win over the older sink-global 'paused'.
+> SELECT o.name, s.status, s.details FROM mz_internal.mz_sink_statuses s JOIN mz_objects o USING (id)
+kafka1  paused  "{\"hints\":[\"The replica running this sink has been dropped\"]}"
+kafka2  paused  "{\"hints\":[\"The replica running this sink has been dropped\"]}"
 
 > ALTER CLUSTER sinks SET (REPLICATION FACTOR 1)
 
