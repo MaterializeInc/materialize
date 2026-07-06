@@ -412,9 +412,12 @@ fn encrypt_with_dek_versioned(
         .map_err(|_| anyhow::anyhow!("failed to create AES-256-GCM key"))?;
     let aead_key = LessSafeKey::new(unbound);
 
-    // Safety: Random 96-bit nonces with AES-256-GCM. Birthday bound is ~2^48 per key.
-    // With DEK rotation every 300s and realistic write rates (~10K ops/s = ~2^21.5
-    // per key lifetime), collision probability is negligible (margin ~2^26).
+    // Safety: Random 96-bit nonces with AES-256-GCM. NIST SP 800-38D bounds
+    // random-nonce use at 2^32 encryptions per key (collision probability
+    // 2^-32). With DEK rotation every 30 days, staying under 2^32 requires
+    // sustained write rates below ~1.6K ops/s per key, well above realistic
+    // persist blob/consensus write rates (tens to hundreds of ops/s, giving
+    // at most ~2^28 encryptions per key lifetime, probability under 2^-40).
     let mut nonce_bytes = [0u8; NONCE_LEN];
     aws_lc_rs::rand::fill(&mut nonce_bytes)
         .map_err(|_| anyhow::anyhow!("failed to generate random nonce"))?;
