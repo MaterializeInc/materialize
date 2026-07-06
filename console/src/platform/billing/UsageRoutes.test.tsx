@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 import { render, screen, waitFor } from "@testing-library/react";
-import { http, HttpResponse } from "msw";
 import React from "react";
 import { Route, Routes } from "react-router-dom";
 
@@ -152,30 +151,6 @@ describe("UsageRoutes", () => {
     });
   });
 
-  it("keeps the Billing route mounted while invoices are still loading", async () => {
-    let resolveInvoices: () => void = () => {};
-    server.use(
-      buildCloudOrganizationsResponse({ payload: buildOrganization() }),
-      http.get("*/api/invoices", () => {
-        return new Promise((resolve) => {
-          resolveInvoices = () =>
-            resolve(HttpResponse.json({ data: oneInvoice, nextCursor: null }));
-        });
-      }),
-    );
-    await renderAt("/usage/billing");
-
-    // Fail open while the invoices query is in flight: a paying org
-    // refreshing directly on /usage/billing must not see a blank page while
-    // this resolves.
-    expect(screen.getByText("Billing Page")).toBeVisible();
-
-    resolveInvoices();
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: "Billing" })).toBeVisible();
-    });
-  });
-
   it("hides Billing for a non-evaluation org with no invoices (e.g. a leaf account)", async () => {
     server.use(
       buildCloudOrganizationsResponse({ payload: buildOrganization() }),
@@ -183,8 +158,9 @@ describe("UsageRoutes", () => {
     );
     await renderAt("/usage/overview");
 
-    // Billing is visible on the very first render, before the mocked
-    // (empty) invoices have loaded, so wait for it to disappear.
+    // Billing reads as hidden from the very first render (invoices loading
+    // counts as "no invoices"), and stays hidden once the empty result loads.
+    expect(screen.queryByRole("link", { name: "Billing" })).toBeNull();
     await waitFor(() => {
       expect(
         screen.queryByRole("link", { name: "Billing" }),

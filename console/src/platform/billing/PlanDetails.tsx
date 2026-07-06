@@ -268,20 +268,27 @@ export const UpgradedPlanDetails = ({
   );
 };
 
-/** Sum every account's cost across a per-account daily breakdown window. */
+/**
+ * Sum every account's cost across a per-account daily breakdown window.
+ * `null` if there's no data to show, e.g. an empty window or a region filter
+ * that leaves no accounts (matches the ledger's own "no usage" empty state
+ * rather than rendering a misleading $0.00).
+ */
 function breakdownTotal(days: CostBreakdownDay[] | null): number | null {
   if (!days || days.length === 0) {
     return null;
   }
-  return aggregateDays(days).accounts.reduce(
-    (sum, account) => sum + accountTotal(account),
-    0,
-  );
+  const accounts = aggregateDays(days).accounts;
+  if (accounts.length === 0) {
+    return null;
+  }
+  return accounts.reduce((sum, account) => sum + accountTotal(account), 0);
 }
 
 /**
  * Per-account spend over a breakdown window, biggest spender first, plus the
- * window total. Used to itemize the "Last 30 days" row by account.
+ * window total. Used to itemize the "Last 30 days" row by account. `null` if
+ * there's no data to show (see `breakdownTotal`).
  */
 function breakdownByAccount(
   days: CostBreakdownDay[] | null,
@@ -295,6 +302,9 @@ function breakdownByAccount(
       total: accountTotal(account),
     }))
     .sort((a, b) => b.total - a.total);
+  if (accounts.length === 0) {
+    return null;
+  }
   const total = accounts.reduce((sum, account) => sum + account.total, 0);
   return { total, accounts };
 }

@@ -94,25 +94,21 @@ const UsageRoutes = ({
   const { organization } = useCurrentOrganization();
 
   const isUpgradedPlan = getIsUpgradedPlan(organization?.subscription?.type);
-  const {
-    data: invoices,
-    isLoading: isInvoicesLoading,
-    isError: isInvoicesError,
-  } = useRecentInvoices();
+  const { data: invoices } = useRecentInvoices();
   // Proxy for "is this a leaf account": a leaf's invoices always read as
   // empty (SAS-148), same signal InvoiceHistorySection uses. Evaluation orgs
   // are also invoice-less pre-upgrade, so carve those out to keep Billing
   // reachable for a first-time "Upgrade & Pay". Known gap and the direct fix
   // (an is_billing_child field, already written but undeployed): SAS-150.
-  // Fail open while the query is loading or erroring, since this only hides a
-  // UI affordance (the backend is the real access boundary) and the Billing
-  // route below is gated on this same flag, so treating "unknown" as "hide"
-  // would blank a real billing owner's page on every refresh.
+  // NOTE: this reads as "hide" while the query is loading, briefly hiding
+  // Billing/the route for a real billing owner on first load. Don't "fix"
+  // that by failing open on loading/error: the route below is gated on this
+  // same flag, and failing open can flip true->false for a leaf account
+  // already on /usage/billing, unmounting the route with no fallback and no
+  // way back. This direction (hidden -> visible, self-correcting) is safer.
   const isBillingVisible =
     useCanViewBilling({ runtimeConfig }) &&
     (organization?.subscription?.type === "evaluation" ||
-      isInvoicesLoading ||
-      isInvoicesError ||
       (invoices?.length ?? 0) > 0);
 
   const shouldRedirectToBilling = isBillingVisible && !isUpgradedPlan;

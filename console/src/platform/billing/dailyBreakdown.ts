@@ -38,14 +38,19 @@ export function accountTotal(account: CostBreakdownAccount): number {
   );
 }
 
-/** Uniquely identifies a cluster row within an account across days. */
+/**
+ * Uniquely identifies a cluster row within an account across days. Quoted
+ * Materialize identifiers can contain arbitrary characters, so this encodes
+ * the fields as a JSON array rather than joining with a delimiter that could
+ * itself appear inside one of them.
+ */
 function clusterKey(cluster: CostBreakdownCluster): string {
-  return [
+  return JSON.stringify([
     cluster.environment_id,
     cluster.cluster_grouping_key,
     cluster.category,
     cluster.region,
-  ].join("|");
+  ]);
 }
 
 /**
