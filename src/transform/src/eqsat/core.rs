@@ -507,9 +507,8 @@ mod tests {
         // order depend on this. Adds create ascending ids. A HashMap would return
         // them in seed-randomized order, a BTreeMap in sorted order.
         let mut eg: EGraph<ArithLang> = EGraph::new();
-        let mut ids = Vec::new();
         for k in 0..32 {
-            ids.push(eg.add(Arith::Num(k)));
+            eg.add(Arith::Num(k));
         }
         eg.rebuild();
         let got = eg.class_ids();

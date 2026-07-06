@@ -823,6 +823,7 @@ mod tests {
 
     use crate::eqsat::default_ruleset;
     use crate::eqsat::ir::{EScalar, Rel};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
@@ -985,7 +986,7 @@ mod tests {
     /// exercise the refinement loop's convergence contract.
     #[derive(Debug)]
     struct ScriptedExtractor {
-        calls: std::cell::Cell<usize>,
+        calls: AtomicUsize,
         seq: Vec<Rel>,
     }
     impl crate::eqsat::extract::Extractor for ScriptedExtractor {
@@ -1003,8 +1004,7 @@ mod tests {
                 >,
             >,
         ) -> Option<Rel> {
-            let i = self.calls.get();
-            self.calls.set(i + 1);
+            let i = self.calls.fetch_add(1, Ordering::Relaxed);
             Some(self.seq[i.min(self.seq.len() - 1)].clone())
         }
     }
@@ -1034,10 +1034,15 @@ mod tests {
             b.clone(), // round 1 (cost-equal, rejected)
         ];
         let ext = std::sync::Arc::new(ScriptedExtractor {
-            calls: std::cell::Cell::new(0),
+            calls: AtomicUsize::new(0),
             seq,
         });
-        let opt = Optimizer::new(default_ruleset(), CostModel::new()).with_extractor(ext.clone());
+        // Unsizing Arc<ScriptedExtractor> to Arc<dyn Extractor> needs the
+        // method-receiver clone. Arc::clone binds the concrete type and cannot
+        // express the coercion.
+        #[allow(clippy::clone_on_ref_ptr)]
+        let extractor: std::sync::Arc<dyn crate::eqsat::extract::Extractor> = ext.clone();
+        let opt = Optimizer::new(default_ruleset(), CostModel::new()).with_extractor(extractor);
         let scope = Rel::LetRec {
             bindings: vec![(0, leaf.clone())],
             limits: vec![None],
@@ -1049,7 +1054,7 @@ mod tests {
         // (2 rounds x 2), never 8 (4 rounds). This is the 4^d guard at the
         // phenomenon level.
         assert_eq!(
-            ext.calls.get(),
+            ext.calls.load(Ordering::Relaxed),
             4,
             "loop must stop after the cost-equal round-1 reject"
         );
@@ -1075,11 +1080,16 @@ mod tests {
         let b = constant(3);
         let seq = vec![leaf.clone(), a.clone(), leaf.clone(), b.clone()];
         let ext = std::sync::Arc::new(ScriptedExtractor {
-            calls: std::cell::Cell::new(0),
+            calls: AtomicUsize::new(0),
             seq,
         });
+        // Unsizing Arc<ScriptedExtractor> to Arc<dyn Extractor> needs the
+        // method-receiver clone. Arc::clone binds the concrete type and cannot
+        // express the coercion.
+        #[allow(clippy::clone_on_ref_ptr)]
+        let extractor: std::sync::Arc<dyn crate::eqsat::extract::Extractor> = ext.clone();
         let opt = Optimizer::new(default_ruleset(), CostModel::new())
-            .with_extractor(ext.clone())
+            .with_extractor(extractor)
             .without_let_union();
         let scope = Rel::Let {
             id: 0,
@@ -1088,7 +1098,7 @@ mod tests {
         };
         let (result, _) = opt.optimize_scope(scope, &LocalFacts::default());
         assert_eq!(
-            ext.calls.get(),
+            ext.calls.load(Ordering::Relaxed),
             2,
             "non-recursive Let must run exactly one round"
         );
@@ -1116,16 +1126,25 @@ mod tests {
         // so each round is 2 calls: value then body.
         let seq = vec![leaf.clone(), a.clone(), leaf.clone(), b.clone()];
         let ext = std::sync::Arc::new(ScriptedExtractor {
-            calls: std::cell::Cell::new(0),
+            calls: AtomicUsize::new(0),
             seq,
         });
-        let opt = Optimizer::new(default_ruleset(), CostModel::new()).with_extractor(ext.clone());
+        // Unsizing Arc<ScriptedExtractor> to Arc<dyn Extractor> needs the
+        // method-receiver clone. Arc::clone binds the concrete type and cannot
+        // express the coercion.
+        #[allow(clippy::clone_on_ref_ptr)]
+        let extractor: std::sync::Arc<dyn crate::eqsat::extract::Extractor> = ext.clone();
+        let opt = Optimizer::new(default_ruleset(), CostModel::new()).with_extractor(extractor);
         let scope = Rel::LetRec {
             bindings: vec![(0, leaf.clone())],
             limits: vec![None],
             body: Box::new(a.clone()),
         };
         let (_result, _) = opt.optimize_scope(scope, &LocalFacts::default());
-        assert_eq!(ext.calls.get(), 4, "LetRec still probes a second round");
+        assert_eq!(
+            ext.calls.load(Ordering::Relaxed),
+            4,
+            "LetRec still probes a second round"
+        );
     }
 }

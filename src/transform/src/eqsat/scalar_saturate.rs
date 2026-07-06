@@ -1097,6 +1097,9 @@ mod tests {
     // `null_prop_variadic`/`err_prop_variadic` are moot regardless of shape
     // (`And`/`Or::propagates_nulls()` is `false`).
     #[mz_ore::test]
+    // The case table is built in commented rewrite-family groups, not one flat
+    // literal, so the incremental pushes are intentional.
+    #[allow(clippy::vec_init_then_push)]
     fn scalar_parity_slice6c() {
         use mz_expr::{EvalError, MirScalarExpr, VariadicFunc};
         use mz_repr::{Datum, ReprScalarType};
@@ -1367,6 +1370,9 @@ mod tests {
     // dedicated test, `absorb_guard_blocks_dropped_extra_error`, so the
     // mutation-test target is a single, isolated assertion.
     #[mz_ore::test]
+    // The case table is built in commented rewrite-family groups, not one flat
+    // literal, so the incremental pushes are intentional.
+    #[allow(clippy::vec_init_then_push)]
     fn scalar_parity_slice6e() {
         use mz_expr::{MirScalarExpr, VariadicFunc};
         use mz_repr::ReprScalarType;
