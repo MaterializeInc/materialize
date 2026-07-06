@@ -38,6 +38,7 @@ use crate::plan::scope::Scope;
 use crate::plan::side_effecting_func::PG_CATALOG_SEF_BUILTINS;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
+use crate::rbac;
 use crate::session::vars::{self, ENABLE_TIME_AT_TIME_ZONE};
 
 /// A specifier for a function or an operator.
@@ -4687,9 +4688,26 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params![MapAny] => UnaryFunc::MapLength(func::MapLength)
                 => Int32, oid::FUNC_MAP_LENGTH_OID;
         },
+        // `mz_environment_id` is a plan-time constant: its value is fixed
+        // for the lifetime of the envd process. Fold directly to a literal
+        // here so downstream layers (MVs, indexes, dataflow) can treat it
+        // as an ordinary string, not an unmaterializable function. The
+        // `restrict_to_user_objects` gate that previously lived in the
+        // unmaterializable evaluator moves alongside the fold: without
+        // this check, restricted-session RBAC would silently regress.
         "mz_environment_id" => Scalar {
-            params!() => UnmaterializableFunc::MzEnvironmentId
-                => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
+            params!() => Operation::nullary(|ecx| {
+                if ecx.catalog().restrict_to_user_objects() {
+                    return Err(rbac::UnauthorizedError::RestrictedSystemObject {
+                        object_name: "function mz_environment_id".to_string(),
+                    }.into());
+                }
+                let env_id = ecx.catalog().config().environment_id.to_string();
+                Ok(HirScalarExpr::literal(
+                    Datum::String(&env_id),
+                    SqlScalarType::String,
+                ))
+            }) => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
         "mz_is_superuser" => Scalar {
             params!() => UnmaterializableFunc::MzIsSuperuser

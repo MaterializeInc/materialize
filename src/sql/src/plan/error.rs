@@ -46,6 +46,7 @@ use crate::pure::error::{
     KafkaSinkPurificationError, KafkaSourcePurificationError, LoadGeneratorSourcePurificationError,
     MySqlSourcePurificationError, PgSourcePurificationError, SqlServerSourcePurificationError,
 };
+use crate::rbac::UnauthorizedError;
 use crate::session::vars::VarError;
 
 #[derive(Debug)]
@@ -320,6 +321,14 @@ pub enum PlanError {
         replacement_type: CatalogItemType,
         replacement_name: PartialItemName,
     },
+    /// The caller is not authorized to perform the requested action.
+    ///
+    /// This variant lets planning-time code raise the same RBAC errors that
+    /// the adapter-layer RBAC gate produces, without a bespoke path per
+    /// callsite. It is unwrapped back to `AdapterError::Unauthorized` by
+    /// `From<PlanError> for AdapterError` so the client-facing error code
+    /// and DETAIL line match the adapter-layer origin.
+    Unauthorized(UnauthorizedError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -334,6 +343,7 @@ impl PlanError {
 
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::Unauthorized(e) => e.detail(),
             Self::NeverSupported { details, .. } => details.clone(),
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
@@ -520,6 +530,7 @@ impl PlanError {
 impl fmt::Display for PlanError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::Unauthorized(e) => e.fmt(f),
             Self::Unsupported { feature, discussion_no } => {
                 write!(f, "{} not yet supported", feature)?;
                 if let Some(discussion_no) = discussion_no {
@@ -893,6 +904,12 @@ impl Error for PlanError {}
 impl From<CatalogError> for PlanError {
     fn from(e: CatalogError) -> PlanError {
         PlanError::Catalog(e)
+    }
+}
+
+impl From<UnauthorizedError> for PlanError {
+    fn from(e: UnauthorizedError) -> PlanError {
+        PlanError::Unauthorized(e)
     }
 }
 

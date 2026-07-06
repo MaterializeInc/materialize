@@ -1528,6 +1528,7 @@ impl From<PlanError> for AdapterError {
     fn from(e: PlanError) -> AdapterError {
         match e {
             PlanError::UnknownCursor(name) => AdapterError::UnknownCursor(name),
+            PlanError::Unauthorized(e) => AdapterError::Unauthorized(e),
             _ => AdapterError::PlanError(e),
         }
     }
