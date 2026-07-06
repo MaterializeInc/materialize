@@ -254,6 +254,26 @@ pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
     Ok(u32::reinterpret_cast(oid))
 }
 
+/// Parses an OID from `s`, accepting only the `i32` range.
+///
+/// This is the historical [`parse_oid`] behavior: values are parsed as `i32`
+/// and reinterpreted as `u32`, so text in `2147483648..=4294967295` is
+/// rejected even though it denotes a valid OID.
+///
+/// NOTE: This exists solely to keep the persisted PostgreSQL source cast
+/// `CastStringToOid` evaluation-stable across releases (see the stability
+/// contract in `mz_storage_types::sources::casts`). PostgreSQL replication
+/// re-casts the old tuple on delete, so widening this cast would let a value
+/// ingested pre-upgrade as an error be retracted post-upgrade as a value,
+/// leaving the error stuck. Use [`parse_oid`] everywhere else.
+pub fn parse_oid_legacy(s: &str) -> Result<u32, ParseError> {
+    let oid: i32 = s
+        .trim()
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("oid", s).with_details(e))?;
+    Ok(u32::reinterpret_cast(oid))
+}
+
 fn parse_float<Fl>(type_name: &'static str, s: &str) -> Result<Fl, ParseError>
 where
     Fl: NumFloat + FromStr,
@@ -2224,5 +2244,20 @@ mod tests {
         assert!(parse_oid("4294967296").is_err());
         assert!(parse_oid("-2147483649").is_err());
         assert!(parse_oid("nope").is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_parse_oid_legacy() {
+        // Only the i32 range is accepted, reinterpreting negatives as u32.
+        assert_eq!(parse_oid_legacy("0").unwrap(), 0);
+        assert_eq!(parse_oid_legacy("2147483647").unwrap(), 2147483647);
+        assert_eq!(parse_oid_legacy("-1").unwrap(), 4294967295);
+        assert_eq!(parse_oid_legacy("-2147483648").unwrap(), 2147483648);
+
+        // The frozen behavior rejects the u32-only range that `parse_oid`
+        // accepts. This divergence must not change (storage stability).
+        assert!(parse_oid_legacy("2147483648").is_err());
+        assert!(parse_oid_legacy("4294967295").is_err());
+        assert!(parse_oid_legacy("nope").is_err());
     }
 }
