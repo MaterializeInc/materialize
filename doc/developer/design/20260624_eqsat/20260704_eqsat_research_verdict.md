@@ -6,6 +6,11 @@
 > and it supersedes the mid-arc status in `20260701_eqsat_showcase_status.md`.
 > The per-topic design docs in this directory remain the detailed record. This
 > doc is the conclusion they add up to.
+>
+> **Refreshed 2026-07-06** after the post-verdict build arc (filter and Map-prefix
+> sharing built and certified, the cycle-aware ILP made real, the determinism
+> sweep, the HiGHS backend, and the delta-availability fix). The verdict stands.
+> The arc strengthened it: see "The post-verdict build arc" below.
 
 ## The question
 
@@ -33,15 +38,22 @@ is not a unique-capability bet.
   arrangement once and shares it, and CSE captures the sharing. Arrangement keys
   are predicate-determined by the equi-join equivalence, so join order cannot
   manufacture a sharing opportunity CSE misses. No order-times-sharing win exists.
-* Cost-based and physical join selection: the greedy commit reaches exact
-  JoinImplementation parity on join strategy (measured, 164-join arm). The ILP
-  extractor models only an arrangement-count objective, with no join-order or
-  strategy term, so it cannot select a better physical plan. Logical
-  phase-ordering: the directional optimizer does have real local minima
-  (documented non-confluence, removable semijoins and antijoins), but eqsat
-  escapes none of them, because its rule set lacks the same rewrites the optimum
-  needs. Saturation over a rule set that cannot produce the better form is stuck
-  exactly where the directional passes are.
+* Cost-based and physical join selection: the commit path reaches exact
+  JoinImplementation parity on join strategy, and since the delta-availability
+  fix it reaches it by delegating to directional's own planner
+  (`plan_join_min_arrangements`) rather than by mirroring it. At the time of the
+  original verdict the ILP extractor modeled only an arrangement-count objective
+  and, unknown at the time, never actually ran on join queries (the
+  commutativity cycle tripped its acyclicity guard and it silently fell back to
+  greedy). The post-verdict arc fixed both: the ILP is cycle-aware and carries a
+  width tier, and it now produces some plans narrower than the directional
+  baseline. Those wins are width-awareness, portable in principle, so they
+  refine the verdict rather than overturn it. Logical phase-ordering: the
+  directional optimizer does have real local minima (documented non-confluence,
+  removable semijoins and antijoins), but eqsat escapes none of them, because
+  its rule set lacks the same rewrites the optimum needs. Saturation over a rule
+  set that cannot produce the better form is stuck exactly where the directional
+  passes are.
 
 The mechanism, stated once: where the directional optimizer is suboptimal, the
 fix is a new rewrite rule (coverage), a cardinality-aware or sharing-aware cost
@@ -131,36 +143,36 @@ regardless of how the plan space is searched.
   fixed fuse-canonicalization cannot. That is the classic
   hold-alternatives-and-cost-pick advantage, relational and output-representable,
   and it is the strongest genuine candidate the arc has surfaced. The probe ran
-  (read-only, 2026-07-04) and the result is unbuilt, not unreachable, and not
-  closed. Today eqsat and directional emit the identical no-share plan, gated on
-  two build gaps. First, the filter-split rewrite does not exist and cannot be
-  expressed in the current DSL, which deliberately treats scalar payload lists as
-  opaque and never destructures them, so the split form never enters the e-graph.
-  Adding it needs a destructuring builtin, buildable via the existing escape-hatch
-  mechanism. Second, and independently, the greedy extractor costs each e-class in
-  isolation with no credit for a subtree shared across consumers, and the ILP
-  objective counts only arrangements, so no cost path values a shared collection.
-  That second gap is the sharing-aware cost lever, the same foundational lever the
-  scalar case needs, unbuilt in both surfaces. eqsat holds the fused and split
-  alternatives natively, so once that cost exists eqsat's route (cost-pick among
-  held alternatives) is cleaner than a bespoke directional don't-fuse-when-shared
-  pass fighting its own canonicalization. The lever is worth building. The one
-  honest caveat is value, not reachability: in the canonical shape source-filter
-  pushdown and collection fan-out already share the scan and the common filter, so
-  the residual win is a per-row re-check of the shared predicate, marginal unless
-  the shared filter is expensive and not pushable. So this is a buildable
-  capability with a natural eqsat mechanism and bounded common-case value, not a
-  closed case.
+  (read-only, 2026-07-04) and found it unbuilt, not unreachable, gated on a
+  filter-split rewrite the DSL could not express and a sharing-aware cost neither
+  surface had. Both gates were then built, and both #2409 cases are now realized
+  and certified. WS1 (filter sharing, `enable_eqsat_filter_sharing`): a
+  hand-written filter-split rule plus a scalar-aware ILP node tier make the
+  UNION-ALL query share `Filter[a>0](r)` through a `Let` where the directional
+  fuse-canonicalization cannot. WS2 (Map-prefix scalar sharing,
+  `enable_eqsat_scalar_sharing`): a peel-first Map-split rule plus a width (arity)
+  tier in the ILP objective make a jsonb extraction compute once in a shared
+  `Map` `Let` across join inputs, with the width tier declining any share that
+  would widen a maintained arrangement. The width tier was subsequently promoted
+  out of the sharing flag into the ILP objective proper, because with the ILP
+  actually running on joins its width-blindness had become a live projection-loss
+  regression, which reclassifies that tier as cost-model correctness rather than
+  a sharing feature. The honest caveats stand: both wins are flag-gated,
+  marginal in the common source-pushable shape, and portable in principle. What
+  they demonstrate is the mechanism claim, that holding fused and split
+  alternatives and cost-picking is genuinely cleaner in an e-graph than a
+  directional pass fighting its own canonicalization, now as running code rather
+  than argument.
 * The MIR logical layer is already well-covered, so there is little new to add
   in eqsat's own layer.
 * A recurring shape across the probes: eqsat has real theoretical properties,
   congruence (database-issues#3324) and native fine-grained scalar CSE, that are
   not realized, because MIR on input or output cannot carry them. The advantage
-  is genuine inside the e-graph and stranded at the MIR boundary. The relational
-  filter-sharing case above is the exception, MIR can carry it (`Rel::Let`), and
-  it is reopened rather than stranded. Realizing any of these is build work, not
-  a free structural win, and the scalar and congruence cases have bounded
-  plan-cost payoff regardless because rendering already dedups the
+  is genuine inside the e-graph and stranded at the MIR boundary. The sharing
+  cases above are the exception, MIR can carry them (`Rel::Let`), and they went
+  from reopened to built and certified. Realizing the stranded ones remains
+  build work, not a free structural win, and the scalar and congruence cases
+  have bounded plan-cost payoff regardless because rendering already dedups the
   memory-relevant arrangements.
 
 Net: eqsat consolidates a well-covered MIR layer feasibly but with friction, and
@@ -183,8 +195,54 @@ extracted children and their arrangement availability. That is precisely why it
 cannot be a pre-extraction cost-selected e-node, and why the raise boundary,
 given the already-extracted children, is its correct home. The two-layer split,
 logical choices cost-selected in the e-graph and physical join planning committed
-at raise, is right, not an inconsistency to remove. Phases 1 and 2 are the
-end-state for this work, not a stepping stone to a bigger e-graph.
+at raise, is right, not an inconsistency to remove. The post-verdict arc took
+this to its conclusion: the commit path now delegates to directional's planner
+outright instead of mirroring it (see below), which is the same architecture with
+less code.
+
+## The post-verdict build arc (2026-07-05 to 2026-07-06)
+
+After the verdict, the one reopened thread (#2409 sharing) was built rather than
+argued, and building it forced the substrate to become real. The chain, each
+link measured before fixed: WS1 filter sharing landed. WS2 Map-prefix sharing
+landed inert, because its acceptance query exposed Finding 2, that the ILP
+extractor had never actually run on join queries (the commutativity cycle
+tripped its acyclicity guard, 19,206 silent fallbacks to greedy across the
+corpus). Making the ILP cycle-aware (MTZ, then SCC-scoped, then exact DFJ cuts
+for the size-1/2 SCCs that are 100% of the corpus) exposed a refinement-loop
+flap (3,730 of 3,731 changed rounds were cost-equal churn), fixed by
+strict-improvement acceptance and a non-recursive-Let round cap, which took the
+worst plan from a 220-second timeout to sub-second. Regenerating goldens then
+exposed per-process nondeterminism, root-caused to hash-order iteration in the
+e-graph substrate and fixed by a full HashMap-to-BTreeMap/non-iterable-wrapper
+sweep, enforced structurally by clippy, which also surfaced three latent bugs.
+Three profiles then converged on the microlp solver's branch-and-bound as the
+sole remaining cost, and the backend moved to HiGHS (worst 7-way join solve 54s
+to 5.73s, byte-identical across processes). The final parity audit caught a
+delta-join regression whose root was eqsat's parallel delta planner demanding
+plain-column keys where directional arranges on expressions. The fix deleted
+that planner entirely: `commit_join` delegates to directional's
+`plan_join_min_arrangements`, removing roughly 1,500 lines of parallel machinery
+(net -1,409) and restoring exact base delta parity.
+
+What the arc contributes to the verdict:
+
+* The consolidation thesis has a flagship exhibit. The delta fix is
+  consolidation in the strictest sense, deleting a parallel implementation and
+  reusing the directional one, and it produced better plans while doing so.
+* The maintainability bet's price is now known concretely: a deterministic
+  substrate (the collections sweep), a real MILP backend (a C++ dependency), and
+  cost-model tiers (scalar-work, width) had to be built before the e-graph's
+  plan choices were even stable enough to commit as goldens.
+* Two disciplines hardened into invariants along the way. Fallbacks and
+  backstops key on input properties, never wall-clock, because time-dependent
+  choices make plans machine-dependent. Golden audits use three lenses (arity,
+  arrangement count, join-type transitions), because each lens caught a
+  regression the others were blind to.
+* One measurement discipline paid throughout: every fix in the chain was
+  preceded by an instrumented probe that named its mechanism, and two proposed
+  fixes died at the probe stage (guard-side node exclusion, a reuse tie-break
+  that rewarded the wrong form).
 
 ## What was shelved, and why
 
@@ -237,15 +295,14 @@ one keeps eqsat's mechanism in frame contingently.
 * Cardinality cost model. The recurring lever across delta-versus-differential,
   join order, and the decorrelation simple-versus-keyed choice. Cardinality
   estimation is currently reverted and off.
-* Sharing-aware cost model. The lever that gates both #2409 cases (sharing a
-  scalar and sharing a filtered collection). The cost model charges each e-class
-  in isolation and counts arrangements, so it cannot value a subtree computed once
-  and reused across consumers. Computing a shared scalar once is always weakly
-  better on execution (`Map` is streaming, the only cost is carrying the column
-  across an arrangement boundary), so the cost model should credit compute-once by
-  default and charge carry only at arrangement crossings. This is a distinct lever
-  from cardinality, it is what makes #2409 the strongest eqsat-mechanism candidate
-  (hold both fused and split, cost-pick), and it is worth building.
+* Sharing-aware cost model. BUILT, in the restricted form the #2409 cases
+  needed: the scalar-work node tier (WS0) and the width/arity tier now live in
+  the ILP objective, crediting compute-once and charging arranged-row width,
+  and both sharing cases are certified against them. The general form, a
+  cost.rs-level scalar-work time term and the gated `(degree, arity)` memory
+  pair for the greedy path, remains future work, as does the ILP objective's
+  count-not-degree coarseness (a huge arrangement still counts the same as a
+  tiny one).
 * Cost-aware decorrelation. The one thread where eqsat's mechanism retains a
   contingent role. The `branch()` simple-versus-keyed choice (D1) is a syntactic
   heuristic today with an explicit code TODO saying it should be cost-based. Its
@@ -267,10 +324,17 @@ Equality saturation for the Materialize optimizer is a consolidation bet, not a
 unique-capability bet, and the consolidation value is bounded by a MIR-only layer
 ceiling. That is not the same as "eqsat can do nothing more": every capability gap
 found is unbuilt machinery, and most of it is portable to the directional
-optimizer, so building it does not require eqsat. The one place eqsat's mechanism
-is genuinely cleaner is holding non-confluent alternatives and cost-picking
-(#2409), gated on a sharing-aware cost worth building. The concrete banked value
-from the arc is the physical delta-parity fix (phases 1 and 2). The leverage for
-the optimizer going forward is foundational, the cardinality and sharing-aware
-cost model, keys and foreign keys, and rewrite coverage, and it is
-architecture-independent.
+optimizer, so building it does not require eqsat. The post-verdict arc tested
+that framing by building: the one genuinely-cleaner eqsat mechanism, holding
+non-confluent alternatives and cost-picking, now runs as certified code (both
+#2409 sharing cases), and the consolidation thesis got its flagship exhibit
+when the delta fix deleted eqsat's parallel join planner in favor of
+directional's and improved plans by doing so. The arc also priced the bet
+honestly: a deterministic substrate, a real MILP backend, and sharing-aware cost
+tiers were the prerequisites for the e-graph's choices to be stable and good
+enough to commit. The concrete banked value is the physical delta parity (now
+by delegation), the sharing wins (gated, marginal in the common shape, real in
+the expensive-scalar shape), and a substrate that is deterministic and roughly
+1,400 lines smaller. The leverage for the optimizer going forward is unchanged
+and foundational, the cardinality cost model, keys and foreign keys, and rewrite
+coverage, and it is architecture-independent.
