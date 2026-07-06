@@ -458,15 +458,38 @@ fn from_less_existence_predicate(sub: &HirRelationExpr) -> Option<HirScalarExpr>
 }
 
 /// Returns `expr` with every reference to the current scope (a [`ColumnRef`]
-/// with `level == 0`) replaced by its value from `env`. Returns `None` if
-/// `expr` contains a subquery, whose nested scopes this flat substitution does
-/// not handle, or references a column absent from `env`.
+/// with `level == 0`) replaced by its value from `env`. Returns `None` if `expr`
+/// cannot be soundly lifted into the outer scope, or references a column absent
+/// from `env`.
 fn resolve_local_columns(expr: &HirScalarExpr, env: &[HirScalarExpr]) -> Option<HirScalarExpr> {
-    let mut contains_subquery = false;
-    expr.visit_direct_subqueries(|_| {
-        contains_subquery = true;
+    // Every scalar in the FROM-less body is substituted into the outer scope, so
+    // reject any that cannot be evaluated equivalently there. The match is
+    // exhaustive on purpose: a new `HirScalarExpr` variant must be classified here
+    // rather than silently treated as liftable.
+    let mut unliftable = false;
+    expr.visit_post(&mut |e| {
+        let liftable = match e {
+            // Row-local: the value depends only on the row, so it is the same in
+            // the subquery's frame and the outer frame.
+            HirScalarExpr::Column(..)
+            | HirScalarExpr::Parameter(..)
+            | HirScalarExpr::Literal(..)
+            | HirScalarExpr::CallUnmaterializable(..)
+            | HirScalarExpr::CallUnary { .. }
+            | HirScalarExpr::CallBinary { .. }
+            | HirScalarExpr::CallVariadic { .. }
+            | HirScalarExpr::If { .. } => true,
+            // A subquery carries its own nested scopes that this flat substitution
+            // does not handle. A window function over the single-row body (e.g.
+            // `row_number() OVER ()` is always 1) is not the same function over the
+            // multi-row outer relation. Neither may cross the subquery boundary.
+            HirScalarExpr::Exists(..)
+            | HirScalarExpr::Select(..)
+            | HirScalarExpr::Windowing(..) => false,
+        };
+        unliftable |= !liftable;
     });
-    if contains_subquery {
+    if unliftable {
         return None;
     }
 

@@ -895,6 +895,45 @@ Target cluster: quickstart
 
 EOF
 
+# A window function in a FROM-less quantified subquery must not be inlined into
+# the outer Filter by the collapse. `x IN/= ANY/= ALL (SELECT <expr>)` normalizes
+# to an EXISTS with `<expr>` in a Filter predicate, but a window function run over
+# the whole outer relation (row_number() = 1, 2, 3, ...) differs from its
+# single-row subquery value (always 1). All three `1` rows satisfy `f1 = 1`, so
+# the correct answer keeps all three. The buggy inlined form keeps only the one
+# row that row_number() numbers 1.
+statement ok
+CREATE TABLE flw (f1 int)
+
+statement ok
+INSERT INTO flw VALUES (1), (1), (1), (NULL)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_simplify_from_less_existence TO true;
+----
+COMPLETE 0
+
+query I rowsort
+SELECT f1 FROM flw WHERE f1 IN (SELECT row_number() OVER ())
+----
+1
+1
+1
+
+query I rowsort
+SELECT f1 FROM flw WHERE f1 = ANY (SELECT row_number() OVER ())
+----
+1
+1
+1
+
+query I rowsort
+SELECT f1 FROM flw WHERE f1 = ALL (SELECT row_number() OVER ())
+----
+1
+1
+1
+
 # Restore the default so later files see production behavior.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_simplify_from_less_existence TO false;
