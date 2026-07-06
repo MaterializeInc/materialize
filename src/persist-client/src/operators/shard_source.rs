@@ -293,16 +293,6 @@ impl<T: Timestamp + Codec64> LeaseManager<T> {
     }
 }
 
-/// Whether the source should forward `progress` now (advancing the output
-/// frontier) or coalesce it with later batches. We coalesce only while still
-/// catching up to the hydration-time upper (`!caught_up`) and only when a
-/// positive byte budget is configured and not yet filled. Once live, or with
-/// coalescing disabled, every batch's progress is forwarded.
-fn should_forward_progress(coalesce_target: u64, caught_up: bool, coalesced_bytes: u64) -> bool {
-    let coalesce = coalesce_target > 0 && !caught_up && coalesced_bytes < coalesce_target;
-    !coalesce
-}
-
 pub(crate) fn shard_source_descs<'outer, K, V, D, TOuter>(
     scope: Scope<'outer, TOuter>,
     name: &str,
@@ -466,7 +456,7 @@ where
         // `current_frontier` reaches it the source is live and we forward every batch's
         // progress so steady-state frontier tracking stays tight. Read before `listen`
         // consumes `read`.
-        let replay_upper = read.machine.applier.clone_upper();
+        let replay_upper = read.shared_upper();
 
         // Store the listen handle in the shared slot so that it stays alive until both operators
         // exit
@@ -610,15 +600,14 @@ where
             current_frontier.join_assign(&progress);
             coalesced_bytes = coalesced_bytes.saturating_add(batch_bytes);
 
-            // Forward the progress (downgrading the output capability) unless we are still
-            // catching up to `replay_upper` and have not yet filled a coalesce batch. The
-            // emitted parts already carry their real timestamps, so holding the frontier
-            // back never drops or reorders data; it only batches the downstream progress
-            // rounds. We always forward once we reach `replay_upper` (the source is live)
-            // so that consumers relying on tight tracking, such as `persist_sink`, are
-            // unaffected in steady state.
+            // Coalesce the frontier downgrade while still catching up to `replay_upper`
+            // and below the byte budget. Parts carry their real timestamps regardless, so
+            // holding the frontier back only batches downstream progress rounds. Once live
+            // (caught up to `replay_upper`) or with coalescing disabled we forward every
+            // batch, keeping steady-state tracking tight for consumers like `persist_sink`.
             let caught_up = PartialOrder::less_equal(&replay_upper, &current_frontier);
-            if should_forward_progress(coalesce_target, caught_up, coalesced_bytes) {
+            let coalesce = coalesce_target > 0 && !caught_up && coalesced_bytes < coalesce_target;
+            if !coalesce {
                 coalesced_bytes = 0;
                 cap_set.downgrade(current_frontier.iter());
             }
@@ -1048,7 +1037,9 @@ mod tests {
                 current += 1;
                 coalesced += bytes_per_batch;
                 let caught_up = replay_upper <= current;
-                if should_forward_progress(coalesce_target, caught_up, coalesced) {
+                // Mirrors the forward/coalesce decision in `shard_source_descs`.
+                let coalesce = coalesce_target > 0 && !caught_up && coalesced < coalesce_target;
+                if !coalesce {
                     forwarded += 1;
                     coalesced = 0;
                 }
