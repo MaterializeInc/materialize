@@ -73,7 +73,7 @@ proptest-derive.workspace = true
 prost.workspace = true
 rdkafka.workspace = true
 regex.workspace = true
-reqwest = { workspace = true, features = ["rustls-tls-webpki-roots-no-provider"], default-features = false }
+reqwest = { workspace = true, features = ["rustls-no-provider"], default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 static_assertions.workspace = true

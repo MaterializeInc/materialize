@@ -388,7 +388,7 @@ hyper = { version = "1.9.0", features = ["http1", "server"] }
 # hyper 0.14 is used by AWS SDK. Used to override the DNS resolver used by the SDK,
 # which can only be done by constructing the HTTP Client
 hyper-0-14 = { package = "hyper", version = "0.14", features = ["client", "tcp"] }
-hyper-openssl = "0.10.2"
+hyper-openssl = { version = "0.10.2", features = ["client-legacy"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc-rs", "http1", "http2", "native-tokio", "tls12"] }
 hyper-util = "0.1.20"
 tower-service = "0.3.3"

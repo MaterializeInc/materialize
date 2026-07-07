@@ -45,7 +45,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 postgres-protocol.workspace = true
 regex.workspace = true
-reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots-no-provider"], default-features = false }
+reqwest = { workspace = true, features = ["json", "rustls-no-provider"], default-features = false }
 shell-words.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
