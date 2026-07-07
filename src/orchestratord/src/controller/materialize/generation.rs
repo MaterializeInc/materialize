@@ -93,7 +93,7 @@ static PER_ROUTE_GROUP_ROLES_VERSION: LazyLock<Version> = LazyLock::new(|| Versi
 });
 
 /// Minimum version for distroless environmentd/clusterd images (nonroot
-/// uid/gid 65534). Balancerd transitioned earlier at V26_18_0 (see
+/// uid/gid 65532). Balancerd transitioned earlier at V26_18_0 (see
 /// balancer.rs).
 static V26_33_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
@@ -899,7 +899,7 @@ fn create_environmentd_statefulset_object(
         ));
     }
     // Distroless environmentd/clusterd (v26.33.0+) run as `nonroot` (uid/gid
-    // 65534). Older images run as `materialize` (999). This sets both the
+    // 65532). Older images run as `materialize` (999). This sets both the
     // environmentd pod security context and the
     // --orchestrator-kubernetes-service-fs-group arg controlling clusterd
     // pods, so both transition together.
@@ -907,7 +907,7 @@ fn create_environmentd_statefulset_object(
     // uid-999 files migrate automatically (may add startup latency on large
     // volumes).
     let service_fs_group: i64 = if mz.meets_minimum_version(&V26_33_0) {
-        65534
+        65532
     } else {
         999
     };
