@@ -1983,14 +1983,41 @@ mz_internal.mz_show_columns:
           →Arranged mz_catalog.mz_columns
             Key: (#1{name})
     cte l1 =
-      →Arrange (#0{id}, uint8_to_numeric(#2{position}))
+      →Arrange (#0{id})
         →Stream l0
     cte l2 =
-      →Differential Join %0:l1[#0{id}, uint8_to_numeric(#2{position})] » %1:mz_comments[#0{id}, integer_to_numeric(#1{object_sub_id})]
+      →Differential Join %0:l1[#0{id}] » %1:mz_objects[#0{id}]
         →Arranged l1
-        →Arrange (#0{id}, integer_to_numeric(#1{object_sub_id}))
+        →Arrange (#0{id})
           →Fused with Child Map/Filter/Project
-            Project: #0, #2, #3
+            Project: #1, #4
+              →Arranged mz_catalog.mz_objects
+                Key: (#2{schema_id})
+    cte l3 =
+      →Union
+        →Map/Filter/Project
+          Project: #0..=#5
+          Map: null
+            →Consolidating Union
+              →Negate Diffs
+                →Differential Join %1[#0] » %0:l1[#0{id}]
+                  →Arranged l1
+                  →Distinct GroupAggregate
+                    →Fused with Child Map/Filter/Project
+                      Project: #0
+                        →Read l2
+              →Stream l0
+        →Stream l2
+    cte l4 =
+      →Arrange (#0{id}, #5{type}, uint8_to_numeric(#2{position}))
+        →Fused with Child Map/Filter/Project
+          Filter: (#5{type}) IS NOT NULL
+            →Read l3
+    cte l5 =
+      →Differential Join %0:l4[#0{id}, #5{type}, uint8_to_numeric(#2{position})] » %1:mz_comments[#0{id}, #1{object_type}, integer_to_numeric(#2{object_sub_id})]
+        →Arranged l4
+        →Arrange (#0{id}, #1{object_type}, integer_to_numeric(#2{object_sub_id}))
+          →Fused with Child Map/Filter/Project
             Filter: (#2{object_sub_id}) IS NOT NULL
               →Arranged mz_internal.mz_comments
                 Key: (#0{id})
@@ -2004,22 +2031,25 @@ mz_internal.mz_show_columns:
             Map: null
               →Consolidating Union
                 →Negate Diffs
-                  →Differential Join %1[#0, #1] » %0:l1[#0{id}, uint8_to_numeric(#2{position})]
-                    →Arranged l1
+                  →Differential Join %1[#0..=#2] » %0:l4[#0{id}, #5{type}, uint8_to_numeric(#2{position})]
+                    →Arranged l4
                     →Distinct GroupAggregate
                       Key:
-                        Project: #0, #2
-                        Map: integer_to_numeric(#1{object_sub_id})
+                        Project: #0, #1, #3
+                        Map: integer_to_numeric(#2{object_sub_id})
                       →Fused with Child Map/Filter/Project
-                        Project: #0, #5
-                          →Read l2
-                →Stream l0
+                        Project: #0, #5, #6
+                          →Read l5
+                →Fused with Child Map/Filter/Project
+                  Project: #0..=#4
+                    →Read l3
           →Fused with Child Map/Filter/Project
-            Project: #0..=#4, #6
-              →Read l2
+            Project: #0..=#4, #7
+              →Read l5
 
 Used Indexes:
   - mz_internal.mz_comments_ind (*** full scan ***)
+  - mz_catalog.mz_objects_ind (*** full scan ***)
   - mz_catalog.mz_columns_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
