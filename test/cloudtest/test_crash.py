@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 
-import subprocess
 from textwrap import dedent
 
 from kubernetes.client import V1Pod, V1StatefulSet
@@ -91,11 +90,11 @@ def test_crash_storage(mz: MaterializeApplication) -> None:
     pod_name = cluster_pod_name(cluster_id, replica_id)
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
-    try:
-        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
-    except subprocess.CalledProcessError as e:
-        # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
-        assert e.returncode == 137
+    # Simulate an unexpected clusterd crash. The distroless clusterd image
+    # ships no shell to `kubectl exec` a kill in, so force-delete the pod
+    # (SIGKILL, no grace period). The StatefulSet recreates it with the same
+    # name.
+    mz.kubectl("delete", "pod", pod_name, "--grace-period=0", "--force")
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
 
