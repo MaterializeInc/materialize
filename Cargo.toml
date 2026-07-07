@@ -262,6 +262,9 @@ exclude = [
     # All WASM crates are split into their own workspace to avoid needles cache
     #  invalidations for the core Mz crates.
     "misc/wasm/*",
+    # The subscribe SDK is a standalone, relocatable crate with its own
+    # workspace and dependency set, kept out of the core workspace.
+    "misc/subscribe-sdk/*",
     # Ignore any Rust dependencies that python packages might pull in.
     "misc/python/venv/*",
     # The `src/*/fuzz` cargo-fuzz crates need no entry here: each sets
