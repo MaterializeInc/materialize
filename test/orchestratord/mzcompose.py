@@ -348,7 +348,7 @@ def recreate_kind_cluster() -> None:
         ]
     )
 
-    install_metrics_server()
+    retry(install_metrics_server, 20)
 
 
 @contextmanager
