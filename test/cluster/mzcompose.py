@@ -15,6 +15,8 @@ usual clusterd included in the materialized container).
 import json
 import random
 import re
+import socket
+import struct
 import time
 from collections.abc import Callable
 from copy import copy
@@ -3945,6 +3947,65 @@ def workflow_test_github_7000(c: Composition, parser: WorkflowArgumentParser) ->
         c.up("materialized")
 
 
+def _char_param_survives(host: str, port: int) -> bool:
+    """Whether environmentd survives an untyped binary ``"char"`` param
+    whose byte is >= 0x80 (SQL-371 regression).
+
+    The param stays untyped (0 OIDs in Parse) so the server infers
+    ``PgLegacyChar`` from the query's cast. Binary format avoids the
+    text-param UTF-8 decode that would reject the byte first. This
+    routes an invalid UTF-8 byte through statement-logging's param
+    serialization, which used to panic and abort the process.
+
+    Returns False if the connection drops before ReadyForQuery, True
+    otherwise.
+    """
+
+    def frame(tag: bytes, body: bytes) -> bytes:
+        return tag + struct.pack(">I", len(body) + 4) + body
+
+    def drain_to_ready(s: socket.socket) -> bool:
+        buf = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                # Connection dropped: server aborted.
+                return False
+            buf += chunk
+            while len(buf) >= 5:
+                end = struct.unpack(">I", buf[1:5])[0] + 1
+                if len(buf) < end:
+                    break
+                ready = buf[0:1] == b"Z"  # ReadyForQuery
+                buf = buf[end:]
+                if ready:
+                    return True
+
+    with socket.create_connection((host, port), timeout=30) as s:
+        # Startup; the `materialize` user has no password in mzcompose.
+        s.sendall(
+            frame(
+                b"",
+                struct.pack(">I", 196608)
+                + b"user\x00materialize\x00database\x00materialize\x00\x00",
+            )
+        )
+        assert drain_to_ready(s), "startup failed"
+        s.sendall(
+            frame(b"P", b'\x00SELECT $1::"char"\x00' + struct.pack(">H", 0))
+            + frame(
+                b"B",
+                b"\x00\x00"
+                + struct.pack(">HHHi", 1, 1, 1, 1)
+                + b"\xff"
+                + struct.pack(">H", 0),
+            )
+            + frame(b"E", b"\x00" + struct.pack(">I", 0))
+            + frame(b"S", b"")
+        )
+        return drain_to_ready(s)
+
+
 def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Statement logging test needs to run with 100% logging of tests (as opposed to the default 1% )"""
 
@@ -3964,6 +4025,16 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         )
 
         c.run_testdrive_files("statement-logging/statement-logging.td")
+
+        # SQL-371: a `"char"` binary param with byte >= 0x80 must not
+        # abort environmentd via statement logging. Sampling is forced
+        # to 100% above, so this deterministically exercises the path.
+        assert _char_param_survives(
+            "127.0.0.1", c.port("materialized", 6875)
+        ), "environmentd aborted on non-UTF-8 char param"
+        assert (
+            c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1
+        ), "environmentd unreachable after char-param test"
 
 
 def workflow_blue_green_deployment(
@@ -6535,15 +6606,23 @@ def workflow_test_slow_seqno_hold(c: Composition):
             2
             """))
 
-    # Down the postgres database, stalling out the source.
+    # Install a durable reader on the source's shard via a background SUBSCRIBE.
+    # A one-shot SELECT is a poor fit: if its read timestamp lands at or below
+    # the (soon to be frozen) upper it completes immediately, leaving no
+    # observable reader, and if it blocks it races replica hydration. Either way
+    # the reader shows up only intermittently. A SUBSCRIBE cursor keeps its
+    # reader installed for as long as the transaction is open, so the reader is
+    # reliably present for the whole test. We start it while the upstream is
+    # still healthy, so the initial FETCH returns and the reader is guaranteed
+    # installed before we stall the source below.
+    subscribe = c.sql_cursor()
+    subscribe.execute("BEGIN")
+    subscribe.execute("DECLARE c CURSOR FOR SUBSCRIBE source1_tbl")
+    subscribe.execute("FETCH 1 c")
+
+    # Down the postgres database, stalling out the source so its frontier stops
+    # advancing.
     c.stop("postgres")
-
-    # Start a long-running select in the background, which should be unable to make progress.
-    def select_from_postgres():
-        c.sql("SELECT count(*) FROM source1_tbl")
-
-    background_select = Thread(target=select_from_postgres)
-    background_select.start()
 
     try:
         [(gid,)] = c.sql_query("SELECT id FROM mz_tables where name = 'source1_tbl'")
@@ -6574,48 +6653,32 @@ def workflow_test_slow_seqno_hold(c: Composition):
                 f"last observed leased_readers={last}"
             )
 
-        # The blocked SELECT installs a reader on the source's shard that can't
-        # make progress. Wait for that single stalled reader to show up and grab
-        # its id + initial seqno. (The source restarts periodically while its
-        # upstream is down, which can briefly expose a second, transient reader;
-        # only latch on once exactly one reader is present.)
-        def single_reader(leased_readers):
-            if len(leased_readers) != 1:
-                return None
-            ((reader_id, value),) = leased_readers.items()
-            return reader_id, value["seqno"]
+        # Even though the upstream frontier is stuck, a leased reader should
+        # periodically downgrade (advance) its seqno hold, so persist state can
+        # still be collected. Record each reader's first observed seqno and wait
+        # until some reader advances past it. Tracking per reader id keeps us
+        # robust to the source exposing extra, transient readers as it restarts
+        # while its upstream is down.
+        first_seqno: dict[str, int] = {}
 
-        reader_id, initial_seqno = poll_until(
-            single_reader,
-            timeout=120,
-            description="a single leased reader to appear on the stalled shard",
-        )
-
-        print(
-            f"{reader_id} has initial seqno {initial_seqno}. Waiting for progress, which may take a minute..."
-        )
-
-        # Show that the seqno is making progress: even though the upstream
-        # frontier is stuck, the reader should periodically downgrade its seqno
-        # hold, advancing it past the initial value.
-        def seqno_advanced(leased_readers):
-            value = leased_readers.get(reader_id)
-            if value is None:
-                # The reader momentarily vanished (e.g. a source restart). Keep
-                # polling; a permanent disappearance surfaces at the deadline.
-                return None
-            return True if value["seqno"] > initial_seqno else None
+        def some_reader_advanced(leased_readers):
+            advanced = None
+            for reader_id, value in leased_readers.items():
+                seqno = value["seqno"]
+                if seqno > first_seqno.setdefault(reader_id, seqno):
+                    advanced = reader_id
+            return advanced
 
         poll_until(
-            seqno_advanced,
+            some_reader_advanced,
             timeout=300,
-            description=f"reader {reader_id} to advance its seqno past {initial_seqno}",
+            description="a leased reader to advance its seqno on the stalled shard",
         )
 
-    # Cleanup: unblock the select and wait for it to complete.
+    # Cleanup: drop the subscribe and bring postgres back up.
     finally:
+        subscribe.execute("ROLLBACK")
         c.up("postgres")
-        background_select.join()
 
 
 def workflow_github_9961(c: Composition):
@@ -7126,3 +7189,39 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                   FROM mz_introspection.mz_cluster_prometheus_metrics
                 true
                 """))
+
+
+def workflow_test_metrics_null_label(c: Composition) -> None:
+    """SQL-198: `/metrics/mz_usage` must not abort environmentd when a
+    Prometheus label column is SQL NULL. An unorchestrated cluster replica has
+    `mz_cluster_replicas.size = NULL`, which used to reach an `.expect("must be
+    string")` in the label-values assembly."""
+    c.up("materialized")
+
+    # The default `Materialized()` in this composition already enables
+    # unorchestrated cluster replicas.
+    c.sql(
+        """CREATE CLUSTER sql198_unmgd REPLICAS (
+               r1 (STORAGECTL ADDRESSES ['s:1234'],
+                   COMPUTECTL ADDRESSES ['c:1234']))""",
+        port=6877,
+        user="mz_system",
+    )
+
+    try:
+        result = c.exec(
+            "materialized",
+            "curl",
+            "-sf",
+            "http://localhost:6878/metrics/mz_usage",
+            capture=True,
+        )
+        assert (
+            result.returncode == 0
+        ), f"metrics endpoint failed (rc={result.returncode})"
+        assert len(result.stdout) > 0, "metrics response was empty"
+
+        # Server is still alive.
+        assert c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1
+    finally:
+        c.sql("DROP CLUSTER sql198_unmgd CASCADE", port=6877, user="mz_system")

@@ -1205,7 +1205,7 @@ fn plan_kafka_source_connection(
     let KafkaSourceConfigOptionExtracted {
         group_id_prefix,
         topic,
-        mut topic_metadata_refresh_interval,
+        topic_metadata_refresh_interval,
         start_timestamp: _, // purified into `start_offset`
         start_offset,
         seen: _,
@@ -1226,9 +1226,10 @@ fn plan_kafka_source_connection(
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
     }
-    if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
-        // We enforce a minimum of 1 second refresh interval to prevent overloading the topic
-        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
+    if topic_metadata_refresh_interval < Duration::from_secs(1) {
+        // This is a librdkafka-enforced restriction that, if violated,
+        // would result in a runtime error for the source.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
     let metadata_columns = include_metadata
         .into_iter()
@@ -1650,16 +1651,18 @@ pub fn plan_create_subsource(
         let details =
             SourceExportStatementDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
         let details = match details {
-            SourceExportStatementDetails::Postgres { table } => {
-                SourceExportDetails::Postgres(PostgresSourceExportDetails {
-                    column_casts: crate::pure::postgres::generate_column_casts(
-                        scx,
-                        &table,
-                        &text_columns,
-                    )?,
-                    table,
-                })
-            }
+            SourceExportStatementDetails::Postgres {
+                table,
+                cast_oid_full_range,
+            } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
+                column_casts: crate::pure::postgres::generate_column_casts(
+                    scx,
+                    &table,
+                    &text_columns,
+                    cast_oid_full_range,
+                )?,
+                table,
+            }),
             SourceExportStatementDetails::MySql {
                 table,
                 initial_gtid_set,
@@ -1809,16 +1812,18 @@ pub fn plan_create_table_from_source(
     }
 
     let details = match details {
-        SourceExportStatementDetails::Postgres { table } => {
-            SourceExportDetails::Postgres(PostgresSourceExportDetails {
-                column_casts: crate::pure::postgres::generate_column_casts(
-                    scx,
-                    &table,
-                    &text_columns,
-                )?,
-                table,
-            })
-        }
+        SourceExportStatementDetails::Postgres {
+            table,
+            cast_oid_full_range,
+        } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
+            column_casts: crate::pure::postgres::generate_column_casts(
+                scx,
+                &table,
+                &text_columns,
+                cast_oid_full_range,
+            )?,
+            table,
+        }),
         SourceExportStatementDetails::MySql {
             table,
             initial_gtid_set,
@@ -3805,7 +3810,7 @@ fn kafka_sink_builder(
         transactional_id_prefix,
         legacy_ids,
         topic_config,
-        mut topic_metadata_refresh_interval,
+        topic_metadata_refresh_interval,
         topic_partition_count,
         topic_replication_factor,
         seen: _,
@@ -3836,7 +3841,7 @@ fn kafka_sink_builder(
     } else if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
         // We enforce a minimum of 1 second here to prevent excessive refreshes, and ensure that
         // tokio::time::interval receives a valid (positive) duration.
-        topic_metadata_refresh_interval = MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL;
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
 
     let assert_positive = |val: Option<i32>, name: &str| {

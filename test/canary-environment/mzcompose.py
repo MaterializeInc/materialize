@@ -40,6 +40,7 @@ import psycopg
 from psycopg import sql
 
 from materialize.biglake import bootstrap_namespace
+from materialize.mz_env_util import connect_and_print_environment_id
 from materialize.mzcompose import loader
 from materialize.mzcompose.composition import (
     Composition,
@@ -659,6 +660,13 @@ def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Seconds to watch each object's write frontier; it must advance within this window.",
     )
     args = parser.parse_args()
+
+    assert MATERIALIZE_PROD_SANDBOX_HOSTNAME is not None
+    connect_and_print_environment_id(
+        MATERIALIZE_PROD_SANDBOX_HOSTNAME,
+        MATERIALIZE_PROD_SANDBOX_USERNAME,
+        MATERIALIZE_PROD_SANDBOX_APP_PASSWORD,
+    )
 
     # `stop` lets the frontier checks bail out promptly on Ctrl-C: signals go to
     # the main thread, so the workers can't see the KeyboardInterrupt — they poll

@@ -662,6 +662,36 @@ Target cluster: mz_catalog_server
 
 EOF
 
+# Regression test for CLU-149: hoisted subquery bindings must not collide with
+# the LocalIds bound by WITH MUTUALLY RECURSIVE.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+WITH MUTUALLY RECURSIVE
+    a (x int4) AS (SELECT 1),
+    b (x int4) AS (SELECT x FROM a WHERE EXISTS (SELECT 1 FROM a))
+SELECT * FROM b;
+----
+With Mutually Recursive
+  cte [l0 as a] =
+    Map (1)
+      Constant
+        - ()
+  cte [l1 as b] =
+    With
+      cte [l2 as subquery-2] =
+        Project (#1)
+          Map (1)
+            Get l0
+    Return
+      Filter exists(Get l2)
+        Get l0
+Return
+  Get l1
+
+Target cluster: mz_catalog_server
+
+EOF
+
 statement ok
 CREATE TABLE accounts(id int, balance int);
 

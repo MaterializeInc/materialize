@@ -160,6 +160,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_enable_s3_lgalloc_noncc_sizes", "true", ["true", "false"]
         ),
+        VariableSystemParameter(
+            "persist_source_fetch_concurrency", "1", ["1", "2", "8", "16"]
+        ),
         # -----
         # Others (ordered by name),
         VariableSystemParameter(
@@ -393,6 +396,13 @@ def get_variable_system_parameters(
             "persist_use_critical_since_source",
             "false",  # always false, because we always have zero-downtime enabled
             ["false"],
+        ),
+        # 0 disables; otherwise coalesce hydration frontier downgrades until
+        # this many encoded bytes have been emitted (1 MiB, 16 MiB, 128 MiB).
+        VariableSystemParameter(
+            "persist_source_hydration_frontier_coalesce_bytes",
+            "0",
+            ["0", "1048576", "16777216", "134217728"],
         ),
         VariableSystemParameter(
             "persist_part_decode_format", "arrow", ["arrow", "row_with_validate"]
@@ -679,6 +689,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_public_metrics_endpoint",
     "enable_mcp_agent",
     "enable_mcp_agent_query_tool",
+    "enable_mcp_agent_read_data_product_tool",
     "enable_mcp_developer",
     "enable_mcp_developer_query_tool",
     "mcp_max_response_size",

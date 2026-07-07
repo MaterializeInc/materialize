@@ -868,7 +868,7 @@ steps:
               run: sql-tests
         agents:
           # SQL Server doesn't support ARM: https://github.com/microsoft/mssql-docker/issues/944
-          queue: hetzner-x86-64-12cpu-24gb
+          queue: hetzner-x86-64-16cpu-32gb
         coverage: skip
         sanitizer: skip
 

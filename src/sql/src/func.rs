@@ -5282,11 +5282,17 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
     use ParamType::*;
     use SqlScalarBaseType::*;
     builtins! {
+        // `mz_all`/`mz_any` back the `ALL`/`ANY` subquery operators, whose
+        // rewrite in `transform_ast` always feeds them a boolean comparison.
+        // The parameter must stay `Bool`: `AggregateFunc::All`/`Any` render as
+        // accumulable reduces whose accumulator only accepts boolean datums, so
+        // a non-boolean argument would crash a compute worker at runtime rather
+        // than being rejected here at plan time (database-issues#9298).
         "mz_all" => Aggregate {
-            params!(Any) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
+            params!(Bool) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
         },
         "mz_any" => Aggregate {
-            params!(Any) => AggregateFunc::Any => Bool, oid::FUNC_MZ_ANY_OID;
+            params!(Bool) => AggregateFunc::Any => Bool, oid::FUNC_MZ_ANY_OID;
         },
         "mz_avg_promotion_internal_v1" => Scalar {
             // Promotes a numeric type to the smallest fractional type that

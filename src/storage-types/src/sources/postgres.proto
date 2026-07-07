@@ -28,4 +28,8 @@ message ProtoPostgresSourcePublicationDetails {
 // compatible
 message ProtoPostgresSourceExportStatementDetails {
   mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
+  // Whether the text-to-oid cast for this export accepts the full u32 range.
+  // Absent (false) for exports created before the oid cast was widened, which
+  // must keep the legacy i32-range cast forever.
+  bool cast_oid_full_range = 2;
 }

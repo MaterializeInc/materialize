@@ -9,6 +9,8 @@
 
 //! Metrics collected by the optimizer.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use mz_ore::metric;
@@ -20,7 +22,11 @@ use prometheus::{HistogramVec, IntCounterVec};
 #[derive(Debug, Clone)]
 pub struct OptimizerMetrics {
     e2e_optimization_time_seconds: HistogramVec,
-    e2e_optimization_time_seconds_log_threshold: Duration,
+    /// Threshold in nanoseconds above which optimization emits a "slow
+    /// optimization" `warn!`. Zero disables the warning. Shared via `Arc` so a
+    /// runtime threshold change reaches every clone, including the long-lived
+    /// copies held by the coordinator and `PeekClient`.
+    e2e_optimization_time_seconds_log_threshold: Arc<AtomicU64>,
     outer_join_lowering_cases: IntCounterVec,
     transform_hits: IntCounterVec,
     transform_total: IntCounterVec,
@@ -41,7 +47,9 @@ impl OptimizerMetrics {
                  var_labels: ["object_type"],
                  buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
-            e2e_optimization_time_seconds_log_threshold,
+            e2e_optimization_time_seconds_log_threshold: Arc::new(AtomicU64::new(
+                duration_to_nanos(e2e_optimization_time_seconds_log_threshold),
+            )),
             outer_join_lowering_cases: registry.register(metric!(
                 name: "outer_join_lowering_cases",
                 help: "How many times the different outer join lowering cases happened.",
@@ -61,11 +69,26 @@ impl OptimizerMetrics {
         }
     }
 
+    /// Updates the "slow optimization" warning threshold. Shared via `Arc`, so
+    /// the change reaches every existing clone.
+    pub fn set_e2e_optimization_time_log_threshold(&self, threshold: Duration) {
+        self.e2e_optimization_time_seconds_log_threshold
+            .store(duration_to_nanos(threshold), Ordering::Relaxed);
+    }
+
     pub fn observe_e2e_optimization_time(&self, object_type: &str, duration: Duration) {
         self.e2e_optimization_time_seconds
             .with_label_values(&[object_type])
             .observe(duration.as_secs_f64());
-        // Also log it when it's big.
+        // Log it when it's big. Zero disables the warning, matching the
+        // `optimizer_e2e_latency_warning_threshold` var contract.
+        let configured = Duration::from_nanos(
+            self.e2e_optimization_time_seconds_log_threshold
+                .load(Ordering::Relaxed),
+        );
+        if configured.is_zero() {
+            return;
+        }
         let debug_threshold = cfg!(debug_assertions);
         let threshold = if debug_threshold {
             // Debug builds are much slower to optimize (despite mz-transform being built
@@ -73,9 +96,9 @@ impl OptimizerMetrics {
             // (A big part of the slowness comes from not optimizing mz-expr, but turning on
             // optimizations for that in debug builds would slow down the build
             // considerably.)
-            self.e2e_optimization_time_seconds_log_threshold * 6
+            configured * 6
         } else {
-            self.e2e_optimization_time_seconds_log_threshold
+            configured
         };
         if duration > threshold {
             let transform_times = self
@@ -127,4 +150,9 @@ impl OptimizerMetrics {
             transform_time_seconds.insert(transform.to_string(), vec![duration]);
         }
     }
+}
+
+/// Saturates at `u64::MAX` nanoseconds (~584 years), beyond any real threshold.
+fn duration_to_nanos(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }

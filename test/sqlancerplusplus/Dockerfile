@@ -25,7 +25,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
 # Build SQLancer++
 RUN git clone --single-branch --depth=1 https://github.com/MaterializeInc/sqlancerplusplus \
     && cd sqlancerplusplus \
-    && git checkout a783076fb3176064b24af0425d168785199d6140 \
+    && git checkout 7237554d9cba63cdfe94d076cd806aec3161e6c0 \
     && rm -rf .git \
     && mvn package -DskipTests \
     && sed -i "s/MATERIALIZE.host=localhost/MATERIALIZE.host=materialized/g" dbconfigs/jdbc.properties
