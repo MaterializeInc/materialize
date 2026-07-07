@@ -61,7 +61,9 @@ use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
-use reqwest::Request;
+// iceberg's `RequestAuthenticator` trait is defined against reqwest 0.12;
+// see `reqwest_0_12` in the workspace Cargo.toml.
+use reqwest_0_12::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
@@ -115,7 +117,8 @@ impl AwsSdkCredentialLoader {
 impl AwsCredentialLoad for AwsSdkCredentialLoader {
     async fn load_credential(
         &self,
-        _client: reqwest::Client,
+        // reqsign 0.16 trait signature; see `reqwest_0_12` in workspace Cargo.toml.
+        _client: reqwest_0_12::Client,
     ) -> anyhow::Result<Option<AwsCredential>> {
         let creds = self
             .provider
