@@ -1061,7 +1061,8 @@ pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     value!(Duration; mz_ssh_util::tunnel::DEFAULT_CHECK_INTERVAL),
     "Controls the check interval for connections to SSH bastions via `mz_ssh_util`.",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
@@ -1193,7 +1194,8 @@ pub static STORAGE_STATISTICS_INTERVAL: VarDefinition = VarDefinition::new(
     "The interval to submit statistics to `mz_source_statistics_per_worker` \
         and `mz_sink_statistics` (Materialize).",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// The interval to collect statistics for `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker` in
 /// clusterd. Controls the accuracy of metrics.
