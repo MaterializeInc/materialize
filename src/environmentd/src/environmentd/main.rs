@@ -434,6 +434,11 @@ pub struct Args {
     /// configuration parameters.
     #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
     launchdarkly_sdk_key: Option<String>,
+    /// Overrides the LaunchDarkly streaming, polling, and events endpoints with
+    /// a single base URL, as for a relay proxy. Primarily intended for pointing
+    /// the SDK at a mock LaunchDarkly server in tests.
+    #[clap(long, env = "LAUNCHDARKLY_BASE_URI", value_name = "URL")]
+    launchdarkly_base_uri: Option<String>,
     /// A list of PARAM_NAME=KEY_NAME pairs from system parameter names to
     /// LaunchDarkly feature keys.
     ///
@@ -657,6 +662,15 @@ pub fn main() {
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::install_enhanced_handler();
+
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let envd_start = Instant::now();
 
     // Configure signal handling as soon as possible. We want signals to be
@@ -1115,6 +1129,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 segment_client_side: args.segment_client_side,
                 test_only_dummy_segment_client: args.test_only_dummy_segment_client,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+                launchdarkly_base_uri: args.launchdarkly_base_uri,
                 launchdarkly_key_map: args
                     .launchdarkly_key_map
                     .into_iter()

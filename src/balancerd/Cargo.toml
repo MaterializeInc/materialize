@@ -42,6 +42,7 @@ num_cpus.workspace = true
 openssl.workspace = true
 prometheus.workspace = true
 proxy-header.workspace = true
+rustls.workspace = true
 semver.workspace = true
 tokio.workspace = true
 tokio-openssl.workspace = true
