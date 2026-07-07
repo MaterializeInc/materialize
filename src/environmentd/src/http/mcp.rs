@@ -1001,11 +1001,28 @@ async fn execute_sql(
     .await
     .map_err(|e| McpRequestError::QueryExecutionFailed(e.to_string()))?;
 
-    // Extract the result with rows (the user's single SELECT/SHOW query)
-    // Other results will be OK (from BEGIN, SET, COMMIT) or Err
-    for result in response.results {
+    select_single_rows(response.results)
+}
+
+/// Returns the rows of the single row-returning statement in a response.
+///
+/// A read's framing statements (`BEGIN`, `SET`, `COMMIT`) report `Ok`, so only
+/// the user's statement returns rows. Surfaces the first error, and a second
+/// row-returning statement is an error rather than a dropped result.
+fn select_single_rows(
+    results: Vec<SqlResult>,
+) -> Result<Vec<Vec<serde_json::Value>>, McpRequestError> {
+    let mut rows = None;
+    for result in results {
         match result {
-            SqlResult::Rows { rows, .. } => return Ok(rows),
+            SqlResult::Rows { rows: r, .. } => {
+                if rows.is_some() {
+                    return Err(McpRequestError::Internal(anyhow!(
+                        "MCP query returned multiple row-producing statements"
+                    )));
+                }
+                rows = Some(r);
+            }
             SqlResult::Err { error, .. } => {
                 return Err(McpRequestError::QueryExecutionFailed(error.message));
             }
@@ -1013,9 +1030,9 @@ async fn execute_sql(
         }
     }
 
-    Err(McpRequestError::QueryExecutionFailed(
-        "Query did not return any results".to_string(),
-    ))
+    rows.ok_or_else(|| {
+        McpRequestError::QueryExecutionFailed("Query did not return any results".to_string())
+    })
 }
 
 /// Serialize rows to JSON and enforce the response size cap.
@@ -1461,6 +1478,80 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::sql::{Description, SqlError};
+
+    fn rows_result(rows: Vec<Vec<serde_json::Value>>) -> SqlResult {
+        SqlResult::Rows {
+            tag: String::new(),
+            rows,
+            desc: Description { columns: vec![] },
+            notices: vec![],
+        }
+    }
+
+    fn ok_result() -> SqlResult {
+        SqlResult::Ok {
+            ok: String::new(),
+            notices: vec![],
+            parameters: vec![],
+        }
+    }
+
+    fn err_result(message: &str) -> SqlResult {
+        SqlResult::Err {
+            error: SqlError {
+                message: message.to_string(),
+                code: String::new(),
+                detail: None,
+                hint: None,
+                position: None,
+            },
+            notices: vec![],
+        }
+    }
+
+    /// The row-returning statement's rows are returned, ignoring the `Ok`
+    /// framing statements around it.
+    #[mz_ore::test]
+    fn test_select_single_rows_extracts_rows() {
+        let rows = vec![vec![serde_json::json!(1)]];
+        let results = vec![
+            ok_result(),
+            ok_result(),
+            rows_result(rows.clone()),
+            ok_result(),
+        ];
+        assert_eq!(select_single_rows(results).unwrap(), rows);
+    }
+
+    /// A response with no row-returning statement is an error.
+    #[mz_ore::test]
+    fn test_select_single_rows_requires_rows() {
+        let err = select_single_rows(vec![ok_result(), ok_result()]).unwrap_err();
+        assert!(
+            matches!(err, McpRequestError::QueryExecutionFailed(_)),
+            "{err:?}"
+        );
+    }
+
+    /// The invariant is enforced: a second row-returning statement is an
+    /// internal error rather than a silently dropped result.
+    #[mz_ore::test]
+    fn test_select_single_rows_rejects_multiple() {
+        let results = vec![rows_result(vec![]), rows_result(vec![])];
+        let err = select_single_rows(results).unwrap_err();
+        assert!(matches!(err, McpRequestError::Internal(_)), "{err:?}");
+    }
+
+    /// A statement error is surfaced.
+    #[mz_ore::test]
+    fn test_select_single_rows_surfaces_error() {
+        let err = select_single_rows(vec![ok_result(), err_result("boom")]).unwrap_err();
+        match err {
+            McpRequestError::QueryExecutionFailed(msg) => assert_eq!(msg, "boom"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 
     /// The DNS-rebinding defense: a disallowed `Origin` is rejected with 403,
     /// an allowed one passes, and a missing one passes (non-browser clients).
