@@ -908,6 +908,52 @@ pub enum ConnectionOptionName {
     Warehouse,
 }
 
+impl ConnectionOptionName {
+    pub(crate) fn value_contains_sensitive_data(&self) -> bool {
+        match self {
+            ConnectionOptionName::AccessKeyId
+            | ConnectionOptionName::Credential
+            | ConnectionOptionName::Password
+            | ConnectionOptionName::SaslPassword
+            | ConnectionOptionName::SaslUsername
+            | ConnectionOptionName::SecretAccessKey
+            | ConnectionOptionName::ServiceAccountKey
+            | ConnectionOptionName::SessionToken
+            | ConnectionOptionName::SslCertificate
+            | ConnectionOptionName::SslCertificateAuthority
+            | ConnectionOptionName::SslKey
+            | ConnectionOptionName::User => true,
+            ConnectionOptionName::AssumeRoleArn
+            | ConnectionOptionName::AssumeRoleSessionName
+            | ConnectionOptionName::AvailabilityZones
+            | ConnectionOptionName::AwsConnection
+            | ConnectionOptionName::AwsPrivatelink
+            | ConnectionOptionName::Broker
+            | ConnectionOptionName::Brokers
+            | ConnectionOptionName::Database
+            | ConnectionOptionName::Endpoint
+            | ConnectionOptionName::GcpConnection
+            | ConnectionOptionName::Host
+            | ConnectionOptionName::Port
+            | ConnectionOptionName::ProgressTopic
+            | ConnectionOptionName::ProgressTopicReplicationFactor
+            | ConnectionOptionName::PublicKey1
+            | ConnectionOptionName::PublicKey2
+            | ConnectionOptionName::Region
+            | ConnectionOptionName::Registry
+            | ConnectionOptionName::SaslMechanisms
+            | ConnectionOptionName::Scope
+            | ConnectionOptionName::SecurityProtocol
+            | ConnectionOptionName::ServiceName
+            | ConnectionOptionName::SshTunnel
+            | ConnectionOptionName::SslMode
+            | ConnectionOptionName::CatalogType
+            | ConnectionOptionName::Url
+            | ConnectionOptionName::Warehouse => false,
+        }
+    }
+}
+
 impl AstDisplay for ConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
@@ -964,47 +1010,11 @@ impl WithOptionName for ConnectionOptionName {
     /// this value could contain sensitive user data. If you're uncertain, err
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
-        match self {
-            ConnectionOptionName::AccessKeyId
-            | ConnectionOptionName::AvailabilityZones
-            | ConnectionOptionName::AwsConnection
-            | ConnectionOptionName::AwsPrivatelink
-            | ConnectionOptionName::Broker
-            | ConnectionOptionName::Brokers
-            | ConnectionOptionName::Credential
-            | ConnectionOptionName::Database
-            | ConnectionOptionName::Endpoint
-            | ConnectionOptionName::GcpConnection
-            | ConnectionOptionName::Host
-            | ConnectionOptionName::Password
-            | ConnectionOptionName::Port
-            | ConnectionOptionName::ProgressTopic
-            | ConnectionOptionName::ProgressTopicReplicationFactor
-            | ConnectionOptionName::PublicKey1
-            | ConnectionOptionName::PublicKey2
-            | ConnectionOptionName::Region
-            | ConnectionOptionName::Registry
-            | ConnectionOptionName::AssumeRoleArn
-            | ConnectionOptionName::AssumeRoleSessionName
-            | ConnectionOptionName::SaslMechanisms
-            | ConnectionOptionName::SaslPassword
-            | ConnectionOptionName::SaslUsername
-            | ConnectionOptionName::Scope
-            | ConnectionOptionName::SecurityProtocol
-            | ConnectionOptionName::SecretAccessKey
-            | ConnectionOptionName::ServiceAccountKey
-            | ConnectionOptionName::ServiceName
-            | ConnectionOptionName::SshTunnel
-            | ConnectionOptionName::SslCertificate
-            | ConnectionOptionName::SslCertificateAuthority
-            | ConnectionOptionName::SslKey
-            | ConnectionOptionName::SslMode
-            | ConnectionOptionName::SessionToken
-            | ConnectionOptionName::CatalogType
-            | ConnectionOptionName::Url
-            | ConnectionOptionName::User
-            | ConnectionOptionName::Warehouse => false,
-        }
+        // Credential-bearing options keep their values in redacted mode, so an
+        // inline credential literal renders as `'<REDACTED>'`. A `SECRET`
+        // reference is unaffected either way. It renders as its catalog name
+        // via `WithOptionValue::Secret`.
+        self.value_contains_sensitive_data()
     }
 }
 

@@ -4463,10 +4463,16 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::Expr(_) => {
                     // These are redact-aware.
                 }
-                WithOptionValue::Secret(_) | WithOptionValue::ConnectionKafkaBroker(_) => {
+                WithOptionValue::ConnectionKafkaBroker(_) => {
                     f.write_str("'<REDACTED>'");
                     return;
                 }
+                // A secret reference is a catalog item name, not the secret
+                // value, so it is safe to show in redacted output. An option
+                // that accepts an inline credential is parsed as a `Value`,
+                // which is redacted by that arm together with the option's
+                // `redact_value()`.
+                WithOptionValue::Secret(_) => {}
                 WithOptionValue::DataType(_)
                 | WithOptionValue::Item(_)
                 | WithOptionValue::UnresolvedItemName(_)

@@ -41,20 +41,25 @@ name       type
 ------------------------------
 mysq   mysql
 
+>[version<14000] SHOW CREATE CONNECTION mysq
+name   create_sql
+---------------------------------
+materialize.public.mysq "CREATE CONNECTION \"materialize\".\"public\".\"mysq\" TO MYSQL (HOST = \"mysql\", PASSWORD = SECRET \"materialize\".\"public\".\"mysqlpass\", USER = \"root\")"
+
 >[14000<=version<2600700] SHOW CREATE CONNECTION mysq
 name   create_sql
 ---------------------------------
 materialize.public.mysq "CREATE CONNECTION materialize.public.mysq TO MYSQL (HOST = mysql, PASSWORD = SECRET materialize.public.mysqlpass, USER = root);"
 
->[version>=2600700] SHOW CREATE CONNECTION mysq
+>[2600700<=version<2603200] SHOW CREATE CONNECTION mysq
 name   create_sql
 ---------------------------------
 materialize.public.mysq "CREATE CONNECTION materialize.public.mysq\nTO MYSQL (HOST = mysql, PASSWORD = SECRET materialize.public.mysqlpass, USER = root);"
 
->[version<14000] SHOW CREATE CONNECTION mysq
+>[version>=2603200] SHOW CREATE CONNECTION mysq
 name   create_sql
 ---------------------------------
-materialize.public.mysq "CREATE CONNECTION \"materialize\".\"public\".\"mysq\" TO MYSQL (HOST = \"mysql\", PASSWORD = SECRET \"materialize\".\"public\".\"mysqlpass\", USER = \"root\")"
+materialize.public.mysq "CREATE CONNECTION materialize.public.mysq\nTO MYSQL (HOST = mysql, PASSWORD = SECRET materialize.public.mysqlpass, USER = 'root');"
 
 #
 # Error checking
