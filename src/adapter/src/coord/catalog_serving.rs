@@ -247,6 +247,10 @@ pub fn check_cluster_restrictions(
             SubscribeFrom::Query { ref expr, .. } => Box::new(expr.depends_on().into_iter()),
         },
         Plan::Select(plan) => Box::new(plan.source.depends_on().into_iter()),
+        // COPY ... TO <url> runs its select as a dataflow on the active
+        // cluster. COPY ... TO STDOUT is planned as `Plan::Select` and is
+        // covered above.
+        Plan::CopyTo(plan) => Box::new(plan.select_plan.source.depends_on().into_iter()),
         _ => return Ok(()),
     };
 

@@ -549,6 +549,24 @@ INSERT INTO sink_tbl VALUES ('a', 1);
 statement ok
 DROP TABLE sink_tbl;
 
+# COPY ... TO <url> runs its select as a dataflow on the active cluster, so
+# reading a user object this way from mz_catalog_server must be rejected too.
+
+statement ok
+CREATE SECRET aws_secret AS 'secret_key';
+
+statement ok
+CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET aws_secret) WITH (VALIDATE = false);
+
+statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
+COPY (SELECT key FROM bar) TO 's3://path/to/dir' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');
+
+statement ok
+DROP CONNECTION aws_conn;
+
+statement ok
+DROP SECRET aws_secret;
+
 # But inspecting those objects, e.g. checking what indexes exist, should be allowed.
 statement ok
 SHOW INDEXES on bar;
