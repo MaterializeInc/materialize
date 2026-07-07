@@ -19,16 +19,14 @@ mz-repr = { path = "../repr", optional = true }
 mz-sql-parser = { path = "../sql-parser" }
 mz-ssh-util = { path = "../ssh-util", optional = true }
 mz-tls-util = { path = "../tls-util", default-features = false }
-openssl.workspace = true
-openssh = { workspace = true, optional = true }
+openssh = { workspace = true, features = ["native-mux",], optional = true, default-features = false }
 postgres_array = { workspace = true, optional = true }
-postgres-openssl.workspace = true
-proptest = { workspace = true, optional = true }
-proptest-derive.workspace = true
-prost = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
+proptest = { workspace = true, features = ["std",], optional = true, default-features = false }
+proptest-derive = { workspace = true, features = ["boxed_union"] }
+prost = { workspace = true, features = ["no-recursion-limit",], optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs", "rt", "sync"] }
 tokio-postgres.workspace = true
 tracing.workspace = true
 
