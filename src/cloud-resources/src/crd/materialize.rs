@@ -1619,7 +1619,14 @@ pub mod v1 {
 }
 
 pub fn parse_image_ref(image_ref: &str) -> Option<Version> {
+    // Strip any `@sha256:...` digest first. Otherwise the digest's `:`
+    // separator is mistaken for the tag separator, so a digest-pinned ref like
+    // `env:v26.32.0@sha256:...` parses the digest hex as the tag and fails,
+    // silently falling into the parse-failure path of every version gate.
     image_ref
+        .split('@')
+        .next()
+        .unwrap_or(image_ref)
         .rsplit_once(':')
         .and_then(|(_repo, tag)| tag.strip_prefix('v'))
         .and_then(|tag| {
@@ -1677,9 +1684,17 @@ mod tests {
             "materialize/environmentd:v0.146.0-dev.0--pr.g5a05a9e4ba873be8adaa528644aaae6e4c7cd29b"
                 .to_owned();
         assert!(mz.meets_minimum_version(&Version::parse("0.146.0-dev.0").unwrap()));
+        // Digest-pinned tag: the `@sha256:` digest must be stripped before
+        // parsing, or the tag is lost and the gate silently returns true.
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v0.35.0@sha256:abc".to_owned();
+        assert!(mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));
 
         // false cases
         mz.spec.environmentd_image_ref = "materialize/environmentd:v0.34.0-dev".to_owned();
+        assert!(!mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));
+        // Digest-pinned old tag stays below the gate rather than falling into
+        // the parse-failure (assume-newest) path.
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v0.33.0@sha256:abc".to_owned();
         assert!(!mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));
         mz.spec.environmentd_image_ref = "materialize/environmentd:v0.33.0".to_owned();
         assert!(!mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));

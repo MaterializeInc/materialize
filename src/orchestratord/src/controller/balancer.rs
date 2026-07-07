@@ -162,7 +162,7 @@ impl Context {
     }
 
     fn pod_uid_gid(image_ref: &str) -> i64 {
-        // Distroless balancerd (v26.18.0+) runs as `nonroot` (uid/gid 65534).
+        // Distroless balancerd (v26.18.0+) runs as `nonroot` (uid/gid 65532).
         // Older Ubuntu-based images run as `materialize` (uid/gid 999).
         static V26_18_0: std::sync::LazyLock<semver::Version> =
             std::sync::LazyLock::new(|| semver::Version {
@@ -182,7 +182,7 @@ impl Context {
                 true
             }
         };
-        if is_distroless { 65534 } else { 999 }
+        if is_distroless { 65532 } else { 999 }
     }
 
     fn create_deployment_object(&self, balancer: &Balancer) -> anyhow::Result<Deployment> {
@@ -640,17 +640,27 @@ mod tests {
         assert_eq!(Context::pod_uid_gid("materialize/balancerd:v26.17.0"), 999);
         assert_eq!(
             Context::pod_uid_gid("materialize/balancerd:v26.18.0"),
-            65534
+            65532
         );
         // Pre-release below threshold gets Ubuntu
         assert_eq!(
             Context::pod_uid_gid("materialize/balancerd:v26.18.0-dev"),
             999
         );
+        // Digest-pinned refs keep their tag's classification: an old
+        // tag stays on the Ubuntu path even with a digest appended.
+        assert_eq!(
+            Context::pod_uid_gid("materialize/balancerd:v26.17.0@sha256:abc"),
+            999
+        );
+        assert_eq!(
+            Context::pod_uid_gid("materialize/balancerd:v26.18.0@sha256:abc"),
+            65532
+        );
         // Unparseable refs assume distroless
         assert_eq!(
             Context::pod_uid_gid("materialize/balancerd@sha256:abc"),
-            65534
+            65532
         );
     }
 }
