@@ -233,6 +233,8 @@ wrappers = [
     "reqsign",
     "reqwest",
     "rustls",
+    # Pulled in by reqwest's rustls backend (activated by azure_core 0.35).
+    "rustls-platform-verifier",
     "sqlparser",
     "tokio-postgres",
     "tokio-tungstenite",

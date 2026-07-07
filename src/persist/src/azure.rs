@@ -201,7 +201,6 @@ impl AzureBlobConfig {
             metrics,
             Url::parse(&format!("http://localhost:40111/{}", container_name)).expect("valid url"),
             Box::new(TestBlobKnobs),
-            Arc::new(ConfigSet::default()),
         )?;
 
         Ok(Some(config))
@@ -272,7 +271,6 @@ impl Blob for AzureBlob {
         let path = self.get_path(key);
         let blob = self.client.blob_client(&path);
 
-        // Pre-allocate an lgalloc region sized to content-length and stream into it.
         let response = match blob
             .download(Some(BlobClientDownloadOptions::default()))
             .await
@@ -289,49 +287,20 @@ impl Blob for AzureBlob {
         let content_length = response.properties.content_length.unwrap_or(0);
         let mut body = response.body;
 
-        let mut buffer = if content_length > 0 {
-            PreSizedBuffer::Sized(
-                self.metrics
-                    .lgbytes
-                    .persist_azure
-                    .new_region(usize::cast_from(content_length)),
-            )
-        } else {
-            // Size unknown: grow into a segmented buffer, then copy into lgalloc.
-            PreSizedBuffer::Unknown(SegmentedBytes::new())
-        };
-
+        let mut segments = SegmentedBytes::new();
         while let Some(value) = body.next().await {
             let value = value
                 .map_err(|e| ExternalError::from(e.with_context("azure blob get body error")))?;
-            match &mut buffer {
-                PreSizedBuffer::Sized(region) => region.extend_from_slice(&value),
-                PreSizedBuffer::Unknown(segments) => segments.push(value),
-            }
+            segments.push(value);
         }
 
-        let lgbytes: Bytes = match buffer {
-            PreSizedBuffer::Sized(region) => region.into(),
-            PreSizedBuffer::Unknown(segments) => {
-                let mut region = self
-                    .metrics
-                    .lgbytes
-                    .persist_azure
-                    .new_region(segments.len());
-                for segment in segments.into_segments() {
-                    region.extend_from_slice(segment.as_ref());
-                }
-                region.into()
-            }
-        };
-
-        if content_length > 0 && content_length != u64::cast_from(lgbytes.len()) {
+        // Report if the content-length header didn't match the number of
+        // bytes we read from the network.
+        if content_length > 0 && content_length != u64::cast_from(segments.len()) {
             self.metrics.get_invalid_resp.inc();
         }
 
-        let mut out = SegmentedBytes::with_capacity(1);
-        out.push(lgbytes);
-        Ok(Some(out))
+        Ok(Some(segments))
     }
 
     async fn list_keys_and_metadata(
@@ -426,13 +395,6 @@ impl Blob for AzureBlob {
             }
         }
     }
-}
-
-/// If possible we'll pre-allocate a chunk of memory in lgalloc and write into
-/// that as we read bytes off the network.
-enum PreSizedBuffer {
-    Sized(mz_ore::lgbytes::MetricsRegion<u8>),
-    Unknown(SegmentedBytes),
 }
 
 #[cfg(test)]

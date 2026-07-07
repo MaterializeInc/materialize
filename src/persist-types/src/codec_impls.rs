@@ -620,14 +620,11 @@ mod tests {
         );
         assert_eq!(
             ShardId::from_str("s0"),
-            Err(
-                "invalid ShardId s0: invalid length: expected length 32 for simple format, found 1"
-                    .to_string()
-            )
+            Err("invalid ShardId s0: invalid length: found 1".to_string())
         );
         assert_eq!(
             ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
-            Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: found `O` at 38".to_string())
+            Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: found `O` at 37".to_string())
         );
     }
 
