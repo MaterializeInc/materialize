@@ -2872,7 +2872,7 @@ mz_internal.mz_sink_statuses:
             Project: #0..=#4
               →Non-monotonic TopK
                 Group By #1
-                Order By #5 asc nulls_last
+                Order By #5 asc nulls_last, #0 desc nulls_first
                 Limit 1
                 →Map/Filter/Project
                   Project: #0..=#4, #6
@@ -2882,21 +2882,27 @@ mz_internal.mz_sink_statuses:
                       Order By #0 desc nulls_first
                       Limit 1
                       →Differential Join %0:l0[#5] » %1[#0]
+                        after %1:
+                          Project: #1..=#5, #0
+                          Filter: (#6 OR (#3{status} = "paused") OR (#0{replica_id} = "<sink>"))
                         →Arrange (#5)
                           →Fused with Child Map/Filter/Project
                             Filter: NOT(like["s%"](#1{sink_id}))
                               →Read l0
                         →Arrange (#0)
-                          →Consolidating Union
-                            →Stream l2
-                            →Negate Diffs
-                              →Fused with Child Map/Filter/Project
-                                Filter: (#0 = "<sink>")
-                                  →Read l2
+                          →Union
                             →Fused with Child Map/Filter/Project
-                              Filter: (#0 = "<sink>")
-                                →Index Lookup on l1
-                                  Key: (#0) Value: ("<sink>")
+                              Project: #0, #1
+                              Map: true
+                                →Read l2
+                            →Map/Filter/Project
+                              Project: #0, #1
+                              Map: false
+                                →Consolidating Union
+                                  →Negate Diffs
+                                    →Stream l2
+                                  →Unarranged Raw Stream
+                                    →Arranged l1
   →Return
     →Map/Filter/Project
       Project: #0..=#3, #7, #5, #6
@@ -3064,7 +3070,7 @@ mz_internal.mz_source_statuses:
         Project: #0..=#4
           →Non-monotonic TopK
             Group By #1
-            Order By #5 asc nulls_last
+            Order By #5 asc nulls_last, #0 desc nulls_first
             Limit 1
             →Map/Filter/Project
               Project: #0..=#4, #6
@@ -3074,19 +3080,25 @@ mz_internal.mz_source_statuses:
                   Order By #0 desc nulls_first
                   Limit 1
                   →Differential Join %0:l0[#5] » %1[#0]
+                    after %1:
+                      Project: #1..=#5, #0
+                      Filter: (#6 OR (#3{status} = "paused") OR (#0{replica_id} = "<source>"))
                     →Arrange (#5)
                       →Stream l0
                     →Arrange (#0)
-                      →Consolidating Union
-                        →Stream l2
-                        →Negate Diffs
-                          →Fused with Child Map/Filter/Project
-                            Filter: (#0 = "<source>")
-                              →Read l2
+                      →Union
                         →Fused with Child Map/Filter/Project
-                          Filter: (#0 = "<source>")
-                            →Index Lookup on l1
-                              Key: (#0) Value: ("<source>")
+                          Project: #0, #1
+                          Map: true
+                            →Read l2
+                        →Map/Filter/Project
+                          Project: #0, #1
+                          Map: false
+                            →Consolidating Union
+                              →Negate Diffs
+                                →Stream l2
+                              →Unarranged Raw Stream
+                                →Arranged l1
     cte l4 =
       →Arranged mz_catalog.mz_sources
     cte l5 =

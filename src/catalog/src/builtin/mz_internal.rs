@@ -1824,9 +1824,10 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     -- We ignore per-replica events from replicas that no longer exist. A dropped
     -- replica's last reported status is stale: without this filter a defunct
     -- replica's lingering 'running' can outrank (see precedence below) a live
-    -- replica's 'stalled', hiding a genuinely broken source. '<source>' is the
-    -- sentinel for source-global events (replica_id was NULL), which are always
-    -- relevant and so are always retained.
+    -- replica's 'stalled', hiding a genuinely broken source. We always retain
+    -- source-global events ('<source>' is the sentinel for replica_id NULL)
+    -- and 'paused' events. A per-replica 'paused' is only written when the
+    -- replica is dropped, so it is a terminal drop marker, not a stale report.
     latest_per_replica_events AS
     (
         SELECT DISTINCT ON (source_id, replica_id)
@@ -1834,13 +1835,15 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
         FROM uniform_status_history
         WHERE replica_id = '<source>'
             OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
+            OR status = 'paused'
         ORDER BY source_id, replica_id, occurred_at DESC
     ),
     -- We have a precedence list that determines the overall status in case
     -- there is differing per-replica (including source-global) statuses. If
     -- there is no 'dropped' status, and any replica reports 'running', the
     -- overall status is 'running' even if there might be some replica that has
-    -- errors or is paused.
+    -- errors or is paused. Precedence ties are broken by recency, so a dropped
+    -- replica's 'paused' wins over an older source-global 'paused'.
     latest_events AS
     (
        SELECT DISTINCT ON (source_id)
@@ -1858,7 +1861,7 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
                     WHEN 'paused' THEN 5
                     WHEN 'ceased' THEN 6
                     ELSE 7  -- For any other status values
-                END
+                END, occurred_at DESC
     ),
     -- Determine which sources are subsources and which are parent sources
     subsources AS
@@ -2103,9 +2106,10 @@ uniform_status_history AS
 -- We ignore per-replica events from replicas that no longer exist. A dropped
 -- replica's last reported status is stale: without this filter a defunct
 -- replica's lingering 'running' can outrank (see precedence below) a live
--- replica's 'stalled', hiding a genuinely broken sink. '<sink>' is the
--- sentinel for sink-global events (replica_id was NULL), which are always
--- relevant and so are always retained.
+-- replica's 'stalled', hiding a genuinely broken sink. We always retain
+-- sink-global events ('<sink>' is the sentinel for replica_id NULL)
+-- and 'paused' events. A per-replica 'paused' is only written when the
+-- replica is dropped, so it is a terminal drop marker, not a stale report.
 latest_per_replica_events AS
 (
     SELECT DISTINCT ON (sink_id, replica_id)
@@ -2113,13 +2117,15 @@ latest_per_replica_events AS
     FROM uniform_status_history
     WHERE replica_id = '<sink>'
         OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
+        OR status = 'paused'
     ORDER BY sink_id, replica_id, occurred_at DESC
 ),
 -- We have a precedence list that determines the overall status in case
 -- there is differing per-replica (including sink-global) statuses. If
 -- there is no 'dropped' status, and any replica reports 'running', the
 -- overall status is 'running' even if there might be some replica that has
--- errors or is paused.
+-- errors or is paused. Precedence ties are broken by recency, so a dropped
+-- replica's 'paused' wins over an older sink-global 'paused'.
 latest_events AS
 (
     SELECT DISTINCT ON (sink_id)
@@ -2137,7 +2143,7 @@ latest_events AS
                 WHEN 'paused' THEN 5
                 WHEN 'ceased' THEN 6
                 ELSE 7  -- For any other status values
-            END
+            END, occurred_at DESC
 )
 SELECT
     mz_sinks.id,

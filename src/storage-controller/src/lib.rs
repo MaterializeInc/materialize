@@ -576,6 +576,8 @@ impl StorageController for Controller {
         let mut source_status_updates = vec![];
         let mut sink_status_updates = vec![];
 
+        // NOTE: mz_source_statuses and mz_sink_statuses rely on per-replica `paused` meaning
+        // "replica dropped"
         let make_update = |id, object_type| StatusUpdate {
             id,
             status: Status::Paused,
