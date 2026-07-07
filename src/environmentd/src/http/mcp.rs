@@ -49,7 +49,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use crate::http::AuthedClient;
-use crate::http::mcp_metrics::{McpMetrics, ToolCallGuard};
+use crate::http::mcp_metrics::{McpCallStatus, McpMetrics, ToolCallGuard};
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
@@ -469,12 +469,8 @@ async fn handle_mcp_request(
 ) -> impl IntoResponse {
     let endpoint_label = endpoint_type.as_label();
     let method_label = request.method.to_string();
-    let record_request = |status: &str| {
-        metrics
-            .requests
-            .with_label_values(&[endpoint_label, &method_label, status])
-            .inc();
-    };
+    let record_request =
+        |status: McpCallStatus| metrics.record_request(endpoint_label, &method_label, status);
 
     // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
     let catalog = client.client.catalog_snapshot("mcp").await;
@@ -485,7 +481,7 @@ async fn handle_mcp_request(
     };
     if !enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
-        record_request("endpoint_disabled");
+        record_request(McpCallStatus::EndpointDisabled);
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
@@ -532,7 +528,7 @@ async fn handle_mcp_request(
     // Handle notifications (no response needed)
     if is_notification {
         debug!(method = %request.method, "Received notification (no response will be sent)");
-        record_request("ok");
+        record_request(McpCallStatus::Ok);
         return StatusCode::OK.into_response();
     }
 
@@ -561,7 +557,7 @@ async fn handle_mcp_request(
     )
     .await;
 
-    let (response, status_label): (McpResponse, &'static str) = match result {
+    let (response, status_label): (McpResponse, McpCallStatus) = match result {
         Ok(inner) => inner,
         Err(_elapsed) => {
             warn!(
@@ -577,7 +573,7 @@ async fn handle_mcp_request(
                 ))
                 .into(),
             );
-            (response, "timeout")
+            (response, McpCallStatus::Timeout)
         }
     };
 
@@ -593,7 +589,7 @@ async fn handle_mcp_request_inner(
     read_data_product_tool_enabled: bool,
     max_response_size: usize,
     metrics: McpMetrics,
-) -> (McpResponse, &'static str) {
+) -> (McpResponse, McpCallStatus) {
     // Extract request ID (guaranteed to be Some since notifications are filtered earlier)
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
@@ -608,10 +604,7 @@ async fn handle_mcp_request_inner(
     )
     .await;
 
-    let status_label = match &result {
-        Ok(_) => "ok",
-        Err(e) => e.error_type(),
-    };
+    let status_label = call_status(&result);
 
     let response = match result {
         Ok(result_value) => McpResponse::success(request_id, result_value),
@@ -1005,12 +998,18 @@ async fn handle_tools_call(
         ))),
     };
 
-    guard.set_status(match &result {
-        Ok(_) => "ok",
-        Err(e) => e.error_type(),
-    });
+    guard.set_status(call_status(&result));
 
     result
+}
+
+/// Maps a handler result to its metric [`McpCallStatus`]. Errors carry the
+/// closed `error_type()` label; anything else is `Ok`.
+fn call_status<T>(result: &Result<T, McpRequestError>) -> McpCallStatus {
+    match result {
+        Ok(_) => McpCallStatus::Ok,
+        Err(e) => McpCallStatus::Error(e.error_type()),
+    }
 }
 
 /// Execute SQL via `execute_request` from sql.rs.
