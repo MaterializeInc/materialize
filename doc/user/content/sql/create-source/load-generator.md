@@ -353,6 +353,15 @@ ORDER BY
  R            | F            | 37770949 |    56610551077 |   54347734573.7 |  57066196254.4557 | 25.496431466814634 |  38213.68205054471 | 0.03997848687172654 |     1481421
 ```
 
+## Source versioning
+
+Load generator sources do not support [source
+versioning](/ingest-data/mysql/source-versioning/). The tables produced by a
+load generator have a fixed schema defined by Materialize, not by an upstream
+system, so there is no upstream schema change to handle. If you're using a
+PostgreSQL, MySQL, or SQL Server source, see the corresponding guide for
+handling upstream schema changes with zero downtime.
+
 ## Related pages
 
 - [`CREATE SOURCE`](../)
