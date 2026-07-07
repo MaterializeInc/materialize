@@ -41,6 +41,10 @@ COPY --from=tini /output/tini /usr/bin/tini
 # NOTE: keep the version in sync with ubuntu-base.
 COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
 
+# Replace the base image's glibc example nsswitch.conf, whose `compat`
+# backend segfaults the statically-linked `ssh` (see comments in the file).
+COPY nsswitch.conf /etc/nsswitch.conf
+
 USER nonroot
 ENV HOME=/home/nonroot
 ENTRYPOINT []
