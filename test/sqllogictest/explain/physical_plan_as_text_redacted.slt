@@ -1345,14 +1345,14 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1, #2)
-        lookup={ relation=2, key=[#0{e}] }
-        stream={ key=[#0{d}], thinning=(#1, #2) }
+        lookup={ relation=2, key=[#0{a}] }
+        stream={ key=[#0{a}], thinning=(#1, #2) }
       delta_stage[0]
         closure
           project=(#2..=#4)
           filter=((#3 > 42))
           map=((#1{b} + #2{d}), (#0{a} + #2{d}))
-        lookup={ relation=1, key=[#0{c}] }
+        lookup={ relation=1, key=[#0{a}] }
         stream={ key=[#0{a}], thinning=(#1) }
       source={ relation=0, key=[#0{a}] }
     plan_path[1]
@@ -1361,16 +1361,16 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1, #2)
-        lookup={ relation=2, key=[#0{e}] }
-        stream={ key=[#0{d}], thinning=(#1, #2) }
+        lookup={ relation=2, key=[#0{a}] }
+        stream={ key=[#0{a}], thinning=(#1, #2) }
       delta_stage[0]
         closure
           project=(#1, #3, #4)
           filter=((#3 > 42))
           map=((#2{b} + #1{d}), (#0{a} + #1{d}))
         lookup={ relation=0, key=[#0{a}] }
-        stream={ key=[#0{c}], thinning=(#1) }
-      source={ relation=1, key=[#0{c}] }
+        stream={ key=[#0{a}], thinning=(#1) }
+      source={ relation=1, key=[#0{a}] }
     plan_path[2]
       final_closure
         project=(#0, #1, #1)
@@ -1380,33 +1380,33 @@ Explained Query:
           filter=((#3 > 42))
           map=((#2{b} + #1{d}), (#0{a} + #1{d}))
         lookup={ relation=0, key=[#0{a}] }
-        stream={ key=[#0{c}], thinning=(#1) }
+        stream={ key=[#0{a}], thinning=(#1) }
       delta_stage[0]
         closure
           project=(#1, #0)
-        lookup={ relation=1, key=[#1{d}] }
-        stream={ key=[#0{e}], thinning=() }
-      source={ relation=2, key=[#0{e}] }
+        lookup={ relation=1, key=[#1{a}] }
+        stream={ key=[#0{a}], thinning=() }
+      source={ relation=2, key=[#0{a}] }
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[#0{c}], permutation=id, thinning=(#1) }
-      arrangements[1]={ key=[#1{d}], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
+      arrangements[1]={ key=[#1{a}], permutation={#0: #1, #1: #0}, thinning=(#0) }
       Get::Collection materialize.public.u
         raw=true
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[#0{e}], permutation=id, thinning=() }
+      arrangements[0]={ key=[#0{a}], permutation=id, thinning=() }
       Get::Collection materialize.public.v
         raw=true
 
 Source materialize.public.u
-  filter=((#0{c}) IS NOT NULL AND (#1{d}) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL AND (#1{d}) IS NOT NULL)
 Source materialize.public.v
   project=(#0)
-  filter=((#0{e}) IS NOT NULL)
+  filter=((#0{a}) IS NOT NULL)
 
 Used Indexes:
   - materialize.public.t_a_idx (delta join 1st input (full scan))
@@ -1483,7 +1483,7 @@ Explained Query:
       arrangements[0]={ key=[#0{c}], permutation=id, thinning=(#1) }
       arrangements[1]={ key=[#0{c}, #1{d}], permutation=id, thinning=() }
       Get::Arrangement materialize.public.u
-        filter=((#0{c}) IS NOT NULL AND (#1{d}) IS NOT NULL)
+        filter=((#0{a}) IS NOT NULL AND (#1{d}) IS NOT NULL)
         key=#0{c}
         raw=false
         arrangements[0]={ key=[#0{c}], permutation=id, thinning=(#1) }
@@ -1491,7 +1491,7 @@ Explained Query:
       raw=true
       arrangements[0]={ key=[#0{e}, #1{f}], permutation=id, thinning=() }
       Get::Arrangement materialize.public.v
-        filter=((#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL)
+        filter=((#0{a}) IS NOT NULL AND (#1{d}) IS NOT NULL)
         key=#0{e}
         raw=false
         arrangements[0]={ key=[#0{e}], permutation=id, thinning=(#1) }
@@ -1604,7 +1604,7 @@ Explained Query:
         Filter (#0{f0}) IS NOT NULL AND (#2{f2}) IS NOT NULL AND (#3{f3}) IS NOT NULL AND (#4{f4}) IS NOT NULL AND (#6{f6}) IS NOT NULL AND (#8{f8}) IS NOT NULL AND (#9{f9}) IS NOT NULL AND (#11{f11}) IS NOT NULL AND (#12{f12}) IS NOT NULL AND (#13{f13}) IS NOT NULL AND (#15{f15}) IS NOT NULL AND (#16{f16}) IS NOT NULL
           ReadStorage materialize.public.r
   Return
-    Project (#0{f0}..=#16{f16}, #0{f0}, #18{f1}, #2{f2}..=#4{f4}, #22{f5}, #6{f6}, #24{f7}, #8{f8}, #9{f9}, #27{f10}, #11{f11}..=#13{f13}, #31{f14}, #15{f15}, #16{f16})
+    Project (#17{f0}..=#33{f16}, #17{f0}, #1{f1}, #19{f2}..=#21{f4}, #5{f5}, #23{f6}, #7{f7}, #25{f8}, #26{f9}, #10{f10}, #28{f11}..=#30{f13}, #14{f14}, #32{f15}, #33{f16})
       Join on=(#0{f0} = #17{f0} AND #2{f2} = #19{f2} AND #3{f3} = #20{f3} AND #4{f4} = #21{f4} AND #6{f6} = #23{f6} AND #8{f8} = #25{f8} AND #9{f9} = #26{f9} AND #11{f11} = #28{f11} AND #12{f12} = #29{f12} AND #13{f13} = #30{f13} AND #15{f15} = #32{f15} AND #16{f16} = #33{f16}) type=differential
         Get l0
         Get l0

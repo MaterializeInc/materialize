@@ -227,17 +227,21 @@ Target cluster: quickstart
 
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v;
 Explained Query:
-  Union
-    Project (#1, #0)
-      Map (1)
-        Reduce aggregates=[sum(#0{b})] monotonic
-          Project (#1)
-            Filter (#0 = 1)
-              ReadStorage materialize.public.data_tbl
-    Project (#0, #4)
-      Filter (#0 = 1)
-        Map (bigint_to_numeric((1 + #2{c})))
+  With
+    cte l0 =
+      Project (#0..=#2)
+        Filter (#0 = 1)
           ReadStorage materialize.public.data_tbl
+  Return
+    Union
+      Project (#1, #0)
+        Map (1)
+          Reduce aggregates=[sum(#0{b})] monotonic
+            Project (#1)
+              Get l0
+      Project (#0, #3)
+        Map (bigint_to_numeric((1 + #2{c})))
+          Get l0
 
 Source materialize.public.data_tbl
   filter=((#0 = 1))

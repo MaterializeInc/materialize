@@ -1,0 +1,249 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# SINGLE SOURCE OF TRUTH for eqsat-over-directional wins.
+#
+# Every plan-quality win claimed for the equality-saturation optimizer must be
+# recorded here. A win is either a self-contained reproducing exhibit in this
+# file (explained twice, eqsat disabled then enabled, so the improvement is
+# visible in one place) or, for a corpus-aggregate win that does not reduce to
+# one compact plan, a verified pointer below to where it reproduces. If a win's
+# mechanism is later deleted, strike it here too. Do not leave a dead win
+# advertised in a scattered test, and do not make the next reader re-derive a
+# win from git archaeology.
+#
+# Reproducing exhibits in this file:
+#   Shape A: EXCEPT over two reads of one table. Eqsat binds the shared read as a
+#            single CTE, so the source is scanned once, not twice.
+#   Shape B: doubly-nested EXISTS. Eqsat shares the base read and cancels a
+#            CrossJoin, replacing it with a Union, losing both the duplicated
+#            read and the join.
+# (Small fully-indexed joins do not differentiate the two optimizers, so these
+# are subquery-derived shapes.)
+#
+# Gated sharing wins, each with its own acceptance file (flag on versus off):
+#   test/sqllogictest/eqsat_filter_sharing.slt  (WS1): shares Filter[a>0](r) via
+#     a Let across two consumers under enable_eqsat_filter_sharing.
+#   test/sqllogictest/eqsat_scalar_sharing.slt  (WS2): computes a jsonb Map
+#     prefix once in a shared Let under enable_eqsat_scalar_sharing, declining a
+#     diverging-consumer share.
+#
+# Corpus-aggregate width wins (verified eqsat-on versus directional-off, both
+# enable_eqsat_optimizer and enable_eqsat_physical_optimizer off for the
+# baseline). These are distributed across many plans and do not reduce to one
+# compact exhibit, so they are recorded as verified pointers, not query blocks:
+#   test/sqllogictest/transform/relation_cse.slt: 65 versus 70 ArrangeBy nodes,
+#     a net -5 maintained arrangements corpus-wide.
+#   chbench: arity sum 3094 versus 3135, a net -41 arranged-row columns, with
+#     arrangement count and join types held at parity.
+#
+# Retired wins, do NOT re-add (their mechanism was deleted by the
+# delta-availability fix, commit 5fe2a40666, which removed eqsat's native join
+# orderer and delegates commit_join to directional's plan_join_min_arrangements):
+#   VOJ delta cross-avoidance: at HEAD eqsat and directional produce the same
+#     delta plan with the cross kept. eqsat_delta_join_cost.slt is now a
+#     delegation-parity check, not a win.
+#   E4 join_fusion superiority: at HEAD eqsat delegates to and matches
+#     directional, so there is no beats-directional case to reproduce.
+
+mode cockroach
+
+statement ok
+CREATE TABLE people (id INT NOT NULL PRIMARY KEY, name TEXT NOT NULL)
+
+statement ok
+CREATE TABLE ab (a boolean, b boolean)
+
+statement ok
+CREATE VIEW v AS SELECT 2 + 2
+
+statement ok
+CREATE TABLE jc (data jsonb)
+
+# --------------------------------------------------------------------------
+# Shape A: an EXCEPT over two reads of the same table. The legacy plan reads
+# `people` twice, once on each side of the difference. Eqsat recognizes the
+# shared read and binds it once as a CTE, so the dataflow scans the source a
+# single time.
+# --------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_optimizer = false
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_physical_optimizer = false
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR (SELECT id FROM people) EXCEPT (SELECT id FROM people WHERE id = 5)
+----
+Explained Query:
+  Union // { non_negative: true }
+    Project (#0{id}) // { non_negative: true }
+      ReadStorage materialize.public.people // { non_negative: true }
+    Negate // { non_negative: false }
+      Project (#0{id}) // { non_negative: true }
+        Filter (#0{id} = 5) // { non_negative: true }
+          ReadStorage materialize.public.people // { non_negative: true }
+
+Source materialize.public.people
+
+Target cluster: quickstart
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_optimizer = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_physical_optimizer = true
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(non negative, humanized expressions) AS VERBOSE TEXT FOR (SELECT id FROM people) EXCEPT (SELECT id FROM people WHERE id = 5)
+----
+Explained Query:
+  With
+    cte l0 =
+      Project (#0{id}) // { non_negative: true }
+        ReadStorage materialize.public.people // { non_negative: true }
+  Return // { non_negative: true }
+    Union // { non_negative: true }
+      Get l0 // { non_negative: true }
+      Negate // { non_negative: false }
+        Filter (#0{id} = 5) // { non_negative: true }
+          Get l0 // { non_negative: true }
+
+Source materialize.public.people
+
+Target cluster: quickstart
+
+EOF
+
+# --------------------------------------------------------------------------
+# Shape B: a doubly-nested EXISTS subquery. The legacy plan recomputes the base
+# read on both sides of a union and joins them through a CrossJoin with a
+# constant. Eqsat shares the base read as a single CTE and cancels the cross
+# join, replacing it with a union, so the plan loses both the duplicated read
+# and the join.
+# --------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_optimizer = false
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_physical_optimizer = false
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+SELECT (SELECT NULL FROM ab) AS c1, ref_0."?column?" AS c4 FROM v AS ref_0 WHERE EXISTS (SELECT FROM jc AS ref_7 WHERE EXISTS (SELECT ref_0."?column?" AS c2)) OR ref_0."?column?" IS NOT NULL
+----
+Explained Query:
+  With
+    cte l0 =
+      Distinct project=[] // { arity: 0 }
+        Project () // { arity: 0 }
+          ReadStorage materialize.public.jc // { arity: 1 }
+    cte l1 =
+      Union // { arity: 1 }
+        Project (#2) // { arity: 1 }
+          Map (null) // { arity: 3 }
+            ReadStorage materialize.public.ab // { arity: 2 }
+        Project (#1) // { arity: 1 }
+          FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
+            Reduce aggregates=[count(*)] // { arity: 1 }
+              Project () // { arity: 0 }
+                ReadStorage materialize.public.ab // { arity: 2 }
+  Return // { arity: 2 }
+    Map (4) // { arity: 2 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %0[×] » %1[×]
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Union // { arity: 0 }
+            Get l0 // { arity: 0 }
+            Negate // { arity: 0 }
+              Get l0 // { arity: 0 }
+            Constant // { arity: 0 }
+              - ()
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l1 // { arity: 1 }
+            Map (null) // { arity: 1 }
+              Union // { arity: 0 }
+                Negate // { arity: 0 }
+                  Distinct project=[] // { arity: 0 }
+                    Project () // { arity: 0 }
+                      Get l1 // { arity: 1 }
+                Constant // { arity: 0 }
+                  - ()
+
+Source materialize.public.ab
+Source materialize.public.jc
+
+Target cluster: quickstart
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_optimizer = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_physical_optimizer = true
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+SELECT (SELECT NULL FROM ab) AS c1, ref_0."?column?" AS c4 FROM v AS ref_0 WHERE EXISTS (SELECT FROM jc AS ref_7 WHERE EXISTS (SELECT ref_0."?column?" AS c2)) OR ref_0."?column?" IS NOT NULL
+----
+Explained Query:
+  With
+    cte l0 =
+      Project () // { arity: 0 }
+        ReadStorage materialize.public.ab // { arity: 2 }
+    cte l1 =
+      Union // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Get l0 // { arity: 0 }
+        Project (#1) // { arity: 1 }
+          FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
+            Reduce aggregates=[count(*)] // { arity: 1 }
+              Get l0 // { arity: 0 }
+  Return // { arity: 2 }
+    Map (4) // { arity: 2 }
+      Union // { arity: 1 }
+        Get l1 // { arity: 1 }
+        Map (null) // { arity: 1 }
+          Union // { arity: 0 }
+            Negate // { arity: 0 }
+              Distinct project=[] // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l1 // { arity: 1 }
+            Constant // { arity: 0 }
+              - ()
+
+Source materialize.public.ab
+Source materialize.public.jc
+
+Target cluster: quickstart
+
+EOF

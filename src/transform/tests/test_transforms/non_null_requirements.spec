@@ -36,6 +36,25 @@ Filter (#2 > #0)
       - (1, 2, 3)
       - (2, 3, 4)
 
+# Prune subterms with literal nulls based on a non-null requirement derived
+# from a `NOT(isnull(#2))` (`#2 IS NOT NULL`) predicate, the spelling that
+# `non_null_requirements` previously failed to seed.
+apply pipeline=non_null_requirements
+Filter #2 IS NOT NULL
+  Union
+    Map (null::bigint)
+      Get t0
+    Constant // { types: "(bigint, bigint, bigint)" }
+      - (1, 2, 3)
+      - (2, 3, 4)
+----
+Filter (#2) IS NOT NULL
+  Union
+    Constant <empty>
+    Constant
+      - (1, 2, 3)
+      - (2, 3, 4)
+
 # Prune subterms with literal nulls based on
 # requirements derived from Map expressions.
 apply pipeline=non_null_requirements

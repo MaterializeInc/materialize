@@ -616,6 +616,16 @@ impl MirRelationExpr {
                 self.fmt_analyses(f, ctx)?;
 
                 if ctx.config.join_impls {
+                    // Lookup keys are stored in per-input local coordinates, so resolving
+                    // their `#N` references requires each input's own column names, not
+                    // names baked into the `MirScalarExpr`s (which collapse to a single
+                    // e-class representative under the eqsat optimizer). Collect owned
+                    // copies up front so this borrow of `ctx.annotations` is released
+                    // before the `ctx.indented` closures below take `ctx` mutably.
+                    let input_column_names: Vec<Option<Vec<String>>> = inputs
+                        .iter()
+                        .map(|input| input.column_names(ctx).cloned())
+                        .collect();
                     let input_name = &|pos: usize| -> String {
                         // Dig out a Get (or IndexedFilter), and return the name of its Id.
                         fn dig_name_from_expr(
@@ -645,11 +655,12 @@ impl MirRelationExpr {
                             None => format!("%{}", pos),
                         }
                     };
-                    let join_key_to_string = |key: &Vec<MirScalarExpr>| -> String {
+                    let join_key_to_string = |pos: usize, key: &Vec<MirScalarExpr>| -> String {
                         if key.is_empty() {
                             "×".to_owned()
                         } else {
-                            CompactScalars(mode.seq(key, None)).to_string()
+                            CompactScalars(mode.seq(key, input_column_names[pos].as_ref()))
+                                .to_string()
                         }
                     };
                     let join_order = |start_idx: usize,
@@ -666,7 +677,7 @@ impl MirRelationExpr {
                             input_name(start_idx),
                             match start_key {
                                 None => "".to_owned(),
-                                Some(key) => format!("[{}]", join_key_to_string(key)),
+                                Some(key) => format!("[{}]", join_key_to_string(start_idx, key)),
                             },
                             start_characteristics
                                 .as_ref()
@@ -678,7 +689,7 @@ impl MirRelationExpr {
                                     format!(
                                         "{}[{}]{}",
                                         input_name(*pos),
-                                        join_key_to_string(key),
+                                        join_key_to_string(*pos, key),
                                         characteristics
                                             .as_ref()
                                             .map(|c| c.explain())

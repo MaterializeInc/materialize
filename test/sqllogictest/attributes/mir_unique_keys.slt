@@ -78,15 +78,15 @@ INNER JOIN
 ON t.b = u.d;
 ----
 Explained Query:
-  Project (#1{sum_a}, #0{b}, #2{c}, #0{b}) // { keys: "([1])" }
-    Join on=(#0{b} = #3{d}) type=differential // { keys: "([0])" }
+  Project (#3{sum_a}, #1{d}, #0{c}, #1{d}) // { keys: "([1], [2])" }
+    Join on=(#1{d} = #2{b}) type=differential // { keys: "([0], [1])" }
+      ArrangeBy keys=[[#1{d}]] // { keys: "([0], [1])" }
+        Filter (#0{c} = #1{d}) // { keys: "([0], [1])" }
+          ReadIndex on=v v_primary_idx=[*** full scan ***] // { keys: "([0, 1])" }
       ArrangeBy keys=[[#0{b}]] // { keys: "([0])" }
         Reduce group_by=[#1{b}] aggregates=[sum(#0{a})] // { keys: "([0])" }
           Filter (#1{b}) IS NOT NULL // { keys: "()" }
             ReadStorage materialize.public.t // { keys: "()" }
-      ArrangeBy keys=[[#1{d}]] // { keys: "([0], [1])" }
-        Filter (#0{c} = #1{d}) // { keys: "([0], [1])" }
-          ReadIndex on=v v_primary_idx=[*** full scan ***] // { keys: "([0, 1])" }
 
 Source materialize.public.t
   filter=((#1{b}) IS NOT NULL)

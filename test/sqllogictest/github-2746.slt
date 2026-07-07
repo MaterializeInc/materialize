@@ -65,19 +65,19 @@ Explained Query:
       Join::Linear
         linear_stage[0]
           lookup={ relation=1, key=[] }
-          stream={ key=[], thinning=(#0) }
+          stream={ key=[], thinning=() }
         source={ relation=0, key=[] }
-        ArrangeBy
-          raw=true
-          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          Get::Collection materialize.public.lineitem
-            project=(#0)
-            raw=true
         ArrangeBy
           raw=true
           arrangements[0]={ key=[], permutation=id, thinning=() }
           Get::Collection materialize.public.orders
             project=()
+            raw=true
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Get::Collection materialize.public.lineitem
+            project=(#0)
             raw=true
   Return
     Join::Linear
@@ -87,14 +87,9 @@ Explained Query:
       linear_stage[0]
         closure
           project=()
-        lookup={ relation=0, key=[#0] }
+        lookup={ relation=1, key=[#0] }
         stream={ key=[#0], thinning=() }
-      source={ relation=1, key=[#0] }
-      ArrangeBy
-        raw=true
-        arrangements[0]={ key=[#0], permutation=id, thinning=() }
-        Get::PassArrangements l0
-          raw=true
+      source={ relation=0, key=[#0] }
       Reduce::Distinct
         key_plan=id
         val_plan
@@ -155,6 +150,11 @@ Explained Query:
             Get::Collection materialize.public.orders
               filter=((#0) IS NOT NULL)
               raw=true
+      ArrangeBy
+        raw=true
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        Get::PassArrangements l0
+          raw=true
 
 Source materialize.public.orders
   project=(#0, #4)

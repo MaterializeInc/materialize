@@ -177,20 +177,18 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 1 }
           Get l0 // { arity: 1 }
   Return // { arity: 2 }
-    Project (#0{la}, #1{lb}) // { arity: 2 }
-      Join on=(#0{la} = #2{la}) type=differential // { arity: 3 }
+    Project (#0{la}, #2{lb}) // { arity: 2 }
+      Join on=(#0{la} = #1{la}) type=differential // { arity: 3 }
         implementation
-          %1[#0]UKA » %0:l[#0]K
-        ArrangeBy keys=[[#0{la}]] // { arity: 2 }
-          ReadStorage materialize.public.l // { arity: 2 }
+          %0[#0{la}]KA » %1:l[#0{la}]K
         ArrangeBy keys=[[#0{la}]] // { arity: 1 }
           Distinct project=[#0{la}] // { arity: 1 }
             Project (#0{la}) // { arity: 1 }
               Join on=(#1{la} = #2{la} = #3) type=delta // { arity: 4 }
                 implementation
-                  %0:l1 » %1[#0]UKA » %2[#0]UKA
-                  %1 » %2[#0]UKA » %0:l1[#1]Kf
-                  %2 » %1[#0]UKA » %0:l1[#1]Kf
+                  %0:l1 » %1[#0{la}]KA » %2[#0]KA
+                  %1 » %2[#0]KA » %0:l1[#1{la}]K
+                  %2 » %1[#0{la}]KA » %0:l1[#1{la}]K
                 ArrangeBy keys=[[#1{la}]] // { arity: 2 }
                   Filter (#0{la} = (#1{la} + 1)) // { arity: 2 }
                     Get l1 // { arity: 2 }
@@ -201,9 +199,10 @@ Explained Query:
                         Get l1 // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct project=[(#0{la} + 1)] // { arity: 1 }
-                    Project (#0{la}) // { arity: 1 }
-                      Filter (#0{la}) IS NOT NULL // { arity: 2 }
-                        ReadStorage materialize.public.l // { arity: 2 }
+                    Filter (#0{la}) IS NOT NULL // { arity: 1 }
+                      Get l0 // { arity: 1 }
+        ArrangeBy keys=[[#0{la}]] // { arity: 2 }
+          ReadStorage materialize.public.l // { arity: 2 }
 
 Source materialize.public.l
 
@@ -351,7 +350,7 @@ Explained Query:
             Project (#0{la}, #1{lb}) // { arity: 2 }
               Join on=(#0{la} = #2{la}) type=differential // { arity: 3 }
                 implementation
-                  %1[#0]UKA » %0:l0[#0{la}]K
+                  %1[#0{la}]KA » %0:l0[#0{la}]K
                 Get l0 // { arity: 2 }
                 ArrangeBy keys=[[#0{la}]] // { arity: 1 }
                   Distinct project=[#0{la}] // { arity: 1 }
@@ -397,7 +396,7 @@ Explained Query:
               Project (#0{ra}, #1{rb}) // { arity: 2 }
                 Join on=(#0{ra} = #2{la}) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0{ra}]K
+                    %1[#0{la}]KA » %0:l0[#0{ra}]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0{la}]] // { arity: 1 }
                     Distinct project=[#0{la}] // { arity: 1 }
@@ -450,7 +449,7 @@ Explained Query:
               Project (#0{ra}, #1{rb}) // { arity: 2 }
                 Join on=(#0{ra} = #2{la}) type=differential // { arity: 3 }
                   implementation
-                    %1:l3[#0]UKA » %0:l1[#0{ra}]K
+                    %0:l1[#0{ra}]K » %1:l3[#0{la}]K
                   Get l1 // { arity: 2 }
                   Get l3 // { arity: 1 }
             ReadStorage materialize.public.r // { arity: 2 }
@@ -460,7 +459,7 @@ Explained Query:
             Project (#0{la}, #1{lb}) // { arity: 2 }
               Join on=(#0{la} = #2{la}) type=differential // { arity: 3 }
                 implementation
-                  %1:l3[#0]UKA » %0:l0[#0{la}]K
+                  %0:l0[#0{la}]K » %1:l3[#0{la}]K
                 Get l0 // { arity: 2 }
                 Get l3 // { arity: 1 }
           ReadStorage materialize.public.l // { arity: 2 }
@@ -556,7 +555,7 @@ Explained Query:
     Project (#0{name}, #1{id}) // { arity: 2 }
       Join on=(#0{name} = #2{name}) type=differential // { arity: 3 }
         implementation
-          %0:t4362[#0{name}]K » %1[#0]K
+          %0:t4362[#0{name}]K » %1[#0{name}]K
         ArrangeBy keys=[[#0{name}]] // { arity: 2 }
           ReadStorage materialize.public.t4362 // { arity: 2 }
         ArrangeBy keys=[[#0{name}]] // { arity: 1 }
@@ -1176,42 +1175,28 @@ WHERE EXISTS (SELECT FROM c AS ref_7 WHERE EXISTS (SELECT ref_0."?column?" AS c2
 Explained Query:
   With
     cte l0 =
-      Distinct project=[] // { arity: 0 }
-        Project () // { arity: 0 }
-          ReadStorage materialize.public.c // { arity: 1 }
+      Project () // { arity: 0 }
+        ReadStorage materialize.public.a // { arity: 2 }
     cte l1 =
       Union // { arity: 1 }
-        Project (#2) // { arity: 1 }
-          Map (null) // { arity: 3 }
-            ReadStorage materialize.public.a // { arity: 2 }
+        Map (null) // { arity: 1 }
+          Get l0 // { arity: 0 }
         Project (#1) // { arity: 1 }
           FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
             Reduce aggregates=[count(*)] // { arity: 1 }
-              Project () // { arity: 0 }
-                ReadStorage materialize.public.a // { arity: 2 }
+              Get l0 // { arity: 0 }
   Return // { arity: 2 }
     Map (4) // { arity: 2 }
-      CrossJoin type=differential // { arity: 1 }
-        implementation
-          %0[×] » %1[×]
-        ArrangeBy keys=[[]] // { arity: 0 }
+      Union // { arity: 1 }
+        Get l1 // { arity: 1 }
+        Map (null) // { arity: 1 }
           Union // { arity: 0 }
-            Get l0 // { arity: 0 }
             Negate // { arity: 0 }
-              Get l0 // { arity: 0 }
+              Distinct project=[] // { arity: 0 }
+                Project () // { arity: 0 }
+                  Get l1 // { arity: 1 }
             Constant // { arity: 0 }
               - ()
-        ArrangeBy keys=[[]] // { arity: 1 }
-          Union // { arity: 1 }
-            Get l1 // { arity: 1 }
-            Map (null) // { arity: 1 }
-              Union // { arity: 0 }
-                Negate // { arity: 0 }
-                  Distinct project=[] // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l1 // { arity: 1 }
-                Constant // { arity: 0 }
-                  - ()
 
 Source materialize.public.a
 Source materialize.public.c

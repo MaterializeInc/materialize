@@ -87,27 +87,10 @@ from
 where true
 limit coalesce(43, 120);
 ----
-Explained Query:
+Explained Query (fast path):
   Finish limit=43 output=[#0..=#3]
-    With
-      cte l0 =
-        Distinct project=[] // { arity: 0 }
-          TopK limit=13 // { arity: 0 }
-            Filter error("timestamp out of range") // { arity: 0 }
-              Project () // { arity: 0 }
-                ReadIndex on=mz_columns mz_columns_ind=[*** full scan ***] // { arity: 8 }
-    Return // { arity: 4 }
-      Map (833564499, null, null, 2024-12-18 12:54:29.994 UTC) // { arity: 4 }
-        TopK limit=90 // { arity: 0 }
-          Union // { arity: 0 }
-            Get l0 // { arity: 0 }
-            Negate // { arity: 0 }
-              Get l0 // { arity: 0 }
-            Constant // { arity: 0 }
-              - ()
-
-Used Indexes:
-  - mz_catalog.mz_columns_ind (*** full scan ***)
+    Constant
+      - (833564499, null, null, 2024-12-18 12:54:29.994 UTC)
 
 Target cluster: mz_catalog_server
 
@@ -153,7 +136,7 @@ Explained Query:
         Map ((#0{a} + #0{a}), (#1{a} + #3{a})) // { arity: 6 }
           Join on=(#0{a} = #2{key}) type=differential // { arity: 4 }
             implementation
-              %0:l0[#0{key}]K » %1:l0[#0{key}]K
+              %0:l0[#0{a}]K » %1:l0[#0{key}]K
             ArrangeBy keys=[[#0{a}]] // { arity: 2 }
               Get l0 // { arity: 2 }
             ArrangeBy keys=[[#0{key}]] // { arity: 2 }

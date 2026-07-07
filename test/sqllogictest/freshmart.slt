@@ -254,12 +254,12 @@ Explained Query:
                       Project (#1{rank})
                         Reduce group_by=[#1{category_id}] aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{category_id}, #2{count})], #2{count}))]
                           Reduce group_by=[#0{product_id}, #1{category_id}] aggregates=[count(*)]
-                            Project (#1{product_id}, #6{category_id})
-                              Join on=(#1{product_id} = #5{product_id}) type=differential
-                                Get l5
+                            Project (#3{product_id}, #1{category_id})
+                              Join on=(#0{product_id} = #3{product_id}) type=differential
                                 ArrangeBy keys=[[#0{product_id}]]
                                   Project (#0{product_id}, #3{category_id})
                                     ReadIndex on=products idx_products_product_name=[*** full scan ***]
+                                Get l5
     cte l7 =
       Project (#2, #3)
         Filter (#2) IS NOT NULL
@@ -270,21 +270,21 @@ Explained Query:
                   Project (#1{product_id}, #2{stock})
                     ReadIndex on=inventory idx_inventory_product_id=[*** full scan ***]
     cte l8 =
-      Project (#0{product_id})
-        Filter (bigint_to_numeric(#1{count}) > (#2{sum_count} / bigint_to_numeric(case when (#3{count} = 0) then null else #3{count} end)))
+      Project (#2{product_id})
+        Filter (bigint_to_numeric(#3{count}) > (#0{sum_count} / bigint_to_numeric(case when (#1{count} = 0) then null else #1{count} end)))
           CrossJoin type=differential
-            ArrangeBy keys=[[]]
-              Reduce group_by=[#0{product_id}] aggregates=[count(*)]
-                Project (#0{product_id})
-                  Join on=(#0{product_id} = #2{product_id}) type=differential
-                    Get l2
-                    Get l5
             ArrangeBy keys=[[]]
               Reduce aggregates=[sum(#0{count}), count(*)]
                 Project (#1{count})
                   Reduce group_by=[#0{product_id}] aggregates=[count(*)]
                     Project (#1{product_id})
                       ReadIndex on=sales idx_sales_product_id=[*** full scan ***]
+            ArrangeBy keys=[[]]
+              Reduce group_by=[#0{product_id}] aggregates=[count(*)]
+                Project (#5{product_id})
+                  Join on=(#1{product_id} = #5{product_id}) type=differential
+                    Get l5
+                    Get l2
     cte l9 =
       Distinct project=[#0{product_id}]
         Project (#0{product_id})
@@ -556,11 +556,11 @@ Explained Query:
       ArrangeBy keys=[[#0{product_id}]]
         Get l0
     cte l2 =
-      Project (#0{product_id}..=#4{adjusted_price}, #7{stock})
-        Join on=(#0{product_id} = #6{product_id}) type=differential
-          Get l1
+      Project (#5{product_id}..=#9{adjusted_price}, #2{stock})
+        Join on=(#1{product_id} = #5{product_id}) type=differential
           ArrangeBy keys=[[#1{product_id}]]
             ReadIndex on=inventory idx_inventory_product_id=[differential join]
+          Get l1
   Return
     Project (#0{product_id}..=#4{adjusted_price}, #6)
       Map (coalesce(#5{sum_stock}, 0))
@@ -682,12 +682,12 @@ Explained Query:
       ArrangeBy keys=[[#0{category_id}]]
         Get l0
     cte l2 =
-      Project (#0{category_id}, #2{price})
-        Join on=(#0{category_id} = #1{category_id}) type=differential
-          Get l1
+      Project (#2{category_id}, #1{price})
+        Join on=(#0{category_id} = #2{category_id}) type=differential
           ArrangeBy keys=[[#0{category_id}]]
             Project (#2{category_id}, #4{price})
               ReadIndex on=dynamic_price_shopping_cart dynamic_price_shopping_cart_idx=[*** full scan ***]
+          Get l1
   Return
     With Mutually Recursive
       cte l3 =
@@ -722,15 +722,12 @@ Explained Query:
     Return
       With
         cte l4 =
-          Project (#0{category_id})
-            ReadStorage materialize.public.categories
-        cte l5 =
           ArrangeBy keys=[[#0{category_id}]]
-            Get l4
-        cte l6 =
+            Get l0
+        cte l5 =
           Project (#0{category_id})
             Join on=(#0{category_id} = #1{parent_id}) type=differential
-              Get l5
+              Get l4
               ArrangeBy keys=[[#0{parent_id}]]
                 Project (#2{parent_id})
                   Filter (#2{parent_id}) IS NOT NULL
@@ -744,7 +741,7 @@ Explained Query:
                   Reduce group_by=[#0{category_id}] aggregates=[sum(#1{total}), sum(#2{item_count})]
                     Project (#0{category_id}, #2, #3)
                       Join on=(#0{category_id} = #1{category_id}) type=differential
-                        Get l5
+                        Get l4
                         ArrangeBy keys=[[#0{category_id}]]
                           Get l3
                 ArrangeBy keys=[[#0{category_id}]]
@@ -757,13 +754,13 @@ Explained Query:
                           Negate
                             Project (#0{category_id})
                               Join on=(#0{category_id} = #1{category_id}) type=differential
-                                Get l5
+                                Get l4
                                 ArrangeBy keys=[[#0{category_id}]]
                                   Distinct project=[#0{category_id}]
-                                    Get l6
-                          Get l4
+                                    Get l5
+                          Get l0
                       Project (#0{category_id}, #0{category_id})
-                        Get l6
+                        Get l5
 
 Source materialize.public.categories
 
@@ -1117,12 +1114,12 @@ Explained Query:
                       Project (#1{rank})
                         Reduce group_by=[#1{category_id}] aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{category_id}, #2{count})], #2{count}))]
                           Reduce group_by=[#0{product_id}, #1{category_id}] aggregates=[count(*)]
-                            Project (#1{product_id}, #6{category_id})
-                              Join on=(#1{product_id} = #5{product_id}) type=differential
-                                Get l5
+                            Project (#3{product_id}, #1{category_id})
+                              Join on=(#0{product_id} = #3{product_id}) type=differential
                                 ArrangeBy keys=[[#0{product_id}]]
                                   Project (#0{product_id}, #3{category_id})
                                     ReadIndex on=products idx_products_product_name=[*** full scan ***]
+                                Get l5
     cte l7 =
       Project (#2, #3)
         Filter (#2) IS NOT NULL
@@ -1133,21 +1130,21 @@ Explained Query:
                   Project (#1{product_id}, #2{stock})
                     ReadIndex on=inventory idx_inventory_product_id=[*** full scan ***]
     cte l8 =
-      Project (#0{product_id})
-        Filter (bigint_to_numeric(#1{count}) > (#2{sum_count} / bigint_to_numeric(case when (#3{count} = 0) then null else #3{count} end)))
+      Project (#2{product_id})
+        Filter (bigint_to_numeric(#3{count}) > (#0{sum_count} / bigint_to_numeric(case when (#1{count} = 0) then null else #1{count} end)))
           CrossJoin type=differential
-            ArrangeBy keys=[[]]
-              Reduce group_by=[#0{product_id}] aggregates=[count(*)]
-                Project (#0{product_id})
-                  Join on=(#0{product_id} = #2{product_id}) type=differential
-                    Get l2
-                    Get l5
             ArrangeBy keys=[[]]
               Reduce aggregates=[sum(#0{count}), count(*)]
                 Project (#1{count})
                   Reduce group_by=[#0{product_id}] aggregates=[count(*)]
                     Project (#1{product_id})
                       ReadIndex on=sales idx_sales_product_id=[*** full scan ***]
+            ArrangeBy keys=[[]]
+              Reduce group_by=[#0{product_id}] aggregates=[count(*)]
+                Project (#5{product_id})
+                  Join on=(#1{product_id} = #5{product_id}) type=differential
+                    Get l5
+                    Get l2
     cte l9 =
       Distinct project=[#0{product_id}]
         Project (#0{product_id})

@@ -723,8 +723,6 @@ Explained Query:
               Get l0 // { types: "()" }
   Return // { types: "(r_int32?)" }
     CrossJoin type=differential // { types: "(r_int32?)" }
-      ArrangeBy keys=[[]] // { types: "()" }
-        Get l0 // { types: "()" }
       ArrangeBy keys=[[]] // { types: "(r_int32?)" }
         Union // { types: "(r_int32?)" }
           Get l1 // { types: "(r_int32)" }
@@ -736,6 +734,8 @@ Explained Query:
                     Get l1 // { types: "(r_int32)" }
               Constant // { types: "()" }
                 - ()
+      ArrangeBy keys=[[]] // { types: "()" }
+        Get l0 // { types: "()" }
 
 Source materialize.public.int_table
 
@@ -798,8 +798,6 @@ Explained Query:
   Return // { types: "(r_bool, r_bool)" }
     Map (NOT(#0)) // { types: "(r_bool, r_bool)" }
       CrossJoin type=differential // { types: "(r_bool)" }
-        ArrangeBy keys=[[]] // { types: "()" }
-          Get l0 // { types: "()" }
         ArrangeBy keys=[[]] // { types: "(r_bool)" }
           Union // { types: "(r_bool)" }
             Map (true) // { types: "(r_bool)" }
@@ -810,6 +808,8 @@ Explained Query:
                   Get l1 // { types: "()" }
                 Constant // { types: "()" }
                   - ()
+        ArrangeBy keys=[[]] // { types: "()" }
+          Get l0 // { types: "()" }
 
 Source materialize.public.int_table
 

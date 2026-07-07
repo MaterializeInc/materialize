@@ -1,0 +1,133 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# WS2 acceptance: cross-consumer subset-prefix Map sharing (jsonb multi-extract).
+# The share is arity-neutral, so it is taken; the win is the scalar-aware node
+# tier resolving the count/time tie toward computing the extraction once.
+#
+# The width-decline gate (an arity term that declines a widening carry) is
+# always on, independent of this flag, and is unit-tested in isolation by
+# `width_aware_arity_tier_prefers_narrower_arrangement` in eqsat/extract.rs.
+
+statement ok
+CREATE TABLE r(data jsonb, k int)
+
+# Flag OFF: `data->'obj'` is extracted independently in both join inputs.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_scalar_sharing = false
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT sub1.x, sub2.x, sub2.y
+FROM (SELECT k, data->'obj' AS x FROM r) sub1
+JOIN (SELECT k, data->'obj' AS x, data->'foo' AS y FROM r) sub2
+ON sub1.k = sub2.k
+----
+Explained Query:
+  With
+    cte l0 =
+      Filter (#1{k}) IS NOT NULL
+        ReadStorage materialize.public.r
+  Return
+    Project (#1, #3, #4)
+      Join on=(#0{k} = #2{k}) type=differential
+        ArrangeBy keys=[[#0{k}]]
+          Project (#1, #2)
+            Map ((#0{data} -> "obj"))
+              Get l0
+        ArrangeBy keys=[[#0{k}]]
+          Project (#1..=#3)
+            Map ((#0{data} -> "obj"), (#0{data} -> "foo"))
+              Get l0
+
+Source materialize.public.r
+  filter=((#1{k}) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+# Flag ON: `data->'obj'` is computed once in a shared Map Let (l0), consumed by
+# both join inputs. Consumer 1 is just `Get l0`; consumer 2 extends it with
+# `data->'foo'`. Arity-neutral subset-prefix share.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_scalar_sharing = true
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT sub1.x, sub2.x, sub2.y
+FROM (SELECT k, data->'obj' AS x FROM r) sub1
+JOIN (SELECT k, data->'obj' AS x, data->'foo' AS y FROM r) sub2
+ON sub1.k = sub2.k
+----
+Explained Query:
+  With
+    cte l0 =
+      Filter (#1{k}) IS NOT NULL
+        Map ((#0{data} -> "obj"))
+          ReadStorage materialize.public.r
+  Return
+    Project (#4, #1, #2)
+      Join on=(#0{k} = #3{k}) type=differential
+        ArrangeBy keys=[[#0{k}]]
+          Project (#1..=#3)
+            Map ((#0{data} -> "foo"))
+              Get l0
+        ArrangeBy keys=[[#0{k}]]
+          Project (#1, #2)
+            Get l0
+
+Source materialize.public.r
+  filter=((#1{k}) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+# Anti-case (flag ON): diverging consumers, each adding its own scalar
+# (`data->'f1'` versus `data->'f2'`). `data->'obj'` is a common scalar but NOT a
+# positional prefix of a single extending Map, so sharing it would need three
+# Map nodes (Map[obj], Map[f1'], Map[f2']) against the fused two, losing on the
+# time tier. The share is declined and `data->'obj'` is computed in both inputs.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT sub1.x, sub1.f, sub2.x, sub2.g
+FROM (SELECT k, data->'obj' AS x, data->'f1' AS f FROM r) sub1
+JOIN (SELECT k, data->'obj' AS x, data->'f2' AS g FROM r) sub2
+ON sub1.k = sub2.k
+----
+Explained Query:
+  With
+    cte l0 =
+      Filter (#1{k}) IS NOT NULL
+        ReadStorage materialize.public.r
+  Return
+    Project (#1, #2, #4, #5)
+      Join on=(#0{k} = #3{k}) type=differential
+        ArrangeBy keys=[[#0{k}]]
+          Project (#1..=#3)
+            Map ((#0{data} -> "obj"), (#0{data} -> "f1"))
+              Get l0
+        ArrangeBy keys=[[#0{k}]]
+          Project (#1..=#3)
+            Map ((#0{data} -> "obj"), (#0{data} -> "f2"))
+              Get l0
+
+Source materialize.public.r
+  filter=((#1{k}) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF

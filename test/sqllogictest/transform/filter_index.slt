@@ -79,7 +79,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   CrossJoin type=differential // { arity: 6 }
     implementation
-      %0:foo[×]ef » %1:bar[×]ef
+      %0:foo[×] » %1:bar[×]
     ArrangeBy keys=[[]] // { arity: 3 }
       Filter (#0{a} = 3) // { arity: 3 }
         ReadStorage materialize.public.foo // { arity: 3 }
@@ -180,7 +180,7 @@ Explained Query:
   Project (#0{a}..=#2{c}, #5{d}, #6{e}) // { arity: 5 }
     Join on=(#0{a} = #4{a}) type=differential // { arity: 7 }
       implementation
-        %0:foo[#0{a}]KAe » %1:bar[#0{a}]KAe
+        %0:foo[#0{a}]KA » %1:bar[#0{a}]KA
       ArrangeBy keys=[[#0{a}]] // { arity: 4 }
         ReadIndex on=materialize.public.foo foo_idx3=[lookup value=("this")] // { arity: 4 }
       ArrangeBy keys=[[#0{a}]] // { arity: 3 }

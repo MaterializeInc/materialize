@@ -83,10 +83,10 @@ Explained Query:
         Union
           Negate
             Project (#0..=#3)
-              Join on=(#3{k} = #4) type=differential
+              Join on=(#3{k} = #4{k}) type=differential
                 Get l2
-                ArrangeBy keys=[[#0]]
-                  Distinct project=[#0]
+                ArrangeBy keys=[[#0{k}]]
+                  Distinct project=[#0{k}]
                     Project (#3)
                       Get l3
           Get l1
@@ -165,10 +165,10 @@ Explained Query:
         Union
           Negate
             Project (#0..=#3)
-              Join on=(#3{k} = #4) type=differential
+              Join on=(#3{k} = #4{k}) type=differential
                 Get l2
-                ArrangeBy keys=[[#0]]
-                  Distinct project=[#0]
+                ArrangeBy keys=[[#0{k}]]
+                  Distinct project=[#0{k}]
                     Project (#3)
                       Get l3
           Get l1
@@ -230,7 +230,7 @@ Explained Query:
           Filter: (#0{k}) IS NOT NULL
             →Read materialize.public.a
     cte l1 =
-      →Differential Join %1:b[#2{k}] » %0:l0[#0{k}]
+      →Differential Join %0:l0[#0{k}] » %1:b[#2{k}]
         →Arranged l0
         →Arrange (#2{k})
           →Read materialize.public.b

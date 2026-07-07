@@ -1,0 +1,121 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Correctness differential for the WMR-lift experiment
+# (`enable_eqsat_wmr_lift`). The lift lets the eqsat optimizer share a
+# subexpression that is built over a recursive reference across two sibling
+# `WITH MUTUALLY RECURSIVE` bindings, hoisting it into a new recursive binding
+# placed at a version-valid order slot. All prior validation was structural or
+# typecheck only. This file is the load-bearing gate: it runs a multi-binding
+# recursive query with a non-monotonic body, first with the lift OFF and then
+# with it ON, and asserts IDENTICAL result rows.
+#
+# Why this is not vacuous. The shared subterm
+# `SELECT e.dst FROM edges e JOIN r ON e.src = r.x` reads the recursive binding
+# `r`, so when the eqsat optimizer lowers it the reference is version tagged
+# (`Cur`). With the lift ON, the cross-binding hoist fires on exactly this
+# subterm: it appears in both the `a` and `b` binding values and reads a
+# versioned recursive leaf, so the lift hoists it into a new recursive binding
+# and must place that binding at an order slot that keeps every `Cur`/`Prev`
+# reference valid. A wrong `Prev`-vs-`Cur` resolution or a wrong slot would feed
+# the join a stale or future iterate of `r` and change the fixpoint. The body is
+# non-monotonic (`EXCEPT ALL`, `INTERSECT ALL`), so the iteration trajectory is
+# observable, not just the fixpoint: the `EXCEPT ALL ... WHERE e.dst > 4` arm
+# keeps node 5 out of the result, so the answer is the proper subset
+# `{1, 2, 3, 4}` rather than the full vertex set. Identical output under both
+# settings is the proof the version and placement logic is result preserving.
+#
+# With the lift OFF the hoist code path never runs (the recursive references are
+# untagged and `eliminate_common_subexpressions` skips the LetRec pass), so the
+# flag-OFF block is the unmodified baseline. The shared-binding structure visible
+# in `EXPLAIN` is also produced by the production `RelationCSE` pass that runs
+# after eqsat, so the two final plans match. The lift's contribution is the
+# version-aware hoist inside the eqsat search, exercised only with the flag ON,
+# and the matching results prove that path is correct. The Rust companion test
+# `src/transform/tests/eqsat_wmr_lift.rs` asserts the lift fires and measures its
+# arrangement-count effect directly on the e-graph.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_optimizer = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE edges (src int, dst int)
+
+statement ok
+INSERT INTO edges VALUES (1,2),(2,3),(3,1),(3,4),(4,5)
+
+# --------------------------------------------------------------------------
+# Flag OFF baseline.
+# --------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_wmr_lift = false
+----
+COMPLETE 0
+
+query I rowsort
+WITH MUTUALLY RECURSIVE
+  r(x int) AS (
+    SELECT src FROM edges
+    UNION SELECT x FROM a
+    UNION SELECT x FROM b
+  ),
+  a(x int) AS (
+    SELECT e.dst FROM edges e JOIN r ON e.src = r.x
+    EXCEPT ALL
+    SELECT e.dst FROM edges e JOIN r ON e.src = r.x WHERE e.dst > 4
+  ),
+  b(x int) AS (
+    SELECT e.dst FROM edges e JOIN r ON e.src = r.x
+    INTERSECT ALL
+    SELECT x FROM r
+  )
+SELECT * FROM r ORDER BY 1
+----
+1
+2
+3
+4
+
+# --------------------------------------------------------------------------
+# Flag ON: identical result required.
+# --------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eqsat_wmr_lift = true
+----
+COMPLETE 0
+
+query I rowsort
+WITH MUTUALLY RECURSIVE
+  r(x int) AS (
+    SELECT src FROM edges
+    UNION SELECT x FROM a
+    UNION SELECT x FROM b
+  ),
+  a(x int) AS (
+    SELECT e.dst FROM edges e JOIN r ON e.src = r.x
+    EXCEPT ALL
+    SELECT e.dst FROM edges e JOIN r ON e.src = r.x WHERE e.dst > 4
+  ),
+  b(x int) AS (
+    SELECT e.dst FROM edges e JOIN r ON e.src = r.x
+    INTERSECT ALL
+    SELECT x FROM r
+  )
+SELECT * FROM r ORDER BY 1
+----
+1
+2
+3
+4

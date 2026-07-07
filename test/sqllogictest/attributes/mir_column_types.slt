@@ -143,11 +143,11 @@ Explained Query:
   With
     cte l0 =
       Project (#0{e}, #1{f}) // { types: "(r_float64, r_bool?)" }
-        Join on=(#0{e} = #2) type=differential // { types: "(r_float64, r_bool?, r_float64)" }
+        Join on=(#0{e} = #2{e}) type=differential // { types: "(r_float64, r_bool?, r_float64)" }
           ArrangeBy keys=[[#0{e}]] // { types: "(r_float64, r_bool?)" }
             Filter (#0{e}) IS NOT NULL // { types: "(r_float64, r_bool?)" }
               ReadStorage materialize.public.v // { types: "(r_float64?, r_bool?)" }
-          ArrangeBy keys=[[#0]] // { types: "(r_float64?)" }
+          ArrangeBy keys=[[#0{e}]] // { types: "(r_float64?)" }
             Union // { types: "(r_float64?)" }
               Project (#1) // { types: "(r_float64?)" }
                 Filter (#0{d}) IS NOT NULL // { types: "(r_int32, r_float64?)" }

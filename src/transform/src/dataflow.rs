@@ -67,7 +67,10 @@ pub fn optimize_dataflow(
             transform_ctx,
         )?;
 
-        optimize_dataflow_filters(dataflow)?;
+        optimize_dataflow_filters(
+            dataflow,
+            transform_ctx.features.enable_eqsat_scalar_canonicalize,
+        )?;
         // TODO: when the linear operator contract ensures that propagated
         // predicates are always applied, projections and filters can be removed
         // from where they come from. Once projections and filters can be removed,
@@ -347,7 +350,10 @@ where
     level = "debug",
     fields(path.segment ="filters")
 )]
-fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+fn optimize_dataflow_filters(
+    dataflow: &mut DataflowDesc,
+    enable_eqsat_scalar: bool,
+) -> Result<(), TransformError> {
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
     let mut predicates = BTreeMap::<Id, BTreeSet<mz_expr::MirScalarExpr>>::new();
@@ -360,6 +366,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
             .rev()
             .map(|build_desc| (Id::Global(build_desc.id), build_desc.plan.as_inner_mut())),
         &mut predicates,
+        enable_eqsat_scalar,
     )?;
 
     // Push predicate information into the SourceDesc.
@@ -395,6 +402,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
 pub fn optimize_dataflow_filters_inner<'a, I>(
     view_iter: I,
     predicates: &mut BTreeMap<Id, BTreeSet<mz_expr::MirScalarExpr>>,
+    enable_eqsat_scalar: bool,
 ) -> Result<(), TransformError>
 where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
@@ -406,7 +414,7 @@ where
                 *view = view.take_dangerous().filter(list.iter().cloned());
             }
         }
-        transform.action(view, predicates)?;
+        transform.action(view, predicates, enable_eqsat_scalar)?;
     }
     Ok(())
 }

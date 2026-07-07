@@ -1,0 +1,493 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# eqsat scalar differential corpus (slice 1 seed).
+# Format: `expr` line, `types` line (comma-separated ReprScalarType names), blank separator.
+# Slice 1 covers not_not; ties/could_error/type axes are seeded here and grown per slice.
+expr: not(not(#0))
+types: bool
+
+expr: not(not(not(#0)))
+types: bool
+
+expr: #0
+types: bool
+
+# --- slice 2: variadic (and/or single, de Morgan) ---
+# and_single / or_single
+expr: and(#0)
+types: bool
+
+expr: or(#0)
+types: bool
+
+# de Morgan, both directions, >2 operands (multi-operand variadic parity)
+expr: not(and(#0, #1, #2))
+types: bool,bool,bool
+
+expr: not(or(#0, #1, #2, #3))
+types: bool,bool,bool,bool
+
+# de Morgan feeding single-collapse: Not(And(#0)) -> Or(Not #0) -> Not #0
+expr: not(and(#0))
+types: bool
+
+# --- slice 3: If resolution (literal-bool/null fold, could_error gate) ---
+# if_true / if_false_or_null: literal-bool and literal-null conditions
+# (the `literal` analysis axis). Branches are bare columns so nothing else
+# in the old engine's 20-rule set can touch the If.
+expr: if(true, #0, #1)
+types: bool,bool
+
+expr: if(false, #0, #1)
+types: bool,bool
+
+expr: if(null, #0, #1)
+types: bool,bool
+
+# if_same_branches, could_error gate POSITIVE: the condition is a bare bool
+# column, which cannot error, so the gate permits the collapse.
+expr: if(#0, #1, #1)
+types: bool,bool
+
+# if_same_branches, could_error gate NEGATIVE control: the condition CAN
+# error (integer division, #0 / #1 = 0). Both operands of the division are
+# columns, not literals, so the old engine's unported const_fold cannot fold
+# the condition out from under this test; only the could_error gate is under
+# test. The If must survive unresolved in BOTH engines.
+expr: if(#0 / #1 = 0, #2, #2)
+types: int64,int64,int64
+
+# --- slice 4: const_fold, and_empty, or_empty ---
+# All-literal fold, non-error (the `literal` axis over Unary/Binary/If).
+expr: 1 + 2
+types:
+
+expr: not(true)
+types:
+
+expr: if(true, 1, 2)
+types:
+
+# All-literal fold, error-as-data (highest risk): the fold must reproduce
+# the runtime error AS a literal in both engines, not panic and not
+# silently drop it.
+expr: 1 / 0
+types:
+
+expr: i64::MAX + 1
+types:
+
+# Nested pre-existing error-literal child: the inner div folds to an error
+# literal on one saturation round, then the outer add folds on a later
+# round, propagating the error through eval's child-error short circuit.
+expr: (1 / 0) + 5
+types:
+
+# Partial-literal: a Column child blocks const_fold in both engines.
+expr: #0 + 1
+types: int64
+
+# Empty identities (declarative RHS, distinct from and_single/or_single).
+expr: and()
+types:
+
+expr: or()
+types:
+
+# Interaction with slice-2 and_single: And(#0) collapses via and_single
+# (see the and(#0) case above), not and_empty. and() and and(#0) must not
+# fight or fail to reach a fixpoint.
+
+# --- slice 5: if_err_cond, null_prop_binary, err_prop_binary, isnull_fold,
+# not_binary_negate ---
+# if_err_cond: a literal-error condition (`1 / 0`, folded by const_fold)
+# folds the whole If to that error. Branches carry distinct types (#0
+# non-nullable, #1 nullable), exercising the then.typ.union(els.typ) path.
+expr: if(1 / 0, #0, #1)
+types: int64,int64
+
+# null_prop_binary: a null-propagating func with a literal-null operand and a
+# non-erroring other operand folds to null.
+expr: null + #0
+types: int64
+
+# err_prop_binary: a literal-error operand with a non-erroring other operand
+# folds to that error.
+expr: (1 / 0) + #0
+types: int64
+
+# isnull_fold: IsNull of a non-nullable, error-free operand folds to false.
+# The same shape with #0 typed nullable must not fold.
+expr: #0 is null
+types: int64
+
+# not_binary_negate (highest risk: negate(f) must choose the correct partner
+# from BinaryFunc::negate()'s table): exhaustively tested in the differential
+# harness over every negation pair (Eq/NotEq, Lt/Gte, Lte/Gt); representative
+# samples of each pair below.
+expr: not(#0 = #1)
+types: int64,int64
+
+expr: not(#0 < #1)
+types: int64,int64
+
+expr: not(#0 <= #1)
+types: int64,int64
+
+# --- slice 6a: and_or_short_circuit (and_short_circuit / or_short_circuit) ---
+# Positions: leading / middle / trailing false operand, all collapse to false.
+expr: and(false, #0, #1)
+types: bool,bool
+
+expr: and(#0, false, #1)
+types: bool,bool
+
+expr: and(#0, #1, false)
+types: bool,bool
+
+# Dual: leading / middle / trailing true operand, all collapse to true.
+expr: or(true, #0, #1)
+types: bool,bool
+
+expr: or(#0, true, #1)
+types: bool,bool
+
+expr: or(#0, #1, true)
+types: bool,bool
+
+# 3VL: false dominates a null operand regardless of position.
+expr: and(#0, false, null)
+types: bool
+
+expr: or(#0, true, null)
+types: bool
+
+# E-err envelope: the fold is UNCONDITIONAL, no could_error guard. And
+# returns false as soon as it sees a false operand even if another operand
+# errors (func/variadic.rs's eval loop discards any accumulated error on the
+# early return); both operand orders below must fold to false/true.
+expr: and(false, 1 / 0)
+types:
+
+expr: and(1 / 0, false)
+types:
+
+expr: or(true, 1 / 0)
+types:
+
+expr: or(1 / 0, true)
+types:
+
+# Interactions: single-operand and duplicate-false operands must not fight
+# and_single / and_or_dedup.
+expr: and(false)
+types:
+
+expr: and(false, false)
+types:
+
+# --- slice 6c: and_or_drop_unit (and_drop_unit / or_drop_unit), and_or_dedup
+# (and_dedup / or_dedup) ---
+# Positions: leading / middle / trailing unit operand (true for And, false for
+# Or), all drop the unit and leave the rest untouched.
+expr: and(true, #0, #1)
+types: bool,bool
+
+expr: and(#0, true, #1)
+types: bool,bool
+
+expr: and(#0, #1, true)
+types: bool,bool
+
+expr: or(false, #0, #1)
+types: bool,bool
+
+expr: or(#0, false, #1)
+types: bool,bool
+
+expr: or(#0, #1, false)
+types: bool,bool
+
+# Duplicates: adjacent, non-adjacent, and more than two copies, all dedup to
+# one occurrence (first-occurrence, canonical-id dedup).
+expr: and(#0, #0, #1)
+types: bool,bool
+
+expr: and(#0, #1, #0)
+types: bool,bool
+
+expr: and(#0, #0, #0, #1)
+types: bool,bool
+
+expr: or(#0, #0, #1)
+types: bool,bool
+
+expr: or(#0, #1, #0)
+types: bool,bool
+
+expr: or(#0, #0, #0, #1)
+types: bool,bool
+
+# Errors: both rules are unconditional (no could_error gate). The error is
+# boolean-typed (`(1/0) = (1/0)`), not the bare Int64 `1 / 0`: and_dedup and
+# and_drop_unit dedup/drop down to arity 1, and and_single/or_single then
+# expose this operand's own class directly as the AND/OR's value, which must
+# agree in type with the connective's own Bool-typed const_fold result. A
+# duplicate error operand dedups to the single error; a unit operand next to
+# an error drops the unit and keeps the error.
+expr: and(1 / 0 = 1 / 0, 1 / 0 = 1 / 0)
+types:
+
+expr: and(1 / 0 = 1 / 0, true)
+types:
+
+expr: or(1 / 0 = 1 / 0, 1 / 0 = 1 / 0)
+types:
+
+expr: or(1 / 0 = 1 / 0, false)
+types:
+
+# 3VL: a null operand is not the connective's unit (its literal analysis is
+# `Some(None)`, not `Some(Some(unit))`), so drop_unit must drop only the true
+# operand and leave the null in place. Dual for Or/false.
+expr: and(#0, true, null)
+types: bool
+
+expr: or(#0, false, null)
+types: bool
+
+# Interaction cascades: drop_unit / dedup feeding and_single / and_empty on a
+# later saturation round.
+# And(#0, true) -> And(#0) (drop_unit) -> #0 (and_single).
+expr: and(#0, true)
+types: bool
+
+# And(true) -> And() (drop_unit) -> true (and_empty).
+expr: and(true)
+types:
+
+# And(#0, #0) -> And(#0) (and_dedup) -> #0 (and_single).
+expr: and(#0, #0)
+types: bool
+
+# --- slice 6e: absorb_and_or (absorb_and / absorb_or) ---
+# Inner-set subsumption absorption: an outer AND/OR operand whose dual-
+# connective inner set is a proper superset of another operand's inner set is
+# dropped, provided every dropped extra is error-free.
+
+# absorb_and: a (#0) inside the inner Or at leading / middle / trailing.
+expr: and(#0, or(#0, #1, #2))
+types: bool,bool,bool
+
+expr: and(#0, or(#1, #0, #2))
+types: bool,bool,bool
+
+expr: and(#0, or(#1, #2, #0))
+types: bool,bool,bool
+
+# absorb_or (dual): a inside the inner And at leading / middle / trailing.
+expr: or(#0, and(#0, #1, #2))
+types: bool,bool,bool
+
+expr: or(#0, and(#1, #0, #2))
+types: bool,bool,bool
+
+expr: or(#0, and(#1, #2, #0))
+types: bool,bool,bool
+
+# Extra operands: absorption drops only the subsumed operand; an unrelated
+# outer sibling survives untouched. And(a, Or(a, b), c) -> And(a, c).
+expr: and(#0, or(#0, #1), #2)
+types: bool,bool,bool
+
+# General subset, beyond the simple "operand present" framing: neither And
+# operand IS `a`; one's inner-set is a proper subset of the other's.
+# AND(a,b) v AND(a,b,c) -> AND(a,b).
+expr: or(and(#0, #1), and(#0, #1, #2))
+types: bool,bool,bool
+
+# Nested absorption: the inner And(a, Or(a, b)) absorbs to `a` on one
+# saturation round; the outer Or(a, a) then dedups to `a` too.
+expr: or(#0, and(#0, or(#0, #1)))
+types: bool,bool
+
+# Absorb feeding and_drop_unit: the leading `true` drops first, exposing
+# And(a, Or(a, b)), which then absorbs to `a`.
+expr: and(true, #0, or(#0, #1))
+types: bool,bool
+
+# GUARD (the correctness core): the Or operand's inner-set {a, err} properly
+# contains {a}, so absorption would drop the erroring extra `err` and
+# collapse to the bare `a` if the could_error gate did not block it. `a` is
+# nullable so the counterexample is live: at a = null, err = Err, And(a,
+# Or(a, err)) evaluates to Err, but the wrongly-absorbed `a` alone would be
+# null. `err` is boolean-typed (`1 / 0 = 1 / 0`), not a bare Int64 `1 / 0`,
+# for the same type-agreement reason slice 6c's E-err cases require it (see
+# `test_absorb_and_or_gate_blocks_dropped_extra_error` in `scalar/rules.rs`
+# for the standalone-engine analogue).
+expr: and(#0, or(#0, 1 / 0 = 1 / 0))
+types: bool
+
+# --- slice 6b: null_prop_variadic / err_prop_variadic ---
+# Both rules gate on `func.propagates_nulls()`, which is FALSE for And/Or, so
+# they never fire on the boolean connectives. Their domain is a null-
+# propagating variadic like MakeTimestamp (`makets(year, month, day, hour,
+# minute, second)`: five Int64 operands and a trailing Float64). Error
+# operands are Int64-typed bare `1 / 0`, valid for a MakeTimestamp position.
+
+# null_prop fires: a literal null (year), every other operand error-free, folds
+# to a typed null.
+expr: makets(null, #0, 1, 0, 0, 0)
+types: int64
+
+# err_prop fires: a literal Int64 error (year), safe others, folds to the error.
+expr: makets(1 / 0, #0, 1, 0, 0, 0)
+types: int64
+
+# null-vs-error priority (the envelope crux): both a literal null and a literal
+# error. null_prop is BLOCKED (the error operand can error), so err_prop wins:
+# the result is the error, NOT null. eval agrees (an operand error surfaces over
+# the propagated null).
+expr: makets(null, 1 / 0, 1, 0, 0, 0)
+types: int64
+
+# could_error guard: `1 / #0` can error but is not a LITERAL error, so null_prop
+# is gated off and err_prop cannot fire. The call survives in both engines.
+expr: makets(null, 1 / #0, 1, 0, 0, 0)
+types: int64
+
+# Non-null-propagating variadic: Coalesce returns the first non-null, so
+# `propagates_nulls()` is false and neither rule considers it. It survives even
+# with a null operand.
+expr: coalesce(null, #0)
+types: int64
+
+# --- slice 6d: flatten_assoc (all five associative variadics) ---
+# `flatten_{and,or,coalesce,greatest,least}` splice a nested same-func operand
+# up one level, porting `scalar/rules.rs::flatten_assoc`. UNCONDITIONAL (no
+# could_error gate): associativity is order-independent over each func's
+# semilattice, errors included. Saturation re-applies for deeper nesting.
+
+# Pure flatten on And / Or: a nested same-connective operand at leading /
+# middle / trailing position; four distinct columns land as a flat 4-ary call.
+expr: and(and(#1, #2), #0, #3)
+types: bool, bool, bool, bool
+
+expr: and(#0, and(#1, #2), #3)
+types: bool, bool, bool, bool
+
+expr: and(#0, #3, and(#1, #2))
+types: bool, bool, bool, bool
+
+expr: or(or(#1, #2), #0, #3)
+types: bool, bool, bool, bool
+
+expr: or(#0, or(#1, #2), #3)
+types: bool, bool, bool, bool
+
+expr: or(#0, #3, or(#1, #2))
+types: bool, bool, bool, bool
+
+# New-domain proof: flatten on the three non-boolean associative variadics.
+# The oracle flattens these too, so parity holds beyond And/Or.
+expr: coalesce(#0, coalesce(#1, #2))
+types: int64, int64, int64
+
+expr: greatest(greatest(#0, #1), #2)
+types: int64, int64, int64
+
+expr: least(#0, least(#1, #2))
+types: int64, int64, int64
+
+# Deep nesting: three levels flatten fully to a 4-ary And.
+expr: and(#0, and(#1, and(#2, #3)))
+types: bool, bool, bool, bool
+
+# Flatten feeding a cascade: the splice exposes a short-circuit literal, a
+# duplicate, an empty inner set, or the and_or_single self-loop, which a
+# downstream rule then folds. Parity holds through the cascade.
+expr: and(#0, and(false, #1))
+types: bool, bool
+
+expr: or(#0, or(true, #1))
+types: bool, bool
+
+expr: and(#0, and(true, #1))
+types: bool, bool
+
+expr: and(#0, and(#0, #1))
+types: bool, bool
+
+# and_or_single self-loop shape: the inner Or([c0]) collapses into c0's class,
+# the circular-ref skip keeps the subsequent flatten from splicing forever.
+expr: or(#0, or(#0))
+types: bool
+
+expr: and(#0, and())
+types: bool
+
+# Mixed-op negative control: an Or operand inside an And is not a same-func
+# nesting, so flatten never fires and the shape stays intact in both engines.
+expr: and(or(#0, #1), #2)
+types: bool, bool, bool
+
+# Error operand Bool-typed inside And nesting. Flatten splices the erroring
+# operand up (unconditional). `err` is `1 / 0 = 1 / 0`, not a bare Int64 `1 / 0`,
+# for the slice-6c type-agreement reason: a variadic collapse can expose an
+# operand's class as the connective's value, and a bare Int64 under a Bool
+# connective trips the shared analysis's merge assertion.
+expr: and(#0, and(1 / 0 = 1 / 0, #1))
+types: bool, bool
+
+expr: and(false, and(1 / 0 = 1 / 0, #0))
+types: bool
+
+# --- slice 6f: factor_and_or (dual-connective distributive factoring) ---
+# `factor_and_or` pulls the operands common to every inner And/Or branch out to
+# the dual connective, porting `scalar/rules.rs::factor_and_or`. Full-intersection
+# only: it fires when a common factor exists across ALL branches and each
+# residual is non-empty. A residual that could error blocks the rewrite; a common
+# FACTOR that errors is exempt (it stays in the result, the CLU-137 property).
+
+# Fires: Or-of-Ands factors to an outer And; the dual And-of-Ors to an outer Or.
+expr: or(and(#0, #1), and(#0, #2))
+types: bool, bool, bool
+
+expr: and(or(#0, #1), or(#0, #2))
+types: bool, bool, bool
+
+# n-ary: three branches sharing #0 factor to And(#0, Or(#1, #2, #3)).
+expr: or(and(#0, #1), and(#0, #2), and(#0, #3))
+types: bool, bool, bool, bool
+
+# Common factor at a non-leading position inside each inner And.
+expr: or(and(#1, #0), and(#2, #0))
+types: bool, bool, bool
+
+# No common factor: disjoint inner sets, so factoring never fires.
+expr: or(and(#0, #1), and(#2, #3))
+types: bool, bool, bool, bool
+
+# Empty-residual factor/absorb boundary: the intersection {#0, #1} leaves one
+# empty residual, so factor declines and absorption handles it instead.
+expr: or(and(#0, #1), and(#0, #1, #2))
+types: bool, bool, bool
+
+# Residual-error gate: r = `1 / #1 = 5` errors at #1 == 0 and is a residual, so
+# the gate blocks factoring and the outer Or survives. `r` is Bool-typed (the
+# comparison), not a bare Int64, for the slice-6c type-agreement reason.
+expr: or(and(#0, 1 / #1 = 5), and(#0, #2))
+types: bool, int64, bool
+
+# Erroring common factor still fires (CLU-137): g = `1 / #0 = 0` errors at
+# #0 == 0 but is the shared factor, so it is pulled out; the residuals #2, #3 are
+# error-free, so the gate permits the rewrite.
+expr: or(and(1 / #0 = 0, #2), and(1 / #0 = 0, #3))
+types: int64, int64, bool, bool

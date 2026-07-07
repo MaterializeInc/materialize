@@ -575,6 +575,111 @@ mod index_map {
     }
 }
 
+/// Plan `join` as a delta query, assuming no pre-existing arrangements and no
+/// statistics.
+///
+/// Returns `join` with its implementation set to
+/// [`mz_expr::JoinImplementation::DeltaQuery`], or an error if delta planning
+/// fails (e.g. the join graph is not connected). The arrangement keys are
+/// derived from the join's equivalences, so the result is a correct delta plan;
+/// it is not stats-optimal (cardinalities are unknown here).
+///
+/// This lets a caller commit a join to the delta strategy. The
+/// [`JoinImplementation`] transform only (re)plans `Unimplemented` and
+/// `Differential` joins, so a join returned by this function survives a
+/// subsequent run of that transform unchanged.
+pub fn plan_as_delta_query(
+    join: &MirRelationExpr,
+    optimizer_features: &OptimizerFeatures,
+) -> Result<MirRelationExpr, TransformError> {
+    let MirRelationExpr::Join { inputs, .. } = join else {
+        return Err(TransformError::Internal(
+            "plan_as_delta_query called on a non-join expression".into(),
+        ));
+    };
+    let input_mapper = JoinInputMapper::new(inputs);
+    let n = inputs.len();
+    // No pre-existing arrangements, unique keys, cardinalities, or filters: the
+    // delta planner derives every arrangement key from the equivalences and
+    // plans the arrangements it needs.
+    let available: Vec<Vec<Vec<MirScalarExpr>>> = vec![Vec::new(); n];
+    let unique_keys: Vec<Vec<Vec<usize>>> = vec![Vec::new(); n];
+    let cardinalities: Vec<Option<usize>> = vec![None; n];
+    let filters: Vec<FilterCharacteristics> = vec![FilterCharacteristics::none(); n];
+    let (planned, _new_arrangements) = delta_queries::plan(
+        join,
+        &input_mapper,
+        &available,
+        &unique_keys,
+        &cardinalities,
+        &filters,
+        optimizer_features,
+    )?;
+    Ok(planned)
+}
+
+/// Plan `join`, choosing the delta strategy iff it needs no more new
+/// arrangements than the differential strategy would.
+///
+/// Both strategies are planned with `available` (the per-input arrangement keys
+/// already materialized, e.g. by existing indexes), so the arrangement counts
+/// are reuse-aware. The delta plan is returned when `delta_new <= diff_new`,
+/// otherwise the differential plan. Binary joins (at most two inputs) are always
+/// differential: a delta join's advantage of avoiding intermediate arrangements
+/// does not apply there.
+///
+/// This is the eager delta rule (`enable_eager_delta_joins`) applied
+/// unconditionally, independent of the feature flag. The returned plan has its
+/// implementation filled (`DeltaQuery` or `Differential`), so it survives a
+/// later run of [`JoinImplementation`], which only (re)plans `Unimplemented`
+/// joins and, with eager delta joins off, `Differential` joins.
+pub fn plan_join_min_arrangements(
+    join: &MirRelationExpr,
+    available: &[Vec<Vec<MirScalarExpr>>],
+    optimizer_features: &OptimizerFeatures,
+) -> Result<MirRelationExpr, TransformError> {
+    let MirRelationExpr::Join { inputs, .. } = join else {
+        return Err(TransformError::Internal(
+            "plan_join_min_arrangements called on a non-join expression".into(),
+        ));
+    };
+    let input_mapper = JoinInputMapper::new(inputs);
+    let n = inputs.len();
+    // No unique-key, cardinality, or filter facts here: the planners derive the
+    // arrangement keys from the equivalences. `available` carries the only
+    // reuse signal.
+    let unique_keys: Vec<Vec<Vec<usize>>> = vec![Vec::new(); n];
+    let cardinalities: Vec<Option<usize>> = vec![None; n];
+    let filters: Vec<FilterCharacteristics> = vec![FilterCharacteristics::none(); n];
+    let (diff_plan, diff_new) = differential::plan(
+        join,
+        &input_mapper,
+        available,
+        &unique_keys,
+        &cardinalities,
+        &filters,
+        optimizer_features,
+    )?;
+    if n <= 2 {
+        return Ok(diff_plan);
+    }
+    // Prefer delta only when it is no costlier in newly-built arrangements. A
+    // delta planning failure (disconnected graph, folded join) falls back to the
+    // differential plan.
+    match delta_queries::plan(
+        join,
+        &input_mapper,
+        available,
+        &unique_keys,
+        &cardinalities,
+        &filters,
+        optimizer_features,
+    ) {
+        Ok((delta_plan, delta_new)) if delta_new <= diff_new => Ok(delta_plan),
+        _ => Ok(diff_plan),
+    }
+}
+
 mod delta_queries {
 
     use std::collections::BTreeSet;
@@ -836,7 +941,7 @@ mod differential {
 ///  - The lifted mfps combined into one mfp.
 ///  - Permutations for each input, which were lifted as part of the mfp lifting. These should be
 ///    applied to the join order.
-fn implement_arrangements<'a>(
+pub(crate) fn implement_arrangements<'a>(
     inputs: &mut [MirRelationExpr],
     available_arrangements: &[Vec<Vec<MirScalarExpr>>],
     needed_arrangements: impl Iterator<
@@ -940,7 +1045,7 @@ fn implement_arrangements<'a>(
 ///   column that was permuted or created by the given MFP.
 /// - Canonicalizes scalar expressions in maps and filters with respect to the join equivalences.
 ///   See inline comment for more details.
-fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
+pub(crate) fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
     if !mfp.is_identity() {
         let (mut map, mut filter, project) = mfp.as_map_filter_project();
         if let MirRelationExpr::Join { equivalences, .. } = new_join {
@@ -991,7 +1096,7 @@ fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
 
 /// Permute the keys in `order` to compensate for projections being lifted from inputs.
 /// `lifted_projections` has an optional projection for each input.
-fn permute_order(
+pub(crate) fn permute_order(
     order: &mut Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>,
     lifted_projections: &Vec<Option<Vec<usize>>>,
 ) {

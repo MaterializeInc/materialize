@@ -278,7 +278,7 @@ Explained Query:
     Filter (((#1{f2} = 3) AND (#3{f2} = 4)) OR ((#1{f2} = 5) AND (#3{f2} = 6))) // { arity: 4 }
       Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
-          %0:t1[#0{f1}]Kef » %1:t2[#0{f1}]Kef
+          %0:t1[#0{f1}]K » %1:t2[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Filter (#0{f1}) IS NOT NULL AND ((#1{f2} = 3) OR (#1{f2} = 5)) // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
@@ -304,7 +304,7 @@ Explained Query:
     Filter ((#1{f2} = 5) OR ((#1{f2} = 3) AND (#3{f2} = 4))) // { arity: 4 }
       Join on=(#0{f1} = #2{f1}) type=differential // { arity: 4 }
         implementation
-          %0:t1[#0{f1}]Kef » %1:t2[#0{f1}]Kef
+          %0:t1[#0{f1}]K » %1:t2[#0{f1}]K
         ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
           Filter (#0{f1}) IS NOT NULL AND ((#1{f2} = 3) OR (#1{f2} = 5)) // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
@@ -330,7 +330,7 @@ Explained Query:
   Filter ((#1{f2} = 27) OR ((#0{f1} = #2{f1}) AND (#1{f2} <= 1995))) // { arity: 4 }
     CrossJoin type=differential // { arity: 4 }
       implementation
-        %0:t1[×]eiif » %1:t2[×]eiif
+        %0:t1[×] » %1:t2[×]
       ArrangeBy keys=[[]] // { arity: 2 }
         Filter ((#1{f2} = 27) OR (#1{f2} <= 1995)) // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
@@ -422,14 +422,11 @@ WHERE
         r.schema_id = s.id AND (r.type = 'materialized-view' OR (r.type = 'view' AND s.name != 'doesntmatter'))
 ----
 Explained Query:
-  Project (#1{name}, #3{name}) // { arity: 2 }
-    Filter ((#4{type} = "materialized-view") OR ((#4{type} = "view") AND (#1{name} != "doesntmatter"))) // { arity: 5 }
-      Join on=(#0{id} = #2{schema_id}) type=differential // { arity: 5 }
+  Project (#4{name}, #1{name}) // { arity: 2 }
+    Filter ((#2{type} = "materialized-view") OR ((#2{type} = "view") AND (#4{name} != "doesntmatter"))) // { arity: 5 }
+      Join on=(#0{schema_id} = #3{id}) type=differential // { arity: 5 }
         implementation
-          %0:mz_schemas[#0{id}]UK » %1[#0{schema_id}]Kef
-        ArrangeBy keys=[[#0{id}]] // { arity: 2 }
-          Project (#0{id}, #3{name}) // { arity: 2 }
-            ReadIndex on=mz_schemas mz_schemas_ind=[*** full scan ***] // { arity: 6 }
+          %0[#0{schema_id}]K » %1:mz_schemas[#0{id}]K
         ArrangeBy keys=[[#0{schema_id}]] // { arity: 3 }
           Union // { arity: 3 }
             Project (#2{schema_id}, #3{name}, #9) // { arity: 3 }
@@ -438,6 +435,9 @@ Explained Query:
             Project (#2{schema_id}, #3{name}, #10) // { arity: 3 }
               Map ("materialized-view") // { arity: 11 }
                 ReadIndex on=mz_materialized_views mz_materialized_views_ind=[*** full scan ***] // { arity: 10 }
+        ArrangeBy keys=[[#0{id}]] // { arity: 2 }
+          Project (#0{id}, #3{name}) // { arity: 2 }
+            ReadIndex on=mz_schemas mz_schemas_ind=[*** full scan ***] // { arity: 6 }
 
 Used Indexes:
   - mz_catalog.mz_materialized_views_ind (*** full scan ***)
@@ -490,20 +490,20 @@ Explained Query:
         ReadStorage materialize.public.y
   Return
     Project (#0)
-      Join on=(#0 = #1) type=differential
-        ArrangeBy keys=[[#0]]
-          Get l0
-        ArrangeBy keys=[[#0]]
+      Join on=(#0{a} = #1{a}) type=differential
+        ArrangeBy keys=[[#0{a}]]
           TopK group_by=[#0] limit=5
             Project (#0)
               Join on=(#0{a} = #1{a}) type=differential
                 ArrangeBy keys=[[#0{a}]]
-                  Distinct project=[#0]
+                  Distinct project=[#0{a}]
                     Get l0
                 ArrangeBy keys=[[#0{a}]]
                   Project (#0)
                     Filter ((#0{a} = 41) OR (#0{a} = 42))
                       ReadStorage materialize.public.x
+        ArrangeBy keys=[[#0{a}]]
+          Get l0
 
 Source materialize.public.x
   filter=(((#0{a} = 41) OR (#0{a} = 42)))

@@ -9,9 +9,13 @@ publish = false
 [lints]
 workspace = true
 
+[build-dependencies]
+chumsky = { workspace = true }
+
 [dependencies]
 differential-dataflow.workspace = true
 enum-kinds.workspace = true
+good_lp = { workspace = true }
 itertools.workspace = true
 mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
@@ -37,6 +41,18 @@ proc-macro2.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 serde_json.workspace = true
+
+[[test]]
+name = "compare_real"
+path = "tests/compare_real.rs"
+
+[[test]]
+name = "wcoj_decision"
+path = "tests/wcoj_decision.rs"
+
+[[test]]
+name = "roundtrip"
+path = "tests/roundtrip.rs"
 
 [features]
 default = []

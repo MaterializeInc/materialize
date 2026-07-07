@@ -4935,6 +4935,8 @@ pub fn unplan_create_cluster(
             let schedule = unplan_cluster_schedule(schedule);
             let OptimizerFeatureOverrides {
                 enable_reduce_mfp_fusion: _,
+                enable_eqsat_optimizer: _,
+                enable_eqsat_physical_optimizer: _,
                 enable_cardinality_estimates: _,
                 persist_fast_path_limit: _,
                 reoptimize_imported_views,
@@ -4953,6 +4955,13 @@ pub fn unplan_create_cluster(
                 enable_simplify_quantified_comparisons: _,
                 enable_coalesce_case_transform: _,
                 enable_will_distinct_propagation: _,
+                enable_eqsat_ilp_extraction: _,
+                enable_eqsat_wmr_lift: _,
+                enable_eqsat_scalar_canonicalize: _,
+                enable_eqsat_delta_join_cost: _,
+                enable_eqsat_native_join_commit: _,
+                enable_eqsat_filter_sharing: _,
+                enable_eqsat_scalar_sharing: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {

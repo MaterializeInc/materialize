@@ -248,6 +248,10 @@ fn handle_apply(
             let transform = CoalesceCase;
             apply_transform(transform, catalog, input)
         }
+        "eqsat" => {
+            let transform = mz_transform::eqsat::EqSatTransform;
+            apply_transform(transform, catalog, input)
+        }
         "threshold_elision" => {
             use mz_transform::threshold_elision::ThresholdElision;
             let transform = ThresholdElision;

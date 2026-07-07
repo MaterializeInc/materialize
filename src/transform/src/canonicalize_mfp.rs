@@ -50,9 +50,9 @@ impl crate::Transform for CanonicalizeMfp {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let result = self.action(relation);
+        let result = self.action(relation, ctx.features.enable_eqsat_scalar_canonicalize);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -60,24 +60,38 @@ impl crate::Transform for CanonicalizeMfp {
 
 impl CanonicalizeMfp {
     /// Extract and optimize MFPs.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
+    ///
+    /// `enable_eqsat_scalar` is forwarded to the `canonicalize_predicates` call
+    /// in [`Self::rebuild_mfp`].
+    pub fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        enable_eqsat_scalar: bool,
+    ) -> Result<(), crate::TransformError> {
         let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
         // Optimize MFP, e.g., perform CSE Push MFPs through `Negate` operators,
         // if encountered. This is a first steps toward a `CanonicalizeLinear`,
         // which puts linear operators in a canonical representation.
         mfp.optimize();
         if let MirRelationExpr::Negate { input } = relation {
-            Self::rebuild_mfp(mfp, &mut **input);
-            relation.try_visit_mut_children(|e| self.action(e))?;
+            Self::rebuild_mfp(mfp, &mut **input, enable_eqsat_scalar);
+            relation.try_visit_mut_children(|e| self.action(e, enable_eqsat_scalar))?;
         } else {
-            relation.try_visit_mut_children(|e| self.action(e))?;
-            Self::rebuild_mfp(mfp, relation);
+            relation.try_visit_mut_children(|e| self.action(e, enable_eqsat_scalar))?;
+            Self::rebuild_mfp(mfp, relation, enable_eqsat_scalar);
         }
         Ok(())
     }
 
     /// Canonicalize the MapFilterProject to Map-Filter-Project, in that order.
-    pub fn rebuild_mfp(mfp: MapFilterProject, relation: &mut MirRelationExpr) {
+    ///
+    /// `enable_eqsat_scalar` is forwarded to the `Filter` fusion's predicate
+    /// canonicalization.
+    pub fn rebuild_mfp(
+        mfp: MapFilterProject,
+        relation: &mut MirRelationExpr,
+        enable_eqsat_scalar: bool,
+    ) {
         if !mfp.is_identity() {
             let (map, filter, project) = mfp.as_map_filter_project();
             let total_arity = mfp.input_arity + map.len();
@@ -86,7 +100,7 @@ impl CanonicalizeMfp {
             }
             if !filter.is_empty() {
                 *relation = relation.take_dangerous().filter(filter);
-                crate::fusion::filter::Filter::action(relation);
+                crate::fusion::filter::Filter::action(relation, enable_eqsat_scalar);
             }
             if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o) {
                 *relation = relation.take_dangerous().project(project);

@@ -2088,6 +2088,88 @@ feature_flags!(
         scope: ParameterScope::Cluster,
     },
     {
+        name: enable_eqsat_optimizer,
+        // Defaulted on: the pass is exercised across the whole test corpus and
+        // is the intended steady state. The flag stays as a safeguard that can
+        // be turned off if a regression surfaces, not as a pre-merge revert.
+        desc: "run the equality-saturation MIR optimizer pass",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eqsat_physical_optimizer,
+        // Defaulted on, mirroring `enable_eqsat_optimizer`: the physical
+        // placement runs across the whole test corpus and is the intended
+        // steady state. The flag stays as a safeguard that can be turned off if
+        // a regression surfaces, not as a pre-merge revert.
+        desc: "run the physical eqsat placement that commits WcoJoin to DeltaQuery",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eqsat_ilp_extraction,
+        // Defaulted on: the ILP extractor is the intended steady state. The
+        // flag stays as a safeguard that can be turned off to fall back to
+        // the greedy extractor if a regression surfaces.
+        desc: "use the ILP extractor for the equality-saturation arrangement-count objective",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eqsat_wmr_lift,
+        desc: "tag LetRec references with a version so eqsat can lift subexpressions across WMR bindings",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eqsat_scalar_canonicalize,
+        desc: "use the equality-saturation scalar canonicalizer in place of reduce in canonicalize_predicates",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eqsat_delta_join_cost,
+        // Defaulted on (in-branch): gates the delta-aware join-cost spelling
+        // selector that lets eqsat avoid a variable-outer-join cross product.
+        // The flag's primary use is easy A/B testing; flag-off is byte-identical
+        // to the prior behavior.
+        desc: "use the delta-aware join cost to pick join-key spellings in eqsat extraction",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eqsat_native_join_commit,
+        // Defaulted on (in-branch): routes acyclic Rel::Join through a
+        // cost-model-native Differential commit at eqsat raise time, so
+        // JoinImplementation no-ops on eqsat joins and the spelling selector
+        // survives. Primary use is easy A/B testing; flag-off is byte-identical
+        // to the prior behavior.
+        desc: "commit eqsat acyclic joins to a cost-model-chosen Differential at raise time",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eqsat_filter_sharing,
+        // Default off: gates both the filter-split rewrite during saturation
+        // and the scalar-aware ILP node tier at extraction. With it off the
+        // corpus is byte-identical. `enable_eqsat_ilp_extraction` is default on,
+        // so the scalar-aware tier must be gated here, not by the extractor
+        // default. See doc/developer/design/20260624_eqsat/20260704_eqsat_sharing_aware_cost.md.
+        desc: "share a filtered collection across consumers in eqsat via filter-split plus a scalar-aware ILP node tier",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eqsat_scalar_sharing,
+        // Default off: gates the Map-split rewrite, the width-aware cost memory
+        // in cost.rs, and the ILP arity tier. cost.rs is shared with the greedy
+        // extractor, so flag-off must be byte-identical. See
+        // doc/developer/design/20260624_eqsat/20260705_eqsat_scalar_sharing_width.md.
+        desc: "share a materialized Map prefix across consumers in eqsat via Map-split, a width cost term, and the scalar-aware ILP node tier",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_off_thread_optimization,
         desc: "use off-thread optimization in `CREATE` statements",
         default: true,
@@ -2299,6 +2381,8 @@ impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
+            enable_eqsat_optimizer: vars.enable_eqsat_optimizer(),
+            enable_eqsat_physical_optimizer: vars.enable_eqsat_physical_optimizer(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
@@ -2318,6 +2402,13 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
             enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
+            enable_eqsat_ilp_extraction: vars.enable_eqsat_ilp_extraction(),
+            enable_eqsat_wmr_lift: vars.enable_eqsat_wmr_lift(),
+            enable_eqsat_scalar_canonicalize: vars.enable_eqsat_scalar_canonicalize(),
+            enable_eqsat_delta_join_cost: vars.enable_eqsat_delta_join_cost(),
+            enable_eqsat_native_join_commit: vars.enable_eqsat_native_join_commit(),
+            enable_eqsat_filter_sharing: vars.enable_eqsat_filter_sharing(),
+            enable_eqsat_scalar_sharing: vars.enable_eqsat_scalar_sharing(),
         }
     }
 }
@@ -2343,6 +2434,9 @@ mod tests {
         let OptimizerFeatures {
             enable_eq_classes_withholding_errors,
             enable_eager_delta_joins,
+            enable_eqsat_optimizer,
+            enable_eqsat_physical_optimizer,
+            enable_eqsat_ilp_extraction,
             enable_letrec_fixpoint_analysis,
             enable_new_outer_join_lowering,
             enable_reduce_mfp_fusion,
@@ -2360,6 +2454,12 @@ mod tests {
             enable_simplify_quantified_comparisons,
             enable_coalesce_case_transform,
             enable_will_distinct_propagation,
+            enable_eqsat_wmr_lift,
+            enable_eqsat_scalar_canonicalize,
+            enable_eqsat_delta_join_cost,
+            enable_eqsat_native_join_commit,
+            enable_eqsat_filter_sharing,
+            enable_eqsat_scalar_sharing,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2373,6 +2473,9 @@ mod tests {
 
         set_var!(enable_eq_classes_withholding_errors);
         set_var!(enable_eager_delta_joins);
+        set_var!(enable_eqsat_optimizer);
+        set_var!(enable_eqsat_physical_optimizer);
+        set_var!(enable_eqsat_ilp_extraction);
         set_var!(enable_letrec_fixpoint_analysis);
         set_var!(enable_new_outer_join_lowering);
         set_var!(enable_reduce_mfp_fusion);
@@ -2390,6 +2493,12 @@ mod tests {
         set_var!(enable_simplify_quantified_comparisons);
         set_var!(enable_coalesce_case_transform);
         set_var!(enable_will_distinct_propagation);
+        set_var!(enable_eqsat_wmr_lift);
+        set_var!(enable_eqsat_scalar_canonicalize);
+        set_var!(enable_eqsat_delta_join_cost);
+        set_var!(enable_eqsat_native_join_commit);
+        set_var!(enable_eqsat_filter_sharing);
+        set_var!(enable_eqsat_scalar_sharing);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

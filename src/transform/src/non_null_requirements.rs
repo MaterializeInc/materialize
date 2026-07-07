@@ -25,7 +25,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::{Either, Itertools, zip_eq};
-use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{
+    Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT, UnaryFunc, func,
+};
 use mz_ore::assert_none;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
@@ -214,7 +216,24 @@ impl NonNullRequirements {
                 MirRelationExpr::Filter { input, predicates } => {
                     for predicate in predicates {
                         predicate.non_null_requirements(&mut columns);
-                        // TODO: Not(IsNull) should add a constraint!
+                        // A `NOT(isnull(e))` predicate (i.e. `e IS NOT NULL`)
+                        // passes only on rows where `e` is non-null. Null
+                        // propagation alone does not capture this, because
+                        // `isnull` does not propagate nulls. Seed the columns
+                        // that `e` requires to be non-null directly.
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::Not(func::Not),
+                            expr,
+                        } = predicate
+                        {
+                            if let MirScalarExpr::CallUnary {
+                                func: UnaryFunc::IsNull(func::IsNull),
+                                expr,
+                            } = &**expr
+                            {
+                                expr.non_null_requirements(&mut columns);
+                            }
+                        }
                     }
                     self.action(input, columns, gets)
                 }

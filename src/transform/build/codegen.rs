@@ -1,0 +1,1747 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Render parsed [`Rule`]s to Rust source.
+//!
+//! For now this emits `rules_ast()`, the rule set as AST literals, consumed by
+//! the Lean emitter. The compiled per-rule `find`/`apply` backend is added in a
+//! later step.
+
+use std::collections::BTreeMap;
+
+use crate::dsl::*;
+
+/// Fully-qualified path to the run-time DSL AST module.
+const P: &str = "crate::eqsat::dsl";
+
+/// Returns `true` when `c` reads only graph structure / payload / arity and
+/// does NOT require an analysis pass.
+///
+/// Exhaustive by design — a new `Cond` variant must be explicitly classified
+/// here; analysis-gated conditions (those reading e-class Analyses) return false.
+fn cond_is_color_exact(c: &Cond) -> bool {
+    match c {
+        // Color-exact: reads only graph structure, payload, or arity.
+        Cond::UsesOnlyInput { .. } => true,
+        Cond::ColsInRange { .. } => true,
+        Cond::Empty { .. } => true,
+        Cond::AllTrue { .. } => true,
+        Cond::AnyFalse { .. } => true,
+        Cond::NoFalse { .. } => true,
+        Cond::NoError { .. } => true,
+        Cond::AllColumns { .. } => true,
+        Cond::IsRelEmpty { .. } => true,
+        Cond::NotRelEmpty { .. } => true,
+        Cond::ProducesKey { .. } => true,
+        Cond::JoinIsCyclic => true,
+        Cond::HasThreeOrMoreInputs => true,
+        Cond::IsBinaryJoin => true,
+        Cond::HasInnerEquiv { .. } => true,
+        Cond::IdentityProjection { .. } => true,
+        Cond::NonIdentityProjection { .. } => true,
+        Cond::ReadsIndexedGlobal { .. } => true,
+        // Analysis-gated: reads e-class Analyses; returns false for colored rules.
+        Cond::NonNegative { .. } => false,
+        Cond::Monotonic { .. } => false,
+        Cond::IsUniqueKey { .. } => false,
+        // Analysis-gated like the three above: they read the e-class scalar
+        // analysis. Scalar conds only ever guard scalar rules, which run in the
+        // scalar saturate pass and never in the relational colored pass, so no
+        // scalar rule is `colored` today. Return `false` (not color-exact) so
+        // the build-time assertion in `emit()` fails loudly if a scalar rule is
+        // ever mistakenly marked `colored`, rather than silently admitting it to
+        // the colored pass where the `ColoredView` scalar stubs are inert.
+        Cond::ScalarLitTrue { .. } => false,
+        Cond::ScalarLitFalseOrNull { .. } => false,
+        Cond::ScalarNoError { .. } => false,
+        Cond::ScalarNonNullable { .. } => false,
+        Cond::AnyScalarLit { .. } => false,
+        // Also reads the e-class scalar `could_error` analysis (the dropped-
+        // extras gate), so it belongs in this group for the same reason.
+        Cond::AbsorbApplies { .. } => false,
+        // Structural read (same-func operand via `find`/`nodes`, no e-class
+        // Analysis), but only ever guards a scalar rule (`flatten_assoc`), and
+        // the `ColoredView` impl is unconditionally inert. Same reasoning as
+        // `HasDuplicateId`/`AbsorbApplies`.
+        Cond::FlattenApplies { .. } => false,
+        // Not analysis-gated (reads canonical ids via `find`, not an e-class
+        // Analysis), but grouped with the scalar conds above for the same
+        // reason: it only ever guards a scalar rule (`and_or_dedup`), and the
+        // `ColoredView` impl is unconditionally inert.
+        Cond::HasDuplicateId { .. } => false,
+    }
+}
+
+/// Render the full generated file for `rules`.
+pub fn emit(rules: &[Rule]) -> String {
+    // Build-time assertion: every `colored` rule must use only color-exact
+    // conditions (no analysis-gated conditions).
+    for r in rules {
+        if r.colored {
+            // A scalar rule must never be colored. The colored pass runs over
+            // `ColoredView`, whose scalar find/apply are inert stubs, so a
+            // colored scalar rule would silently become a dead no-op. Builtin
+            // RHSs additionally pin the concrete `EGraph` and would not compile
+            // under `colored_apply`. The cond-exactness check below cannot catch
+            // this: a conditionless scalar rule passes it vacuously.
+            assert!(
+                !is_scalar_rule(r),
+                "scalar rule `{}` must not be marked colored: the colored pass \
+                 runs over ColoredView's inert scalar stubs",
+                r.name
+            );
+            for c in &r.conds {
+                assert!(
+                    cond_is_color_exact(c),
+                    "colored rule `{}` uses non-color-exact condition {:?}",
+                    r.name,
+                    c
+                );
+            }
+        }
+    }
+
+    let mut out = String::new();
+    out.push_str(
+        "// @generated by build.rs from the src/eqsat/rules/*.rewrite files\n// (relational.rewrite + scalar.rewrite). Do not edit.\n\n",
+    );
+    out.push_str(&emit_rules_ast(rules));
+    out.push('\n');
+    out.push_str(&emit_compiled(rules));
+    out.push('\n');
+    out.push_str(&emit_colored(rules));
+    out
+}
+
+// --- compiled per-rule matchers -------------------------------------------
+
+/// A fresh-name allocator for generated locals.
+struct Fresh(u32);
+
+impl Fresh {
+    fn id(&mut self) -> u32 {
+        let v = self.0;
+        self.0 += 1;
+        v
+    }
+}
+
+/// The `Sym` variant name for an operator pattern.
+fn sym_name(p: &Pat) -> &'static str {
+    match p {
+        Pat::Filter { .. } => "Filter",
+        Pat::Map { .. } => "Map",
+        Pat::Project { .. } => "Project",
+        Pat::Reduce { .. } => "Reduce",
+        Pat::FlatMap { .. } => "FlatMap",
+        Pat::Negate(_) => "Negate",
+        Pat::Threshold(_) => "Threshold",
+        Pat::TopK(_) => "TopK",
+        Pat::ArrangeBy { .. } => "ArrangeBy",
+        Pat::Join { .. } => "Join",
+        Pat::WcoJoin { .. } => "WcoJoin",
+        Pat::Union { .. } => "Union",
+        Pat::RelVar(_) => unreachable!("relvars have no operator symbol"),
+        Pat::SUnary { .. } => unreachable!("scalar patterns have no relational operator symbol"),
+        Pat::SVariadic { .. } => {
+            unreachable!("scalar patterns have no relational operator symbol")
+        }
+        Pat::SIf { .. } => unreachable!("scalar patterns have no relational operator symbol"),
+        Pat::SBinaryVar { .. } => {
+            unreachable!("scalar patterns have no relational operator symbol")
+        }
+        Pat::Scalar { .. } => unreachable!("scalar patterns have no relational operator symbol"),
+    }
+}
+
+/// The Rust pattern text matching a fixed scalar `UnaryFunc` by keyword. Extend
+/// this table as scalar rules reference more unary functions.
+fn unary_func_pat(func: &str) -> String {
+    match func {
+        "not" => "mz_expr::UnaryFunc::Not(_)".to_string(),
+        "isnull" => "mz_expr::UnaryFunc::IsNull(_)".to_string(),
+        other => panic!("unknown scalar unary func keyword: {other}"),
+    }
+}
+
+/// The Rust pattern text matching a fixed scalar `VariadicFunc` by keyword.
+/// Extend this table as scalar rules reference more variadic functions.
+fn variadic_func_pat(func: &str) -> String {
+    match func {
+        "and" => "mz_expr::VariadicFunc::And(_)".to_string(),
+        "or" => "mz_expr::VariadicFunc::Or(_)".to_string(),
+        "coalesce" => "mz_expr::VariadicFunc::Coalesce(_)".to_string(),
+        "greatest" => "mz_expr::VariadicFunc::Greatest(_)".to_string(),
+        "least" => "mz_expr::VariadicFunc::Least(_)".to_string(),
+        other => panic!("unknown scalar variadic func keyword: {other}"),
+    }
+}
+
+/// The Rust expression constructing a fixed scalar `UnaryFunc` by keyword.
+fn unary_func_value(func: &str) -> String {
+    match func {
+        "not" => "mz_expr::UnaryFunc::Not(mz_expr::func::Not)".to_string(),
+        "isnull" => "mz_expr::UnaryFunc::IsNull(mz_expr::func::IsNull)".to_string(),
+        other => panic!("unknown scalar unary func keyword: {other}"),
+    }
+}
+
+/// The Rust expression constructing a fixed scalar `VariadicFunc` by keyword.
+fn variadic_func_value(func: &str) -> String {
+    match func {
+        "and" => "mz_expr::VariadicFunc::And(mz_expr::func::variadic::And)".to_string(),
+        "or" => "mz_expr::VariadicFunc::Or(mz_expr::func::variadic::Or)".to_string(),
+        "coalesce" => {
+            "mz_expr::VariadicFunc::Coalesce(mz_expr::func::variadic::Coalesce)".to_string()
+        }
+        "greatest" => {
+            "mz_expr::VariadicFunc::Greatest(mz_expr::func::variadic::Greatest)".to_string()
+        }
+        "least" => "mz_expr::VariadicFunc::Least(mz_expr::func::variadic::Least)".to_string(),
+        other => panic!("unknown scalar variadic func keyword: {other}"),
+    }
+}
+
+/// Accumulates the matching code for one rule's left-hand side.
+#[derive(Default)]
+struct Matcher {
+    fresh: Fresh,
+    /// Match statements, in order; operator-child `for` loops open a brace
+    /// recorded in `open_braces`.
+    stmts: Vec<String>,
+    open_braces: usize,
+    /// Bound metavariables: `(dsl name, generated local)`. Relvars may repeat.
+    rels: Vec<(String, String)>,
+    payloads: Vec<(String, String)>,
+    rests: Vec<(String, String)>,
+    /// Bound func metavariables, e.g. `SBinaryVar`'s `func`: `(dsl name,
+    /// generated local holding a `BinaryFunc`)`.
+    funcs: Vec<(String, String)>,
+}
+
+impl Default for Fresh {
+    fn default() -> Self {
+        Fresh(0)
+    }
+}
+
+impl Matcher {
+    /// Match `pat` (an operator) against the e-node expression `node`,
+    /// binding payloads and recursing into children.
+    fn node(&mut self, pat: &Pat, node: &str) {
+        let c = self.fresh.id();
+        match pat {
+            Pat::Filter { preds, input } => {
+                self.stmts.push(format!(
+                    "let ENode::Filter {{ predicates: f{c}, input: in{c} }} = {node} else {{ continue }};"
+                ));
+                let pl = self.pl(preds);
+                self.stmts
+                    .push(format!("let {pl} = Payload::Predicates(f{c}.clone());"));
+                self.child(input, &format!("*in{c}"));
+            }
+            Pat::Map { scalars, input } => {
+                self.stmts.push(format!(
+                    "let ENode::Map {{ scalars: s{c}, input: in{c} }} = {node} else {{ continue }};"
+                ));
+                let pl = self.pl(scalars);
+                self.stmts
+                    .push(format!("let {pl} = Payload::Scalars(s{c}.clone());"));
+                self.child(input, &format!("*in{c}"));
+            }
+            Pat::Project { outputs, input } => {
+                self.stmts.push(format!(
+                    "let ENode::Project {{ outputs: o{c}, input: in{c} }} = {node} else {{ continue }};"
+                ));
+                let pl = self.pl(outputs);
+                self.stmts
+                    .push(format!("let {pl} = Payload::Outputs(o{c}.clone());"));
+                self.child(input, &format!("*in{c}"));
+            }
+            Pat::Reduce {
+                group_key,
+                aggregates,
+                input,
+            } => {
+                self.stmts.push(format!(
+                    "let ENode::Reduce {{ input: in{c}, group_key: gk{c}, aggregates: ag{c}, .. }} = {node} else {{ continue }};"
+                ));
+                let pgk = self.pl(group_key);
+                self.stmts
+                    .push(format!("let {pgk} = Payload::GroupKey(gk{c}.clone());"));
+                let pag = self.pl(aggregates);
+                self.stmts
+                    .push(format!("let {pag} = Payload::Aggregates(ag{c}.clone());"));
+                self.child(input, &format!("*in{c}"));
+            }
+            Pat::FlatMap { func, exprs, input } => {
+                self.stmts.push(format!(
+                    "let ENode::FlatMap {{ input: in{c}, func: fn{c}, exprs: ex{c} }} = {node} else {{ continue }};"
+                ));
+                let pfn = self.pl(func);
+                self.stmts
+                    .push(format!("let {pfn} = Payload::FlatMapFunc(fn{c}.clone());"));
+                let pex = self.pl(exprs);
+                self.stmts
+                    .push(format!("let {pex} = Payload::FlatMapExprs(ex{c}.clone());"));
+                self.child(input, &format!("*in{c}"));
+            }
+            Pat::Negate(input) => {
+                self.stmts.push(format!(
+                    "let ENode::Negate {{ input: in{c} }} = {node} else {{ continue }};"
+                ));
+                self.child(input, &format!("*in{c}"));
+            }
+            Pat::Threshold(input) => {
+                self.stmts.push(format!(
+                    "let ENode::Threshold {{ input: in{c} }} = {node} else {{ continue }};"
+                ));
+                self.child(input, &format!("*in{c}"));
+            }
+            Pat::TopK(input) => {
+                self.stmts.push(format!(
+                    "let ENode::TopK {{ input: in{c}, .. }} = {node} else {{ continue }};"
+                ));
+                self.child(input, &format!("*in{c}"));
+            }
+            Pat::ArrangeBy { key, input } => {
+                self.stmts.push(format!(
+                    "let ENode::ArrangeBy {{ key: k{c}, input: in{c} }} = {node} else {{ continue }};"
+                ));
+                let pl = self.pl(key);
+                self.stmts
+                    .push(format!("let {pl} = Payload::GroupKey(k{c}.clone());"));
+                self.child(input, &format!("*in{c}"));
+            }
+            Pat::Join {
+                equivalences,
+                inputs,
+            } => {
+                self.stmts.push(format!(
+                    "let ENode::Join {{ inputs: ins{c}, equivalences: eq{c} }} = {node} else {{ continue }};"
+                ));
+                let pl = self.pl(equivalences);
+                self.stmts
+                    .push(format!("let {pl} = Payload::Equivalences(eq{c}.clone());"));
+                self.variadic(inputs, c);
+            }
+            Pat::WcoJoin {
+                equivalences,
+                inputs,
+            } => {
+                self.stmts.push(format!(
+                    "let ENode::WcoJoin {{ inputs: ins{c}, equivalences: eq{c} }} = {node} else {{ continue }};"
+                ));
+                let pl = self.pl(equivalences);
+                self.stmts
+                    .push(format!("let {pl} = Payload::Equivalences(eq{c}.clone());"));
+                self.variadic(inputs, c);
+            }
+            Pat::Union { inputs } => {
+                self.stmts.push(format!(
+                    "let ENode::Union {{ inputs: ins{c} }} = {node} else {{ continue }};"
+                ));
+                self.variadic(inputs, c);
+            }
+            Pat::SUnary { func, input } => {
+                let fpat = unary_func_pat(func);
+                self.stmts.push(format!(
+                    "let crate::eqsat::scalar::node::SNode::CallUnary {{ func: {fpat}, expr: e{c} }} = {node} else {{ continue }};"
+                ));
+                self.child(input, &format!("*e{c}"));
+            }
+            Pat::SVariadic { func, inputs } => {
+                let fpat = variadic_func_pat(func);
+                self.stmts.push(format!(
+                    "let crate::eqsat::scalar::node::SNode::CallVariadic {{ func: {fpat}, exprs: ins{c} }} = {node} else {{ continue }};"
+                ));
+                self.variadic(inputs, c);
+            }
+            Pat::SIf { cond, then, els } => {
+                self.stmts.push(format!(
+                    "let crate::eqsat::scalar::node::SNode::If {{ cond: ec{c}, then: et{c}, els: ee{c} }} = {node} else {{ continue }};"
+                ));
+                self.child(cond, &format!("*ec{c}"));
+                self.child(then, &format!("*et{c}"));
+                self.child(els, &format!("*ee{c}"));
+            }
+            Pat::SBinaryVar { func, expr1, expr2 } => {
+                self.stmts.push(format!(
+                    "let crate::eqsat::scalar::node::SNode::CallBinary {{ func: bf{c}, expr1: e1{c}, expr2: e2{c} }} = {node} else {{ continue }};"
+                ));
+                self.funcs.push((func.clone(), format!("bf{c}")));
+                self.child(expr1, &format!("*e1{c}"));
+                self.child(expr2, &format!("*e2{c}"));
+            }
+            Pat::RelVar(_) => unreachable!("node() is only called on operators"),
+            Pat::Scalar { .. } => unreachable!("node() is only called on operators"),
+        }
+    }
+
+    /// Match the items and `rest` of a variadic operator whose inputs were
+    /// bound to `ins{c}`.
+    fn variadic(&mut self, inputs: &ListPat, c: u32) {
+        let k = inputs.items.len();
+        let has_rest = inputs.rest.is_some();
+        if has_rest {
+            if k > 0 {
+                self.stmts
+                    .push(format!("if ins{c}.len() < {k} {{ continue }};"));
+            }
+        } else {
+            self.stmts
+                .push(format!("if ins{c}.len() != {k} {{ continue }};"));
+        }
+        for (i, item) in inputs.items.iter().enumerate() {
+            self.child(item, &format!("ins{c}[{i}]"));
+        }
+        if let Some(rest) = &inputs.rest {
+            let local = self.rest(rest);
+            self.stmts
+                .push(format!("let {local}: Vec<Id> = ins{c}[{k}..].to_vec();"));
+        }
+    }
+
+    /// Match `pat` against the e-class denoted by `class` (an `Id` expression).
+    fn child(&mut self, pat: &Pat, class: &str) {
+        match pat {
+            Pat::RelVar(name) => {
+                let local = self.rel(name);
+                self.stmts.push(format!("let {local} = {class};"));
+            }
+            _ => {
+                let c = self.fresh.id();
+                // A scalar operator child scans the scalar e-nodes of the class;
+                // a relational one scans only the relational e-nodes. A scalar
+                // class never matches a relational pattern and vice versa.
+                let scalar = matches!(
+                    pat,
+                    Pat::SUnary { .. }
+                        | Pat::SVariadic { .. }
+                        | Pat::SIf { .. }
+                        | Pat::SBinaryVar { .. }
+                );
+                if scalar {
+                    self.stmts
+                        .push(format!("for n{c} in g.scalar_class_nodes({class}) {{"));
+                } else {
+                    self.stmts
+                        .push(format!("for n{c} in g.rel_class_nodes({class}) {{"));
+                }
+                // Reborrow as reference so match ergonomics work identically to
+                // the inherent EGraph::rel_class_nodes (&ENode) return type.
+                self.stmts.push(format!("let n{c} = &n{c};"));
+                self.open_braces += 1;
+                self.node(pat, &format!("n{c}"));
+            }
+        }
+    }
+
+    fn rel(&mut self, name: &str) -> String {
+        let local = format!("r{}", self.fresh.id());
+        self.rels.push((name.to_string(), local.clone()));
+        local
+    }
+
+    fn pl(&mut self, name: &str) -> String {
+        let local = format!("pl{}", self.fresh.id());
+        self.payloads.push((name.to_string(), local.clone()));
+        local
+    }
+
+    fn rest(&mut self, name: &str) -> String {
+        let local = format!("rest{}", self.fresh.id());
+        self.rests.push((name.to_string(), local.clone()));
+        local
+    }
+
+    /// The generated local holding the first binding of relvar `name`.
+    fn rel_local(&self, name: &str) -> String {
+        self.rels
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, l)| l.clone())
+            .unwrap_or_else(|| panic!("relvar `{name}` referenced but not bound"))
+    }
+
+    fn pl_local(&self, name: &str) -> String {
+        self.payloads
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, l)| l.clone())
+            .unwrap_or_else(|| panic!("payload `{name}` referenced but not bound"))
+    }
+
+    /// The generated local holding the `Vec<Id>` bound to rest-metavar `name`.
+    fn rest_local(&self, name: &str) -> String {
+        self.rests
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, l)| l.clone())
+            .unwrap_or_else(|| panic!("rest `{name}` referenced but not bound"))
+    }
+}
+
+/// An index expression in `find` (side conditions): arities come from the
+/// e-graph via the relvar's bound local.
+fn ix_cond(e: &IxExpr, m: &Matcher) -> String {
+    match e {
+        IxExpr::Lit(n) => format!("{n}i64"),
+        IxExpr::Arity(r) => format!("(g.arity({}) as i64)", m.rel_local(r)),
+        IxExpr::Add(a, b) => format!("({} + {})", ix_cond(a, m), ix_cond(b, m)),
+        IxExpr::Sub(a, b) => format!("({} - {})", ix_cond(a, m), ix_cond(b, m)),
+        IxExpr::Neg(a) => format!("(-{})", ix_cond(a, m)),
+    }
+}
+
+fn cond_expr(c: &Cond, m: &Matcher) -> String {
+    match c {
+        Cond::UsesOnlyInput { payload, rel } => format!(
+            "g.cond_uses_only_input(&{}, {})",
+            m.pl_local(payload),
+            m.rel_local(rel)
+        ),
+        Cond::ColsInRange { payload, lo, hi } => format!(
+            "g.cond_cols_in_range(&{}, {}, {})",
+            m.pl_local(payload),
+            ix_cond(lo, m),
+            ix_cond(hi, m)
+        ),
+        Cond::NonNegative { rel } => format!("g.cond_non_negative({})", m.rel_local(rel)),
+        Cond::Monotonic { rel } => format!("g.cond_monotonic({})", m.rel_local(rel)),
+        Cond::IsUniqueKey { payload, rel } => format!(
+            "g.cond_is_unique_key(&{}, {})",
+            m.pl_local(payload),
+            m.rel_local(rel)
+        ),
+        Cond::Empty { payload } => format!("{}.is_empty()", m.pl_local(payload)),
+        Cond::AllTrue { payload } => format!("g.cond_all_true(&{})", m.pl_local(payload)),
+        Cond::AnyFalse { payload } => format!("g.cond_any_false(&{})", m.pl_local(payload)),
+        Cond::NoFalse { payload } => format!("g.cond_no_false(&{})", m.pl_local(payload)),
+        Cond::NoError { payload } => format!("g.cond_no_error(&{})", m.pl_local(payload)),
+        Cond::AllColumns { payload } => {
+            format!("g.cond_all_columns(&{})", m.pl_local(payload))
+        }
+        Cond::IsRelEmpty { rel } => format!("g.cond_is_rel_empty({})", m.rel_local(rel)),
+        Cond::NotRelEmpty { rel } => format!("g.cond_not_rel_empty({})", m.rel_local(rel)),
+        Cond::ProducesKey { rel, key } => format!(
+            "g.cond_produces_key({}, &{})",
+            m.rel_local(rel),
+            m.pl_local(key)
+        ),
+        Cond::JoinIsCyclic => "g.cond_join_is_cyclic(root_id)".to_string(),
+        Cond::HasThreeOrMoreInputs => "g.cond_has_three_or_more_inputs(root_id)".to_string(),
+        Cond::IsBinaryJoin => "g.cond_is_binary_join(root_id)".to_string(),
+        Cond::HasInnerEquiv { payload, boundary } => format!(
+            "g.cond_has_inner_equiv(&{}, {})",
+            m.pl_local(payload),
+            ix_cond(boundary, m)
+        ),
+        Cond::IdentityProjection { payload, rel } => format!(
+            "g.cond_identity_projection(&{}, {})",
+            m.pl_local(payload),
+            m.rel_local(rel)
+        ),
+        Cond::NonIdentityProjection { payload, rel } => format!(
+            "!g.cond_identity_projection(&{}, {})",
+            m.pl_local(payload),
+            m.rel_local(rel)
+        ),
+        Cond::ReadsIndexedGlobal { rel } => {
+            format!("g.cond_reads_indexed_global({})", m.rel_local(rel))
+        }
+        Cond::ScalarLitTrue { scalar } => format!(
+            "g.scalar_lit_bool_or_null({}) == Some(Some(true))",
+            m.rel_local(scalar)
+        ),
+        Cond::ScalarLitFalseOrNull { scalar } => format!(
+            "matches!(g.scalar_lit_bool_or_null({}), Some(Some(false)) | Some(None))",
+            m.rel_local(scalar)
+        ),
+        Cond::ScalarNoError { scalar } => {
+            format!("!g.scalar_could_error({})", m.rel_local(scalar))
+        }
+        Cond::ScalarNonNullable { scalar } => {
+            format!("!g.scalar_nullable({})", m.rel_local(scalar))
+        }
+        Cond::AnyScalarLit { list, value } => {
+            format!("g.cond_any_scalar_lit(&{}, {})", m.rest_local(list), value)
+        }
+        Cond::HasDuplicateId { list } => {
+            format!("g.cond_has_duplicate_id(&{})", m.rest_local(list))
+        }
+        Cond::AbsorbApplies { list, inner } => format!(
+            "g.cond_absorb_applies(&{}, &{})",
+            m.rest_local(list),
+            variadic_func_value(inner)
+        ),
+        Cond::FlattenApplies { list, func } => format!(
+            "g.cond_flatten_applies(&{}, &{})",
+            m.rest_local(list),
+            variadic_func_value(func)
+        ),
+    }
+}
+
+/// The guard conjunction: repeated-relvar equality plus side conditions.
+fn guard(rule: &Rule, m: &Matcher) -> String {
+    let mut terms: Vec<String> = Vec::new();
+    // Repeated relvars must denote the same e-class.
+    let mut by_name: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (name, local) in &m.rels {
+        by_name.entry(name).or_default().push(local);
+    }
+    for locals in by_name.values() {
+        for l in &locals[1..] {
+            terms.push(format!("{} == {}", locals[0], l));
+        }
+    }
+    for c in &rule.conds {
+        terms.push(cond_expr(c, m));
+    }
+    if terms.is_empty() {
+        "true".to_string()
+    } else {
+        terms.join(" && ")
+    }
+}
+
+/// Which graph surface a `find` body is generated for. The match/guard/binding
+/// logic is byte-identical across both; only how a completed binding is recorded
+/// (and the early-return value when `limit` is hit) differs.
+enum FindMode {
+    /// The base `find_NAME_base(g: &BaseView, ..) -> (Vec<EBindings>, bool)`
+    /// variant: pushes a bare binding and reports `(out, true)` on cap.
+    Base,
+    /// The shared `colored_find_all(g: &ColoredView, ..) -> Vec<(usize, EBindings)>`
+    /// driver: pushes `(rule_index, binding)` and returns `out` on cap. The
+    /// `usize` is the rule's index among the colored rules.
+    Colored(usize),
+}
+
+/// The body run at each full structural match: check the guard, build the
+/// bindings, and record them. Shared by the base and colored `find` variants
+/// (see [`FindMode`]); only the final push/limit-return differs.
+fn body(rule: &Rule, m: &Matcher, mode: &FindMode) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("if {} {{\n", guard(rule, m)));
+    s.push_str("let mut b = EBindings::default();\n");
+    s.push_str("b.root = root_id;\n");
+    let mut seen_rel = std::collections::BTreeSet::new();
+    for (name, local) in &m.rels {
+        if seen_rel.insert(name.clone()) {
+            s.push_str(&format!("b.rels.insert({name:?}, {local});\n"));
+        }
+    }
+    for (name, local) in &m.payloads {
+        s.push_str(&format!("b.payloads.insert({name:?}, {local}.clone());\n"));
+    }
+    for (name, local) in &m.rests {
+        s.push_str(&format!("b.rests.insert({name:?}, {local}.clone());\n"));
+    }
+    for (name, local) in &m.funcs {
+        s.push_str(&format!("b.bind_binary_func({name:?}, {local}.clone());\n"));
+    }
+    match mode {
+        FindMode::Base => {
+            s.push_str("out.push(b);\n");
+            s.push_str("if out.len() >= limit { return (out, true); }\n");
+        }
+        FindMode::Colored(idx) => {
+            s.push_str(&format!("out.push(({idx}, b));\n"));
+            s.push_str("if out.len() >= limit { return out; }\n");
+        }
+    }
+    s.push_str("}\n");
+    s
+}
+
+/// The matching loop + recording body for one rule's left-hand side (no `fn`
+/// header/footer). Shared verbatim by the base `find_NAME_base` and the
+/// `colored_find_all` driver — the only difference (how a binding is recorded)
+/// is threaded through `mode` into [`body`]. Each call allocates a fresh
+/// [`Matcher`], so generated locals never collide across concatenated rules.
+fn find_stmts(rule: &Rule, mode: &FindMode) -> String {
+    let mut m = Matcher::default();
+    let mut s = String::new();
+    match &rule.lhs {
+        Pat::RelVar(name) => {
+            // A pure-relvar root ranges over every relational e-class (scalar
+            // classes are not relations and must not be matched as one).
+            let local = m.rel(name);
+            s.push_str("for root_id in g.rel_class_ids() {\n");
+            s.push_str(&format!("let {local} = root_id;\n"));
+            s.push_str(&body(rule, &m, mode));
+            s.push_str("}\n");
+        }
+        Pat::SUnary { .. } => {
+            s.push_str(
+                "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::Unary) {\n",
+            );
+            s.push_str("let root_id = root_id;\n");
+            s.push_str("let root_node = &root_node;\n");
+            m.node(&rule.lhs, "root_node");
+            for stmt in &m.stmts {
+                s.push_str(stmt);
+                s.push('\n');
+            }
+            s.push_str(&body(rule, &m, mode));
+            for _ in 0..m.open_braces {
+                s.push_str("}\n");
+            }
+            s.push_str("}\n");
+        }
+        Pat::SVariadic { .. } => {
+            s.push_str(
+                "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::Variadic) {\n",
+            );
+            s.push_str("let root_id = root_id;\n");
+            s.push_str("let root_node = &root_node;\n");
+            m.node(&rule.lhs, "root_node");
+            for stmt in &m.stmts {
+                s.push_str(stmt);
+                s.push('\n');
+            }
+            s.push_str(&body(rule, &m, mode));
+            for _ in 0..m.open_braces {
+                s.push_str("}\n");
+            }
+            s.push_str("}\n");
+        }
+        Pat::SIf { .. } => {
+            s.push_str(
+                "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::If) {\n",
+            );
+            s.push_str("let root_id = root_id;\n");
+            s.push_str("let root_node = &root_node;\n");
+            m.node(&rule.lhs, "root_node");
+            for stmt in &m.stmts {
+                s.push_str(stmt);
+                s.push('\n');
+            }
+            s.push_str(&body(rule, &m, mode));
+            for _ in 0..m.open_braces {
+                s.push_str("}\n");
+            }
+            s.push_str("}\n");
+        }
+        Pat::SBinaryVar { .. } => {
+            s.push_str(
+                "for (root_id, root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::Binary) {\n",
+            );
+            s.push_str("let root_id = root_id;\n");
+            s.push_str("let root_node = &root_node;\n");
+            m.node(&rule.lhs, "root_node");
+            for stmt in &m.stmts {
+                s.push_str(stmt);
+                s.push('\n');
+            }
+            s.push_str(&body(rule, &m, mode));
+            for _ in 0..m.open_braces {
+                s.push_str("}\n");
+            }
+            s.push_str("}\n");
+        }
+        Pat::Scalar { binding } => {
+            // Matches any scalar CALL node, so it ranges over all four call
+            // syms (leaves are never matched). Records the class id under
+            // `binding` exactly like a `RelVar` root, so `Tmpl::Builtin`'s
+            // args resolve it via `b.rels`.
+            let local = m.rel(binding);
+            for sym in ["Unary", "Binary", "Variadic", "If"] {
+                s.push_str(&format!(
+                    "for (root_id, _root_node) in g.nodes_by_scalar_sym(crate::eqsat::scalar::lang::ScalarSym::{sym}) {{\n"
+                ));
+                s.push_str("let root_id = root_id;\n");
+                s.push_str(&format!("let {local} = root_id;\n"));
+                s.push_str(&body(rule, &m, mode));
+                s.push_str("}\n");
+            }
+        }
+        _ => {
+            let sym = sym_name(&rule.lhs);
+            s.push_str(&format!(
+                "for (root_id, root_node) in g.nodes_by_sym(Sym::{sym}) {{\n"
+            ));
+            // nodes_by_sym returns an owned Vec<(Id, ENode)>; reborrow root_node
+            // as a reference so match ergonomics work identically to the
+            // inherent EGraph::rel_class_nodes (&ENode) return type.
+            s.push_str("let root_id = root_id;\n");
+            s.push_str("let root_node = &root_node;\n");
+            m.node(&rule.lhs, "root_node");
+            for stmt in &m.stmts {
+                s.push_str(stmt);
+                s.push('\n');
+            }
+            s.push_str(&body(rule, &m, mode));
+            for _ in 0..m.open_braces {
+                s.push_str("}\n");
+            }
+            s.push_str("}\n");
+        }
+    }
+    s
+}
+
+fn emit_find(rule: &Rule) -> String {
+    let mut s = String::new();
+    s.push_str(&format!(
+        "fn find_{}_base(g: &crate::eqsat::egraph::view::BaseView, an: &Analyses, limit: usize) -> (Vec<EBindings>, bool) {{\n",
+        rule.name
+    ));
+    s.push_str("let mut out: Vec<EBindings> = Vec::new();\n");
+    s.push_str(&find_stmts(rule, &FindMode::Base));
+    s.push_str("(out, false)\n}\n");
+    s
+}
+
+// --- right-hand-side instantiation (apply) --------------------------------
+
+/// An index expression in `apply`: arities come from the bindings' `arities`.
+fn ix_apply(e: &IxExpr) -> String {
+    match e {
+        IxExpr::Lit(n) => format!("{n}i64"),
+        IxExpr::Arity(r) => format!(
+            "(*arities.get({r:?}).ok_or_else(|| \"arity of unbound relation {r}\".to_string())? as i64)"
+        ),
+        IxExpr::Add(a, b) => format!("({} + {})", ix_apply(a), ix_apply(b)),
+        IxExpr::Sub(a, b) => format!("({} - {})", ix_apply(a), ix_apply(b)),
+        IxExpr::Neg(a) => format!("(-{})", ix_apply(a)),
+    }
+}
+
+/// Emit the statements that compute a payload expression into `out`, returning
+/// the name of the local that holds the resulting `Payload` (already
+/// `?`-unwrapped). Each sub-payload is bound to its own `let` first, so the
+/// column-mutating helpers (`shift_payload`/`remap_payload`/`swap_equivs`) — now
+/// `&mut EGraph` methods — never appear nested inside one another's arguments
+/// (which would not borrow-check). The read-only helpers take `eg.data()`.
+fn pexpr_stmts(e: &PExpr, out: &mut String, fresh: &mut Fresh) -> String {
+    let c = fresh.id();
+    let v = format!("pv{c}");
+    match e {
+        PExpr::Var(n) => out.push_str(&format!(
+            "let {v} = b.payloads.get({n:?}).cloned().ok_or_else(|| \"unbound payload metavariable {n}\".to_string())?;\n"
+        )),
+        PExpr::Concat(a, b) => {
+            let va = pexpr_stmts(a, out, fresh);
+            let vb = pexpr_stmts(b, out, fresh);
+            out.push_str(&format!("let {v} = concat_payload({va}, {vb})?;\n"));
+        }
+        PExpr::Compose(a, b) => {
+            let va = pexpr_stmts(a, out, fresh);
+            let vb = pexpr_stmts(b, out, fresh);
+            out.push_str(&format!("let {v} = compose_payload({va}, {vb})?;\n"));
+        }
+        PExpr::Shift(p, k) => {
+            let vp = pexpr_stmts(p, out, fresh);
+            out.push_str(&format!("let {v} = shift_payload(g, {vp}, {})?;\n", ix_apply(k)));
+        }
+        PExpr::Remap(p, o) => {
+            let vp = pexpr_stmts(p, out, fresh);
+            let vo = pexpr_stmts(o, out, fresh);
+            out.push_str(&format!(
+                "let {v} = remap_payload(g, {vp}, &{vo}.into_outputs()?)?;\n"
+            ));
+        }
+        PExpr::ColsOf(p) => {
+            let vp = pexpr_stmts(p, out, fresh);
+            out.push_str(&format!("let {v} = cols_of_payload(&|id| g.escalar(id), {vp})?;\n"));
+        }
+        PExpr::Iota(n) => {
+            out.push_str(&format!("let {v} = iota_payload({})?;\n", ix_apply(n)));
+        }
+        PExpr::EquivsInner(p, k) => {
+            let vp = pexpr_stmts(p, out, fresh);
+            out.push_str(&format!(
+                "let {v} = equivs_inner(&|id| g.escalar(id), {vp}, {})?;\n",
+                ix_apply(k)
+            ));
+        }
+        PExpr::EquivsOuter(p, k) => {
+            let vp = pexpr_stmts(p, out, fresh);
+            out.push_str(&format!(
+                "let {v} = equivs_outer(&|id| g.escalar(id), {vp}, {})?;\n",
+                ix_apply(k)
+            ));
+        }
+        PExpr::SwapEquivs(p, a, b) => {
+            let vp = pexpr_stmts(p, out, fresh);
+            out.push_str(&format!(
+                "let {v} = swap_equivs(g, {vp}, {}, {})?;\n",
+                ix_apply(a),
+                ix_apply(b)
+            ));
+        }
+        PExpr::SwapProjection(a, b) => {
+            out.push_str(&format!(
+                "let {v} = swap_projection({}, {})?;\n",
+                ix_apply(a),
+                ix_apply(b)
+            ));
+        }
+    }
+    v
+}
+
+/// Emit the statements that build a template into `out`, returning the name of
+/// the local that holds the resulting e-class `Id`. Every relational node is
+/// wrapped in `CNode::Rel`. `hole` is the local bound to `_` inside a `map(...)`
+/// combinator.
+fn tmpl_stmts(t: &Tmpl, hole: Option<&str>, out: &mut String, fresh: &mut Fresh) -> String {
+    match t {
+        Tmpl::RelVar(n) => {
+            let c = fresh.id();
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = b.rels.get({n:?}).copied().ok_or_else(|| \"unbound relation metavariable {n}\".to_string())?;\n"
+            ));
+            v
+        }
+        Tmpl::Hole => hole
+            .expect("`_` used outside a map(...) combinator")
+            .to_string(),
+        Tmpl::Empty(n) => {
+            let c = fresh.id();
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let arity{c} = *arities.get({n:?}).ok_or_else(|| \"Empty of unbound relation {n}\".to_string())?;\n\
+                 let ct{c} = b.rels.get({n:?}).and_then(|&id| g.column_types(id));\n\
+                 let {v} = g.add(CNode::Rel(ENode::Constant {{ card: 0, arity: arity{c}, col_types: ct{c} }}));\n"
+            ));
+            v
+        }
+        Tmpl::Filter { preds, input } => {
+            let vp = pexpr_stmts(preds, out, fresh);
+            let c = fresh.id();
+            out.push_str(&format!("let pred{c} = {vp}.into_predicates()?;\n"));
+            let vin = tmpl_stmts(input, hole, out, fresh);
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Rel(ENode::Filter {{ predicates: pred{c}, input: {vin} }}));\n"
+            ));
+            v
+        }
+        Tmpl::Map { scalars, input } => {
+            let vp = pexpr_stmts(scalars, out, fresh);
+            let c = fresh.id();
+            out.push_str(&format!("let sc{c} = {vp}.into_scalars()?;\n"));
+            let vin = tmpl_stmts(input, hole, out, fresh);
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Rel(ENode::Map {{ scalars: sc{c}, input: {vin} }}));\n"
+            ));
+            v
+        }
+        Tmpl::Project { outputs, input } => {
+            let vp = pexpr_stmts(outputs, out, fresh);
+            let c = fresh.id();
+            out.push_str(&format!("let o{c} = {vp}.into_outputs()?;\n"));
+            let vin = tmpl_stmts(input, hole, out, fresh);
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Rel(ENode::Project {{ outputs: o{c}, input: {vin} }}));\n"
+            ));
+            v
+        }
+        Tmpl::Reduce {
+            group_key,
+            aggregates,
+            input,
+        } => {
+            let vgk = pexpr_stmts(group_key, out, fresh);
+            let vag = pexpr_stmts(aggregates, out, fresh);
+            let c = fresh.id();
+            out.push_str(&format!("let gk{c} = {vgk}.into_group_key()?;\n"));
+            out.push_str(&format!("let ag{c} = {vag}.into_aggregates()?;\n"));
+            let vin = tmpl_stmts(input, hole, out, fresh);
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Rel(ENode::Reduce {{ group_key: gk{c}, aggregates: ag{c}, input: {vin}, monotonic: false, expected_group_size: None }}));\n"
+            ));
+            v
+        }
+        Tmpl::FlatMap { func, exprs, input } => {
+            let c = fresh.id();
+            out.push_str(&format!(
+                "let fn{c} = b.payloads.get({func:?}).cloned().ok_or_else(|| \"unbound payload metavariable {func}\".to_string())?.into_flatmap_func()?;\n\
+                 let ex{c} = b.payloads.get({exprs:?}).cloned().ok_or_else(|| \"unbound payload metavariable {exprs}\".to_string())?.into_flatmap_exprs()?;\n"
+            ));
+            let vin = tmpl_stmts(input, hole, out, fresh);
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Rel(ENode::FlatMap {{ func: fn{c}, exprs: ex{c}, input: {vin} }}));\n"
+            ));
+            v
+        }
+        Tmpl::Negate(t) => {
+            let vin = tmpl_stmts(t, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Rel(ENode::Negate {{ input: {vin} }}));\n"
+            ));
+            v
+        }
+        Tmpl::Threshold(t) => {
+            let vin = tmpl_stmts(t, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Rel(ENode::Threshold {{ input: {vin} }}));\n"
+            ));
+            v
+        }
+        Tmpl::Join {
+            equivalences,
+            inputs,
+        } => {
+            let veq = pexpr_stmts(equivalences, out, fresh);
+            let c = fresh.id();
+            out.push_str(&format!("let eq{c} = {veq}.into_equivalences()?;\n"));
+            let vins = listtmpl_stmts(inputs, hole, out, fresh);
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Rel(ENode::Join {{ inputs: {vins}, equivalences: eq{c} }}));\n"
+            ));
+            v
+        }
+        Tmpl::WcoJoin {
+            equivalences,
+            inputs,
+        } => {
+            let veq = pexpr_stmts(equivalences, out, fresh);
+            let c = fresh.id();
+            out.push_str(&format!("let eq{c} = {veq}.into_equivalences()?;\n"));
+            let vins = listtmpl_stmts(inputs, hole, out, fresh);
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Rel(ENode::WcoJoin {{ inputs: {vins}, equivalences: eq{c} }}));\n"
+            ));
+            v
+        }
+        Tmpl::Union { inputs } => {
+            let vins = listtmpl_stmts(inputs, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "if {vins}.is_empty() {{ return Err(\"Union template produced no inputs\".to_string()); }}\n\
+                 let {v} = g.add(CNode::Rel(ENode::Union {{ inputs: {vins} }}));\n"
+            ));
+            v
+        }
+        Tmpl::SUnary { func, input } => {
+            let vin = tmpl_stmts(input, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            let fval = unary_func_value(func);
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::CallUnary {{ func: {fval}, expr: {vin} }}));\n"
+            ));
+            v
+        }
+        Tmpl::SVariadic { func, inputs } => {
+            let vins = listtmpl_stmts(inputs, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            let fval = variadic_func_value(func);
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::CallVariadic {{ func: {fval}, exprs: {vins} }}));\n"
+            ));
+            v
+        }
+        Tmpl::SIf { cond, then, els } => {
+            let vc = tmpl_stmts(cond, hole, out, fresh);
+            let vt = tmpl_stmts(then, hole, out, fresh);
+            let ve = tmpl_stmts(els, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            out.push_str(&format!(
+                "let {v} = g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::If {{ cond: {vc}, then: {vt}, els: {ve} }}));\n"
+            ));
+            v
+        }
+        Tmpl::SBinaryNegate { func, expr1, expr2 } => {
+            let ve1 = tmpl_stmts(expr1, hole, out, fresh);
+            let ve2 = tmpl_stmts(expr2, hole, out, fresh);
+            let c = fresh.id();
+            let v = format!("id{c}");
+            // Declines (returns Err, the rule's natural no-fire path) when the
+            // bound BinaryFunc has no negation.
+            out.push_str(&format!(
+                "let f{c} = b.binary_func({func:?});\n\
+                 let Some(neg{c}) = f{c}.negate() else {{ return Err(\"SBinaryNegate: `{func}` not negatable\".to_string()); }};\n\
+                 let {v} = g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::CallBinary {{ func: neg{c}, expr1: {ve1}, expr2: {ve2} }}));\n"
+            ));
+            v
+        }
+        Tmpl::Builtin { name, args } => {
+            let c = fresh.id();
+            let v = format!("id{c}");
+            // Resolve each arg metavar to its bound class Id.
+            let mut arg_locals = Vec::new();
+            for a in args {
+                let al = format!("ba{}", fresh.id());
+                out.push_str(&format!(
+                    "let {al} = b.rels.get({a:?}).copied().ok_or_else(|| \"unbound scalar metavariable {a}\".to_string())?;\n"
+                ));
+                arg_locals.push(al);
+            }
+            let call_args = std::iter::once("g".to_string())
+                .chain(arg_locals)
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "let {v} = crate::eqsat::scalar_builtins::{name}({call_args})?;\n"
+            ));
+            v
+        }
+        Tmpl::SBool(b) => {
+            let c = fresh.id();
+            let v = format!("id{c}");
+            let ctor = if *b { "literal_true" } else { "literal_false" };
+            out.push_str(&format!(
+                "let {v} = {{ let lit = mz_expr::MirScalarExpr::{ctor}(); \
+                 let mz_expr::MirScalarExpr::Literal(row, ct) = lit else {{ unreachable!() }}; \
+                 g.add(CNode::Scalar(crate::eqsat::scalar::node::SNode::Literal(row, ct))) }};\n"
+            ));
+            v
+        }
+    }
+}
+
+/// Emit the statements that build a template input list into `out`, returning
+/// the name of the local that holds the resulting `Vec<Id>`.
+fn listtmpl_stmts(
+    list: &ListTmpl,
+    hole: Option<&str>,
+    out: &mut String,
+    fresh: &mut Fresh,
+) -> String {
+    let c = fresh.id();
+    let v = format!("vl{c}");
+    out.push_str(&format!("let mut {v}: Vec<Id> = Vec::new();\n"));
+    for elem in &list.elems {
+        match elem {
+            TElem::Item(t) => {
+                let vt = tmpl_stmts(t, hole, out, fresh);
+                out.push_str(&format!("{v}.push({vt});\n"));
+            }
+            TElem::Splice(name) => {
+                out.push_str(&format!(
+                    "{v}.extend(b.rests.get({name:?}).ok_or_else(|| \"unbound rest metavariable {name}\".to_string())?.iter().copied());\n"
+                ));
+            }
+            TElem::MapSplice { func, list } => {
+                let h = fresh.id();
+                let hv = format!("h{h}");
+                let mut body = String::new();
+                let vt = tmpl_stmts(func, Some(&hv), &mut body, fresh);
+                out.push_str(&format!(
+                    "for {hv} in b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?.clone() {{\n{body}{v}.push({vt});\n}}\n"
+                ));
+            }
+            TElem::FilterSplice { list, filter } => {
+                let call = match filter {
+                    RestFilter::DedupById => format!(
+                        "crate::eqsat::rest_filters::rest_dedup_by_id(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?)"
+                    ),
+                    RestFilter::DropScalarLit(value) => format!(
+                        "crate::eqsat::rest_filters::rest_drop_scalar_lit(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?, {value})"
+                    ),
+                    RestFilter::AbsorbSubsumed { inner } => format!(
+                        "crate::eqsat::rest_filters::rest_absorb(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?, &{})",
+                        variadic_func_value(inner)
+                    ),
+                    RestFilter::FlattenSameFunc { func } => format!(
+                        "crate::eqsat::rest_filters::rest_flatten(g, b.rests.get({list:?}).ok_or_else(|| \"unbound rest metavariable {list}\".to_string())?, &{})",
+                        variadic_func_value(func)
+                    ),
+                };
+                out.push_str(&format!("{v}.extend({call});\n"));
+            }
+        }
+    }
+    v
+}
+
+/// The right-hand-side instantiation statements for one rule, returning the
+/// emitted body and the name of the local holding the resulting root `Id`. The
+/// body assumes a `let arities = g.binding_arities(b);` is in scope. Shared by
+/// the base `apply_NAME_base` and the `colored_apply` dispatcher; the emitted
+/// statements use only `g.add`/`g.escalar`/`g.column_types` and the
+/// `&mut impl ApplyGraph` payload helpers, so they compile for both graph types.
+fn apply_body(rule: &Rule) -> (String, String) {
+    let mut fresh = Fresh::default();
+    let mut body = String::new();
+    let root = tmpl_stmts(&rule.rhs, None, &mut body, &mut fresh);
+    (body, root)
+}
+
+fn emit_apply(rule: &Rule) -> String {
+    let (body, root) = apply_body(rule);
+    format!(
+        "fn apply_{}_base(g: &mut EGraph, b: &EBindings) -> Result<Id, String> {{\n\
+         let arities = g.binding_arities(b);\n\
+         {body}Ok({root})\n}}\n",
+        rule.name
+    )
+}
+
+/// True for rules whose left-hand-side root is a scalar-sort operator. These
+/// are compiled into `SCALAR_COMPILED_RULES` so they never run in the relational
+/// saturation pass.
+fn is_scalar_rule(r: &Rule) -> bool {
+    matches!(
+        r.lhs,
+        Pat::SUnary { .. }
+            | Pat::SVariadic { .. }
+            | Pat::SIf { .. }
+            | Pat::SBinaryVar { .. }
+            | Pat::Scalar { .. }
+    )
+}
+
+/// The `CompiledRule { .. }` table literal for one rule. Identical text for every
+/// rule regardless of sort, so the relational and scalar tables share it.
+fn compiled_rule_literal(r: &Rule) -> String {
+    // Which e-class analyses this rule's conditions read, so the saturation
+    // loop can skip recomputing analyses no active rule needs. Derived from
+    // the same conditions that generate `find`, so it cannot drift.
+    let nonneg = r
+        .conds
+        .iter()
+        .any(|c| matches!(c, Cond::NonNegative { .. }));
+    let keys = r
+        .conds
+        .iter()
+        .any(|c| matches!(c, Cond::IsUniqueKey { .. } | Cond::ProducesKey { .. }));
+    let monotonic = r.conds.iter().any(|c| matches!(c, Cond::Monotonic { .. }));
+    format!(
+        "    CompiledRule {{ name: {:?}, phase: {}, needs: AnalysisNeeds {{ nonneg: {}, keys: {}, monotonic: {} }}, colored: {}, find: find_{}_base, apply: apply_{}_base }},\n",
+        r.name,
+        phase(&r.phase),
+        nonneg,
+        keys,
+        monotonic,
+        r.colored,
+        r.name,
+        r.name
+    )
+}
+
+fn emit_compiled(rules: &[Rule]) -> String {
+    let mut s = String::new();
+    // The per-rule find/apply function bodies are emitted for ALL rules; only
+    // the table partition below differs by root sort.
+    for r in rules {
+        s.push_str(&emit_find(r));
+        s.push('\n');
+        s.push_str(&emit_apply(r));
+        s.push('\n');
+    }
+    s.push_str(
+        "/// Every built-in rewrite rule, compiled to `find`/`apply` functions.\n\
+         pub(crate) static COMPILED_RULES: &[CompiledRule] = &[\n",
+    );
+    for r in rules.iter().filter(|r| !is_scalar_rule(r)) {
+        s.push_str(&compiled_rule_literal(r));
+    }
+    s.push_str("];\n");
+    s.push_str(
+        "/// Every scalar-sort rewrite rule, compiled to `find`/`apply` functions.\n\
+         pub(crate) static SCALAR_COMPILED_RULES: &[CompiledRule] = &[\n",
+    );
+    for r in rules.iter().filter(|r| is_scalar_rule(r)) {
+        s.push_str(&compiled_rule_literal(r));
+    }
+    s.push_str("];\n");
+    s
+}
+
+/// Emit the two colored-saturation dispatch functions over the `colored` rules.
+///
+/// Rather than a function-pointer table (a `fn(&ColoredView, ..)` pointer needs
+/// awkward HRTB because `ColoredView` carries three lifetimes), the colored rule
+/// set is compiled into two dispatch functions:
+///
+/// * `colored_find_all` concatenates every colored rule's `find` body (reusing
+///   [`find_stmts`] with [`FindMode::Colored`]) into one pass, tagging each
+///   recorded binding with the rule's index among the colored rules.
+/// * `colored_apply` is a `match` over that index whose arms are each colored
+///   rule's `apply` body (reusing [`apply_body`]).
+///
+/// Both run over `&[mut] ColoredView`, which implements the same
+/// `MatchGraph`/`ApplyGraph` surfaces (plus the inherent `add`/`binding_arities`/
+/// `column_types`/`escalar`) that the base graph does, so the bodies are emitted
+/// identically to the `_base` variants. The `_base` functions and the
+/// `COMPILED_RULES` table are emitted unchanged, preserving byte-identity.
+fn emit_colored(rules: &[Rule]) -> String {
+    let colored: Vec<&Rule> = rules.iter().filter(|r| r.colored).collect();
+    let mut s = String::new();
+
+    // colored_find_all: one concatenated pass over all colored rules' find
+    // bodies, each push tagged with the rule's colored-index.
+    s.push_str(
+        "/// Enumerate every colored-rule left-hand-side match over a `ColoredView`,\n\
+         /// each tagged with the matching rule's index among the colored rules\n\
+         /// (for dispatch through [`colored_apply`]). The colored mirror of the\n\
+         /// per-rule `find_NAME_base` functions, concatenated into one pass.\n\
+         pub(crate) fn colored_find_all(g: &crate::eqsat::colored::ColoredView, an: &Analyses, limit: usize) -> Vec<(usize, EBindings)> {\n",
+    );
+    s.push_str("let mut out: Vec<(usize, EBindings)> = Vec::new();\n");
+    for (idx, rule) in colored.iter().enumerate() {
+        s.push_str(&find_stmts(rule, &FindMode::Colored(idx)));
+    }
+    s.push_str("out\n}\n\n");
+
+    // colored_apply: dispatch on the colored-rule index to that rule's apply
+    // body. `arities` is computed once up front (it depends only on `b`).
+    s.push_str(
+        "/// Instantiate the right-hand side of the colored rule at `idx` (its index\n\
+         /// among the colored rules, as produced by [`colored_find_all`]) over a\n\
+         /// `ColoredView`, returning the new colored e-class. The colored mirror of\n\
+         /// the per-rule `apply_NAME_base` functions, dispatched by index.\n\
+         pub(crate) fn colored_apply(idx: usize, g: &mut crate::eqsat::colored::ColoredView, b: &EBindings) -> Result<Id, String> {\n",
+    );
+    s.push_str("let arities = g.binding_arities(b);\n");
+    s.push_str("match idx {\n");
+    for (idx, rule) in colored.iter().enumerate() {
+        let (body, root) = apply_body(rule);
+        s.push_str(&format!("{idx} => {{\n{body}Ok({root})\n}}\n"));
+    }
+    s.push_str("_ => Err(format!(\"unknown colored rule index {idx}\")),\n");
+    s.push_str("}\n}\n");
+    s
+}
+
+fn emit_rules_ast(rules: &[Rule]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "/// The built-in rewrite rules as AST literals, generated from the\n\
+         /// `src/eqsat/rules/*.rewrite` files (relational.rewrite +\n\
+         /// scalar.rewrite). Used by the Lean emitter (`super::lean`).\n\
+         pub(crate) fn rules_ast() -> {P}::RuleSet {{\n"
+    ));
+    out.push_str(&format!("    {P}::RuleSet {{ rules: vec![\n"));
+    for r in rules {
+        out.push_str(&format!("        {},\n", rule(r)));
+    }
+    out.push_str("    ] }\n}\n");
+    out
+}
+
+fn s(value: &str) -> String {
+    format!("{value:?}.to_string()")
+}
+
+fn opt_s(value: &Option<String>) -> String {
+    match value {
+        None => "None".to_string(),
+        Some(v) => format!("Some({})", s(v)),
+    }
+}
+
+fn phase(p: &Phase) -> String {
+    let v = match p {
+        Phase::Both => "Both",
+        Phase::Logical => "Logical",
+        Phase::Physical => "Physical",
+    };
+    format!("{P}::Phase::{v}")
+}
+
+fn ixexpr(e: &IxExpr) -> String {
+    match e {
+        IxExpr::Lit(n) => format!("{P}::IxExpr::Lit({n})"),
+        IxExpr::Arity(r) => format!("{P}::IxExpr::Arity({})", s(r)),
+        IxExpr::Add(a, b) => format!(
+            "{P}::IxExpr::Add(Box::new({}), Box::new({}))",
+            ixexpr(a),
+            ixexpr(b)
+        ),
+        IxExpr::Sub(a, b) => format!(
+            "{P}::IxExpr::Sub(Box::new({}), Box::new({}))",
+            ixexpr(a),
+            ixexpr(b)
+        ),
+        IxExpr::Neg(a) => format!("{P}::IxExpr::Neg(Box::new({}))", ixexpr(a)),
+    }
+}
+
+fn pexpr(e: &PExpr) -> String {
+    match e {
+        PExpr::Var(v) => format!("{P}::PExpr::Var({})", s(v)),
+        PExpr::Concat(a, b) => format!(
+            "{P}::PExpr::Concat(Box::new({}), Box::new({}))",
+            pexpr(a),
+            pexpr(b)
+        ),
+        PExpr::Compose(a, b) => format!(
+            "{P}::PExpr::Compose(Box::new({}), Box::new({}))",
+            pexpr(a),
+            pexpr(b)
+        ),
+        PExpr::Shift(p, k) => format!("{P}::PExpr::Shift(Box::new({}), {})", pexpr(p), ixexpr(k)),
+        PExpr::Remap(p, o) => format!(
+            "{P}::PExpr::Remap(Box::new({}), Box::new({}))",
+            pexpr(p),
+            pexpr(o)
+        ),
+        PExpr::ColsOf(p) => format!("{P}::PExpr::ColsOf(Box::new({}))", pexpr(p)),
+        PExpr::Iota(n) => format!("{P}::PExpr::Iota({})", ixexpr(n)),
+        PExpr::EquivsInner(p, k) => {
+            format!(
+                "{P}::PExpr::EquivsInner(Box::new({}), {})",
+                pexpr(p),
+                ixexpr(k)
+            )
+        }
+        PExpr::EquivsOuter(p, k) => {
+            format!(
+                "{P}::PExpr::EquivsOuter(Box::new({}), {})",
+                pexpr(p),
+                ixexpr(k)
+            )
+        }
+        PExpr::SwapEquivs(p, a, b) => format!(
+            "{P}::PExpr::SwapEquivs(Box::new({}), {}, {})",
+            pexpr(p),
+            ixexpr(a),
+            ixexpr(b)
+        ),
+        PExpr::SwapProjection(a, b) => {
+            format!("{P}::PExpr::SwapProjection({}, {})", ixexpr(a), ixexpr(b))
+        }
+    }
+}
+
+fn listpat(l: &ListPat) -> String {
+    let items: Vec<String> = l.items.iter().map(pat).collect();
+    let rest = match &l.rest {
+        None => "None".to_string(),
+        Some(r) => format!("Some({})", s(r)),
+    };
+    format!(
+        "{P}::ListPat {{ items: vec![{}], rest: {} }}",
+        items.join(", "),
+        rest
+    )
+}
+
+fn pat(p: &Pat) -> String {
+    match p {
+        Pat::RelVar(n) => format!("{P}::Pat::RelVar({})", s(n)),
+        Pat::SUnary { func, input } => format!(
+            "{P}::Pat::SUnary {{ func: {}, input: Box::new({}) }}",
+            s(func),
+            pat(input)
+        ),
+        Pat::SVariadic { func, inputs } => format!(
+            "{P}::Pat::SVariadic {{ func: {}, inputs: {} }}",
+            s(func),
+            listpat(inputs)
+        ),
+        Pat::SIf { cond, then, els } => format!(
+            "{P}::Pat::SIf {{ cond: Box::new({}), then: Box::new({}), els: Box::new({}) }}",
+            pat(cond),
+            pat(then),
+            pat(els)
+        ),
+        Pat::SBinaryVar { func, expr1, expr2 } => format!(
+            "{P}::Pat::SBinaryVar {{ func: {}, expr1: Box::new({}), expr2: Box::new({}) }}",
+            s(func),
+            pat(expr1),
+            pat(expr2)
+        ),
+        Pat::Scalar { binding } => format!("{P}::Pat::Scalar {{ binding: {} }}", s(binding)),
+        Pat::Filter { preds, input } => format!(
+            "{P}::Pat::Filter {{ preds: {}, input: Box::new({}) }}",
+            s(preds),
+            pat(input)
+        ),
+        Pat::Map { scalars, input } => format!(
+            "{P}::Pat::Map {{ scalars: {}, input: Box::new({}) }}",
+            s(scalars),
+            pat(input)
+        ),
+        Pat::Project { outputs, input } => format!(
+            "{P}::Pat::Project {{ outputs: {}, input: Box::new({}) }}",
+            s(outputs),
+            pat(input)
+        ),
+        Pat::Reduce {
+            group_key,
+            aggregates,
+            input,
+        } => format!(
+            "{P}::Pat::Reduce {{ group_key: {}, aggregates: {}, input: Box::new({}) }}",
+            s(group_key),
+            s(aggregates),
+            pat(input)
+        ),
+        Pat::FlatMap { func, exprs, input } => format!(
+            "{P}::Pat::FlatMap {{ func: {}, exprs: {}, input: Box::new({}) }}",
+            s(func),
+            s(exprs),
+            pat(input)
+        ),
+        Pat::Negate(i) => format!("{P}::Pat::Negate(Box::new({}))", pat(i)),
+        Pat::Threshold(i) => format!("{P}::Pat::Threshold(Box::new({}))", pat(i)),
+        Pat::TopK(i) => format!("{P}::Pat::TopK(Box::new({}))", pat(i)),
+        Pat::ArrangeBy { key, input } => format!(
+            "{P}::Pat::ArrangeBy {{ key: {}, input: Box::new({}) }}",
+            s(key),
+            pat(input)
+        ),
+        Pat::Join {
+            equivalences,
+            inputs,
+        } => format!(
+            "{P}::Pat::Join {{ equivalences: {}, inputs: {} }}",
+            s(equivalences),
+            listpat(inputs)
+        ),
+        Pat::WcoJoin {
+            equivalences,
+            inputs,
+        } => format!(
+            "{P}::Pat::WcoJoin {{ equivalences: {}, inputs: {} }}",
+            s(equivalences),
+            listpat(inputs)
+        ),
+        Pat::Union { inputs } => format!("{P}::Pat::Union {{ inputs: {} }}", listpat(inputs)),
+    }
+}
+
+fn telem(e: &TElem) -> String {
+    match e {
+        TElem::Item(t) => format!("{P}::TElem::Item({})", tmpl(t)),
+        TElem::Splice(n) => format!("{P}::TElem::Splice({})", s(n)),
+        TElem::MapSplice { func, list } => format!(
+            "{P}::TElem::MapSplice {{ func: Box::new({}), list: {} }}",
+            tmpl(func),
+            s(list)
+        ),
+        TElem::FilterSplice { list, filter } => {
+            let f = match filter {
+                RestFilter::DedupById => format!("{P}::RestFilter::DedupById"),
+                RestFilter::DropScalarLit(v) => format!("{P}::RestFilter::DropScalarLit({v})"),
+                RestFilter::AbsorbSubsumed { inner } => {
+                    format!("{P}::RestFilter::AbsorbSubsumed {{ inner: {} }}", s(inner))
+                }
+                RestFilter::FlattenSameFunc { func } => {
+                    format!("{P}::RestFilter::FlattenSameFunc {{ func: {} }}", s(func))
+                }
+            };
+            format!(
+                "{P}::TElem::FilterSplice {{ list: {}, filter: {} }}",
+                s(list),
+                f
+            )
+        }
+    }
+}
+
+fn listtmpl(l: &ListTmpl) -> String {
+    let elems: Vec<String> = l.elems.iter().map(telem).collect();
+    format!("{P}::ListTmpl {{ elems: vec![{}] }}", elems.join(", "))
+}
+
+fn tmpl(t: &Tmpl) -> String {
+    match t {
+        Tmpl::RelVar(n) => format!("{P}::Tmpl::RelVar({})", s(n)),
+        Tmpl::Hole => format!("{P}::Tmpl::Hole"),
+        Tmpl::Empty(n) => format!("{P}::Tmpl::Empty({})", s(n)),
+        Tmpl::Filter { preds, input } => format!(
+            "{P}::Tmpl::Filter {{ preds: {}, input: Box::new({}) }}",
+            pexpr(preds),
+            tmpl(input)
+        ),
+        Tmpl::Map { scalars, input } => format!(
+            "{P}::Tmpl::Map {{ scalars: {}, input: Box::new({}) }}",
+            pexpr(scalars),
+            tmpl(input)
+        ),
+        Tmpl::Project { outputs, input } => format!(
+            "{P}::Tmpl::Project {{ outputs: {}, input: Box::new({}) }}",
+            pexpr(outputs),
+            tmpl(input)
+        ),
+        Tmpl::Reduce {
+            group_key,
+            aggregates,
+            input,
+        } => format!(
+            "{P}::Tmpl::Reduce {{ group_key: {}, aggregates: {}, input: Box::new({}) }}",
+            pexpr(group_key),
+            pexpr(aggregates),
+            tmpl(input)
+        ),
+        Tmpl::FlatMap { func, exprs, input } => format!(
+            "{P}::Tmpl::FlatMap {{ func: {}, exprs: {}, input: Box::new({}) }}",
+            s(func),
+            s(exprs),
+            tmpl(input)
+        ),
+        Tmpl::Negate(i) => format!("{P}::Tmpl::Negate(Box::new({}))", tmpl(i)),
+        Tmpl::Threshold(i) => format!("{P}::Tmpl::Threshold(Box::new({}))", tmpl(i)),
+        Tmpl::Join {
+            equivalences,
+            inputs,
+        } => format!(
+            "{P}::Tmpl::Join {{ equivalences: {}, inputs: {} }}",
+            pexpr(equivalences),
+            listtmpl(inputs)
+        ),
+        Tmpl::WcoJoin {
+            equivalences,
+            inputs,
+        } => format!(
+            "{P}::Tmpl::WcoJoin {{ equivalences: {}, inputs: {} }}",
+            pexpr(equivalences),
+            listtmpl(inputs)
+        ),
+        Tmpl::Union { inputs } => format!("{P}::Tmpl::Union {{ inputs: {} }}", listtmpl(inputs)),
+        Tmpl::SUnary { func, input } => format!(
+            "{P}::Tmpl::SUnary {{ func: {}, input: Box::new({}) }}",
+            s(func),
+            tmpl(input)
+        ),
+        Tmpl::SVariadic { func, inputs } => format!(
+            "{P}::Tmpl::SVariadic {{ func: {}, inputs: {} }}",
+            s(func),
+            listtmpl(inputs)
+        ),
+        Tmpl::SIf { cond, then, els } => format!(
+            "{P}::Tmpl::SIf {{ cond: Box::new({}), then: Box::new({}), els: Box::new({}) }}",
+            tmpl(cond),
+            tmpl(then),
+            tmpl(els)
+        ),
+        Tmpl::Builtin { name, args } => format!(
+            "{P}::Tmpl::Builtin {{ name: {}, args: vec![{}] }}",
+            s(name),
+            args.iter().map(|a| s(a)).collect::<Vec<_>>().join(", ")
+        ),
+        Tmpl::SBool(b) => format!("{P}::Tmpl::SBool({b})"),
+        Tmpl::SBinaryNegate { func, expr1, expr2 } => format!(
+            "{P}::Tmpl::SBinaryNegate {{ func: {}, expr1: Box::new({}), expr2: Box::new({}) }}",
+            s(func),
+            tmpl(expr1),
+            tmpl(expr2)
+        ),
+    }
+}
+
+fn cond(c: &Cond) -> String {
+    match c {
+        Cond::UsesOnlyInput { payload, rel } => format!(
+            "{P}::Cond::UsesOnlyInput {{ payload: {}, rel: {} }}",
+            s(payload),
+            s(rel)
+        ),
+        Cond::ColsInRange { payload, lo, hi } => format!(
+            "{P}::Cond::ColsInRange {{ payload: {}, lo: {}, hi: {} }}",
+            s(payload),
+            ixexpr(lo),
+            ixexpr(hi)
+        ),
+        Cond::NonNegative { rel } => format!("{P}::Cond::NonNegative {{ rel: {} }}", s(rel)),
+        Cond::Monotonic { rel } => format!("{P}::Cond::Monotonic {{ rel: {} }}", s(rel)),
+        Cond::IsUniqueKey { payload, rel } => format!(
+            "{P}::Cond::IsUniqueKey {{ payload: {}, rel: {} }}",
+            s(payload),
+            s(rel)
+        ),
+        Cond::Empty { payload } => format!("{P}::Cond::Empty {{ payload: {} }}", s(payload)),
+        Cond::AllTrue { payload } => format!("{P}::Cond::AllTrue {{ payload: {} }}", s(payload)),
+        Cond::AnyFalse { payload } => format!("{P}::Cond::AnyFalse {{ payload: {} }}", s(payload)),
+        Cond::NoFalse { payload } => format!("{P}::Cond::NoFalse {{ payload: {} }}", s(payload)),
+        Cond::NoError { payload } => format!("{P}::Cond::NoError {{ payload: {} }}", s(payload)),
+        Cond::AllColumns { payload } => {
+            format!("{P}::Cond::AllColumns {{ payload: {} }}", s(payload))
+        }
+        Cond::IsRelEmpty { rel } => format!("{P}::Cond::IsRelEmpty {{ rel: {} }}", s(rel)),
+        Cond::NotRelEmpty { rel } => format!("{P}::Cond::NotRelEmpty {{ rel: {} }}", s(rel)),
+        Cond::ProducesKey { rel, key } => format!(
+            "{P}::Cond::ProducesKey {{ rel: {}, key: {} }}",
+            s(rel),
+            s(key)
+        ),
+        Cond::JoinIsCyclic => format!("{P}::Cond::JoinIsCyclic"),
+        Cond::HasThreeOrMoreInputs => format!("{P}::Cond::HasThreeOrMoreInputs"),
+        Cond::IsBinaryJoin => format!("{P}::Cond::IsBinaryJoin"),
+        Cond::HasInnerEquiv { payload, boundary } => format!(
+            "{P}::Cond::HasInnerEquiv {{ payload: {}, boundary: {} }}",
+            s(payload),
+            ixexpr(boundary)
+        ),
+        Cond::IdentityProjection { payload, rel } => format!(
+            "{P}::Cond::IdentityProjection {{ payload: {}, rel: {} }}",
+            s(payload),
+            s(rel)
+        ),
+        Cond::NonIdentityProjection { payload, rel } => format!(
+            "{P}::Cond::NonIdentityProjection {{ payload: {}, rel: {} }}",
+            s(payload),
+            s(rel)
+        ),
+        Cond::ReadsIndexedGlobal { rel } => {
+            format!("{P}::Cond::ReadsIndexedGlobal {{ rel: {} }}", s(rel))
+        }
+        Cond::ScalarLitTrue { scalar } => {
+            format!("{P}::Cond::ScalarLitTrue {{ scalar: {} }}", s(scalar))
+        }
+        Cond::ScalarLitFalseOrNull { scalar } => {
+            format!(
+                "{P}::Cond::ScalarLitFalseOrNull {{ scalar: {} }}",
+                s(scalar)
+            )
+        }
+        Cond::ScalarNoError { scalar } => {
+            format!("{P}::Cond::ScalarNoError {{ scalar: {} }}", s(scalar))
+        }
+        Cond::ScalarNonNullable { scalar } => {
+            format!("{P}::Cond::ScalarNonNullable {{ scalar: {} }}", s(scalar))
+        }
+        Cond::AnyScalarLit { list, value } => format!(
+            "{P}::Cond::AnyScalarLit {{ list: {}, value: {} }}",
+            s(list),
+            value
+        ),
+        Cond::HasDuplicateId { list } => {
+            format!("{P}::Cond::HasDuplicateId {{ list: {} }}", s(list))
+        }
+        Cond::AbsorbApplies { list, inner } => format!(
+            "{P}::Cond::AbsorbApplies {{ list: {}, inner: {} }}",
+            s(list),
+            s(inner)
+        ),
+        Cond::FlattenApplies { list, func } => format!(
+            "{P}::Cond::FlattenApplies {{ list: {}, func: {} }}",
+            s(list),
+            s(func)
+        ),
+    }
+}
+
+fn rule(r: &Rule) -> String {
+    let conds: Vec<String> = r.conds.iter().map(cond).collect();
+    format!(
+        "{P}::Rule {{ name: {}, doc: {}, phase: {}, colored: {}, lhs: {}, rhs: {}, conds: vec![{}] }}",
+        s(&r.name),
+        opt_s(&r.doc),
+        phase(&r.phase),
+        r.colored,
+        pat(&r.lhs),
+        tmpl(&r.rhs),
+        conds.join(", ")
+    )
+}

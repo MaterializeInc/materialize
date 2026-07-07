@@ -420,7 +420,7 @@ Explained Query:
           linear_stage[0]
             closure
               project=(#0)
-              filter=((#0{b}) IS NOT NULL AND (#1{a} = 5) AND (1 = (#1{a} % 2)) AND (#2{a} = 5))
+              filter=((#0{b}) IS NOT NULL AND (#1{a} = 5) AND (#2{a} = 5) AND (1 = (#2{a} % 2)))
             lookup={ relation=1, key=[#1{b}] }
             stream={ key=[#1{b}], thinning=(#0) }
           source={ relation=0, key=[#1{b}] }

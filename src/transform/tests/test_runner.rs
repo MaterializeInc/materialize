@@ -477,6 +477,7 @@ mod tests {
                         .map(|(id, rel)| (Id::Global(*id), rel))
                         .rev(),
                     &mut predicates,
+                    false,
                 ) {
                     Ok(()) => Ok(format!(
                         "Pushed-down predicates:\n{}",

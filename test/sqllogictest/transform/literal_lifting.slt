@@ -240,13 +240,13 @@ Explained Query:
     Map ((1 + #0{a}), 1) // { arity: 3 }
       CrossJoin type=differential // { arity: 1 }
         implementation
-          %0[×] » %1:t[×]
-        ArrangeBy keys=[[]] // { arity: 0 }
-          Constant // { arity: 0 }
-            - (() x 7)
+          %0:t[×] » %1[×]
         ArrangeBy keys=[[]] // { arity: 1 }
           Project (#0{a}) // { arity: 1 }
             ReadStorage materialize.public.t // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Constant // { arity: 0 }
+            - (() x 7)
 
 Source materialize.public.t
 
@@ -276,14 +276,14 @@ Explained Query:
   Project (#1, #0) // { types: "(r_int32, r_int32)" }
     Map (1) // { types: "(r_int32, r_int32)" }
       CrossJoin type=differential // { types: "(r_int32)" }
+        ArrangeBy keys=[[]] // { types: "()" }
+          Project () // { types: "()" }
+            ReadStorage materialize.public.t // { types: "(r_int32?, r_int32?)" }
         ArrangeBy keys=[[]] // { types: "(r_int32)" }
           Constant // { types: "(r_int32)" }
             - (2)
             - (3)
             - (4)
-        ArrangeBy keys=[[]] // { types: "()" }
-          Project () // { types: "()" }
-            ReadStorage materialize.public.t // { types: "(r_int32?, r_int32?)" }
 
 Source materialize.public.t
 
@@ -299,6 +299,9 @@ Explained Query:
   Project (#0, #2, #1) // { types: "(r_int32, r_int32, r_int32)" }
     Map (1) // { types: "(r_int32, r_int32, r_int32)" }
       CrossJoin type=differential // { types: "(r_int32, r_int32)" }
+        ArrangeBy keys=[[]] // { types: "()" }
+          Project () // { types: "()" }
+            ReadStorage materialize.public.t // { types: "(r_int32?, r_int32?)" }
         ArrangeBy keys=[[]] // { types: "(r_int32, r_int32)" }
           Constant // { types: "(r_int32, r_int32)" }
             - (2, 3)
@@ -310,9 +313,6 @@ Explained Query:
             - (4, 3)
             - (4, 4)
             - (4, 5)
-        ArrangeBy keys=[[]] // { types: "()" }
-          Project () // { types: "()" }
-            ReadStorage materialize.public.t // { types: "(r_int32?, r_int32?)" }
 
 Source materialize.public.t
 
@@ -802,14 +802,14 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[min(#0{a})] // { arity: 1 }
         Project (#0{a}) // { arity: 1 }
-          Join on=(#0{a} = #1) type=differential // { arity: 2 }
+          Join on=(#0{a} = #1{a}) type=differential // { arity: 2 }
             implementation
-              %0:t_pk[#0{a}]UKiif » %1[#0]Kiif
+              %0:t_pk[#0{a}]K » %1[#0{a}]K
             ArrangeBy keys=[[#0{a}]] // { arity: 1 }
               Project (#0{a}) // { arity: 1 }
                 Filter (#0{a} <= 195) AND (#0{a} >= 38) // { arity: 2 }
                   ReadStorage materialize.public.t_pk // { arity: 2 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
+            ArrangeBy keys=[[#0{a}]] // { arity: 1 }
               Project (#1) // { arity: 1 }
                 FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
                   Reduce aggregates=[count(*)] // { arity: 1 }
@@ -844,14 +844,14 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[min(#0{a})] // { arity: 1 }
         Project (#0{a}) // { arity: 1 }
-          Join on=(#0{a} = #1) type=differential // { arity: 2 }
+          Join on=(#0{a} = #1{a}) type=differential // { arity: 2 }
             implementation
-              %0:t[#0{a}]Kiif » %1[#0]Kiif
+              %0:t[#0{a}]K » %1[#0{a}]K
             ArrangeBy keys=[[#0{a}]] // { arity: 1 }
               Project (#0{a}) // { arity: 1 }
                 Filter (#0{a} <= 195) AND (#0{a} >= 38) // { arity: 2 }
                   ReadStorage materialize.public.t // { arity: 2 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
+            ArrangeBy keys=[[#0{a}]] // { arity: 1 }
               Project (#1) // { arity: 1 }
                 FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
                   Reduce aggregates=[count(*)] // { arity: 1 }
@@ -917,9 +917,9 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   CrossJoin type=delta // { arity: 4 }
     implementation
-      %0:t1 » %1:t1[×]ef » %2[×]ef
-      %1:t1 » %2[×]ef » %0:t1[×]
-      %2 » %1:t1[×]ef » %0:t1[×]
+      %0:t1 » %1:t1[×] » %2[×]
+      %1:t1 » %0:t1[×] » %2[×]
+      %2 » %0:t1[×] » %1:t1[×]
     ArrangeBy keys=[[]] // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 2 }

@@ -328,6 +328,7 @@ cc = "1.2.62"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
+chumsky = "0.13.0"
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.2"
 columnar = "0.13.0"
@@ -372,6 +373,7 @@ futures-task = "0.3.32"
 futures-util = "0.3.32"
 gcp_auth = { version = "0.12.6", default-features = false, features = ["aws-lc-rs"] }
 glob = "0.3.3"
+good_lp = { version = "1.15", default-features = false, features = ["microlp", "highs"] }
 globset = "0.4.18"
 governor = "0.10.1"
 half = "2"

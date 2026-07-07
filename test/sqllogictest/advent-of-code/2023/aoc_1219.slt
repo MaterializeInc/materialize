@@ -391,7 +391,7 @@ Explained Query:
       Return // { arity: 2 }
         CrossJoin type=differential // { arity: 2 }
           implementation
-            %0[×]U » %1[×]U
+            %0[×] » %1[×]
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l2 // { arity: 1 }

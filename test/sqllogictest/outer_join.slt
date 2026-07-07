@@ -108,10 +108,13 @@ from
 Explained Query:
   With
     cte l0 =
+      Get::Collection materialize.public.right2
+        raw=true
+    cte l1 =
       TopK::MonotonicTop1 group_by=[#0] must_consolidate
         Get::Collection materialize.public.right1
           raw=true
-    cte l1 =
+    cte l2 =
       Reduce::Distinct
         key_plan=id
         val_plan
@@ -181,6 +184,33 @@ Explained Query:
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1, #2) }
         Union
+          Get::Collection l1
+            project=(#0..=#2)
+            map=(true)
+            raw=true
+          Mfp
+            project=(#0..=#2)
+            map=(null, null)
+            input_key=#0
+            Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+              ArrangeBy
+                raw=false
+                arrangements[0]={ key=[#0], permutation=id, thinning=() }
+                Union consolidate_output=true
+                  Negate
+                    Get::Collection l1
+                      project=(#0)
+                      raw=true
+                  ArrangeBy
+                    input_key=[#0]
+                    raw=true
+                    Get::PassArrangements l2
+                      raw=false
+                      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      ArrangeBy
+        raw=true
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1, #2) }
+        Union
           Get::Collection l0
             project=(#0..=#2)
             map=(true)
@@ -201,34 +231,7 @@ Explained Query:
                   ArrangeBy
                     input_key=[#0]
                     raw=true
-                    Get::PassArrangements l1
-                      raw=false
-                      arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      ArrangeBy
-        raw=true
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1, #2) }
-        Union
-          Get::Collection materialize.public.right2
-            project=(#0..=#2)
-            map=(true)
-            raw=true
-          Mfp
-            project=(#0..=#2)
-            map=(null, null)
-            input_key=#0
-            Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
-              ArrangeBy
-                raw=false
-                arrangements[0]={ key=[#0], permutation=id, thinning=() }
-                Union consolidate_output=true
-                  Negate
-                    Get::Collection materialize.public.right2
-                      project=(#0)
-                      raw=true
-                  ArrangeBy
-                    input_key=[#0]
-                    raw=true
-                    Get::PassArrangements l1
+                    Get::PassArrangements l2
                       raw=false
                       arrangements[0]={ key=[#0], permutation=id, thinning=() }
 

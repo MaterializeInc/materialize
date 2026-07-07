@@ -31,8 +31,9 @@ impl crate::Transform for NormalizeOps {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        _ctx: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
+        let enable_eqsat_scalar = ctx.features.enable_eqsat_scalar_canonicalize;
         // Canonicalize and fuse various operators as a bottom-up transforms.
         relation.try_visit_mut_post::<_, crate::TransformError>(
             &mut |expr: &mut MirRelationExpr| {
@@ -40,7 +41,7 @@ impl crate::Transform for NormalizeOps {
                 crate::canonicalization::FlatMapElimination::action(expr);
                 crate::canonicalization::TopKElision::action(expr);
                 // (b) Fuse various like-kinded operators. Might enable further canonicalization.
-                crate::fusion::Fusion::action(expr);
+                crate::fusion::Fusion::action(expr, enable_eqsat_scalar);
                 // (c) Fuse join trees (might lift in-between MFPs).
                 crate::fusion::join::Join::action(expr)?;
                 // (d) Extract column references in Map as Project.

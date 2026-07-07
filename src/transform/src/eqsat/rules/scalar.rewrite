@@ -1,0 +1,213 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+
+# Equality-preserving rewrites over MIR scalar expressions.
+#
+# Parsed by the same build-time grammar as `relational.rewrite`, and compiled
+# into `SCALAR_COMPILED_RULES` (see `build/codegen.rs::is_scalar_rule`). These
+# rules run only in the scalar saturation pass over the combined e-graph
+# (`eqsat::scalar_saturate`), never in the relational `EGraph::saturate` pass.
+
+# Double negation cancels.
+rule not_not {
+    doc "Not(Not(x)) = x"
+    Unary[not](Unary[not](x)) => x
+}
+
+# A one-argument AND/OR equals its sole argument.
+rule and_single {
+    doc "And(x) = x"
+    Variadic[and](x) => x
+}
+
+rule or_single {
+    doc "Or(x) = x"
+    Variadic[or](x) => x
+}
+
+# De Morgan: push a NOT through a variadic AND/OR, flipping the connective and
+# wrapping each operand. Operand order is preserved. The And/Or error is the
+# order-independent max over operands, so the flip is exact under three-valued
+# logic and errors (no could_error gate).
+rule not_demorgan_and {
+    doc "Not(And(xs...)) = Or(Not(xs)...)"
+    Unary[not](Variadic[and](xs...)) => Variadic[or](map(Unary[not](_), xs))
+}
+
+rule not_demorgan_or {
+    doc "Not(Or(xs...)) = And(Not(xs)...)"
+    Unary[not](Variadic[or](xs...)) => Variadic[and](map(Unary[not](_), xs))
+}
+
+# A constant-true condition selects the then-branch.
+rule if_true {
+    doc "If(true, t, e) = t"
+    If(c, t, e) => t where scalar_lit_true(c)
+}
+
+# A constant-false or null condition selects the else-branch.
+rule if_false_or_null {
+    doc "If(false|null, t, e) = e"
+    If(c, t, e) => e where scalar_lit_false_or_null(c)
+}
+
+# Identical branches collapse when the condition cannot error. The repeated `x`
+# binds then and els to the same e-class (enforced by codegen's guard).
+rule if_same_branches {
+    doc "If(c, x, x) = x  when c cannot error"
+    If(c, x, x) => x where scalar_no_error(c)
+}
+
+# All-literal scalar calls fold to their evaluated literal. RHS is the Rust
+# builtin `const_eval` (reconstruct + mz_expr eval). The Lean theorem is a
+# permanent sorry. Matches any scalar call node. The builtin declines (no-op)
+# on non-literal args, on `mz_panic`, and on unmaterializable calls.
+rule const_fold {
+    doc "all-literal scalar call = its evaluated literal"
+    Scalar(e) => const_eval(e)
+}
+
+# An empty AND is the unit `true`, an empty OR is the unit `false`. Declarative
+# constant-literal RHS (not a builtin). Distinct from `and_single`/`or_single`,
+# which fire only at arity one.
+rule and_empty {
+    doc "And() = true"
+    Variadic[and]() => true
+}
+
+rule or_empty {
+    doc "Or() = false"
+    Variadic[or]() => false
+}
+
+# If with a literal-error condition folds to that error, typed as the union of
+# the branch types. Builtin RHS (needs branch typing). If evaluates the
+# condition first, so no could_error gate. The Lean theorem is a permanent sorry.
+rule if_err_cond {
+    doc "If(err, t, e) = err"
+    Scalar(e) => if_err_cond(e)
+}
+
+# A binary call with a literal-null operand folds to null when the OTHER operand
+# cannot error, for a null-propagating func. Builtin. Permanent sorry.
+rule null_prop_binary {
+    doc "f(null, b) = null when f propagates nulls and b cannot error"
+    Scalar(e) => null_prop_binary(e)
+}
+
+# A binary call with a literal-error operand folds to that error when the OTHER
+# operand cannot error. Builtin. Permanent sorry.
+rule err_prop_binary {
+    doc "f(err, b) = err when b cannot error"
+    Scalar(e) => err_prop_binary(e)
+}
+
+# A null-propagating variadic call with a literal-null operand folds to null when
+# every other operand cannot error. Builtin. Permanent sorry.
+rule null_prop_variadic {
+    doc "f(.., null, ..) = null when f propagates nulls and every other operand cannot error"
+    Scalar(e) => null_prop_variadic(e)
+}
+
+# A null-propagating variadic call with a literal-error operand folds to that error
+# when every other operand cannot error. Builtin. Permanent sorry.
+rule err_prop_variadic {
+    doc "f(.., err, ..) = err when f propagates nulls and every other operand cannot error"
+    Scalar(e) => err_prop_variadic(e)
+}
+
+# IsNull of a provably non-nullable, error-free operand is false. Declarative
+# constant-literal RHS guarded by the no-error and non-nullable conds.
+rule isnull_fold {
+    doc "IsNull(x) = false when x is non-nullable and cannot error"
+    Unary[isnull](x) => false where scalar_no_error(x) where scalar_non_nullable(x)
+}
+
+# Not of a negatable binary comparison is the negated comparison over the same
+# operands, e.g. Not(a = b) = a != b. Binds the func symbol as a metavar and
+# emits negate(f). Declines when the func has no negation. Permanent sorry.
+rule not_binary_negate {
+    doc "Not(f(a, b)) = negate(f)(a, b) for negatable f"
+    Unary[not](Binary[f](a, b)) => Binary[negate(f)](a, b)
+}
+
+# A variadic AND with a literal-false operand is false, regardless of the other
+# operands or whether they could error. MZ's And short-circuits on false (an
+# unconditional early return that discards any accumulated error, see
+# func/variadic.rs), so this is sound with no could_error gate. Mirrors
+# scalar/rules.rs::and_or_short_circuit. Or is dual (true dominates).
+rule and_short_circuit {
+    doc "And([.., false, ..]) = false"
+    Variadic[and](xs...) => false where scalar_any_lit_false(xs)
+}
+
+rule or_short_circuit {
+    doc "Or([.., true, ..]) = true"
+    Variadic[or](xs...) => true where scalar_any_lit_true(xs)
+}
+
+# A variadic AND with a literal-true operand drops that operand (true is And's
+# unit); OR dually drops literal-false (its unit). Mirrors
+# scalar/rules.rs::and_or_drop_unit, which is unconditional (no could_error
+# gate): dropping a unit operand never changes the AND/OR's value or error
+# behavior.
+rule and_drop_unit {
+    doc "And([.., true, ..]) = And([.. without true])"
+    Variadic[and](xs...) => Variadic[and](drop_scalar_lit(xs, true)) where scalar_any_lit_true(xs)
+}
+
+rule or_drop_unit {
+    doc "Or([.., false, ..]) = Or([.. without false])"
+    Variadic[or](xs...) => Variadic[or](drop_scalar_lit(xs, false)) where scalar_any_lit_false(xs)
+}
+
+# Duplicate operands of an AND/OR collapse to one. Mirrors
+# scalar/rules.rs::and_or_dedup, which is unconditional (no could_error gate):
+# the e-graph already canonicalizes children to class ids, so a syntactic
+# duplicate is provably the same value including its error behavior.
+rule and_dedup {
+    doc "And([a, a, b]) = And([a, b])"
+    Variadic[and](xs...) => Variadic[and](dedup(xs)) where has_duplicate_id(xs)
+}
+
+rule or_dedup {
+    doc "Or([a, a, b]) = Or([a, b])"
+    Variadic[or](xs...) => Variadic[or](dedup(xs)) where has_duplicate_id(xs)
+}
+
+# Inner-set subsumption absorption: an outer AND/OR operand whose dual-connective
+# inner set is a proper superset of another operand's inner set is redundant and
+# is dropped, provided every dropped extra could not error. Mirrors
+# scalar/rules.rs::absorb_and_or.
+rule absorb_and {
+    doc "And(.., a, .., Or(.., a, ..)) = And(.., a, ..), dropped extras error-free"
+    Variadic[and](xs...) => Variadic[and](absorb(xs, or)) where absorb_applies(xs, or)
+}
+
+rule absorb_or {
+    doc "Or(.., a, .., And(.., a, ..)) = Or(.., a, ..), dropped extras error-free"
+    Variadic[or](xs...) => Variadic[or](absorb(xs, and)) where absorb_applies(xs, and)
+}
+
+# Nested same-op flattening: a variadic operand that is itself the same
+# variadic op is inlined into the outer operand list. Mirrors
+# scalar/rules.rs::flatten_assoc for all 5 associative variadics.
+rule flatten_and { doc "And(.., And(inner..), ..) = And(.., inner.., ..) (associativity)"
+    Variadic[and](xs...) => Variadic[and](flatten(xs, and)) where flatten_applies(xs, and) }
+rule flatten_or  { doc "Or(.., Or(inner..), ..) = Or(.., inner.., ..) (associativity)"
+    Variadic[or](xs...)  => Variadic[or](flatten(xs, or))   where flatten_applies(xs, or) }
+rule flatten_coalesce { doc "Coalesce(.., Coalesce(inner..), ..) = Coalesce(.., inner.., ..) (associativity)"
+    Variadic[coalesce](xs...) => Variadic[coalesce](flatten(xs, coalesce)) where flatten_applies(xs, coalesce) }
+rule flatten_greatest { doc "Greatest(.., Greatest(inner..), ..) = Greatest(.., inner.., ..) (associativity)"
+    Variadic[greatest](xs...) => Variadic[greatest](flatten(xs, greatest)) where flatten_applies(xs, greatest) }
+rule flatten_least { doc "Least(.., Least(inner..), ..) = Least(.., inner.., ..) (associativity)"
+    Variadic[least](xs...) => Variadic[least](flatten(xs, least)) where flatten_applies(xs, least) }
+
+# Undistribute a common factor from an And/Or: (a∧b)∨(a∧c) = a∧(b∨c) and dual.
+# Full-intersection factoring, residual-error gated. Builtin. Permanent sorry.
+rule factor_and_or {
+    doc "(a∧b)∨(a∧c) = a∧(b∨c) and dual: undistribute a common factor, residual-error gated"
+    Scalar(e) => factor_and_or(e)
+}

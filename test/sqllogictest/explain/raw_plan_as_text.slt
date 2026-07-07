@@ -467,7 +467,7 @@ Explained Query:
         Filter (#0{f0}) IS NOT NULL AND (#2{f2}) IS NOT NULL AND (#3{f3}) IS NOT NULL AND (#4{f4}) IS NOT NULL AND (#6{f6}) IS NOT NULL AND (#8{f8}) IS NOT NULL AND (#9{f9}) IS NOT NULL AND (#11{f11}) IS NOT NULL AND (#12{f12}) IS NOT NULL AND (#13{f13}) IS NOT NULL AND (#15{f15}) IS NOT NULL AND (#16{f16}) IS NOT NULL
           ReadStorage materialize.public.r
   Return
-    Project (#0{f0}..=#16{f16}, #0{f0}, #18{f1}, #2{f2}..=#4{f4}, #22{f5}, #6{f6}, #24{f7}, #8{f8}, #9{f9}, #27{f10}, #11{f11}..=#13{f13}, #31{f14}, #15{f15}, #16{f16})
+    Project (#17{f0}..=#33{f16}, #17{f0}, #1{f1}, #19{f2}..=#21{f4}, #5{f5}, #23{f6}, #7{f7}, #25{f8}, #26{f9}, #10{f10}, #28{f11}..=#30{f13}, #14{f14}, #32{f15}, #33{f16})
       Join on=(#0{f0} = #17{f0} AND #2{f2} = #19{f2} AND #3{f3} = #20{f3} AND #4{f4} = #21{f4} AND #6{f6} = #23{f6} AND #8{f8} = #25{f8} AND #9{f9} = #26{f9} AND #11{f11} = #28{f11} AND #12{f12} = #29{f12} AND #13{f13} = #30{f13} AND #15{f15} = #32{f15} AND #16{f16} = #33{f16}) type=differential
         Get l0
         Get l0
