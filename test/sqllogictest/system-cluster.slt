@@ -532,6 +532,23 @@ SET CLUSTER TO mz_catalog_server;
 statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
 SELECT key FROM bar;
 
+# INSERT ... SELECT with a non-constant body is internally a read-then-write
+# whose SELECT half peeks on the active cluster, so reading a user object this
+# way from mz_catalog_server must be rejected like the bare SELECT above.
+
+statement ok
+CREATE TABLE sink_tbl ( key text, val bigint );
+
+statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
+INSERT INTO sink_tbl SELECT key, val FROM bar;
+
+# A constant INSERT runs no computation on the cluster and stays allowed.
+statement ok
+INSERT INTO sink_tbl VALUES ('a', 1);
+
+statement ok
+DROP TABLE sink_tbl;
+
 # But inspecting those objects, e.g. checking what indexes exist, should be allowed.
 statement ok
 SHOW INDEXES on bar;

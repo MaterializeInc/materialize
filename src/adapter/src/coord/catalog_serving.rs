@@ -235,6 +235,13 @@ pub fn check_cluster_restrictions(
     // 'mz_catalog_server' cluster to be "read-only", which restricts these actions.
     let depends_on: Box<dyn Iterator<Item = GlobalId>> = match plan {
         Plan::ReadThenWrite(plan) => Box::new(plan.selection.depends_on().into_iter()),
+        // A non-constant INSERT runs its selection as a peek on the active
+        // cluster. The `ReadThenWrite` arm above does not cover it, because
+        // the INSERT is rewritten into a read-then-write only later, during
+        // sequencing, without passing through this check again. A constant
+        // INSERT has no dependencies and passes the check below, which is
+        // fine because it never runs computation on the cluster.
+        Plan::Insert(plan) => Box::new(plan.values.depends_on().into_iter()),
         Plan::Subscribe(plan) => match plan.from {
             SubscribeFrom::Id(id) => Box::new(std::iter::once(id)),
             SubscribeFrom::Query { ref expr, .. } => Box::new(expr.depends_on().into_iter()),
