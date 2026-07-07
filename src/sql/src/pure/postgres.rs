@@ -316,7 +316,14 @@ pub(super) fn generate_source_export_statement_values(
             constraints.push(constraint);
         }
     }
-    let details = SourceExportStatementDetails::Postgres { table };
+    // Newly purified exports always take the full-range oid cast. The flag is
+    // persisted in the statement details so replanning keeps the choice stable
+    // for the lifetime of the export, while exports whose details predate the
+    // flag decode as `false` and stay on the legacy cast.
+    let details = SourceExportStatementDetails::Postgres {
+        table,
+        cast_oid_full_range: true,
+    };
 
     let text_columns = text_columns.map(|mut columns| {
         columns.sort();
@@ -567,6 +574,7 @@ pub(crate) fn generate_column_casts(
     scx: &StatementContext,
     table: &PostgresTableDesc,
     text_columns: &Vec<Ident>,
+    cast_oid_full_range: bool,
 ) -> Result<Vec<(CastType, StorageScalarExpr)>, PlanError> {
     // Generate the cast expressions required to convert the text encoded columns into
     // the appropriate target types, creating a Vec<StorageScalarExpr>.
@@ -609,7 +617,7 @@ pub(crate) fn generate_column_casts(
             }
         };
 
-        let cast_expr = match pg_type_to_cast_func(scx, &ty) {
+        let cast_expr = match pg_type_to_cast_func(scx, &ty, cast_oid_full_range) {
             Ok(None) => {
                 // No cast needed (e.g. Text → String identity).
                 StorageScalarExpr::Column(i)
@@ -671,6 +679,7 @@ fn resolve_pg_type_to_scalar_type(
 fn pg_type_to_cast_func(
     scx: &StatementContext,
     ty: &mz_pgrepr::Type,
+    cast_oid_full_range: bool,
 ) -> Result<Option<CastFunc>, PlanError> {
     use mz_pgrepr::Type;
 
@@ -698,7 +707,13 @@ fn pg_type_to_cast_func(
                 _ => unreachable!("Numeric must resolve to Numeric"),
             }
         }
-        Type::Oid => CastFunc::CastStringToOid,
+        Type::Oid => {
+            if cast_oid_full_range {
+                CastFunc::CastStringToOidFullRange
+            } else {
+                CastFunc::CastStringToOid
+            }
+        }
         Type::Text => return Ok(None),
         Type::BpChar { .. } => {
             // Resolve through the catalog to get the repr CharLength type.
@@ -753,7 +768,7 @@ fn pg_type_to_cast_func(
         Type::Json => CastFunc::CastStringToJsonb,
         Type::Array(elem) => {
             let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
-            let elem_cast = build_element_cast_expr(scx, elem)?;
+            let elem_cast = build_element_cast_expr(scx, elem, cast_oid_full_range)?;
             CastFunc::CastStringToArray {
                 return_ty,
                 cast_expr: Box::new(elem_cast),
@@ -761,7 +776,7 @@ fn pg_type_to_cast_func(
         }
         Type::List(elem) => {
             let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
-            let elem_cast = build_element_cast_expr(scx, elem)?;
+            let elem_cast = build_element_cast_expr(scx, elem, cast_oid_full_range)?;
             CastFunc::CastStringToList {
                 return_ty,
                 cast_expr: Box::new(elem_cast),
@@ -769,7 +784,7 @@ fn pg_type_to_cast_func(
         }
         Type::Map { value_type } => {
             let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
-            let value_cast = build_element_cast_expr(scx, value_type)?;
+            let value_cast = build_element_cast_expr(scx, value_type, cast_oid_full_range)?;
             CastFunc::CastStringToMap {
                 return_ty,
                 cast_expr: Box::new(value_cast),
@@ -777,7 +792,7 @@ fn pg_type_to_cast_func(
         }
         Type::Range { element_type } => {
             let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
-            let elem_cast = build_element_cast_expr(scx, element_type)?;
+            let elem_cast = build_element_cast_expr(scx, element_type, cast_oid_full_range)?;
             CastFunc::CastStringToRange {
                 return_ty,
                 cast_expr: Box::new(elem_cast),
@@ -809,8 +824,9 @@ fn pg_type_to_cast_func(
 fn build_element_cast_expr(
     scx: &StatementContext,
     elem_ty: &mz_pgrepr::Type,
+    cast_oid_full_range: bool,
 ) -> Result<StorageScalarExpr, PlanError> {
-    match pg_type_to_cast_func(scx, elem_ty)? {
+    match pg_type_to_cast_func(scx, elem_ty, cast_oid_full_range)? {
         None => Ok(StorageScalarExpr::Column(0)),
         Some(cast_func) => Ok(StorageScalarExpr::CallUnary(
             cast_func,

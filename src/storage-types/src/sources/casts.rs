@@ -20,14 +20,6 @@
 //! to error variants, error messages, or output types are **breaking changes**
 //! for storage and require a migration.
 //!
-//! NOTE: `CastStringToOid` is a deliberate exception. `strconv::parse_oid` was
-//! widened to accept the full `u32` range, so text in `2147483648..=4294967295`
-//! now casts to a value instead of erroring. A source that ingested such a value
-//! as an error under an older release and then retracts it after upgrading will
-//! leave that error unretracted. This was accepted without a migration because
-//! ingesting `oid` columns is rare, and an errored source is recreated (which
-//! resnapshots with the corrected cast) rather than kept around across upgrades.
-//!
 //! The eval implementations delegate to `mz_repr::strconv::parse_*` functions,
 //! which in turn depend on these external crates:
 //!
@@ -84,6 +76,11 @@ pub enum CastFunc {
     CastStringToFloat32,
     CastStringToFloat64,
     CastStringToOid,
+    /// The text-to-oid cast accepting the full `u32` range, used by source
+    /// exports whose statement details set `cast_oid_full_range`.
+    /// `CastStringToOid` stays on the legacy `i32` range for exports that
+    /// predate the widening.
+    CastStringToOidFullRange,
     CastStringToUint16,
     CastStringToUint32,
     CastStringToUint64,
@@ -206,7 +203,14 @@ impl CastFunc {
                 let f: f64 = strconv::parse_float64(a).map_err(parse_err)?;
                 Ok(Datum::Float64(f.into()))
             }
-            CastFunc::CastStringToOid => Ok(Datum::UInt32(Oid(strconv::parse_oid(a)?).0)),
+            // NOTE: Uses the frozen `parse_oid_legacy` (i32 range only), not
+            // `parse_oid`, to satisfy the stability contract above. `parse_oid`
+            // was widened to the full `u32` range for SQL casts, but replication
+            // re-casts the old tuple on delete, so changing this persisted cast
+            // would let a row ingested as an error later be retracted as a value.
+            // Exports created after the widening use `CastStringToOidFullRange`.
+            CastFunc::CastStringToOid => Ok(Datum::UInt32(Oid(strconv::parse_oid_legacy(a)?).0)),
+            CastFunc::CastStringToOidFullRange => Ok(Datum::UInt32(Oid(strconv::parse_oid(a)?).0)),
             CastFunc::CastStringToUint16 => {
                 Ok(Datum::UInt16(strconv::parse_uint16(a).map_err(parse_err)?))
             }
@@ -837,6 +841,65 @@ mod tests {
         }
 
         #[mz_ore::test]
+        fn error_oid_frozen_i32_range() {
+            // The storage oid cast must stay stable across releases: text above
+            // i32::MAX keeps erroring here even though the SQL cast accepts the
+            // full u32 range. Widening it would break retraction symmetry for
+            // existing PG sources (a pre-upgrade CastError could later be
+            // retracted as a value, leaving the error stuck).
+            let arena = RowArena::new();
+            let expr = cast_col0(CastFunc::CastStringToOid);
+            assert_eq!(
+                expr.eval(&[Datum::String("2147483647")], &arena).unwrap(),
+                Datum::UInt32(2147483647),
+            );
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToOid, "2147483648"),
+                parse_err_with_details(
+                    "oid",
+                    "2147483648",
+                    "number too large to fit in target type"
+                ),
+            );
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToOid, "4294967295"),
+                parse_err_with_details(
+                    "oid",
+                    "4294967295",
+                    "number too large to fit in target type"
+                ),
+            );
+        }
+
+        #[mz_ore::test]
+        fn oid_full_range() {
+            // The full-range variant accepts the whole `u32` range plus
+            // negative `i32` text reinterpreted as `u32`, matching the SQL
+            // cast. Only text outside both ranges errors.
+            let arena = RowArena::new();
+            let expr = cast_col0(CastFunc::CastStringToOidFullRange);
+            for (input, expected) in [
+                ("2147483647", 2147483647),
+                ("2147483648", 2147483648),
+                ("4294967295", 4294967295),
+                ("-1", 4294967295),
+            ] {
+                assert_eq!(
+                    expr.eval(&[Datum::String(input)], &arena).unwrap(),
+                    Datum::UInt32(expected),
+                );
+            }
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToOidFullRange, "4294967296"),
+                parse_err_with_details(
+                    "oid",
+                    "4294967296",
+                    "number too large to fit in target type"
+                ),
+            );
+        }
+
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn error_numeric() {
             assert_eq!(
@@ -1136,13 +1199,41 @@ mod tests {
         #[mz_ore::test]
         fn parity_oid() {
             use mz_expr::func::CastStringToOid;
-            // Cover the full u32 range that both casts accept, including values
-            // above i32::MAX and the negative reinterpretation.
+            // Inputs stay within the i32 range on purpose. The storage cast is
+            // frozen on `parse_oid_legacy` while the SQL cast (`mz_expr`) uses
+            // the widened `parse_oid`, so the two intentionally diverge for text
+            // in `2147483648..=4294967295`. See `error_oid_frozen_i32_range`.
+            // `parity_oid_full_range` covers the widened storage variant.
             assert_parity(
                 "Oid",
                 CastFunc::CastStringToOid,
                 UnaryFunc::CastStringToOid(CastStringToOid),
-                &["42", "0", "2147483648", "4294967295", "-1", "bad", ""],
+                &["42", "0", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_oid_full_range() {
+            use mz_expr::func::CastStringToOid;
+            // The full-range variant matches the widened SQL cast on the whole
+            // `u32` range, unlike the frozen `CastFunc::CastStringToOid`.
+            assert_parity(
+                "OidFullRange",
+                CastFunc::CastStringToOidFullRange,
+                UnaryFunc::CastStringToOid(CastStringToOid),
+                &[
+                    "42",
+                    "0",
+                    "2147483647",
+                    "2147483648",
+                    "4294967295",
+                    "-1",
+                    "-2147483648",
+                    "4294967296",
+                    "-2147483649",
+                    "bad",
+                    "",
+                ],
             );
         }
 
