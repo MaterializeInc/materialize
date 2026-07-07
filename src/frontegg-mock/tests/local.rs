@@ -7,20 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+// can't call foreign functions from aws-lc-rs under Miri
 #![cfg(not(miri))]
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
+use aws_lc_rs::encoding::AsDer;
+use aws_lc_rs::rsa::{KeyPair, KeySize};
+use aws_lc_rs::signature::KeyPair as _;
+use base64::Engine;
 use chrono::Utc;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::UserConfig, models::UserRole,
 };
 use mz_ore::now::SYSTEM_TIME;
-use openssl::rsa::Rsa;
 use reqwest::Client;
 use serde_json::json;
 use uuid::Uuid;
@@ -39,10 +42,33 @@ struct TestContext {
 }
 
 fn generate_rsa_keys() -> (Vec<u8>, Vec<u8>) {
-    let rsa = Rsa::generate(2048).unwrap();
-    let private_key = rsa.private_key_to_pem().unwrap();
-    let public_key = rsa.public_key_to_pem().unwrap();
-    (private_key, public_key)
+    let key_pair = KeyPair::generate(KeySize::Rsa2048).unwrap();
+    let private_pem = der_to_pem(
+        AsDer::<aws_lc_rs::encoding::Pkcs8V1Der>::as_der(&key_pair)
+            .unwrap()
+            .as_ref(),
+        "PRIVATE KEY",
+    );
+    let public_pem = der_to_pem(
+        AsDer::<aws_lc_rs::encoding::PublicKeyX509Der>::as_der(key_pair.public_key())
+            .unwrap()
+            .as_ref(),
+        "PUBLIC KEY",
+    );
+    (private_pem.into_bytes(), public_pem.into_bytes())
+}
+
+fn der_to_pem(der: &[u8], label: &str) -> String {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(der);
+    let lines: Vec<&str> = b64
+        .as_bytes()
+        .chunks(76)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+    format!(
+        "-----BEGIN {label}-----\n{}\n-----END {label}-----\n",
+        lines.join("\n")
+    )
 }
 
 async fn setup_test_context() -> TestContext {
