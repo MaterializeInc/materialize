@@ -540,6 +540,10 @@ where
     };
 
     let system_vars = adapter_client.get_system_vars().await;
+    // Startup parameters that were successfully applied. They additionally
+    // become the session's default values below, once role defaults have been
+    // applied too.
+    let mut applied_params = vec![];
     for (name, value) in params {
         let settings = match name.as_str() {
             "options" => match &options {
@@ -560,14 +564,17 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) = session
+            match session
                 .vars_mut()
                 .set(&system_vars, key, VarInput::Flat(val), LOCAL)
             {
-                session.add_notice(AdapterNotice::BadStartupSetting {
-                    name: key.clone(),
-                    reason: err.to_string(),
-                });
+                Ok(()) => applied_params.push((key.clone(), val.clone())),
+                Err(err) => {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name: key.clone(),
+                        reason: err.to_string(),
+                    });
+                }
             }
         }
     }
@@ -588,6 +595,24 @@ where
         Ok(adapter_client) => adapter_client,
         Err(e) => return conn.send(e.into_response(Severity::Fatal)).await,
     };
+
+    // Make the startup parameters the session's default values, so that RESET
+    // and DISCARD ALL restore them rather than the server defaults. This
+    // matches PostgreSQL, where client-supplied startup parameters take
+    // precedence over role defaults (which startup registration applied) both
+    // as the current value and as the reset value. Connection poolers rely on
+    // this. For example, pgbouncer's default server_reset_query is DISCARD
+    // ALL, which must not rebind a pooled connection to the default database.
+    for (key, val) in applied_params {
+        if let Err(err) = adapter_client
+            .session()
+            .vars_mut()
+            .set_default(&key, VarInput::Flat(&val))
+        {
+            // Unexpected, since the same value was accepted by set() above.
+            mz_ore::soft_panic_or_log!("failed to apply startup parameter as default: {err:?}");
+        }
+    }
 
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in adapter_client.session().vars().notify_set() {
