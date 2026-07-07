@@ -17,7 +17,7 @@ import { testdrive } from "~/test/sql/mzcompose";
 describe("buildSinkStatisticsQuery", () => {
   it(
     "gets current statistics on a single-replica cluster",
-    { timeout: 15_000 },
+    { timeout: 45_000 },
     async () => {
       await testdrive(`
       $ postgres-execute connection=postgres://mz_system:materialize@\${testdrive.materialize-internal-sql-addr}
@@ -66,7 +66,7 @@ describe("buildSinkStatisticsQuery", () => {
 
   it(
     "gets statistics for a sink on a multi-replica cluster",
-    { timeout: 25_000 },
+    { timeout: 45_000 },
     async () => {
       await testdrive(
         `

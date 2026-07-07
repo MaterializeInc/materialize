@@ -15,7 +15,7 @@ import { buildLargestMaintainedQueriesQuery } from "./largestMaintainedQueries";
 describe("buildLargestMaintainedQueriesQuery", () => {
   it(
     "fetches the largest maintained queries",
-    { timeout: 20_000 },
+    { timeout: 45_000 },
     async () => {
       await testdrive(`> SET database TO materialize;`);
       const query = buildLargestMaintainedQueriesQuery({

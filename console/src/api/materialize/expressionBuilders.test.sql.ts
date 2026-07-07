@@ -19,7 +19,7 @@ import { testdrive } from "~/test/sql/mzcompose";
 describe("buildFirstReplicaSourceStatisticsTable", () => {
   it(
     "returns statistics for single-replica source",
-    { timeout: 15_000 },
+    { timeout: 45_000 },
     async () => {
       await testdrive(
         `
@@ -81,7 +81,7 @@ describe("buildFirstReplicaSourceStatisticsTable", () => {
 
   it(
     "returns only first replica statistics on multi-replica cluster",
-    { timeout: 25_000 },
+    { timeout: 45_000 },
     async () => {
       await testdrive(
         `

@@ -15,7 +15,10 @@ export default defineConfig({
   ...baseConfig,
   test: {
     ...baseConfig.test,
-    globalSetup: ["src/test/sql/sql.setup.ts"],
+    globalSetup: [
+      "src/test/vitest.globalSetup.ts",
+      "src/test/sql/sql.setup.ts",
+    ],
     setupFiles: ["src/__mocks__/globalMocks.js", "src/__mocks__/jsDom.ts"],
     // These tests do not use the dom or any browser state
     // Disabling isolation improves performance
@@ -28,7 +31,10 @@ export default defineConfig({
         minForks: 1,
       },
     },
-    testTimeout: 10_000,
+    // These tests execute SQL against mzcompose services. On loaded CI runners,
+    // Docker exec, testdrive reset, and catalog queries can exceed browser-test
+    // timeouts even when Materialize is healthy.
+    testTimeout: 45_000,
     include: ["**/*.test.sql.ts"],
   },
 });

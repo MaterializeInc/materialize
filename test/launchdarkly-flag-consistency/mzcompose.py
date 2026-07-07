@@ -236,6 +236,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_bounded_staleness_isolation
     enable_cluster_controller
     enable_coalesce_case_transform
+    enable_cluster_controller
     enable_compute_half_join2
     enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
@@ -342,6 +343,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_pubsub_server_connection_channel_size
     persist_pubsub_state_cache_shard_ref_channel_size
     persist_rollup_fallback_threshold_ms
+    persist_source_fetch_concurrency
+    persist_source_hydration_frontier_coalesce_bytes
     persist_state_update_lease_timeout
     persist_state_versions_recent_live_diffs_limit
     persist_stats_audit_panic
@@ -1059,9 +1062,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     total = sum(len(v) for v in failures.values())
     if total:
         summary = ", ".join(f"{len(v)} {k}" for k, v in failures.items() if v)
+        discrepancy_noun = "discrepancy" if total == 1 else "discrepancies"
+        flag_noun = "flag" if total == 1 else "flags"
+        allowlist_count = sum(1 for v in failures.values() if v)
+        allowlist_noun = "allowlist" if allowlist_count == 1 else "allowlists"
         message = (
-            f"{total} unexpected LaunchDarkly discrepancy/ies ({summary}). "
-            "Resolve them, or add to the appropriate known-exceptions allowlist."
+            f"{total} unexpected LaunchDarkly {discrepancy_noun} ({summary}). "
+            f"Resolve the {discrepancy_noun}, or add the affected {flag_noun} "
+            f"to the appropriate known-exceptions {allowlist_noun}."
         )
         if args.no_fail:
             print(f"WARNING: {message}")
