@@ -105,7 +105,9 @@ pub struct BalancerConfig {
     config_sync_file_path: Option<PathBuf>,
     config_sync_timeout: Duration,
     config_sync_loop_interval: Option<Duration>,
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     cloud_provider: Option<String>,
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     cloud_provider_region: Option<String>,
     tracing_handle: TracingHandle,
     default_configs: Vec<(String, String)>,

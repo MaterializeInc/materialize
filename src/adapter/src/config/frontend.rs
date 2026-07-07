@@ -10,25 +10,32 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+#[cfg(feature = "telemetry")]
 use std::sync::Arc;
+#[cfg(feature = "telemetry")]
 use std::time::Duration;
 
 use derivative::Derivative;
+#[cfg(feature = "telemetry")]
 use hyper_tls::HttpsConnector;
+#[cfg(feature = "telemetry")]
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
+#[cfg(feature = "telemetry")]
 use mz_cloud_provider::CloudProvider;
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
+#[cfg(feature = "telemetry")]
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::Value as JsonValue;
+#[cfg(feature = "telemetry")]
 use tokio::time;
 use tracing::warn;
 
-use crate::config::{
-    Metrics, SynchronizedParameters, SystemParameterSyncClientConfig, SystemParameterSyncConfig,
-};
+#[cfg(feature = "telemetry")]
+use crate::config::SystemParameterSyncClientConfig;
+use crate::config::{Metrics, SynchronizedParameters, SystemParameterSyncConfig};
 
 /// A frontend client for pulling [SynchronizedParameters] from LaunchDarkly.
 #[derive(Derivative)]
@@ -55,6 +62,7 @@ pub enum SystemParameterFrontendClient {
     File {
         path: PathBuf,
     },
+    #[cfg(feature = "telemetry")]
     LaunchDarkly {
         /// An SDK client to mediate interactions with the LaunchDarkly client.
         #[derivative(Debug = "ignore")]
@@ -82,6 +90,7 @@ impl SystemParameterFrontend {
                 build_info: sync_config.build_info,
                 metrics: sync_config.metrics.clone(),
             }),
+            #[cfg(feature = "telemetry")]
             SystemParameterSyncClientConfig::LaunchDarkly { sdk_key, now_fn } => Ok(Self {
                 client: SystemParameterFrontendClient::LaunchDarkly {
                     client: ld_client(sdk_key, &sync_config.metrics, now_fn).await?,
@@ -111,6 +120,7 @@ impl SystemParameterFrontend {
                 .unwrap_or(param_name);
 
             let flag_str = match self.client {
+                #[cfg(feature = "telemetry")]
                 SystemParameterFrontendClient::LaunchDarkly {
                     ref client,
                     ref ctx,
@@ -173,41 +183,51 @@ impl SystemParameterFrontend {
         param_names: &[&'static str],
         replicas: &[ReplicaEvalContext],
     ) -> BTreeMap<ReplicaId, BTreeMap<String, String>> {
-        let mut out: BTreeMap<ReplicaId, BTreeMap<String, String>> = BTreeMap::new();
+        #[cfg(feature = "telemetry")]
+        {
+            let mut out: BTreeMap<ReplicaId, BTreeMap<String, String>> = BTreeMap::new();
 
-        let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
-            // The file client has no notion of scoped evaluation.
-            return out;
-        };
-
-        if param_names.is_empty() {
-            return out;
-        }
-
-        for replica in replicas {
-            let ctx = match ld_ctx(
-                &self.env_id,
-                self.build_info,
-                Some(&replica.cluster),
-                Some(&replica.replica),
-            ) {
-                Ok(ctx) => ctx,
-                Err(e) => {
-                    warn!(
-                        replica_id = %replica.replica.id,
-                        "could not build scoped LD context: {e}"
-                    );
-                    continue;
-                }
+            let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
+                // The file client has no notion of scoped evaluation.
+                return out;
             };
 
-            let overrides = self.evaluate_scoped_overrides(client, &ctx, params, param_names);
-            if !overrides.is_empty() {
-                out.insert(replica.replica_id, overrides);
+            if param_names.is_empty() {
+                return out;
             }
-        }
 
-        out
+            for replica in replicas {
+                let ctx = match ld_ctx(
+                    &self.env_id,
+                    self.build_info,
+                    Some(&replica.cluster),
+                    Some(&replica.replica),
+                ) {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        warn!(
+                            replica_id = %replica.replica.id,
+                            "could not build scoped LD context: {e}"
+                        );
+                        continue;
+                    }
+                };
+
+                let overrides = self.evaluate_scoped_overrides(client, &ctx, params, param_names);
+                if !overrides.is_empty() {
+                    out.insert(replica.replica_id, overrides);
+                }
+            }
+
+            out
+        }
+        // Without telemetry only the file client exists, which has no notion
+        // of scoped evaluation.
+        #[cfg(not(feature = "telemetry"))]
+        {
+            let _ = (params, param_names, replicas);
+            BTreeMap::new()
+        }
     }
 
     /// Evaluates the cluster-coherent scoped parameters for each given cluster
@@ -223,36 +243,47 @@ impl SystemParameterFrontend {
         param_names: &[&'static str],
         clusters: &[ClusterEvalContext],
     ) -> BTreeMap<ClusterId, BTreeMap<String, String>> {
-        let mut out: BTreeMap<ClusterId, BTreeMap<String, String>> = BTreeMap::new();
+        #[cfg(feature = "telemetry")]
+        {
+            let mut out: BTreeMap<ClusterId, BTreeMap<String, String>> = BTreeMap::new();
 
-        let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
-            // The file client has no notion of scoped evaluation.
-            return out;
-        };
-
-        if param_names.is_empty() {
-            return out;
-        }
-
-        for cluster in clusters {
-            let ctx = match ld_ctx(&self.env_id, self.build_info, Some(&cluster.cluster), None) {
-                Ok(ctx) => ctx,
-                Err(e) => {
-                    warn!(
-                        cluster_id = %cluster.cluster.id,
-                        "could not build scoped LD context: {e}"
-                    );
-                    continue;
-                }
+            let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
+                // The file client has no notion of scoped evaluation.
+                return out;
             };
 
-            let overrides = self.evaluate_scoped_overrides(client, &ctx, params, param_names);
-            if !overrides.is_empty() {
-                out.insert(cluster.cluster_id, overrides);
+            if param_names.is_empty() {
+                return out;
             }
-        }
 
-        out
+            for cluster in clusters {
+                let ctx = match ld_ctx(&self.env_id, self.build_info, Some(&cluster.cluster), None)
+                {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        warn!(
+                            cluster_id = %cluster.cluster.id,
+                            "could not build scoped LD context: {e}"
+                        );
+                        continue;
+                    }
+                };
+
+                let overrides = self.evaluate_scoped_overrides(client, &ctx, params, param_names);
+                if !overrides.is_empty() {
+                    out.insert(cluster.cluster_id, overrides);
+                }
+            }
+
+            out
+        }
+        // Without telemetry only the file client exists, which has no notion
+        // of scoped evaluation.
+        #[cfg(not(feature = "telemetry"))]
+        {
+            let _ = (params, param_names, clusters);
+            BTreeMap::new()
+        }
     }
 
     /// Evaluates each of `param_names` against `ctx`, returning only the values
@@ -261,6 +292,7 @@ impl SystemParameterFrontend {
     ///
     /// We record on the differs-from-env test, not the `variation_detail`
     /// reason. The inline comment at the recording decision explains why.
+    #[cfg(feature = "telemetry")]
     fn evaluate_scoped_overrides(
         &self,
         client: &ld::Client,
@@ -347,6 +379,7 @@ pub struct ClusterEvalContext {
     pub cluster: ClusterScopeContext,
 }
 
+#[cfg(feature = "telemetry")]
 fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
     ld::ConfigBuilder::new(api_key)
         .event_processor(
@@ -370,6 +403,7 @@ fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
         .expect("valid config")
 }
 
+#[cfg(feature = "telemetry")]
 async fn ld_client(
     api_key: &str,
     metrics: &Metrics,
@@ -462,6 +496,7 @@ pub struct ReplicaScopeContext {
 ///
 /// Deliberately replica-free: cluster-coherent flags must resolve identically
 /// across a cluster's replicas, so no replica/size attributes appear here.
+#[cfg(feature = "telemetry")]
 fn cluster_context(cluster: &ClusterScopeContext) -> Result<ld::Context, anyhow::Error> {
     ld::ContextBuilder::new(cluster.id.as_str())
         .anonymous(true) // keep the LD dashboard Contexts list clean
@@ -477,6 +512,7 @@ fn cluster_context(cluster: &ClusterScopeContext) -> Result<ld::Context, anyhow:
 ///
 /// Includes the owning cluster's identity so a rule can combine both axes,
 /// e.g. "size family `D` *and* cluster `foo`".
+#[cfg(feature = "telemetry")]
 fn replica_context(replica: &ReplicaScopeContext) -> Result<ld::Context, anyhow::Error> {
     ld::ContextBuilder::new(replica.id.as_str())
         .anonymous(true) // keep the LD dashboard Contexts list clean
@@ -500,6 +536,7 @@ fn replica_context(replica: &ReplicaScopeContext) -> Result<ld::Context, anyhow:
 ///
 /// The environment-wide pass passes `None` for both. This is the single entry
 /// point the sync loop uses to evaluate each scoped pass.
+#[cfg(feature = "telemetry")]
 fn ld_ctx(
     env_id: &EnvironmentId,
     build_info: &'static BuildInfo,
@@ -577,7 +614,7 @@ fn ld_ctx(
     ctx_builder.build().map_err(|e| anyhow::anyhow!(e))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "telemetry"))]
 mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
 

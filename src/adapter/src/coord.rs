@@ -2055,6 +2055,7 @@ pub struct Coordinator {
 
     /// Segment analytics client.
     #[derivative(Debug = "ignore")]
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     segment_client: SegmentClient,
 
     /// Coordinator metrics.

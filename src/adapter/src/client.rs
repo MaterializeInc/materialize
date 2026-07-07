@@ -68,8 +68,6 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementExecution
 use crate::telemetry::SegmentClient;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
-#[cfg(not(feature = "telemetry"))]
-use crate::telemetry::{self, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
 
@@ -620,7 +618,9 @@ pub struct SessionClient {
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
     timeouts: Timeout,
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     segment_client: SegmentClient,
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     environment_id: EnvironmentId,
     /// Client for frontend peek sequencing; populated at connection startup.
     peek_client: PeekClient,

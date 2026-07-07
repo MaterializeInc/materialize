@@ -23,6 +23,7 @@ use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
+#[cfg(feature = "telemetry")]
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, task};

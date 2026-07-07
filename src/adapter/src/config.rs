@@ -147,7 +147,9 @@ impl SystemParameterSyncConfig {
 
 #[derive(Debug, Clone)]
 pub(super) struct Metrics {
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     pub last_cse_time_seconds: UIntGauge,
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     pub last_sse_time_seconds: UIntGauge,
     pub params_changed: IntCounter,
 }
