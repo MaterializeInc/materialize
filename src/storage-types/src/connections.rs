@@ -61,9 +61,7 @@ use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
-// iceberg's `RequestAuthenticator` trait is defined against reqwest 0.12;
-// see `reqwest_0_12` in the workspace Cargo.toml.
-use reqwest_0_12::Request;
+use reqwest::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
