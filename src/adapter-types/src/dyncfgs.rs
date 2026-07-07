@@ -245,6 +245,14 @@ pub const MCP_MAX_RESPONSE_SIZE: Config<usize> = Config::new(
     "Maximum size in bytes of MCP tool response content. Responses exceeding this limit are rejected with an error telling the agent to narrow its query.",
 );
 
+/// Maximum time an MCP request may run before it is aborted and a timeout
+/// error is returned to the client.
+pub const MCP_REQUEST_TIMEOUT: Config<Duration> = Config::new(
+    "mcp_request_timeout",
+    Duration::from_secs(60),
+    "Maximum time an MCP request may run before it is aborted with a timeout error.",
+);
+
 /// Maximum size (in bytes) of a webhook request body, measured after
 /// decompression. Requests whose body exceeds this limit are rejected with
 /// HTTP 413. Applies only to the webhook route; other HTTP routes use a
@@ -380,6 +388,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
+        .add(&MCP_REQUEST_TIMEOUT)
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&CONSOLE_OIDC_CLIENT_ID)

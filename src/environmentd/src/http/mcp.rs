@@ -24,7 +24,6 @@
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::anyhow;
 use axum::Extension;
@@ -34,7 +33,9 @@ use http::{HeaderMap, HeaderValue, StatusCode};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
     ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
+    MCP_REQUEST_TIMEOUT,
 };
+use mz_ore::cast::CastLossy;
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::{parse_item_name_with_limit, parse_with_limit};
 use mz_sql::session::metadata::SessionMetadata;
@@ -59,12 +60,6 @@ const JSONRPC_VERSION: &str = "2.0";
 /// MCP protocol version returned in the `initialize` response.
 /// Spec: <https://modelcontextprotocol.io/specification/2025-11-25>
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
-
-/// Maximum time an MCP tool call can run before the HTTP response is returned.
-/// Note: this returns a clean JSON-RPC error to the caller, but the underlying
-/// query may continue running on the cluster until it completes or is cancelled
-/// separately (see database-issues#9947 for SELECT timeout gaps).
-const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
@@ -221,8 +216,11 @@ struct ReadDataProductParams {
     cluster: Option<String>,
 }
 
+/// Default row cap for `read_data_product` when the caller omits `limit`.
+const DEFAULT_READ_LIMIT: u32 = 500;
+
 fn default_read_limit() -> u32 {
-    500
+    DEFAULT_READ_LIMIT
 }
 
 #[derive(Debug, Deserialize)]
@@ -508,6 +506,7 @@ async fn handle_mcp_request(
     // matches `query_tool_enabled` above.
     let read_data_product_tool_enabled = ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
+    let request_timeout = MCP_REQUEST_TIMEOUT.get(dyncfgs);
 
     // Tag MCP-originated sessions so they're distinguishable in
     // mz_session_history / mz_statement_execution_history. set_default lets a
@@ -546,10 +545,10 @@ async fn handle_mcp_request(
     // Spawn task for fault isolation, with a timeout safety net.
     // `abort_on_drop` propagates the timeout to the task itself; without
     // it the task orphans and the SQL query keeps running in the
-    // background after the client gives up.
+    // background after the client gives up (see database-issues#9947).
     let metrics_inner = metrics.clone();
     let result = tokio::time::timeout(
-        MCP_REQUEST_TIMEOUT,
+        request_timeout,
         mz_ore::task::spawn(|| "mcp_request", async move {
             handle_mcp_request_inner(
                 &mut client,
@@ -571,14 +570,14 @@ async fn handle_mcp_request(
         Err(_elapsed) => {
             warn!(
                 endpoint = %endpoint_type,
-                timeout = ?MCP_REQUEST_TIMEOUT,
+                timeout = ?request_timeout,
                 "MCP request timed out",
             );
             let response = McpResponse::error(
                 request_id,
                 McpRequestError::QueryExecutionFailed(format!(
                     "Request timed out after {} seconds.",
-                    MCP_REQUEST_TIMEOUT.as_secs(),
+                    request_timeout.as_secs(),
                 ))
                 .into(),
             );
@@ -788,7 +787,10 @@ async fn handle_tools_list(
     read_data_product_tool_enabled: bool,
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
-    let size_hint = format!("Response limit: {} MB.", max_response_size / 1_000_000);
+    let size_hint = format!(
+        "Response limit: {:.1} MB.",
+        f64::cast_lossy(max_response_size) / 1_000_000.0
+    );
 
     let tools = match endpoint_type {
         McpEndpointType::Agent => {
@@ -825,7 +827,7 @@ async fn handle_tools_list(
                 tools.push(ToolDefinition {
                     name: "read_data_product".to_string(),
                     title: Some("Read Data Product".to_string()),
-                    description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
+                    description: format!("Read rows from a specific data product. Returns up to `limit` rows (default {DEFAULT_READ_LIMIT}). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
@@ -835,8 +837,8 @@ async fn handle_tools_list(
                             },
                             "limit": {
                                 "type": "integer",
-                                "description": "Maximum number of rows to return (default 500)",
-                                "default": 500
+                                "description": format!("Maximum number of rows to return (default {DEFAULT_READ_LIMIT})"),
+                                "default": DEFAULT_READ_LIMIT
                             },
                             "cluster": {
                                 "type": "string",

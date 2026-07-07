@@ -300,6 +300,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     max_sql_server_connections
     max_timestamp_interval
     mcp_max_response_size
+    mcp_request_timeout
     memory_limiter_usage_bias
     mysql_replication_heartbeat_interval
     mysql_source_connect_timeout

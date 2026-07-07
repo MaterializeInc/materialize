@@ -704,6 +704,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mcp_developer",
     "enable_mcp_developer_query_tool",
     "mcp_max_response_size",
+    "mcp_request_timeout",
     "user_id_pool_batch_size",
     "webhook_max_request_size_bytes",
     "enable_cluster_controller",
