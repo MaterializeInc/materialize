@@ -104,7 +104,11 @@ impl ClientConfig {
 
     /// Builds the [`Client`].
     pub fn build(self) -> Result<Client, anyhow::Error> {
-        let mut builder = reqwest::ClientBuilder::new();
+        // Pin the TLS backend explicitly. With reqwest 0.13, rustls is the
+        // default whenever both backends are compiled in (transitive deps
+        // enable the rustls feature), and our certificates and identities
+        // are prepared for native-tls.
+        let mut builder = reqwest::ClientBuilder::new().tls_backend_native();
 
         for root_cert in self.root_certs {
             builder = builder.add_root_certificate(root_cert.into());

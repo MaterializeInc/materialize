@@ -832,11 +832,7 @@ mod tests {
         fn error_uuid() {
             assert_eq!(
                 eval_cast_err(CastFunc::CastStringToUuid, "bad"),
-                parse_err_with_details(
-                    "uuid",
-                    "bad",
-                    "invalid length: expected length 32 for simple format, found 3"
-                ),
+                parse_err_with_details("uuid", "bad", "invalid length: found 3"),
             );
         }
 
