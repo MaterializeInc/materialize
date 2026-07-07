@@ -195,6 +195,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     catalog_info_metrics_reconcile_interval
     cluster_alter_check_ready_interval
     cluster_check_scheduling_policies_interval
+    cluster_controller_tick_interval
     cluster_enable_topology_spread
     cluster_multi_process_replica_az_affinity_weight
     cluster_soften_az_affinity
@@ -233,6 +234,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_alter_table_add_column
     enable_binary_date_bin
     enable_bounded_staleness_isolation
+    enable_cluster_controller
     enable_coalesce_case_transform
     enable_compute_half_join2
     enable_compute_render_fueled_as_specific_collection

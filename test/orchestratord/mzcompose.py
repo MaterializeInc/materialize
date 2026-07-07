@@ -2243,7 +2243,10 @@ def workflow_documentation_defaults(
         )
 
         # This should finish quickly, see https://github.com/MaterializeInc/database-issues/issues/10099
-        for i in range(120):
+        # The timeout is generous because the oldest supported environmentd
+        # versions boot slowly and the operator can spend ~30s in a single
+        # reconcile before it creates the console.
+        for i in range(240):
             try:
                 data = json.loads(
                     spawn.capture(
