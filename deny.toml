@@ -150,7 +150,34 @@ skip = [
     { name = "hashlink", version = "0.9.1" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
+    # Older versions pulled in by native-tls / openssl while the workspace also
+    # uses the rustls stack. Removed once the TLS migration (PRs 2-6) lands.
+    { name = "core-foundation", version = "0.9.4" },
+    { name = "openssl-probe", version = "0.1.6" },
+    { name = "security-framework", version = "2.11.1" },
+    # launchdarkly-server-sdk 3.x pulls eventsource-client, which depends on
+    # rand 0.10 and its newer transitive crypto deps.
+    { name = "cpufeatures", version = "0.3.0" },
+    { name = "getrandom", version = "0.4.3" },
+    { name = "rand", version = "0.10.2" },
+    { name = "rand_core", version = "0.10.1" },
 ]
+
+# Use rustls + aws-lc-rs instead. native-tls pulls in OpenSSL which causes
+# symbol collisions with aws-lc-rs and prevents FIPS compliance.
+[[bans.deny]]
+name = "native-tls"
+
+# Use rustls + aws-lc-rs instead. hyper-tls depends on native-tls.
+[[bans.deny]]
+name = "hyper-tls"
+
+# Use aws-lc-rs (via rdkafka ssl-awslc) instead of vendored OpenSSL.
+[[bans.deny]]
+name = "openssl-sys"
+
+[[bans.deny]]
+name = "openssl-src"
 
 [[bans.deny]]
 crate = "crossbeam-channel@0.5.14"
@@ -204,9 +231,10 @@ wrappers = [
     "eventsource-client",
     "fail",
     "globset",
+    "hyper-rustls",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
-    "native-tls",
+    "launchdarkly-sdk-transport",
     "opendal",
     "os_info",
     "postgres",
@@ -227,6 +255,77 @@ wrappers = [
     "zopfli",
 ]
 
+# FIPS 140-3 compliance: all cryptographic operations must use `aws-lc-rs` as
+# the single crypto backend. The following crates are not FIPS-validated and
+# must not be used for new code. Existing wrappers should be removed as each
+# crate is migrated to `aws-lc-rs`. See doc/developer/openssl-to-rustls-migration.md.
+
+# Use `aws_lc_rs::digest` instead.
+[[bans.deny]]
+name = "sha2"
+wrappers = [
+    # Third-party crates (not under our control).
+    "aws-sdk-s3",
+    "aws-sigv4",
+    "aws-smithy-checksums",
+    "azure_core",
+    "mysql_common",
+    "oauth2",
+    "pest_meta",
+    "postgres-protocol",
+    "reqsign",
+    "ssh-encoding",
+    "ssh-key",
+]
+
+# Use `aws_lc_rs::hmac` instead.
+[[bans.deny]]
+name = "hmac"
+wrappers = [
+    # Third-party crates.
+    "aws-sdk-s3",
+    "aws-sigv4",
+    "azure_core",
+    "postgres-protocol",
+    "reqsign",
+    # Workspace crate — hmac-md5 only; SHA variants use aws-lc-rs.
+    "mz-expr",
+]
+
+# Use `aws_lc_rs::constant_time` instead.
+[[bans.deny]]
+name = "subtle"
+wrappers = [
+    # Third-party crates.
+    "digest",
+    "rustls",
+    "ssh-key",
+]
+
+# Use `aws_lc_rs` instead of `ring` — ring is not FIPS-validated.
+[[bans.deny]]
+name = "ring"
+
+# Use `aws_lc_rs::pbkdf2` instead.
+[[bans.deny]]
+name = "pbkdf2"
+
+# Use `aws_lc_rs::signature::Ed25519KeyPair` instead.
+[[bans.deny]]
+name = "ed25519-dalek"
+
+# Use `aws_lc_rs::cipher` (AES-CBC) instead.
+[[bans.deny]]
+name = "aes"
+
+# Use `aws_lc_rs::cipher` instead.
+[[bans.deny]]
+name = "cbc"
+
+# Use `aws_lc_rs::rsa` instead.
+[[bans.deny]]
+name = "rsa"
+
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.
 [[bans.deny]]
@@ -234,7 +333,6 @@ name = "lazy_static"
 wrappers = [
     "dynfmt",
     "findshlibs",
-    "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "num-bigint-dig",
     "prometheus",
@@ -299,6 +397,8 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "CC0-1.0",
+    # webpki-roots (rustls root certificate bundle) ships under CDLA-Permissive-2.0.
+    "CDLA-Permissive-2.0",
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
