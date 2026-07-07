@@ -910,21 +910,47 @@ pub enum ConnectionOptionName {
 
 impl ConnectionOptionName {
     pub(crate) fn value_contains_sensitive_data(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ConnectionOptionName::AccessKeyId
-                | ConnectionOptionName::Credential
-                | ConnectionOptionName::Password
-                | ConnectionOptionName::SaslPassword
-                | ConnectionOptionName::SaslUsername
-                | ConnectionOptionName::SecretAccessKey
-                | ConnectionOptionName::ServiceAccountKey
-                | ConnectionOptionName::SessionToken
-                | ConnectionOptionName::SslCertificate
-                | ConnectionOptionName::SslCertificateAuthority
-                | ConnectionOptionName::SslKey
-                | ConnectionOptionName::User
-        )
+            | ConnectionOptionName::Credential
+            | ConnectionOptionName::Password
+            | ConnectionOptionName::SaslPassword
+            | ConnectionOptionName::SaslUsername
+            | ConnectionOptionName::SecretAccessKey
+            | ConnectionOptionName::ServiceAccountKey
+            | ConnectionOptionName::SessionToken
+            | ConnectionOptionName::SslCertificate
+            | ConnectionOptionName::SslCertificateAuthority
+            | ConnectionOptionName::SslKey
+            | ConnectionOptionName::User => true,
+            ConnectionOptionName::AssumeRoleArn
+            | ConnectionOptionName::AssumeRoleSessionName
+            | ConnectionOptionName::AvailabilityZones
+            | ConnectionOptionName::AwsConnection
+            | ConnectionOptionName::AwsPrivatelink
+            | ConnectionOptionName::Broker
+            | ConnectionOptionName::Brokers
+            | ConnectionOptionName::Database
+            | ConnectionOptionName::Endpoint
+            | ConnectionOptionName::GcpConnection
+            | ConnectionOptionName::Host
+            | ConnectionOptionName::Port
+            | ConnectionOptionName::ProgressTopic
+            | ConnectionOptionName::ProgressTopicReplicationFactor
+            | ConnectionOptionName::PublicKey1
+            | ConnectionOptionName::PublicKey2
+            | ConnectionOptionName::Region
+            | ConnectionOptionName::Registry
+            | ConnectionOptionName::SaslMechanisms
+            | ConnectionOptionName::Scope
+            | ConnectionOptionName::SecurityProtocol
+            | ConnectionOptionName::ServiceName
+            | ConnectionOptionName::SshTunnel
+            | ConnectionOptionName::SslMode
+            | ConnectionOptionName::CatalogType
+            | ConnectionOptionName::Url
+            | ConnectionOptionName::Warehouse => false,
+        }
     }
 }
 
