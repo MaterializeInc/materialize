@@ -1,0 +1,74 @@
+# Stray COPY subprotocol messages received outside COPY mode are accepted but
+# ignored, matching PostgreSQL (SQL-469). Clients like pgx stream COPY data
+# optimistically without waiting for CopyInResponse, so a COPY statement that
+# fails before COPY mode is entered leaves pipelined CopyData/CopyDone in the
+# stream after the ErrorResponse. This lives in pgtest-mz because the trigger
+# relies on Materialize rejecting binary COPY FROM at planning, which
+# PostgreSQL supports.
+
+send
+Query {"query": "CREATE TABLE strayt (i INT8)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+# Simple protocol after the stray messages: the Query must be answered.
+send
+Query {"query": "COPY strayt FROM STDIN (FORMAT binary)"}
+CopyData "ignored"
+CopyDone
+Query {"query": "SELECT 1"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"FORMAT BINARY not yet supported"}]}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Extended protocol after the stray messages: nothing may be swallowed, the
+# Parse must produce a ParseComplete.
+send
+Query {"query": "COPY strayt FROM STDIN (FORMAT binary)"}
+CopyData "ignored"
+CopyDone
+Parse {"query": "SELECT 2"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"FORMAT BINARY not yet supported"}]}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# A stray CopyFail in the idle state is ignored as well.
+send
+CopyFail "stray failure"
+Query {"query": "SELECT 3"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["3"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

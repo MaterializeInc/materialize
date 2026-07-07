@@ -1005,10 +1005,17 @@ where
             Some(FrontendMessage::Sync) => self.sync().await?,
             Some(FrontendMessage::Terminate) => State::Done,
 
+            // Accept but ignore stray COPY subprotocol messages, mirroring
+            // PostgreSQL. Clients stream COPY data optimistically, so when a
+            // COPY statement fails before COPY mode is entered, its pipelined
+            // CopyData/CopyDone/CopyFail arrive here. Draining instead would
+            // discard unrelated messages until the next Sync, hanging simple
+            // protocol clients that never send one.
             Some(FrontendMessage::CopyData(_))
             | Some(FrontendMessage::CopyDone)
-            | Some(FrontendMessage::CopyFail(_))
-            | Some(FrontendMessage::Password { .. })
+            | Some(FrontendMessage::CopyFail(_)) => State::Ready,
+
+            Some(FrontendMessage::Password { .. })
             | Some(FrontendMessage::RawAuthentication(_))
             | Some(FrontendMessage::SASLInitialResponse { .. })
             | Some(FrontendMessage::SASLResponse(_)) => State::Drain,
