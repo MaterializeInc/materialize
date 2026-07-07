@@ -1452,6 +1452,13 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
 mod tests {
     use super::*;
 
+    /// Pin the wire-visible protocol version returned in every `initialize`
+    /// response; a bump is a deliberate MCP spec upgrade, not a stray edit.
+    #[mz_ore::test]
+    fn test_mcp_protocol_version_constant() {
+        assert_eq!(MCP_PROTOCOL_VERSION, "2025-11-25");
+    }
+
     #[mz_ore::test]
     fn test_validate_readonly_query_select() {
         assert!(validate_readonly_query("SELECT * FROM mz_tables").is_ok());
