@@ -15,7 +15,7 @@
 //! Registry client. It is intentionally narrow: only the surface needed by
 //! the current Materialize integration is implemented.
 //!
-//! Currently implemented:
+//! Read path (source decode, DDL planning, connection validation):
 //!
 //! * [`Client::get_registry`] — used by `GlueSchemaRegistryConnection::validate`
 //!   to verify a registry exists at `CREATE CONNECTION` time.
@@ -24,10 +24,21 @@
 //! * [`Client::get_schema_version_latest_by_name`] — DDL planning: pin a
 //!   reader schema to the registry's current "latest" version.
 //!
-//! Future work will add:
+//! Write path (sink encode):
 //!
-//! * `register_schema_version`, `get_schema_version_by_definition`,
-//!   `get_compatibility`, `update_compatibility` — sink encode.
+//! * [`Client::get_schema_by_definition`] — reuse an already-registered
+//!   definition so a sink restart does not create a duplicate version.
+//! * [`Client::register_schema_version`] — add a new version to an existing
+//!   schema.
+//! * [`Client::create_schema`] — create a schema on first publish, setting its
+//!   compatibility policy.
+//! * [`Client::get_schema`] — read a schema's compatibility to warn on a
+//!   mismatch without overwriting it.
+//!
+//! Glue has no separate get/update-compatibility API: a schema's compatibility
+//! is set once at [`Client::create_schema`] and read back via
+//! [`Client::get_schema`]. This crate deliberately exposes no way to change it,
+//! matching the sink's set-if-unset policy.
 //!
 //! ## Example usage
 //!
@@ -51,7 +62,9 @@ mod client;
 mod config;
 
 pub use client::{
-    Client, DataFormat, GetRegistryError, GetSchemaVersionError, Registry, RegistryLifecycleStatus,
-    SchemaVersion, SchemaVersionLifecycleStatus,
+    Client, Compatibility, CreateSchemaError, DataFormat, GetRegistryError,
+    GetSchemaByDefinitionError, GetSchemaError, GetSchemaVersionError, RegisterSchemaVersionError,
+    Registry, RegistryLifecycleStatus, Schema, SchemaLifecycleStatus, SchemaVersion,
+    SchemaVersionLifecycleStatus,
 };
 pub use config::ClientConfig;

@@ -6118,6 +6118,7 @@ dependencies = [
  "aws-sdk-glue",
  "aws-smithy-runtime-api",
  "aws-types",
+ "mz-ore",
  "thiserror 2.0.18",
  "tracing",
  "uuid",
