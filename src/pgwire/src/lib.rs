@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 //! PostgreSQL network ("wire") protocol.
 //!

@@ -6616,6 +6616,9 @@ def workflow_test_slow_seqno_hold(c: Composition):
     # still healthy, so the initial FETCH returns and the reader is guaranteed
     # installed before we stall the source below.
     subscribe = c.sql_cursor()
+    # This transaction intentionally sits idle while the test polls via separate
+    # sessions, so disable the idle-in-transaction timeout for this connection.
+    subscribe.execute("SET idle_in_transaction_session_timeout TO 0")
     subscribe.execute("BEGIN")
     subscribe.execute("DECLARE c CURSOR FOR SUBSCRIBE source1_tbl")
     subscribe.execute("FETCH 1 c")

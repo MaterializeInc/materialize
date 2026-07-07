@@ -573,12 +573,7 @@ steps:
 
   - id: clusterd-test-driver
     label: Clusterd test driver
-    # Depend on both builds: the `clusterd-test-driver` image changes every commit,
-    # so its arch-specific tag is pushed late in its build. `mkpipeline` may switch
-    # this aarch64 job to an x86_64 agent (Hetzner aarch64 availability), so waiting
-    # for only one build races the other arch's freshly-built image (it would fail
-    # to pull `clusterd-test-driver:mzbuild-…: not found`). Waiting for both is safe.
-    depends_on: [build-aarch64, build-x86_64]
+    depends_on: build-aarch64
     timeout_in_minutes: 20
     inputs: [test/clusterd-test-driver]
     plugins:

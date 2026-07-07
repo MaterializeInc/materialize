@@ -13,6 +13,7 @@ pointed at it via `mz_service`."""
 
 from materialize import ui
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Service as ServiceName
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.metadata_store import (
@@ -99,7 +100,7 @@ SCRIPTS = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.up(METADATA_STORE, "minio")
+    c.up(METADATA_STORE, "minio", ServiceName("headless-driver", idle=True))
     for i, script in enumerate(SCRIPTS):
         # Buildkite collapsible section per scenario.
         ui.section(f"Running scenario {script}")
