@@ -25,10 +25,21 @@ MZFROM tini-static AS tini
 
 FROM gcr.io/distroless/cc-debian13:nonroot-28078d2e5e77671d2046dcc9e2c75334e31efa4d
 
+# Ensure any Rust binaries that crash print a backtrace.
+ENV RUST_BACKTRACE=1
+# Disable backtrace collection in Rust libraries, such as `anyhow`. Collecting
+# backtraces at runtime can be expensive and is known to cause deadlocks
+# (database-issues#9159).
+ENV RUST_LIB_BACKTRACE=0
+
 # Copy libeatmydata for CI performance optimization (no-op unless
 # LD_PRELOAD=libeatmydata.so is set as a container env var).
 COPY --from=eatmydata /usr/lib/*/libeatmydata.so /usr/lib/
 COPY --from=tini /output/tini /usr/bin/tini
+
+# FoundationDB client library, dynamically linked by environmentd and clusterd.
+# NOTE: keep the version in sync with ubuntu-base.
+COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
 
 USER nonroot
 ENV HOME=/home/nonroot
