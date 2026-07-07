@@ -354,6 +354,12 @@ fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
     }
 
     match str::from_utf8(a) {
+        // Match PostgreSQL, which rejects NUL bytes because text values must
+        // never contain them.
+        Ok(from) if from.contains('\0') => Err(EvalError::InvalidByteSequence {
+            byte_sequence: "0x00".into(),
+            encoding_name,
+        }),
         Ok(from) => Ok(from),
         Err(e) => Err(EvalError::InvalidByteSequence {
             byte_sequence: e.to_string().into(),

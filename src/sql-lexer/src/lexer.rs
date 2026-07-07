@@ -268,6 +268,7 @@ fn lex_string(buf: &mut LexBuf) -> Result<String, LexerError> {
             match buf.next() {
                 Some('\'') if buf.consume('\'') => s.push('\''),
                 Some('\'') => break,
+                Some('\0') => bail!(pos, "null character in string literal"),
                 Some(c) => s.push(c),
                 None => bail!(pos, "unterminated quoted string"),
             }
@@ -281,10 +282,15 @@ fn lex_string(buf: &mut LexBuf) -> Result<String, LexerError> {
 fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, LexerError> {
     fn lex_unicode_escape(buf: &mut LexBuf, n: usize) -> Result<char, LexerError> {
         let pos = buf.pos() - 2;
-        buf.next_n(n)
+        let ch = buf
+            .next_n(n)
             .and_then(|s| u32::from_str_radix(s, 16).ok())
             .and_then(|codepoint| char::try_from(codepoint).ok())
-            .ok_or_else(|| LexerError::new(pos, "invalid unicode escape"))
+            .ok_or_else(|| LexerError::new(pos, "invalid unicode escape"))?;
+        if ch == '\0' {
+            return Err(LexerError::new(pos, "null character in string literal"));
+        }
+        Ok(ch)
     }
 
     // We do not support octal (\o) or hexadecimal (\x) escapes, since it is
@@ -322,9 +328,11 @@ fn lex_extended_string(buf: &mut LexBuf) -> Result<Token, LexerError> {
                     Some('U') => s.push(lex_unicode_escape(buf, 8)?),
                     Some('0'..='7') => return Err(lex_octal_escape(buf)),
                     Some('x') => return Err(lex_hexadecimal_escape(buf)),
+                    Some('\0') => bail!(pos, "null character in string literal"),
                     Some(c) => s.push(c),
                     None => bail!(pos, "unterminated quoted string"),
                 },
+                Some('\0') => bail!(pos, "null character in string literal"),
                 Some(c) => s.push(c),
                 None => bail!(pos, "unterminated quoted string"),
             }
@@ -348,6 +356,9 @@ fn lex_dollar_string(buf: &mut LexBuf) -> Result<Token, LexerError> {
     let tag = format!("${}$", buf.take_while(|ch| ch != '$'));
     let _ = buf.next();
     if let Some(s) = buf.take_to_delimiter(&tag) {
+        if s.contains('\0') {
+            return Err(LexerError::new(pos, "null character in string literal"));
+        }
         Ok(Token::String(s.into()))
     } else {
         Err(LexerError::new(pos, "unterminated dollar-quoted string"))

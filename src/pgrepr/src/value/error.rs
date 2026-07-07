@@ -7,13 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Error type for fallible conversion from [`super::Value`] to [`mz_repr::Datum`].
+//! Error types for decoding wire-format values and for fallible conversion
+//! from [`super::Value`] to [`mz_repr::Datum`].
 
 use std::error::Error;
 use std::fmt;
 
 use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::range::InvalidRangeError;
+
+/// Error returned when a decoded text value contains a NUL character, which
+/// PostgreSQL-compatible text values must never contain.
+#[derive(Debug)]
+pub struct NulCharacterError;
+
+impl fmt::Display for NulCharacterError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // This matches PostgreSQL's message for NUL bytes in text values.
+        f.write_str("invalid byte sequence for encoding \"UTF8\": 0x00")
+    }
+}
+
+impl Error for NulCharacterError {}
 
 /// Errors that can occur when converting a [`super::Value`] into a [`mz_repr::Datum`].
 #[derive(Debug)]

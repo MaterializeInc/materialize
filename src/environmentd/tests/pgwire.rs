@@ -745,6 +745,11 @@ fn test_pgtest_notice() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_nul() {
+    pg_test_inner(Path::new("../../test/pgtest/nul.pt"), false);
+}
+
+#[mz_ore::test]
 fn test_pgtest_params() {
     pg_test_inner(Path::new("../../test/pgtest/params.pt"), false);
 }

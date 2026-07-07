@@ -21,6 +21,32 @@
 use datadriven::walk;
 use mz_sql_lexer::lexer::lex;
 
+/// Raw NUL characters in string literals must be rejected. They cannot appear
+/// in datadriven testdata files, which hold text, so they are exercised here.
+#[mz_ore::test]
+fn test_nul_characters_rejected() {
+    for query in [
+        "SELECT 'foo\0bar'",
+        "SELECT E'foo\0bar'",
+        "SELECT E'foo\\\0bar'",
+        "SELECT $$foo\0bar$$",
+        "SELECT $tag$foo\0bar$tag$",
+        "SELECT x'\0'",
+        "SELECT E'\\u0000'",
+        "SELECT E'\\U00000000'",
+    ] {
+        let err = match lex(query) {
+            Ok(_) => panic!("lexing {query:?} must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "null character in string literal",
+            "query: {query:?}"
+        );
+    }
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_datadriven() {
@@ -33,7 +59,7 @@ fn test_datadriven() {
                         .map(|t| format!("{}: {:?}\n", t.offset, t.kind))
                         .collect::<Vec<_>>()
                         .join(""),
-                    Err(err) => err.to_string(),
+                    Err(err) => format!("{}\n", err),
                 },
                 _ => unreachable!("unknown directive"),
             }

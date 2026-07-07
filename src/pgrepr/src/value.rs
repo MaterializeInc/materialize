@@ -33,7 +33,7 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
 use crate::types::{NumericConstraints, UINT2, UINT4, UINT8};
-use crate::value::error::IntoDatumError;
+use crate::value::error::{IntoDatumError, NulCharacterError};
 use crate::{Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
 
 pub mod error;
@@ -670,6 +670,9 @@ impl Value {
         raw: &'a [u8],
     ) -> Result<Value, Box<dyn Error + Sync + Send>> {
         let s = str::from_utf8(raw)?;
+        // Match PostgreSQL, which rejects NUL bytes in text-format values of
+        // any type as part of client encoding verification.
+        reject_nul(s)?;
         Ok(match ty {
             Type::Array(elem_type) => {
                 let (elements, dims) = strconv::parse_array(
@@ -746,6 +749,9 @@ impl Value {
         s: &'a str,
         packer: &mut RowPacker,
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
+        // Match PostgreSQL, which rejects NUL bytes in text-format values of
+        // any type as part of client encoding verification.
+        reject_nul(s)?;
         Ok(match ty {
             Type::Array(elem_type) => {
                 let (elements, dims) =
@@ -890,6 +896,7 @@ impl Value {
             Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
             Type::Name => {
                 let s = String::from_sql(ty.inner(), raw)?;
+                reject_nul(&s)?;
                 if s.len() > NAME_MAX_BYTES {
                     return Err("identifier too long".into());
                 }
@@ -906,9 +913,9 @@ impl Value {
                 u32::from_sql(ty.inner(), raw).map(Value::Oid)
             }
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
-            Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
-            Type::BpChar { .. } => String::from_sql(ty.inner(), raw).map(Value::BpChar),
-            Type::VarChar { .. } => String::from_sql(ty.inner(), raw).map(Value::VarChar),
+            Type::Text => decode_binary_string(ty, raw).map(Value::Text),
+            Type::BpChar { .. } => decode_binary_string(ty, raw).map(Value::BpChar),
+            Type::VarChar { .. } => decode_binary_string(ty, raw).map(Value::VarChar),
             Type::Time { .. } => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::TimeTz { .. } => Err("input of timetz types is not implemented".into()),
             Type::Timestamp { .. } => {
@@ -935,6 +942,23 @@ impl Value {
             Type::AclItem => Err("aclitem has no binary encoding".into()),
         }
     }
+}
+
+/// Returns an error if `s` contains a NUL character, which PostgreSQL rejects
+/// in text values.
+fn reject_nul(s: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
+    if s.contains('\0') {
+        Err(Box::new(NulCharacterError))
+    } else {
+        Ok(())
+    }
+}
+
+/// Decodes a binary-format string value, rejecting embedded NUL characters.
+fn decode_binary_string(ty: &Type, raw: &[u8]) -> Result<String, Box<dyn Error + Sync + Send>> {
+    let s = String::from_sql(ty.inner(), raw)?;
+    reject_nul(&s)?;
+    Ok(s)
 }
 
 /// Rescales `n` to the scale required by `constraints`, if any.
@@ -1080,5 +1104,41 @@ mod tests {
             panic!("decode_text of a numeric must yield Value::Numeric");
         };
         assert_eq!(text, expected, "text decode did not rescale to scale 2");
+    }
+
+    /// Text values must never contain NUL characters, in either wire format.
+    #[mz_ore::test]
+    fn decode_rejects_nul_in_strings() {
+        const NUL_ERR: &str = "invalid byte sequence for encoding \"UTF8\": 0x00";
+        let raw = b"foo\x00bar";
+
+        for ty in [
+            Type::Text,
+            Type::BpChar { length: None },
+            Type::VarChar { max_length: None },
+            Type::Name,
+        ] {
+            for format in [Format::Text, Format::Binary] {
+                let res = Value::decode(format, &ty, raw);
+                assert_eq!(
+                    res.map(|_| ()).map_err(|e| e.to_string()).unwrap_err(),
+                    NUL_ERR,
+                    "{ty:?} in {format:?} format must reject NUL",
+                );
+            }
+        }
+
+        // The text format rejects NUL bytes regardless of the target type.
+        let res = Value::decode_text(&Type::Bytea, b"\\x00\x00");
+        assert_eq!(
+            res.map(|_| ()).map_err(|e| e.to_string()).unwrap_err(),
+            NUL_ERR,
+        );
+
+        // NUL-free values still decode.
+        let Value::Text(s) = Value::decode(Format::Binary, &Type::Text, b"foobar").unwrap() else {
+            panic!("decoding a text value must yield Value::Text");
+        };
+        assert_eq!(s, "foobar");
     }
 }
