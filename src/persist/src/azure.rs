@@ -59,11 +59,8 @@ impl AzureBlobConfig {
         url: Url,
         knobs: Box<dyn BlobKnobs>,
     ) -> Result<Self, Error> {
-        // azure_core 0.21 implements `HttpClient` only for reqwest 0.12, so
-        // this transport client comes from the `reqwest_0_12` alias. Moves to
-        // the workspace reqwest when the Azure SDK migration lands.
         let transport = TransportOptions::new(Arc::new(
-            reqwest_0_12::ClientBuilder::new()
+            reqwest::ClientBuilder::new()
                 .timeout(knobs.operation_attempt_timeout())
                 .read_timeout(knobs.read_timeout())
                 .connect_timeout(knobs.connect_timeout())
