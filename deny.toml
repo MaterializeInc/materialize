@@ -150,6 +150,10 @@ skip = [
     { name = "hashlink", version = "0.9.1" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
+    # Pulled in by the azure-sdk fork's rustls / aws-lc-rs TLS stack.
+    { name = "core-foundation", version = "0.9.3" },
+    { name = "openssl-probe", version = "0.1.6" },
+    { name = "security-framework", version = "2.10.0" },
 ]
 
 [[bans.deny]]
