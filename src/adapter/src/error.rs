@@ -941,8 +941,11 @@ impl AdapterError {
             AdapterError::ReplaceMaterializedViewSealed { .. } => {
                 SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE
             }
-            // similar to AbsurdSubscribeBounds
-            AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
+            // A dedicated code so clients can detect a timestamp-constraint
+            // failure without matching the error message text. For a SUBSCRIBE
+            // with an explicit AS OF this is the compaction horizon: the
+            // requested time is older than the inputs' since frontier.
+            AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::from_code("MZ012"),
             AdapterError::OidcGroupSyncFailed(_) => SqlState::INTERNAL_ERROR,
             AdapterError::BoundedStalenessExceeded { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // Matches ReadOnlyTransaction/ReadOnly: a write was rejected
