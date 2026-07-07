@@ -14,7 +14,7 @@ from kubernetes.client import V1Pod, V1StatefulSet
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name
+from materialize.cloudtest.util.cluster import cluster_pod_name, signal_process_in_pod
 from materialize.cloudtest.util.wait import wait
 
 
@@ -90,11 +90,9 @@ def test_crash_storage(mz: MaterializeApplication) -> None:
     pod_name = cluster_pod_name(cluster_id, replica_id)
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
-    # Simulate an unexpected clusterd crash. The distroless clusterd image
-    # ships no shell to `kubectl exec` a kill in, so force-delete the pod
-    # (SIGKILL, no grace period). The StatefulSet recreates it with the same
-    # name.
-    mz.kubectl("delete", "pod", pod_name, "--grace-period=0", "--force")
+    # Simulate an unexpected clusterd crash. The process is killed in place,
+    # so the container restarts within the same pod.
+    signal_process_in_pod(mz, pod_name, "clusterd", "SIGKILL")
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
 

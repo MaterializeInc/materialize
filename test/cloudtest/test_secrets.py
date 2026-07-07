@@ -13,7 +13,7 @@ import pytest
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name
+from materialize.cloudtest.util.cluster import cluster_pod_name, signal_process_in_pod
 from materialize.cloudtest.util.wait import wait
 
 
@@ -174,11 +174,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     # wait for the cluster to be ready first before attempting to kill it
     wait(condition="condition=Ready", resource=f"{pod_name}")
 
-    # Simulate an unexpected clusterd crash. The distroless clusterd image
-    # ships no shell to `kubectl exec` a kill in, so force-delete the pod
-    # (SIGKILL, no grace period). The StatefulSet recreates it with the same
-    # name.
-    mz.kubectl("delete", "pod", pod_name, "--grace-period=0", "--force")
+    # Simulate an unexpected clusterd crash. The process is killed in place,
+    # so the container restarts within the same pod.
+    signal_process_in_pod(mz, pod_name, "clusterd", "SIGKILL")
 
     mz.testdrive.run(
         input=dedent("""
@@ -200,12 +198,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    # Kill the environmentd and confirm the same. The distroless environmentd
-    # image ships no shell to `kubectl exec` a kill in, so force-delete the
-    # pod (SIGKILL, no grace period). The StatefulSet recreates it with the
-    # same name.
+    # Kill the environmentd and confirm the same
 
-    mz.kubectl("delete", "pod/environmentd-0", "--grace-period=0", "--force")
+    signal_process_in_pod(mz, "pod/environmentd-0", "environmentd", "SIGKILL")
     wait(condition="condition=Ready", resource="pod/environmentd-0")
 
     mz.testdrive.run(

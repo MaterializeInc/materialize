@@ -13,7 +13,7 @@ import time
 from textwrap import dedent
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name
+from materialize.cloudtest.util.cluster import cluster_pod_name, signal_process_in_pod
 
 LOGGER = logging.getLogger(__name__)
 
@@ -101,9 +101,7 @@ def kill_clusterd(
     LOGGER.info(f"sending signal {signal} to pod {pod_name}...")
 
     try:
-        mz.kubectl(
-            "exec", pod_name, "--", "bash", "-c", f"kill -{signal} `pidof clusterd`"
-        )
+        signal_process_in_pod(mz, pod_name, "clusterd", signal)
     except subprocess.CalledProcessError:
         # The clusterd process or container most likely has stopped already or is on its way
         pass
