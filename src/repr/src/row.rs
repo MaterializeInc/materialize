@@ -1839,6 +1839,43 @@ const TINY: usize = 1 << 8;
 const SHORT: usize = 1 << 16;
 const LONG: usize = 1 << 32;
 
+/// The quiet positive NaN. This is the bit pattern of `f64::NAN` on x86 and
+/// aarch64, spelled out because Rust does not guarantee the bit pattern of
+/// `f64::NAN` and packed bytes must be identical across platforms.
+const CANONICAL_F64_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
+/// The `f32` analogue of [`CANONICAL_F64_NAN_BITS`].
+const CANONICAL_F32_NAN_BITS: u32 = 0x7fc0_0000;
+
+/// Rewrites `f` to the canonical representative of its `Datum` equality class.
+///
+/// `Datum` float equality is semantic (via `OrderedFloat`): -0.0 equals +0.0
+/// and all NaN bit patterns are equal to each other. Packed rows are compared
+/// as raw bytes (`Row` equality, arrangement keys, index lookups), so equal
+/// datums must pack to equal bytes. Each equality class therefore encodes as a
+/// single bit pattern: zeros as +0.0 and NaNs as the quiet positive NaN.
+#[inline]
+fn canonicalize_float32(f: OrderedFloat<f32>) -> f32 {
+    if f.is_nan() {
+        f32::from_bits(CANONICAL_F32_NAN_BITS)
+    } else if *f == 0.0 {
+        0.0
+    } else {
+        f.into_inner()
+    }
+}
+
+/// See [`canonicalize_float32`].
+#[inline]
+fn canonicalize_float64(f: OrderedFloat<f64>) -> f64 {
+    if f.is_nan() {
+        f64::from_bits(CANONICAL_F64_NAN_BITS)
+    } else if *f == 0.0 {
+        0.0
+    } else {
+        f.into_inner()
+    }
+}
+
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -1906,11 +1943,11 @@ where
         }
         Datum::Float32(f) => {
             data.push(Tag::Float32.into());
-            data.extend_from_slice(&f.to_bits().to_le_bytes());
+            data.extend_from_slice(&canonicalize_float32(f).to_bits().to_le_bytes());
         }
         Datum::Float64(f) => {
             data.push(Tag::Float64.into());
-            data.extend_from_slice(&f.to_bits().to_le_bytes());
+            data.extend_from_slice(&canonicalize_float64(f).to_bits().to_le_bytes());
         }
         Datum::Date(d) => {
             data.push(Tag::Date.into());
@@ -4149,11 +4186,9 @@ mod tests {
         //test_list_encoding_inner(LONG + 1); // huge
     }
 
-    /// Demonstrates that DatumList's Eq (bytewise) and Ord (datum-by-datum) are now consistent.
-    /// A list containing -0.0 and one containing +0.0 have different byte representations
-    /// (IEEE 754 distinguishes them), originally Eq says they are not equal. But after
-    /// using the new Datum::cmp, Eq says they are equal, which matches what Ord
-    /// compares via iter().cmp(other.iter()), and them as equal.
+    /// DatumList's Eq and Ord (both datum-by-datum) agree that lists
+    /// containing -0.0 and +0.0 are equal. Packing also canonicalizes the two
+    /// zeros to the same bytes, see `test_float_packing_canonicalizes`.
     #[mz_ore::test]
     fn test_datum_list_eq_ord_consistency() {
         // Build list containing +0.0
@@ -4170,12 +4205,10 @@ mod tests {
         });
         let list_neg = row_neg.unpack_first().unwrap_list();
 
-        // Eq is bytewise: different encodings => not equal
-        // This was a bug in the past, so we test it.
-        assert_eq!(
-            list_pos, list_neg,
-            "Eq should see different encodings as equal"
-        );
+        assert_eq!(list_pos, list_neg, "-0.0 and +0.0 lists must be equal");
+
+        // Packing canonicalizes -0.0 to +0.0, so the rows are equal bytewise.
+        assert_eq!(row_pos, row_neg, "-0.0 and +0.0 must pack to equal bytes");
 
         // Ord is datum-by-datum: -0.0 and +0.0 compare equal as Datums
         assert_eq!(
@@ -4185,8 +4218,47 @@ mod tests {
         );
     }
 
-    /// Demonstrates that DatumMap's derived Eq (bytewise) can make maps with equal keys and
-    /// values compare equal when values have different encodings (e.g. -0.0 vs +0.0).
+    /// Equal float datums must pack to identical bytes. Arrangement keys,
+    /// index lookups, and `Row` equality compare packed rows bytewise, so the
+    /// packer canonicalizes -0.0 to +0.0 and every NaN to one bit pattern.
+    #[mz_ore::test]
+    fn test_float_packing_canonicalizes() {
+        let f64_classes: &[(f64, f64)] = &[
+            (-0.0, 0.0),
+            // Negative quiet NaN, what x86 produces for e.g. inf - inf.
+            (f64::NAN, f64::from_bits(0xfff8_0000_0000_0000)),
+            // Quiet NaN with a payload.
+            (f64::NAN, f64::from_bits(0x7ff8_0000_dead_beef)),
+            // Signaling NaN.
+            (f64::NAN, f64::from_bits(0x7ff0_0000_0000_0001)),
+        ];
+        for (a, b) in f64_classes {
+            let row_a = Row::pack_slice(&[Datum::Float64(OrderedFloat(*a))]);
+            let row_b = Row::pack_slice(&[Datum::Float64(OrderedFloat(*b))]);
+            assert_eq!(row_a, row_b, "{a:?} and {b:?} must pack to equal bytes");
+            // Unpacking still yields an equal datum.
+            assert_eq!(row_a.unpack_first(), Datum::Float64(OrderedFloat(*a)));
+        }
+
+        let f32_classes: &[(f32, f32)] = &[
+            (-0.0, 0.0),
+            (f32::NAN, f32::from_bits(0xffc0_0000)),
+            (f32::NAN, f32::from_bits(0x7fc0_dead)),
+        ];
+        for (a, b) in f32_classes {
+            let row_a = Row::pack_slice(&[Datum::Float32(OrderedFloat(*a))]);
+            let row_b = Row::pack_slice(&[Datum::Float32(OrderedFloat(*b))]);
+            assert_eq!(row_a, row_b, "{a:?} and {b:?} must pack to equal bytes");
+            assert_eq!(row_a.unpack_first(), Datum::Float32(OrderedFloat(*a)));
+        }
+
+        // Non-zero, non-NaN values keep their exact bits.
+        let row = Row::pack_slice(&[Datum::Float64(OrderedFloat(-1.5))]);
+        assert_eq!(row.unpack_first(), Datum::Float64(OrderedFloat(-1.5)));
+    }
+
+    /// Maps with equal keys and equal values (-0.0 vs +0.0) compare equal,
+    /// both datum-by-datum and bytewise (packing canonicalizes the zeros).
     #[mz_ore::test]
     fn test_datum_map_eq_bytewise_consistency() {
         // Build map {"k": +0.0}
@@ -4205,11 +4277,8 @@ mod tests {
         });
         let map_neg = row_neg.unpack_first().unwrap_map();
 
-        // Same keys and semantically equal values, but Eq (bytewise) says not equal
-        assert_eq!(
-            map_pos, map_neg,
-            "DatumMap Eq is semantic; -0.0 and +0.0 have different encodings but are equal"
-        );
+        assert_eq!(map_pos, map_neg, "-0.0 and +0.0 maps must be equal");
+        assert_eq!(row_pos, row_neg, "-0.0 and +0.0 must pack to equal bytes");
         // Verify they have the same logical content
         let entries_pos: Vec<_> = map_pos.iter().collect();
         let entries_neg: Vec<_> = map_neg.iter().collect();
