@@ -4528,6 +4528,111 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
         ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
 
 
+def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None:
+    """Deterministically exercise a dependency drop racing a SUBSCRIBE (SQL-456).
+
+    The frontend subscribe sequencing runs on the session task: it optimizes
+    the plan (binding the indexes to read through) and acquires read holds,
+    then dispatches `Command::ExecuteSubscribe` to the coordinator. A `DROP
+    INDEX` that lands in this window removes the index's compute collection
+    (read holds hold back compaction, not drops), so shipping the subscribe
+    dataflow fails with `CollectionMissing`. Historically the coordinator
+    treated dataflow creation as infallible and panicked, aborting
+    environmentd; it must instead return a "was dropped" error to the client.
+
+    The window is a sub-millisecond cross-thread gap, so we make it
+    deterministic with the `subscribe_before_dispatch` failpoint: pause a
+    subscribe right after sequencing, drop the index it reads through while
+    it's parked, then resume so the dataflow ships against the dropped index.
+    Assert that the client gets a clean error, that environmentd survives, and
+    that no duplicate statement-logging end was logged.
+    """
+
+    failpoint = "subscribe_before_dispatch"
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("CREATE TABLE t (a int); INSERT INTO t SELECT generate_series(1, 10);")
+        # The subscribe reads through this index, so its dataflow imports it.
+        c.sql("CREATE DEFAULT INDEX t_idx ON t")
+
+        subscriber_ready = Event()
+        failpoint_armed = Event()
+        subscribe_outcome: list[str] = []
+
+        def subscriber() -> None:
+            try:
+                with c.sql_cursor() as cur:
+                    # We connect *before* the failpoint is armed. The failpoint
+                    # only parks subscribes, but keeping the same structure as
+                    # the registered-peek tests makes the ordering obvious.
+                    subscriber_ready.set()
+                    failpoint_armed.wait()
+                    cur.execute("BEGIN")
+                    cur.execute("DECLARE sub CURSOR FOR SUBSCRIBE (SELECT * FROM t)")
+                    # The FETCH executes the subscribe: it sequences on the
+                    # session task and parks at the failpoint before
+                    # dispatching to the coordinator. It fails once t_idx is
+                    # dropped.
+                    cur.execute("FETCH ALL sub WITH (timeout = '30s')")
+                    cur.fetchall()
+                    subscribe_outcome.append("ok")
+            except Exception as e:
+                subscribe_outcome.append(f"error: {e}")
+
+        subscribe_thread = PropagatingThread(target=subscriber, name="subscriber")
+        subscribe_thread.start()
+
+        with c.sql_cursor() as control:
+            assert subscriber_ready.wait(timeout=30), "subscriber failed to connect"
+            # Arm: every subscribe now parks right after sequencing.
+            control.execute(f"SET failpoints = '{failpoint}=pause'")
+            failpoint_armed.set()
+            # Give the subscriber time to sequence its SUBSCRIBE and park. It
+            # stays parked until we turn the failpoint off, so this only has to
+            # outlast planning and optimization, not race a narrow window.
+            time.sleep(5)
+            # Drop the index while the subscribe is parked: the coordinator
+            # removes the index's compute collection.
+            control.execute("DROP INDEX t_idx")
+            # Resume the subscribe: shipping its dataflow now fails on the
+            # missing index collection, which must surface as an error on the
+            # subscribing session, not a coordinator panic.
+            control.execute(f"SET failpoints = '{failpoint}=off'")
+
+        subscribe_thread.join(timeout=30)
+
+        # The parked subscribe must actually have failed on the dropped index;
+        # otherwise the race didn't happen and the test is silently vacuous.
+        assert subscribe_outcome, "subscriber thread did not finish"
+        assert subscribe_outcome[0].startswith("error") and "was dropped" in (
+            subscribe_outcome[0]
+        ), f"expected the subscribe to fail on the dropped index, got: {subscribe_outcome[0]}"
+
+        # A panic on the coordinator thread aborts the entire environmentd
+        # process (src/ore/src/panic.rs); with no restart policy the container
+        # stays down and this fresh connection raises.
+        with c.sql_cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
+
+        # Statement logging must have ended the failed subscribe exactly once
+        # (the frontend logs the error end; the coordinator defuses its guard).
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "duplicate end_statement_execution" not in logs.stdout
+        ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
+
+
 def workflow_test_refresh_mv_warmup(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
