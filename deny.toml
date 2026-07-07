@@ -150,8 +150,6 @@ skip = [
     { name = "hashlink", version = "0.9.1" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
-    # reqwest_0_12 workspace alias; see Cargo.toml.
-    { name = "reqwest", version = "0.12" },
 ]
 
 [[bans.deny]]

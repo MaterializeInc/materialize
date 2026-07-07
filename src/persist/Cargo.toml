@@ -60,7 +60,6 @@ proptest-derive.workspace = true
 prost.workspace = true
 rand = { workspace = true, features = ["small_rng"] }
 reqwest.workspace = true
-reqwest_0_12.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
 timely.workspace = true
