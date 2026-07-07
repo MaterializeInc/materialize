@@ -61,7 +61,9 @@ use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
-use reqwest::Request;
+// iceberg's `RequestAuthenticator` trait is defined against reqwest 0.12;
+// see `reqwest_0_12` in the workspace Cargo.toml.
+use reqwest_0_12::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
@@ -115,7 +117,8 @@ impl AwsSdkCredentialLoader {
 impl AwsCredentialLoad for AwsSdkCredentialLoader {
     async fn load_credential(
         &self,
-        _client: reqwest::Client,
+        // reqsign 0.16 trait signature; see `reqwest_0_12` in workspace Cargo.toml.
+        _client: reqwest_0_12::Client,
     ) -> anyhow::Result<Option<AwsCredential>> {
         let creds = self
             .provider
@@ -2439,14 +2442,13 @@ impl MySqlConnection<InlinedConnection> {
                 .read_string_in_task_if(in_task, identity.key)
                 .await?;
             let cert = identity.cert.get_string(in_task, secrets_reader).await?;
-            let (der, pass) =
-                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?.into_parts();
 
-            // Add client identity to SSLOpts
+            // Add client identity to SSLOpts (cert chain + private key as PEM)
             ssl_opts = ssl_opts.map(|opts| {
-                opts.with_client_identity(Some(
-                    mysql_async::ClientIdentity::new(der.into()).with_password(pass),
-                ))
+                opts.with_client_identity(Some(mysql_async::ClientIdentity::new(
+                    cert.into_bytes().into(),
+                    key.into_bytes().into(),
+                )))
             });
         }
 

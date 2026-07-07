@@ -150,6 +150,16 @@ skip = [
     { name = "hashlink", version = "0.9.1" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
+    # reqwest_0_12 workspace alias; see Cargo.toml.
+    { name = "reqwest", version = "0.12" },
+    # Pulled in by rustls ecosystem
+    { name = "core-foundation", version = "0.9.3" },
+    { name = "openssl-probe", version = "0.1.6" },
+    { name = "security-framework", version = "2.10.0" },
+    # rustls-platform-verifier (reqwest rustls backend) pulls webpki-roots 1.x
+    # while hyper-rustls (gcp_auth) still pulls 0.26.
+    { name = "webpki-roots", version = "0.26" },
+    { name = "webpki-roots", version = "1.0" },
 ]
 
 [[bans.deny]]
@@ -204,6 +214,7 @@ wrappers = [
     "eventsource-client",
     "fail",
     "globset",
+    "hyper-rustls",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "native-tls",
@@ -217,6 +228,7 @@ wrappers = [
     "reqsign",
     "reqwest",
     "rustls",
+    "rustls-platform-verifier",
     "sqlparser",
     "tokio-postgres",
     "tokio-tungstenite",
@@ -308,6 +320,8 @@ allow = [
     "MPL-2.0",
     "Zlib",
     "Unicode-3.0",
+    # webpki-roots (pulled in by the rustls TLS backend via rustls-platform-verifier).
+    "CDLA-Permissive-2.0",
 ]
 # copyleft is denied by default
 private = { ignore = true }

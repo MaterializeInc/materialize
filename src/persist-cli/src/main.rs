@@ -47,6 +47,7 @@ enum Command {
 }
 
 fn main() {
+    let _ = mz_ore::crypto::fips_crypto_provider();
     let args: Args = cli::parse_args(CliConfig::default());
 
     // Mirror the tokio Runtime configuration in our production binaries.

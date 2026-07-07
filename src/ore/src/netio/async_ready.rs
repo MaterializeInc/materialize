@@ -46,3 +46,23 @@ where
         self.get_ref().ready(interest).await
     }
 }
+
+#[async_trait]
+impl<S> AsyncReady for tokio_rustls::server::TlsStream<S>
+where
+    S: AsyncReady + Sync + Send,
+{
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        self.get_ref().0.ready(interest).await
+    }
+}
+
+#[async_trait]
+impl<S> AsyncReady for tokio_rustls::client::TlsStream<S>
+where
+    S: AsyncReady + Sync + Send,
+{
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        self.get_ref().0.ready(interest).await
+    }
+}

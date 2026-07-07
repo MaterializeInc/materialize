@@ -18,7 +18,7 @@ futures.workspace = true
 futures-util.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
-mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
+mz-ore = { path = "../ore", features = ["chrono", "async", "crypto", "tracing"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-client = { path = "../postgres-client" }
 mz-repr = { path = "../repr", features = ["tracing"] }

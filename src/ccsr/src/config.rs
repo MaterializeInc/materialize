@@ -104,7 +104,10 @@ impl ClientConfig {
 
     /// Builds the [`Client`].
     pub fn build(self) -> Result<Client, anyhow::Error> {
-        let mut builder = reqwest::ClientBuilder::new();
+        // Pin the TLS backend explicitly. With reqwest 0.13, either backend can
+        // be selected whenever both are compiled in. Our certificates and
+        // identities are prepared for rustls (PEM-encoded), so pin rustls.
+        let mut builder = reqwest::ClientBuilder::new().tls_backend_rustls();
 
         for root_cert in self.root_certs {
             builder = builder.add_root_certificate(root_cert.into());

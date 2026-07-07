@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 chrono.workspace = true
 mz-ore = { path = "../ore", features = ["async"], default-features = false }
-segment.workspace = true
+segment = { workspace = true, default-features = false }
 serde_json.workspace = true
 time.workspace = true
 tokio.workspace = true
