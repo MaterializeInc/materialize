@@ -1634,7 +1634,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 scheme: Scheme::HTTPS,
                 headers: &wrong_aud_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "invalid audience");
@@ -1659,7 +1659,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 scheme: Scheme::HTTPS,
                 headers: &no_aud_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "invalid audience");
@@ -2251,7 +2251,7 @@ async fn test_auth_oidc_no_matching_authentication_claim() {
                 user_reported_by_system: oidc_user,
                 scheme: Scheme::HTTPS,
                 headers: &token_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "no matching authentication claim found in the JWT");
@@ -5481,7 +5481,8 @@ async fn setup_group_sync_test() -> (
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
 
     let oidc_server = OidcMockServer::start(
         None,
@@ -5529,10 +5530,8 @@ async fn setup_group_sync_test() -> (
 
 const GROUP_SYNC_USER: &str = "alice@example.com";
 
-fn make_insecure_tls() -> postgres_openssl::MakeTlsConnector {
-    make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-        Ok(b.set_verify(SslVerifyMode::NONE))
-    }))
+fn make_insecure_tls() -> mz_tls_util::MakeRustlsConnect {
+    make_pg_tls(TestTlsConfig::no_verify())
 }
 
 /// Helper: connect as the OIDC user with the given token.
@@ -5654,7 +5653,7 @@ async fn test_oidc_group_sync_http() {
     );
 
     let resp = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
-        .build(make_http_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE))))
+        .build(make_http_tls(&TestTlsConfig::no_verify()))
         .request({
             let mut req = Request::post(&uri);
             for (k, v) in headers.iter() {
@@ -5698,7 +5697,8 @@ async fn test_oidc_group_sync_ws() {
         .unwrap();
 
     let request = ClientRequestBuilder::new(uri.clone());
-    let stream = make_ws_tls(&uri, |b| Ok(b.set_verify(SslVerifyMode::NONE)));
+    let tls_config = TestTlsConfig::no_verify();
+    let stream = make_ws_tls(&uri, &tls_config);
     let (mut ws, _resp) = tungstenite::client(request, stream).unwrap();
 
     let auth = WebSocketAuth::Bearer {
