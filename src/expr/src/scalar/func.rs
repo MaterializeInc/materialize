@@ -1305,11 +1305,13 @@ fn neg_interval_inner(a: Interval) -> Result<Interval, EvalError> {
 }
 
 fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
-    if val.is_negative() {
-        return Err(EvalError::NegativeOutOfDomain(function_name.into()));
-    }
+    // Check zero before the sign, like PostgreSQL, so that a negative zero
+    // (which the dec crate considers negative) reports the same error as +0.
     if val.is_zero() {
         return Err(EvalError::ZeroOutOfDomain(function_name.into()));
+    }
+    if val.is_negative() {
+        return Err(EvalError::NegativeOutOfDomain(function_name.into()));
     }
     Ok(())
 }
@@ -1353,12 +1355,17 @@ fn log_base_numeric(mut a: Numeric, mut b: Numeric) -> Result<Numeric, EvalError
 
 #[sqlfunc(propagates_nulls = true)]
 fn power(a: f64, b: f64) -> Result<f64, EvalError> {
-    if a == 0.0 && b.is_sign_negative() {
+    // Strict less-than, so that a -0.0 exponent counts as zero (x^0 = 1)
+    // rather than as negative, like PostgreSQL.
+    if a == 0.0 && b < 0.0 {
         return Err(EvalError::Undefined(
             "zero raised to a negative power".into(),
         ));
     }
-    if a.is_sign_negative() && b.fract() != 0.0 {
+    // Strict less-than, like PostgreSQL, so that -0.0 does not count as
+    // negative (row packing canonicalizes -0.0 to +0.0, so the sign of a zero
+    // must not be observable) and NaN propagates to a NaN result.
+    if a < 0.0 && b.fract() != 0.0 {
         // Equivalent to PG error:
         // > a negative number raised to a non-integer power yields a complex result
         return Err(EvalError::ComplexOutOfRange("pow".into()));

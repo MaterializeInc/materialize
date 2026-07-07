@@ -371,6 +371,12 @@ fn cot(a: f64) -> Result<f64, EvalError> {
     if a.is_infinite() {
         return Err(EvalError::InfinityOutOfDomain("cot".into()));
     }
+    // -0.0 behaves as +0.0, so cot(-0.0) is +Infinity rather than
+    // PostgreSQL's -Infinity. Row packing canonicalizes -0.0 to +0.0, so
+    // honoring the sign here would make the result depend on whether the
+    // input crossed a packing boundary (e.g. a view vs a materialized view
+    // of the same query).
+    let a = if a == 0.0 { 0.0 } else { a };
     Ok(1.0 / a.tan())
 }
 
@@ -384,24 +390,29 @@ fn degrees(a: f64) -> f64 {
     a.to_degrees()
 }
 
+// The guards in `log10` and `ln` use `== 0.0` and `< 0.0` rather than the
+// sign bit, so that -0.0 errors like +0.0 and NaN propagates to a NaN result,
+// like PostgreSQL. The sign of a zero must not be observable, since row
+// packing canonicalizes -0.0 to +0.0.
+
 #[sqlfunc(sqlname = "log10f64")]
 fn log10(a: f64) -> Result<f64, EvalError> {
-    if a.is_sign_negative() {
-        return Err(EvalError::NegativeOutOfDomain("log10".into()));
-    }
     if a == 0.0 {
         return Err(EvalError::ZeroOutOfDomain("log10".into()));
+    }
+    if a < 0.0 {
+        return Err(EvalError::NegativeOutOfDomain("log10".into()));
     }
     Ok(a.log10())
 }
 
 #[sqlfunc(sqlname = "lnf64")]
 fn ln(a: f64) -> Result<f64, EvalError> {
-    if a.is_sign_negative() {
-        return Err(EvalError::NegativeOutOfDomain("ln".into()));
-    }
     if a == 0.0 {
         return Err(EvalError::ZeroOutOfDomain("ln".into()));
+    }
+    if a < 0.0 {
+        return Err(EvalError::NegativeOutOfDomain("ln".into()));
     }
     Ok(a.ln())
 }
