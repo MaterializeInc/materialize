@@ -115,6 +115,49 @@ SELECT 'hi'::text = ANY(ARRAY[]::text[])
 ----
 false
 
+# A NULL array yields NULL, distinct from the empty-array case above.
+query B
+SELECT 33 = ANY(NULL::int[])
+----
+NULL
+
+query B
+SELECT 33 = ALL(NULL::int[])
+----
+NULL
+
+# An empty array yields the empty-set answer, not NULL.
+query B
+SELECT 33 = ALL(ARRAY[]::int[])
+----
+true
+
+# NULL elements propagate through the comparison per three-valued logic.
+query B
+SELECT 33 = ANY(ARRAY[NULL]::int[])
+----
+NULL
+
+query B
+SELECT 33 = ANY(ARRAY[33, NULL])
+----
+true
+
+query B
+SELECT 33 = ANY(ARRAY[1, NULL])
+----
+NULL
+
+query B
+SELECT 33 = ALL(ARRAY[33, NULL])
+----
+NULL
+
+query B
+SELECT 33 = ALL(ARRAY[1, NULL])
+----
+false
+
 query error ARRAY types integer and boolean cannot be matched
 SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
 
@@ -1076,6 +1119,22 @@ SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','mon'], nu
 ----
 NULL
 
+# Searching for NULL finds the first NULL element (IS NOT DISTINCT FROM semantics).
+query I
+SELECT array_position(ARRAY['sun','mon',NULL,'fri'], NULL)
+----
+3
+
+query I
+SELECT array_position(ARRAY[NULL, 'sun', NULL]::text[], NULL)
+----
+1
+
+query I
+SELECT array_position(ARRAY['sun', NULL, 'mon']::text[], NULL, 3)
+----
+NULL
+
 query I
 SELECT array_position(null::text[], 'abc')
 ----
@@ -1086,10 +1145,8 @@ SELECT array_position(null::text[], 'abc', null)
 ----
 NULL
 
-query I
+query error initial position must not be null
 SELECT array_position(ARRAY['sun'], null, null)
-----
-NULL
 
 query error initial position must not be null
 SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','mon'], 'mon', null)
