@@ -57,15 +57,15 @@ contains:error sending request for url
   )
 contains:error sending request for url
 
-# Key-cert mismatch: schema-registry cert with kafka key. Rustls detects the
-# mismatch when building the TLS client config.
+# This is a bad error message to indicate "invalid client certificate" but
+# it's not under our control.
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://mssl.schema-registry.local:8082',
     SSL CERTIFICATE = '${schema-registry-crt}',
     SSL KEY = SECRET kafka_key,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:failed to build schema registry HTTP client
+contains:key values mismatch
 
 # ==> Test without an SSH tunnel. <==
 

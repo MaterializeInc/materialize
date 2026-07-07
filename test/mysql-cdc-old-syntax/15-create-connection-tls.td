@@ -105,7 +105,7 @@ contains:Input/output error
     PASSWORD SECRET mysqluserpass,
     SSL MODE verify_ca
   )
-contains:invalid peer certificate
+contains:TLS error
 
 # Error: Verify_CA SSL mode with wrong Server CA
 ! CREATE CONNECTION mysq_tls TO MYSQL (
@@ -115,7 +115,7 @@ contains:invalid peer certificate
     SSL MODE verify_ca,
     SSL CERTIFICATE AUTHORITY SECRET ssl_wrong_ca
   )
-contains:invalid peer certificate
+contains:TLS error
 
 # Error: Verify_CA SSL mode with required x509 Cert user and no client cert
 ! CREATE CONNECTION mysq_tls TO MYSQL (
