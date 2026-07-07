@@ -23,7 +23,7 @@
 #   docker cp extract:/output/tini ./tini
 #   docker rm extract
 
-FROM ubuntu:noble-20260210.1 AS builder
+FROM ubuntu:noble-20260610 AS builder
 
 ARG TINI_VERSION=v0.19.0
 
