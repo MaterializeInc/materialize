@@ -25,7 +25,7 @@
 #   docker cp extract:/output/ssh ./ssh
 #   docker rm extract
 
-FROM ubuntu:noble-20260509.1 AS builder
+FROM ubuntu:noble-20260610 AS builder
 
 ARG AWS_LC_VERSION=v1.54.0
 # OpenSSH >= 10.0 is required: it natively stubs BN_set_flags() for AWS-LC,
