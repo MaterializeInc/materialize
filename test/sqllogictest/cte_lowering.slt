@@ -531,11 +531,11 @@ Project (#1)
       Get materialize.public.y
     cte [l2 as x] =
       Get l1
-    cte [l8 as subquery-8] =
+    cte [l10 as subquery-10] =
       With
         cte [l3 as c] =
           Get materialize.public.y
-        cte [l5 as subquery-5] =
+        cte [l7 as subquery-7] =
           With
             cte [l4 as d] =
               Get l3
@@ -543,26 +543,26 @@ Project (#1)
             Reduce aggregates=[max(#0{d})]
               Get l4
       Return
-        Filter (select(Get l5) > 1)
+        Filter (select(Get l7) > 1)
           Get l3
   Return
-    Map (select(Get l8))
+    Map (select(Get l10))
       With
-        cte [l3 as e] =
+        cte [l5 as e] =
           Get l1
-        cte [l7 as subquery-7] =
+        cte [l9 as subquery-9] =
           Reduce aggregates=[max(#0{x})]
             Get l2
-        cte [l6 as subquery-6] =
+        cte [l8 as subquery-8] =
           With
-            cte [l4 as f] =
-              Get l3
+            cte [l6 as f] =
+              Get l5
           Return
             Reduce aggregates=[min(#0{f})]
-              Get l4
+              Get l6
       Return
-        Filter (select(Get l6) < select(Get l7))
-          Get l3
+        Filter (select(Get l8) < select(Get l9))
+          Get l5
 
 Target cluster: quickstart
 
