@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/apply.rs
-revision: e926ec3a86
+revision: a90f8e3027
 ---
 
 # adapter::catalog::apply
@@ -9,6 +9,7 @@ Implements the logic for applying `StateUpdate` diffs from the durable catalog s
 `apply_updates` processes a batch of `StateUpdate` values grouped by timestamp; within each timestamp group, updates are sorted into a pseudo-topological order before being applied.
 An `InProgressRetractions` struct caches denormalized state stripped during retractions so that the corresponding additions can reuse it without rebuilding from scratch.
 The `ApplyState` state machine batches consecutive updates of the same type when beneficial, then delegates to `apply_updates_inner`, which calls per-type `apply_*_update` methods for roles, role auth, databases, schemas, clusters, network policies, items, system configuration, scoped system configuration, and more.
+The `sort_updates` helper `merge_item_updates` orders all persistent items before all temporary items; because non-temporary items can never depend on temporary ones, this keeps dependencies before dependents for additions. During temp item updates in `apply_updates_inner`, `set_create_sql` is called to preserve the exact `create_sql` bytes so that retraction consolidation works correctly.
 After processing retractions that are not replaced by a corresponding addition (i.e., truly dropped items), `apply_updates` calls `drop_optimizer_notices` to clean up any optimizer notices associated with the dropped items and emits the corresponding `mz_notices` retractions.
 `CatalogState` methods defined in this module (`set_optimized_plan`, `set_physical_plan`, `set_dataflow_metainfo`, `drop_optimizer_notices`) mutate the plan and notice fields stored directly on `Index` and `MaterializedView` catalog items. `set_physical_plan` accepts a `DataflowDescription<LirRelationExpr>`.
 `StateUpdateKind::Role`, `StateUpdateKind::DefaultPrivilege`, `StateUpdateKind::SystemPrivilege`, and `StateUpdateKind::Comment` updates do not produce builtin table updates; `mz_roles`, `mz_role_parameters`, `mz_default_privileges`, `mz_system_privileges`, and `mz_internal.mz_comments` are materialized views backed by `mz_internal.mz_catalog_raw` rather than builtin tables.
