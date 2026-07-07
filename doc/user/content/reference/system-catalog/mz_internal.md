@@ -588,7 +588,7 @@ schema information.
 | Field         | Type     | Meaning                                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
-| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index. |
+| `cluster`     | [`text`] | Cluster hosting the object's index or compute, shown only when your role has USAGE on it (otherwise null). Reads still work from any cluster you can use, but only reads on this cluster benefit from the index. |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 
 ## `mz_mcp_data_product_details`
@@ -603,7 +603,7 @@ has no replicas — needs operator action."
 | Field         | Type     | Meaning                                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
-| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index. |
+| `cluster`     | [`text`] | Cluster hosting the object's index or compute, shown only when your role has USAGE on it (otherwise null). Reads still work from any cluster you can use, but only reads on this cluster benefit from the index. |
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 | `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
 | `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry. |

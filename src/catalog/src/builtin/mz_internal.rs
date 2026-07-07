@@ -5929,17 +5929,22 @@ pub static MZ_MCP_DATA_PRODUCTS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
         ),
         (
             "cluster",
-            "Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index.",
+            "Cluster hosting the object's index or compute, shown only when your role has USAGE on it (otherwise null). Reads still work from any cluster you can use, but only reads on this cluster benefit from the index.",
         ),
         (
             "description",
             "Index comment if available, otherwise object comment. Used as data product description.",
         ),
     ]),
+    // The `cluster` column is null unless the role has USAGE on the object's
+    // index/compute cluster, so a data product never advertises a cluster the
+    // role cannot actually run reads on (DEX-66). The object stays listed
+    // regardless, because it remains readable from any cluster the role can
+    // use (materialized views serve from persist; views recompute).
     sql: r#"
 SELECT DISTINCT
     '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name,
-    COALESCE(c_idx.name, c_obj.name) AS cluster,
+    CASE WHEN cp.name IS NOT NULL THEN COALESCE(c_idx.name, c_obj.name) END AS cluster,
     COALESCE(cts_idx.comment, cts_obj.comment) AS description
 FROM mz_internal.mz_show_my_object_privileges op
 JOIN mz_objects o ON op.name = o.name AND op.object_type = o.type
@@ -5948,6 +5953,8 @@ JOIN mz_databases d ON d.name = op.database AND d.id = s.database_id
 LEFT JOIN mz_indexes i ON i.on_id = o.id
 LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
 LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
+LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
+    ON cp.name = COALESCE(c_idx.name, c_obj.name) AND cp.privilege_type = 'USAGE'
 LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
 LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
 WHERE op.privilege_type = 'SELECT'
@@ -5990,7 +5997,7 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         ),
         (
             "cluster",
-            "Cluster where the object computes or its index is hosted. Reads from any cluster work, but only reads on this cluster benefit from the index.",
+            "Cluster hosting the object's index or compute, shown only when your role has USAGE on it (otherwise null). Reads still work from any cluster you can use, but only reads on this cluster benefit from the index.",
         ),
         (
             "description",
@@ -6129,7 +6136,14 @@ hydration AS (
 )
 SELECT
     d.object_name,
-    d.cluster,
+    -- Null the advertised cluster unless the role has USAGE on it (DEX-66),
+    -- matching mz_mcp_data_products. Hydration below still joins on the real
+    -- d.cluster, so readiness is reported accurately even when the name is
+    -- hidden.
+    CASE WHEN EXISTS (
+        SELECT 1 FROM mz_internal.mz_show_my_cluster_privileges cp
+        WHERE cp.name = d.cluster AND cp.privilege_type = 'USAGE'
+    ) THEN d.cluster END AS cluster,
     d.description,
     d.schema,
     jsonb_build_object(

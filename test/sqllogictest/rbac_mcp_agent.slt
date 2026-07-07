@@ -440,22 +440,63 @@ COMPLETE 2
 
 # Regression pin for the lookup query that
 # `src/environmentd/src/http/mcp.rs:read_data_product` issues under
-# restriction. Joins against `mz_show_my_cluster_privileges` (allow-listed,
-# `pg_has_role` swapped for `mz_session_role_memberships()`) instead of
-# calling `has_cluster_privilege` directly, since that function's
-# `sql_impl` body references `mz_roles` and is still blocked.
+# restriction. The view now nulls the cluster when the role lacks USAGE
+# (via `mz_show_my_cluster_privileges`, allow-listed with `pg_has_role`
+# swapped for `mz_session_role_memberships()`), so the lookup just reads the
+# already-USAGE-filtered cluster back. The agent has USAGE on quickstart via
+# PUBLIC, so it is advertised.
 simple conn=agent_restricted,user=agent
-SELECT dp.cluster,
-       dp.cluster IS NULL OR cp.name IS NOT NULL AS has_cluster_usage
+SELECT dp.cluster
 FROM mz_internal.mz_mcp_data_products dp
-LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
-    ON cp.name = dp.cluster AND cp.privilege_type = 'USAGE'
 WHERE dp.object_name = '"materialize"."agent_objects"."next_arrivals"'
-ORDER BY (dp.cluster IS NOT NULL AND cp.name IS NOT NULL) DESC,
-         dp.cluster NULLS LAST
+ORDER BY dp.cluster NULLS LAST
 LIMIT 1;
 ----
-quickstart,t
+quickstart
+COMPLETE 1
+
+# =============================================================================
+# DEX-66: the advertised cluster respects cluster USAGE. A data product hosted
+# on a cluster the agent cannot use is still listed (it stays readable from a
+# serving cluster), but its `cluster` is null, so discovery never points at a
+# cluster the agent has no USAGE on.
+# =============================================================================
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER agent_compute REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW agent_objects.compute_only IN CLUSTER agent_compute AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.compute_only TO agent;
+----
+COMPLETE 0
+
+# The agent has SELECT but no USAGE on agent_compute, so the product is listed
+# with a null cluster.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."compute_only"';
+----
+"materialize"."agent_objects"."compute_only",NULL
+COMPLETE 1
+
+# The details view nulls the cluster the same way.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."compute_only"';
+----
+"materialize"."agent_objects"."compute_only",NULL
+COMPLETE 1
+
+# A product on a cluster the agent CAN use still advertises that cluster.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."transfer_windows"';
+----
+"materialize"."agent_objects"."transfer_windows",quickstart
 COMPLETE 1
 
 # mz_session_role_memberships() is callable in a restricted session (it only
@@ -875,6 +916,11 @@ DROP SCHEMA agent_objects CASCADE;
 
 simple conn=mz_system,user=mz_system
 DROP CLUSTER agent_serving CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER agent_compute CASCADE;
 ----
 COMPLETE 0
 
