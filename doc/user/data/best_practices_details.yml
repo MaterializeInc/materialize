@@ -17,7 +17,12 @@
 
     **Limitations of a one-tier architecture** include:
 
-    - Sources, compute objects, and queries compete for cluster resources.
+    - Sources, compute objects, queries, and sinks compete for cluster
+      resources.
+
+    - No isolation between sources/sinks and compute. A crash in a
+      colocated source or sink can take down the compute and serving resources
+      sharing the cluster.
 
     - [Blue/green
       deployment](/manage/dbt/blue-green-deployments/) is
@@ -26,7 +31,10 @@
       To support blue/green deployments, use a two-tier architecture by moving
       compute objects to a new cluster (i.e., recreating compute objects in a new cluster).
 
-    - Cluster restarts require rehydration of the indexes on views.
+    - During cluster restarts, rehydration and query serving compete for the
+      same cluster resources. During rehydration, indexes on views are
+      recomputed, while indexes on materialized views are reloaded from storage
+      (that is, materialized view results are not recomputed).
 
 - name: architecture-two-tier
   content: |
@@ -49,10 +57,17 @@
 
     However, with a two-tier architecture:
 
-    - Compute/transform operations and queries compete for the same cluster
-    resources.
+    - Compute/transform operations and queries compete for the same
+      cluster resources.
 
-    - Cluster restarts require rehydration of the indexes on views.
+    - No isolation between sinks and compute. A crash in a
+      colocated sink can take down the compute and serving resources sharing the
+      cluster.
+
+    - During cluster restarts, rehydration and query serving compete for the
+      same cluster resources. During rehydration, indexes on views are
+      recomputed, while indexes on materialized views are reloaded from storage
+      (that is, materialized view results are not recomputed).
 
 - name: architecture-three-tier
   content: |
@@ -72,6 +87,10 @@
       deployments](/manage/dbt/blue-green-deployments/)
 
     - Independent scaling of each tier.
+
+    - During cluster restarts, rehydration for indexes
+      on materialized views reloads persisted results from storage (whereas for
+      indexes on views, rehydration recomputes the results).
 
 - name: architecture-upsert-source
   content: |
