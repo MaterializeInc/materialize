@@ -389,6 +389,14 @@ hyper = { version = "1.9.0", features = ["http1", "server"] }
 # which can only be done by constructing the HTTP Client
 hyper-0-14 = { package = "hyper", version = "0.14", features = ["client", "tcp"] }
 hyper-openssl = "0.10.2"
+# `aws-lc-rs` selects the FIPS-capable crypto provider (not `ring`), `native-tokio`
+# brings the `rustls-native-certs` roots that `with_provider_and_native_roots`
+# needs, and `http1`/`http2` cover the LaunchDarkly streaming and event
+# connections. We keep `default-features = false` to leave out the `logging`
+# feature, which would pull in the (workspace-banned) `log` crate. Used by
+# `mz-adapter` to build a FIPS-capable HTTPS connector for the LaunchDarkly
+# transport.
+hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc-rs", "native-tokio", "http1", "http2", "tls12"] }
 hyper-util = "0.1.20"
 tower-service = "0.3.3"
 iceberg = "0.9.0"
@@ -407,7 +415,17 @@ junit-report = "0.8.3"
 k8s-controller = "0.11.0"
 k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_32"] }
 kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
-launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
+# We select only the base `hyper` feature, not `hyper-rustls-native-roots`. That
+# feature would enable `launchdarkly-sdk-transport`'s `hyper-rustls` dependency,
+# which the transport crate hardcodes to the `ring` crypto provider (not
+# FIPS-validated). We supply our own aws-lc-rs-backed HTTPS connector to the
+# transport instead. See `mz-adapter`'s `config::frontend::ld_config`.
+launchdarkly-server-sdk = { version = "3.1.1", default-features = false, features = ["hyper", "crypto-aws-lc-rs"] }
+# `default-features = false` with only `hyper` keeps the transport crate's
+# ring-pinned `hyper-rustls` dependency out of the build. The `hyper` feature
+# still exposes `HyperTransport::builder()` and `build_with_connector`, which we
+# use to inject an aws-lc-rs connector.
+launchdarkly-sdk-transport = { version = "0.1", default-features = false, features = ["hyper"] }
 lgalloc = "0.6.0"
 libc = "0.2.186"
 lru = "0.16.3"
@@ -652,9 +670,6 @@ postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array"
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
-
-# Waiting for resolution of https://github.com/launchdarkly/rust-server-sdk/issues/116
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }

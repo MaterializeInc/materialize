@@ -27,12 +27,13 @@ futures.workspace = true
 governor.workspace = true
 hex.workspace = true
 humantime.workspace = true
+hyper-rustls.workspace = true
 imbl.workspace = true
 http.workspace = true
-hyper-tls = "0.5.0"
 ipnet.workspace = true
 itertools.workspace = true
 launchdarkly-server-sdk.workspace = true
+launchdarkly-sdk-transport.workspace = true
 maplit.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
@@ -83,6 +84,7 @@ prost.workspace = true
 qcell.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
+rustls.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

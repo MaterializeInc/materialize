@@ -657,6 +657,15 @@ pub fn main() {
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::install_enhanced_handler();
+
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let envd_start = Instant::now();
 
     // Configure signal handling as soon as possible. We want signals to be
