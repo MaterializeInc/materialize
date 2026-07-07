@@ -38,7 +38,13 @@ COPY --from=eatmydata /usr/lib/*/libeatmydata.so /usr/lib/
 COPY --from=tini /output/tini /usr/bin/tini
 
 # FoundationDB client library, dynamically linked by environmentd and clusterd.
-# NOTE: keep the version in sync with ubuntu-base.
+# NOTE: this tag is coupled to two other pins and all three must move
+# together: the same COPY in `ubuntu-base` (both prod bases must ship an
+# identical libfdb_c.so, since Ubuntu and distroless environmentd/clusterd
+# share one FoundationDB cluster during a rolling upgrade) and the
+# `foundationdb` crate's `fdb-7_3` API feature in the root Cargo.toml. A
+# dependabot bump here that is not matched in the other two is a bug, not a
+# routine update.
 COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
 
 # Replace the base image's glibc example nsswitch.conf, whose `compat`
