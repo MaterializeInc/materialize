@@ -200,16 +200,12 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    # Kill the environmentd and confirm the same
+    # Kill the environmentd and confirm the same. The distroless environmentd
+    # image ships no shell to `kubectl exec` a kill in, so force-delete the
+    # pod (SIGKILL, no grace period). The StatefulSet recreates it with the
+    # same name.
 
-    mz.kubectl(
-        "exec",
-        "pod/environmentd-0",
-        "--",
-        "bash",
-        "-c",
-        "kill -9 `pidof environmentd`",
-    )
+    mz.kubectl("delete", "pod/environmentd-0", "--grace-period=0", "--force")
     wait(condition="condition=Ready", resource="pod/environmentd-0")
 
     mz.testdrive.run(
