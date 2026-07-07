@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import subprocess
 from textwrap import dedent
 
 import pytest
@@ -175,11 +174,11 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     # wait for the cluster to be ready first before attempting to kill it
     wait(condition="condition=Ready", resource=f"{pod_name}")
 
-    try:
-        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
-    except subprocess.CalledProcessError as e:
-        # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
-        assert e.returncode == 137
+    # Simulate an unexpected clusterd crash. The distroless clusterd image
+    # ships no shell to `kubectl exec` a kill in, so force-delete the pod
+    # (SIGKILL, no grace period). The StatefulSet recreates it with the same
+    # name.
+    mz.kubectl("delete", "pod", pod_name, "--grace-period=0", "--force")
 
     mz.testdrive.run(
         input=dedent("""
