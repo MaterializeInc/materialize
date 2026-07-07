@@ -1406,12 +1406,18 @@ where
                         }
                     },
                     Err(err) => {
-                        let msg = format!("unable to decode parameter: {}", err);
-                        return self
-                            .send_error_and_get_state(ErrorResponse::error(
+                        // NUL characters get the same SQLSTATE that PostgreSQL
+                        // reports for them.
+                        let (code, msg) = if err.is::<mz_pgrepr::NulCharacterError>() {
+                            (SqlState::CHARACTER_NOT_IN_REPERTOIRE, err.to_string())
+                        } else {
+                            (
                                 SqlState::INVALID_PARAMETER_VALUE,
-                                msg,
-                            ))
+                                format!("unable to decode parameter: {}", err),
+                            )
+                        };
+                        return self
+                            .send_error_and_get_state(ErrorResponse::error(code, msg))
                             .await;
                     }
                 },
