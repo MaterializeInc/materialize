@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project.rs
-revision: 673fdb9d44
+revision: 8ee3def844
 ---
 
 # mz-deploy::project

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: 3030148731
+revision: 1c17d34993
 ---
 
 # adapter::coord::sequencer::inner
@@ -13,3 +13,4 @@ The generic `sequence_staged` driver and the `Staged` / `StagedContext` / `Stage
 `await_real_time_recent_timestamp` (public to the crate) and the private `real_time_recent_timestamp_error` helper convert `StorageError::RtrTimeout` and `StorageError::RtrDropFailure` to the dedicated `AdapterError::RtrTimeout` / `AdapterError::RtrDropFailure` variants with humanized collection names; callers in the `peek`, `explain_timestamp`, and `command_handler` modules use these helpers when awaiting real-time recency futures.
 `sequence_side_effecting_func` handles `PgCancelBackend` with a `NULL` connection-id argument by returning `NULL` immediately (matching PostgreSQL semantics), before attempting to look up or cancel any connection.
 Connection secret content is validated through `check_connection_secret_content_guards` for `CREATE CONNECTION` and `ALTER CONNECTION`, and through `check_secret_content_guards_of_dependents` when a secret's value changes, before any catalog entry is installed or persisted.
+Privilege grant/revoke operations group all grantee changes for the same target object into a single `Op::UpdatePrivilege` carrying a `privileges: Vec<MzAclItem>`, so a bulk grant/revoke affecting one object is a single durable write rather than one per grantee.

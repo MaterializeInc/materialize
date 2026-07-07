@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/lib.rs
-revision: 68b35c5959
+revision: 12181a5639
 ---
 
 # timely-util
@@ -10,6 +10,7 @@ revision: 68b35c5959
 Key modules:
 
 * `builder_async` — async operator construction with `OperatorBuilder`, `AsyncInputHandle`, and shutdown coordination via `Button`.
+* `hash` — `fixed_state()`, a fixed-seed `ahash::RandomState` used wherever deterministic hashing is required across runs, replicas, and builds (worker assignment during consolidation, per-column codec summaries in `mz_row_spine`).
 * `operator` — extension traits `StreamExt` and `CollectionExt` for fallible maps, consolidation, and stream expiry; `ConcatenateFlatten` and `consolidate_pact`.
 * `reclock` — timestamp translation operator for remapping source times to query times.
 * `order` — `Partitioned<P, T>` timestamp, `Interval<P>`, `Reverse<T>`, and `refine_antichain`.

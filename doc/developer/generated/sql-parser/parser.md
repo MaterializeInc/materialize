@@ -1,13 +1,13 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: 460108c80d
+revision: 4fd96c4a39
 ---
 
 # mz-sql-parser::parser
 
 Implements Materialize's recursive-descent SQL parser.
 `parse_statements` is the main entry point, tokenizing input via `mz-sql-lexer` and parsing a sequence of semicolon-separated statements into `Vec<StatementParseResult>`.
-Also exposes `parse_expr` for parsing a single expression, `parse_datatype` for type expressions, `parse_item_name` for parsing a qualified item name (e.g. `"db"."schema"."table"`), and `ParserError` with position information for error reporting.
+Also exposes `parse_expr` for parsing a single expression, `parse_datatype` for type expressions, `parse_item_name` for parsing a qualified item name (e.g. `"db"."schema"."table"`), `parse_item_name_with_limit` (like `parse_item_name` but rejects inputs larger than `MAX_STATEMENT_BATCH_SIZE` before lexing, mirroring `parse_statements_with_limit`), and `ParserError` with position information for error reporting.
 The parser enforces a recursion limit (`RECURSION_LIMIT = 128`) to guard against stack overflow on deeply nested queries. Iterative expression chains (`a + b + c`, field-access chains) are bounded separately by `EXPR_CHAIN_LIMIT = 1024` to allow wide but valid predicates while preventing stack overflows in later recursive passes (display, drop, visit). `maybe_parse` speculative failures are capped at `SPECULATIVE_FAILURES_PER_TOKEN × token_count` to prevent exponential backtracking on pathological input.
 `parse_table_factor` guards the nested table-factor recursion via `checked_recur_mut`; the actual work is delegated to `parse_table_factor_inner`.
 The right-hand side of `IS [NOT] DISTINCT FROM` is parsed at the precedence of the surrounding `IS` operator (via `parse_subexpr(precedence)`), not at `Precedence::Zero`. This ensures that `AND`/`OR` following the RHS are left for the enclosing expression rather than absorbed into it, matching PostgreSQL precedence.
@@ -23,3 +23,4 @@ Iceberg sink parsing reads the catalog connection name, then optionally parses `
 When parsing `FORMAT AVRO USING`, if the next tokens are `AWS GLUE SCHEMA REGISTRY`, the parser expects `CONNECTION <name>` followed by an optional parenthesized list of `GlueAvroOption`s parsed by `parse_glue_avro_option`. `parse_glue_avro_option` expects the `SCHEMA NAME` keyword sequence and then an optional value. After the option list, if the keyword `SEED` is present the parser expects `VALUE SCHEMA '<string>'` and populates `GlueAvroSeed { value_schema }`; otherwise `seed` is `None`.
 The `Precedence` enum is `pub(crate)` and serves as the single source of truth for both parser precedence and output parenthesization; the `prec` module in `ast::defs::expr` derives its constants from it via `as u8`.
 `parse_rows_from` uses `parse_windowless_function` (a private method) for each function inside `ROWS FROM (...)`. `parse_windowless_function` parses a function name and argument list without consuming `DISTINCT`, `FILTER`, or `OVER`, ensuring that table functions in `ROWS FROM` never carry those clauses.
+`GRANT/REVOKE ON ALL` parsing recognizes `NETWORK POLICY` as an object type in addition to the other supported types.

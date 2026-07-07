@@ -1,6 +1,6 @@
 ---
 source: src/orchestratord/src/k8s.rs
-revision: ff4065dc30
+revision: b088d23e1d
 ---
 
 # mz-orchestratord::k8s

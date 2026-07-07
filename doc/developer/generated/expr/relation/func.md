@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/relation/func.rs
-revision: 31a56678e7
+revision: 740e6615fc
 ---
 
 # mz-expr::relation::func
@@ -16,3 +16,4 @@ The `TableFunc::SubqueryScalar` evaluation checks the row count: a count of 1 re
 The corresponding free functions are `repeat_row` and `repeat_row_non_negative`.
 The public constant `REPEAT_ROW_NAME` holds the display name `"repeat_row"` and is re-exported from the crate root.
 `AnalyzedRegex` wraps a compiled regex and a `Vec<CaptureGroupDesc>` and an `AnalyzedRegexOpts`. Each `CaptureGroupDesc` carries the capture index, optional name, and a `nullable` flag; all capture groups are unconditionally marked `nullable: true` at construction time.
+The timestamp `generate_series` iterator (`TimestampRangeStepInclusive`) detects lack of progress at each step and terminates the series rather than looping. A mixed month/day step can reach a fixed point (month addition saturates onto a short month boundary and the day component then returns to the start), which would otherwise loop forever. This deliberately diverges from PostgreSQL, which loops indefinitely on such inputs; in Materialize the loop is reachable in materialized views and indexes where no `statement_timeout` can interrupt it.

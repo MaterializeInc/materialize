@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/cfg.rs
-revision: b89a9e0ec5
+revision: 6c3b074fbb
 ---
 
 # persist::cfg

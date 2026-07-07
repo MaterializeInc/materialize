@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/ir/compiled.rs
-revision: a647094cc4
+revision: 8ee3def844
 ---
 
 # mz-deploy::project::ir::compiled

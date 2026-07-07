@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/threshold.rs
-revision: 225aeaa79f
+revision: e926ec3a86
 ---
 
 # mz-compute::render::threshold
