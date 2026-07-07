@@ -45,8 +45,11 @@ RECONNECT_VALUE = 3221225472
 # initialization) and the long-lived sync client. Stalling only the first
 # connection would waste the stall on the bootstrap loader and hand the sync
 # client the updated value with no reconnect exercised at all. Stalling the
-# first two covers both: the sync client always receives at least one
-# stall-then-timeout cycle, even if the bootstrap connection ever goes away.
+# first two makes 3 GiB unreachable without a working post-timeout reconnect:
+# the two stalls are consumed either by the sync client (which must then
+# reconnect to see 3 GiB) or by a bootstrap client that itself had to reconnect
+# past a stall to consume the second one. Either path exercises the behavior
+# under test, so a regressed SDK stays stuck at 2 GiB.
 STALL_CONNECTIONS = 2
 
 # Seconds to hold a stalled connection open. Must comfortably exceed the SDK's
@@ -122,8 +125,11 @@ class Handler(BaseHTTPRequestHandler):
             # connection open. No further bytes, no FIN, no RST: the SDK's
             # read timeout must be what ends the stream, surfacing the
             # incident-984 error class to the data source.
-            self.wfile.write(put_event(INITIAL_VALUE, 1))
-            self.wfile.flush()
+            try:
+                self.wfile.write(put_event(INITIAL_VALUE, 1))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
             self.log_message("stalling streaming connection %d", n)
             time.sleep(STALL_SECONDS)
             self.close_connection = True

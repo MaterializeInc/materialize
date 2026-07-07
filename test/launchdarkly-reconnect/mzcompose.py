@@ -30,6 +30,8 @@ stuck on the initial value and the assertion below times out.
 Unlike test/launchdarkly, this needs no real LaunchDarkly credentials.
 """
 
+from textwrap import dedent
+
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.service import Service as DockerService
 from materialize.mzcompose.services.materialized import Materialized
@@ -90,4 +92,7 @@ def workflow_default(c: Composition) -> None:
     # client's data source reconnected after the mid-body timeout; a regressed
     # SDK stays stuck at 2 GiB and this assertion times out. We don't assert
     # the transient 2 GiB value, as the timeout can race startup.
-    c.testdrive("\n".join(["> SHOW max_result_size", "3GB"]))
+    c.testdrive(dedent("""
+            > SHOW max_result_size
+            3GB
+            """))

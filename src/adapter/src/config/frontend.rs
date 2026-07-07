@@ -400,11 +400,29 @@ fn ld_config(
     // error class of incident-984 (a silently-dead connection). Overridable
     // via a hidden env var so tests can trigger the timeout path in seconds
     // instead of minutes (see test/launchdarkly-reconnect).
-    let read_timeout = std::env::var("MZ_LAUNCHDARKLY_READ_TIMEOUT")
-        .ok()
-        .and_then(|v| humantime::parse_duration(&v).ok())
-        .unwrap_or(Duration::from_secs(300));
+    //
+    // The default must stay above LaunchDarkly's streaming heartbeat interval
+    // (roughly 3 minutes per LD's documentation), or a healthy idle stream
+    // would trip the timeout and reconnect spuriously. Benign now that
+    // reconnects work, but wasteful. The same constant lives in
+    // `mz-dyncfg-launchdarkly`.
+    let read_timeout = match std::env::var("MZ_LAUNCHDARKLY_READ_TIMEOUT") {
+        Ok(v) => humantime::parse_duration(&v).unwrap_or_else(|e| {
+            // Don't silently fall back: a typo here (e.g. `5sec`) would
+            // otherwise present as an unexplained timeout far downstream.
+            tracing::error!(
+                "ignoring unparseable MZ_LAUNCHDARKLY_READ_TIMEOUT {v:?}: {e}; \
+                 falling back to default"
+            );
+            Duration::from_secs(300)
+        }),
+        Err(_) => Duration::from_secs(300),
+    };
 
+    // NOTE: `HyperTransport` auto-detects the `HTTP_PROXY`/`HTTPS_PROXY`/
+    // `NO_PROXY` env vars and routes through a configured proxy. No exposure
+    // today (our cloud pods set no proxy vars, self-managed never builds an LD
+    // client), but worth knowing if proxy vars ever appear on a pod.
     let transport = launchdarkly_sdk_transport::HyperTransport::builder()
         .connect_timeout(Duration::from_secs(10))
         .read_timeout(read_timeout)

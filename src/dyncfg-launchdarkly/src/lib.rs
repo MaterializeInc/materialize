@@ -49,6 +49,16 @@ where
         let _ = dyn_into_flag(entry.val())?;
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
+        // The 300s streaming read timeout must stay above LaunchDarkly's
+        // streaming heartbeat interval (roughly 3 minutes per LD's
+        // documentation), or a healthy idle stream would trip the timeout and
+        // reconnect spuriously. The same constant lives in the adapter's
+        // `SystemParameterFrontend`.
+        //
+        // NOTE: `HyperTransport` auto-detects the `HTTP_PROXY`/`HTTPS_PROXY`/
+        // `NO_PROXY` env vars and routes through a configured proxy. No
+        // exposure today (balancerd's cloud pods set no proxy vars), but worth
+        // knowing if proxy vars ever appear on a pod.
         let transport = launchdarkly_sdk_transport::HyperTransport::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(300))
