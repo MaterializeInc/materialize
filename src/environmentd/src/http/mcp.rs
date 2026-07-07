@@ -1452,6 +1452,32 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
 mod tests {
     use super::*;
 
+    /// The DNS-rebinding defense: a disallowed `Origin` is rejected with 403,
+    /// an allowed one passes, and a missing one passes (non-browser clients).
+    #[mz_ore::test]
+    fn test_validate_origin() {
+        let allowed = [HeaderValue::from_static("https://good.example")];
+
+        assert!(validate_origin(&HeaderMap::new(), &allowed).is_none());
+
+        let mut ok = HeaderMap::new();
+        ok.insert(http::header::ORIGIN, allowed[0].clone());
+        assert!(validate_origin(&ok, &allowed).is_none());
+
+        let mut bad = HeaderMap::new();
+        bad.insert(
+            http::header::ORIGIN,
+            HeaderValue::from_static("https://evil.example"),
+        );
+        let rejected = validate_origin(&bad, &allowed);
+        assert_eq!(
+            rejected
+                .expect("disallowed origin must be rejected")
+                .status(),
+            StatusCode::FORBIDDEN,
+        );
+    }
+
     #[mz_ore::test]
     fn test_validate_readonly_query_select() {
         assert!(validate_readonly_query("SELECT * FROM mz_tables").is_ok());
