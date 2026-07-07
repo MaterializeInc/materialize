@@ -1127,63 +1127,85 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
             acc
         });
 
-    // Add new replicas.
+    // Reconcile builtin replicas against the durable cluster row.
+    //
+    // The target replication factor comes from `cluster.config.variant`,
+    // which is the durable source of truth: seeded from the bootstrap flag
+    // on first boot, updated by `ALTER CLUSTER` after that. Reading from
+    // the cluster row here (instead of the bootstrap flag) means an ALTER
+    // survives a restart, and keeps the invariant
+    // `count(system replicas of cluster C) == C.replication_factor`.
+    //
+    // Also handles the rf > 0 -> rf = 0 direction: a replica that should
+    // no longer exist stays in `durable_replicas` and gets removed by the
+    // orphan-cleanup loop at the bottom of this function.
+    //
+    // The bootstrap map is still consulted for the Unmanaged fallback,
+    // matching prior behavior for legacy on-disk configs.
     for builtin_replica in BUILTIN_CLUSTER_REPLICAS {
         let cluster = cluster_lookup
             .get(builtin_replica.cluster_name)
             .expect("builtin cluster replica references non-existent cluster");
-        // `empty_map` is a hack to simplify the if statement below.
+
+        let (target_rf, replica_size) = match &cluster.config.variant {
+            ClusterVariant::Managed(m) => (m.replication_factor, m.size.clone()),
+            ClusterVariant::Unmanaged => {
+                let bootstrap =
+                    builtin_cluster_config_map.get_config(builtin_replica.cluster_name)?;
+                (bootstrap.replication_factor, bootstrap.size.clone())
+            }
+        };
+
+        // Stand-in empty map for clusters with no stored replicas, so the
+        // branches below can treat `replica_names` uniformly.
         let mut empty_map: BTreeMap<String, ClusterReplica> = BTreeMap::new();
         let replica_names = durable_replicas
             .get_mut(&cluster.id)
             .unwrap_or(&mut empty_map);
 
-        let builtin_cluster_bootstrap_config =
-            builtin_cluster_config_map.get_config(builtin_replica.cluster_name)?;
-        if replica_names.remove(builtin_replica.name).is_none()
-            // NOTE(SangJunBak): We need to explicitly check the replication factor because
-            // BUILT_IN_CLUSTER_REPLICAS is constant throughout all deployments but the replication
-            // factor is configurable on bootstrap.
-            && builtin_cluster_bootstrap_config.replication_factor > 0
-        {
-            let replica_size = match cluster.config.variant {
-                ClusterVariant::Managed(ClusterVariantManaged { ref size, .. }) => size.clone(),
-                ClusterVariant::Unmanaged => builtin_cluster_bootstrap_config.size.clone(),
-            };
-
-            let config = builtin_cluster_replica_config(replica_size.clone());
-            // Builtin replicas live on system clusters. This runs inside the
-            // catalog-open transaction with no coordinator, so allocating from
-            // the same transaction is single-source and safe.
-            let replica_id = txn.allocate_system_replica_id()?;
-            txn.insert_cluster_replica_with_id(
-                cluster.id,
-                replica_id,
-                builtin_replica.name,
-                config,
-                MZ_SYSTEM_ROLE_ID,
-            )?;
-
-            let audit_id = txn.allocate_audit_log_id()?;
-            txn.insert_audit_log_event(VersionedEvent::new(
-                audit_id,
-                EventType::Create,
-                ObjectType::ClusterReplica,
-                EventDetails::CreateClusterReplicaV4(mz_audit_log::CreateClusterReplicaV4 {
-                    cluster_id: cluster.id.to_string(),
-                    cluster_name: cluster.name.clone(),
-                    replica_id: Some(replica_id.to_string()),
-                    replica_name: builtin_replica.name.to_string(),
-                    logical_size: replica_size,
-                    billed_as: None,
-                    internal: false,
-                    reason: CreateOrDropClusterReplicaReasonV1::System,
-                    scheduling_policies: None,
-                }),
-                None,
-                boot_ts.into(),
-            ));
+        if target_rf == 0 {
+            // Leave any existing replica in `durable_replicas` so the
+            // cleanup loop below removes it.
+            continue;
         }
+
+        if replica_names.remove(builtin_replica.name).is_some() {
+            // Replica already exists. Nothing to do.
+            continue;
+        }
+
+        let config = builtin_cluster_replica_config(replica_size.clone());
+        // Builtin replicas live on system clusters. This runs inside the
+        // catalog-open transaction with no coordinator, so allocating from
+        // the same transaction is single-source and safe.
+        let replica_id = txn.allocate_system_replica_id()?;
+        txn.insert_cluster_replica_with_id(
+            cluster.id,
+            replica_id,
+            builtin_replica.name,
+            config,
+            MZ_SYSTEM_ROLE_ID,
+        )?;
+
+        let audit_id = txn.allocate_audit_log_id()?;
+        txn.insert_audit_log_event(VersionedEvent::new(
+            audit_id,
+            EventType::Create,
+            ObjectType::ClusterReplica,
+            EventDetails::CreateClusterReplicaV4(mz_audit_log::CreateClusterReplicaV4 {
+                cluster_id: cluster.id.to_string(),
+                cluster_name: cluster.name.clone(),
+                replica_id: Some(replica_id.to_string()),
+                replica_name: builtin_replica.name.to_string(),
+                logical_size: replica_size,
+                billed_as: None,
+                internal: false,
+                reason: CreateOrDropClusterReplicaReasonV1::System,
+                scheduling_policies: None,
+            }),
+            None,
+            boot_ts.into(),
+        ));
     }
 
     // Remove old replicas.

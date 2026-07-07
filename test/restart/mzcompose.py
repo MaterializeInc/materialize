@@ -993,6 +993,122 @@ def workflow_user_id_no_reuse_after_restart(c: Composition) -> None:
     c.sql("DROP TABLE idreuse_t1")
 
 
+def _assert_builtin_cluster_consistent(
+    c: Composition, cluster_name: str, expected_rf: int | None = None
+) -> None:
+    """Assert the count invariant for a builtin cluster.
+
+    `mz_clusters.replication_factor` must equal the number of rows in
+    `mz_cluster_replicas` for that cluster. If `expected_rf` is given, also
+    assert the stored value matches it.
+    """
+    stored_rf = int(
+        c.sql_query(
+            f"SELECT replication_factor FROM mz_clusters WHERE name = '{cluster_name}'"
+        )[0][0]
+    )
+    actual_replicas = int(
+        c.sql_query(
+            "SELECT count(*) FROM mz_cluster_replicas r "
+            "JOIN mz_clusters c ON c.id = r.cluster_id "
+            f"WHERE c.name = '{cluster_name}'"
+        )[0][0]
+    )
+    assert stored_rf == actual_replicas, (
+        f"{cluster_name} has replication_factor={stored_rf} "
+        f"but {actual_replicas} actual replica(s)"
+    )
+    if expected_rf is not None:
+        assert (
+            stored_rf == expected_rf
+        ), f"{cluster_name} has replication_factor={stored_rf}, expected {expected_rf}"
+
+
+def workflow_builtin_cluster_replication_factor_drift_zero_to_one(
+    c: Composition,
+) -> None:
+    """Regression test for SQL-207.
+
+    Boot `mz_system` with `--bootstrap-builtin-system-cluster-replication-factor=0`,
+    then restart with `=1`. The bootstrap flag is one-time, so
+    `mz_clusters.replication_factor` should stay at 0 after the restart, and
+    the invariant `stored rf == replica count` must hold on both boots.
+    """
+    c.down(destroy_volumes=True)
+
+    with c.override(Materialized(builtin_system_cluster_replication_factor=0)):
+        c.up("materialized")
+        _assert_builtin_cluster_consistent(c, "mz_system", expected_rf=0)
+        c.kill("materialized")
+
+    with c.override(Materialized(builtin_system_cluster_replication_factor=1)):
+        c.up("materialized")
+        _assert_builtin_cluster_consistent(c, "mz_system", expected_rf=0)
+        c.kill("materialized")
+
+    c.down(destroy_volumes=True)
+
+
+def workflow_builtin_cluster_replication_factor_drift_one_to_zero(
+    c: Composition,
+) -> None:
+    """Regression test for SQL-207, mirror direction.
+
+    Boot `mz_system` with rf=1, then restart with rf=0. Same reasoning: the
+    bootstrap flag is one-time, so `mz_clusters.replication_factor` stays at
+    1 after the restart, and the invariant must hold.
+    """
+    c.down(destroy_volumes=True)
+
+    with c.override(Materialized(builtin_system_cluster_replication_factor=1)):
+        c.up("materialized")
+        _assert_builtin_cluster_consistent(c, "mz_system", expected_rf=1)
+        c.kill("materialized")
+
+    with c.override(Materialized(builtin_system_cluster_replication_factor=0)):
+        c.up("materialized")
+        _assert_builtin_cluster_consistent(c, "mz_system", expected_rf=1)
+        c.kill("materialized")
+
+    c.down(destroy_volumes=True)
+
+
+def workflow_builtin_cluster_alter_survives_restart(c: Composition) -> None:
+    """`ALTER CLUSTER mz_system SET (REPLICATION FACTOR N)` must survive a
+    restart, and `mz_cluster_replicas` must reconcile to the new value.
+    """
+    c.down(destroy_volumes=True)
+
+    with c.override(Materialized(builtin_system_cluster_replication_factor=1)):
+        c.up("materialized")
+        _assert_builtin_cluster_consistent(c, "mz_system", expected_rf=1)
+
+        c.sql(
+            "ALTER CLUSTER mz_system SET (REPLICATION FACTOR 0)",
+            port=6877,
+            user="mz_system",
+        )
+        _assert_builtin_cluster_consistent(c, "mz_system", expected_rf=0)
+        c.kill("materialized")
+
+        c.up("materialized")
+        _assert_builtin_cluster_consistent(c, "mz_system", expected_rf=0)
+
+        c.sql(
+            "ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)",
+            port=6877,
+            user="mz_system",
+        )
+        _assert_builtin_cluster_consistent(c, "mz_system", expected_rf=1)
+        c.kill("materialized")
+
+        c.up("materialized")
+        _assert_builtin_cluster_consistent(c, "mz_system", expected_rf=1)
+        c.kill("materialized")
+
+    c.down(destroy_volumes=True)
+
+
 def workflow_rename_schema_types_functions(c: Composition) -> None:
     """Verify that ALTER SCHEMA RENAME updates references to a renamed schema's types.
 
