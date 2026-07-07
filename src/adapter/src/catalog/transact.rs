@@ -423,23 +423,53 @@ impl Catalog {
         !item.is_temporary()
     }
 
+    /// The cluster config's `reconfiguration` record, if any.
+    fn reconfiguration_record_of(
+        config: &ClusterConfig,
+    ) -> Option<&mz_catalog::memory::objects::ReconfigurationState> {
+        match &config.variant {
+            ClusterVariant::Managed(managed) => managed.reconfiguration.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    /// Whether a cluster config write moves the reconfiguration lifecycle: a
+    /// status change, a fresh record, or the drop of an in-progress record.
+    ///
+    /// Every such movement is an audit-log transition, so a write performing
+    /// one must declare the matching intent. Status-preserving copies (legacy
+    /// paths carrying a record forward, re-targets that stay in progress with a
+    /// declared `Started`) and drops of already-settled records move nothing.
+    fn reconfiguration_lifecycle_moved(
+        old_config: &ClusterConfig,
+        new_config: &ClusterConfig,
+    ) -> bool {
+        match (
+            Self::reconfiguration_record_of(old_config),
+            Self::reconfiguration_record_of(new_config),
+        ) {
+            (None, Some(_)) => true,
+            (Some(old), Some(new)) => old.status != new.status,
+            (Some(old), None) => old.is_in_progress(),
+            (None, None) => false,
+        }
+    }
+
     /// Builds a reconfiguration lifecycle audit event from the writer-declared
     /// audit intent and the record in `config`.
     ///
     /// The intent must cohere with the record it rides along with: the durable
     /// `status` and the audited transition are two views of one decision, so a
     /// mismatch is a writer bug and fails the transaction rather than commit an
-    /// event that contradicts the state.
+    /// event that contradicts the state. The valid pairings are tabulated on
+    /// [`mz_catalog::memory::objects::ReconfigurationStatus`].
     fn reconfiguration_audit_details(
         config: &ClusterConfig,
         cluster_id: ClusterId,
         cluster_name: &str,
         audit: ReconfigurationAudit,
     ) -> Result<AlterClusterReconfigurationV1, AdapterError> {
-        let record = match &config.variant {
-            ClusterVariant::Managed(managed) => managed.reconfiguration.as_ref(),
-            ClusterVariant::Unmanaged => None,
-        };
+        let record = Self::reconfiguration_record_of(config);
         let Some(record) = record else {
             return Err(AdapterError::Internal(format!(
                 "reconfiguration audit transition {audit:?} for cluster {cluster_name} \
@@ -2796,6 +2826,18 @@ impl Catalog {
                 burst_audit,
             } => {
                 let mut cluster = state.get_cluster(id).clone();
+                // Writes that declare no reconfiguration intent must not move
+                // the reconfiguration lifecycle, or the audit log would
+                // silently lose the transition. Writer bug, fails the
+                // transaction.
+                if reconfiguration_audit.is_none()
+                    && Self::reconfiguration_lifecycle_moved(&cluster.config, &config)
+                {
+                    return Err(AdapterError::Internal(format!(
+                        "cluster {name} reconfiguration record moved without a declared \
+                         audit intent"
+                    )));
+                }
                 let reconfiguration_event = reconfiguration_audit
                     .map(|audit| Self::reconfiguration_audit_details(&config, id, &name, audit))
                     .transpose()?;
@@ -3572,6 +3614,88 @@ mod tests {
             ReconfigurationAudit::Started,
         );
         assert!(missing.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_reconfiguration_lifecycle_moved() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{
+            ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+            ReconfigurationStatus, ReconfigurationTarget,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let managed = |reconfiguration: Option<ReconfigurationState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration,
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let unmanaged = ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        };
+        let record = |status| ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: "large".into(),
+                replication_factor: 2,
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: Some(Duration::from_secs(1)),
+                },
+            },
+            deadline: Timestamp::from(400u64),
+            on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
+            status,
+        };
+
+        // Lifecycle movements: these writes must declare an audit intent.
+        // A fresh record appears.
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(None),
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+        ));
+        // The status changes.
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &managed(Some(record(ReconfigurationStatus::Finalized))),
+        ));
+        // An in-progress record is dropped, e.g. by converting the cluster to
+        // unmanaged (which the sequencer refuses, and this guard backstops).
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &unmanaged,
+        ));
+
+        // Not movements: no record at all, a status-preserving copy (legacy
+        // paths carry the record forward), and dropping a settled record.
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(None),
+            &managed(None),
+        ));
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+        ));
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::Cancelled))),
+            &unmanaged,
+        ));
     }
 
     #[mz_ore::test]

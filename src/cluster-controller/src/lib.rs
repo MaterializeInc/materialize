@@ -191,8 +191,7 @@ impl ClusterController {
     /// a discretionary user change that fails cleanly (audited, and the wait-shim
     /// reports a timeout) and can be retried, while aborting it leaves the
     /// cluster running at its realized shape. The baseline is never shed, it is
-    /// the committed floor. A further transient strategy ranks between the two:
-    /// its shed arm slots in below the reconfiguration's.
+    /// the committed floor.
     ///
     /// We shed one strategy per exhausted apply. If that was not enough, the
     /// next tick recomputes and sheds the next one.

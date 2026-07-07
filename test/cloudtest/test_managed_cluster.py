@@ -45,7 +45,7 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     # cluster controller on it is realized as a graceful reconfiguration. The new
     # pool takes effect only once replacement replicas have hydrated and the
     # controller cuts over, so the realized `availability_zones` and the steady
-    # replica set settle asynchronously; with the controller off the change is
+    # replica set settle asynchronously. With the controller off the change is
     # applied synchronously in place. Poll (testdrive retries each query) for the
     # settled state so this passes either way. The cut-over does not preserve
     # replica names, so assert on replica *count* rather than specific names.

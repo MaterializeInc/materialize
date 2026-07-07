@@ -102,7 +102,7 @@ impl Strategy for BaselineStrategy {
 /// default) marks the record timed out without touching the realized config and
 /// stops desiring the target replicas, reverting to the pre-reconfiguration set.
 ///
-/// Both functions are pure over the observed [`ClusterState`]; hydration is read
+/// Both functions are pure over the observed [`ClusterState`]. Hydration is read
 /// from [`ClusterState::hydrated_replicas`], which the controller populates while
 /// an in-progress reconfiguration is present.
 #[derive(Clone, Copy, Debug, Default)]
@@ -218,12 +218,14 @@ impl Strategy for GracefulReconfigurationStrategy {
         // Past the deadline with the target not hydrated under `Rollback`: stop
         // contributing the target replicas. `update_state` marks the record
         // timed out in this same tick's first phase, so this usually never fires
-        // against a re-read state. It matters when that write could not land (e.g.
-        // the compare-and-append witness was stale), keeping the rollback's
-        // replica drops prompt rather than waiting for the status update to retry. Everything
-        // else (before the deadline, awaiting a success cut-over past it, or a
-        // `Commit` cut-over `update_state` performs this tick) keeps desiring
-        // the target set.
+        // against a re-read state. It matters when the deadline crosses between
+        // the two phases' `ctx.now()` reads within one tick: phase 1 saw the
+        // deadline unreached and wrote nothing, phase 2 sees it reached here and
+        // already stops desiring the target, keeping the rollback's replica
+        // drops prompt rather than waiting a tick for the status write.
+        // Everything else (before the deadline, awaiting a success cut-over
+        // past it, or a `Commit` cut-over `update_state` performs this tick)
+        // keeps desiring the target set.
         // `now >= deadline` matches `update_state`'s boundary, so a zero-timeout
         // rollback stops desiring the target on the same tick it marks the
         // record timed out.

@@ -271,6 +271,9 @@ pub enum AdapterError {
     ReadOnly,
     AlterClusterTimeout,
     AlterClusterWhilePendingReplicas,
+    /// Attempt to convert a cluster to unmanaged while a graceful
+    /// reconfiguration is in progress.
+    AlterClusterUnmanagedWhileReconfiguring,
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
@@ -707,6 +710,11 @@ impl AdapterError {
             ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
+            AdapterError::AlterClusterUnmanagedWhileReconfiguring => Some(
+                "Cancel the reconfiguration by altering the cluster back to its current size, \
+                or wait for it to settle, then convert."
+                    .to_string(),
+            ),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
                     "No availability zones configured; do not specify AVAILABILITY ZONE".into()
@@ -933,6 +941,7 @@ impl AdapterError {
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
             AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
                 SqlState::INVALID_PASSWORD
@@ -1369,6 +1378,12 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::AlterClusterWhilePendingReplicas => {
                 write!(f, "cannot alter clusters with pending updates")
+            }
+            AdapterError::AlterClusterUnmanagedWhileReconfiguring => {
+                write!(
+                    f,
+                    "cannot convert cluster to unmanaged while a reconfiguration is in progress"
+                )
             }
             AdapterError::ReplacementSchemaMismatch(_) => {
                 write!(f, "replacement schema differs from target schema")

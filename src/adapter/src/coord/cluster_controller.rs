@@ -412,7 +412,8 @@ impl Coordinator {
                 exclude.clone(),
             ) {
                 Ok(fut) => fut,
-                // The replica is not known to the compute controller; not hydrated.
+                // The replica is not known to the compute controller. Treat it
+                // as not hydrated.
                 Err(_) => continue,
             };
             let storage_hydrated = match self.controller.storage.collections_hydrated_on_replicas(

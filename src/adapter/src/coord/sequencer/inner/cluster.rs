@@ -537,11 +537,7 @@ impl Coordinator {
                 // Sizes are validated by `ensure_valid_replica_size` before we get
                 // here, so an unknown size contributes nothing rather than panics.
                 .unwrap_or_else(Numeric::zero);
-            let mut total = Numeric::zero();
-            for _ in 0..replication_factor {
-                total += per_replica;
-            }
-            total
+            per_replica * Numeric::from(replication_factor)
         };
         let mut peak_credit = shape_credit(&target.size, target.replication_factor);
         peak_credit += shape_credit(&realized.size, realized.replication_factor);
@@ -664,7 +660,7 @@ impl Coordinator {
         self.validate_reconfiguration_resource_limits(cluster_id, &target)?;
 
         // Resolve the deadline and the on-timeout action from the existing
-        // `WITH (WAIT ...)` surface; both are written relative to the current time
+        // `WITH (WAIT ...)` surface. Both are written relative to the current time
         // so they survive session disconnect and restart. Unlike the target, which
         // folds per-dimension onto the in-flight one, the deadline and `on_timeout`
         // are replaced wholesale by the latest `ALTER`'s `WAIT` clause (they are
@@ -794,8 +790,8 @@ impl Coordinator {
         target: ReconfigurationTarget,
     ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
         let Some(cluster) = self.catalog().try_get_cluster(cluster_id) else {
-            // The cluster was dropped out from under the reconfiguration; nothing
-            // to wait on.
+            // The cluster was dropped out from under the reconfiguration.
+            // There is nothing to wait on.
             return Ok(StageResult::Response(ExecuteResponse::AlteredObject(
                 ObjectType::Cluster,
             )));
@@ -971,15 +967,19 @@ impl Coordinator {
 
         ops.extend(finalize_replicas);
 
-        // Add the Op to update the cluster state
+        // Add the Op to update the cluster state. A stale in-progress
+        // reconfiguration record carried by this legacy write is retained as
+        // cancelled, with the matching audit intent declared.
+        let mut final_config = ClusterConfig {
+            variant: ClusterVariant::Managed(new_config),
+            workload_class: workload_class.clone(),
+        };
+        let reconfiguration_audit = cancel_carried_reconfiguration(&mut final_config);
         ops.push(Op::UpdateClusterConfig {
             id: cluster_id,
             name: cluster_name,
-            config: ClusterConfig {
-                variant: ClusterVariant::Managed(new_config),
-                workload_class: workload_class.clone(),
-            },
-            reconfiguration_audit: None,
+            config: final_config,
+            reconfiguration_audit,
             burst_audit: None,
         });
         self.catalog_transact(Some(session), ops).await?;
@@ -1869,7 +1869,7 @@ impl Coordinator {
         let mut replica_ctxs = Vec::new();
 
         if controller_owns {
-            // Defer all replica create/drop to the controller; only the realized
+            // Defer all replica create/drop to the controller. Only the realized
             // config update below is applied here.
         } else if config_changed {
             self.ensure_valid_azs(new_availability_zones.iter())?;
@@ -2018,14 +2018,18 @@ impl Coordinator {
         }
 
         // If finalization is needed, finalization should update the cluster
-        // config.
+        // config. A stale in-progress reconfiguration record carried by this
+        // legacy write is retained as cancelled, with the matching audit
+        // intent declared.
         match finalization_needed {
             NeedsFinalization::No => {
+                let mut new_config = new_config;
+                let reconfiguration_audit = cancel_carried_reconfiguration(&mut new_config);
                 ops.push(catalog::Op::UpdateClusterConfig {
                     id: cluster_id,
                     name: name.clone(),
                     config: new_config,
-                    reconfiguration_audit: None,
+                    reconfiguration_audit,
                     burst_audit: None,
                 });
             }
@@ -2190,6 +2194,21 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog().get_cluster(cluster_id);
 
+        // The unmanaged variant has no reconfiguration field, so converting
+        // would silently drop an in-progress record with no terminal status
+        // and no audit event, and strand any overlap replicas the controller
+        // already created. Refuse instead: the user can cancel (ALTER back to
+        // the realized size) or wait for the record to settle first.
+        if let ClusterVariant::Managed(managed) = &cluster.config.variant {
+            if managed
+                .reconfiguration
+                .as_ref()
+                .is_some_and(|record| record.is_in_progress())
+            {
+                return Err(AdapterError::AlterClusterUnmanagedWhileReconfiguring);
+            }
+        }
+
         let ops = vec![catalog::Op::UpdateClusterConfig {
             id: cluster_id,
             name: cluster.name().to_string(),
@@ -2346,6 +2365,28 @@ struct ReconfigurationDimensionsUnchanged {
     interval: bool,
 }
 
+/// Retains a stale in-progress reconfiguration record carried by a legacy-path
+/// config write as cancelled, returning the audit intent to declare with the
+/// write.
+///
+/// The legacy ALTER paths (controller gate off) change the realized config
+/// directly and know nothing about reconfiguration records. Nothing on those
+/// paths ever settles a record, and carrying an in-progress one forward invites
+/// a bogus revival, up to a forced cut-over to an obsolete target, if the gate
+/// is turned back on later. A record can only be in progress here if it was
+/// written while the gate was on.
+fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<ReconfigurationAudit> {
+    let ClusterVariant::Managed(managed) = &mut config.variant else {
+        return None;
+    };
+    let record = managed.reconfiguration.as_mut()?;
+    if !record.is_in_progress() {
+        return None;
+    }
+    record.status = ReconfigurationStatus::Cancelled;
+    Some(ReconfigurationAudit::Cancelled)
+}
+
 /// Fold a new `ALTER` onto an in-flight reconfiguration target.
 ///
 /// `new_target` was built against the *realized* config, so any dimension the
@@ -2454,7 +2495,7 @@ mod tests {
 
     #[mz_ore::test]
     fn fold_rf_only_keeps_in_flight_shape() {
-        // A 200cc size change is in flight; a later rf-only ALTER must NOT revert
+        // A 200cc size change is in flight. A later rf-only ALTER must NOT revert
         // the in-flight size/AZ/logging back to the realized (100cc) values that
         // `new_target` carries for the dimensions the ALTER left unchanged.
         let in_flight = target("200cc", 1, &["az2"], true);
@@ -2469,7 +2510,7 @@ mod tests {
             interval: true,
         };
         let folded = fold_reconfiguration_target(Some(&in_flight), new, unchanged);
-        // The in-flight size/AZ/logging survive; only rf is re-targeted.
+        // The in-flight size/AZ/logging survive. Only rf is re-targeted.
         assert_eq!(folded, target("200cc", 5, &["az2"], true));
     }
 

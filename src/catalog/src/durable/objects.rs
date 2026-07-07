@@ -365,7 +365,7 @@ pub struct ClusterVariantManaged {
 /// to or most recently moved toward, plus its deadline and terminal state.
 ///
 /// `ALTER` writes this record with [`ReconfigurationStatus::InProgress`] and
-/// returns; the realized config (`cluster.size`, ...) is advanced by the
+/// returns. The realized config (`cluster.size`, ...) is advanced by the
 /// controller only at cut-over. When the reconfiguration settles, the controller
 /// retains the record with a terminal status so readers can inspect the latest
 /// outcome without reconstructing it from the audit log.

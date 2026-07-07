@@ -125,6 +125,16 @@ cc_graceful r3 scale=1,workers=1
 4 create reconfiguration
 5 drop retired
 
+# The reconfiguration lifecycle itself is audited: each reshape records a
+# `started` when its record is written and a `finalized` at cut-over. Both
+# cut-overs here were reached by hydration, not by a deadline commit, so
+# `forced` reads false (it is absent on `started` events).
+> SELECT row_number() OVER (ORDER BY id), details->>'transition', details->>'forced' FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_graceful' AND details->>'transition' IS NOT NULL
+1 started <null>
+2 finalized false
+3 started <null>
+4 finalized false
+
 > DROP CLUSTER cc_graceful
 
 # A logging (INTROSPECTION) change is also a config-shape change: the controller
@@ -366,3 +376,31 @@ scale=1,workers=1 2
 # Reset the limit after this section.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM RESET max_credit_consumption_rate
+
+# ----- Converting to unmanaged is refused while a reconfiguration is in flight -----
+#
+# The unmanaged variant has no reconfiguration field, so the conversion would
+# silently drop an in-progress record with no terminal status and no audit
+# event, and strand any overlap replicas. The conversion is refused instead.
+# The controller is frozen (master gate off) right after the record is written
+# so the in-flight state holds still while the rejection is asserted.
+
+> CREATE CLUSTER cc_unmanaged (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+> ALTER CLUSTER cc_unmanaged SET (SIZE 'scale=1,workers=2')
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_controller = false
+
+! ALTER CLUSTER cc_unmanaged SET (MANAGED = false)
+contains:cannot convert cluster to unmanaged while a reconfiguration is in progress
+
+# Unfreeze and cancel by ALTERing back to the realized size. Once the record
+# settles (the retrying `>` rides out the interim), the conversion goes
+# through.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_cluster_controller = true
+
+> ALTER CLUSTER cc_unmanaged SET (SIZE 'scale=1,workers=1')
+> ALTER CLUSTER cc_unmanaged SET (MANAGED = false)
+
+> DROP CLUSTER cc_unmanaged CASCADE
