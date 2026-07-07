@@ -385,10 +385,23 @@ impl<T: HttpTransport> HttpTransport for MetricsTransport<T> {
 }
 
 fn ld_config(api_key: &str, metrics: &Metrics, now_fn: &NowFn) -> ld::Config {
+    // Build the HTTPS connector on the aws-lc-rs rustls crypto provider. The
+    // `launchdarkly-sdk-transport` crate's own `build_https` hardcodes rustls to
+    // the `ring` provider, which is not FIPS-validated. We name the aws-lc-rs
+    // provider explicitly and inject the connector via `build_with_connector`.
+    // Native roots match the trust store the SDK used under the transport
+    // crate's `hyper-rustls-native-roots` feature, which we no longer enable.
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_provider_and_native_roots(rustls::crypto::aws_lc_rs::default_provider())
+        .expect("failed to load native root certificates")
+        .https_only()
+        .enable_http1()
+        .enable_http2()
+        .build();
     let transport = launchdarkly_sdk_transport::HyperTransport::builder()
         .connect_timeout(Duration::from_secs(10))
         .read_timeout(Duration::from_secs(300))
-        .build_https()
+        .build_with_connector(https)
         .expect("failed to create HTTPS transport");
 
     let cse_transport = MetricsTransport {
