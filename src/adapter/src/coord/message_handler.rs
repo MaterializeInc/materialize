@@ -23,6 +23,7 @@ use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
+#[cfg(feature = "telemetry")]
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, task};
@@ -34,6 +35,7 @@ use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use opentelemetry::trace::TraceContextExt;
 use rand::{Rng, SeedableRng, rngs};
+#[cfg(feature = "telemetry")]
 use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -45,6 +47,7 @@ use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
+#[cfg(feature = "telemetry")]
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::{AdapterNotice, TimestampContext};
 
@@ -946,6 +949,7 @@ impl Coordinator {
     async fn message_cluster_event(&mut self, event: ClusterEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
 
+        #[cfg(feature = "telemetry")]
         if let Some(segment_client) = &self.segment_client {
             let env_id = &self.catalog().config().environment_id;
             let mut properties = json!({

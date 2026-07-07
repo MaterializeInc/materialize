@@ -15,6 +15,7 @@ use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+#[cfg(feature = "telemetry")]
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
 use prometheus::IntCounter;
@@ -106,6 +107,7 @@ pub enum SystemParameterSyncClientConfig {
         // Path to a JSON config file that contains system parameters.
         path: PathBuf,
     },
+    #[cfg(feature = "telemetry")]
     LaunchDarkly {
         /// The LaunchDarkly SDK key
         sdk_key: String,
@@ -117,6 +119,7 @@ pub enum SystemParameterSyncClientConfig {
 impl SystemParameterSyncClientConfig {
     fn is_launch_darkly(&self) -> bool {
         match &self {
+            #[cfg(feature = "telemetry")]
             Self::LaunchDarkly { .. } => true,
             Self::File { .. } => false,
         }
@@ -144,7 +147,9 @@ impl SystemParameterSyncConfig {
 
 #[derive(Debug, Clone)]
 pub(super) struct Metrics {
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     pub last_cse_time_seconds: UIntGauge,
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     pub last_sse_time_seconds: UIntGauge,
     pub params_changed: IntCounter,
 }
