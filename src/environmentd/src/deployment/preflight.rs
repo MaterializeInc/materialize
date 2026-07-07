@@ -200,7 +200,7 @@ pub async fn preflight_0dt(
             .await
             .expect("incompatible catalog/persist version");
 
-            let (_catalog, _audit_logs) = openable_adapter_storage
+            let _catalog = openable_adapter_storage
                 .open(boot_ts, &bootstrap_args)
                 .await
                 .unwrap_or_terminate("unexpected error while fencing out old deployment");
@@ -252,7 +252,7 @@ async fn check_ddl_changes(
     .await
     .expect("incompatible catalog/persist version");
 
-    let (mut catalog, _audit_logs) = openable_adapter_storage
+    let mut catalog = openable_adapter_storage
         .open_savepoint(boot_ts, &bootstrap_args)
         .await
         .unwrap_or_terminate("can open in savepoint mode");
@@ -339,7 +339,7 @@ async fn get_next_ids(
     .await
     .expect("incompatible catalog/persist version");
 
-    let (mut catalog, _audit_logs) = openable_adapter_storage
+    let mut catalog = openable_adapter_storage
         .open_savepoint(boot_ts, &bootstrap_args)
         .await
         .unwrap_or_terminate("can open in savepoint mode");

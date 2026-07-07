@@ -97,13 +97,13 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_AUDIT_EVENTS, MZ_STORAGE_USAGE_BY_SHARD};
+use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_STORAGE_USAGE_BY_SHARD};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
-use mz_catalog::durable::{AuditLogIterator, OpenableDurableCatalogState};
+use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind, Table, TableDataSource,
+    DataSourceDesc, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -1208,7 +1208,6 @@ pub struct Config {
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
-    pub audit_logs_iterator: AuditLogIterator,
     pub timestamp_oracle_url: Option<SensitiveUrl>,
     pub unsafe_mode: bool,
     pub all_features: bool,
@@ -2348,7 +2347,6 @@ impl Coordinator {
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
-        audit_logs_iterator: AuditLogIterator,
     ) -> Result<(), AdapterError> {
         let bootstrap_start = Instant::now();
         info!("startup: coordinator init: bootstrap beginning");
@@ -2821,32 +2819,12 @@ impl Coordinator {
                 "coordinator init: bootstrap: stashing builtin table updates while in read-only mode"
             );
 
-            // TODO(jkosh44) Optimize deserializing the audit log in read-only mode.
-            let audit_join_start = Instant::now();
-            info!("startup: coordinator init: bootstrap: audit log deserialization beginning");
-            let audit_log_updates: Vec<_> = audit_logs_iterator
-                .map(|(audit_log, ts)| StateUpdate {
-                    kind: StateUpdateKind::AuditLog(audit_log),
-                    ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect();
-            let audit_log_builtin_table_updates = self
-                .catalog()
-                .state()
-                .generate_builtin_table_updates(audit_log_updates);
-            builtin_table_updates.extend(audit_log_builtin_table_updates);
-            info!(
-                "startup: coordinator init: bootstrap: audit log deserialization complete in {:?}",
-                audit_join_start.elapsed()
-            );
             self.buffered_builtin_table_updates
                 .as_mut()
                 .expect("in read-only mode")
                 .append(&mut builtin_table_updates);
         } else {
-            self.bootstrap_tables(&entries, builtin_table_updates, audit_logs_iterator)
-                .await;
+            self.bootstrap_tables(&entries, builtin_table_updates).await;
         };
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
@@ -2965,7 +2943,6 @@ impl Coordinator {
         &mut self,
         entries: &[CatalogEntry],
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
-        audit_logs_iterator: AuditLogIterator,
     ) {
         /// Smaller helper struct of metadata for bootstrapping tables.
         struct TableMetadata<'a> {
@@ -3023,26 +3000,10 @@ impl Coordinator {
         };
 
         let mut retraction_tasks = Vec::new();
-        let mut system_tables: Vec<_> = table_metas
+        let system_tables: Vec<_> = table_metas
             .iter()
             .filter(|meta| meta.id.is_system() && !is_storage_usage_by_shard(meta))
             .collect();
-
-        // Special case audit events because it's append only.
-        let (audit_events_idx, _) = system_tables
-            .iter()
-            .find_position(|table| {
-                table.id == self.catalog().resolve_builtin_table(&MZ_AUDIT_EVENTS)
-            })
-            .expect("mz_audit_events must exist");
-        let audit_events = system_tables.remove(audit_events_idx);
-        let audit_log_task = self.bootstrap_audit_log_table(
-            audit_events.id,
-            audit_events.name,
-            audit_events.table,
-            audit_logs_iterator,
-            read_ts,
-        );
 
         for system_table in system_tables {
             let table_id = system_table.id;
@@ -3090,19 +3051,6 @@ impl Coordinator {
             builtin_table_updates.push(retractions);
         }
 
-        let audit_join_start = Instant::now();
-        info!("startup: coordinator init: bootstrap: join audit log deserialization beginning");
-        let audit_log_updates = audit_log_task.await;
-        let audit_log_builtin_table_updates = self
-            .catalog()
-            .state()
-            .generate_builtin_table_updates(audit_log_updates);
-        builtin_table_updates.extend(audit_log_builtin_table_updates);
-        info!(
-            "startup: coordinator init: bootstrap: join audit log deserialization complete in {:?}",
-            audit_join_start.elapsed()
-        );
-
         // Now that the snapshots are complete, the appends must also be complete.
         table_fence_rx
             .await
@@ -3118,55 +3066,6 @@ impl Coordinator {
         if let Some(write_ts) = write_ts {
             self.apply_local_write(write_ts).await;
         }
-    }
-
-    /// Prepare updates to the audit log table. The audit log table append only and very large, so
-    /// we only need to find the events present in `audit_logs_iterator` but not in the audit log
-    /// table.
-    #[instrument]
-    fn bootstrap_audit_log_table<'a>(
-        &self,
-        table_id: CatalogItemId,
-        name: &'a QualifiedItemName,
-        table: &'a Table,
-        audit_logs_iterator: AuditLogIterator,
-        read_ts: Timestamp,
-    ) -> JoinHandle<Vec<StateUpdate>> {
-        let full_name = self.catalog().resolve_full_name(name, None);
-        debug!("coordinator init: reconciling audit log: {full_name} ({table_id})");
-        let current_contents_fut = self
-            .controller
-            .storage_collections
-            .snapshot(table.global_id_writes(), read_ts);
-        spawn(|| format!("snapshot-audit-log-{table_id}"), async move {
-            let current_contents = current_contents_fut
-                .await
-                .unwrap_or_terminate("cannot fail to fetch snapshot");
-            let contents_len = current_contents.len();
-            debug!("coordinator init: audit log table ({table_id}) size {contents_len}");
-
-            // Fetch the largest audit log event ID that has been written to the table.
-            let max_table_id = current_contents
-                .into_iter()
-                .filter(|(_, diff)| *diff == 1)
-                .map(|(row, _diff)| row.unpack_first().unwrap_uint64())
-                .sorted()
-                .rev()
-                .next();
-
-            // Filter audit log catalog updates to those that are not present in the table.
-            audit_logs_iterator
-                .take_while(|(audit_log, _)| match max_table_id {
-                    Some(id) => audit_log.event.sortable_id() > id,
-                    None => true,
-                })
-                .map(|(audit_log, ts)| StateUpdate {
-                    kind: StateUpdateKind::AuditLog(audit_log),
-                    ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect::<Vec<_>>()
-        })
     }
 
     /// Initializes all storage collections required by catalog objects in the storage controller.
@@ -4710,7 +4609,6 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         mut storage,
-        audit_logs_iterator,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -5136,7 +5034,6 @@ pub fn serve(
                             builtin_table_updates,
                             cached_global_exprs,
                             uncached_local_exprs,
-                            audit_logs_iterator,
                         )
                         .await?;
                     coord

@@ -38,9 +38,9 @@ other objects in the system catalog.
 <!-- RELATION_SPEC mz_catalog.mz_audit_events -->
 Field           | Type                         | Meaning
 ----------------|------------------------------|--------
-`id  `          | [`uint8`]                    | Materialize's unique, monotonically increasing ID for the event.
-`event_type`    | [`text`]                     | The type of the event: `create`, `drop`, or `alter`.
-`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`.
+`id`            | [`uint8`]                    | Materialize's unique, monotonically increasing ID for the event.
+`event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, `grant`, `revoke`, or `comment`.
+`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.
 `details`       | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
 `user`          | [`text`]                     | The user who triggered the event, or `NULL` if triggered by the system.
 `occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.

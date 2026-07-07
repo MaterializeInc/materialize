@@ -1599,16 +1599,16 @@ WHERE
   ((details->'cluster_name')::text LIKE '"c_schedule_%"' OR (details->'cluster_name')::text = '"other"') AND
   (details->'cluster_name')::text != '"c_schedule_4"';
 ----
-drop  cluster-replica  "other"  "manual"  true  NULL
-create  cluster-replica  "other"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_1"  "manual"  true  NULL
+create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
+create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
+create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "other"  "manual"  true  NULL
 drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
 drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
-create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+drop  cluster-replica  "other"  "manual"  true  NULL
 
 ## Now test `cluster_refresh_mv_compaction_estimate`.
 ## (This would make the above audit test flaky, so it should be after that.)
@@ -1689,9 +1689,9 @@ WHERE
   object_type = 'cluster-replica' AND
   (details->'cluster_name')::text = '"c_schedule_6"';
 ----
-drop  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
 create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":["uXXX"],"objects_needing_refresh":[]}
 create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+drop  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0

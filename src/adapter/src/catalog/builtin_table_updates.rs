@@ -12,10 +12,10 @@ mod notice;
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
+    BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
@@ -29,7 +29,7 @@ use mz_catalog::builtin::{
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
-use mz_catalog::memory::error::{Error, ErrorKind};
+use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, Index, MaterializedView, Sink,
     Table, TableDataSource, Type, View,
@@ -1351,57 +1351,6 @@ impl CatalogState {
             ]),
             diff,
         )
-    }
-
-    pub fn pack_audit_log_update(
-        &self,
-        event: &VersionedEvent,
-        diff: Diff,
-    ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, Error> {
-        let (event_type, object_type, details, user, occurred_at): (
-            &EventType,
-            &ObjectType,
-            &EventDetails,
-            &Option<String>,
-            u64,
-        ) = match event {
-            VersionedEvent::V1(ev) => (
-                &ev.event_type,
-                &ev.object_type,
-                &ev.details,
-                &ev.user,
-                ev.occurred_at,
-            ),
-        };
-        let details = Jsonb::from_serde_json(details.as_json())
-            .map_err(|e| {
-                Error::new(ErrorKind::Unstructured(format!(
-                    "could not pack audit log update: {}",
-                    e
-                )))
-            })?
-            .into_row();
-        let details = details
-            .iter()
-            .next()
-            .expect("details created above with a single jsonb column");
-        let dt = mz_ore::now::to_datetime(occurred_at);
-        let id = event.sortable_id();
-        Ok(BuiltinTableUpdate::row(
-            &*MZ_AUDIT_EVENTS,
-            Row::pack_slice(&[
-                Datum::UInt64(id),
-                Datum::String(&format!("{}", event_type)),
-                Datum::String(&format!("{}", object_type)),
-                details,
-                match user {
-                    Some(user) => Datum::String(user),
-                    None => Datum::Null,
-                },
-                Datum::TimestampTz(dt.try_into().expect("must fit")),
-            ]),
-            diff,
-        ))
     }
 
     pub fn pack_storage_usage_update(

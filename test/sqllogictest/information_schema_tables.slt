@@ -98,7 +98,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_audit_events
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_aws_privatelink_connections
