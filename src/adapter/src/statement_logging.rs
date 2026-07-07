@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
+use aws_lc_rs::digest;
 use bytes::BytesMut;
 use mz_catalog::memory::objects::CatalogItem;
 use mz_controller_types::ClusterId;
@@ -29,7 +30,6 @@ use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::{StatementKind, statement_kind_label_value};
 use qcell::QCell;
 use rand::distr::{Bernoulli, Distribution};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::catalog::CatalogState;
@@ -517,7 +517,10 @@ impl StatementLoggingFrontend {
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
                 let uuid = epoch_to_uuid_v7(prepared_at);
-                let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
+                let sql_hash: [u8; 32] = digest::digest(&digest::SHA256, sql.as_bytes())
+                    .as_ref()
+                    .try_into()
+                    .expect("SHA256 output is 32 bytes");
 
                 let record = StatementPreparedRecord {
                     id: uuid,

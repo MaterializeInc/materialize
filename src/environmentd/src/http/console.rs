@@ -20,7 +20,6 @@ use axum::response::{IntoResponse, Response};
 use http::HeaderValue;
 use http::header::HOST;
 use hyper::Uri;
-use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
@@ -29,8 +28,8 @@ use mz_adapter_types::dyncfgs::{CONSOLE_OIDC_CLIENT_ID, CONSOLE_OIDC_SCOPES, OID
 use crate::http::Delayed;
 
 pub(crate) struct ConsoleProxyConfig {
-    /// Hyper http client, supports https.
-    client: Client<HttpsConnector<HttpConnector>, Body>,
+    /// Hyper http client, supports https via rustls.
+    client: Client<hyper_rustls::HttpsConnector<HttpConnector>, Body>,
 
     /// URL of upstream console to proxy to (e.g. <https://console.materialize.com>).
     url: String,
@@ -45,8 +44,14 @@ impl ConsoleProxyConfig {
         if let Some(new) = url.strip_suffix('/') {
             url = new.to_string();
         }
+        let https = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_provider_and_native_roots(mz_ore::crypto::fips_crypto_provider())
+            .expect("native root certs")
+            .https_or_http()
+            .enable_http1()
+            .build();
         Self {
-            client: Client::builder(TokioExecutor::new()).build(HttpsConnector::new()),
+            client: Client::builder(TokioExecutor::new()).build(https),
             url,
             route_prefix,
         }

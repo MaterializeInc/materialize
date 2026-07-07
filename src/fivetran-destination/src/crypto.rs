@@ -13,7 +13,8 @@ use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
-use openssl::symm::{Cipher, Crypter};
+use aws_lc_rs::cipher::{AES_256, DecryptionContext, StreamingDecryptingKey, UnboundCipherKey};
+use aws_lc_rs::iv::FixedLength;
 use tokio::io::{AsyncRead, ReadBuf};
 
 const BUF_SIZE: usize = 4096;
@@ -21,7 +22,8 @@ const BLOCK_SIZE: usize = 16;
 
 pub struct AsyncAesDecrypter<R> {
     input: R,
-    crypter: Crypter,
+    /// Wrapped in `Option` because `finish()` takes ownership.
+    decrypter: Option<StreamingDecryptingKey>,
     buf: [u8; BUF_SIZE + BLOCK_SIZE],
     pos: usize,
     end: usize,
@@ -33,15 +35,15 @@ impl<R> AsyncAesDecrypter<R> {
         input: R,
         key: &[u8],
         iv: &[u8],
-    ) -> Result<AsyncAesDecrypter<R>, openssl::error::ErrorStack> {
+    ) -> Result<AsyncAesDecrypter<R>, aws_lc_rs::error::Unspecified> {
+        let unbound_key = UnboundCipherKey::new(&AES_256, key)?;
+        let iv_fixed = FixedLength::<16>::try_from(iv)?;
+        let context = DecryptionContext::Iv128(iv_fixed);
+        let decrypter = StreamingDecryptingKey::cbc_pkcs7(unbound_key, context)?;
+
         Ok(AsyncAesDecrypter {
             input,
-            crypter: Crypter::new(
-                Cipher::aes_256_cbc(),
-                openssl::symm::Mode::Decrypt,
-                key,
-                Some(iv),
-            )?,
+            decrypter: Some(decrypter),
             buf: [0; BUF_SIZE + BLOCK_SIZE],
             pos: 0,
             end: 0,
@@ -78,9 +80,21 @@ where
             // Decrypt the chunk in full and stash it in `me.buf`.
             me.pos = 0;
             if !read_buf.filled().is_empty() {
-                me.end = me.crypter.update(read_buf.filled(), &mut me.buf)?;
+                let decrypter = me.decrypter.as_mut().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::Other, "decrypter already finalized")
+                })?;
+                let update = decrypter
+                    .update(read_buf.filled(), &mut me.buf)
+                    .map_err(|_| io::Error::new(io::ErrorKind::Other, "AES decryption failed"))?;
+                me.end = update.written().len();
             } else {
-                me.end = me.crypter.finalize(&mut me.buf)?;
+                let decrypter = me.decrypter.take().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::Other, "decrypter already finalized")
+                })?;
+                let update = decrypter.finish(&mut me.buf).map_err(|_| {
+                    io::Error::new(io::ErrorKind::Other, "AES decryption finalize failed")
+                })?;
+                me.end = update.written().len();
                 me.done = true;
             }
 
