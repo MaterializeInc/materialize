@@ -855,6 +855,11 @@ fn test_pgtest_mz_startup() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_stray_copy() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/stray-copy.pt"), true);
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_transactions() {
     pg_test_inner(Path::new("../../test/pgtest-mz/transactions.pt"), true);
 }
