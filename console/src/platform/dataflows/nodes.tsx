@@ -14,7 +14,11 @@ import React from "react";
 import { formatBytesShort } from "~/utils/format";
 
 import type { VisibleNode } from "./dataflowGraph";
-import { type FlowNodeData, formatElapsed } from "./nodeStyle";
+import {
+  type FlowNodeData,
+  formatElapsed,
+  HIGHLIGHT_COLORS,
+} from "./nodeStyle";
 
 // Records and size share one line, not two: the fixed node height only has
 // room for name + a couple of stat lines before text spills out of the box.
@@ -29,6 +33,14 @@ const statLines = (node: VisibleNode) => {
   }
   if (stats.elapsedNs > 0n) lines.push(formatElapsed(stats.elapsedNs));
   return lines;
+};
+
+// Selection (clicked) wins over the active search match when both apply to
+// the same node; both are visually distinct from ordinary dimming.
+const highlightShadow = (data: FlowNodeData): string | undefined => {
+  if (data.selected) return `0 0 0 2px ${HIGHLIGHT_COLORS.selected}`;
+  if (data.activeMatch) return `0 0 0 2px ${HIGHLIGHT_COLORS.activeMatch}`;
+  return undefined;
 };
 
 const CardShell = ({
@@ -48,6 +60,7 @@ const CardShell = ({
     overflow="hidden"
     background={data.color}
     opacity={data.dimmed ? 0.25 : 1}
+    boxShadow={highlightShadow(data)}
   >
     {children}
     <Handle type="target" position={Position.Top} />
@@ -106,6 +119,7 @@ export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
     height="100%"
     background={`${data.color}20`}
     opacity={data.dimmed ? 0.25 : 1}
+    boxShadow={highlightShadow(data)}
   >
     <Text fontSize="sm" fontWeight="600" px={2} noOfLines={1}>
       {data.node.label}
@@ -122,6 +136,7 @@ export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
     px={2}
     background="gray.100"
     opacity={data.dimmed ? 0.25 : 1}
+    boxShadow={highlightShadow(data)}
   >
     <Text fontSize="2xs">{data.node.label}</Text>
     <Handle type="target" position={Position.Top} />

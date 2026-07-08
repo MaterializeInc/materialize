@@ -16,11 +16,14 @@ import {
 } from "@xyflow/react";
 import React from "react";
 
+import { HIGHLIGHT_COLORS } from "./nodeStyle";
+
 export type ChannelEdgeData = {
   messagesSent: bigint;
   batchesSent: bigint;
   channelTypes: string[];
   dimmed: boolean;
+  selected: boolean;
 };
 
 const compactCount = Intl.NumberFormat("default", {
@@ -32,14 +35,17 @@ const compact = (n: bigint) => compactCount.format(n);
 
 export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
   const [path, labelX, labelY] = getBezierPath(props);
-  const { messagesSent, batchesSent, channelTypes, dimmed } = props.data;
+  const { messagesSent, batchesSent, channelTypes, dimmed, selected } =
+    props.data;
   const idle = messagesSent === 0n;
   // Inline label stays terse: compact record/batch counts only. Exact figures
   // and the full container type names live in the tooltip, since those Rust
-  // type strings are long enough to swamp the canvas.
-  const label = idle
-    ? ""
-    : `${compact(messagesSent)} / ${compact(batchesSent)}`;
+  // type strings are long enough to swamp the canvas. Selecting an idle edge
+  // still shows its (zero) counts, confirming the click landed.
+  const label =
+    idle && !selected
+      ? ""
+      : `${compact(messagesSent)} / ${compact(batchesSent)}`;
   const tooltip = idle
     ? channelTypes.join(", ") || "unknown channel type"
     : `${messagesSent} records / ${batchesSent} batches` +
@@ -52,6 +58,8 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
         style={{
           strokeDasharray: idle ? "6 4" : undefined,
           opacity: dimmed ? 0.15 : 1,
+          stroke: selected ? HIGHLIGHT_COLORS.selected : undefined,
+          strokeWidth: selected ? 2.5 : undefined,
         }}
       />
       {label && (

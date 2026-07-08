@@ -27,6 +27,7 @@ export interface LirInfo {
 
 export interface DataflowNode {
   id: NodeId;
+  operatorId: bigint;
   address: Address;
   name: string;
   parent: NodeId | null;
@@ -65,6 +66,8 @@ export interface VisibleNode {
   childCount: number;
   lir: LirInfo[];
   address: Address | null;
+  // null for synthetic port nodes, which have no operator row of their own.
+  operatorId: bigint | null;
 }
 
 export interface VisibleEdge {
@@ -135,6 +138,7 @@ export function buildDataflowStructure(
     };
     nodes.set(id, {
       id,
+      operatorId: opId,
       address,
       name: row.name,
       parent: address.length > 1 ? nodeIdOf(address.slice(0, -1)) : null,
@@ -280,6 +284,7 @@ export function deriveVisibleGraph(
       childCount: node.children.length,
       lir: node.lir,
       address: node.address,
+      operatorId: node.operatorId,
     });
     if (!isCollapsed) for (const c of node.children) emit(c, id);
   };
@@ -326,6 +331,7 @@ export function deriveVisibleGraph(
           childCount: 0,
           lir: [],
           address: null,
+          operatorId: null,
         });
       }
     }
