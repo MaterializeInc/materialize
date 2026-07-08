@@ -22,6 +22,8 @@ export interface NodeStats {
 export interface LirInfo {
   exportId: string;
   lirId: string;
+  parentLirId: string | null;
+  nesting: number;
   operator: string;
 }
 
@@ -106,6 +108,8 @@ export interface ChannelRow {
 export interface LirSpanRow {
   exportId: string;
   lirId: string;
+  parentLirId: string | null;
+  nesting: number;
   operator: string;
   operatorIdStart: bigint | number | string;
   operatorIdEnd: bigint | number | string;
@@ -122,6 +126,8 @@ export function buildDataflowStructure(
   const spans = lirSpans.map((s) => ({
     exportId: s.exportId,
     lirId: s.lirId,
+    parentLirId: s.parentLirId,
+    nesting: s.nesting,
     operator: s.operator,
     start: toBigInt(s.operatorIdStart),
     end: toBigInt(s.operatorIdEnd),
@@ -147,9 +153,11 @@ export function buildDataflowStructure(
       transitive: own, // replaced below
       lir: spans
         .filter((s) => s.start <= opId && opId < s.end)
-        .map(({ exportId, lirId, operator }) => ({
+        .map(({ exportId, lirId, parentLirId, nesting, operator }) => ({
           exportId,
           lirId,
+          parentLirId,
+          nesting,
           operator,
         })),
     });
@@ -586,6 +594,21 @@ export function decorateGraph(
 
 // Search may match inside collapsed regions. Returns a collapse state with
 // every ancestor of every matching node expanded (respecting nothing else).
+// Expands every ancestor region of the given addresses, so their operators
+// are guaranteed visible regardless of current collapse state.
+export function expandAncestorsOf(
+  collapsed: CollapseState,
+  addresses: Iterable<Address>,
+): CollapseState {
+  const next = new Set(collapsed);
+  for (const address of addresses) {
+    for (let len = 1; len < address.length; len++) {
+      next.delete(nodeIdOf(address.slice(0, len)));
+    }
+  }
+  return next;
+}
+
 export function expandForSearch(
   structure: DataflowStructure,
   collapsed: CollapseState,
@@ -593,14 +616,13 @@ export function expandForSearch(
 ): CollapseState {
   const needle = search.trim().toLowerCase();
   if (!needle) return collapsed;
-  const next = new Set(collapsed);
-  for (const node of structure.nodes.values()) {
-    if (!node.name.toLowerCase().includes(needle)) continue;
-    for (let len = 1; len < node.address.length; len++) {
-      next.delete(nodeIdOf(node.address.slice(0, len)));
-    }
-  }
-  return next;
+  const matches = [...structure.nodes.values()].filter((node) =>
+    node.name.toLowerCase().includes(needle),
+  );
+  return expandAncestorsOf(
+    collapsed,
+    matches.map((node) => node.address),
+  );
 }
 
 // Groups operator nodes by the LIR span covering them, keyed
@@ -619,4 +641,51 @@ export function lirIndex(
     }
   }
   return index;
+}
+
+export interface LirTreeNode {
+  key: string;
+  info: LirInfo;
+  memberIds: NodeId[];
+  children: LirTreeNode[];
+}
+
+// Arranges lirIndex's flat entries into a tree per export, following
+// parentLirId. A lir id is assigned once its own build (and so every
+// descendant's) completes, so within one export a higher lir id is never an
+// ancestor of a lower one; sorting each level descending by lir id therefore
+// matches construction order without needing it as an explicit input, the
+// same convention EXPLAIN ANALYZE's own tree rendering uses.
+export function lirTree(
+  index: ReadonlyMap<string, { info: LirInfo; memberIds: NodeId[] }>,
+): Map<string, LirTreeNode[]> {
+  const byExport = new Map<string, Map<string, LirTreeNode>>();
+  for (const { info, memberIds } of index.values()) {
+    const byLirId = byExport.get(info.exportId) ?? new Map();
+    byLirId.set(info.lirId, {
+      key: `${info.exportId}/${info.lirId}`,
+      info,
+      memberIds,
+      children: [],
+    });
+    byExport.set(info.exportId, byLirId);
+  }
+  const sortDesc = (nodes: LirTreeNode[]) => {
+    nodes.sort((a, b) => Number(b.info.lirId) - Number(a.info.lirId));
+    for (const n of nodes) sortDesc(n.children);
+  };
+  const roots = new Map<string, LirTreeNode[]>();
+  for (const [exportId, byLirId] of byExport) {
+    const exportRoots: LirTreeNode[] = [];
+    for (const node of byLirId.values()) {
+      const parent = node.info.parentLirId
+        ? byLirId.get(node.info.parentLirId)
+        : undefined;
+      if (parent) parent.children.push(node);
+      else exportRoots.push(node);
+    }
+    sortDesc(exportRoots);
+    roots.set(exportId, exportRoots);
+  }
+  return roots;
 }

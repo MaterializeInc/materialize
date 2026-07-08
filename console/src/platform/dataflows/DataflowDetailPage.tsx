@@ -43,8 +43,10 @@ import {
   DEFAULT_FILTERS,
   defaultCollapseState,
   deriveVisibleGraph,
+  expandAncestorsOf,
   expandForSearch,
   type Filters,
+  type NodeId,
 } from "./dataflowGraph";
 import { DataflowGraphView } from "./DataflowGraphView";
 import { DataflowToolbar } from "./DataflowToolbar";
@@ -100,7 +102,24 @@ const DataflowDetailPage = () => {
   const [matchIndex, setMatchIndex] = React.useState(0);
   const [lirHighlight, setLirHighlight] =
     React.useState<ReadonlySet<string> | null>(null);
+  const [pendingCenterId, setPendingCenterId] = React.useState<string | null>(
+    null,
+  );
   const centerRef = React.useRef<((id: string) => void) | null>(null);
+
+  const onLirSelect = React.useCallback(
+    (memberIds: NodeId[]) => {
+      if (!data || memberIds.length === 0) return;
+      const addresses = memberIds.map(
+        (id) => data.structure.nodes.get(id)!.address,
+      );
+      setCollapsed((c) => (c ? expandAncestorsOf(c, addresses) : c));
+      // Centering happens once the expand above lands and the newly visible
+      // node has a real layout position (see DataflowGraphView's centerOnId).
+      setPendingCenterId(memberIds[0]);
+    },
+    [data],
+  );
 
   const decorations = React.useMemo(() => {
     if (!data || !collapsed) return undefined;
@@ -270,6 +289,7 @@ const DataflowDetailPage = () => {
               <LirPanel
                 structure={data.structure}
                 onHighlight={setLirHighlight}
+                onSelect={onLirSelect}
               />
               <DataflowGraphView
                 structure={data.structure}
@@ -278,6 +298,8 @@ const DataflowDetailPage = () => {
                 cacheKey={structureKey ?? ""}
                 decorations={decorations}
                 centerRef={centerRef}
+                centerOnId={pendingCenterId}
+                onCentered={() => setPendingCenterId(null)}
                 selectedId={
                   selection?.kind === "node"
                     ? selection.node.id
