@@ -13,6 +13,10 @@ export function nodeIdOf(address: Address): NodeId {
   return JSON.stringify(address);
 }
 
+export function formatElapsedNs(ns: bigint): string {
+  return `${Math.round(Number(ns) / 1e9)}s`;
+}
+
 export interface NodeStats {
   arrangementRecords: bigint;
   arrangementSize: bigint;
@@ -20,10 +24,10 @@ export interface NodeStats {
 }
 
 // How unevenly work for this node is spread across workers: worst worker's
-// value over the average, matching EXPLAIN ANALYZE ... WITH SKEW (avg is
+// value over the average, matching EXPLAIN ANALYZE ... WITH SKEW. Avg is
 // over workers that show up at all for this node, not the full replica
-// worker count; a worker with zero rows anywhere for a node is invisible to
-// both, same convention). 1 means perfectly even; higher means more skewed;
+// worker count. A worker with zero rows anywhere for a node is invisible to
+// both, same convention. 1 means perfectly even, higher means more skewed,
 // 0 means no data.
 export interface SkewStats {
   cpuSkew: number;
@@ -80,7 +84,7 @@ export interface PortPeer {
   channelTypes: string[];
   // The exact port this crossing lands on from inside the peer, so jumping
   // can drill straight into it rather than parking outside as an unlabeled
-  // box; null when the peer is a leaf (nothing to drill into, so the peer
+  // box. Null when the peer is a leaf (nothing to drill into, so the peer
   // itself is the target).
   peerPortId: NodeId | null;
 }
@@ -187,6 +191,40 @@ export function buildDataflowStructure(
   lirSpans: LirSpanRow[],
   perWorkerStats: PerWorkerStatRow[] = [],
 ): DataflowStructure {
+  // A dropped or transient dataflow that has already gone away returns zero
+  // operator rows, a valid query result rather than an error. Represent it
+  // as a single-node placeholder structure instead of throwing below, so it
+  // renders through the same nodes.size <= 1 "no longer exists" branch as
+  // any other empty dataflow.
+  if (operators.length === 0) {
+    const placeholderId = nodeIdOf([]);
+    return {
+      nodes: new Map([
+        [
+          placeholderId,
+          {
+            id: placeholderId,
+            operatorId: 0n,
+            address: [],
+            name: "",
+            parent: null,
+            children: [],
+            own: { arrangementRecords: 0n, arrangementSize: 0n, elapsedNs: 0n },
+            transitive: {
+              arrangementRecords: 0n,
+              arrangementSize: 0n,
+              elapsedNs: 0n,
+            },
+            ownSkew: { cpuSkew: 0, memorySkew: 0 },
+            transitiveSkew: { cpuSkew: 0, memorySkew: 0 },
+            lir: [],
+          },
+        ],
+      ]),
+      root: placeholderId,
+      channels: [],
+    };
+  }
   const spans = lirSpans.map((s) => ({
     exportId: s.exportId,
     lirId: s.lirId,
@@ -314,7 +352,7 @@ export function buildDataflowStructure(
   };
 }
 
-// A view shows exactly one scope's direct children; anything deeper is
+// A view shows exactly one scope's direct children. Anything deeper is
 // rolled up into its child's box, addressed at that box's depth (viewRoot's
 // depth + 1). representativeInView is the general form of that projection,
 // exported for translating arbitrary structure addresses (search matches,
@@ -394,8 +432,8 @@ function endpointId(
 }
 
 // Renders exactly one scope's direct children, each either a leaf operator or
-// a box summarizing a whole nested subtree (never expanded in place);
-// double-clicking a box navigates to a new view rooted there instead.
+// a box summarizing a whole nested subtree (never expanded in place).
+// Double-clicking a box navigates to a new view rooted there instead.
 export function deriveVisibleGraph(
   structure: DataflowStructure,
   viewRoot: NodeId,
@@ -431,7 +469,7 @@ export function deriveVisibleGraph(
   // Records the out-of-view side of a crossing on its port, so a port that
   // can't show its peer directly can still be jumped to. One output can feed
   // several inputs (and vice versa), so this can add up across channels
-  // rather than replace; the same peer address showing up twice (e.g. two
+  // rather than replace. The same peer address showing up twice (e.g. two
   // channel rows for the same logical pair) just accumulates its stats.
   const addPeer = (
     p: { scope: NodeId; direction: "input" | "output"; port: number },
@@ -744,7 +782,7 @@ export interface GraphDecorations {
 
 // Search matches anywhere in the whole dataflow, not just the current view
 // (search is structure-wide so it stays useful once a graph is too big to
-// show in one screen); searchInfo carries that lookup in, precomputed once
+// show in one screen). searchInfo carries that lookup in, precomputed once
 // per search string rather than re-walked per view. A box that doesn't
 // itself match but contains a match deeper in its rolled-up subtree is left
 // undimmed rather than excluded, so the match's path stays visible without
@@ -915,7 +953,7 @@ export function lirSummary(
 // Arranges lirIndex's flat entries into a tree per export, following
 // parentLirId. A lir id is assigned once its own build (and so every
 // descendant's) completes, so within one export a higher lir id is never an
-// ancestor of a lower one; sorting each level descending by lir id therefore
+// ancestor of a lower one. Sorting each level descending by lir id therefore
 // matches construction order without needing it as an explicit input, the
 // same convention EXPLAIN ANALYZE's own tree rendering uses.
 export function lirTree(

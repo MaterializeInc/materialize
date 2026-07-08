@@ -17,17 +17,23 @@ import { createProviderWrapper } from "~/test/utils";
 import { useDataflowList } from "./useDataflowList";
 
 const FAILING_REPLICA = "r2";
+const COLUMNS = [
+  { name: "id" },
+  { name: "name" },
+  { name: "records" },
+  { name: "size" },
+  { name: "elapsedNs" },
+];
 const listResult = {
-  desc: {
-    columns: [
-      { name: "id" },
-      { name: "name" },
-      { name: "records" },
-      { name: "size" },
-      { name: "elapsedNs" },
-    ],
-  },
+  desc: { columns: COLUMNS },
   rows: [["7", "Dataflow: mv", "100", "4096", "12345"]],
+};
+// Distinct ids from listResult: dataflow ids are per-replica, so a stale row
+// from the wrong replica reads as an entirely different, meaningless entry
+// rather than merely out of date.
+const otherReplicaResult = {
+  desc: { columns: COLUMNS },
+  rows: [["9", "Dataflow: other_mv", "200", "8192", "54321"]],
 };
 
 beforeEach(() => {
@@ -47,6 +53,9 @@ beforeEach(() => {
             },
           ],
         });
+      }
+      if (options.cluster_replica === "r3") {
+        return HttpResponse.json({ results: [otherReplicaResult] });
       }
       return HttpResponse.json({ results: [listResult] });
     }),
@@ -68,6 +77,26 @@ describe("useDataflowList", () => {
       size: 4096n,
       elapsedNs: 12345n,
     });
+  });
+
+  it("hides the previous replica's list while the new one is loading", async () => {
+    const Wrapper = await createProviderWrapper();
+    const { result, rerender } = renderHook(
+      (replicaName: string) =>
+        useDataflowList({ clusterName: "c", replicaName }),
+      { wrapper: Wrapper, initialProps: "r1" },
+    );
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    expect(result.current.data?.[0].id).toBe("7");
+
+    // Switching replicas must not show r1's still-resident rows tagged as
+    // r3's: dataflow ids are per-replica, so navigating one would be
+    // meaningless, and a transient dataflow gone on r3 would crash instead.
+    rerender("r3");
+    expect(result.current.data).toBeNull();
+
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    expect(result.current.data?.[0].id).toBe("9");
   });
 
   it("clears data when the fetch fails", async () => {

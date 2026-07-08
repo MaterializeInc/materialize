@@ -12,7 +12,11 @@ import React from "react";
 
 import { formatBytesShort } from "~/utils/format";
 
-import type { PortPeer, VisibleNode } from "./dataflowGraph";
+import {
+  formatElapsedNs,
+  type PortPeer,
+  type VisibleNode,
+} from "./dataflowGraph";
 import type { SelectedEdge } from "./DataflowGraphView";
 import { prettyPrintChannelType } from "./nodeStyle";
 
@@ -113,10 +117,7 @@ const NodeDetail = ({
           label="Arrangement size"
           value={formatBytesShort(node.stats.arrangementSize)}
         />
-        <Row
-          label="Elapsed"
-          value={`${Math.round(Number(node.stats.elapsedNs) / 1e9)}s`}
-        />
+        <Row label="Elapsed" value={formatElapsedNs(node.stats.elapsedNs)} />
       </>
     )}
     {node.transitive && node.childCount > 0 && (
@@ -131,7 +132,7 @@ const NodeDetail = ({
         />
         <Row
           label="Subtree elapsed"
-          value={`${Math.round(Number(node.transitive.elapsedNs) / 1e9)}s`}
+          value={formatElapsedNs(node.transitive.elapsedNs)}
         />
       </>
     )}
