@@ -633,6 +633,7 @@ impl From<&LirScalarExpr> for MirScalarExpr {
 }
 
 impl TryFrom<&MirScalarExpr> for LirScalarExpr {
+    // MIR-to-LIR failures come from unmaterializable functions that haven't been dealt with yet.
     type Error = Vec<UnmaterializableFunc>;
 
     fn try_from(value: &MirScalarExpr) -> Result<Self, Self::Error> {

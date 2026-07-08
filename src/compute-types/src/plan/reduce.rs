@@ -143,6 +143,9 @@ pub enum ReducePlan {
 ///
 /// We could use `mz_expr::AggregateExpr`, but it explicitly names `MirScalarExpr`
 /// and derives `MzReflect` (which cannot accommodate type parameters).
+///
+/// We don't build a separate `AggregateFunc`, since we'd only eliminate one variant
+/// and need to duplicate the evaluation code.
 #[derive(
     Clone,
     Debug,
