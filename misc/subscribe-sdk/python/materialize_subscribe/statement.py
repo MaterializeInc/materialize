@@ -109,10 +109,18 @@ class Subscribe:
     def to_sql_resume(self, token: ResumeToken) -> str:
         """The SQL for resuming from ``token``: no snapshot, with ``AS OF`` set
         to ``token.as_of()`` so emission begins exactly where it left off."""
-        return self._to_sql(snapshot=False, as_of=token.as_of())
+        return self.to_sql_resume_at(token.as_of())
+
+    def to_sql_resume_at(self, as_of: int) -> str:
+        """The SQL for resuming at an explicit ``as_of``: no snapshot, emitting
+        only timestamps strictly greater than ``as_of``. Used by a cohort, where
+        every member resumes at the same joint ``AS OF``."""
+        return self._to_sql(snapshot=False, as_of=as_of)
 
     def _to_sql(self, snapshot: bool, as_of: Optional[int]) -> str:
-        relation = self._relation if not self._relation_is_query else f"({self._relation})"
+        relation = (
+            self._relation if not self._relation_is_query else f"({self._relation})"
+        )
         sql = f"SUBSCRIBE {relation}"
 
         if isinstance(self._envelope, UpsertEnvelope):

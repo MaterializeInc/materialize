@@ -102,6 +102,73 @@ impl ResumeToken {
     }
 }
 
+/// An opaque, serializable checkpoint for a whole cohort of subscriptions.
+///
+/// A cohort is released at one shared frontier: the minimum closed frontier
+/// across its members. This token records that single joint frontier plus each
+/// member's fingerprint, in member order. Resuming re-subscribes every member
+/// with `SNAPSHOT = false AS OF frontier - 1`, reconstructing the exact joint
+/// cut, and refuses if the members no longer match.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CohortToken {
+    format: u32,
+    frontier: u64,
+    members: Vec<String>,
+}
+
+impl CohortToken {
+    /// Builds a token for a cohort closed at `frontier` whose members have the
+    /// given `fingerprints`, in member order. Crate-internal: tokens originate
+    /// from the cohort engine, not user code.
+    pub(crate) fn new(frontier: u64, fingerprints: Vec<String>) -> Self {
+        CohortToken {
+            format: TOKEN_FORMAT,
+            frontier,
+            members: fingerprints,
+        }
+    }
+
+    /// The joint closed frontier: every member has delivered every update below
+    /// this timestamp.
+    pub fn frontier(&self) -> u64 {
+        self.frontier
+    }
+
+    /// The member fingerprints, in the order the cohort was created. Compared on
+    /// resume to catch a changed cohort (see [`SubscribeError::SchemaMismatch`]).
+    pub fn members(&self) -> &[String] {
+        &self.members
+    }
+
+    /// The `AS OF` value every member uses for a gap-free `SNAPSHOT = false`
+    /// resume. Saturates at zero, like [`ResumeToken::as_of`].
+    pub fn as_of(&self) -> u64 {
+        self.frontier.saturating_sub(1)
+    }
+
+    /// Encodes the token to a compact, URL-safe string for durable storage.
+    pub fn encode(&self) -> String {
+        let json = serde_json::to_vec(self).expect("CohortToken always serializes");
+        URL_SAFE_NO_PAD.encode(json)
+    }
+
+    /// Decodes a token previously produced by [`CohortToken::encode`].
+    pub fn decode(encoded: &str) -> Result<Self, SubscribeError> {
+        let bytes = URL_SAFE_NO_PAD
+            .decode(encoded.as_bytes())
+            .map_err(|e| SubscribeError::InvalidToken(format!("not valid base64: {e}")))?;
+        let token: CohortToken = serde_json::from_slice(&bytes)
+            .map_err(|e| SubscribeError::InvalidToken(format!("malformed cohort token: {e}")))?;
+        if token.format != TOKEN_FORMAT {
+            return Err(SubscribeError::InvalidToken(format!(
+                "unsupported token format {} (this SDK understands {})",
+                token.format, TOKEN_FORMAT
+            )));
+        }
+        Ok(token)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +206,27 @@ mod tests {
     fn decode_rejects_garbage() {
         assert!(ResumeToken::decode("!!! not base64 !!!").is_err());
         assert!(ResumeToken::decode(&URL_SAFE_NO_PAD.encode(b"not json")).is_err());
+    }
+
+    #[test]
+    fn cohort_token_round_trips_and_carries_members() {
+        let token = CohortToken::new(42, vec!["fp-a".to_string(), "fp-b".to_string()]);
+        let decoded = CohortToken::decode(&token.encode()).expect("round trip");
+        assert_eq!(decoded, token);
+        assert_eq!(decoded.frontier(), 42);
+        assert_eq!(decoded.as_of(), 41);
+        assert_eq!(decoded.members(), ["fp-a", "fp-b"]);
+    }
+
+    #[test]
+    fn cohort_token_encoding_is_stable_and_cross_language() {
+        // Asserted byte-for-byte by the Python SDK too, so a cohort token minted
+        // by either SDK decodes in the other.
+        let encoded = CohortToken::new(7, vec!["x".to_string(), "y".to_string()]).encode();
+        assert_eq!(
+            encoded,
+            "eyJmb3JtYXQiOjEsImZyb250aWVyIjo3LCJtZW1iZXJzIjpbIngiLCJ5Il19"
+        );
     }
 
     #[test]

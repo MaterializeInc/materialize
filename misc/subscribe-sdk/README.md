@@ -44,6 +44,29 @@ Applying each batch and persisting its token in one transaction yields
 exactly-once **state**: after any crash, resuming from the last token neither
 drops nor duplicates data.
 
+## Layers and cohorts
+
+The client is three layers, each usable on its own.
+
+1. The raw decoded stream (`subscribe_raw`): timestamped changes and progress
+   markers, before any consistency policy. This is the composable substrate.
+2. The consistency engine: buffer changes and release everything below a
+   frontier, consolidated to the net effect within the released batch.
+3. The closed unit handed to the consumer: a consistent batch for one view, or a
+   consistent moment for a cohort of many.
+
+A **cohort** subscribes to several views at once and releases them only up to
+the *minimum* closed frontier across all of them, which is the latest instant
+final for every view together. A downstream store therefore moves from one
+cross-view-consistent state to the next, never a mix of a newer view with a
+staler one. A single view is the cohort of one: the same engine, with one
+member.
+
+The transport drains each subscription continuously into a bounded client-side
+buffer. Materialize buffers unread subscribe output without bound, so a consumer
+that falls behind fails loud (a buffer-overflow error) rather than pushing that
+cost onto the server. The client falls over, never the server.
+
 ## Building and testing
 
 Rust:

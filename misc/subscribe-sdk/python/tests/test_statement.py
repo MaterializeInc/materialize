@@ -47,7 +47,12 @@ def test_upsert_envelope_precedes_with_clause() -> None:
 
 
 def test_multi_column_key_and_up_to() -> None:
-    sql = Subscribe.object("sales").envelope_upsert(["region", "id"]).up_to(500).to_sql_initial()
+    sql = (
+        Subscribe.object("sales")
+        .envelope_upsert(["region", "id"])
+        .up_to(500)
+        .to_sql_initial()
+    )
     assert sql == (
         'SUBSCRIBE sales ENVELOPE UPSERT (KEY ("region", "id")) '
         "WITH (PROGRESS, SNAPSHOT = true) UP TO 500"
@@ -63,7 +68,10 @@ def test_fingerprint_is_stable_and_distinguishes_shape() -> None:
     a = Subscribe.object("orders")
     assert a.fingerprint() == Subscribe.object("orders").fingerprint()
     assert a.fingerprint() != Subscribe.object("other").fingerprint()
-    assert a.fingerprint() != Subscribe.object("orders").envelope_upsert(["id"]).fingerprint()
+    assert (
+        a.fingerprint()
+        != Subscribe.object("orders").envelope_upsert(["id"]).fingerprint()
+    )
     assert (
         Subscribe.object("orders").envelope_upsert(["id"]).fingerprint()
         != Subscribe.object("orders").envelope_upsert(["id", "region"]).fingerprint()

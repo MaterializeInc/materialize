@@ -57,6 +57,17 @@ pub enum SubscribeError {
     #[error("transient connection error: {0}")]
     Transient(String),
 
+    /// The consumer fell too far behind and the client-side buffer filled. The
+    /// client drains the server continuously so the server never buffers
+    /// unboundedly, which means a slow consumer must fail here rather than push
+    /// that cost onto Materialize. Recover by consuming faster, widening the
+    /// buffer, or resuming from the last token once caught up.
+    #[error(
+        "client-side buffer overflowed: the consumer fell behind the subscription. \
+         Consume faster or widen the buffer, then resume from the last token"
+    )]
+    BufferOverflow,
+
     /// A resume token could not be decoded.
     #[error("invalid resume token: {0}")]
     InvalidToken(String),
@@ -97,6 +108,7 @@ mod tests {
         }
         .is_retryable());
         assert!(!SubscribeError::Fatal("auth".into()).is_retryable());
+        assert!(!SubscribeError::BufferOverflow.is_retryable());
     }
 
     #[test]

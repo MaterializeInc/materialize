@@ -21,6 +21,30 @@ with SubscribeClient.connect("postgres://materialize@localhost:6875") as client:
 * Resuming takes an opaque `ResumeToken`; the `AS OF frontier - 1` arithmetic
   lives inside it.
 * Failures surface as a small, typed `SubscribeError` hierarchy.
+* For a lower-level stream of decoded changes and progress markers, use
+  `subscribe_raw`. The batcher is built on it.
+
+## Cohorts
+
+To stay consistent across several views at once, a `Cohort` releases every
+member only up to their shared minimum frontier, so each moment is a genuine
+cross-view snapshot.
+
+```python
+from materialize_subscribe import Cohort, Subscribe
+
+with Cohort.connect(
+    "postgres://materialize@localhost:6875",
+    [
+        ("orders", Subscribe.object("orders")),
+        ("inventory", Subscribe.object("inventory")),
+    ],
+) as cohort:
+    for moment in cohort:
+        for view in moment.views:
+            ...  # view.name, view.updates at the joint frontier
+        # moment.resume_token checkpoints the whole cohort at once.
+```
 
 The protocol core has no runtime dependencies. Install the `client` extra to
 connect:

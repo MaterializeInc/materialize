@@ -61,17 +61,36 @@
 //! drops nor duplicates data. For side-effecting sinks (webhooks, queues) that
 //! cannot transact with the checkpoint, use the token for at-least-once
 //! delivery and deduplicate downstream.
+//!
+//! # Layers
+//!
+//! The client is three layers, each usable on its own:
+//!
+//! 1. [`RawStream`] (via [`SubscribeClient::subscribe_raw`]): the decoded
+//!    timestamped changes and progress markers, before any consistency policy.
+//!    This is the composable substrate.
+//! 2. The consistency engine: buffer and release everything below a frontier,
+//!    consolidated. A [`BatchStream`] is a raw stream plus this engine.
+//! 3. [`ConsistentBatch`] (one view) or [`CohortMoment`] (a [`Cohort`] of N
+//!    views): the closed unit handed to the consumer.
+//!
+//! A [`Cohort`] releases N views at their shared minimum frontier, so a
+//! multi-view sink sees one cross-view-consistent moment at a time. A single
+//! view is the cohort of one.
 
 mod batch;
 mod client;
+mod cohort;
+mod engine;
 mod envelope;
 mod error;
 mod statement;
 mod token;
 
 pub use batch::{Batcher, ConsistentBatch};
-pub use client::{BatchStream, SubscribeClient};
+pub use client::{BatchStream, RawStream, SubscribeClient};
+pub use cohort::{Cohort, CohortMoment, ViewChanges};
 pub use envelope::{Change, Datum, Decoder, Envelope, Row, StreamMessage};
 pub use error::SubscribeError;
 pub use statement::{Relation, Subscribe};
-pub use token::ResumeToken;
+pub use token::{CohortToken, ResumeToken};

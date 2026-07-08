@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass
+from typing import List
 
 from .errors import InvalidToken
 
@@ -94,3 +95,64 @@ class ResumeToken:
             )
         except (KeyError, ValueError, TypeError) as exc:
             raise InvalidToken(f"malformed token: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class CohortToken:
+    """An opaque, serializable checkpoint for a whole cohort of subscriptions.
+
+    A cohort is released at one shared frontier: the minimum closed frontier
+    across its members. This token records that single joint frontier plus each
+    member's fingerprint, in member order. Resuming re-subscribes every member
+    with ``SNAPSHOT = false AS OF frontier - 1``, reconstructing the exact joint
+    cut, and refuses if the members no longer match.
+
+    The encoded shape matches the Rust SDK so a cohort token is cross-compatible.
+    """
+
+    frontier: int
+    """The joint closed frontier shared by every member."""
+
+    members: List[str]
+    """The member fingerprints, in the order the cohort was created."""
+
+    def as_of(self) -> int:
+        """The ``AS OF`` value every member uses for a gap-free resume.
+
+        Saturates at zero, like :meth:`ResumeToken.as_of`.
+        """
+        return max(0, self.frontier - 1)
+
+    def encode(self) -> str:
+        """Encodes the token to a compact, URL-safe string for durable
+        storage."""
+        payload = {
+            "format": _TOKEN_FORMAT,
+            "frontier": self.frontier,
+            "members": list(self.members),
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @classmethod
+    def decode(cls, encoded: str) -> CohortToken:
+        """Decodes a token previously produced by :meth:`encode`."""
+        try:
+            padded = encoded + "=" * (-len(encoded) % 4)
+            raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+            payload = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            raise InvalidToken(f"malformed cohort token: {exc}") from exc
+
+        if not isinstance(payload, dict) or payload.get("format") != _TOKEN_FORMAT:
+            raise InvalidToken(
+                f"unsupported token format {payload.get('format') if isinstance(payload, dict) else '?'} "
+                f"(this SDK understands {_TOKEN_FORMAT})"
+            )
+        try:
+            return cls(
+                frontier=int(payload["frontier"]),
+                members=[str(m) for m in payload["members"]],
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise InvalidToken(f"malformed cohort token: {exc}") from exc

@@ -40,7 +40,9 @@ def test_diff_decoder_reads_progress() -> None:
 
 
 def test_diff_decoder_preserves_multiplicity_and_sign() -> None:
-    decoder = Decoder(["mz_timestamp", "mz_progressed", "mz_diff", "id"], DiffEnvelope())
+    decoder = Decoder(
+        ["mz_timestamp", "mz_progressed", "mz_diff", "id"], DiffEnvelope()
+    )
     assert decoder.decode(["7", "f", "3", "42"]) == Data(
         timestamp=7, change=Diff(row=["42"], diff=3)
     )

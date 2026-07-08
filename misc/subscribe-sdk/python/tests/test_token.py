@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from materialize_subscribe import InvalidToken, ResumeToken
+from materialize_subscribe import CohortToken, InvalidToken, ResumeToken
 
 
 def test_as_of_is_frontier_minus_one_and_saturates() -> None:
@@ -55,3 +55,19 @@ def test_decode_rejects_unknown_format() -> None:
     encoded = base64.urlsafe_b64encode(future).decode().rstrip("=")
     with pytest.raises(InvalidToken):
         ResumeToken.decode(encoded)
+
+
+def test_cohort_token_round_trips_and_carries_members() -> None:
+    token = CohortToken(frontier=42, members=["fp-a", "fp-b"])
+    decoded = CohortToken.decode(token.encode())
+    assert decoded == token
+    assert decoded.frontier == 42
+    assert decoded.as_of() == 41
+    assert decoded.members == ["fp-a", "fp-b"]
+
+
+def test_cohort_token_encoding_is_stable_and_cross_language() -> None:
+    # Asserted byte-for-byte by the Rust SDK too, so a cohort token minted by
+    # either SDK decodes in the other.
+    encoded = CohortToken(frontier=7, members=["x", "y"]).encode()
+    assert encoded == "eyJmb3JtYXQiOjEsImZyb250aWVyIjo3LCJtZW1iZXJzIjpbIngiLCJ5Il19"

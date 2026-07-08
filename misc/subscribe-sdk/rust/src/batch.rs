@@ -29,8 +29,13 @@
 //! A consumer that applies each emitted batch and persists its token atomically
 //! gets exactly-once *state*: after any crash, resuming from the last token
 //! neither drops nor duplicates data.
+//!
+//! A single view is the one-member case of the [`crate::cohort`] engine: the
+//! release frontier is the view's own progress frontier. Both share the
+//! [`ReleaseBuffer`] buffer-and-consolidate core.
 
-use crate::envelope::{Change, StreamMessage};
+use crate::engine::ReleaseBuffer;
+use crate::envelope::{Change, Envelope, StreamMessage};
 use crate::error::SubscribeError;
 use crate::token::ResumeToken;
 
@@ -41,7 +46,8 @@ use crate::token::ResumeToken;
 /// checkpoints exactly this position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsistentBatch {
-    /// The finalized changes, in arrival order.
+    /// The finalized changes, consolidated to their net effect within this
+    /// batch and ordered by first appearance.
     pub updates: Vec<Change>,
     /// The closed frontier: everything below it is present in this or an
     /// earlier batch.
@@ -73,9 +79,8 @@ impl ConsistentBatch {
 pub struct Batcher {
     fingerprint: String,
     with_snapshot: bool,
-    /// Buffered changes awaiting closure, paired with their timestamp, in
-    /// arrival order.
-    buffered: Vec<(u64, Change)>,
+    /// The buffer-and-consolidate core, shared with the cohort engine.
+    buffer: ReleaseBuffer,
     /// The last frontier emitted, or `None` before the first progress marker.
     last_frontier: Option<u64>,
     /// The first frontier seen, which is the subscription's effective `AS OF`.
@@ -86,14 +91,15 @@ pub struct Batcher {
 }
 
 impl Batcher {
-    /// Creates a batcher for a subscription with the given query `fingerprint`.
+    /// Creates a batcher for a subscription with the given query `fingerprint`
+    /// and `envelope` (which selects how a batch is consolidated).
     /// `with_snapshot` must match the subscription: `true` for an initial
     /// subscribe, `false` for a resume.
-    pub fn new(fingerprint: impl Into<String>, with_snapshot: bool) -> Self {
+    pub fn new(fingerprint: impl Into<String>, envelope: Envelope, with_snapshot: bool) -> Self {
         Batcher {
             fingerprint: fingerprint.into(),
             with_snapshot,
-            buffered: Vec::new(),
+            buffer: ReleaseBuffer::new(envelope),
             last_frontier: None,
             first_frontier: None,
             snapshot_emitted: false,
@@ -107,15 +113,7 @@ impl Batcher {
     ) -> Result<Option<ConsistentBatch>, SubscribeError> {
         match message {
             StreamMessage::Data { timestamp, change } => {
-                if let Some(frontier) = self.last_frontier {
-                    if timestamp < frontier {
-                        return Err(SubscribeError::Protocol(format!(
-                            "change at timestamp {timestamp} arrived after the frontier \
-                             advanced to {frontier}"
-                        )));
-                    }
-                }
-                self.buffered.push((timestamp, change));
+                self.buffer.push_data(timestamp, change)?;
                 Ok(None)
             }
             StreamMessage::Progress { frontier } => self.advance(frontier),
@@ -123,35 +121,18 @@ impl Batcher {
     }
 
     fn advance(&mut self, frontier: u64) -> Result<Option<ConsistentBatch>, SubscribeError> {
-        if let Some(last) = self.last_frontier {
-            if frontier < last {
-                return Err(SubscribeError::Protocol(format!(
-                    "frontier went backwards from {last} to {frontier}"
-                )));
-            }
-            if frontier == last {
-                // No advance: nothing new is closed.
-                return Ok(None);
-            }
+        if self.last_frontier == Some(frontier) {
+            // No advance: nothing new is closed. A regression, by contrast, is
+            // caught by `observe_progress` below.
+            return Ok(None);
         }
+        self.buffer.observe_progress(frontier)?;
 
         if self.first_frontier.is_none() {
             self.first_frontier = Some(frontier);
         }
 
-        // Everything strictly below the new frontier is now final. Retain the
-        // rest (timestamps `>= frontier`, which may include changes at exactly
-        // this frontier that are not yet closed).
-        let mut closed = Vec::new();
-        let mut still_open = Vec::with_capacity(self.buffered.len());
-        for (timestamp, change) in self.buffered.drain(..) {
-            if timestamp < frontier {
-                closed.push(change);
-            } else {
-                still_open.push((timestamp, change));
-            }
-        }
-        self.buffered = still_open;
+        let updates = self.buffer.release_below(frontier);
 
         // The snapshot is the data closed once we advance past the first
         // frontier (the effective `AS OF`). Mark the first such batch.
@@ -170,7 +151,7 @@ impl Batcher {
         self.last_frontier = Some(frontier);
 
         Ok(Some(ConsistentBatch {
-            updates: closed,
+            updates,
             frontier,
             resume_token: ResumeToken::new(frontier, self.fingerprint.clone()),
             is_snapshot,
@@ -199,7 +180,7 @@ mod tests {
 
     #[test]
     fn buffers_until_the_timestamp_closes() {
-        let mut b = Batcher::new("fp", false);
+        let mut b = Batcher::new("fp", Envelope::Diff, false);
         // Data at t=5 is buffered, not emitted.
         assert_eq!(b.push(data(5, insert("a"))).unwrap(), None);
         assert_eq!(b.push(data(5, insert("b"))).unwrap(), None);
@@ -213,8 +194,9 @@ mod tests {
     #[test]
     fn closes_a_timestamp_with_mixed_retractions_and_multiplicities() {
         // A single timestamp can hold inserts, retractions, and multiplicities
-        // beyond one; all of them close together and in arrival order.
-        let mut b = Batcher::new("fp", false);
+        // beyond one. Distinct rows all survive consolidation, in first-seen
+        // order.
+        let mut b = Batcher::new("fp", Envelope::Diff, false);
         let insert3 = Change::Diff {
             row: vec![Some("a".into())],
             diff: 3,
@@ -231,8 +213,43 @@ mod tests {
     }
 
     #[test]
+    fn batch_is_consolidated_to_its_net_effect() {
+        // Repeated changes to the same row within a batch collapse: two inserts
+        // and a retract of `a` net to +1, and `b` inserted then retracted
+        // disappears entirely.
+        let mut b = Batcher::new("fp", Envelope::Diff, false);
+        b.push(data(5, insert("a"))).unwrap();
+        b.push(data(5, insert("a"))).unwrap();
+        b.push(data(6, insert("b"))).unwrap();
+        b.push(data(
+            6,
+            Change::Diff {
+                row: vec![Some("a".into())],
+                diff: -1,
+            },
+        ))
+        .unwrap();
+        b.push(data(
+            6,
+            Change::Diff {
+                row: vec![Some("b".into())],
+                diff: -1,
+            },
+        ))
+        .unwrap();
+        let batch = b.push(progress(7)).unwrap().expect("batch");
+        assert_eq!(
+            batch.updates,
+            vec![Change::Diff {
+                row: vec![Some("a".into())],
+                diff: 1,
+            }]
+        );
+    }
+
+    #[test]
     fn data_at_the_frontier_stays_open() {
-        let mut b = Batcher::new("fp", false);
+        let mut b = Batcher::new("fp", Envelope::Diff, false);
         b.push(data(5, insert("a"))).unwrap();
         b.push(data(6, insert("b"))).unwrap();
         // Progress to 6 closes t=5 only; the t=6 change is still open.
@@ -245,7 +262,7 @@ mod tests {
 
     #[test]
     fn empty_batches_still_advance_the_token() {
-        let mut b = Batcher::new("fp", false);
+        let mut b = Batcher::new("fp", Envelope::Diff, false);
         let batch = b.push(progress(10)).unwrap().expect("batch");
         assert!(batch.is_empty());
         assert_eq!(batch.frontier, 10);
@@ -254,7 +271,7 @@ mod tests {
 
     #[test]
     fn duplicate_frontier_emits_nothing() {
-        let mut b = Batcher::new("fp", false);
+        let mut b = Batcher::new("fp", Envelope::Diff, false);
         assert!(b.push(progress(10)).unwrap().is_some());
         // A repeated progress at the same frontier is not an advance.
         assert_eq!(b.push(progress(10)).unwrap(), None);
@@ -264,7 +281,7 @@ mod tests {
     fn snapshot_batch_is_the_first_past_the_initial_frontier() {
         // Initial subscribe: progress(as_of) then snapshot data at as_of, then
         // progress advances past it.
-        let mut b = Batcher::new("fp", true);
+        let mut b = Batcher::new("fp", Envelope::Diff, true);
         // First progress reveals as_of = 100; leading batch is not the snapshot.
         let leading = b.push(progress(100)).unwrap().expect("batch");
         assert!(!leading.is_snapshot);
@@ -285,7 +302,7 @@ mod tests {
     #[test]
     fn resume_never_marks_a_snapshot() {
         // A resumed subscription (with_snapshot = false) never flags a snapshot.
-        let mut b = Batcher::new("fp", false);
+        let mut b = Batcher::new("fp", Envelope::Diff, false);
         b.push(progress(100)).unwrap();
         b.push(data(100, insert("x"))).unwrap();
         let batch = b.push(progress(101)).unwrap().expect("batch");
@@ -294,7 +311,7 @@ mod tests {
 
     #[test]
     fn late_data_below_the_frontier_is_a_protocol_error() {
-        let mut b = Batcher::new("fp", false);
+        let mut b = Batcher::new("fp", Envelope::Diff, false);
         b.push(progress(10)).unwrap();
         let err = b.push(data(5, insert("late"))).unwrap_err();
         assert!(matches!(err, SubscribeError::Protocol(_)), "{err:?}");
@@ -302,7 +319,7 @@ mod tests {
 
     #[test]
     fn regressing_frontier_is_a_protocol_error() {
-        let mut b = Batcher::new("fp", false);
+        let mut b = Batcher::new("fp", Envelope::Diff, false);
         b.push(progress(10)).unwrap();
         let err = b.push(progress(9)).unwrap_err();
         assert!(matches!(err, SubscribeError::Protocol(_)), "{err:?}");
@@ -310,7 +327,7 @@ mod tests {
 
     #[test]
     fn token_carries_the_fingerprint() {
-        let mut b = Batcher::new("my-fingerprint", false);
+        let mut b = Batcher::new("my-fingerprint", Envelope::Diff, false);
         let batch = b.push(progress(1)).unwrap().expect("batch");
         assert_eq!(batch.resume_token.fingerprint(), "my-fingerprint");
     }

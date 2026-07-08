@@ -70,6 +70,23 @@ class TransientError(SubscribeError):
     is_retryable = True
 
 
+class BufferOverflow(SubscribeError):
+    """The consumer fell too far behind and the client-side buffer filled.
+
+    The client drains the server continuously so the server never buffers
+    unboundedly, which means a slow consumer must fail here rather than push
+    that cost onto Materialize. Recover by consuming faster, widening the
+    buffer, or resuming from the last token once caught up.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "client-side buffer overflowed: the consumer fell behind the "
+            "subscription. Consume faster or widen the buffer, then resume "
+            "from the last token"
+        )
+
+
 class InvalidToken(SubscribeError):
     """A resume token could not be decoded."""
 

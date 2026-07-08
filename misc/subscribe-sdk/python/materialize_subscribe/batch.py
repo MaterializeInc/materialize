@@ -29,14 +29,20 @@ enforces:
 A consumer that applies each emitted batch and persists its token atomically
 gets exactly-once *state*: after any crash, resuming from the last token neither
 drops nor duplicates data.
+
+A single view is the one-member case of the cohort engine (see
+:mod:`materialize_subscribe.cohort`): the release frontier is the view's own
+progress frontier. Both share the :class:`ReleaseBuffer` buffer-and-consolidate
+core.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
-from .envelope import Change, Data, Progress, StreamMessage
+from .engine import ReleaseBuffer
+from .envelope import Change, Data, Envelope, Progress, StreamMessage
 from .errors import ProtocolError
 from .token import ResumeToken
 
@@ -47,7 +53,8 @@ class ConsistentBatch:
 
     Every change in ``updates`` has a timestamp strictly below ``frontier``, and
     no future batch will contain a timestamp below ``frontier``. ``resume_token``
-    checkpoints exactly this position.
+    checkpoints exactly this position. ``updates`` is consolidated to its net
+    effect within the batch, ordered by first appearance.
     """
 
     updates: List[Change]
@@ -73,10 +80,12 @@ class Batcher:
     progress marker closes one or more timestamps, and ``None`` otherwise.
     """
 
-    def __init__(self, fingerprint: str, with_snapshot: bool) -> None:
+    def __init__(
+        self, fingerprint: str, envelope: Envelope, with_snapshot: bool
+    ) -> None:
         self._fingerprint = fingerprint
         self._with_snapshot = with_snapshot
-        self._buffered: List[Tuple[int, Change]] = []
+        self._buffer = ReleaseBuffer(envelope)
         self._last_frontier: Optional[int] = None
         self._first_frontier: Optional[int] = None
         self._snapshot_emitted = False
@@ -85,12 +94,7 @@ class Batcher:
         """Feeds one decoded message. Returns a batch when the frontier
         advances."""
         if isinstance(message, Data):
-            if self._last_frontier is not None and message.timestamp < self._last_frontier:
-                raise ProtocolError(
-                    f"change at timestamp {message.timestamp} arrived after the "
-                    f"frontier advanced to {self._last_frontier}"
-                )
-            self._buffered.append((message.timestamp, message.change))
+            self._buffer.push_data(message.timestamp, message.change)
             return None
 
         if isinstance(message, Progress):
@@ -99,29 +103,16 @@ class Batcher:
         raise ProtocolError(f"unexpected stream message: {message!r}")
 
     def _advance(self, frontier: int) -> Optional[ConsistentBatch]:
-        if self._last_frontier is not None:
-            if frontier < self._last_frontier:
-                raise ProtocolError(
-                    f"frontier went backwards from {self._last_frontier} to {frontier}"
-                )
-            if frontier == self._last_frontier:
-                # No advance: nothing new is closed.
-                return None
+        if frontier == self._last_frontier:
+            # No advance: nothing new is closed. A regression, by contrast, is
+            # caught by `observe_progress` below.
+            return None
+        self._buffer.observe_progress(frontier)
 
         if self._first_frontier is None:
             self._first_frontier = frontier
 
-        # Everything strictly below the new frontier is now final. Retain the
-        # rest (timestamps >= frontier, which may include changes at exactly this
-        # frontier that are not yet closed).
-        closed: List[Change] = []
-        still_open: List[Tuple[int, Change]] = []
-        for timestamp, change in self._buffered:
-            if timestamp < frontier:
-                closed.append(change)
-            else:
-                still_open.append((timestamp, change))
-        self._buffered = still_open
+        updates = self._buffer.release_below(frontier)
 
         # The snapshot is the data closed once we advance past the first frontier
         # (the effective AS OF). Mark the first such batch.
@@ -142,7 +133,7 @@ class Batcher:
         self._last_frontier = frontier
 
         return ConsistentBatch(
-            updates=closed,
+            updates=updates,
             frontier=frontier,
             resume_token=ResumeToken(frontier=frontier, fingerprint=self._fingerprint),
             is_snapshot=is_snapshot,

@@ -26,6 +26,12 @@ encodes the protocol so callers cannot get it wrong:
   arithmetic lives inside it.
 * Failures surface as a small, typed :class:`SubscribeError` hierarchy.
 
+The client is three layers, each usable on its own: :class:`RawStream` (via
+:meth:`SubscribeClient.subscribe_raw`) is the decoded timestamped substrate; the
+consistency engine buffers and releases below a frontier; a
+:class:`ConsistentBatch` (one view) or :class:`CohortMoment` (a :class:`Cohort`
+of N views) is the closed unit. A single view is the cohort of one.
+
 Example::
 
     from materialize_subscribe import Subscribe, SubscribeClient
@@ -44,7 +50,8 @@ Example::
 from __future__ import annotations
 
 from .batch import Batcher, ConsistentBatch
-from .client import BatchStream, SubscribeClient
+from .client import BatchStream, RawStream, SubscribeClient
+from .cohort import Cohort, CohortMoment, ViewChanges
 from .envelope import (
     Change,
     Data,
@@ -60,6 +67,7 @@ from .envelope import (
     UpsertEnvelope,
 )
 from .errors import (
+    BufferOverflow,
     CompactionHorizon,
     DependencyDropped,
     FatalError,
@@ -70,12 +78,16 @@ from .errors import (
     TransientError,
 )
 from .statement import Subscribe
-from .token import ResumeToken
+from .token import CohortToken, ResumeToken
 
 __all__ = [
     "Batcher",
     "BatchStream",
+    "BufferOverflow",
     "Change",
+    "Cohort",
+    "CohortMoment",
+    "CohortToken",
     "CompactionHorizon",
     "ConsistentBatch",
     "Data",
@@ -90,6 +102,7 @@ __all__ = [
     "KeyViolation",
     "Progress",
     "ProtocolError",
+    "RawStream",
     "ResumeToken",
     "SchemaMismatch",
     "StreamMessage",
@@ -99,4 +112,5 @@ __all__ = [
     "TransientError",
     "Upsert",
     "UpsertEnvelope",
+    "ViewChanges",
 ]

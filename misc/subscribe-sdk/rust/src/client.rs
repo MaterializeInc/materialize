@@ -17,17 +17,29 @@
 //!
 //! The transport is deliberately thin. It runs the `DECLARE`/`FETCH` loop and
 //! reads columns in their text encoding via the simple-query protocol, then
-//! hands every row to the tested [`Decoder`] and [`Batcher`]. All protocol
-//! judgement lives in those, not here.
+//! hands every row to the tested [`Decoder`]. All protocol judgement lives in
+//! the decoder and the consistency engine, not here.
+//!
+//! A background task drains the cursor continuously into a *bounded* buffer,
+//! rather than fetching only when the consumer asks. This is deliberate:
+//! Materialize buffers a subscription's unread output in `environmentd` without
+//! bound, so a consumer that stops fetching pushes an unbounded cost onto the
+//! server. Draining continuously keeps that buffer on the client, where it is
+//! bounded and fails loud ([`SubscribeError::BufferOverflow`]) if the consumer
+//! cannot keep up. The client falls over, never the server.
 //!
 //! TLS is not yet wired, so this connects over plaintext (suitable for the
 //! emulator or a `sslmode=disable` local server). A TLS connector is the next
 //! step for this module.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use tokio::sync::mpsc;
 use tokio_postgres::{NoTls, SimpleQueryMessage};
 
 use crate::batch::{Batcher, ConsistentBatch};
-use crate::envelope::{Datum, Decoder};
+use crate::envelope::{Datum, Decoder, Envelope, StreamMessage};
 use crate::error::SubscribeError;
 use crate::statement::Subscribe;
 use crate::token::ResumeToken;
@@ -36,6 +48,13 @@ use crate::token::ResumeToken;
 /// connection, so a fixed name is safe.
 const CURSOR: &str = "mz_subscribe_cursor";
 
+/// Default client-side buffer capacity, in decoded messages. A slow consumer
+/// that falls this far behind trips [`SubscribeError::BufferOverflow`].
+///
+/// TODO: make this configurable per subscription once we have real workloads to
+/// size it against.
+pub(crate) const DEFAULT_BUFFER_CAPACITY: usize = 1 << 16;
+
 /// A connection to Materialize for consuming subscriptions.
 ///
 /// One connection backs one subscription at a time. Transaction-mode connection
@@ -43,7 +62,8 @@ const CURSOR: &str = "mz_subscribe_cursor";
 /// supported.
 #[derive(Debug)]
 pub struct SubscribeClient {
-    client: tokio_postgres::Client,
+    client: Arc<tokio_postgres::Client>,
+    buffer_capacity: usize,
 }
 
 impl SubscribeClient {
@@ -61,13 +81,30 @@ impl SubscribeClient {
             // closed connection, which `classify_error` maps to `Transient`.
             let _ = connection.await;
         });
-        Ok(SubscribeClient { client })
+        Ok(SubscribeClient {
+            client: Arc::new(client),
+            buffer_capacity: DEFAULT_BUFFER_CAPACITY,
+        })
+    }
+
+    /// Overrides the client-side buffer capacity, in decoded messages. Larger
+    /// buffers tolerate burstier consumers at the cost of memory.
+    pub fn buffer_capacity(mut self, messages: usize) -> Self {
+        self.buffer_capacity = messages.max(1);
+        self
     }
 
     /// Starts a new subscription, taking the initial snapshot.
-    pub async fn subscribe(&self, subscribe: Subscribe) -> Result<BatchStream<'_>, SubscribeError> {
-        let sql = subscribe.to_sql_initial();
-        self.open(subscribe, sql, /* with_snapshot */ true).await
+    pub async fn subscribe(&self, subscribe: Subscribe) -> Result<BatchStream, SubscribeError> {
+        let batcher = Batcher::new(
+            subscribe.fingerprint(),
+            subscribe.envelope().clone(),
+            /* with_snapshot */ true,
+        );
+        let raw = self
+            .open_raw(&subscribe, subscribe.to_sql_initial())
+            .await?;
+        Ok(BatchStream { raw, batcher })
     }
 
     /// Resumes a subscription from `token`, skipping the snapshot and starting
@@ -80,51 +117,100 @@ impl SubscribeClient {
         &self,
         subscribe: Subscribe,
         token: &ResumeToken,
-    ) -> Result<BatchStream<'_>, SubscribeError> {
-        let fingerprint = subscribe.fingerprint();
-        if fingerprint != token.fingerprint() {
-            return Err(SubscribeError::SchemaMismatch {
-                expected: token.fingerprint().to_string(),
-                actual: fingerprint,
-            });
-        }
-        let sql = subscribe.to_sql_resume(token);
-        self.open(subscribe, sql, /* with_snapshot */ false).await
+    ) -> Result<BatchStream, SubscribeError> {
+        check_fingerprint(&subscribe, token)?;
+        let batcher = Batcher::new(
+            subscribe.fingerprint(),
+            subscribe.envelope().clone(),
+            /* with_snapshot */ false,
+        );
+        let raw = self
+            .open_raw(&subscribe, subscribe.to_sql_resume(token))
+            .await?;
+        Ok(BatchStream { raw, batcher })
     }
 
-    async fn open(
+    /// Starts a subscription and hands back the *raw* decoded stream: the
+    /// timestamped changes and progress markers, before any batching.
+    ///
+    /// This is the composable substrate. Most callers want [`subscribe`], which
+    /// layers consistent batching on top. Reach for the raw stream to build a
+    /// different consistency policy, or to feed a [`crate::Cohort`]-style
+    /// multi-view engine of your own.
+    ///
+    /// [`subscribe`]: SubscribeClient::subscribe
+    pub async fn subscribe_raw(&self, subscribe: Subscribe) -> Result<RawStream, SubscribeError> {
+        self.open_raw(&subscribe, subscribe.to_sql_initial()).await
+    }
+
+    /// Resumes a raw stream from `token`. See [`subscribe_raw`] and [`resume`].
+    ///
+    /// [`subscribe_raw`]: SubscribeClient::subscribe_raw
+    /// [`resume`]: SubscribeClient::resume
+    pub async fn resume_raw(
         &self,
         subscribe: Subscribe,
-        subscribe_sql: String,
-        with_snapshot: bool,
-    ) -> Result<BatchStream<'_>, SubscribeError> {
-        // A cursor must live inside a transaction, which also holds the read so
-        // the frontier does not advance out from under a slow reader mid-batch.
-        //
-        // NOTE: one subscription owns its connection for its lifetime. If
-        // `DECLARE` fails after `BEGIN`, roll back so the connection is not left
-        // in an open transaction.
-        self.client
-            .simple_query("BEGIN")
+        token: &ResumeToken,
+    ) -> Result<RawStream, SubscribeError> {
+        check_fingerprint(&subscribe, token)?;
+        self.open_raw(&subscribe, subscribe.to_sql_resume(token))
             .await
-            .map_err(classify_error)?;
-        if let Err(error) = self
-            .client
-            .simple_query(&format!("DECLARE {CURSOR} CURSOR FOR {subscribe_sql}"))
-            .await
-        {
-            let _ = self.client.simple_query("ROLLBACK").await;
-            return Err(classify_error(error));
-        }
+    }
 
-        Ok(BatchStream {
-            client: &self.client,
-            fetch_sql: format!("FETCH ALL {CURSOR} WITH (timeout = '1s')"),
-            decoder: None,
-            batcher: Batcher::new(subscribe.fingerprint(), with_snapshot),
-            envelope: subscribe.envelope().clone(),
-            bounded: subscribe.is_bounded(),
-        })
+    async fn open_raw(
+        &self,
+        subscribe: &Subscribe,
+        subscribe_sql: String,
+    ) -> Result<RawStream, SubscribeError> {
+        start_cursor(&self.client, &subscribe_sql).await?;
+        let (tx, rx) = mpsc::channel(self.buffer_capacity);
+        let status = Arc::new(Mutex::new(None));
+        let cancel = Arc::new(AtomicBool::new(false));
+        tokio::spawn(run_drain(
+            Arc::clone(&self.client),
+            subscribe.envelope().clone(),
+            subscribe.is_bounded(),
+            tx,
+            |message| message,
+            cancel,
+            Arc::clone(&status),
+        ));
+        Ok(RawStream { rx, status })
+    }
+}
+
+/// Rejects a resume whose query shape no longer matches the checkpoint.
+fn check_fingerprint(subscribe: &Subscribe, token: &ResumeToken) -> Result<(), SubscribeError> {
+    let fingerprint = subscribe.fingerprint();
+    if fingerprint != token.fingerprint() {
+        return Err(SubscribeError::SchemaMismatch {
+            expected: token.fingerprint().to_string(),
+            actual: fingerprint,
+        });
+    }
+    Ok(())
+}
+
+/// The raw decoded stream for one subscription: [`StreamMessage`]s in arrival
+/// order, before any batching or consistency policy is applied.
+///
+/// This is layer one, the composable substrate the batcher and cohort are built
+/// on. Pull messages with [`RawStream::next`].
+#[derive(Debug)]
+pub struct RawStream {
+    rx: mpsc::Receiver<StreamMessage>,
+    status: Arc<Mutex<Option<SubscribeError>>>,
+}
+
+impl RawStream {
+    /// Returns the next decoded message, or `None` when the stream ends (only a
+    /// bounded subscription ends on its own). Surfaces the terminal error if the
+    /// drain failed.
+    pub async fn next(&mut self) -> Result<Option<StreamMessage>, SubscribeError> {
+        match self.rx.recv().await {
+            Some(message) => Ok(Some(message)),
+            None => take_terminal_status(&self.status),
+        }
     }
 }
 
@@ -132,73 +218,174 @@ impl SubscribeClient {
 ///
 /// Pull batches with [`BatchStream::next`]. Each returned batch is complete: a
 /// consumer that applies it and persists its `resume_token` atomically achieves
-/// exactly-once state.
+/// exactly-once state. This is the raw stream plus the [`Batcher`] consistency
+/// engine.
 #[derive(Debug)]
-pub struct BatchStream<'a> {
-    client: &'a tokio_postgres::Client,
-    fetch_sql: String,
-    decoder: Option<Decoder>,
+pub struct BatchStream {
+    raw: RawStream,
     batcher: Batcher,
-    envelope: crate::envelope::Envelope,
-    bounded: bool,
 }
 
-impl BatchStream<'_> {
+impl BatchStream {
     /// Returns the next consistent batch, or `None` when a bounded subscription
     /// (one with `UP TO`) has terminated.
     ///
-    /// Fetches from the server until a timestamp closes, so it may issue
-    /// several `FETCH`es before returning. Idle periods still yield empty
-    /// batches as the frontier advances.
+    /// Consumes raw messages until a timestamp closes. Idle periods still yield
+    /// empty batches as the frontier advances.
     pub async fn next(&mut self) -> Result<Option<ConsistentBatch>, SubscribeError> {
         loop {
-            let messages = self
-                .client
-                .simple_query(&self.fetch_sql)
-                .await
-                .map_err(classify_error)?;
-
-            let mut terminated = true;
-            for message in messages {
-                match message {
-                    SimpleQueryMessage::Row(row) => {
-                        // A row means the cursor is still live.
-                        terminated = false;
-                        if self.decoder.is_none() {
-                            let columns: Vec<String> =
-                                row.columns().iter().map(|c| c.name().to_string()).collect();
-                            self.decoder = Some(Decoder::new(&columns, &self.envelope)?);
-                        }
-                        let decoder = self.decoder.as_ref().expect("decoder set above");
-                        let raw: Vec<Datum> = (0..row.len())
-                            .map(|i| row.get(i).map(str::to_string))
-                            .collect();
-                        let message = decoder.decode(&raw)?;
-                        if let Some(batch) = self.batcher.push(message)? {
-                            return Ok(Some(batch));
-                        }
+            match self.raw.next().await? {
+                Some(message) => {
+                    if let Some(batch) = self.batcher.push(message)? {
+                        return Ok(Some(batch));
                     }
-                    SimpleQueryMessage::CommandComplete(_) => {}
-                    // Newer message variants (added behind `#[non_exhaustive]`)
-                    // carry no rows and can be ignored.
-                    _ => {}
                 }
-            }
-
-            // A `FETCH` that returns only a command tag and no rows means the
-            // bounded subscription has drained.
-            if terminated && self.is_bounded() {
-                return Ok(None);
+                None => return Ok(None),
             }
         }
     }
+}
 
-    /// Whether this is a bounded (`UP TO`) subscription. Only a bounded cursor
-    /// terminates with an empty fetch; an unbounded one blocks on the fetch
-    /// timeout and keeps advancing, so an empty fetch there just means "idle,
-    /// poll again".
-    fn is_bounded(&self) -> bool {
-        self.bounded
+/// Reads and clears the terminal status of a finished drain: an error if it
+/// failed, or a clean end otherwise.
+fn take_terminal_status(
+    status: &Mutex<Option<SubscribeError>>,
+) -> Result<Option<StreamMessage>, SubscribeError> {
+    match status.lock().expect("status mutex poisoned").take() {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
+}
+
+/// The `FETCH` statement, with a short timeout so an idle unbounded subscription
+/// still returns periodically to check for cancellation and emit progress.
+pub(crate) fn fetch_sql() -> String {
+    format!("FETCH ALL {CURSOR} WITH (timeout = '1s')")
+}
+
+/// Connects a fresh connection and opens the subscription cursor on it. Used for
+/// cohort members, which each own a connection.
+pub(crate) async fn connect_cursor(
+    conninfo: &str,
+    subscribe_sql: &str,
+) -> Result<Arc<tokio_postgres::Client>, SubscribeError> {
+    let (client, connection) = tokio_postgres::connect(conninfo, NoTls)
+        .await
+        .map_err(classify_error)?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let client = Arc::new(client);
+    start_cursor(&client, subscribe_sql).await?;
+    Ok(client)
+}
+
+/// Opens the subscription cursor inside a transaction on an existing connection.
+///
+/// A cursor must live inside a transaction, which also holds the read so the
+/// frontier does not advance out from under a slow reader mid-batch. If
+/// `DECLARE` fails after `BEGIN`, this rolls back so the connection is not left
+/// in an open transaction.
+async fn start_cursor(
+    client: &tokio_postgres::Client,
+    subscribe_sql: &str,
+) -> Result<(), SubscribeError> {
+    client.simple_query("BEGIN").await.map_err(classify_error)?;
+    if let Err(error) = client
+        .simple_query(&format!("DECLARE {CURSOR} CURSOR FOR {subscribe_sql}"))
+        .await
+    {
+        let _ = client.simple_query("ROLLBACK").await;
+        return Err(classify_error(error));
+    }
+    Ok(())
+}
+
+/// The background drain: fetch, decode, and forward messages into `tx` until the
+/// subscription ends, the consumer leaves, or a sibling drain fails.
+///
+/// On any terminal error it records the first error in `status` and sets
+/// `cancel` so sibling drains (in a cohort) stop too. It always tries to
+/// `ROLLBACK` on the way out, releasing the cursor so the server stops buffering
+/// output no one will read.
+pub(crate) async fn run_drain<T, W>(
+    client: Arc<tokio_postgres::Client>,
+    envelope: Envelope,
+    bounded: bool,
+    tx: mpsc::Sender<T>,
+    wrap: W,
+    cancel: Arc<AtomicBool>,
+    status: Arc<Mutex<Option<SubscribeError>>>,
+) where
+    T: Send + 'static,
+    W: Fn(StreamMessage) -> T + Send + 'static,
+{
+    if let Err(error) = drain_loop(&client, &envelope, bounded, &tx, &wrap, &cancel).await {
+        let mut slot = status.lock().expect("status mutex poisoned");
+        if slot.is_none() {
+            *slot = Some(error);
+        }
+        cancel.store(true, Ordering::SeqCst);
+    }
+    // Best-effort cursor release. If the connection is already broken this is a
+    // no-op; if it is healthy it stops the server buffering for a dead reader.
+    let _ = client.simple_query("ROLLBACK").await;
+}
+
+async fn drain_loop<T, W>(
+    client: &tokio_postgres::Client,
+    envelope: &Envelope,
+    bounded: bool,
+    tx: &mpsc::Sender<T>,
+    wrap: &W,
+    cancel: &AtomicBool,
+) -> Result<(), SubscribeError>
+where
+    W: Fn(StreamMessage) -> T,
+{
+    let fetch = fetch_sql();
+    let mut decoder: Option<Decoder> = None;
+    loop {
+        // Stop promptly when a sibling failed or the consumer walked away. The
+        // fetch timeout bounds how long either takes to notice.
+        if cancel.load(Ordering::SeqCst) || tx.is_closed() {
+            return Ok(());
+        }
+
+        let messages = client.simple_query(&fetch).await.map_err(classify_error)?;
+        let mut saw_row = false;
+        for message in messages {
+            if let SimpleQueryMessage::Row(row) = message {
+                saw_row = true;
+                if decoder.is_none() {
+                    let columns: Vec<String> =
+                        row.columns().iter().map(|c| c.name().to_string()).collect();
+                    decoder = Some(Decoder::new(&columns, envelope)?);
+                }
+                let decoder = decoder.as_ref().expect("decoder set above");
+                let raw: Vec<Datum> = (0..row.len())
+                    .map(|i| row.get(i).map(str::to_string))
+                    .collect();
+                let decoded = decoder.decode(&raw)?;
+                match tx.try_send(wrap(decoded)) {
+                    Ok(()) => {}
+                    // The consumer dropped the receiver: nothing more to do.
+                    Err(mpsc::error::TrySendError::Closed(_)) => return Ok(()),
+                    // The buffer is full: the consumer fell behind. Fail loud
+                    // rather than block the drain (which would backpressure the
+                    // server into unbounded buffering).
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        return Err(SubscribeError::BufferOverflow);
+                    }
+                }
+            }
+        }
+
+        // A fetch that returned no rows on a bounded subscription means it has
+        // drained. An unbounded one just idled; loop and fetch again.
+        if !saw_row && bounded {
+            return Ok(());
+        }
     }
 }
 

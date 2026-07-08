@@ -24,6 +24,34 @@ while let Some(batch) = stream.next().await? {
 * Resuming takes an opaque `ResumeToken`; the `AS OF frontier - 1` arithmetic
   lives inside it.
 * Failures surface as a small, typed `SubscribeError`.
+* For a lower-level stream of decoded changes and progress markers, use
+  `subscribe_raw`. The batcher is built on it.
+
+## Cohorts
+
+To stay consistent across several views at once, a `Cohort` releases every
+member only up to their shared minimum frontier, so each moment is a genuine
+cross-view snapshot.
+
+```rust
+use mz_subscribe::{Cohort, Subscribe};
+
+let mut cohort = Cohort::connect(
+    "postgres://materialize@localhost:6875",
+    vec![
+        ("orders".to_string(), Subscribe::object("orders")),
+        ("inventory".to_string(), Subscribe::object("inventory")),
+    ],
+)
+.await?;
+
+while let Some(moment) = cohort.next().await? {
+    for view in &moment.views {
+        // view.name, view.updates: this view's changes at the joint frontier
+    }
+    // moment.resume_token checkpoints the whole cohort at once.
+}
+```
 
 See the [top-level README](../README.md) for the protocol this encodes and the
 guarantees it provides.

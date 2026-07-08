@@ -136,7 +136,14 @@ impl Subscribe {
     /// The SQL for resuming from `token`: no snapshot, and `AS OF` set to
     /// `token.as_of()` so emission begins exactly where the token left off.
     pub fn to_sql_resume(&self, token: &ResumeToken) -> String {
-        self.to_sql(false, Some(token.as_of()))
+        self.to_sql_resume_at(token.as_of())
+    }
+
+    /// The SQL for resuming at an explicit `as_of`: no snapshot, emitting only
+    /// timestamps strictly greater than `as_of`. Used by a cohort, where every
+    /// member resumes at the same joint `AS OF`.
+    pub fn to_sql_resume_at(&self, as_of: u64) -> String {
+        self.to_sql(false, Some(as_of))
     }
 
     fn to_sql(&self, snapshot: bool, as_of: Option<u64>) -> String {
@@ -262,7 +269,10 @@ mod tests {
         // These exact values are also asserted by the Python SDK, so both
         // compute the same fingerprint (and therefore interchangeable tokens)
         // for the same subscription shape.
-        assert_eq!(Subscribe::object("orders").fingerprint(), "f44d7c35ad6f569c");
+        assert_eq!(
+            Subscribe::object("orders").fingerprint(),
+            "f44d7c35ad6f569c"
+        );
         assert_eq!(
             Subscribe::object("orders")
                 .envelope_upsert(["id"])
