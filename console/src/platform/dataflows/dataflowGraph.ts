@@ -331,12 +331,113 @@ export function visibleNodeCount(
   return deriveVisibleGraph(structure, collapsed).nodes.length;
 }
 
-// All-optional here. Task 13's decorateGraph returns all fields set.
+export interface Filters {
+  search: string;
+  hideIdle: boolean;
+  heatmap: "off" | "elapsed" | "size";
+  heatmapThreshold: number; // 0..1 fraction of max
+  channelTypes: string[] | null; // null = all
+}
+
+export const DEFAULT_FILTERS: Filters = {
+  search: "",
+  hideIdle: false,
+  heatmap: "off",
+  heatmapThreshold: 0,
+  channelTypes: null,
+};
+
+// decorateGraph returns every field set.
 export interface GraphDecorations {
-  dimmedNodeIds?: ReadonlySet<string>;
-  hiddenNodeIds?: ReadonlySet<string>;
-  hiddenEdgeIds?: ReadonlySet<string>;
-  dimmedEdgeIds?: ReadonlySet<string>;
-  nodeColors?: ReadonlyMap<string, string>; // heatmap override
-  searchMatches?: string[];
+  dimmedNodeIds: Set<string>;
+  hiddenNodeIds: Set<string>;
+  hiddenEdgeIds: Set<string>;
+  dimmedEdgeIds: Set<string>;
+  nodeColors: Map<string, string>;
+  searchMatches: string[]; // visible node ids, document order
+}
+
+export function allChannelTypes(structure: DataflowStructure): string[] {
+  const types = new Set<string>();
+  for (const c of structure.channels)
+    if (c.channelType) types.add(c.channelType);
+  return [...types].sort();
+}
+
+export function decorateGraph(
+  graph: VisibleGraph,
+  filters: Filters,
+  heatColor: (t: number) => string,
+): GraphDecorations {
+  const d: GraphDecorations = {
+    dimmedNodeIds: new Set(),
+    hiddenNodeIds: new Set(),
+    hiddenEdgeIds: new Set(),
+    dimmedEdgeIds: new Set(),
+    nodeColors: new Map(),
+    searchMatches: [],
+  };
+  const needle = filters.search.trim().toLowerCase();
+  for (const n of graph.nodes) {
+    if (needle && n.kind !== "port" && n.kind !== "region") {
+      if (n.label.toLowerCase().includes(needle)) d.searchMatches.push(n.id);
+      else d.dimmedNodeIds.add(n.id);
+    }
+    if (
+      filters.hideIdle &&
+      n.kind === "operator" &&
+      n.stats !== null &&
+      n.stats.elapsedNs === 0n &&
+      n.stats.arrangementRecords === 0n
+    ) {
+      d.hiddenNodeIds.add(n.id);
+    }
+  }
+  for (const e of graph.edges) {
+    if (filters.hideIdle && e.messagesSent === 0n) d.hiddenEdgeIds.add(e.id);
+    if (
+      filters.channelTypes !== null &&
+      !e.channelTypes.some((t) => filters.channelTypes!.includes(t))
+    ) {
+      d.dimmedEdgeIds.add(e.id);
+    }
+  }
+  if (filters.heatmap !== "off") {
+    const metric = (n: VisibleNode): bigint =>
+      filters.heatmap === "elapsed"
+        ? (n.transitive?.elapsedNs ?? 0n)
+        : (n.transitive?.arrangementSize ?? 0n);
+    const candidates = graph.nodes.filter((n) => n.kind !== "port");
+    const max = candidates.reduce(
+      (m, n) => (metric(n) > m ? metric(n) : m),
+      0n,
+    );
+    if (max > 0n) {
+      for (const n of candidates) {
+        const t = Number(metric(n)) / Number(max);
+        d.nodeColors.set(n.id, heatColor(t));
+        if (t < filters.heatmapThreshold) d.dimmedNodeIds.add(n.id);
+      }
+    }
+  }
+  return d;
+}
+
+// Search may match inside collapsed regions. Returns a collapse state with
+// every ancestor of every matching node expanded (respecting nothing else).
+export function expandForSearch(
+  structure: DataflowStructure,
+  collapsed: CollapseState,
+  search: string,
+): CollapseState {
+  const needle = search.trim().toLowerCase();
+  if (!needle) return collapsed;
+  const next = new Set(collapsed);
+  for (const node of structure.nodes.values()) {
+    if (!node.name.toLowerCase().includes(needle)) continue;
+    for (let len = 1; len < node.address.length; len++) {
+      next.delete(nodeIdOf(node.address.slice(0, len)));
+    }
+  }
+  return next;
 }

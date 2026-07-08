@@ -10,10 +10,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  allChannelTypes,
   buildDataflowStructure,
   type ChannelRow,
+  decorateGraph,
+  DEFAULT_FILTERS,
   defaultCollapseState,
   deriveVisibleGraph,
+  expandForSearch,
   type LirSpanRow,
   MAX_VISIBLE_NODES,
   nodeIdOf,
@@ -225,5 +229,108 @@ describe("deriveVisibleGraph", () => {
     expect(defaultCollapseState(s)).toEqual(new Set([regionId]));
     expect(visibleNodeCount(s, defaultCollapseState(s))).toEqual(2);
     expect(MAX_VISIBLE_NODES).toEqual(1500);
+  });
+});
+
+describe("decorateGraph", () => {
+  const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
+  const expanded = deriveVisibleGraph(s, new Set());
+  const heat = (t: number) => `heat(${t.toFixed(2)})`;
+
+  it("search dims non-matching leaf nodes and lists matches", () => {
+    const d = decorateGraph(
+      expanded,
+      { ...DEFAULT_FILTERS, search: "join" },
+      heat,
+    );
+    expect(d.searchMatches).toEqual([nodeIdOf([5, 1, 1])]);
+    expect(d.dimmedNodeIds.has(nodeIdOf([5, 2]))).toBe(true);
+    expect(d.dimmedNodeIds.has(nodeIdOf([5, 1, 1]))).toBe(false);
+  });
+
+  it("hideIdle hides zero-activity operators and zero-message edges, never regions or ports", () => {
+    const d = decorateGraph(
+      expanded,
+      { ...DEFAULT_FILTERS, hideIdle: true },
+      heat,
+    );
+    // every fixture operator has elapsed > 0 except none; hide check via a synthetic idle op
+    const idle = buildDataflowStructure(
+      [
+        ...OPS,
+        {
+          id: "15",
+          address: ["5", "3"],
+          name: "Idle",
+          arrangementRecords: "0",
+          arrangementSize: "0",
+          elapsedNs: "0",
+        },
+      ],
+      CHANNELS,
+      [],
+    );
+    const d2 = decorateGraph(
+      deriveVisibleGraph(idle, new Set()),
+      { ...DEFAULT_FILTERS, hideIdle: true },
+      heat,
+    );
+    expect(d2.hiddenNodeIds.has(nodeIdOf([5, 3]))).toBe(true);
+    expect(d2.hiddenNodeIds.has(nodeIdOf([5, 1]))).toBe(false);
+    expect(d.hiddenEdgeIds.size).toBe(0); // all fixture edges have messages
+  });
+
+  it("channel type filter dims non-matching edges", () => {
+    const d = decorateGraph(
+      expanded,
+      { ...DEFAULT_FILTERS, channelTypes: ["batches"] },
+      heat,
+    );
+    const rowsEdge = expanded.edges.find((e) =>
+      e.channelTypes.includes("rows"),
+    )!;
+    const batchesEdge = expanded.edges.find((e) =>
+      e.channelTypes.includes("batches"),
+    )!;
+    expect(d.dimmedEdgeIds.has(rowsEdge.id)).toBe(true);
+    expect(d.dimmedEdgeIds.has(batchesEdge.id)).toBe(false);
+  });
+
+  it("heatmap colors by transitive metric and dims below threshold", () => {
+    const d = decorateGraph(
+      expanded,
+      { ...DEFAULT_FILTERS, heatmap: "elapsed", heatmapThreshold: 0.5 },
+      heat,
+    );
+    // max transitive elapsed among visible non-ports is the region (13n)
+    expect(d.nodeColors.get(nodeIdOf([5, 1]))).toEqual("heat(1.00)");
+    expect(d.dimmedNodeIds.has(nodeIdOf([5, 2]))).toBe(true); // 2/13 < 0.5
+  });
+
+  it("heatmap with all-zero metric sets no colors", () => {
+    const zero = buildDataflowStructure(
+      OPS.map((o) => ({ ...o, elapsedNs: "0" })),
+      CHANNELS,
+      [],
+    );
+    const d = decorateGraph(
+      deriveVisibleGraph(zero, new Set()),
+      { ...DEFAULT_FILTERS, heatmap: "elapsed" },
+      heat,
+    );
+    expect(d.nodeColors.size).toBe(0);
+  });
+});
+
+describe("expandForSearch / allChannelTypes", () => {
+  const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
+
+  it("expands ancestors of matches", () => {
+    const next = expandForSearch(s, defaultCollapseState(s), "join");
+    expect(next.has(nodeIdOf([5, 1]))).toBe(false);
+  });
+
+  it("collects channel types", () => {
+    expect(allChannelTypes(s)).toEqual(["batches", "rows"]);
   });
 });
