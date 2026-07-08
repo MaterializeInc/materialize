@@ -11,7 +11,7 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 
 import type { Cluster } from "~/api/materialize/cluster/clusterList";
 import { ErrorCode } from "~/api/materialize/types";
@@ -23,6 +23,10 @@ import { renderComponent } from "~/test/utils";
 
 import DataflowDetailPage from "./DataflowDetailPage";
 import { nodeIdOf } from "./dataflowGraph";
+
+// Declared via vi.hoisted so the vi.mock factory below (itself hoisted
+// above regular imports) can close over it.
+const fitViewSpy = vi.hoisted(() => vi.fn());
 
 // jsdom lacks ResizeObserver/DOMMatrixReadOnly, so replace @xyflow/react with a
 // flat renderer that preserves the decision under test (whether the canvas and
@@ -69,7 +73,8 @@ vi.mock("@xyflow/react", () => ({
   useReactFlow: () => ({
     getInternalNode: () => undefined,
     setCenter: () => {},
-    fitView: () => {},
+    fitView: fitViewSpy,
+    getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
   }),
 }));
 
@@ -184,6 +189,7 @@ const fanOutChannelsResult = {
 };
 
 beforeEach(() => {
+  fitViewSpy.mockClear();
   const store = getStore();
   store.set(allClusters, mockSubscribeState({ data: [cluster] }));
   server.use(
@@ -237,6 +243,13 @@ beforeEach(() => {
     }),
   );
 });
+
+// Exposes the current URL search string so a test can assert the
+// drill-down scope actually landed in the URL, not just in the rendered
+// graph (which would still look right if it were only in component state).
+const LocationProbe = () => (
+  <div data-testid="location-search">{useLocation().search}</div>
+);
 
 describe("DataflowDetailPage", () => {
   // CNS-109: switching to a replica whose query fails must surface the error
@@ -350,6 +363,90 @@ describe("DataflowDetailPage", () => {
     const regionBInPortId = `${regionBId}:in:0`;
     expect(await screen.findByTestId(`node-${regionBInPortId}`)).toBeVisible();
     expect(await screen.findAllByText("input 0")).toHaveLength(2);
+  });
+
+  // The drill-down scope has to actually be in the URL, not just reflected
+  // in the rendered graph, for a copied link or the back button to work.
+  it("puts the drill-down scope in the URL, so a link into it reopens there directly", async () => {
+    const { unmount } = await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={
+            <>
+              <DataflowDetailPage />
+              <LocationProbe />
+            </>
+          }
+        />
+      </Routes>,
+      {
+        initialRouterEntries: ["/clusters/u5/test_cluster/dataflows/8"],
+      },
+    );
+
+    const regionAId = nodeIdOf([8, 1]);
+    await screen.findByTestId(`node-${regionAId}`);
+    // A fresh, undrilled link carries no scope param at all.
+    expect(screen.getByTestId("location-search").textContent).toBe("");
+
+    await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+    await screen.findByTestId(`node-${nodeIdOf([8, 1, 1])}`);
+    const search = screen.getByTestId("location-search").textContent;
+    expect(search).toBe("?scope=8.1");
+
+    unmount();
+
+    // Reopening at that exact URL, with no clicks, lands drilled in already.
+    await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={<DataflowDetailPage />}
+        />
+      </Routes>,
+      {
+        initialRouterEntries: [
+          `/clusters/u5/test_cluster/dataflows/8${search}`,
+        ],
+      },
+    );
+    expect(
+      await screen.findByTestId(`node-${nodeIdOf([8, 1, 1])}`),
+    ).toBeVisible();
+  });
+
+  // elk lays each scope out from scratch, so a viewport left over from
+  // wherever the user was in the previous scope can easily miss the new
+  // one entirely. Navigating into a scope should recenter for that reason,
+  // but an unrelated re-render within the same scope (e.g. selecting a
+  // node) must not refit again, or it would fight the user's own panning.
+  it("recenters after navigating into a scope, but not again within it", async () => {
+    await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={<DataflowDetailPage />}
+        />
+      </Routes>,
+      {
+        initialRouterEntries: ["/clusters/u5/test_cluster/dataflows/8"],
+      },
+    );
+
+    const regionAId = nodeIdOf([8, 1]);
+    await screen.findByTestId(`node-${regionAId}`);
+    // The initial scope is skipped: React Flow's own `fitView` prop already
+    // covers first load.
+    expect(fitViewSpy).not.toHaveBeenCalled();
+
+    await userEvent.dblClick(screen.getByTestId(`node-${regionAId}`));
+    const leafAId = nodeIdOf([8, 1, 1]);
+    await screen.findByTestId(`node-${leafAId}`);
+    expect(fitViewSpy).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByTestId(`node-${leafAId}`));
+    expect(fitViewSpy).toHaveBeenCalledTimes(1);
   });
 
   // A 1:n port (RegionA's single output feeding both RegionB and RegionC)

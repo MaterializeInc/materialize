@@ -23,6 +23,11 @@ export const COLORS = {
 export const HIGHLIGHT_COLORS = {
   selected: "#0093e6",
   activeMatch: "#fe581d",
+  // Same hue as `selected`, for an edge that merely touches the selected
+  // node rather than being the clicked thing itself; ChannelEdge pairs this
+  // with a thinner stroke than `selected` gets, so the two read as a clear
+  // emphasis/de-emphasis pair rather than two unrelated colors.
+  connected: "#8fd2f5",
 };
 
 export function nodeFillColor(node: VisibleNode): string {
