@@ -56,6 +56,7 @@ export interface DataflowGraphViewProps {
   cacheKey: string;
   decorations?: GraphDecorations;
   onNodeClick?: (node: VisibleNode) => void;
+  onPaneClick?: () => void;
 }
 
 export const DataflowGraphView = ({
@@ -65,6 +66,7 @@ export const DataflowGraphView = ({
   cacheKey,
   decorations,
   onNodeClick,
+  onPaneClick,
 }: DataflowGraphViewProps) => {
   const toast = useToast();
   const visible = React.useMemo(() => {
@@ -188,6 +190,7 @@ export const DataflowGraphView = ({
         onNodeClick={(_, node) =>
           onNodeClick?.((node.data as { node: VisibleNode }).node)
         }
+        onPaneClick={onPaneClick}
         onNodeDoubleClick={(_, node) => {
           const visibleNode = (node.data as { node: VisibleNode }).node;
           if (

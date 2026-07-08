@@ -26,8 +26,13 @@ import LabeledSelect from "~/components/LabeledSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { useAllClusters } from "~/store/allClusters";
 
-import { type CollapseState, defaultCollapseState } from "./dataflowGraph";
+import {
+  type CollapseState,
+  defaultCollapseState,
+  type VisibleNode,
+} from "./dataflowGraph";
 import { DataflowGraphView } from "./DataflowGraphView";
+import { NodeDetailPanel } from "./NodeDetailPanel";
 
 // Stable 32-bit hash so a pure stats refresh (identical node ids) keeps the
 // same structure key and reuses the layout, while any structural change
@@ -57,6 +62,9 @@ const DataflowDetailPage = () => {
     useDataflowGraphData(params);
 
   const [collapsed, setCollapsed] = React.useState<CollapseState | null>(null);
+  const [selectedNode, setSelectedNode] = React.useState<VisibleNode | null>(
+    null,
+  );
   // Digest of the sorted node ids: identical structure across a stats-only
   // refresh yields the same key, so layout and collapse state are preserved.
   const structureKey = data
@@ -126,12 +134,22 @@ const DataflowDetailPage = () => {
         ) : data.structure.nodes.size <= 1 ? (
           <Text>This dataflow contains no operators.</Text>
         ) : (
-          <DataflowGraphView
-            structure={data.structure}
-            collapsed={collapsed}
-            onCollapsedChange={setCollapsed}
-            cacheKey={structureKey ?? ""}
-          />
+          <HStack flex="1" minH={0} alignItems="stretch" spacing={0}>
+            <DataflowGraphView
+              structure={data.structure}
+              collapsed={collapsed}
+              onCollapsedChange={setCollapsed}
+              cacheKey={structureKey ?? ""}
+              onNodeClick={setSelectedNode}
+              onPaneClick={() => setSelectedNode(null)}
+            />
+            {selectedNode && (
+              <NodeDetailPanel
+                node={selectedNode}
+                onClose={() => setSelectedNode(null)}
+              />
+            )}
+          </HStack>
         )}
       </VStack>
     </MainContentContainer>
