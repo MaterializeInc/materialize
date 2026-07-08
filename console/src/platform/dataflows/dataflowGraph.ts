@@ -13,8 +13,18 @@ export function nodeIdOf(address: Address): NodeId {
   return JSON.stringify(address);
 }
 
-export function formatElapsedNs(ns: bigint): string {
-  return `${Math.round(Number(ns) / 1e9)}s`;
+/**
+ * Looks up a key expected to be present by construction (e.g. a child id
+ * drawn from the same map it indexes into). Throws with the key in the
+ * message instead of a bare non-null assertion, so a broken invariant fails
+ * loudly at the lookup site rather than as a generic "undefined" downstream.
+ */
+export function mustGet<K, V>(map: ReadonlyMap<K, V>, key: K): V {
+  const value = map.get(key);
+  if (value === undefined) {
+    throw new Error(`missing expected map entry for key ${String(key)}`);
+  }
+  return value;
 }
 
 export interface NodeStats {
@@ -23,18 +33,20 @@ export interface NodeStats {
   elapsedNs: bigint;
   // Total times this operator was scheduled (summed over the scheduling
   // duration histogram's buckets). A high count relative to elapsed time
-  // means the operator yields often -- each activation does little work,
-  // so per-activation overhead (waking the worker, progress tracking)
-  // dominates -- which raw elapsed time alone doesn't surface.
+  // means the operator yields often. Each activation does little work, so
+  // per-activation overhead (waking the worker, progress tracking)
+  // dominates, and raw elapsed time alone doesn't surface this.
   scheduleCount: bigint;
 }
 
-// How unevenly work for this node is spread across workers: worst worker's
-// value over the average, matching EXPLAIN ANALYZE ... WITH SKEW. Avg is
-// over workers that show up at all for this node, not the full replica
-// worker count. A worker with zero rows anywhere for a node is invisible to
-// both, same convention. 1 means perfectly even, higher means more skewed,
-// 0 means no data.
+/**
+ * How unevenly work for this node is spread across workers: worst worker's
+ * value over the average, matching EXPLAIN ANALYZE ... WITH SKEW. Avg is
+ * over workers that show up at all for this node, not the full replica
+ * worker count. A worker with zero rows anywhere for a node is invisible to
+ * both, same convention. 1 means perfectly even, higher means more skewed,
+ * 0 means no data.
+ */
 export interface SkewStats {
   cpuSkew: number;
   memorySkew: number;
@@ -49,6 +61,12 @@ export interface LirInfo {
   operator: string;
 }
 
+/**
+ * One node of a dataflow's internal address tree: pure introspection data
+ * (own/transitive stats and skew), independent of any particular scope's
+ * view. `deriveVisibleGraph` projects this into `VisibleNode`s for a given
+ * view; this type carries no view-specific computation itself.
+ */
 export interface DataflowNode {
   id: NodeId;
   operatorId: bigint;
@@ -61,7 +79,7 @@ export interface DataflowNode {
   ownSkew: SkewStats;
   // Same ratios as ownSkew, but never suppressed by the magnitude floor.
   // ownSkew exists to seed transitiveSkew's MAX rollup (see its comment for
-  // why negligible nodes must not pollute an ancestor's reported skew);
+  // why negligible nodes must not pollute an ancestor's reported skew).
   // ownSkewRaw is this node's actual measured skew, for display when this
   // exact node is selected, where a floor built for ancestor-safety would
   // otherwise misreport a real (if individually low-stakes) imbalance as
@@ -107,9 +125,11 @@ export interface DataflowStructure {
   channels: Channel[];
 }
 
-// A boundary crossing this view can't show directly (the far side isn't part
-// of it): kept so a port can still be jumped to, even fanning out to several
-// peers (one output can feed multiple inputs).
+/**
+ * A boundary crossing this view can't show directly (the far side isn't part
+ * of it): kept so a port can still be jumped to, even fanning out to several
+ * peers (one output can feed multiple inputs).
+ */
 export interface PortPeer {
   address: Address;
   label: string;
@@ -140,7 +160,7 @@ export interface VisibleNode {
   // needs to show on its own.
   own: NodeStats | null;
   // This node's own skew, unfiltered by the magnitude floor that guards
-  // transitiveSkew's ancestor rollup (see DataflowNode.ownSkewRaw) -- the
+  // transitiveSkew's ancestor rollup (see DataflowNode.ownSkewRaw). The
   // real number for this exact node, not a heatmap-safe one.
   ownSkew: SkewStats | null;
   transitiveSkew: SkewStats | null;
@@ -157,6 +177,12 @@ export interface VisibleNode {
   peers: PortPeer[];
 }
 
+/**
+ * A rendered edge in one scope's view: a real `Channel`'s raw endpoints,
+ * resolved to whatever's actually visible at this scope (an exact node, or
+ * a collapsed region/port peeled back to it). Several real channels can
+ * merge onto one `VisibleEdge` when they share the same visible endpoints.
+ */
 export interface VisibleEdge {
   id: string;
   source: string;
@@ -183,7 +209,9 @@ export interface VisibleGraph {
   edges: VisibleEdge[];
 }
 
-// SQL row shapes (values arrive as strings or numbers, normalized here)
+/**
+ * SQL row shapes (values arrive as strings or numbers, normalized here)
+ */
 export interface OperatorRow {
   id: bigint | number | string;
   address: string[];
@@ -254,9 +282,9 @@ function skewRatio(vector: WorkerVector): number {
 // would otherwise become every ancestor's reported skew all the way to
 // the root. A node's own magnitude (elapsed for cpu, arrangement size for
 // memory) must be at least this fraction of the busiest single node's own
-// magnitude anywhere in the dataflow to count; below it, ownSkew reports
-// the same 0 ("no data") sentinel a node with no per-worker rows at all
-// would.
+// magnitude anywhere in the dataflow to count. Below that floor, ownSkew
+// reports the same 0 ("no data") sentinel a node with no per-worker rows at
+// all would.
 const SKEW_MAGNITUDE_FLOOR_FRACTION = 0.01;
 
 function passesMagnitudeFloor(own: bigint, maxOwn: bigint): boolean {
@@ -266,6 +294,13 @@ function passesMagnitudeFloor(own: bigint, maxOwn: bigint): boolean {
   );
 }
 
+/**
+ * Builds the address tree and own/transitive stats from raw introspection
+ * rows. `operators` must contain at most one root (an address of length 1);
+ * more than one throws. An empty `operators` list (a dropped or transient
+ * dataflow) is valid input, not an error: it returns a single-node
+ * placeholder structure instead.
+ */
 export function buildDataflowStructure(
   operators: OperatorRow[],
   channels: ChannelRow[],
@@ -373,7 +408,7 @@ export function buildDataflowStructure(
   // Children in address order so layout and tests are deterministic.
   for (const node of nodes.values()) {
     node.children.sort((a, b) => {
-      const [x, y] = [nodes.get(a)!.address, nodes.get(b)!.address];
+      const [x, y] = [mustGet(nodes, a).address, mustGet(nodes, b).address];
       return x[x.length - 1] - y[y.length - 1];
     });
   }
@@ -424,7 +459,7 @@ export function buildDataflowStructure(
   }
 
   const fillTransitive = (id: NodeId): void => {
-    const node = nodes.get(id)!;
+    const node = mustGet(nodes, id);
     const ownCpuVec = ownCpuByNode.get(id) ?? new Map();
     const ownMemoryVec = ownMemoryByNode.get(id) ?? new Map();
     const ownScheduleVec = ownScheduleByNode.get(id) ?? new Map();
@@ -457,7 +492,7 @@ export function buildDataflowStructure(
     let childrenOwnElapsedNs = 0n;
     for (const c of node.children) {
       fillTransitive(c);
-      const child = nodes.get(c)!;
+      const child = mustGet(nodes, c);
       t.arrangementRecords += child.transitive.arrangementRecords;
       t.arrangementSize += child.transitive.arrangementSize;
       t.elapsedNs += child.transitive.elapsedNs;
@@ -488,12 +523,14 @@ export function buildDataflowStructure(
   };
 }
 
-// A view shows exactly one scope's direct children. Anything deeper is
-// rolled up into its child's box, addressed at that box's depth (viewRoot's
-// depth + 1). representativeInView is the general form of that projection,
-// exported for translating arbitrary structure addresses (search matches,
-// LIR members) into the box that would represent them in a given view, or
-// null if the address isn't inside viewRootAddress's subtree at all.
+/**
+ * A view shows exactly one scope's direct children. Anything deeper is
+ * rolled up into its child's box, addressed at that box's depth (viewRoot's
+ * depth + 1). representativeInView is the general form of that projection,
+ * exported for translating arbitrary structure addresses (search matches,
+ * LIR members) into the box that would represent them in a given view, or
+ * null if the address isn't inside viewRootAddress's subtree at all.
+ */
 export function representativeInView(
   address: Address,
   viewRootAddress: Address,
@@ -517,11 +554,11 @@ function representative(address: Address, viewRootAddress: Address): NodeId {
 
 // A scope boundary crossing is logged as two channels that share a port
 // number but use different addressing for each half:
-//   - the outer half (external <-> scope) addresses the scope by its own
+//   - The outer half (external <-> scope) addresses the scope by its own
 //     operator address, e.g. an external producer's channel row targets
 //     address [5,2] directly, the same address BuildRegion's own operator
-//     row uses;
-//   - the inner half (scope <-> child) addresses the scope's internal
+//     row uses.
+//   - The inner half (scope <-> child) addresses the scope's internal
 //     fan-out point one level deeper, e.g. [5,2,0].
 // Both halves are mapped to the same synthetic port id, keyed by (scope,
 // direction, port number), so they visually chain through one port node
@@ -571,17 +608,19 @@ function endpointId(
   return { id: representative(address, viewRootAddress) };
 }
 
-// Renders exactly one scope's direct children, each either a leaf operator or
-// a box summarizing a whole nested subtree (never expanded in place).
-// Double-clicking a box navigates to a new view rooted there instead.
+/**
+ * Renders exactly one scope's direct children, each either a leaf operator or
+ * a box summarizing a whole nested subtree (never expanded in place).
+ * Double-clicking a box navigates to a new view rooted there instead.
+ */
 export function deriveVisibleGraph(
   structure: DataflowStructure,
   viewRoot: NodeId,
 ): VisibleGraph {
-  const viewRootNode = structure.nodes.get(viewRoot)!;
+  const viewRootNode = mustGet(structure.nodes, viewRoot);
   const viewRootAddress = viewRootNode.address;
   const nodes: VisibleNode[] = viewRootNode.children.map((id) => {
-    const node = structure.nodes.get(id)!;
+    const node = mustGet(structure.nodes, id);
     const kind = node.children.length === 0 ? "operator" : "region";
     return {
       id,
@@ -634,8 +673,8 @@ export function deriveVisibleGraph(
     // A scope's own boundary is logged as a pseudo-vertex [scope, 0], which
     // never gets an operator row of its own (only real children do). A
     // region nested two or more scopes deep has its outer half target that
-    // pseudo-vertex directly, one level further up than the region itself;
-    // peel back to the enclosing scope, which does have a row, so the jump
+    // pseudo-vertex directly, one level further up than the region itself.
+    // Peel back to the enclosing scope, which does have a row, so the jump
     // still lands somewhere instead of being dropped as if elided.
     let resolvedAddress = peerAddress;
     while (
@@ -647,7 +686,7 @@ export function deriveVisibleGraph(
     }
     const peerId = nodeIdOf(resolvedAddress);
     if (!structure.nodes.has(peerId)) return; // elided scope, nothing to jump to
-    const port = ports.get(portId(p))!;
+    const port = mustGet(ports, portId(p));
     const existing = port.peers.find(
       (peer) => nodeIdOf(peer.address) === peerId,
     );
@@ -671,7 +710,7 @@ export function deriveVisibleGraph(
       );
       port.peers.push({
         address: resolvedAddress,
-        label: structure.nodes.get(peerId)!.name,
+        label: mustGet(structure.nodes, peerId).name,
         messagesSent,
         batchesSent,
         channelTypes: channelType ? [channelType] : [],
@@ -681,7 +720,7 @@ export function deriveVisibleGraph(
   };
   // A channel touching a collapsed region box always does so at exactly the
   // box's own address (Timely gates every scope crossing through a single
-  // boundary vertex, one hop at a time; a plain, non-port box reference is
+  // boundary vertex, one hop at a time. A plain, non-port box reference is
   // therefore never deeper than its own address, unlike addPeer's peers,
   // which land outside viewRoot's subtree entirely). What can still be
   // ambiguous is which of the box's own inner ports a given hop's port
@@ -795,7 +834,7 @@ export function deriveVisibleGraph(
     // A non-port endpoint id must name one of this view's own boxes. Real
     // dataflows can log channels touching an address with no corresponding
     // operator row (e.g. an elided scope), and any address outside viewRoot's
-    // subtree resolves to an id this view never emits either; drop the
+    // subtree resolves to an id this view never emits either. Drop the
     // edge (but keep any port registered above) in both cases rather than
     // hand elk a dangling reference.
     if (
@@ -813,7 +852,7 @@ export function deriveVisibleGraph(
     // ancestor box, an address that isn't this box's boundary at all) has
     // no more precise a target than the box itself, already shown.
     if (!from.port) {
-      const box = structure.nodes.get(from.id)!;
+      const box = mustGet(structure.nodes, from.id);
       if (addressesEqual(ch.fromAddress, box.address)) {
         const inner = endpointId(
           structure,
@@ -838,7 +877,7 @@ export function deriveVisibleGraph(
       }
     }
     if (!to.port) {
-      const box = structure.nodes.get(to.id)!;
+      const box = mustGet(structure.nodes, to.id);
       if (addressesEqual(ch.toAddress, box.address)) {
         const inner = endpointId(
           structure,
@@ -888,12 +927,14 @@ export function deriveVisibleGraph(
   return { nodes: [...nodes, ...ports.values()], edges };
 }
 
-// The scope to navigate to so that every given address is directly visible,
-// each as either itself (if it's already a direct child of the result) or
-// the box that rolls it up. Backs off past any address that IS the raw
-// common prefix (so every input lands strictly below the result, never
-// equal to it) and past any prefix with no operator row of its own (an
-// elided scope can't be navigated to, since it never appears in a view).
+/**
+ * The scope to navigate to so that every given address is directly visible,
+ * each as either itself (if it's already a direct child of the result) or
+ * the box that rolls it up. Backs off past any address that IS the raw
+ * common prefix (so every input lands strictly below the result, never
+ * equal to it) and past any prefix with no operator row of its own (an
+ * elided scope can't be navigated to, since it never appears in a view).
+ */
 export function commonAncestorScope(
   structure: DataflowStructure,
   addresses: readonly Address[],
@@ -914,17 +955,19 @@ export function commonAncestorScope(
   return nodeIdOf(prefix);
 }
 
-// Hiding a run of idle operators would otherwise sever every path through
-// them, splitting the graph into disconnected islands even though a real
-// (idle) path exists. Splices a pass-through edge across each hidden run,
-// so hiding idle nodes never removes connectivity, only the boxes in
-// between. The spliced edge sums messages/batches/types along the run,
-// which is almost always 0/0 (that is why the run was hidden) and so
-// renders with the same dashed "idle" styling as an ordinary quiet edge.
-//
-// Cycles (timely feedback loops) are real and must not hang this: `path`
-// tracks nodes on the current walk, and re-entering one simply stops that
-// branch rather than looping forever.
+/**
+ * Hiding a run of idle operators would otherwise sever every path through
+ * them, splitting the graph into disconnected islands even though a real
+ * (idle) path exists. Splices a pass-through edge across each hidden run,
+ * so hiding idle nodes never removes connectivity, only the boxes in
+ * between. The spliced edge sums messages/batches/types along the run,
+ * which is almost always 0/0 (that is why the run was hidden) and so
+ * renders with the same dashed "idle" styling as an ordinary quiet edge.
+ *
+ * Cycles (timely feedback loops) are real and must not hang this: `path`
+ * tracks nodes on the current walk, and re-entering one simply stops that
+ * branch rather than looping forever.
+ */
 export function rerouteHiddenNodes(
   graph: VisibleGraph,
   hiddenNodeIds: ReadonlySet<string>,
@@ -1056,7 +1099,9 @@ export const DEFAULT_FILTERS: Filters = {
   showLirGroups: true,
 };
 
-// decorateGraph returns every field set.
+/**
+ * decorateGraph returns every field set.
+ */
 export interface GraphDecorations {
   dimmedNodeIds: Set<string>;
   hiddenNodeIds: Set<string>;
@@ -1065,13 +1110,15 @@ export interface GraphDecorations {
   searchMatches: string[]; // visible node ids, document order
 }
 
-// Search matches anywhere in the whole dataflow, not just the current view
-// (search is structure-wide so it stays useful once a graph is too big to
-// show in one screen). searchInfo carries that lookup in, precomputed once
-// per search string rather than re-walked per view. A box that doesn't
-// itself match but contains a match deeper in its rolled-up subtree is left
-// undimmed rather than excluded, so the match's path stays visible without
-// forcing a navigation on every keystroke.
+/**
+ * Search matches anywhere in the whole dataflow, not just the current view
+ * (search is structure-wide so it stays useful once a graph is too big to
+ * show in one screen). searchInfo carries that lookup in, precomputed once
+ * per search string rather than re-walked per view. A box that doesn't
+ * itself match but contains a match deeper in its rolled-up subtree is left
+ * undimmed rather than excluded, so the match's path stays visible without
+ * forcing a navigation on every keystroke.
+ */
 export function decorateGraph(
   graph: VisibleGraph,
   filters: Filters,
@@ -1172,9 +1219,11 @@ export interface SubtreeSearchMatches {
   containsMatch: Set<NodeId>; // matches, plus any ancestor of one
 }
 
-// Computed once over the whole structure (not the current view), so a box is
-// never dimmed just because the current scope hasn't drilled down to the
-// match nested inside it yet.
+/**
+ * Computed once over the whole structure (not the current view), so a box is
+ * never dimmed just because the current scope hasn't drilled down to the
+ * match nested inside it yet.
+ */
 export function subtreeSearchMatches(
   structure: DataflowStructure,
   search: string,
@@ -1184,7 +1233,7 @@ export function subtreeSearchMatches(
   const containsMatch = new Set<NodeId>();
   if (!needle) return { matches, containsMatch };
   const visit = (id: NodeId): boolean => {
-    const node = structure.nodes.get(id)!;
+    const node = mustGet(structure.nodes, id);
     let hit = node.name.toLowerCase().includes(needle);
     if (hit) matches.add(id);
     for (const c of node.children) {
@@ -1193,7 +1242,9 @@ export function subtreeSearchMatches(
     if (hit) containsMatch.add(id);
     return hit;
   };
-  for (const id of structure.nodes.get(structure.root)!.children) visit(id);
+  for (const id of mustGet(structure.nodes, structure.root).children) {
+    visit(id);
+  }
   return { matches, containsMatch };
 }
 
@@ -1204,9 +1255,11 @@ function addressCompare(a: Address, b: Address): number {
   return a.length - b.length;
 }
 
-// The ordered, structure-wide match list prev/next cycles through: jumping
-// to a match may navigate the view (unlike decorateGraph's searchMatches,
-// which only ever lists what's already visible in the current scope).
+/**
+ * The ordered, structure-wide match list prev/next cycles through: jumping
+ * to a match may navigate the view (unlike decorateGraph's searchMatches,
+ * which only ever lists what's already visible in the current scope).
+ */
 export function allSearchMatches(
   structure: DataflowStructure,
   search: string,
@@ -1221,9 +1274,11 @@ export function allSearchMatches(
     .sort((a, b) => addressCompare(a.address, b.address));
 }
 
-// Groups operator nodes by the LIR span covering them, keyed
-// `${exportId}/${lirId}`. One dataflow can back several exports, so entries
-// are not unique per lir id across exports.
+/**
+ * Groups operator nodes by the LIR span covering them, keyed
+ * `${exportId}/${lirId}`. One dataflow can back several exports, so entries
+ * are not unique per lir id across exports.
+ */
 export function lirIndex(
   structure: DataflowStructure,
 ): Map<string, { info: LirInfo; memberIds: NodeId[] }> {
@@ -1247,12 +1302,14 @@ export interface LirTreeNode {
   summary: NodeStats;
 }
 
-// Sums each member's OWN stats (not transitive): every operator belonging to
-// a LIR id appears in memberIds exactly once, including a parent LIR id's
-// descendants (buildDataflowStructure assigns an operator to every ancestor
-// span that contains it), so this matches EXPLAIN ANALYZE's own total_memory/
-// total_records/total_elapsed exactly without a separate query: the same
-// operator rows are already fetched for the graph itself.
+/**
+ * Sums each member's OWN stats (not transitive): every operator belonging to
+ * a LIR id appears in memberIds exactly once, including a parent LIR id's
+ * descendants (buildDataflowStructure assigns an operator to every ancestor
+ * span that contains it), so this matches EXPLAIN ANALYZE's own total_memory/
+ * total_records/total_elapsed exactly without a separate query: the same
+ * operator rows are already fetched for the graph itself.
+ */
 export function lirSummary(
   structure: DataflowStructure,
   memberIds: readonly NodeId[],
@@ -1274,12 +1331,14 @@ export function lirSummary(
   return summary;
 }
 
-// Arranges lirIndex's flat entries into a tree per export, following
-// parentLirId. A lir id is assigned once its own build (and so every
-// descendant's) completes, so within one export a higher lir id is never an
-// ancestor of a lower one. Sorting each level descending by lir id therefore
-// matches construction order without needing it as an explicit input, the
-// same convention EXPLAIN ANALYZE's own tree rendering uses.
+/**
+ * Arranges lirIndex's flat entries into a tree per export, following
+ * parentLirId. A lir id is assigned once its own build (and so every
+ * descendant's) completes, so within one export a higher lir id is never an
+ * ancestor of a lower one. Sorting each level descending by lir id therefore
+ * matches construction order without needing it as an explicit input, the
+ * same convention EXPLAIN ANALYZE's own tree rendering uses.
+ */
 export function lirTree(
   structure: DataflowStructure,
   index: ReadonlyMap<string, { info: LirInfo; memberIds: NodeId[] }>,
@@ -1324,33 +1383,39 @@ export interface LirGroupNode {
   nesting: number;
 }
 
-// A grouping layer over an already-derived VisibleGraph, the same way
-// decorateGraph layers dimming and color over it: nothing here replaces
-// `nodes`, so search, dimming, and click handling keep working against the
-// flat list untouched.
+/**
+ * A grouping layer over an already-derived VisibleGraph, the same way
+ * decorateGraph layers dimming and color over it: nothing here replaces
+ * `nodes`, so search, dimming, and click handling keep working against the
+ * flat list untouched.
+ */
 export interface LirGrouping {
   groups: LirGroupNode[]; // outer groups appear before groups nested inside them
   parentOf: Map<NodeId, NodeId>; // a VisibleNode or LirGroupNode id -> its immediate enclosing group's id
 }
 
-// Groups a scope's direct children into the LIR tree that encloses them, for
-// drawing nested boxes on the canvas. LIR spans are contiguous ranges over
-// operator ids and properly nested: a region is always fully enclosed by a
-// single LIR node's range. A dataflow can back several exports, and a shared
-// subplan can carry lir entries from more than one of them at once; a
-// compound-node tree needs one parent chain per node, so this groups by the
-// lowest exportId (string-compared) present among the given nodes only. A
-// node whose only lir entries belong to a different export renders
-// ungrouped, alongside nodes with no lir data at all (e.g. ports).
+/**
+ * Groups a scope's direct children into the LIR tree that encloses them, for
+ * drawing nested boxes on the canvas. LIR spans are contiguous ranges over
+ * operator ids and properly nested: a region is always fully enclosed by a
+ * single LIR node's range. A dataflow can back several exports, and a shared
+ * subplan can carry lir entries from more than one of them at once; a
+ * compound-node tree needs one parent chain per node, so this groups by the
+ * lowest exportId (string-compared) present among the given nodes only. A
+ * node whose only lir entries belong to a different export renders
+ * ungrouped, alongside nodes with no lir data at all (e.g. ports).
+ */
 export function groupByLir(nodes: readonly VisibleNode[]): LirGrouping {
   const groups: LirGroupNode[] = [];
   const parentOf = new Map<NodeId, NodeId>();
   const ordered = nodes
-    .filter((n) => n.operatorId !== null)
+    .filter(
+      (n): n is VisibleNode & { operatorId: bigint } => n.operatorId !== null,
+    )
     .slice()
     .sort((a, b) => {
-      const x = a.operatorId!;
-      const y = b.operatorId!;
+      const x = a.operatorId;
+      const y = b.operatorId;
       return x < y ? -1 : x > y ? 1 : 0;
     });
   if (ordered.length === 0) return { groups, parentOf };
@@ -1385,7 +1450,13 @@ export function groupByLir(nodes: readonly VisibleNode[]): LirGrouping {
       const key = stackKeys[depth];
       let group = groupIndex.get(key);
       if (!group) {
-        const info = node.lir.find((l) => `${l.exportId}/${l.lirId}` === key)!;
+        const info = node.lir.find((l) => `${l.exportId}/${l.lirId}` === key);
+        if (!info) {
+          // key was derived from this same node.lir list two lines up
+          // (filtered to chosenExport, mapped to "exportId/lirId"), so the
+          // matching entry always exists. This only guards the invariant.
+          throw new Error(`missing lir info for key ${key}`);
+        }
         group = {
           id: key,
           exportId: info.exportId,
