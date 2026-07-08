@@ -53,6 +53,35 @@ export function operatorColor(
   return palette[Math.abs(hashString(name)) % palette.length];
 }
 
+// WCAG relative luminance of a "#RRGGBB" color, for picking readable text.
+function relativeLuminance(hex: string): number {
+  const channels = [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ].map((c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+// colors.lineGraph mixes dark and light swatches in both themes (it's
+// indexed by hash, not by theme), so a node's fill color carries no
+// relationship to the current color mode. Text on top of it needs a
+// contrast decision from the fill's actual luminance, not a theme token.
+// Pins to raw black/white (not theme foreground tokens) since those exist
+// specifically for text on the app's own background, not on an arbitrary
+// hashed fill.
+export function textColorFor(background: string): string {
+  const luminance = relativeLuminance(background);
+  // WCAG contrast ratio, (lighter + 0.05) / (darker + 0.05), against each
+  // candidate; picking the higher one is equivalent to maximizing contrast.
+  const contrastWithWhite = 1.05 / (luminance + 0.05);
+  const contrastWithBlack = (luminance + 0.05) / 0.05;
+  return contrastWithBlack > contrastWithWhite ? colors.black : colors.white;
+}
+
 export function nodeFillColor(
   node: VisibleNode,
   palette: readonly string[],
