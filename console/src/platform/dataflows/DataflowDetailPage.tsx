@@ -19,7 +19,7 @@ import {
 } from "@chakra-ui/react";
 import { interpolateYlOrRd } from "d3-scale-chromatic";
 import React from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { useDataflowGraphData } from "~/api/materialize/dataflow/useDataflowGraphData";
 import { ErrorCode } from "~/api/materialize/types";
@@ -41,6 +41,7 @@ import {
 } from "./dataflowGraph";
 import { DataflowGraphView } from "./DataflowGraphView";
 import { DataflowToolbar } from "./DataflowToolbar";
+import { LirPanel } from "./LirPanel";
 import { NodeDetailPanel } from "./NodeDetailPanel";
 
 // Injected into decorateGraph so the pure graph module stays d3-free.
@@ -79,19 +80,24 @@ const DataflowDetailPage = () => {
   );
   const [filters, setFilters] = React.useState<Filters>(DEFAULT_FILTERS);
   const [matchIndex, setMatchIndex] = React.useState(0);
+  const [lirHighlight, setLirHighlight] =
+    React.useState<ReadonlySet<string> | null>(null);
   const centerRef = React.useRef<((id: string) => void) | null>(null);
 
-  const decorations = React.useMemo(
-    () =>
-      data && collapsed
-        ? decorateGraph(
-            deriveVisibleGraph(data.structure, collapsed),
-            filters,
-            heatColor,
-          )
-        : undefined,
-    [data, collapsed, filters],
-  );
+  const decorations = React.useMemo(() => {
+    if (!data || !collapsed) return undefined;
+    const visible = deriveVisibleGraph(data.structure, collapsed);
+    const d = decorateGraph(visible, filters, heatColor);
+    // A hovered LIR row dims every visible node outside its member set, so the
+    // members stand out. Members that are collapsed away simply have no visible
+    // node to keep lit.
+    if (lirHighlight) {
+      for (const n of visible.nodes) {
+        if (!lirHighlight.has(n.id)) d.dimmedNodeIds.add(n.id);
+      }
+    }
+    return d;
+  }, [data, collapsed, filters, lirHighlight]);
 
   // New search: expand ancestors of matches once, reset the cursor.
   React.useEffect(() => {
@@ -176,11 +182,19 @@ const DataflowDetailPage = () => {
             </Text>
           </Alert>
         ) : error ? (
-          <ErrorBox message="There was an error visualizing your dataflow" />
+          <VStack alignItems="flex-start" spacing={2}>
+            <ErrorBox message="There was an error visualizing your dataflow" />
+            <Button size="sm" onClick={refetch}>
+              Retry
+            </Button>
+          </VStack>
         ) : !data || !collapsed ? (
           <Spinner />
         ) : data.structure.nodes.size <= 1 ? (
-          <Text>This dataflow contains no operators.</Text>
+          <Text>
+            This dataflow no longer exists on this replica.{" "}
+            <Link to="..">Back to dataflows</Link>
+          </Text>
         ) : (
           <VStack flex="1" minH={0} alignItems="stretch" spacing={2}>
             <HStack flexShrink={0} flexWrap="wrap" alignItems="center">
@@ -210,6 +224,10 @@ const DataflowDetailPage = () => {
               )}
             </HStack>
             <HStack flex="1" minH={0} alignItems="stretch" spacing={0}>
+              <LirPanel
+                structure={data.structure}
+                onHighlight={setLirHighlight}
+              />
               <DataflowGraphView
                 structure={data.structure}
                 collapsed={collapsed}

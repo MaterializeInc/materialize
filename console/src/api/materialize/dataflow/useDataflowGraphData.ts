@@ -78,16 +78,25 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
           "toOperatorAddress", mdc.to_port, mdco.type`
         .$castTo<ChannelRow>()
         .compile(queryBuilder),
+      // mz_lir_mapping is keyed by the built object's global id (often a
+      // transient id), which mz_compute_exports does not bridge to a dataflow.
+      // Operator id ranges do: a span belongs to this dataflow when one of the
+      // dataflow's operators falls inside its [start, end) range.
       lirSpans: sql`
-        SELECT
-          mce.export_id AS "exportId",
+        SELECT DISTINCT
+          mlm.global_id AS "exportId",
           mlm.lir_id::text AS "lirId",
           mlm.operator,
           mlm.operator_id_start AS "operatorIdStart",
           mlm.operator_id_end AS "operatorIdEnd"
         FROM mz_lir_mapping AS mlm
-        JOIN mz_compute_exports AS mce ON mlm.global_id = mce.export_id
-        WHERE mce.dataflow_id = ${id}`
+        WHERE EXISTS (
+          SELECT 1
+          FROM mz_dataflow_operator_dataflows AS dod
+          WHERE dod.dataflow_id = ${id}
+            AND dod.id >= mlm.operator_id_start
+            AND dod.id < mlm.operator_id_end
+        )`
         .$castTo<LirSpanRow>()
         .compile(queryBuilder),
     };
