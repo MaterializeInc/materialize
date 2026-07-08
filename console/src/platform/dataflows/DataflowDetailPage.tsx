@@ -36,17 +36,20 @@ import { absoluteClusterPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import { useRegionSlug } from "~/store/environments";
 
+import { DataflowBreadcrumbs } from "./DataflowBreadcrumbs";
 import {
-  allChannelTypes,
-  type CollapseState,
+  type Address,
+  allSearchMatches,
+  commonAncestorScope,
   decorateGraph,
   DEFAULT_FILTERS,
-  defaultCollapseState,
   deriveVisibleGraph,
-  expandAncestorsOf,
-  expandForSearch,
   type Filters,
   type NodeId,
+  nodeIdOf,
+  type PortPeer,
+  representativeInView,
+  subtreeSearchMatches,
 } from "./dataflowGraph";
 import { DataflowGraphView } from "./DataflowGraphView";
 import { DataflowToolbar } from "./DataflowToolbar";
@@ -96,7 +99,18 @@ const DataflowDetailPage = () => {
   );
   const { data: dataflowList } = useDataflowList(listParams);
 
-  const [collapsed, setCollapsed] = React.useState<CollapseState | null>(null);
+  const [rawFocusedScope, setFocusedScope] = React.useState<NodeId | null>(
+    null,
+  );
+  // Derived, not synchronized via effect: a scope from a previous structure
+  // (a stale drill-down target after a refetch or a dataflow/replica switch
+  // changes the node id set) falls back to the new structure's root rather
+  // than crashing every direct `nodes.get(focusedScope)!` lookup downstream.
+  const focusedScope = data
+    ? rawFocusedScope && data.structure.nodes.has(rawFocusedScope)
+      ? rawFocusedScope
+      : data.structure.root
+    : null;
   const [selection, setSelection] = React.useState<Selection | null>(null);
   const [filters, setFilters] = React.useState<Filters>(DEFAULT_FILTERS);
   const [matchIndex, setMatchIndex] = React.useState(0);
@@ -115,19 +129,78 @@ const DataflowDetailPage = () => {
   const centerRef = React.useRef<((id: string) => void) | null>(null);
   const fitRef = React.useRef<((ids: string[]) => void) | null>(null);
 
-  const onLirSelect = React.useCallback(
-    (memberIds: NodeId[]) => {
-      if (!data || memberIds.length === 0) return;
-      const addresses = memberIds.map(
-        (id) => data.structure.nodes.get(id)!.address,
-      );
-      setCollapsed((c) => (c ? expandAncestorsOf(c, addresses) : c));
-      // Fitting happens once the expand above lands and the newly visible
-      // members have real layout positions (see DataflowGraphView's
-      // fitOnIds).
-      setPendingFitIds(memberIds);
+  // Navigates to the scope that makes every given address directly visible
+  // (as itself, or as the box that rolls it up), then fits the view to
+  // whichever representative boxes result once that scope's layout lands.
+  const navigateAndFit = React.useCallback(
+    (addresses: Address[]) => {
+      if (!data || addresses.length === 0) return;
+      const scope = commonAncestorScope(data.structure, addresses);
+      setFocusedScope(scope);
+      const scopeAddress = data.structure.nodes.get(scope)!.address;
+      const targets = [
+        ...new Set(
+          addresses
+            .map((a) => representativeInView(a, scopeAddress))
+            .filter((id): id is NodeId => id !== null),
+        ),
+      ];
+      setPendingFitIds(targets);
     },
     [data],
+  );
+
+  const onLirSelect = React.useCallback(
+    (memberIds: NodeId[]) => {
+      if (!data) return;
+      const addresses = memberIds
+        .map((id) => data.structure.nodes.get(id)?.address)
+        // The dataflow root is never a direct child of any scope, so it
+        // can never be shown or highlighted; a LIR span that happens to
+        // cover it simply can't anchor navigation on it.
+        .filter((a): a is Address => a !== undefined && a.length > 1);
+      navigateAndFit(addresses);
+    },
+    [data, navigateAndFit],
+  );
+
+  // Navigates to a scope and selects one specific box in it. Deriving the
+  // destination's graph to find that box doesn't need to wait for anything
+  // async (unlike fitting, which needs real layout positions from elk), so
+  // this can select synchronously, right here, in the same call that
+  // navigates — landing at a scope with many siblings (e.g. the root) never
+  // leaves it ambiguous which one a jump actually reached.
+  const focusOn = React.useCallback(
+    (scope: NodeId, targetId: NodeId) => {
+      if (!data) return;
+      setFocusedScope(scope);
+      setPendingFitIds([targetId]);
+      const node = deriveVisibleGraph(data.structure, scope).nodes.find(
+        (n) => n.id === targetId,
+      );
+      setSelection(node ? { kind: "node", node } : null);
+    },
+    [data],
+  );
+
+  // A port's peer lives outside the current view. When the peer is itself a
+  // region, peerPortId names the exact port this crossing lands on from
+  // inside it, so the jump drills straight there instead of parking outside
+  // as an unlabeled box; a leaf peer has no inside to drill into, so the
+  // fallback lands on the peer itself, in its own containing scope.
+  const onJumpToPeer = React.useCallback(
+    (peer: PortPeer) => {
+      if (!data) return;
+      if (peer.peerPortId) {
+        focusOn(nodeIdOf(peer.address), peer.peerPortId);
+        return;
+      }
+      const scope = commonAncestorScope(data.structure, [peer.address]);
+      const scopeAddress = data.structure.nodes.get(scope)!.address;
+      const targetId = representativeInView(peer.address, scopeAddress);
+      if (targetId) focusOn(scope, targetId);
+    },
+    [data, focusOn],
   );
 
   const onTogglePinLir = React.useCallback(
@@ -142,48 +215,58 @@ const DataflowDetailPage = () => {
     [],
   );
 
+  const allMatches = React.useMemo(
+    () => (data ? allSearchMatches(data.structure, filters.search) : []),
+    [data, filters.search],
+  );
+
   const decorations = React.useMemo(() => {
-    if (!data || !collapsed) return undefined;
-    const visible = deriveVisibleGraph(data.structure, collapsed);
-    const d = decorateGraph(visible, filters, heatColor);
+    if (!data || !focusedScope) return undefined;
+    const visible = deriveVisibleGraph(data.structure, focusedScope);
+    const searchInfo = filters.search
+      ? subtreeSearchMatches(data.structure, filters.search)
+      : null;
+    const d = decorateGraph(visible, filters, heatColor, searchInfo);
     // Pinned LIR ids dim everything outside the union of their members;
     // hovering a row (pinned or not) previews it the same way, on top of
-    // whatever is already pinned. Members collapsed away simply have no
-    // visible node to keep lit.
-    let highlighted: Set<string> | null = null;
-    if (lirHighlight || pinnedLir.size > 0) {
-      highlighted = new Set(lirHighlight ?? []);
-      for (const memberIds of pinnedLir.values()) {
-        for (const id of memberIds) highlighted.add(id);
+    // whatever is already pinned. A member outside the current scope, or
+    // rolled up into one of its boxes, highlights that box instead of being
+    // silently dropped.
+    const memberGroups = [
+      ...(lirHighlight ? [[...lirHighlight]] : []),
+      ...pinnedLir.values(),
+    ];
+    if (memberGroups.length > 0) {
+      const focusedScopeAddress =
+        data.structure.nodes.get(focusedScope)!.address;
+      const highlighted = new Set<string>();
+      for (const group of memberGroups) {
+        for (const id of group) {
+          const address = data.structure.nodes.get(id)?.address;
+          const rep =
+            address && representativeInView(address, focusedScopeAddress);
+          if (rep) highlighted.add(rep);
+        }
       }
-    }
-    if (highlighted) {
       for (const n of visible.nodes) {
         if (!highlighted.has(n.id)) d.dimmedNodeIds.add(n.id);
       }
     }
     return d;
-  }, [data, collapsed, filters, lirHighlight, pinnedLir]);
+  }, [data, focusedScope, filters, lirHighlight, pinnedLir]);
 
-  // New search: expand ancestors of matches once, reset the cursor.
   React.useEffect(() => {
     setMatchIndex(0);
-    if (filters.search && data) {
-      setCollapsed((c) =>
-        c ? expandForSearch(data.structure, c, filters.search) : c,
-      );
-    }
-  }, [filters.search]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filters.search]);
 
   const onJump = React.useCallback(
     (delta: 1 | -1) => {
-      const matches = decorations?.searchMatches ?? [];
-      if (matches.length === 0) return;
-      const next = (matchIndex + delta + matches.length) % matches.length;
+      if (allMatches.length === 0) return;
+      const next = (matchIndex + delta + allMatches.length) % allMatches.length;
       setMatchIndex(next);
-      centerRef.current?.(matches[next]);
+      navigateAndFit([allMatches[next].address]);
     },
-    [decorations?.searchMatches, matchIndex],
+    [allMatches, matchIndex, navigateAndFit],
   );
   // Digest of the sorted node ids: identical structure across a stats-only
   // refresh yields the same key, so layout and collapse state are preserved.
@@ -193,11 +276,6 @@ const DataflowDetailPage = () => {
         return `${params?.dataflowId}/${params?.replicaName}/${ids.length}-${hashString(ids.join(","))}`;
       })()
     : null;
-  React.useEffect(() => {
-    if (data) setCollapsed(defaultCollapseState(data.structure));
-    // Reset collapse state when the structure identity changes.
-  }, [structureKey]); // eslint-disable-line react-hooks/exhaustive-deps
-
   if (!cluster) return null;
   if (cluster.replicas.length === 0) {
     return (
@@ -212,7 +290,14 @@ const DataflowDetailPage = () => {
     databaseError.code === ErrorCode.INSUFFICIENT_PRIVILEGE;
 
   return (
-    <MainContentContainer width="100%">
+    // minH=0: MainContentContainer is a flex column item of BaseLayout's
+    // <main>, which defaults to min-height:auto and so refuses to shrink
+    // below its content's natural size. Harmless for pages that just scroll,
+    // but this page pins height=100% end-to-end so the graph area can fill
+    // whatever's left; without this override, one more row of content above
+    // the graph (e.g. the breadcrumb trail) pushes the whole page taller
+    // than the viewport instead of the graph area shrinking to absorb it.
+    <MainContentContainer width="100%" minH={0}>
       <VStack width="100%" height="100%" alignItems="stretch">
         <HStack flexShrink={0} alignItems="flex-end">
           <LabeledSelect
@@ -235,8 +320,8 @@ const DataflowDetailPage = () => {
                 `${absoluteClusterPath(regionSlug, cluster)}/dataflows/${e.target.value}?replica=${replicaName}`,
               )
             }
-            flexShrink={0}
-            width="320px"
+            flex="1"
+            minWidth="320px"
           >
             {dataflowId && !dataflowList?.some((d) => d.id === dataflowId) && (
               // The list query hasn't resolved yet (or this dataflow just
@@ -279,7 +364,7 @@ const DataflowDetailPage = () => {
               Retry
             </Button>
           </VStack>
-        ) : !data || !collapsed ? (
+        ) : !data || !focusedScope ? (
           <Spinner />
         ) : data.structure.nodes.size <= 1 ? (
           <Text>
@@ -288,12 +373,16 @@ const DataflowDetailPage = () => {
           </Text>
         ) : (
           <VStack flex="1" minH={0} alignItems="stretch" spacing={2}>
+            <DataflowBreadcrumbs
+              structure={data.structure}
+              focusedScope={focusedScope}
+              onNavigate={setFocusedScope}
+            />
             <HStack flexShrink={0} flexWrap="wrap" alignItems="center">
               <DataflowToolbar
                 filters={filters}
                 onFiltersChange={setFilters}
-                channelTypes={allChannelTypes(data.structure)}
-                matchCount={decorations?.searchMatches.length ?? 0}
+                matchCount={allMatches.length}
                 matchIndex={matchIndex}
                 onJump={onJump}
               />
@@ -324,8 +413,8 @@ const DataflowDetailPage = () => {
               />
               <DataflowGraphView
                 structure={data.structure}
-                collapsed={collapsed}
-                onCollapsedChange={setCollapsed}
+                focusedScope={focusedScope}
+                onNavigate={setFocusedScope}
                 cacheKey={structureKey ?? ""}
                 decorations={decorations}
                 centerRef={centerRef}
@@ -339,7 +428,11 @@ const DataflowDetailPage = () => {
                       ? selection.edge.id
                       : undefined
                 }
-                activeMatchId={decorations?.searchMatches[matchIndex]}
+                activeMatchId={
+                  allMatches.length > 0
+                    ? nodeIdOf(allMatches[matchIndex].address)
+                    : undefined
+                }
                 onNodeClick={(node, connectedEdges) =>
                   setSelection({
                     kind: "node",
@@ -350,11 +443,13 @@ const DataflowDetailPage = () => {
                 }
                 onEdgeClick={(edge) => setSelection({ kind: "edge", edge })}
                 onPaneClick={() => setSelection(null)}
+                onJumpToPeer={onJumpToPeer}
               />
               {selection && (
                 <NodeDetailPanel
                   selection={selection}
                   onClose={() => setSelection(null)}
+                  onJumpTo={onJumpToPeer}
                 />
               )}
             </HStack>
