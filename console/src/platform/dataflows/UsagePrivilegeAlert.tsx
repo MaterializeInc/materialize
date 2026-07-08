@@ -7,18 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Alert, AlertIcon, Text } from "@chakra-ui/react";
+import { Text } from "@chakra-ui/react";
 import React from "react";
 
-export const UsagePrivilegeAlert = ({ action }: { action: string }) => (
-  <Alert status="info" rounded="md" p={4} width="auto">
-    <AlertIcon />
-    <Text>
-      You&apos;ll need{" "}
-      <Text as="span" textStyle="monospace">
-        USAGE
-      </Text>{" "}
-      privilege on this cluster to {action}.
-    </Text>
-  </Alert>
+import Alert from "~/components/Alert";
+
+export interface UsagePrivilegeAlertProps {
+  action: string;
+}
+
+export const UsagePrivilegeAlert = ({ action }: UsagePrivilegeAlertProps) => (
+  <Alert
+    variant="info"
+    message={
+      <Text>
+        You&apos;ll need{" "}
+        <Text as="span" textStyle="monospace">
+          USAGE
+        </Text>{" "}
+        privilege on this cluster to {action}.
+      </Text>
+    }
+  />
 );
