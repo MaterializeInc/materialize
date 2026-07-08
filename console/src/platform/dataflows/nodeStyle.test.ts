@@ -11,41 +11,62 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatSkew,
+  hashString,
   lirGroupColor,
   nodeFillColor,
   operatorColor,
   prettyPrintChannelType,
 } from "./nodeStyle";
 
+const PALETTE = ["#111111", "#222222", "#333333", "#444444"];
+const ACCENT = { arranged: "#aaaaaa", notArranged: "#bbbbbb" };
+
+describe("hashString", () => {
+  it("is deterministic for the same string", () => {
+    expect(hashString("abc")).toEqual(hashString("abc"));
+  });
+
+  it("differs for different strings often enough to be useful", () => {
+    const hashes = new Set(["1", "2", "3", "4", "5", "6"].map(hashString));
+    expect(hashes.size).toBeGreaterThan(1);
+  });
+});
+
 describe("lirGroupColor", () => {
   it("is deterministic for the same lirId", () => {
-    expect(lirGroupColor("42")).toEqual(lirGroupColor("42"));
+    expect(lirGroupColor("42", PALETTE)).toEqual(lirGroupColor("42", PALETTE));
   });
 
   it("differs for different lirIds often enough to be useful", () => {
-    const colors = new Set(["1", "2", "3", "4", "5", "6"].map(lirGroupColor));
-    expect(colors.size).toBeGreaterThan(1);
+    const picked = new Set(
+      ["1", "2", "3", "4", "5", "6"].map((id) => lirGroupColor(id, PALETTE)),
+    );
+    expect(picked.size).toBeGreaterThan(1);
+  });
+
+  it("only ever picks from the given palette", () => {
+    expect(PALETTE).toContain(lirGroupColor("some-lir-id", PALETTE));
   });
 });
 
 describe("operatorColor", () => {
   it("is deterministic for the same operator name", () => {
-    expect(operatorColor("Reduce")).toEqual(operatorColor("Reduce"));
+    expect(operatorColor("Reduce", PALETTE)).toEqual(
+      operatorColor("Reduce", PALETTE),
+    );
   });
 
   it("differs for different operator names often enough to be useful", () => {
-    const colors = new Set(
-      ["Map", "Filter", "Reduce", "Join", "FlatMap", "Arrange"].map(
-        operatorColor,
+    const picked = new Set(
+      ["Map", "Filter", "Reduce", "Join", "FlatMap", "Arrange"].map((name) =>
+        operatorColor(name, PALETTE),
       ),
     );
-    expect(colors.size).toBeGreaterThan(1);
+    expect(picked.size).toBeGreaterThan(1);
   });
 
-  it("is never pure white, unlike the old fixed operator fill", () => {
-    for (const name of ["Map", "Reduce", "Join", ""]) {
-      expect(operatorColor(name)).not.toEqual("#ffffff");
-    }
+  it("only ever picks from the given palette", () => {
+    expect(PALETTE).toContain(operatorColor("Reduce", PALETTE));
   });
 });
 
@@ -67,35 +88,51 @@ describe("nodeFillColor", () => {
   };
 
   it("colors an operator by its name, not by whether it's arranged", () => {
-    const unarranged = nodeFillColor({ ...baseNode, kind: "operator" });
-    const arranged = nodeFillColor({
-      ...baseNode,
-      kind: "operator",
-      transitive: {
-        arrangementRecords: 100n,
-        arrangementSize: 100n,
-        elapsedNs: 0n,
-        scheduleCount: 0n,
+    const unarranged = nodeFillColor(
+      { ...baseNode, kind: "operator" },
+      PALETTE,
+      ACCENT,
+    );
+    const arranged = nodeFillColor(
+      {
+        ...baseNode,
+        kind: "operator",
+        transitive: {
+          arrangementRecords: 100n,
+          arrangementSize: 100n,
+          elapsedNs: 0n,
+          scheduleCount: 0n,
+        },
       },
-    });
-    expect(unarranged).toEqual(operatorColor("Reduce"));
-    expect(arranged).toEqual(operatorColor("Reduce"));
+      PALETTE,
+      ACCENT,
+    );
+    expect(unarranged).toEqual(operatorColor("Reduce", PALETTE));
+    expect(arranged).toEqual(operatorColor("Reduce", PALETTE));
   });
 
   it("still colors a region by whether it's arranged, unaffected by name", () => {
-    const noArrangement = nodeFillColor({ ...baseNode, kind: "region" });
-    const arranged = nodeFillColor({
-      ...baseNode,
-      kind: "region",
-      transitive: {
-        arrangementRecords: 100n,
-        arrangementSize: 100n,
-        elapsedNs: 0n,
-        scheduleCount: 0n,
+    const noArrangement = nodeFillColor(
+      { ...baseNode, kind: "region" },
+      PALETTE,
+      ACCENT,
+    );
+    const arranged = nodeFillColor(
+      {
+        ...baseNode,
+        kind: "region",
+        transitive: {
+          arrangementRecords: 100n,
+          arrangementSize: 100n,
+          elapsedNs: 0n,
+          scheduleCount: 0n,
+        },
       },
-    });
-    expect(noArrangement).not.toEqual(arranged);
-    expect(noArrangement).not.toEqual(operatorColor("Reduce"));
+      PALETTE,
+      ACCENT,
+    );
+    expect(noArrangement).toEqual(ACCENT.notArranged);
+    expect(arranged).toEqual(ACCENT.arranged);
   });
 });
 
