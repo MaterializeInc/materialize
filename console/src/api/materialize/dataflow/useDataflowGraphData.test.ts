@@ -155,18 +155,22 @@ describe("useDataflowGraphData", () => {
     expect(result.current.data?.workerCount).toEqual(8);
   });
 
-  it("rejects a non-numeric dataflow id", async () => {
+  it("rejects a non-numeric dataflow id without ever compiling a query for it", async () => {
     const Wrapper = await createProviderWrapper();
-    expect(() =>
-      renderHook(
-        () =>
-          useDataflowGraphData({
-            clusterName: "c",
-            replicaName: "r1",
-            dataflowId: "7; DROP",
-          }),
-        { wrapper: Wrapper },
-      ),
-    ).toThrow();
+    // A malformed id is only reachable via a hand-edited URL, so this must
+    // report an error the page can render, not throw and crash to the error
+    // boundary over a URL typo.
+    const { result } = renderHook(
+      () =>
+        useDataflowGraphData({
+          clusterName: "c",
+          replicaName: "r1",
+          dataflowId: "7; DROP",
+        }),
+      { wrapper: Wrapper },
+    );
+    expect(result.current.error).toEqual("invalid dataflow id: 7; DROP");
+    expect(result.current.loading).toEqual(false);
+    expect(result.current.data).toBeNull();
   });
 });
