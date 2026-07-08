@@ -2769,17 +2769,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@hpcc-js/wasm@npm:^2.20.0":
-  version: 2.20.0
-  resolution: "@hpcc-js/wasm@npm:2.20.0"
-  dependencies:
-    yargs: "npm:17.7.2"
-  bin:
-    dot-wasm: node ./node_modules/@hpcc-js/wasm-graphviz-cli/bin/index.js
-  checksum: 10c0/925ce14d47389a99837b4fc7d97d270cd401a72e089c55d5fac62212ae652830c4f3f54475e46685a4fed0658c39598a82dd182468bfa603d29d647c419f1ea5
-  languageName: node
-  linkType: hard
-
 "@humanwhocodes/config-array@npm:^0.11.14":
   version: 0.11.14
   resolution: "@humanwhocodes/config-array@npm:0.11.14"
@@ -4451,13 +4440,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/d3-color@npm:^1":
-  version: 1.4.2
-  resolution: "@types/d3-color@npm:1.4.2"
-  checksum: 10c0/f1c70d7deabe2b30e337361c3fa26b7ce4e9c875dfd1ad75e17379c6a5596f116fb21ca0e595c2f2220e04866bca6bdb2623e772cfb5f8bf4d20ffe6ba5c72ab
-  languageName: node
-  linkType: hard
-
 "@types/d3-contour@npm:*":
   version: 3.0.2
   resolution: "@types/d3-contour@npm:3.0.2"
@@ -4555,17 +4537,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/d3-graphviz@npm:^2.6.10":
-  version: 2.6.10
-  resolution: "@types/d3-graphviz@npm:2.6.10"
-  dependencies:
-    "@types/d3-selection": "npm:^1"
-    "@types/d3-transition": "npm:^1"
-    "@types/d3-zoom": "npm:^1"
-  checksum: 10c0/bbb4143dcef1ebac612f93e448a53291cec3f708489261dc54c657db0441ed0a87c3bdf5e902e6d695918b7a39ace15bcf07e2c828d6568611eee8b5c15fe6c4
-  languageName: node
-  linkType: hard
-
 "@types/d3-hierarchy@npm:*":
   version: 3.1.2
   resolution: "@types/d3-hierarchy@npm:3.1.2"
@@ -4579,15 +4550,6 @@ __metadata:
   dependencies:
     "@types/d3-color": "npm:*"
   checksum: 10c0/1c7577045a4a30dc177bca10980c456a28c9b89b1a5406fe7303824dd9cc898f67f8dafd8e22a7702ca5df12a28a5f48f77d92a9b5d8f1fc0939f33831067114
-  languageName: node
-  linkType: hard
-
-"@types/d3-interpolate@npm:^1":
-  version: 1.4.2
-  resolution: "@types/d3-interpolate@npm:1.4.2"
-  dependencies:
-    "@types/d3-color": "npm:^1"
-  checksum: 10c0/98bff93ce4d94485a4f6117e554854ec69072382910008e785d2c960b50e643093a8cfa2e0875b3d1dff19f3603b6e16a4eea8122c7c8ead3623daf3044cd22e
   languageName: node
   linkType: hard
 
@@ -4667,13 +4629,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/d3-selection@npm:^1":
-  version: 1.4.3
-  resolution: "@types/d3-selection@npm:1.4.3"
-  checksum: 10c0/47c181f8362ade4df151e01737816356c939bc5728ff87c3a29bd43aaa0413296170119949eb3aa0ef8d9c10fac4463eb1d154b6fd0e89617b45eeb06bdefb8b
-  languageName: node
-  linkType: hard
-
 "@types/d3-selection@npm:^3.0.10":
   version: 3.0.11
   resolution: "@types/d3-selection@npm:3.0.11"
@@ -4736,15 +4691,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/d3-transition@npm:^1":
-  version: 1.3.2
-  resolution: "@types/d3-transition@npm:1.3.2"
-  dependencies:
-    "@types/d3-selection": "npm:^1"
-  checksum: 10c0/9e1340c2840fde63f224550cbde5531b8b2493218d421f97de138c1e7ca9b1f481dfc9e4c91cb5ce84df9df671e2d95468556be1f8cf1e28f0c33929322115a4
-  languageName: node
-  linkType: hard
-
 "@types/d3-transition@npm:^3.0.8":
   version: 3.0.9
   resolution: "@types/d3-transition@npm:3.0.9"
@@ -4761,16 +4707,6 @@ __metadata:
     "@types/d3-interpolate": "npm:*"
     "@types/d3-selection": "npm:*"
   checksum: 10c0/48476c73490d664abd9b7364170ff539f8c47519c7c31e72327f6e8d25e481a359b2cd595373863a99a1b2035ed191c1f0c475f850da2fbff43048d40ca02c83
-  languageName: node
-  linkType: hard
-
-"@types/d3-zoom@npm:^1":
-  version: 1.8.3
-  resolution: "@types/d3-zoom@npm:1.8.3"
-  dependencies:
-    "@types/d3-interpolate": "npm:^1"
-    "@types/d3-selection": "npm:^1"
-  checksum: 10c0/d93ab0b610a68c02926c8388ed839fcc31ac0ee2ed19c69c59b5ea0cb87afd70515d507fc10c063eba5fc400389b3216f1bcdfe97ad84b75eac6c30e67cbccdf
   languageName: node
   linkType: hard
 
@@ -6944,7 +6880,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"d3-dispatch@npm:1 - 3, d3-dispatch@npm:3, d3-dispatch@npm:^3.0.1":
+"d3-dispatch@npm:1 - 3, d3-dispatch@npm:3":
   version: 3.0.1
   resolution: "d3-dispatch@npm:3.0.1"
   checksum: 10c0/6eca77008ce2dc33380e45d4410c67d150941df7ab45b91d116dbe6d0a3092c0f6ac184dd4602c796dc9e790222bad3ff7142025f5fd22694efe088d1d941753
@@ -7009,7 +6945,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"d3-format@npm:1 - 3, d3-format@npm:3, d3-format@npm:3.1.0, d3-format@npm:^3.1.0":
+"d3-format@npm:1 - 3, d3-format@npm:3, d3-format@npm:3.1.0":
   version: 3.1.0
   resolution: "d3-format@npm:3.1.0"
   checksum: 10c0/049f5c0871ebce9859fc5e2f07f336b3c5bfff52a2540e0bac7e703fce567cd9346f4ad1079dd18d6f1e0eaa0599941c1810898926f10ac21a31fd0a34b4aa75
@@ -7022,24 +6958,6 @@ __metadata:
   dependencies:
     d3-array: "npm:2.5.0 - 3"
   checksum: 10c0/5b0a26d232787ca9e824a660827c28626a51004328dde7c76a1bd300d3cad8c7eeb55fea64c8cd6495d5a34fea434fb1418d59926a6cb24e6fb6e2b6f62c6bd9
-  languageName: node
-  linkType: hard
-
-"d3-graphviz@npm:^5.6.0":
-  version: 5.6.0
-  resolution: "d3-graphviz@npm:5.6.0"
-  dependencies:
-    "@hpcc-js/wasm": "npm:^2.20.0"
-    d3-dispatch: "npm:^3.0.1"
-    d3-format: "npm:^3.1.0"
-    d3-interpolate: "npm:^3.0.1"
-    d3-path: "npm:^3.1.0"
-    d3-timer: "npm:^3.0.1"
-    d3-transition: "npm:^3.0.1"
-    d3-zoom: "npm:^3.0.0"
-  peerDependencies:
-    d3-selection: ^3.0.0
-  checksum: 10c0/ffbe5facb35cfe80b9bc1985acbd1facdab180c0eb0cfaccaf6f662e9f1d6be6bd8d20539a5fa04f555075b0c511154ebb567e96335b9d3283874f9f3b5b2744
   languageName: node
   linkType: hard
 
@@ -7160,14 +7078,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"d3-timer@npm:1 - 3, d3-timer@npm:3, d3-timer@npm:^3.0.1":
+"d3-timer@npm:1 - 3, d3-timer@npm:3":
   version: 3.0.1
   resolution: "d3-timer@npm:3.0.1"
   checksum: 10c0/d4c63cb4bb5461d7038aac561b097cd1c5673969b27cbdd0e87fa48d9300a538b9e6f39b4a7f0e3592ef4f963d858c8a9f0e92754db73116770856f2fc04561a
   languageName: node
   linkType: hard
 
-"d3-transition@npm:2 - 3, d3-transition@npm:3, d3-transition@npm:^3.0.1":
+"d3-transition@npm:2 - 3, d3-transition@npm:3":
   version: 3.0.1
   resolution: "d3-transition@npm:3.0.1"
   dependencies:
@@ -11054,7 +10972,6 @@ __metadata:
     "@testing-library/user-event": "npm:^14.5.2"
     "@types/base32-encoding": "npm:^1.0.2"
     "@types/d3": "npm:^7.4.3"
-    "@types/d3-graphviz": "npm:^2.6.10"
     "@types/dagre": "npm:^0.7.54"
     "@types/debug": "npm:^4.1.12"
     "@types/jsonwebtoken": "npm:^9"
@@ -11091,7 +11008,6 @@ __metadata:
     copy-to-clipboard: "npm:^3.3.3"
     core-js: "npm:^3.38.1"
     d3: "npm:^7.9.0"
-    d3-graphviz: "npm:^5.6.0"
     d3-scale-chromatic: "npm:^3.1.0"
     date-fns: "npm:^4.1.0"
     date-fns-tz: "npm:^3.2.0"
@@ -15718,7 +15634,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"yargs@npm:17.7.2, yargs@npm:^17.7.2":
+"yargs@npm:^17.7.2":
   version: 17.7.2
   resolution: "yargs@npm:17.7.2"
   dependencies:
