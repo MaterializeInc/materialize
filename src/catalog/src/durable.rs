@@ -321,6 +321,21 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         snapshot: Snapshot,
     ) -> Result<Transaction, CatalogError>;
 
+    /// Opens a [`Transaction`] after verifying that this handle has applied all durable catalog
+    /// content, erroring with [`DurableCatalogError::CatalogOutOfSync`] otherwise.
+    ///
+    /// Opening syncs the handle to the current upper, so any content updates observed there mean
+    /// that whatever state the caller planned against is stale. Callers that maintain derived
+    /// in-memory state (the adapter) must open through this method, so staleness surfaces as an
+    /// error they can react to (today by restarting and rebuilding from durable state) instead of
+    /// being absorbed silently. Pure empty progress (upper movement without content, e.g. from
+    /// the group committer) is not an error.
+    async fn transaction_in_sync(&mut self) -> Result<Transaction, CatalogError> {
+        let mut txn = self.transaction().await?;
+        txn.ensure_not_out_of_sync().await?;
+        Ok(txn)
+    }
+
     /// Commits a durable catalog state transaction. The transaction will be committed at
     /// `commit_ts`.
     ///

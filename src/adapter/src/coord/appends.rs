@@ -8,6 +8,36 @@
 // by the Apache License, Version 2.0.
 
 //! Logic and types for all appends executed by the [`Coordinator`].
+//!
+//! # The group committer
+//!
+//! All txns-shard writes (group-commit table appends, and table registration and forgetting for
+//! DDL) flow through one long-lived task, the [`GroupCommitter`], as [`TableWriteCmd`]s. The
+//! coordinator loop only does cheap, state-touching staging (draining pending writes, taking
+//! write locks, building append batches). The committer does everything that involves a
+//! timestamp, per command:
+//!
+//! 1. allocate a write timestamp from the oracle,
+//! 2. advance the catalog shard upper to the timestamp's `advance_to`, which keeps the catalog
+//!    readable at the read timestamp the oracle moves to in step 4 and, when the advance
+//!    actually writes, re-checks leadership before user data is written (see
+//!    materialize#28216; an advance that finds the upper already past the target short-circuits
+//!    without a durable check, so this is defense in depth, not a per-attempt guarantee),
+//! 3. issue the txns-shard write; an `InvalidUppers` conflict means another process advanced
+//!    the txns shard past our timestamp, so retry from step 1 at a fresh timestamp (a wasted
+//!    timestamp is harmless, `apply_write` is a high-water mark),
+//! 4. apply the write to the oracle, so no read ever observes a timestamp at which the write is
+//!    not yet durable.
+//!
+//! Processing one command at a time makes the committer the single in-process writer to the
+//! txns shard, and the queue order is load-bearing: an append staged before a table's forget
+//! reaches the table-write worker before it, and appends staged after a registration cannot
+//! overtake it. See the corresponding section in `doc/developer/guide-adapter.md` for why, and
+//! for the cross-process story.
+//!
+//! Finalization that needs coordinator state (statement-logging timestamps, retiring client
+//! responses, downgrading read holds) is handed back to the loop via
+//! [`Message::GroupCommitApplied`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -180,12 +210,8 @@ impl PendingWriteTxn {
     }
 }
 
-/// A command for the [`GroupCommitter`], the single in-process writer to the txns shard.
-///
-/// All txns-shard writes flow through one queue and are applied one at a time, in queue order, at
-/// monotone oracle timestamps. That single-sender ordering is what makes concurrent DDL safe
-/// against in-flight appends: a staged append for a table is always applied before a later
-/// forget of that table, because the forget enters the queue behind it.
+/// A command for the [`GroupCommitter`]. See the module docs for the protocol and the ordering
+/// contract carried by the command queue.
 pub(crate) enum TableWriteCmd {
     /// A staged group commit, see [`GroupCommitRequest`].
     GroupCommit(GroupCommitRequest),
@@ -260,16 +286,8 @@ impl GroupCommitRequest {
     }
 }
 
-/// A single, long-lived task that owns all txns-shard writes: group commits (table appends) as
-/// well as table registration and forgetting for DDL, applied off the coordinator loop.
-///
-/// The coordinator loop stages each group commit (draining pending writes, acquiring write locks,
-/// and building the append batch, all cheap) and hands a [`TableWriteCmd`] here. This task does
-/// the timestamp-oracle round trips, the txns-shard write, and applies the write to the oracle.
-/// Processing one command at a time makes this task the serialization point for txns-shard
-/// writes: they reach the single table-write worker in queue order at monotone timestamps, so
-/// in-process conflicts cannot happen and an `InvalidUppers` conflict always means another
-/// process wrote the txns shard, which we handle by retrying at a fresh timestamp.
+/// A single, long-lived task that owns all txns-shard writes, applied off the coordinator loop.
+/// See the module docs for the protocol.
 ///
 /// It holds only shareable handles, captured once at startup. The oracle is never replaced
 /// in-process, and the table write handle stays valid for the controller's lifetime. The catalog
@@ -326,20 +344,8 @@ impl GroupCommitter {
         }
     }
 
-    /// Writes to the txns shard at a fresh oracle timestamp and applies the write to the oracle.
-    ///
-    /// Per attempt: allocate a write timestamp, advance the catalog upper to its `advance_to`
-    /// (keeping the catalog readable at the read timestamp the oracle moves to below, and, when
-    /// the advance actually writes, re-checking leadership before user data is written, see
-    /// materialize#28216; an advance that finds the upper already past `advance_to` short-circuits
-    /// without a durable check, so the leadership re-check is defense in depth, not a per-attempt
-    /// guarantee), then issue the op. An `InvalidUppers` conflict means another process advanced
-    /// the txns shard past our timestamp, so we retry at a fresh one. A wasted timestamp is
-    /// harmless: `apply_write` is a high-water mark, so the eventual, higher timestamp subsumes
-    /// it.
-    ///
-    /// Only after the op succeeds do we apply the write to the oracle, so no read observes a
-    /// timestamp at which the write (append, registration, forget) is not yet durable.
+    /// Writes to the txns shard at a fresh oracle timestamp and applies the write to the oracle,
+    /// implementing steps 1-4 of the protocol in the module docs.
     ///
     /// Returns `None` if the table write worker shut down, which only happens at process
     /// shutdown.
@@ -863,11 +869,8 @@ impl Coordinator {
     }
 
     /// Registers `tables` in the txns shard through the group committer, returning the timestamp
-    /// at which they became writable. The committer applies that timestamp to the oracle before
-    /// replying, so the tables are also readable once the oracle read ts passes it.
-    ///
-    /// Going through the committer orders the registration after all previously staged appends
-    /// and gives it the committer's conflict-retry protocol against concurrent processes.
+    /// at which they became writable (and readable, once the oracle read ts passes it). Going
+    /// through the committer orders the registration against staged appends, see the module docs.
     pub(crate) async fn register_tables_via_committer(
         &self,
         tables: Vec<TableRegistration>,
@@ -892,9 +895,9 @@ impl Coordinator {
     }
 
     /// Forgets `ids` in the txns shard through the group committer, returning the forget
-    /// timestamp. See [`Self::register_tables_via_committer`] for why this goes through the
-    /// committer: ordering after staged appends is what makes dropping a table with in-flight
-    /// writes safe.
+    /// timestamp. Going through the committer orders the forget after all previously staged
+    /// appends, which is what makes dropping a table with in-flight writes safe, see the module
+    /// docs.
     pub(crate) async fn forget_tables_via_committer(&self, ids: Vec<GlobalId>) -> Timestamp {
         let (tx, rx) = oneshot::channel();
         if self
