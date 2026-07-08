@@ -49,10 +49,13 @@ class SqlServer(Service):
                 # healthy while msdb is still recovering, causing error
                 # 904 ("cannot be autostarted during server shutdown or
                 # startup").
+                # NOTE: -b is what turns the RAISERROR into a nonzero exit
+                # code; without it sqlcmd exits 0 and the check degrades to
+                # a plain connectivity probe.
                 "test": (
                     "SQLCMD=/opt/mssql-tools18/bin/sqlcmd; "
                     '[ -x "$$SQLCMD" ] || SQLCMD=/opt/mssql-tools/bin/sqlcmd; '
-                    f"\"$$SQLCMD\" -C -S localhost -U sa -P '{sa_password}' "
+                    f"\"$$SQLCMD\" -b -C -S localhost -U sa -P '{sa_password}' "
                     "-Q \"SET NOCOUNT ON; IF EXISTS (SELECT 1 FROM sys.databases WHERE state_desc != 'ONLINE') RAISERROR('not ready', 16, 1)\""
                 ),
                 # Recovering can take a while

@@ -21,7 +21,7 @@ class TestCerts(Service):
         name: str = "test-certs",
     ) -> None:
         super().__init__(
-            name="test-certs",
+            name=name,
             config={
                 # Container must stay alive indefinitely to be considered
                 # healthy by `docker compose up --wait`.

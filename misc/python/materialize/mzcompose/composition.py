@@ -529,8 +529,12 @@ class Composition:
                         check=check,
                         stdout=stdout,
                         stderr=stderr,
+                        # NOTE: isinstance against typing.IO is always False for
+                        # real file objects, so dispatch on str instead: strings
+                        # go through `input`, everything else (file objects,
+                        # subprocess.DEVNULL) is passed as the stdin stream.
                         input=stdin if isinstance(stdin, str) else None,
-                        stdin=stdin if isinstance(stdin, IO) else None,
+                        stdin=stdin if not isinstance(stdin, str) else None,
                         text=True,
                         bufsize=1,
                         env=environment,
@@ -1912,9 +1916,14 @@ class Composition:
                 )
                 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
-                test_analytics_config = create_test_analytics_config(self)
-                test_analytics = TestAnalyticsDb(test_analytics_config)
-                test_analytics.database_connector.submit_update_statements()
+                try:
+                    test_analytics_config = create_test_analytics_config(self)
+                    test_analytics = TestAnalyticsDb(test_analytics_config)
+                    test_analytics.database_connector.submit_update_statements()
+                except Exception as e:
+                    # An analytics failure must not mask the actual test
+                    # result, which is raised below.
+                    print(f"Failed to submit test analytics data: {e}")
         if len(exceptions) > 1:
             print(f"Further exceptions were raised:\n{exceptions[1:]}")
         if exceptions:
