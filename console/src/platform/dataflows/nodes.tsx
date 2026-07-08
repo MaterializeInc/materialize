@@ -15,6 +15,7 @@ import { formatBytesShort } from "~/utils/format";
 
 import type { VisibleNode } from "./dataflowGraph";
 import {
+  type FlowGroupData,
   type FlowNodeData,
   formatElapsed,
   HIGHLIGHT_COLORS,
@@ -122,5 +123,37 @@ export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
     <Text fontSize="2xs">{data.node.label}</Text>
     <Handle type="target" position={Position.Top} />
     <Handle type="source" position={Position.Bottom} />
+  </Box>
+);
+
+// A label-only wrapper around its members, never itself a click target
+// except its header (the body is pointerEvents="none" so clicks pass
+// through to whatever member is underneath). Its width/height come from
+// elk's auto-sized bounds, same as every other node in this file.
+export const LirGroupNode = ({ data }: NodeProps & { data: FlowGroupData }) => (
+  <Box width="100%" height="100%" position="relative" pointerEvents="none">
+    <Box
+      position="absolute"
+      inset={0}
+      borderWidth="2px"
+      borderStyle="dashed"
+      borderRadius="md"
+      borderColor={data.color}
+    />
+    <Box
+      position="absolute"
+      top={0}
+      left={0}
+      px={2}
+      py="1px"
+      pointerEvents="auto"
+      cursor="pointer"
+      background={data.color}
+      borderBottomRightRadius="md"
+    >
+      <Text fontSize="2xs" color="white" noOfLines={1}>
+        {data.label}
+      </Text>
+    </Box>
   </Box>
 );

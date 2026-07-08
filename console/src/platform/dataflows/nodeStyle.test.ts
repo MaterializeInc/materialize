@@ -9,7 +9,18 @@
 
 import { describe, expect, it } from "vitest";
 
-import { prettyPrintChannelType } from "./nodeStyle";
+import { lirGroupColor, prettyPrintChannelType } from "./nodeStyle";
+
+describe("lirGroupColor", () => {
+  it("is deterministic for the same lirId", () => {
+    expect(lirGroupColor("42")).toEqual(lirGroupColor("42"));
+  });
+
+  it("differs for different lirIds often enough to be useful", () => {
+    const colors = new Set(["1", "2", "3", "4", "5", "6"].map(lirGroupColor));
+    expect(colors.size).toBeGreaterThan(1);
+  });
+});
 
 describe("prettyPrintChannelType", () => {
   it("strips module paths, aliases Diff/Error, and brackets Vec", () => {

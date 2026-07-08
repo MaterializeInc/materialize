@@ -991,3 +991,91 @@ export function lirTree(
   }
   return roots;
 }
+
+export interface LirGroupNode {
+  id: NodeId; // `${exportId}/${lirId}`, matching lirIndex's key
+  exportId: string;
+  lirId: string;
+  operator: string;
+  nesting: number;
+}
+
+// A grouping layer over an already-derived VisibleGraph, the same way
+// decorateGraph layers dimming and color over it: nothing here replaces
+// `nodes`, so search, dimming, and click handling keep working against the
+// flat list untouched.
+export interface LirGrouping {
+  groups: LirGroupNode[]; // outer groups appear before groups nested inside them
+  parentOf: Map<NodeId, NodeId>; // a VisibleNode or LirGroupNode id -> its immediate enclosing group's id
+}
+
+// Groups a scope's direct children into the LIR tree that encloses them, for
+// drawing nested boxes on the canvas. LIR spans are contiguous ranges over
+// operator ids and properly nested: a region is always fully enclosed by a
+// single LIR node's range. A dataflow can back several exports, and a shared
+// subplan can carry lir entries from more than one of them at once; a
+// compound-node tree needs one parent chain per node, so this groups by the
+// lowest exportId (string-compared) present among the given nodes only. A
+// node whose only lir entries belong to a different export renders
+// ungrouped, alongside nodes with no lir data at all (e.g. ports).
+export function groupByLir(nodes: readonly VisibleNode[]): LirGrouping {
+  const groups: LirGroupNode[] = [];
+  const parentOf = new Map<NodeId, NodeId>();
+  const ordered = nodes
+    .filter((n) => n.operatorId !== null)
+    .slice()
+    .sort((a, b) => {
+      const x = a.operatorId!;
+      const y = b.operatorId!;
+      return x < y ? -1 : x > y ? 1 : 0;
+    });
+  if (ordered.length === 0) return { groups, parentOf };
+
+  let chosenExport: string | null = null;
+  for (const n of ordered) {
+    for (const l of n.lir) {
+      if (chosenExport === null || l.exportId < chosenExport) {
+        chosenExport = l.exportId;
+      }
+    }
+  }
+  if (chosenExport === null) return { groups, parentOf };
+
+  const groupIndex = new Map<string, LirGroupNode>();
+  const stack: LirGroupNode[] = []; // open groups, outer to inner
+  for (const node of ordered) {
+    const stackKeys = node.lir
+      .filter((l) => l.exportId === chosenExport)
+      .sort((a, b) => a.nesting - b.nesting)
+      .map((l) => `${l.exportId}/${l.lirId}`);
+    let commonLen = 0;
+    while (
+      commonLen < stack.length &&
+      commonLen < stackKeys.length &&
+      stack[commonLen].id === stackKeys[commonLen]
+    ) {
+      commonLen++;
+    }
+    stack.length = commonLen; // pop back to the shared prefix
+    for (let depth = commonLen; depth < stackKeys.length; depth++) {
+      const key = stackKeys[depth];
+      let group = groupIndex.get(key);
+      if (!group) {
+        const info = node.lir.find((l) => `${l.exportId}/${l.lirId}` === key)!;
+        group = {
+          id: key,
+          exportId: info.exportId,
+          lirId: info.lirId,
+          operator: info.operator,
+          nesting: info.nesting,
+        };
+        groupIndex.set(key, group);
+        groups.push(group);
+      }
+      if (depth > 0) parentOf.set(group.id, stack[depth - 1].id);
+      stack.push(group);
+    }
+    if (stack.length > 0) parentOf.set(node.id, stack[stack.length - 1].id);
+  }
+  return { groups, parentOf };
+}
