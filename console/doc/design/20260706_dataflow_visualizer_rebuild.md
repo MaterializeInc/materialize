@@ -26,7 +26,8 @@ Beyond the bugs, the visualizer lacks features operators need: no dataflow selec
   All required data exists in `mz_introspection` relations already queried today.
 * Live-updating stats via `SUBSCRIBE`.
   The data layer separates structure from stats so this can be added later, but v1 ships manual refresh only.
-* URL-persisted filter and drill-down state.
+* URL-persisted filters (search, heatmap mode, hide-idle).
+  The drill-down scope itself is URL-persisted (see Graph model and drill-down), since back/forward and copyable links depend on it; filters are lower-value to persist and stay in component state.
 * New end-to-end tests.
 
 ## Solution Proposal
@@ -83,6 +84,10 @@ This avoids the in-place model's edge-remapping and aggregation machinery entire
 A peer records the address on the far side and, when that peer is itself a region, the exact port inside it the crossing lands on (`peerPortId`), so a jump can drill straight to the matching port instead of parking on the peer's outer box.
 Jumping is click-to-select-then-jump, or double-click direct when a port has exactly one peer; a fanned-out port (one output feeding several inputs) has no single unambiguous target, so double-click just selects it.
 The derivation `deriveVisibleGraph(structure, focusedScope)` is a pure function from a structure and a scope to the visible nodes, edges, and ports; there is no persisted collapse state, so a stale scope from a previous structure resolves at render time by falling back to the new structure's root rather than crashing.
+
+`focusedScope` lives in the URL, not component state, as the dataflow address it resolves to (a `scope` search param, e.g. `?scope=5.1.2`; omitted at the root).
+Every navigation goes through `setSearchParams`, which pushes rather than replaces, so browser back/forward walks the drill-down history and a copied link reopens at the same scope.
+The same stale-scope tolerance above covers a scope param that doesn't resolve in the current structure, whether from a stale link, a reshaped dataflow, or no param at all.
 
 Regions and LIR spans are two different hierarchies.
 LIR information appears as a badge and operator text on each node, plus a side panel listing the dataflow's LIR operators from `mz_lir_mapping` as a tree, with member highlighting and multi-pin.
@@ -182,6 +187,8 @@ Phase 1 verified this in both `vite dev` and the production build.
 If the module worker fails to bundle or run `elk.bundled.js`, the fallback is running elkjs on the main thread in a lazily loaded chunk, accepting UI stalls during layout.
 Navigating into or out of a region recomputes layout for the new scope.
 A small "layouting" overlay shows during computation while the canvas stays interactive.
+Since elk lays each scope out independently near its own origin, the viewport's pan/zoom from a previous, unrelated scope can land somewhere with nothing from the new one in it.
+Once a scope's layout lands, if none of its nodes are actually on screen, the view refits; this is checked once per scope rather than on every render, so it doesn't fight deliberate panning once landed.
 
 The node component shows name, arranged records, size, and elapsed time.
 Default colors keep a two-by-two palette (region versus operator, has arrangement versus not).
