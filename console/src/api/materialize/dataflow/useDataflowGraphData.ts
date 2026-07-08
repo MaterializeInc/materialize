@@ -11,10 +11,10 @@ import { sql } from "kysely";
 import React from "react";
 
 import { escapedLiteral as lit, useSqlManyTyped } from "~/api/materialize";
+import { useLastGoodByKey } from "~/api/materialize/useLastGoodByKey";
 import {
   buildDataflowStructure,
   type ChannelRow,
-  type DataflowStructure,
   type LirSpanRow,
   type OperatorRow,
   type PerWorkerStatRow,
@@ -32,10 +32,13 @@ interface ReplicaWorkerCountRow {
   workerCount: bigint | number | string;
 }
 
+// A malformed id can only reach this hook via a hand-edited URL (the route
+// itself only ever supplies real dataflow ids), so this returns undefined
+// for the caller to render as a not-found state, rather than throwing
+// inside useMemo and crashing to the error boundary over a typo in the
+// address bar.
 function dataflowIdLiteral(dataflowId: string) {
-  if (!/^\d+$/.test(dataflowId)) {
-    throw new Error(`invalid dataflow id: ${dataflowId}`);
-  }
+  if (!/^\d+$/.test(dataflowId)) return undefined;
   return sql`${lit(dataflowId)}::uint8`;
 }
 
@@ -59,6 +62,7 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
     )
       return null;
     const id = dataflowIdLiteral(dataflowId);
+    if (id === undefined) return null;
     return {
       operators: sql`
         SELECT
@@ -182,15 +186,30 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
     };
   }, [dataflowId, clusterName, replicaName]);
 
-  const { results, error, databaseError, loading, refetch } = useSqlManyTyped(
-    queries,
-    {
-      cluster: params?.clusterName,
-      replica: params?.replicaName,
-      // This query can be slow for large dataflows.
-      timeout: 30_000,
-    },
-  );
+  const {
+    results,
+    error: queryError,
+    databaseError,
+    loading: queryLoading,
+    refetch,
+  } = useSqlManyTyped(queries, {
+    cluster: params?.clusterName,
+    replica: params?.replicaName,
+    // This query can be slow for large dataflows.
+    timeout: 30_000,
+  });
+
+  // A malformed dataflow id (only reachable via a hand-edited URL) never
+  // compiles a query, so `loading` would otherwise stay false forever with
+  // no error to show. Surfacing it here, rather than throwing inside the
+  // queries useMemo above, lets the page render a real error message
+  // instead of crashing to the error boundary over a URL typo.
+  const invalidDataflowId =
+    dataflowId !== undefined && dataflowIdLiteral(dataflowId) === undefined;
+  const error = invalidDataflowId
+    ? `invalid dataflow id: ${dataflowId}`
+    : queryError;
+  const loading = !invalidDataflowId && queryLoading;
 
   // JSON tuple, not a delimiter-joined string. Cluster and replica names are
   // identifiers that can themselves contain any delimiter we might pick.
@@ -201,57 +220,30 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
         params.dataflowId,
       ])
     : null;
-  const [lastGood, setLastGood] = React.useState<{
-    key: string;
-    data: {
-      structure: DataflowStructure;
-      workerCount: number;
-      fetchedAt: Date;
-    };
-  } | null>(null);
 
-  // Whether a fetch has actually started under the current key. Guards against
-  // tagging the previous fetch's still-resident results with the new key in
-  // the render after the selection changes but before useSqlMany's runSql
-  // effect flips loading. Without it the old graph would show under the new
-  // selection until the new fetch resolves (CNS-109).
-  const sawLoadingRef = React.useRef(false);
+  const compute = React.useCallback(
+    (r: NonNullable<typeof results>) => ({
+      structure: buildDataflowStructure(
+        r.operators ?? [],
+        r.channels ?? [],
+        r.lirSpans ?? [],
+        r.perWorkerStats ?? [],
+      ),
+      // A replica always has at least 1 worker; falling back to 1 (a heatmap
+      // ceiling of log2(1) = 0, disabling skew coloring entirely) only
+      // matters if the query somehow returns no row.
+      workerCount: Number(r.replicaWorkers?.[0]?.workerCount ?? 1),
+      fetchedAt: new Date(),
+    }),
+    [],
+  );
+  const data = useLastGoodByKey({
+    key,
+    results,
+    error,
+    loading,
+    compute,
+  });
 
-  // Reset acceptance synchronously when the selection changes. Using the
-  // render-phase state-adjustment pattern so the reset lands before any effect
-  // runs, not one render later.
-  const [trackedKey, setTrackedKey] = React.useState(key);
-  if (key !== trackedKey) {
-    setTrackedKey(key);
-    sawLoadingRef.current = false;
-  }
-
-  // Tag successful results with the key they were fetched for, but only once a
-  // fetch has started under that key.
-  React.useEffect(() => {
-    if (loading) sawLoadingRef.current = true;
-    if (key && results && !error && !loading && sawLoadingRef.current) {
-      setLastGood({
-        key,
-        data: {
-          structure: buildDataflowStructure(
-            results.operators ?? [],
-            results.channels ?? [],
-            results.lirSpans ?? [],
-            results.perWorkerStats ?? [],
-          ),
-          // A replica always has at least 1 worker; falling back to 1 (a
-          // heatmap ceiling of log2(1) = 0, disabling skew coloring
-          // entirely) only matters if the query somehow returns no row.
-          workerCount: Number(results.replicaWorkers?.[0]?.workerCount ?? 1),
-          fetchedAt: new Date(),
-        },
-      });
-    }
-  }, [key, results, error, loading]);
-
-  // Error always wins, and data for other params never renders.
-  const data =
-    !error && lastGood && lastGood.key === key ? lastGood.data : null;
   return { data, error, databaseError, loading, refetch };
 }
