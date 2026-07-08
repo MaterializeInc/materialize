@@ -32,7 +32,7 @@ export const NODE_DIMENSIONS: Record<
 
 const LAYOUT_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
-  "elk.direction": "RIGHT",
+  "elk.direction": "DOWN",
   "elk.hierarchyHandling": "INCLUDE_CHILDREN",
   "elk.padding": "[top=48,left=16,bottom=16,right=16]",
   "elk.spacing.nodeNode": "24",

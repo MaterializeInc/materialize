@@ -63,18 +63,19 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
         SELECT
           mdco.id,
           from_operator_address AS "fromOperatorAddress",
-          from_port AS "fromPort",
+          mdc.from_port AS "fromPort",
           to_operator_address AS "toOperatorAddress",
-          to_port AS "toPort",
+          mdc.to_port AS "toPort",
           COALESCE(sum(mmc.sent), 0) AS "messagesSent",
           COALESCE(sum(mmc.batch_sent), 0) AS "batchesSent",
           mdco.type AS "channelType"
         FROM mz_dataflow_channel_operators AS mdco
+        JOIN mz_dataflow_channels AS mdc ON mdc.id = mdco.id
         LEFT JOIN mz_message_counts AS mmc ON mdco.id = mmc.channel_id
         WHERE from_operator_address[1] = ${id}
         GROUP BY
-          mdco.id, "fromOperatorAddress", "fromPort",
-          "toOperatorAddress", "toPort", mdco.type`
+          mdco.id, "fromOperatorAddress", mdc.from_port,
+          "toOperatorAddress", mdc.to_port, mdco.type`
         .$castTo<ChannelRow>()
         .compile(queryBuilder),
       lirSpans: sql`

@@ -7,14 +7,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import ELK, { type ElkNode } from "elkjs/lib/elk-api.js";
+// The elk engine detects a worker context at load time and registers itself
+// as the worker's message handler, so it must be the worker entry point
+// itself. A hand-written worker wrapping it cannot work: imported into
+// another worker the engine hijacks that worker's onmessage and exports
+// nothing. elk-api on the main thread speaks to it and correlates
+// request/response pairs internally.
+import ElkWorker from "elkjs/lib/elk-worker.min.js?worker";
 import React from "react";
 
 import type { VisibleGraph } from "./dataflowGraph";
-import type { Positions } from "./elkGraph";
-import type { LayoutRequest, LayoutResponse } from "./layout.worker";
+import { extractPositions, type Positions, toElkGraph } from "./elkGraph";
 
 export function useElkLayout(graph: VisibleGraph | null, cacheKey: string) {
-  const workerRef = React.useRef<Worker | null>(null);
+  const elkRef = React.useRef<InstanceType<typeof ELK> | null>(null);
   const requestIdRef = React.useRef(0);
   const cacheRef = React.useRef(new Map<string, Positions>());
   const [state, setState] = React.useState<{
@@ -24,11 +31,11 @@ export function useElkLayout(graph: VisibleGraph | null, cacheKey: string) {
   }>({ key: null, positions: null, error: null });
 
   React.useEffect(() => {
-    const worker = new Worker(new URL("./layout.worker.ts", import.meta.url), {
-      type: "module",
-    });
-    workerRef.current = worker;
-    return () => worker.terminate();
+    const elk = new ELK({ workerFactory: () => new ElkWorker() });
+    elkRef.current = elk;
+    return () => {
+      elk.terminateWorker();
+    };
   }, []);
 
   React.useEffect(() => {
@@ -38,30 +45,22 @@ export function useElkLayout(graph: VisibleGraph | null, cacheKey: string) {
       setState({ key: cacheKey, positions: cached, error: null });
       return;
     }
+    const elk = elkRef.current;
+    if (!elk) return;
     const requestId = ++requestIdRef.current;
-    const worker = workerRef.current;
-    if (!worker) return;
-    const onMessage = (event: MessageEvent<LayoutResponse>) => {
-      // Drop responses for superseded requests.
-      if (event.data.requestId !== requestIdRef.current) return;
-      if (event.data.positions) {
-        cacheRef.current.set(cacheKey, event.data.positions);
-        setState({
-          key: cacheKey,
-          positions: event.data.positions,
-          error: null,
-        });
-      } else {
-        setState({
-          key: cacheKey,
-          positions: null,
-          error: event.data.error ?? "layout failed",
-        });
-      }
-    };
-    worker.addEventListener("message", onMessage);
-    worker.postMessage({ requestId, graph } satisfies LayoutRequest);
-    return () => worker.removeEventListener("message", onMessage);
+    elk.layout(toElkGraph(graph)).then(
+      (layouted: ElkNode) => {
+        // Drop responses for superseded requests.
+        if (requestId !== requestIdRef.current) return;
+        const positions = extractPositions(layouted);
+        cacheRef.current.set(cacheKey, positions);
+        setState({ key: cacheKey, positions, error: null });
+      },
+      (error: unknown) => {
+        if (requestId !== requestIdRef.current) return;
+        setState({ key: cacheKey, positions: null, error: String(error) });
+      },
+    );
   }, [graph, cacheKey]);
 
   return {

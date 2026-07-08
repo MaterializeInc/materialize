@@ -15,6 +15,7 @@ import { isSystemCluster } from "~/api/materialize";
 import { ClusterWithOwnership } from "~/api/materialize/cluster/clusterList";
 import DeleteObjectMenuItem from "~/components/DeleteObjectMenuItem";
 import OverflowMenu from "~/components/OverflowMenu";
+import { useFlags } from "~/hooks/useFlags";
 import {
   Breadcrumb,
   PageBreadcrumbs,
@@ -39,6 +40,10 @@ import { useClusters } from "./queries";
 import Sinks from "./Sinks";
 import Sources from "./Sources";
 import { useShowSystemObjects } from "./useShowSystemObjects";
+
+const DataflowDetailPage = React.lazy(
+  () => import("~/platform/dataflows/DataflowDetailPage"),
+);
 
 const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
   const [showSystemObjects] = useShowSystemObjects();
@@ -124,17 +129,21 @@ const ClusterDetailPage = () => {
     ],
     [clusterName],
   );
-  const subnavItems: Tab[] = React.useMemo(
-    () => [
+  const flags = useFlags();
+  const subnavItems: Tab[] = React.useMemo(() => {
+    const tabs: Tab[] = [
       { label: "Overview", href: "..", end: true },
       { label: "Replicas", href: "../replicas" },
       { label: "Materialized Views", href: "../materialized-views" },
       { label: "Indexes", href: "../indexes" },
       { label: "Sources", href: "../sources" },
       { label: "Sinks", href: "../sinks" },
-    ],
-    [],
-  );
+    ];
+    if (flags["visualization-features"]) {
+      tabs.push({ label: "Dataflows", href: "../dataflows" });
+    }
+    return tabs;
+  }, [flags]);
 
   // Setting key on the route elements prevents any weird jank when you use the context
   // menu to switch between clusters.
@@ -159,6 +168,12 @@ const ClusterDetailPage = () => {
         <Route path="indexes" element={<IndexList key={clusterName} />} />
         <Route path="sources" element={<Sources key={clusterName} />} />
         <Route path="sinks" element={<Sinks key={clusterName} />} />
+        {flags["visualization-features"] && (
+          <Route
+            path="dataflows/:dataflowId"
+            element={<DataflowDetailPage key={clusterName} />}
+          />
+        )}
       </SentryRoutes>
     </>
   );
