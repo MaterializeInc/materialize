@@ -18,6 +18,7 @@ import {
   type Node,
   Position,
   ReactFlow,
+  useReactFlow,
 } from "@xyflow/react";
 import React from "react";
 
@@ -57,7 +58,37 @@ export interface DataflowGraphViewProps {
   decorations?: GraphDecorations;
   onNodeClick?: (node: VisibleNode) => void;
   onPaneClick?: () => void;
+  centerRef?: React.MutableRefObject<((id: string) => void) | null>;
 }
+
+// Exposes a centering callback through the ref once React Flow context exists.
+const CenterHelper = ({
+  centerRef,
+}: {
+  centerRef: React.MutableRefObject<((id: string) => void) | null>;
+}) => {
+  const reactFlow = useReactFlow();
+  React.useEffect(() => {
+    // Assigning to the ref inside an effect is safe: it never runs during
+    // render, so the parent's ref just receives the latest centering callback.
+    // eslint-disable-next-line react-compiler/react-compiler
+    centerRef.current = (id: string) => {
+      const internal = reactFlow.getInternalNode(id);
+      if (!internal) return;
+      const { x, y } = internal.internals.positionAbsolute;
+      const width = internal.measured?.width ?? 0;
+      const height = internal.measured?.height ?? 0;
+      reactFlow.setCenter(x + width / 2, y + height / 2, {
+        zoom: 1,
+        duration: 300,
+      });
+    };
+    return () => {
+      centerRef.current = null;
+    };
+  }, [reactFlow, centerRef]);
+  return null;
+};
 
 export const DataflowGraphView = ({
   structure,
@@ -67,6 +98,7 @@ export const DataflowGraphView = ({
   decorations,
   onNodeClick,
   onPaneClick,
+  centerRef,
 }: DataflowGraphViewProps) => {
   const toast = useToast();
   const visible = React.useMemo(() => {
@@ -205,6 +237,7 @@ export const DataflowGraphView = ({
         <Background />
         <Controls />
         <MiniMap pannable zoomable />
+        {centerRef && <CenterHelper centerRef={centerRef} />}
       </ReactFlow>
     </Box>
   );
