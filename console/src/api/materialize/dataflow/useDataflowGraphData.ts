@@ -67,11 +67,17 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
           mdod.name,
           coalesce(mas.records, 0) AS "arrangementRecords",
           coalesce(mas.size, 0) AS "arrangementSize",
-          coalesce(mse.elapsed_ns, 0) AS "elapsedNs"
+          coalesce(mse.elapsed_ns, 0) AS "elapsedNs",
+          coalesce(mcodh.count, 0) AS "scheduleCount"
         FROM mz_dataflow_operator_dataflows AS mdod
         JOIN mz_dataflow_addresses AS mda ON mda.id = mdod.id
         LEFT JOIN mz_arrangement_sizes AS mas ON mas.operator_id = mdod.id
         LEFT JOIN mz_scheduling_elapsed AS mse ON mse.id = mdod.id
+        LEFT JOIN (
+          SELECT id, sum(count) AS count
+          FROM mz_compute_operator_durations_histogram
+          GROUP BY id
+        ) AS mcodh ON mcodh.id = mdod.id
         WHERE mdod.dataflow_id = ${id}`
         .$castTo<OperatorRow>()
         .compile(queryBuilder),
@@ -117,13 +123,13 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
         )`
         .$castTo<LirSpanRow>()
         .compile(queryBuilder),
-      // Per-worker CPU/memory, for the skew heatmap (worst worker over the
-      // average). Two independent per-worker sources full-outer-joined on
-      // (id, worker_id): an operator can show up in one and not the other
-      // (e.g. it schedules but never arranges anything), and a worker with
-      // no row in a source never touched that side of it at all, which
-      // matters for skew (see dataflowGraph.ts) and must not be coalesced
-      // to a false zero here.
+      // Per-worker CPU/memory/schedule count, for the skew heatmap (worst
+      // worker over the average). Three independent per-worker sources
+      // full-outer-joined on (id, worker_id): an operator can show up in
+      // one and not the others (e.g. it schedules but never arranges
+      // anything), and a worker with no row in a source never touched that
+      // side of it at all, which matters for skew (see dataflowGraph.ts)
+      // and must not be coalesced to a false zero here.
       perWorkerStats: sql`
         WITH cpu AS (
           SELECT mdod.id, mse.worker_id, mse.elapsed_ns
@@ -136,15 +142,28 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
           FROM mz_dataflow_operator_dataflows AS mdod
           JOIN mz_arrangement_sizes_per_worker AS mas ON mas.operator_id = mdod.id
           WHERE mdod.dataflow_id = ${id}
+        ),
+        schedules AS (
+          SELECT mdod.id, mcodhpw.worker_id, sum(mcodhpw.count) AS count
+          FROM mz_dataflow_operator_dataflows AS mdod
+          JOIN mz_compute_operator_durations_histogram_per_worker AS mcodhpw
+            ON mcodhpw.id = mdod.id
+          WHERE mdod.dataflow_id = ${id}
+          GROUP BY mdod.id, mcodhpw.worker_id
         )
         SELECT
-          coalesce(cpu.id, memory.id) AS id,
-          coalesce(cpu.worker_id, memory.worker_id) AS "workerId",
+          coalesce(cpu.id, memory.id, schedules.id) AS id,
+          coalesce(cpu.worker_id, memory.worker_id, schedules.worker_id)
+            AS "workerId",
           cpu.elapsed_ns AS "elapsedNs",
-          memory.size AS "arrangementSize"
+          memory.size AS "arrangementSize",
+          schedules.count AS "scheduleCount"
         FROM cpu
         FULL OUTER JOIN memory
-          ON memory.id = cpu.id AND memory.worker_id = cpu.worker_id`
+          ON memory.id = cpu.id AND memory.worker_id = cpu.worker_id
+        FULL OUTER JOIN schedules
+          ON schedules.id = coalesce(cpu.id, memory.id)
+          AND schedules.worker_id = coalesce(cpu.worker_id, memory.worker_id)`
         .$castTo<PerWorkerStatRow>()
         .compile(queryBuilder),
       // The replica's total worker count (workers per process times

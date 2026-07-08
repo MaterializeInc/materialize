@@ -56,6 +56,7 @@ describe("nodeFillColor", () => {
     stats: null,
     transitive: null,
     transitiveSkew: null,
+    overheadNs: null,
     childCount: 0,
     lir: [],
     address: null,
@@ -72,6 +73,7 @@ describe("nodeFillColor", () => {
         arrangementRecords: 100n,
         arrangementSize: 100n,
         elapsedNs: 0n,
+        scheduleCount: 0n,
       },
     });
     expect(unarranged).toEqual(operatorColor("Reduce"));
@@ -87,6 +89,7 @@ describe("nodeFillColor", () => {
         arrangementRecords: 100n,
         arrangementSize: 100n,
         elapsedNs: 0n,
+        scheduleCount: 0n,
       },
     });
     expect(noArrangement).not.toEqual(arranged);
