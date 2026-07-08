@@ -7,86 +7,65 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import colors from "~/theme/colors";
+
 import type { LirGroupNode, VisibleNode } from "./dataflowGraph";
 
-export const COLORS = {
-  noArrangementRegion: "#12b886",
-  arrangementRegion: "#7950f2",
-};
-
-// Mirrors theme/colors.ts blue.500 and orange.400. This app doesn't emit
-// Chakra tokens as CSS custom properties, so `var(--chakra-colors-*)`
-// silently resolves to nothing inside a raw boxShadow/stroke value; these
-// need the literal hex.
+// Selection/match highlights read the same in light and dark mode (a bright
+// ring reads fine against either canvas background), so these pin to the
+// raw swatch module instead of a light/dark-aware theme token, only to keep
+// them from drifting out of sync with the rest of the palette.
 export const HIGHLIGHT_COLORS = {
-  selected: "#0093e6",
-  activeMatch: "#fe581d",
+  selected: colors.blue[500],
+  activeMatch: colors.orange[400],
   // Same hue as `selected`, for an edge that merely touches the selected
   // node rather than being the clicked thing itself; ChannelEdge pairs this
   // with a thinner stroke than `selected` gets, so the two read as a clear
-  // emphasis/de-emphasis pair rather than two unrelated colors.
+  // emphasis/de-emphasis pair rather than two unrelated colors. No exact
+  // swatch matches this shade; chosen for the pairing, not a token.
   connected: "#8fd2f5",
 };
 
-// A small, visually distinct palette for LIR group borders/headers, cycled
-// by a deterministic hash so the same lirId always gets the same color
-// within one render (and across re-renders, since lirId is stable).
-const GROUP_PALETTE = [
-  "#e8590c",
-  "#5f3dc4",
-  "#0b7285",
-  "#2f9e44",
-  "#c2255c",
-  "#1971c2",
-  "#e67700",
-  "#7048e8",
-];
-
-export function lirGroupColor(lirId: string): string {
-  let hash = 0;
-  for (let i = 0; i < lirId.length; i++) {
-    hash = (hash * 31 + lirId.charCodeAt(i)) | 0;
-  }
-  return GROUP_PALETTE[Math.abs(hash) % GROUP_PALETTE.length];
+/** Deterministic 32-bit string hash, for cycling a fixed color palette. */
+export function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++)
+    h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return h;
 }
 
-// A muted, light subset of the spectrum for operator fills: deliberately
-// less saturated than GROUP_PALETTE so an operator's fill never reads as
-// "this is a LIR group" at a glance, while still giving operators of the
-// same kind (every "Reduce", every "Map") a consistent, recognizable color
-// instead of the old fixed white/orange pair, which made an unarranged
-// operator (the common case) invisible against a white canvas.
-const OPERATOR_PALETTE = [
-  "#a5d8ff", // blue
-  "#99e9f2", // cyan
-  "#96f2d7", // teal
-  "#b2f2bb", // green
-  "#d8f5a2", // lime
-  "#ffec99", // yellow
-  "#ffd8a8", // orange
-  "#fcc2d7", // pink
-  "#eebefa", // grape
-  "#d0bfff", // violet
-  "#bac8ff", // indigo
-];
-
-export function operatorColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = (hash * 31 + name.charCodeAt(i)) | 0;
-  }
-  return OPERATOR_PALETTE[Math.abs(hash) % OPERATOR_PALETTE.length];
+// Cycled by a hash of lirId/operator name so the same id or name always
+// gets the same color within one render (and across re-renders, since both
+// are stable). Groups and operators share one palette: LirGroupNode's own
+// border/label already marks a box as a group, so the fill color doesn't
+// need to carry that distinction too.
+export function lirGroupColor(
+  lirId: string,
+  palette: readonly string[],
+): string {
+  return palette[Math.abs(hashString(lirId)) % palette.length];
 }
 
-export function nodeFillColor(node: VisibleNode): string {
+export function operatorColor(
+  name: string,
+  palette: readonly string[],
+): string {
+  return palette[Math.abs(hashString(name)) % palette.length];
+}
+
+export function nodeFillColor(
+  node: VisibleNode,
+  palette: readonly string[],
+  accent: { arranged: string; notArranged: string },
+): string {
   const region = node.kind !== "operator" && node.kind !== "port";
-  if (!region) return operatorColor(node.label);
+  if (!region) return operatorColor(node.label, palette);
   const arranged = (node.transitive?.arrangementRecords ?? 0n) > 0n;
-  return arranged ? COLORS.arrangementRegion : COLORS.noArrangementRegion;
+  return arranged ? accent.arranged : accent.notArranged;
 }
 
 // skewRatio's 0 is a "no per-worker data at all" sentinel, not a real ratio
-// (a real ratio is always >= 1); labeling it distinctly avoids it reading
+// (a real ratio is always >= 1). Labeling it distinctly avoids it reading
 // as an implausibly perfect score.
 export function formatSkew(ratio: number): string {
   return ratio === 0 ? "no data" : ratio.toFixed(2);

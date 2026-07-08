@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Badge, Box, HStack, Text, Tooltip } from "@chakra-ui/react";
+import { Badge, Box, HStack, Text, Tooltip, useTheme } from "@chakra-ui/react";
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 import React from "react";
 
+import { MaterializeTheme } from "~/theme";
 import { formatBytesShort } from "~/utils/format";
 
 import type { VisibleNode } from "./dataflowGraph";
@@ -111,20 +112,23 @@ export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
   </CardShell>
 );
 
-export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
-  <Box
-    borderWidth="1px"
-    borderRadius="full"
-    px={2}
-    background="gray.100"
-    opacity={data.dimmed ? 0.25 : 1}
-    boxShadow={highlightShadow(data)}
-  >
-    <Text fontSize="2xs">{data.node.label}</Text>
-    <Handle type="target" position={Position.Top} />
-    <Handle type="source" position={Position.Bottom} />
-  </Box>
-);
+export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Box
+      borderWidth="1px"
+      borderRadius="full"
+      px={2}
+      background={colors.background.tertiary}
+      opacity={data.dimmed ? 0.25 : 1}
+      boxShadow={highlightShadow(data)}
+    >
+      <Text fontSize="2xs">{data.node.label}</Text>
+      <Handle type="target" position={Position.Top} />
+      <Handle type="source" position={Position.Bottom} />
+    </Box>
+  );
+};
 
 // A label-only wrapper around its members. Header is clickable
 // (pointerEvents="auto"), body is not (pointerEvents="none"). For clicks on
