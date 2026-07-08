@@ -10,7 +10,7 @@
 import "@xyflow/react/dist/style.css";
 import "./DataflowGraphView.css";
 
-import { Box, Button, Spinner, VStack } from "@chakra-ui/react";
+import { Box, Button, Spinner, useTheme, VStack } from "@chakra-ui/react";
 import {
   Background,
   Controls,
@@ -24,6 +24,7 @@ import {
 import React from "react";
 
 import ErrorBox from "~/components/ErrorBox";
+import { MaterializeTheme } from "~/theme";
 
 import { ChannelEdge } from "./ChannelEdge";
 import {
@@ -223,6 +224,8 @@ export const DataflowGraphView = ({
   showLirGroups,
   onLirGroupClick,
 }: DataflowGraphViewProps) => {
+  const { colors, shadows } = useTheme<MaterializeTheme>();
+
   const visible = React.useMemo(() => {
     // Hidden nodes get spliced out with connectivity preserved (a hidden idle
     // run still shows a pass-through edge). Hidden edges (independently
@@ -231,12 +234,11 @@ export const DataflowGraphView = ({
     const rerouted = decorations?.hiddenNodeIds
       ? rerouteHiddenNodes(rawVisible, decorations.hiddenNodeIds)
       : rawVisible;
-    if (!decorations?.hiddenEdgeIds?.size) return rerouted;
+    const hiddenEdgeIds = decorations?.hiddenEdgeIds;
+    if (!hiddenEdgeIds?.size) return rerouted;
     return {
       nodes: rerouted.nodes,
-      edges: rerouted.edges.filter(
-        (e) => !decorations.hiddenEdgeIds!.has(e.id),
-      ),
+      edges: rerouted.edges.filter((e) => !hiddenEdgeIds.has(e.id)),
     };
   }, [rawVisible, decorations?.hiddenNodeIds, decorations?.hiddenEdgeIds]);
 
@@ -297,13 +299,14 @@ export const DataflowGraphView = ({
 
   const nodes: Node[] = React.useMemo(() => {
     if (!positions) return [];
+    const parentOf = grouping?.parentOf;
     const groupNodes: Node[] = (grouping?.groups ?? []).map((g) => {
       const pos = positions[g.id] ?? { x: 0, y: 0, width: 0, height: 0 };
       return {
         id: g.id,
         type: "lirGroup",
         position: { x: pos.x, y: pos.y },
-        parentId: grouping!.parentOf.get(g.id),
+        parentId: parentOf?.get(g.id),
         width: pos.width,
         height: pos.height,
         // pointerEvents: "none" on React Flow's own node wrapper (not just
@@ -324,7 +327,11 @@ export const DataflowGraphView = ({
         // an explicit zIndex also protects against member nodes elsewhere
         // in the array being reordered by a future change.
         zIndex: -1,
-        data: { group: g, label: g.operator, color: lirGroupColor(g.lirId) },
+        data: {
+          group: g,
+          label: g.operator,
+          color: lirGroupColor(g.lirId, colors.lineGraph),
+        },
       };
     });
     const memberNodes: Node[] = visible.nodes.map((n) => {
@@ -350,7 +357,12 @@ export const DataflowGraphView = ({
         data: {
           node: n,
           dimmed: decorations?.dimmedNodeIds?.has(n.id) ?? false,
-          color: decorations?.nodeColors?.get(n.id) ?? nodeFillColor(n),
+          color:
+            decorations?.nodeColors?.get(n.id) ??
+            nodeFillColor(n, colors.lineGraph, {
+              arranged: colors.accent.purple,
+              notArranged: colors.accent.green,
+            }),
           selected: n.id === selectedId,
           activeMatch: n.id === activeMatchId,
         },
@@ -365,6 +377,7 @@ export const DataflowGraphView = ({
     decorations?.nodeColors,
     selectedId,
     activeMatchId,
+    colors,
   ]);
 
   const edges: Edge[] = React.useMemo(
@@ -416,7 +429,31 @@ export const DataflowGraphView = ({
     );
   }
   return (
-    <Box ref={paneRef} width="100%" flex="1" position="relative">
+    <Box
+      ref={paneRef}
+      width="100%"
+      flex="1"
+      position="relative"
+      // React Flow's Background/Controls/MiniMap render their own chrome
+      // from a packaged stylesheet, outside Chakra's component tree, and
+      // read colors through these CSS custom properties (documented,
+      // themeable hooks -- not an internal implementation detail) rather
+      // than props, so this is how they pick up light/dark mode.
+      style={
+        {
+          "--xy-background-color": colors.background.primary,
+          "--xy-background-pattern-color": colors.border.secondary,
+          "--xy-minimap-background-color": colors.background.secondary,
+          "--xy-minimap-mask-background-color": colors.background.tertiary,
+          "--xy-controls-button-background-color": colors.background.primary,
+          "--xy-controls-button-background-color-hover":
+            colors.background.tertiary,
+          "--xy-controls-button-color": colors.foreground.primary,
+          "--xy-controls-button-border-color": colors.border.primary,
+          "--xy-controls-box-shadow": shadows.level1,
+        } as React.CSSProperties
+      }
+    >
       {layouting && (
         <Box position="absolute" top={2} right={2} zIndex={10}>
           <Spinner size="sm" />
@@ -480,14 +517,14 @@ export const DataflowGraphView = ({
           pannable
           zoomable
           nodeColor={(node) =>
-            (node.data as { color?: string }).color ?? "#ccc"
+            (node.data as { color?: string }).color ??
+            colors.background.tertiary
           }
           // Node fills are light (operator colors and the cold end of the
-          // heatmap gradient both skew pale), and the minimap's default
-          // node stroke is transparent on its own light background, so
-          // without an explicit stroke a scope of pale nodes can render as
-          // an almost-blank minimap.
-          nodeStrokeColor="#9ca3af"
+          // heatmap gradient both skew pale) in light mode, and dark in
+          // dark mode, so without an explicit stroke a scope of same-toned
+          // nodes can render as an almost-blank minimap.
+          nodeStrokeColor={colors.border.secondary}
         />
         {centerRef && <CenterHelper centerRef={centerRef} fitRef={fitRef} />}
         <ViewportGuard

@@ -7,9 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { ThemeProvider } from "@chakra-ui/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { Position, ReactFlowProvider, useStoreApi } from "@xyflow/react";
 import React from "react";
+
+import { lightTheme } from "~/theme";
 
 import { ChannelEdge, type ChannelEdgeData } from "./ChannelEdge";
 import type { PortPeer } from "./dataflowGraph";
@@ -49,13 +52,15 @@ const DomNodeSetter = ({ children }: { children: React.ReactNode }) => {
 
 function renderEdge(data: ChannelEdgeData) {
   const { container } = render(
-    <ReactFlowProvider>
-      <DomNodeSetter>
-        <svg>
-          <ChannelEdge {...BASE_POSITION} data={data} />
-        </svg>
-      </DomNodeSetter>
-    </ReactFlowProvider>,
+    <ThemeProvider theme={lightTheme}>
+      <ReactFlowProvider>
+        <DomNodeSetter>
+          <svg>
+            <ChannelEdge {...BASE_POSITION} data={data} />
+          </svg>
+        </DomNodeSetter>
+      </ReactFlowProvider>
+    </ThemeProvider>,
   );
   return container.querySelector("path")!;
 }
