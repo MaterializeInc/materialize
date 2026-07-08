@@ -16,6 +16,7 @@ import {
   nodeFillColor,
   operatorColor,
   prettyPrintChannelType,
+  textColorFor,
 } from "./nodeStyle";
 
 const PALETTE = ["#111111", "#222222", "#333333", "#444444"];
@@ -144,6 +145,18 @@ describe("formatSkew", () => {
 
   it("labels the no-data sentinel (0) distinctly from a real ratio", () => {
     expect(formatSkew(0)).toEqual("no data");
+  });
+});
+
+describe("textColorFor", () => {
+  it("picks light text on a dark background", () => {
+    // colors.lineGraph's purple[700], the color from the reported contrast bug
+    expect(textColorFor("#391D7E")).toEqual("#FFF");
+  });
+
+  it("picks dark text on a light background", () => {
+    // colors.lineGraph's purple[200]
+    expect(textColorFor("#C8B5FF")).toEqual("#111");
   });
 });
 
