@@ -20,7 +20,7 @@ import {
 
 import { useDataflowGraphData } from "~/api/materialize/dataflow/useDataflowGraphData";
 import { useDataflowList } from "~/api/materialize/dataflow/useDataflowList";
-import { ErrorCode } from "~/api/materialize/types";
+import { isInsufficientPrivilegeError } from "~/api/materialize/executeSql";
 import ErrorBox from "~/components/ErrorBox";
 import LabeledSelect from "~/components/LabeledSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
@@ -39,6 +39,7 @@ import {
   type Filters,
   lirIndex,
   lirSummary,
+  mustGet,
   type NodeId,
   nodeIdOf,
   type PortPeer,
@@ -49,20 +50,11 @@ import { DataflowGraphView } from "./DataflowGraphView";
 import { DataflowToolbar } from "./DataflowToolbar";
 import { LirPanel } from "./LirPanel";
 import { NodeDetailPanel, type Selection } from "./NodeDetailPanel";
+import { hashString } from "./nodeStyle";
 import { UsagePrivilegeAlert } from "./UsagePrivilegeAlert";
 
 // Injected into decorateGraph so the pure graph module stays d3-free.
 const heatColor = (t: number) => interpolateYlOrRd(0.15 + 0.85 * t);
-
-// Stable 32-bit hash so a pure stats refresh (identical node ids) keeps the
-// same structure key and reuses the layout, while any structural change
-// produces a new key and relayouts.
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++)
-    h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
-  return h;
-}
 
 const DataflowDetailPage = () => {
   const { clusterId, dataflowId } = useParams();
@@ -222,7 +214,7 @@ const DataflowDetailPage = () => {
       if (!data || addresses.length === 0) return;
       const scope = commonAncestorScope(data.structure, addresses);
       setFocusedScope(scope);
-      const scopeAddress = data.structure.nodes.get(scope)!.address;
+      const scopeAddress = mustGet(data.structure.nodes, scope).address;
       const targets = [
         ...new Set(
           addresses
@@ -289,7 +281,7 @@ const DataflowDetailPage = () => {
         return;
       }
       const scope = commonAncestorScope(data.structure, [peer.address]);
-      const scopeAddress = data.structure.nodes.get(scope)!.address;
+      const scopeAddress = mustGet(data.structure.nodes, scope).address;
       const targetId = representativeInView(peer.address, scopeAddress);
       if (targetId) focusOn(scope, targetId);
     },
@@ -340,7 +332,7 @@ const DataflowDetailPage = () => {
       // this same handler would have the second silently discard the
       // first (see updateSearchParams's doc comment above).
       const scope = commonAncestorScope(data.structure, addresses);
-      const scopeAddress = data.structure.nodes.get(scope)!.address;
+      const scopeAddress = mustGet(data.structure.nodes, scope).address;
       const targets = [
         ...new Set(
           addresses
@@ -481,8 +473,10 @@ const DataflowDetailPage = () => {
     // A member outside the current scope, or rolled up into one of its
     // boxes, highlights that box instead of being silently dropped.
     if (lirHighlight) {
-      const focusedScopeAddress =
-        data.structure.nodes.get(focusedScope)!.address;
+      const focusedScopeAddress = mustGet(
+        data.structure.nodes,
+        focusedScope,
+      ).address;
       const highlighted = new Set<string>();
       for (const id of lirHighlight) {
         const address = data.structure.nodes.get(id)?.address;
@@ -529,10 +523,7 @@ const DataflowDetailPage = () => {
       </MainContentContainer>
     );
   }
-  const permissionError =
-    databaseError &&
-    "code" in databaseError &&
-    databaseError.code === ErrorCode.INSUFFICIENT_PRIVILEGE;
+  const permissionError = isInsufficientPrivilegeError(databaseError);
 
   return (
     // minH=0: MainContentContainer is a flex column item of BaseLayout's
@@ -621,6 +612,7 @@ const DataflowDetailPage = () => {
                 matchCount={allMatches.length}
                 matchIndex={activeMatchIndex}
                 onJump={onJump}
+                workerCount={data.workerCount}
               />
               {filters.heatmap !== "off" && (
                 <HStack spacing={1} flexShrink={0}>
