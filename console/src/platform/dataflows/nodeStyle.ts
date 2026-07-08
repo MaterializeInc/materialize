@@ -16,6 +16,15 @@ export const COLORS = {
   arrangementOperator: "#fab005",
 };
 
+// Mirrors theme/colors.ts blue.500 and orange.400. This app doesn't emit
+// Chakra tokens as CSS custom properties, so `var(--chakra-colors-*)`
+// silently resolves to nothing inside a raw boxShadow/stroke value; these
+// need the literal hex.
+export const HIGHLIGHT_COLORS = {
+  selected: "#0093e6",
+  activeMatch: "#fe581d",
+};
+
 export function nodeFillColor(node: VisibleNode): string {
   const arranged = (node.transitive?.arrangementRecords ?? 0n) > 0n;
   const region = node.kind !== "operator" && node.kind !== "port";
@@ -32,4 +41,6 @@ export type FlowNodeData = {
   node: VisibleNode;
   dimmed: boolean;
   color: string;
+  selected: boolean;
+  activeMatch: boolean;
 };

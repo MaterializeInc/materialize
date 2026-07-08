@@ -30,6 +30,7 @@ import {
   type GraphDecorations,
   MAX_VISIBLE_NODES,
   rerouteHiddenNodes,
+  type VisibleEdge,
   type VisibleNode,
   visibleNodeCount,
 } from "./dataflowGraph";
@@ -51,13 +52,25 @@ const nodeTypes = {
   port: PortNode,
 };
 
+// An edge plus resolved endpoint labels, since VisibleEdge only carries ids.
+export type SelectedEdge = VisibleEdge & {
+  sourceLabel: string;
+  targetLabel: string;
+};
+
 export interface DataflowGraphViewProps {
   structure: DataflowStructure;
   collapsed: CollapseState;
   onCollapsedChange: (next: CollapseState) => void;
   cacheKey: string;
   decorations?: GraphDecorations;
-  onNodeClick?: (node: VisibleNode) => void;
+  selectedId?: string;
+  activeMatchId?: string;
+  // Edges connected to the clicked node, with endpoint labels resolved, so a
+  // clicked port can show what flows through it without the caller
+  // recomputing the (already decorated, rerouted) visible graph.
+  onNodeClick?: (node: VisibleNode, connectedEdges: SelectedEdge[]) => void;
+  onEdgeClick?: (edge: SelectedEdge) => void;
   onPaneClick?: () => void;
   centerRef?: React.MutableRefObject<((id: string) => void) | null>;
 }
@@ -97,7 +110,10 @@ export const DataflowGraphView = ({
   onCollapsedChange,
   cacheKey,
   decorations,
+  selectedId,
+  activeMatchId,
   onNodeClick,
+  onEdgeClick,
   onPaneClick,
   centerRef,
 }: DataflowGraphViewProps) => {
@@ -183,10 +199,19 @@ export const DataflowGraphView = ({
           node: n,
           dimmed: decorations?.dimmedNodeIds?.has(n.id) ?? false,
           color: decorations?.nodeColors?.get(n.id) ?? nodeFillColor(n),
+          selected: n.id === selectedId,
+          activeMatch: n.id === activeMatchId,
         },
       };
     });
-  }, [visible, positions, decorations?.dimmedNodeIds, decorations?.nodeColors]);
+  }, [
+    visible,
+    positions,
+    decorations?.dimmedNodeIds,
+    decorations?.nodeColors,
+    selectedId,
+    activeMatchId,
+  ]);
 
   const edges: Edge[] = React.useMemo(
     () =>
@@ -203,9 +228,15 @@ export const DataflowGraphView = ({
             (decorations?.dimmedNodeIds?.has(e.source) ?? false) ||
             (decorations?.dimmedNodeIds?.has(e.target) ?? false) ||
             (decorations?.dimmedEdgeIds?.has(e.id) ?? false),
+          selected: e.id === selectedId,
         },
       })),
-    [visible, decorations?.dimmedNodeIds, decorations?.dimmedEdgeIds],
+    [
+      visible,
+      decorations?.dimmedNodeIds,
+      decorations?.dimmedEdgeIds,
+      selectedId,
+    ],
   );
 
   if (error) throw new Error(error);
@@ -226,9 +257,32 @@ export const DataflowGraphView = ({
         minZoom={0.05}
         // Double-click is the collapse toggle, so it must not also zoom.
         zoomOnDoubleClick={false}
-        onNodeClick={(_, node) =>
-          onNodeClick?.((node.data as { node: VisibleNode }).node)
-        }
+        onNodeClick={(_, node) => {
+          const visibleNode = (node.data as { node: VisibleNode }).node;
+          const resolveLabel = (id: string) =>
+            visible.nodes.find((n) => n.id === id)?.label ?? id;
+          const connectedEdges = visible.edges
+            .filter(
+              (e) => e.source === visibleNode.id || e.target === visibleNode.id,
+            )
+            .map((e) => ({
+              ...e,
+              sourceLabel: resolveLabel(e.source),
+              targetLabel: resolveLabel(e.target),
+            }));
+          onNodeClick?.(visibleNode, connectedEdges);
+        }}
+        onEdgeClick={(_, edge) => {
+          const e = visible.edges.find((ve) => ve.id === edge.id);
+          if (!e) return;
+          const resolveLabel = (id: string) =>
+            visible.nodes.find((n) => n.id === id)?.label ?? id;
+          onEdgeClick?.({
+            ...e,
+            sourceLabel: resolveLabel(e.source),
+            targetLabel: resolveLabel(e.target),
+          });
+        }}
         onPaneClick={onPaneClick}
         onNodeDoubleClick={(_, node) => {
           const visibleNode = (node.data as { node: VisibleNode }).node;
