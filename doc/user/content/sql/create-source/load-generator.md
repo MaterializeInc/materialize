@@ -169,6 +169,44 @@ As long as the offset continues increasing, Materialize is generating data. For
 more details on monitoring source ingestion progress and debugging related
 issues, see [Troubleshooting](/ops/troubleshooting/).
 
+## Ingesting data
+
+Once a load generator source is created, use [`CREATE TABLE FROM
+SOURCE`](/sql/create-table/) to create a table for each of the tables
+described above that you want to ingest:
+
+```mzsql
+CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+```
+
+For **multi-output generators** (`AUCTION`, `MARKETING`, `TPCH`), the
+`REFERENCE` clause is required: specify one of the table names listed above
+(e.g. `bids`, `customers`, `lineitem`). Omitting `REFERENCE` results in an
+error, since Materialize cannot determine which table you're referring to.
+
+For **single-output generators** (e.g. `KEY VALUE`), `REFERENCE` can be
+omitted, since there is only one table available:
+
+```mzsql
+CREATE TABLE kv_tbl FROM SOURCE kv_gen;
+```
+
+You can create multiple tables that reference the same load generator table.
+
+{{< note >}}
+`TEXT COLUMNS` and `EXCLUDE COLUMNS` are not supported for load generator
+tables. If specified, they are silently ignored.
+{{< /note >}}
+
+### Handling table schema changes
+
+Load generator sources do not support [source
+versioning](/ingest-data/mysql/source-versioning/). The tables produced by a
+load generator have a fixed schema defined by Materialize, not by an upstream
+system, so there is no upstream schema change to handle. If you're using a
+PostgreSQL, MySQL, or SQL Server source, see the corresponding guide for
+handling upstream schema changes with zero downtime.
+
 ## Examples
 
 ### Creating an auction load generator
@@ -353,14 +391,23 @@ ORDER BY
  R            | F            | 37770949 |    56610551077 |   54347734573.7 |  57066196254.4557 | 25.496431466814634 |  38213.68205054471 | 0.03997848687172654 |     1481421
 ```
 
-## Source versioning
+### Creating tables from a load generator source
 
-Load generator sources do not support [source
-versioning](/ingest-data/mysql/source-versioning/). The tables produced by a
-load generator have a fixed schema defined by Materialize, not by an upstream
-system, so there is no upstream schema change to handle. If you're using a
-PostgreSQL, MySQL, or SQL Server source, see the corresponding guide for
-handling upstream schema changes with zero downtime.
+To create a load generator source without immediately ingesting any of its
+tables, and then explicitly create tables for only the ones you want:
+
+```mzsql
+CREATE SOURCE tpch
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 1);
+
+CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+```
+
+Unlike the [previous example](#creating-a-tpch-load-generator), `FOR ALL
+TABLES` is omitted from `CREATE SOURCE`, and only the `orders` and `lineitem`
+tables are created; the other TPCH tables are not ingested unless you also
+create tables for them.
 
 ## Related pages
 
