@@ -55,7 +55,7 @@ beforeEach(() => {
         });
       }
       return HttpResponse.json({
-        results: [operatorsResult, okResult, okResult],
+        results: [operatorsResult, okResult, okResult, okResult],
       });
     }),
   );
