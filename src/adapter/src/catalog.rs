@@ -36,8 +36,9 @@ use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Conf
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{
-    BootstrapArgs, DurableCatalogState, STORAGE_USAGE_ID_ALLOC_KEY, TestCatalogStateBuilder,
-    test_bootstrap_args,
+    BootstrapArgs, DurableCatalogState, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
+    TestCatalogStateBuilder, USER_CLUSTER_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, test_bootstrap_args,
 };
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -154,6 +155,25 @@ pub struct Catalog {
     /// session that has observed any evidence of a catalog change is
     /// guaranteed to see the corresponding bump.
     shared_transient_revision: Arc<AtomicU64>,
+}
+
+/// A narrow handle to the durable catalog for advancing its upper from off the coordinator loop.
+///
+/// See [`Catalog::upper_handle`].
+#[derive(Debug, Clone)]
+pub struct CatalogUpperHandle {
+    storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
+}
+
+impl CatalogUpperHandle {
+    /// Advances the catalog upper to at least `new_upper`. See
+    /// [`Catalog::advance_upper`] for the semantics.
+    pub async fn advance_upper(
+        &self,
+        new_upper: mz_repr::Timestamp,
+    ) -> Result<(), mz_catalog::durable::CatalogError> {
+        self.storage.lock().await.advance_upper(new_upper).await
+    }
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
@@ -606,12 +626,16 @@ impl Catalog {
         &self,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<(CatalogItemId, GlobalId), Error> {
-        self.storage()
+        use mz_ore::collections::CollectionExt;
+
+        let ids = self
+            .storage()
             .await
-            .allocate_user_id(commit_ts)
+            .allocate_id(USER_ITEM_ALLOC_KEY, 1, commit_ts)
             .await
-            .maybe_terminate("allocating user ids")
-            .err_into()
+            .maybe_terminate("allocating user ids")?;
+        let id = ids.into_element();
+        Ok((CatalogItemId::User(id), GlobalId::User(id)))
     }
 
     /// Allocate `amount` many user IDs. See [`DurableCatalogState::allocate_user_ids`].
@@ -620,12 +644,16 @@ impl Catalog {
         amount: u64,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, Error> {
-        self.storage()
+        let ids = self
+            .storage()
             .await
-            .allocate_user_ids(amount, commit_ts)
+            .allocate_id(USER_ITEM_ALLOC_KEY, amount, commit_ts)
             .await
-            .maybe_terminate("allocating user ids")
-            .err_into()
+            .maybe_terminate("allocating user ids")?;
+        Ok(ids
+            .iter()
+            .map(|id| (CatalogItemId::User(*id), GlobalId::User(*id)))
+            .collect())
     }
 
     pub async fn allocate_user_id_for_test(&self) -> Result<(CatalogItemId, GlobalId), Error> {
@@ -696,12 +724,16 @@ impl Catalog {
         &self,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<ClusterId, Error> {
-        self.storage()
+        use mz_ore::collections::CollectionExt;
+
+        let ids = self
+            .storage()
             .await
-            .allocate_user_cluster_id(commit_ts)
+            .allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1, commit_ts)
             .await
-            .maybe_terminate("allocating user cluster ids")
-            .err_into()
+            .maybe_terminate("allocating user cluster ids")?;
+        let id = ids.into_element();
+        Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
     }
 
     /// Allocate `amount` many user replica IDs. See
@@ -711,12 +743,13 @@ impl Catalog {
         amount: u64,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<Vec<ReplicaId>, Error> {
-        self.storage()
+        let ids = self
+            .storage()
             .await
-            .allocate_user_replica_ids(amount, commit_ts)
+            .allocate_id(USER_REPLICA_ID_ALLOC_KEY, amount, commit_ts)
             .await
-            .maybe_terminate("allocating user replica ids")
-            .err_into()
+            .maybe_terminate("allocating user replica ids")?;
+        Ok(ids.into_iter().map(ReplicaId::User).collect())
     }
 
     /// Allocate `amount` many system replica IDs. See
@@ -726,12 +759,13 @@ impl Catalog {
         amount: u64,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<Vec<ReplicaId>, Error> {
-        self.storage()
+        let ids = self
+            .storage()
             .await
-            .allocate_system_replica_ids(amount, commit_ts)
+            .allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, amount, commit_ts)
             .await
-            .maybe_terminate("allocating system replica ids")
-            .err_into()
+            .maybe_terminate("allocating system replica ids")?;
+        Ok(ids.into_iter().map(ReplicaId::System).collect())
     }
 
     /// Allocate `amount` many replica IDs for `cluster_id`, picking user or
@@ -1148,9 +1182,29 @@ impl Catalog {
         }
     }
 
+    /// Advances the catalog upper to at least `new_upper`, tolerating an upper that is already
+    /// past it.
+    ///
+    /// A no-op when the catalog upper already reached `new_upper`: the group committer allocates
+    /// its write timestamp off the loop, so by the time it advances the catalog upper to match,
+    /// an on-loop catalog transaction may already have advanced it past that timestamp. Content
+    /// committed by another writer in between surfaces as a `CatalogOutOfSync` error, on which we
+    /// must restart and rebuild from durable state.
     #[mz_ore::instrument(level = "debug")]
     pub async fn advance_upper(&self, new_upper: mz_repr::Timestamp) -> Result<(), AdapterError> {
         Ok(self.storage().await.advance_upper(new_upper).await?)
+    }
+
+    /// Returns a narrow handle for advancing the catalog upper from off the coordinator loop.
+    ///
+    /// The handle shares the durable-storage mutex with catalog transactions, so advancement
+    /// stays serialized with DDL commits. It deliberately does not expose the in-memory
+    /// `CatalogState`: a clone held by a long-lived task would be a permanently stale snapshot,
+    /// inviting accidental use.
+    pub fn upper_handle(&self) -> CatalogUpperHandle {
+        CatalogUpperHandle {
+            storage: Arc::clone(&self.storage),
+        }
     }
 
     /// Return the ids of all log sources the given object depends on.

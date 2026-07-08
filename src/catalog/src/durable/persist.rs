@@ -22,6 +22,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::{
@@ -278,8 +279,10 @@ impl FenceableToken {
 pub(crate) enum CompareAndAppendError {
     #[error(transparent)]
     Fence(#[from] FenceError),
-    /// Catalog encountered an upper mismatch when trying to write to the catalog. This should only
-    /// happen while trying to fence out other catalogs.
+    /// Catalog encountered an upper mismatch when trying to write to the catalog: another
+    /// writer moved the upper between our snapshot of it and the write. Handled by the conflict
+    /// classification in the commit and advance paths (rebase over empty progress, surface
+    /// content conflicts as out-of-sync).
     #[error(
         "expected catalog upper {expected_upper:?} did not match actual catalog upper {actual_upper:?}"
     )]
@@ -368,6 +371,13 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// [`Self::maybe_consolidate`] to decide when to consolidate. Initialized
     /// lazily on the first call.
     size_at_last_consolidation: Option<usize>,
+    /// Counts every raw update applied to this handle, across all kinds. Used to distinguish
+    /// empty progress (upper movement with zero updates) from content written by another catalog:
+    /// capture the count before a compare-and-append, and if it is unchanged after the
+    /// conflict-triggered sync, the interval was pure empty progress and it is safe to rebase.
+    /// Memory-update emptiness is not a substitute, because some kinds (e.g. ID allocators) do
+    /// not surface as memory updates but still invalidate a rebase.
+    updates_applied: u64,
 }
 
 impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
@@ -392,28 +402,6 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         updates: Vec<(S, Diff)>,
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CompareAndAppendError> {
-        // The fencing check is expensive, so run it only with soft assertions enabled.
-        let contains_fence = if mz_ore::assert::soft_assertions_enabled() {
-            let parsed_updates: Vec<_> = updates
-                .clone()
-                .into_iter()
-                .filter_map(|(update, diff)| {
-                    let update: StateUpdateKindJson = update.into();
-                    let update = TryIntoStateUpdateKind::try_into(update).ok()?;
-                    Some((update, diff))
-                })
-                .collect();
-            let contains_retraction = parsed_updates.iter().any(|(update, diff)| {
-                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::MINUS_ONE
-            });
-            let contains_addition = parsed_updates.iter().any(|(update, diff)| {
-                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::ONE
-            });
-            Some(contains_retraction && contains_addition)
-        } else {
-            None
-        };
-
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
             (
@@ -423,20 +411,12 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             )
         });
         let next_upper = commit_ts.step_forward();
-        self.compare_and_append_inner(updates, next_upper)
-            .await
-            .inspect_err(|e| {
-                // A compare-and-append failure means someone else must have written to the
-                // catalog. We expect to have been fenced out, since writing to the catalog without
-                // fencing other catalogs should be impossible. The one exception is if we are
-                // trying to fence other catalogs with this write.
-                if let Some(contains_fence) = contains_fence {
-                    soft_assert_or_log!(
-                        matches!(e, CompareAndAppendError::Fence(_)) || contains_fence,
-                        "encountered an upper mismatch on a non-fencing write"
-                    );
-                }
-            })?;
+        // NOTE: An `UpperMismatch` here is a legitimate outcome, not a programming error:
+        // another writer (a fencer, or a concurrent catalog advancing the upper) got in between
+        // our snapshot of the upper and this write. Callers classify the conflict and either
+        // rebase over empty progress or surface it, see `commit_transaction` and
+        // `advance_upper`.
+        self.compare_and_append_inner(updates, next_upper).await?;
 
         self.sync(next_upper).await?;
         Ok(next_upper)
@@ -655,6 +635,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             if diff != Diff::ONE && diff != Diff::MINUS_ONE {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
+            self.updates_applied += 1;
 
             match self.update_applier.apply_update(
                 StateUpdate { kind, ts, diff },
@@ -1097,6 +1078,7 @@ impl UnopenedPersistCatalogState {
             bootstrap_complete: false,
             metrics,
             size_at_last_consolidation: None,
+            updates_applied: 0,
         };
         // If the snapshot is not consolidated, and we see multiple epoch values while applying the
         // updates, then we might accidentally fence ourselves out.
@@ -1297,6 +1279,7 @@ impl UnopenedPersistCatalogState {
             bootstrap_complete: false,
             metrics: self.metrics,
             size_at_last_consolidation: None,
+            updates_applied: 0,
         };
         catalog.metrics.collection_entries.reset();
         // Normally, `collection_entries` is updated in `apply_updates`. The audit log updates skip
@@ -1834,30 +1817,50 @@ impl DurableCatalogState for PersistCatalogState {
                 return Ok(catalog.upper);
             }
 
-            // If the current upper does not match the transaction's commit timestamp, then the
-            // catalog must have changed since the transaction was started, making the transaction
-            // invalid. When/if we want a multi-writer catalog, this will likely have to change
-            // from an assert to a retry.
+            // The handle must not have synced past the upper the transaction was built on. All
+            // in-process users run transactions on one handle behind a mutex held from open to
+            // commit, so a mismatch here is a local programming error, not external interference
+            // (a concurrent writer does not move our cached upper, it makes the
+            // compare-and-append below fail, which is handled gracefully).
             assert_eq!(
                 catalog.upper, txn_batch.upper,
-                "only one transaction at a time is supported"
+                "the handle was mutated mid-transaction"
             );
 
-            assert!(
-                commit_ts >= catalog.upper,
-                "expected commit ts, {}, to be greater than or equal to upper, {}",
-                commit_ts,
-                catalog.upper
-            );
-
-            let updates = StateUpdate::from_txn_batch(txn_batch).collect();
+            let updates: Vec<_> = StateUpdate::from_txn_batch(txn_batch).collect();
             debug!("committing updates: {updates:?}");
 
+            // Rebase over empty progress: the group committer (and in the future other
+            // processes) advances the upper without content, which must not invalidate this
+            // transaction. Real content committed by another writer does invalidate it, and
+            // surfaces as `CatalogOutOfSync` below.
+            let mut commit_ts = max(commit_ts, catalog.upper);
+
             let next_upper = match catalog.mode {
-                Mode::Writable => catalog
-                    .compare_and_append(updates, commit_ts)
-                    .await
-                    .map_err(|e| e.unwrap_fence_error())?,
+                Mode::Writable => loop {
+                    let updates_applied_before = catalog.updates_applied;
+                    match catalog.compare_and_append(updates.clone(), commit_ts).await {
+                        Ok(next_upper) => break next_upper,
+                        Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
+                        Err(CompareAndAppendError::UpperMismatch { actual_upper, .. }) => {
+                            // Another writer got in between our snapshot of the upper and the
+                            // compare-and-append. `compare_and_append_inner` synced us to the
+                            // current upper. Zero applied updates means pure empty progress, so
+                            // we rebase the commit timestamp and retry. Anything else means the
+                            // transaction was planned against stale state.
+                            if catalog.updates_applied != updates_applied_before {
+                                return Err(DurableCatalogError::CatalogOutOfSync {
+                                    update_count: usize::cast_from(
+                                        catalog.updates_applied - updates_applied_before,
+                                    ),
+                                    upper: actual_upper,
+                                }
+                                .into());
+                            }
+                            commit_ts = max(commit_ts, catalog.upper);
+                        }
+                    }
+                },
                 Mode::Savepoint => {
                     let updates = updates.into_iter().map(|(kind, diff)| StateUpdate {
                         kind,
@@ -1883,39 +1886,55 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError> {
-        if self.upper >= new_upper {
-            // We don't expect a no-op advancement, but if we are wrong we'd crash the process.
-            // Seems safer to only soft-assert and return gracefully in production. If we get here
-            // that means we tried to make the catalog shard readable at a time it was already
-            // readable, which likely means we are violating linearizability. That's not great, but
-            // crashing (or even crash-looping) is worse.
-            //
-            // TODO: Consider removing this once we have built some confidence.
-            soft_panic_or_log!(
-                "new_upper ({new_upper}) not greater than current upper ({})",
-                self.upper
-            );
-            return Ok(());
-        }
+        loop {
+            if self.upper >= new_upper {
+                // Someone (an on-loop catalog transaction, or another process) already advanced
+                // the upper to or past `new_upper`. Advancing is "to at least", so nothing to do.
+                return Ok(());
+            }
 
-        match self.mode {
-            Mode::Writable => self
-                .compare_and_append_inner([], new_upper)
-                .await
-                .map_err(|e| e.unwrap_fence_error())?,
-            Mode::Savepoint => (),
-            Mode::Readonly => {
-                return Err(DurableCatalogError::NotWritable(
-                    "cannot advance upper of a read-only catalog".into(),
-                )
-                .into());
+            match self.mode {
+                Mode::Writable => {}
+                Mode::Savepoint => {
+                    self.upper = new_upper;
+                    return Ok(());
+                }
+                Mode::Readonly => {
+                    return Err(DurableCatalogError::NotWritable(
+                        "cannot advance upper of a read-only catalog".into(),
+                    )
+                    .into());
+                }
+            }
+
+            let updates_applied_before = self.updates_applied;
+            match self.compare_and_append_inner([], new_upper).await {
+                Ok(()) => {
+                    self.upper = new_upper;
+                    // No sync needed since no data was written.
+                    return Ok(());
+                }
+                Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
+                Err(CompareAndAppendError::UpperMismatch { actual_upper, .. }) => {
+                    // Another writer advanced the shard between our snapshot of the upper and the
+                    // compare-and-append. `compare_and_append_inner` already synced us to the
+                    // current upper. If that sync applied any updates, the other writer committed
+                    // content we have not planned against, and the caller must rebuild from
+                    // durable state. If it applied none, the interval was pure empty progress
+                    // (e.g. another upper bump) and we can simply re-evaluate against the new
+                    // upper.
+                    if self.updates_applied != updates_applied_before {
+                        return Err(DurableCatalogError::CatalogOutOfSync {
+                            update_count: usize::cast_from(
+                                self.updates_applied - updates_applied_before,
+                            ),
+                            upper: actual_upper,
+                        }
+                        .into());
+                    }
+                }
             }
         }
-
-        self.upper = new_upper;
-        // No sync needed since no data was written.
-
-        Ok(())
     }
 
     fn shard_id(&self) -> ShardId {

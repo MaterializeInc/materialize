@@ -354,6 +354,24 @@ pub enum Message {
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
+    /// Finalizes a group commit that the committer applied off the loop. The committer does the
+    /// oracle round trips, table append, oracle write application, and catalog upper advancement off
+    /// the loop, then hands back the cheap work that needs coordinator state: record statement
+    /// execution timestamps, retire client responses, and downgrade local read holds.
+    ///
+    /// NOTE: Statement timestamps must be recorded before the responses are retired, because
+    /// retiring ends the statement execution and drops its logging record. That is why retiring
+    /// happens here on the loop rather than in the committer.
+    GroupCommitApplied {
+        /// Client responses to retire, once statement timestamps are recorded.
+        responses: Vec<crate::util::CompletedClientTransmitter>,
+        /// Statement executions whose execution timestamp is this commit's write timestamp.
+        statement_logging_ids: Vec<StatementLoggingId>,
+        /// This commit's write timestamp. Used for statement logging, per-session
+        /// read-your-writes, and for downgrading local read holds: the committer applied it to
+        /// the oracle, so the read ts is at least this.
+        write_ts: Timestamp,
+    },
     DeferredStatementReady,
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
@@ -513,6 +531,7 @@ impl Message {
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::TryDeferred { .. } => "try_deferred",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
+            Message::GroupCommitApplied { .. } => "group_commit_applied",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
@@ -1985,6 +2004,10 @@ pub struct Coordinator {
     /// waiting out its tick interval. Notified after catalog transactions that
     /// change durable cluster state.
     reconcile_now: Arc<Notify>,
+    /// Hands staged group commits and DDL table registration/forgetting to the
+    /// [`appends::GroupCommitter`] task, the single in-process writer to the txns shard, which
+    /// allocates timestamps and applies the writes off the loop.
+    group_committer_tx: mpsc::UnboundedSender<appends::TableWriteCmd>,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
@@ -3102,14 +3125,10 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to append");
 
         info!("coordinator init: sending builtin table updates");
-        let (_builtin_updates_fut, write_ts) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
-        info!(?write_ts, "our write ts");
-        if let Some(write_ts) = write_ts {
-            self.apply_local_write(write_ts).await;
-        }
+        let builtin_updates_fut = self.builtin_table_update().execute(builtin_table_updates);
+        // Wait for the committer to apply the write off the loop, so the builtin tables are readable
+        // before we start serving. The committer allocates the timestamp and advances the oracle.
+        builtin_updates_fut.await;
     }
 
     /// Initializes all storage collections required by catalog objects in the storage controller.
@@ -3378,6 +3397,11 @@ impl Coordinator {
             })
             .collect();
 
+        // Collect every storage collection we create so we can register the tables among them in
+        // the txns shard after all layers are set up (below). `register_table_collections` selects
+        // the `DataSource::Table` collections, so handing it source-fed tables and the like is fine.
+        let mut created_gids = Vec::new();
+
         while !pending.is_empty() {
             // Drain collections whose dependencies have all been registered already
             // (i.e., are not in `pending`).
@@ -3423,6 +3447,8 @@ impl Coordinator {
                 ready = mem::take(&mut pending).into_iter().collect();
             }
 
+            created_gids.extend(ready.iter().map(|(gid, _collection)| *gid));
+
             self.controller
                 .storage
                 .create_collections_for_bootstrap(
@@ -3434,6 +3460,15 @@ impl Coordinator {
                 .await
                 .unwrap_or_terminate("cannot fail to create collections");
         }
+
+        // Register the tables in the txns shard, making them available for writes. Bootstrap runs no
+        // group commits concurrently, so this cannot conflict with the off-loop committer. In
+        // read-only mode `register_table_collections` registers only migrated tables.
+        self.controller
+            .storage
+            .register_table_collections(register_ts, created_gids)
+            .await
+            .unwrap_or_terminate("cannot fail to register tables");
 
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
@@ -3981,17 +4016,16 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
                     _ = self.advance_timelines_interval.tick() => {
-                        let span = info_span!(parent: None, "coord::advance_timelines_interval");
-                        span.follows_from(Span::current());
-
-                        // Group commit sends an `AdvanceTimelines` message when
-                        // done, which is what downgrades read holds. In
-                        // read-only mode we send this message directly because
-                        // we're not doing group commits.
+                        // Periodically bump table uppers and downgrade read holds. In read-only mode
+                        // we're not doing group commits, so we advance timelines directly. Otherwise
+                        // we trigger a keepalive group commit through the same notify+permit path as
+                        // user writes: the permit coalesces keepalives so they don't pile up behind a
+                        // slow oracle, and the committer advances timelines (via `GroupCommitApplied`)
+                        // when it's done.
                         if self.controller.read_only() {
                             messages.push(Message::AdvanceTimelines);
                         } else {
-                            messages.push(Message::GroupCommitInitiate(span, None));
+                            self.group_commit_tx.notify();
                         }
                     },
                     // Re-check pending strict serializable reads. Deliberately
@@ -5047,12 +5081,14 @@ pub fn serve(
                 let catalog = Arc::new(catalog);
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
+                let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
                 let mut coord = Coordinator {
                     controller,
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,
                     reconcile_now: Arc::new(Notify::new()),
+                    group_committer_tx,
                     strict_serializable_reads_tx,
                     linearize_reads_notify: Arc::new(Notify::new()),
                     global_timelines: timestamp_oracles,
@@ -5099,6 +5135,24 @@ pub fn serve(
                     user_id_pool: IdPool::empty(),
                     persist_client,
                 };
+
+                // Spawn the group committer, which applies txns-shard writes off the loop. It holds
+                // handles that stay valid for the process lifetime: the oracle is never replaced
+                // in-process, and the table write handle lives as long as the controller. Promotion
+                // out of read-only mode is a process restart, so a fresh committer is spawned then.
+                // We enter the runtime via `block_on` so the internal `task::spawn` has a reactor.
+                handle.block_on(async {
+                    appends::spawn_group_committer(
+                        group_committer_rx,
+                        coord.get_local_timestamp_oracle(),
+                        coord.controller.storage.table_write_handle(),
+                        coord.catalog().upper_handle(),
+                        coord.internal_cmd_tx.clone(),
+                        coord.catalog().config().now.clone(),
+                        coord.metrics.clone(),
+                    );
+                });
+
                 let bootstrap = handle.block_on(async {
                     coord
                         .bootstrap(

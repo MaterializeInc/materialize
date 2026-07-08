@@ -274,6 +274,23 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
         target_upper: Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
+    /// Returns an error if syncing to `target_upper` observes unapplied catalog updates.
+    async fn ensure_not_out_of_sync(
+        &mut self,
+        target_upper: Timestamp,
+    ) -> Result<(), CatalogError> {
+        let updates = self.sync_updates(target_upper).await?;
+        if updates.is_empty() {
+            Ok(())
+        } else {
+            Err(DurableCatalogError::CatalogOutOfSync {
+                update_count: updates.len(),
+                upper: target_upper,
+            }
+            .into())
+        }
+    }
+
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp;
 }
@@ -317,13 +334,27 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError>;
 
-    /// Advances the upper of the catalog shard to `new_upper`.
+    /// Advances the upper of the catalog shard to at least `new_upper`, doing nothing if the
+    /// upper is already at or past it.
     ///
     /// This implicitly confirms leadership, as attempting to advance the catalog frontier will
     /// fail if the writer has been fenced out.
+    ///
+    /// Callers may pass a timestamp that has been superseded since it was chosen (e.g. the group
+    /// committer's, allocated off the coordinator loop and possibly overtaken by a catalog
+    /// transaction). If another writer moved the upper with content updates in between, this
+    /// returns [`DurableCatalogError::CatalogOutOfSync`], and the caller must rebuild from
+    /// durable state.
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
+    ///
+    /// Tolerates the catalog upper having moved since the caller chose `commit_ts` (the commit
+    /// rebases past empty progress, and content committed by another writer surfaces as
+    /// [`DurableCatalogError::CatalogOutOfSync`] from the commit itself). Allocation needs no
+    /// staleness check of its own: an allocated ID is fresh and unique regardless of whether the
+    /// caller's in-memory state is current, and staleness is detected by the next catalog
+    /// transaction that plans against it.
     ///
     /// See [`Self::commit_transaction`] for details on `commit_ts`.
     #[mz_ore::instrument(level = "debug")]

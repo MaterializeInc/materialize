@@ -711,11 +711,19 @@ impl Catalog {
             .transaction()
             .await
             .unwrap_or_terminate("starting catalog transaction");
+        // Opening the transaction syncs the durable handle to its current upper. Empty progress
+        // is safe to cross because it does not change catalog contents. Real updates mean the
+        // adapter planned this transaction against stale catalog state, so we must restart and
+        // rebuild from durable state before applying catalog implications.
+        tx.ensure_not_out_of_sync()
+            .await
+            .unwrap_or_terminate("durable catalog changed before transaction");
+        let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
 
         let new_state = Self::transact_inner(
             TransactInnerMode::Commit,
             storage_collections,
-            oracle_write_ts,
+            commit_ts,
             session,
             ops,
             temporary_ids,
@@ -731,7 +739,7 @@ impl Catalog {
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        tx.commit(oracle_write_ts)
+        tx.commit(commit_ts)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 

@@ -109,13 +109,29 @@ impl Coordinator {
             Message::GroupCommitInitiate(span, permit) => {
                 // Add an OpenTelemetry link to our current span.
                 tracing::Span::current().add_link(span.context().span().span_context().clone());
-                self.try_group_commit(permit)
-                    .instrument(span)
-                    .boxed_local()
-                    .await
+                span.in_scope(|| self.stage_group_commit(permit));
+            }
+            Message::GroupCommitApplied {
+                responses,
+                statement_logging_ids,
+                write_ts,
+            } => {
+                // Record statement timestamps before retiring, since retiring ends the statement
+                // execution and drops its logging record.
+                for id in statement_logging_ids {
+                    self.set_statement_execution_timestamp(id, write_ts);
+                }
+                for response in responses {
+                    let (mut ctx, result) = response.finalize();
+                    ctx.session_mut().apply_write(write_ts);
+                    ctx.retire(result);
+                }
+                // The committer applied `write_ts` to the oracle, so the read ts is at least
+                // that and we can downgrade read holds without an oracle round trip.
+                self.advance_timelines(Some(write_ts)).boxed_local().await;
             }
             Message::AdvanceTimelines => {
-                self.advance_timelines().boxed_local().await;
+                self.advance_timelines(None).boxed_local().await;
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
@@ -290,7 +306,7 @@ impl Coordinator {
         //
         // `storage_usage_fetch` skips this path in read-only mode, so we can
         // unconditionally bump the oracle write ts here.
-        let write_ts = self.get_local_write_ts().await.timestamp;
+        let write_ts = self.get_catalog_write_ts().await;
         let collection_timestamp: EpochMillis = write_ts.into();
 
         // All rows in this collection cycle share `batch_id` so consumers can
@@ -320,7 +336,7 @@ impl Coordinator {
             })
             .collect();
 
-        let (table_updates, _) = self.builtin_table_update().execute(updates).await;
+        let table_updates = self.builtin_table_update().execute(updates);
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let task_span = info_span!(parent: None, "coord::storage_usage_update::table_updates");
@@ -336,7 +352,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn storage_usage_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        let (fut, _) = self.builtin_table_update().execute(expired).await;
+        let fut = self.builtin_table_update().execute(expired);
         task::spawn(|| "storage_usage_pruning_apply", async move {
             fut.await;
         });
@@ -637,7 +653,7 @@ impl Coordinator {
         // in https://github.com/MaterializeInc/materialize/pull/35436 lands,
         // append directly on `mz_catalog_server` instead of going through
         // the environmentd builtin-table-update path.
-        let (fut, _) = self.builtin_table_update().execute(updates).await;
+        let fut = self.builtin_table_update().execute(updates);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let task_span = info_span!(parent: None, "coord::arrangement_sizes_write::table_updates");
         OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
@@ -655,7 +671,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn arrangement_sizes_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        let (fut, _) = self.builtin_table_update().execute(expired).await;
+        let fut = self.builtin_table_update().execute(expired);
         task::spawn(|| "arrangement_sizes_pruning_apply", async move {
             fut.await;
         });

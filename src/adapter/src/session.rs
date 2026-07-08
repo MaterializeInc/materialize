@@ -1769,7 +1769,7 @@ impl WriteLocksBuilder {
     }
 }
 
-/// Collection of [`WriteLocks`] gathered during [`group_commit`].
+/// Collection of [`WriteLocks`] gathered during [`stage_group_commit`].
 ///
 /// Note: This struct should __never__ be used outside of group commit because it attempts to merge
 /// together several collections of [`WriteLocks`] which if not done carefully can cause deadlocks
@@ -1816,7 +1816,7 @@ impl WriteLocksBuilder {
 /// For total order to exist, Ta < Tb < Tc < Ta, which is impossible.
 /// ```
 ///
-/// [`group_commit`]: super::coord::Coordinator::group_commit
+/// [`stage_group_commit`]: super::coord::Coordinator::stage_group_commit
 #[derive(Debug, Default)]
 pub(crate) struct GroupCommitWriteLocks {
     locks: BTreeMap<CatalogItemId, tokio::sync::OwnedMutexGuard<()>>,
@@ -1830,6 +1830,14 @@ impl GroupCommitWriteLocks {
         // See: <https://github.com/rust-lang/rust/issues/81074>
         let existing = std::mem::take(&mut locks.locks);
         self.locks.extend(existing);
+    }
+
+    /// Absorbs the locks of another group-commit lock collection.
+    ///
+    /// Lock sets of separately staged group commits are disjoint (staging defers writes whose
+    /// locks are already held elsewhere), so this cannot end up holding a lock twice.
+    pub fn extend(&mut self, mut other: GroupCommitWriteLocks) {
+        self.locks.extend(std::mem::take(&mut other.locks));
     }
 
     /// Returns the collections we're missing locks for, if any.

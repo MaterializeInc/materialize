@@ -58,7 +58,8 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
-    StorageMetadata, StorageTxn, StorageWriteOp, WallclockLag, WallclockLagHistogramPeriod,
+    StorageMetadata, StorageTxn, StorageWriteOp, TableRegistration, WallclockLag,
+    WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -876,7 +877,6 @@ impl StorageController for Controller {
         // `DataSource::IngestionExport` is added as a new collection, but is
         // not executed directly.
         let mut new_collections = BTreeSet::new();
-        let mut table_registers = Vec::with_capacity(to_register.len());
 
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
@@ -1079,9 +1079,9 @@ impl StorageController for Controller {
                 DataSource::Table => {
                     debug!(
                         ?data_source, meta = ?metadata,
-                        "registering {id} with persist table worker",
+                        "not registering {id} with the txns shard here; the caller does that \
+                         through the group committer",
                     );
-                    table_registers.push((id, write));
                 }
                 DataSource::Progress | DataSource::Other => {
                     debug!(
@@ -1155,36 +1155,6 @@ impl StorageController for Controller {
             // here.
         }
 
-        // Register the tables all in one batch.
-        if !table_registers.is_empty() {
-            let register_ts = register_ts
-                .expect("caller should have provided a register_ts when creating a table");
-
-            if self.read_only {
-                // In read-only mode, we use a special read-only table worker
-                // that allows writing to migrated tables and will continually
-                // bump their shard upper so that it tracks the txn shard upper.
-                // We do this, so that they remain readable at a recent
-                // timestamp, which in turn allows dataflows that depend on them
-                // to (re-)hydrate.
-                //
-                // We only want to register migrated tables, though, and leave
-                // existing tables out/never write to them in read-only mode.
-                table_registers
-                    .retain(|(id, _write_handle)| migrated_storage_collections.contains(id));
-
-                self.persist_table_worker
-                    .register(register_ts, table_registers)
-                    .await
-                    .expect("table worker unexpectedly shut down");
-            } else {
-                self.persist_table_worker
-                    .register(register_ts, table_registers)
-                    .await
-                    .expect("table worker unexpectedly shut down");
-            }
-        }
-
         self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
 
         // TODO(guswynn): perform the io in this final section concurrently.
@@ -1214,6 +1184,9 @@ impl StorageController for Controller {
             };
         }
 
+        // We do not register tables in the txns shard here. The caller does that as a separate
+        // step through the group committer (or `register_table_collections` at bootstrap), which
+        // owns timestamp selection and conflict handling for txns-shard writes.
         Ok(())
     }
 
@@ -1394,7 +1367,6 @@ impl StorageController for Controller {
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        register_ts: Timestamp,
     ) -> Result<(), StorageError> {
         let data_shard = {
             let Controller {
@@ -1423,20 +1395,6 @@ impl StorageController for Controller {
             existing.collection_metadata.data_shard.clone()
         };
 
-        let persist_client = self
-            .persist
-            .open(self.persist_location.clone())
-            .await
-            .expect("invalid persist location");
-        let write_handle = self
-            .open_data_handles(
-                &existing_collection,
-                data_shard,
-                new_desc.clone(),
-                &persist_client,
-            )
-            .await;
-
         let collection_meta = CollectionMetadata {
             persist_location: self.persist_location.clone(),
             data_shard,
@@ -1457,14 +1415,66 @@ impl StorageController for Controller {
         // in-memory data structures.
         self.collections.insert(new_collection, collection_state);
 
-        self.persist_table_worker
-            .register(register_ts, vec![(new_collection, write_handle)])
-            .await
-            .expect("table worker unexpectedly shut down");
-
         self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
 
+        // We do not register the evolved collection in the txns shard here. The caller does that
+        // through the group committer, which owns timestamp selection and conflict handling for
+        // txns-shard writes.
         Ok(())
+    }
+
+    async fn register_table_collections(
+        &mut self,
+        register_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> Result<(), StorageError> {
+        let mut tables = self.table_registrations(ids)?;
+
+        // In read-only mode only migrated tables are registered; the read-write environment owns
+        // the rest and we must not re-register them. The read-only table worker keeps a migrated
+        // table's shard upper tracking the txns upper so it stays readable at a recent timestamp,
+        // which lets dependent dataflows (re-)hydrate.
+        if self.read_only {
+            tables.retain(|table| self.migrated_storage_collections.contains(&table.id));
+        }
+        if tables.is_empty() {
+            return Ok(());
+        }
+
+        match self
+            .persist_table_worker
+            .register(register_ts, tables)
+            .await
+        {
+            Ok(res) => res,
+            // The worker is gone; treat as shutting down.
+            Err(_recv) => Err(StorageError::ShuttingDown("persist_table_worker")),
+        }
+    }
+
+    fn table_registrations(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Result<Vec<TableRegistration>, StorageError> {
+        // Only `DataSource::Table` collections are written via the txns table-write path and thus
+        // registered in the txns shard. Source-fed tables (`IngestionExport`) and webhooks are
+        // also created as table catalog items, but they are written by the storage layer, so we
+        // ignore them here. Keeping this decision in the storage controller, where the data
+        // source is authoritative, means callers can pass all the collections they created
+        // without having to know which ones belong in the txns shard.
+        let mut tables = Vec::with_capacity(ids.len());
+        for id in ids {
+            let collection = self.collection(id)?;
+            if matches!(collection.data_source, DataSource::Table) {
+                let metadata = &collection.collection_metadata;
+                tables.push(TableRegistration {
+                    id,
+                    data_shard: metadata.data_shard,
+                    relation_desc: metadata.relation_desc.clone(),
+                });
+            }
+        }
+        Ok(tables)
     }
 
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError> {
@@ -1767,7 +1777,6 @@ impl StorageController for Controller {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-        ts: Timestamp,
     ) -> Result<(), StorageError> {
         // Collect tables by their data_source
         let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
@@ -1778,18 +1787,14 @@ impl StorageController for Controller {
                 _ => panic!("identifier is not a table: {}", id),
             });
 
-        // Drop table write tables
+        // Schedule cleanup of the table-write tables. The txns-shard forget has already happened
+        // through the group committer (see the trait docs), so all that is left is finalizing the
+        // shards and dropping the collections.
         if table_write_ids.len() > 0 {
-            let drop_notif = self
-                .persist_table_worker
-                .drop_handles(table_write_ids.clone(), ts);
             let tx = self.pending_table_handle_drops_tx.clone();
-            mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
-                drop_notif.await;
-                for identifier in table_write_ids {
-                    let _ = tx.send(identifier);
-                }
-            });
+            for identifier in table_write_ids {
+                let _ = tx.send(identifier);
+            }
         }
 
         // Drop source-fed tables
@@ -2128,6 +2133,12 @@ impl StorageController for Controller {
         Ok(self
             .persist_table_worker
             .append(write_ts, advance_to, commands))
+    }
+
+    fn table_write_handle(&self) -> Arc<dyn mz_storage_client::controller::TableWriteHandle> {
+        Arc::new(persist_handles::TableWriteWorkerHandle(
+            self.persist_table_worker.clone(),
+        ))
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
@@ -2771,7 +2782,10 @@ where
                 )
                 .await
                 .expect("txns schema shouldn't change");
-            persist_handles::PersistTableWriteWorker::new_read_only_mode(txns_write)
+            persist_handles::PersistTableWriteWorker::new_read_only_mode(
+                txns_write,
+                txns_client.clone(),
+            )
         } else {
             let mut txns = TxnsHandle::open(
                 Timestamp::MIN,
@@ -2783,7 +2797,7 @@ where
             )
             .await;
             txns.upgrade_version().await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns)
+            persist_handles::PersistTableWriteWorker::new_txns(txns, txns_client.clone())
         };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 

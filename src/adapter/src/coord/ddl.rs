@@ -467,7 +467,7 @@ impl Coordinator {
         // always going up, and believe we will always be close to the system
         // clock because it is well configured (chrony) and so may only rarely
         // regress or pause for 10s.
-        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+        let oracle_write_ts = self.get_catalog_write_ts().await;
 
         let Coordinator {
             catalog,
@@ -517,10 +517,7 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let (builtin_update_notify, _) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
+        let builtin_update_notify = self.builtin_table_update().execute(builtin_table_updates);
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
@@ -625,16 +622,35 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping tables.
-    pub(crate) fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>, ts: Timestamp) {
+    pub(crate) async fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>) {
         for (item_id, _gid) in &tables {
             self.active_webhooks.remove(item_id);
         }
 
+        let table_gids: Vec<_> = tables.into_iter().map(|(_id, gid)| gid).collect();
+
+        // Forget the txns-shard-registered tables among them through the group committer. The
+        // committer is the single in-process txns-shard writer, so the forget is ordered after
+        // all staged appends (a staged INSERT into a table being dropped still lands before the
+        // forget), and conflicts with concurrent processes are retried there.
+        let forget_ids: Vec<_> = self
+            .controller
+            .storage
+            .table_registrations(table_gids.clone())
+            .unwrap_or_terminate("cannot fail to look up table registrations")
+            .into_iter()
+            .map(|registration| registration.id)
+            .collect();
+        if !forget_ids.is_empty() {
+            self.forget_tables_via_committer(forget_ids).await;
+        }
+
+        // With the forget durable, clean up the controller side: schedule shard finalization and
+        // drop the collections.
         let storage_metadata = self.catalog.state().storage_metadata();
-        let table_gids = tables.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_tables(storage_metadata, table_gids, ts)
+            .drop_tables(storage_metadata, table_gids)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 

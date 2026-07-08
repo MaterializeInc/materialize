@@ -946,8 +946,8 @@ impl Coordinator {
             // logging around to indicate when an actual dependency error might
             // occur.
             if !tables_to_drop.is_empty() {
-                let ts = self.get_local_write_ts().await;
-                self.drop_tables(tables_to_drop.into_iter().collect_vec(), ts.timestamp);
+                self.drop_tables(tables_to_drop.into_iter().collect_vec())
+                    .await;
             }
 
             if !sources_to_drop.is_empty() {
@@ -1099,41 +1099,59 @@ impl Coordinator {
         table_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
-        // If we have tables, determine the initial validity for the table.
+        // Source-fed tables and webhooks flow through here too (they are table catalog items), but
+        // `table_registrations` below filters to the real (`DataSource::Table`) tables that need
+        // txns-shard registration, so we can hand it all of them.
+        let table_ids: Vec<GlobalId> = table_collections_to_create.keys().copied().collect();
+        let collections = table_collections_to_create.into_iter().collect_vec();
+
+        // Allocate a write timestamp and make the catalog readable at the read ts we bump to below
+        // (this also serves as the leader/fencing check, see materialize#28216). The tables' initial
+        // read frontier (since) is set to this timestamp in `create_collections`.
         let write_ts = self.get_local_write_ts().await;
         let register_ts = write_ts.timestamp;
-
-        // After acquiring `register_ts` but before using it, we need to
-        // be sure we're still the leader. Otherwise a new generation
-        // may also be trying to use `register_ts` for a different
-        // purpose. See materialize#28216.
-        //
-        // We also should advance the upper of the catalog shard, to ensure it
-        // is readable at the oracle read ts after we bump it to the
-        // `register_ts` below. Both of these needs are served by calling
-        // `advance_upper`.
         self.catalog
             .advance_upper(write_ts.advance_to)
             .await
             .unwrap_or_terminate("unable to advance catalog upper");
 
-        for id in execution_timestamps_to_set {
-            self.set_statement_execution_timestamp(id, register_ts);
+        {
+            let storage_metadata = self.catalog.state().storage_metadata();
+            self.controller
+                .storage
+                .create_collections(storage_metadata, Some(register_ts), collections)
+                .await
+                .unwrap_or_terminate("cannot fail to create collections");
         }
 
-        let storage_metadata = self.catalog.state().storage_metadata();
-
-        self.controller
+        // Register the tables in the txns shard through the group committer, making them
+        // available for writes. The committer is the single in-process txns-shard writer, so the
+        // registration is ordered after all staged appends and needs no local conflict handling.
+        // It allocates its own, possibly later timestamp and applies it to the oracle, so reads
+        // never observe a partially registered table: the read ts only passes the registration
+        // timestamp after the registration is durable.
+        //
+        // NOTE: The table since (set to `register_ts` in `create_collections` above) may end up
+        // below the final registration timestamp. That is the safe direction: txns registration
+        // does not constrain the data shard since, and reads only happen at or beyond the final
+        // timestamp.
+        let registrations = self
+            .controller
             .storage
-            .create_collections(
-                storage_metadata,
-                Some(register_ts),
-                table_collections_to_create.into_iter().collect_vec(),
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
+            .table_registrations(table_ids)
+            .unwrap_or_terminate("cannot fail to look up table registrations");
+        let table_ts = if registrations.is_empty() {
+            // Nothing to register (e.g. only source-fed tables). Bump the oracle read ts
+            // ourselves so the collections become readable at `register_ts`.
+            self.apply_local_write(register_ts).await;
+            register_ts
+        } else {
+            self.register_tables_via_committer(registrations).await
+        };
 
-        self.apply_local_write(register_ts).await;
+        for id in execution_timestamps_to_set {
+            self.set_statement_execution_timestamp(id, table_ts);
+        }
 
         Ok(())
     }
@@ -1361,28 +1379,29 @@ impl Coordinator {
             .desc
             .at_version(RelationVersionSelector::Specific(new_version));
 
+        // Make the catalog readable at the read ts the registration below bumps to, and re-check
+        // leadership (see materialize#28216) before mutating controller state.
         let write_ts = self.get_local_write_ts().await;
-        let register_ts = write_ts.timestamp;
-
-        // Ensure the catalog will be immediately readable at the read ts we're
-        // about to bump.
         self.catalog
             .advance_upper(write_ts.advance_to)
             .await
             .unwrap_or_terminate("unable to advance catalog upper");
 
-        // Alter the table description, creating a "new" collection.
         self.controller
             .storage
-            .alter_table_desc(
-                existing_gid,
-                new_gid,
-                new_desc,
-                expected_version,
-                register_ts,
-            )
+            .alter_table_desc(existing_gid, new_gid, new_desc, expected_version)
             .await
-            .expect("failed to alter desc of table");
+            .unwrap_or_terminate("failed to alter desc of table");
+
+        // Register the evolved collection in the txns shard through the group committer, making
+        // it available for writes. As with CREATE TABLE, the committer orders the registration
+        // after all staged appends and handles conflicts with concurrent processes.
+        let registrations = self
+            .controller
+            .storage
+            .table_registrations(vec![new_gid])
+            .unwrap_or_terminate("cannot fail to look up table registrations");
+        self.register_tables_via_committer(registrations).await;
 
         // Initialize the ReadPolicy which ensures we have the correct read holds.
         let compaction_window = new_table
@@ -1396,8 +1415,6 @@ impl Coordinator {
             compaction_window,
         )
         .await;
-
-        self.apply_local_write(register_ts).await;
 
         // Alter is complete! We can drop our read hold.
         drop(existing_table_read_hold);

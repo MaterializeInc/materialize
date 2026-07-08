@@ -2572,6 +2572,13 @@ impl<'a> Transaction<'a> {
         self.upper
     }
 
+    /// Verifies that this process has not missed catalog content updates.
+    pub async fn ensure_not_out_of_sync(&mut self) -> Result<(), CatalogError> {
+        self.durable_catalog
+            .ensure_not_out_of_sync(self.upper)
+            .await
+    }
+
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
         let audit_log_updates = self
             .audit_log_updates
@@ -2717,9 +2724,15 @@ impl<'a> Transaction<'a> {
         // transaction, otherwise the commit was performed with an out of date state.
         // Read-only catalogs can only commit empty transactions, so they don't need to consume all
         // updates before committing.
+        //
+        // NOTE: The commit may have rebased over empty progress to a timestamp past `commit_ts`,
+        // so we check against the upper the commit reported rather than `commit_ts` exactly.
         soft_assert_no_log!(
-            durable_storage.is_read_only() || updates.iter().all(|update| update.ts == commit_ts),
-            "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}"
+            durable_storage.is_read_only()
+                || updates
+                    .iter()
+                    .all(|update| update.ts >= commit_ts && update.ts < upper),
+            "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, upper={upper:?}, updates:{updates:?}"
         );
         Ok(())
     }

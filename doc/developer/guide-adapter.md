@@ -235,6 +235,42 @@ keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
 
+### The group committer is the single in-process writer to the txns shard
+
+All txns-shard writes (table appends from group commits, table registration
+and forgetting for DDL) flow through the group committer task
+(`src/adapter/src/coord/appends.rs`), one queue, applied one at a time at
+monotone oracle timestamps. Do not add a second path that sends commands to
+the persist table-write worker from anywhere else at runtime. The bootstrap
+path (`StorageController::register_table_collections`) is the one exception,
+safe only because nothing else runs during bootstrap.
+
+Two reasons this is load-bearing:
+
+- **The worker's command channel carries an implicit ordering contract.** An
+  append containing writes for a table must reach the worker before the forget
+  of that table, otherwise the worker has no registered shard to write to and
+  panics. When all commands came from the coordinator loop, loop serialization
+  provided this ordering for free. The moment appends moved off-loop into the
+  committer, a DROP TABLE forgetting directly from the loop could overtake a
+  staged INSERT sitting in the committer's queue (DROP takes no write locks,
+  so nothing else prevented it). Any off-loop sender reintroduces this race.
+  The fix is structural: one sender, one queue, ordering by construction.
+- **In-process txns-shard conflicts become impossible**, so an
+  `InvalidUppers` result from the worker means exactly one thing: another
+  process wrote the txns shard. The committer retries at a fresh oracle
+  timestamp, which is the correct protocol for concurrent `environmentd`
+  writers and needs no coordination beyond the oracle's monotonicity.
+
+Related: the catalog shard's write-conflict protocol lives in the
+compare-and-append itself (`commit_transaction` and `advance_upper` in
+`src/catalog/src/durable/persist.rs`). On an upper mismatch they classify the
+conflicting interval: zero raw updates is empty progress (safe to rebase over
+and retry), anything else is content from another writer and surfaces as the
+graceful `CatalogOutOfSync` error, on which the process restarts and rebuilds
+from durable state. Checks before the write (`ensure_not_out_of_sync`) are
+early-abort conveniences, not the enforcement.
+
 ## Rejected Optimizations
 
 This section records specific optimizations that have been attempted and found

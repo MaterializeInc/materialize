@@ -280,7 +280,13 @@ impl Coordinator {
     }
 
     #[instrument(level = "debug")]
-    pub(crate) async fn advance_timelines(&mut self) {
+    /// Downgrades read holds on all timelines to the current read ts.
+    ///
+    /// For the [`EpochMilliseconds`](Timeline::EpochMilliseconds) timeline, the group committer
+    /// applies writes off the loop and passes the resulting `local_read_ts` in, so we downgrade to
+    /// it without a round trip. When it is `None` (read-only mode, driven by the periodic tick) we
+    /// read the ts from the oracle here. Other timelines are advanced from their objects' uppers.
+    pub(crate) async fn advance_timelines(&mut self, local_read_ts: Option<Timestamp>) {
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (
             timeline,
@@ -290,31 +296,37 @@ impl Coordinator {
             },
         ) in global_timelines
         {
-            // Timeline::EpochMilliseconds is advanced in group commits and doesn't need to be
-            // manually advanced here.
-            if timeline != Timeline::EpochMilliseconds && !self.read_only_controllers {
-                // For non realtime sources, we define now as the largest timestamp, not in
-                // advance of any object's upper. This is the largest timestamp that is closed
-                // to writes.
-                let id_bundle = self.catalog().ids_in_timeline(&timeline);
-
-                // Advance the timeline if-and-only-if there are objects in it.
-                // Otherwise we'd advance to the empty frontier, meaning we
-                // close it off for ever.
-                if !id_bundle.is_empty() {
-                    let least_valid_write = self.least_valid_write(&id_bundle);
-                    let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
-                    oracle.apply_write(now).await;
-                    debug!(
-                        least_valid_write = ?least_valid_write,
-                        oracle_read_ts = ?oracle.read_ts().await,
-                        "advanced {:?} to {}",
-                        timeline,
-                        now,
-                    );
+            let read_ts = if timeline == Timeline::EpochMilliseconds {
+                // The EpochMilliseconds timeline is advanced by group commits, not here.
+                match local_read_ts {
+                    Some(read_ts) => read_ts,
+                    None => oracle.read_ts().await,
                 }
+            } else {
+                if !self.read_only_controllers {
+                    // For non realtime sources, we define now as the largest timestamp, not in
+                    // advance of any object's upper. This is the largest timestamp that is closed
+                    // to writes.
+                    let id_bundle = self.catalog().ids_in_timeline(&timeline);
+
+                    // Advance the timeline if-and-only-if there are objects in it.
+                    // Otherwise we'd advance to the empty frontier, meaning we
+                    // close it off for ever.
+                    if !id_bundle.is_empty() {
+                        let least_valid_write = self.least_valid_write(&id_bundle);
+                        let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
+                        oracle.apply_write(now).await;
+                        debug!(
+                            least_valid_write = ?least_valid_write,
+                            oracle_read_ts = ?oracle.read_ts().await,
+                            "advanced {:?} to {}",
+                            timeline,
+                            now,
+                        );
+                    }
+                }
+                oracle.read_ts().await
             };
-            let read_ts = oracle.read_ts().await;
             read_holds.downgrade(read_ts);
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
