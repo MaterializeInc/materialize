@@ -367,12 +367,12 @@ CrossJoin
       Filter (#0{m} != #^0{a})
         Get l0
   With
-    cte [l0 as r4] =
+    cte [l1 as r4] =
       Reduce aggregates=[max((#^0{a} * #0{a}))]
         Get materialize.public.t
   Return
     Filter ((#0{m} != #^0{a}) OR ((#0{m}) IS NOT NULL AND (#^0{a}) IS NULL))
-      Get l0
+      Get l1
 
 Target cluster: quickstart
 
