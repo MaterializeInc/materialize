@@ -247,6 +247,29 @@ N connections (a long-running `SUBSCRIBE` cursor holds its connection in a
 in views and worth stating. Dynamic cohort membership (add/drop/merge/split of
 a live cohort) is deferred to future work.
 
+The cohort is the SDK's strongest-consistency construct, and by the same token
+its least available. It makes progress only as fast as its slowest member, and
+a jointly consistent moment exists only once every member has closed it. The
+single-view path and the raw stream are more available precisely because they
+answer for one view alone. Three consequences are worth stating for v1, and the
+unresolved policy for each is an open question below.
+
+- **One timeline.** `min(frontier)` is a valid cut only when every member reads
+  the same logical timeline, so their timestamps are comparable. That holds for
+  objects on the default timeline. A member on a user-defined timeline, or a
+  source carrying external timestamps, would make the comparison meaningless.
+  v1 documents this as a constraint rather than checking it.
+- **A laggard is bounded, not silent.** Holding a leading member's changes until
+  the slowest catches up is inherent to the guarantee, so a stalled member would
+  otherwise buffer its peers without bound. v1 caps the total buffered across
+  the cohort with a lag budget and fails loud when it is exceeded, rather than
+  growing memory quietly.
+- **Failure is all-or-nothing in v1.** Any one member erroring tears the whole
+  cohort down, and recovery re-subscribes every member at the joint frontier.
+  This is the conservative, consistent choice. Reconnecting only the failed
+  member without disturbing the others is an availability improvement tracked
+  with the HA workstream.
+
 ### Layer 1: the subscribe client
 
 Layer 1 wraps the ecosystem-native PostgreSQL driver and runs the
@@ -871,6 +894,12 @@ crisp:
 - **Idempotency keys never depend on batch grouping.** Batch boundaries are not
   stable across a resume, so the delivery key is derived from `mz_timestamp`
   plus within-timestamp identity, not a within-batch ordinal.
+- **Cohort ships demonstrated, not hardened.** v1 proves the one engine
+  generalizes to multi-view consistency and bounds the laggard case with a
+  fail-loud lag budget. Availability hardening (per-member reconnect, timeline
+  validation, a configurable budget) is deliberately deferred until real
+  workloads show which of it matters, rather than designed against a cohort no
+  one runs yet. The core single-view path is where v1 invests.
 
 ## Open questions
 
@@ -897,3 +926,12 @@ crisp:
    the lease lives only in the checkpoint store or also surfaces in
    `mz_internal.mz_subscriptions` for observability. Needs a short design of
    its own before the failover release.
+7. **Cohort failure and lag policy.** On a member error, tear the whole cohort
+   down and resume every member at the joint frontier (v1 behavior), or
+   reconnect only the failed member? And when the lag budget is hit, fail loud
+   (v1), drop the laggard from the cut, or block the fast members? Both interact
+   with the HA workstream and want deciding before cohorts are branded stable.
+8. **Cohort timeline validation.** Should the SDK detect and reject a cohort
+   whose members do not share a comparable timeline, or is documenting the
+   constraint enough for v1? Rejecting needs a way to read an object's timeline,
+   so it is a small server-side dependency if we want it.
