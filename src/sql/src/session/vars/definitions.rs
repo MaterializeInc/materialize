@@ -2040,6 +2040,13 @@ feature_flags!(
         scope: ParameterScope::Cluster,
     },
     {
+        name: enable_fixed_correlated_cte_lowering,
+        desc: "CTE-aware branch keys in HIR-to-MIR lowering, fixing references to \
+               correlated CTEs from nested correlated scopes",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_time_at_time_zone,
         desc: "use of AT TIME ZONE or timezone() with time type",
         default: false,
@@ -2320,6 +2327,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
             enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
+            enable_fixed_correlated_cte_lowering: vars.enable_fixed_correlated_cte_lowering(),
         }
     }
 }
@@ -2362,6 +2370,7 @@ mod tests {
             enable_simplify_quantified_comparisons,
             enable_coalesce_case_transform,
             enable_will_distinct_propagation,
+            enable_fixed_correlated_cte_lowering,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2392,6 +2401,7 @@ mod tests {
         set_var!(enable_simplify_quantified_comparisons);
         set_var!(enable_coalesce_case_transform);
         set_var!(enable_will_distinct_propagation);
+        set_var!(enable_fixed_correlated_cte_lowering);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

@@ -347,6 +347,9 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
             enable_simplify_quantified_comparisons: config
                 .features
                 .enable_simplify_quantified_comparisons,
+            enable_fixed_correlated_cte_lowering: config
+                .features
+                .enable_fixed_correlated_cte_lowering,
         }
     }
 }
