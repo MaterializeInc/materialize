@@ -188,6 +188,89 @@ describe("buildDataflowStructure", () => {
     });
   });
 
+  it("computes own and transitive schedule counts alongside elapsed time", () => {
+    const s = buildDataflowStructure(
+      OPS.map((o) =>
+        o.id === "12"
+          ? { ...o, scheduleCount: "100" }
+          : o.id === "13"
+            ? { ...o, scheduleCount: "50" }
+            : o,
+      ),
+      CHANNELS,
+      LIR_SPANS,
+    );
+    const join = s.nodes.get(nodeIdOf([5, 1, 1]))!;
+    expect(join.own.scheduleCount).toEqual(100n);
+    const region = s.nodes.get(nodeIdOf([5, 1]))!;
+    // Region's own row sets no scheduleCount (defaults 0); transitive sums
+    // Join's and Map's.
+    expect(region.transitive.scheduleCount).toEqual(150n);
+  });
+
+  it("computes a region's overhead as its own elapsed time minus its direct children's own elapsed time", () => {
+    const overheadOps = OPS.map((o) =>
+      o.id === "11"
+        ? { ...o, elapsedNs: "100" }
+        : o.id === "12"
+          ? { ...o, elapsedNs: "30" }
+          : o.id === "13"
+            ? { ...o, elapsedNs: "20" }
+            : o,
+    );
+    const s = buildDataflowStructure(overheadOps, CHANNELS, LIR_SPANS);
+    const region = s.nodes.get(nodeIdOf([5, 1]))!;
+    // 100 - (30 + 20) = 50: time in the region's own scheduling loop, not
+    // attributable to either child.
+    expect(region.overheadNs).toEqual(50n);
+    // A leaf has no children to subtract, so this is just its own elapsed
+    // time -- not a meaningful "overhead" reading on its own.
+    const join = s.nodes.get(nodeIdOf([5, 1, 1]))!;
+    expect(join.overheadNs).toEqual(30n);
+  });
+
+  it("compares a region's own time against its direct children's own time, not their transitive rollup", () => {
+    // Timely's own-elapsed accounting is exclusive self time (verified
+    // against live introspection data: a real region's own.elapsedNs can
+    // sit well below its direct children's own.elapsedNs summed, which is
+    // only possible if "own" never included child execution to begin
+    // with). Join here has its own grandchild (a nested region inside it)
+    // whose time dwarfs Join's own row; overhead must compare Region
+    // against Join's own 5ns, not Join's transitive total.
+    const nested = buildDataflowStructure(
+      [
+        { ...OPS[0], id: "20", address: ["6"], name: "Dataflow" },
+        {
+          ...OPS[0],
+          id: "21",
+          address: ["6", "1"],
+          name: "Region",
+          elapsedNs: "10",
+        },
+        {
+          ...OPS[0],
+          id: "22",
+          address: ["6", "1", "1"],
+          name: "Join",
+          elapsedNs: "5",
+        },
+        {
+          ...OPS[0],
+          id: "23",
+          address: ["6", "1", "1", "1"],
+          name: "GrandchildLeaf",
+          elapsedNs: "1000",
+        },
+      ],
+      [],
+      [],
+    );
+    const region = nested.nodes.get(nodeIdOf([6, 1]))!;
+    // Join's transitive elapsed (5 + 1000 = 1005) would make this wildly
+    // negative if used instead of Join's own (5): 10 - 5 = 5.
+    expect(region.overheadNs).toEqual(5n);
+  });
+
   describe("skew", () => {
     // Join (id 12, [5,1,1]): worker 0 does 10ns/1000B, worker 1 does
     // 30ns/3000B -> 2x every direction. Map (id 13, [5,1,2]): only worker 0
@@ -210,7 +293,32 @@ describe("buildDataflowStructure", () => {
       expect(map.ownSkew.memorySkew).toEqual(0); // no memory data at all
 
       const sink = s.nodes.get(nodeIdOf([5, 2]))!;
-      expect(sink.ownSkew).toEqual({ cpuSkew: 0, memorySkew: 0 });
+      expect(sink.ownSkew).toEqual({
+        cpuSkew: 0,
+        memorySkew: 0,
+        scheduleSkew: 0,
+      });
+    });
+
+    it("computes schedule-count skew the same way as CPU/memory skew", () => {
+      const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, [
+        {
+          id: "12",
+          workerId: "0",
+          elapsedNs: null,
+          arrangementSize: null,
+          scheduleCount: "100",
+        },
+        {
+          id: "12",
+          workerId: "1",
+          elapsedNs: null,
+          arrangementSize: null,
+          scheduleCount: "300",
+        },
+      ]);
+      const join = s.nodes.get(nodeIdOf([5, 1, 1]))!;
+      expect(join.ownSkew.scheduleSkew).toBeCloseTo(1.5); // 300 / ((100+300)/2)
     });
 
     it("computes transitive skew as the max of its own and its subtree's skew, matching EXPLAIN ANALYZE's rollup, not a merged-and-then-ratioed vector", () => {
@@ -869,6 +977,37 @@ describe("decorateGraph", () => {
     expect(d.nodeColors.get(nodeIdOf([5, 2]))).toEqual("heat(0.00)");
   });
 
+  it("scheduleSkew heatmap colors by transitive schedule-count skew, same as cpu/memory", () => {
+    const skewed = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, [
+      {
+        id: "12",
+        workerId: "0",
+        elapsedNs: null,
+        arrangementSize: null,
+        scheduleCount: "100",
+      },
+      {
+        id: "12",
+        workerId: "1",
+        elapsedNs: null,
+        arrangementSize: null,
+        scheduleCount: "300",
+      },
+    ]);
+    const skewedRoot = deriveVisibleGraph(skewed, skewed.root);
+    const d = decorateGraph(
+      skewedRoot,
+      { ...DEFAULT_FILTERS, heatmap: "scheduleSkew" },
+      heat,
+      null,
+      4,
+    );
+    expect(d.nodeColors.get(regionId)).toEqual(
+      `heat(${(Math.log2(1.5) / Math.log2(4)).toFixed(2)})`,
+    );
+    expect(d.nodeColors.get(nodeIdOf([5, 2]))).toEqual("heat(0.00)");
+  });
+
   it("skew heatmap floor is exactly ratio 1, ceiling is exactly the worker count", () => {
     const perfectlyEven = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, [
       { id: "12", workerId: "0", elapsedNs: "100", arrangementSize: "0" },
@@ -1079,11 +1218,13 @@ describe("lirTree", () => {
       arrangementRecords: 300n,
       arrangementSize: 0n,
       elapsedNs: 30n,
+      scheduleCount: 0n,
     });
     expect(root.children[0].summary).toEqual({
       arrangementRecords: 100n,
       arrangementSize: 0n,
       elapsedNs: 10n,
+      scheduleCount: 0n,
     });
   });
 });
@@ -1096,6 +1237,7 @@ describe("rerouteHiddenNodes", () => {
     stats: null,
     transitive: null,
     transitiveSkew: null,
+    overheadNs: null,
     childCount: 0,
     lir: [],
     address: null,
@@ -1230,6 +1372,7 @@ describe("groupByLir", () => {
     stats: null,
     transitive: null,
     transitiveSkew: null,
+    overheadNs: null,
     childCount: 0,
     lir,
     address: null,
@@ -1243,6 +1386,7 @@ describe("groupByLir", () => {
     stats: null,
     transitive: null,
     transitiveSkew: null,
+    overheadNs: null,
     childCount: 0,
     lir: [],
     address: null,

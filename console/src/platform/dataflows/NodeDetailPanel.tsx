@@ -128,6 +128,7 @@ const LirGroupDetail = ({ node }: { node: LirTreeNode }) => (
       value={formatBytesShort(node.summary.arrangementSize)}
     />
     <Row label="Elapsed" value={formatElapsedNs(node.summary.elapsedNs)} />
+    <Row label="Schedules" value={node.summary.scheduleCount.toString()} />
   </>
 );
 
@@ -162,7 +163,11 @@ const NodeDetail = ({
           value={formatBytesShort(node.stats.arrangementSize)}
         />
         <Row label="Elapsed" value={formatElapsedNs(node.stats.elapsedNs)} />
+        <Row label="Schedules" value={node.stats.scheduleCount.toString()} />
       </>
+    )}
+    {node.childCount > 0 && (
+      <Row label="Overhead" value={formatElapsedNs(node.overheadNs ?? 0n)} />
     )}
     {node.transitive && node.childCount > 0 && (
       <>
@@ -178,6 +183,10 @@ const NodeDetail = ({
           label="Subtree elapsed"
           value={formatElapsedNs(node.transitive.elapsedNs)}
         />
+        <Row
+          label="Subtree schedules"
+          value={node.transitive.scheduleCount.toString()}
+        />
       </>
     )}
     {node.transitiveSkew && (
@@ -186,6 +195,10 @@ const NodeDetail = ({
         <Row
           label="Memory skew"
           value={formatSkew(node.transitiveSkew.memorySkew)}
+        />
+        <Row
+          label="Schedule skew"
+          value={formatSkew(node.transitiveSkew.scheduleSkew)}
         />
       </>
     )}

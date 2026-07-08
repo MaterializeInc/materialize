@@ -21,6 +21,12 @@ export interface NodeStats {
   arrangementRecords: bigint;
   arrangementSize: bigint;
   elapsedNs: bigint;
+  // Total times this operator was scheduled (summed over the scheduling
+  // duration histogram's buckets). A high count relative to elapsed time
+  // means the operator yields often -- each activation does little work,
+  // so per-activation overhead (waking the worker, progress tracking)
+  // dominates -- which raw elapsed time alone doesn't surface.
+  scheduleCount: bigint;
 }
 
 // How unevenly work for this node is spread across workers: worst worker's
@@ -32,6 +38,7 @@ export interface NodeStats {
 export interface SkewStats {
   cpuSkew: number;
   memorySkew: number;
+  scheduleSkew: number;
 }
 
 export interface LirInfo {
@@ -60,6 +67,19 @@ export interface DataflowNode {
   // which a merge would hide and a max surfaces.
   transitiveSkew: SkewStats;
   lir: LirInfo[]; // one entry per export span covering this operator id
+  // Timely's own-elapsed accounting is exclusive self time: an operator's
+  // own.elapsedNs already excludes time spent inside any nested/child
+  // operator's own activation, even though scheduling a region
+  // synchronously runs its children first (verified against live
+  // introspection data: a region's own.elapsedNs can come in well below
+  // its direct children's own.elapsedNs summed, which an inclusive
+  // wall-clock reading never could). Comparing self time to self time (own
+  // minus direct children's own, not their transitive) isolates the
+  // region's own dispatch overhead: pointstamp/progress tracking,
+  // activation logic, everything beyond simply handing off to each direct
+  // child once. Equals own.elapsedNs for a leaf (no children to subtract),
+  // which isn't a meaningful "overhead" reading on its own.
+  overheadNs: bigint;
 }
 
 export interface Channel {
@@ -102,6 +122,9 @@ export interface VisibleNode {
   stats: NodeStats | null;
   transitive: NodeStats | null;
   transitiveSkew: SkewStats | null;
+  // null for synthetic port nodes, same as transitive/transitiveSkew (no
+  // operator row of their own to compute it from).
+  overheadNs: bigint | null;
   childCount: number;
   lir: LirInfo[];
   address: Address | null;
@@ -146,6 +169,11 @@ export interface OperatorRow {
   arrangementRecords: bigint | number | string | null;
   arrangementSize: bigint | number | string | null;
   elapsedNs: bigint | number | string | null;
+  // Optional (unlike the fields above) so fixtures unrelated to schedule
+  // counting don't all need updating: real query rows always provide it
+  // (see useDataflowGraphData.ts's COALESCE), omitting it just reads as 0
+  // via toBigInt's undefined handling, same as an explicit null would.
+  scheduleCount?: bigint | number | string | null;
 }
 export interface ChannelRow {
   id: number | string;
@@ -171,6 +199,8 @@ export interface PerWorkerStatRow {
   workerId: bigint | number | string;
   elapsedNs: bigint | number | string | null;
   arrangementSize: bigint | number | string | null;
+  // See OperatorRow.scheduleCount for why this is optional.
+  scheduleCount?: bigint | number | string | null;
 }
 
 const toBigInt = (v: bigint | number | string | null | undefined): bigint =>
@@ -238,15 +268,22 @@ export function buildDataflowStructure(
             name: "",
             parent: null,
             children: [],
-            own: { arrangementRecords: 0n, arrangementSize: 0n, elapsedNs: 0n },
+            own: {
+              arrangementRecords: 0n,
+              arrangementSize: 0n,
+              elapsedNs: 0n,
+              scheduleCount: 0n,
+            },
             transitive: {
               arrangementRecords: 0n,
               arrangementSize: 0n,
               elapsedNs: 0n,
+              scheduleCount: 0n,
             },
-            ownSkew: { cpuSkew: 0, memorySkew: 0 },
-            transitiveSkew: { cpuSkew: 0, memorySkew: 0 },
+            ownSkew: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 },
+            transitiveSkew: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 },
             lir: [],
+            overheadNs: 0n,
           },
         ],
       ]),
@@ -273,6 +310,7 @@ export function buildDataflowStructure(
       arrangementRecords: toBigInt(row.arrangementRecords),
       arrangementSize: toBigInt(row.arrangementSize),
       elapsedNs: toBigInt(row.elapsedNs),
+      scheduleCount: toBigInt(row.scheduleCount),
     };
     nodeIdByOperatorId.set(opId.toString(), id);
     nodes.set(id, {
@@ -284,8 +322,8 @@ export function buildDataflowStructure(
       children: [],
       own,
       transitive: own, // replaced below
-      ownSkew: { cpuSkew: 0, memorySkew: 0 }, // replaced below
-      transitiveSkew: { cpuSkew: 0, memorySkew: 0 }, // replaced below
+      ownSkew: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 }, // replaced below
+      transitiveSkew: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 }, // replaced below
       lir: spans
         .filter((s) => s.start <= opId && opId < s.end)
         .map(({ exportId, lirId, parentLirId, nesting, operator }) => ({
@@ -295,6 +333,7 @@ export function buildDataflowStructure(
           nesting,
           operator,
         })),
+      overheadNs: 0n, // replaced below
     });
   }
   const roots: NodeId[] = [];
@@ -317,6 +356,7 @@ export function buildDataflowStructure(
 
   const ownCpuByNode = new Map<NodeId, WorkerVector>();
   const ownMemoryByNode = new Map<NodeId, WorkerVector>();
+  const ownScheduleByNode = new Map<NodeId, WorkerVector>();
   for (const row of perWorkerStats) {
     const id = nodeIdByOperatorId.get(toBigInt(row.id).toString());
     if (!id) continue; // operator outside this dataflow's own address tree
@@ -334,10 +374,19 @@ export function buildDataflowStructure(
       );
       ownMemoryByNode.set(id, vec);
     }
+    if (row.scheduleCount != null) {
+      const vec = ownScheduleByNode.get(id) ?? new Map();
+      vec.set(
+        workerId,
+        (vec.get(workerId) ?? 0n) + toBigInt(row.scheduleCount),
+      );
+      ownScheduleByNode.set(id, vec);
+    }
   }
 
   let maxOwnElapsedNs = 0n;
   let maxOwnArrangementSize = 0n;
+  let maxOwnScheduleCount = 0n;
   for (const node of nodes.values()) {
     if (node.own.elapsedNs > maxOwnElapsedNs) {
       maxOwnElapsedNs = node.own.elapsedNs;
@@ -345,12 +394,16 @@ export function buildDataflowStructure(
     if (node.own.arrangementSize > maxOwnArrangementSize) {
       maxOwnArrangementSize = node.own.arrangementSize;
     }
+    if (node.own.scheduleCount > maxOwnScheduleCount) {
+      maxOwnScheduleCount = node.own.scheduleCount;
+    }
   }
 
   const fillTransitive = (id: NodeId): void => {
     const node = nodes.get(id)!;
     const ownCpuVec = ownCpuByNode.get(id) ?? new Map();
     const ownMemoryVec = ownMemoryByNode.get(id) ?? new Map();
+    const ownScheduleVec = ownScheduleByNode.get(id) ?? new Map();
     node.ownSkew = {
       cpuSkew: passesMagnitudeFloor(node.own.elapsedNs, maxOwnElapsedNs)
         ? skewRatio(ownCpuVec)
@@ -361,21 +414,33 @@ export function buildDataflowStructure(
       )
         ? skewRatio(ownMemoryVec)
         : 0,
+      scheduleSkew: passesMagnitudeFloor(
+        node.own.scheduleCount,
+        maxOwnScheduleCount,
+      )
+        ? skewRatio(ownScheduleVec)
+        : 0,
     };
     const t = { ...node.own };
     let cpuSkew = node.ownSkew.cpuSkew;
     let memorySkew = node.ownSkew.memorySkew;
+    let scheduleSkew = node.ownSkew.scheduleSkew;
+    let childrenOwnElapsedNs = 0n;
     for (const c of node.children) {
       fillTransitive(c);
       const child = nodes.get(c)!;
       t.arrangementRecords += child.transitive.arrangementRecords;
       t.arrangementSize += child.transitive.arrangementSize;
       t.elapsedNs += child.transitive.elapsedNs;
+      t.scheduleCount += child.transitive.scheduleCount;
+      childrenOwnElapsedNs += child.own.elapsedNs;
       cpuSkew = Math.max(cpuSkew, child.transitiveSkew.cpuSkew);
       memorySkew = Math.max(memorySkew, child.transitiveSkew.memorySkew);
+      scheduleSkew = Math.max(scheduleSkew, child.transitiveSkew.scheduleSkew);
     }
     node.transitive = t;
-    node.transitiveSkew = { cpuSkew, memorySkew };
+    node.transitiveSkew = { cpuSkew, memorySkew, scheduleSkew };
+    node.overheadNs = node.own.elapsedNs - childrenOwnElapsedNs;
   };
   fillTransitive(roots[0]);
   return {
@@ -496,6 +561,7 @@ export function deriveVisibleGraph(
       stats: kind === "region" ? node.transitive : node.own,
       transitive: node.transitive,
       transitiveSkew: node.transitiveSkew,
+      overheadNs: node.overheadNs,
       childCount: node.children.length,
       lir: node.lir,
       address: node.address,
@@ -658,6 +724,7 @@ export function deriveVisibleGraph(
           stats: null,
           transitive: null,
           transitiveSkew: null,
+          overheadNs: null,
           childCount: 0,
           lir: [],
           address: null,
@@ -936,7 +1003,13 @@ export function rerouteHiddenNodes(
 export interface Filters {
   search: string;
   hideIdle: boolean;
-  heatmap: "off" | "elapsed" | "size" | "cpuSkew" | "memorySkew";
+  heatmap:
+    | "off"
+    | "elapsed"
+    | "size"
+    | "cpuSkew"
+    | "memorySkew"
+    | "scheduleSkew";
   heatmapThreshold: number; // 0..1 fraction of max
   showLirGroups: boolean;
 }
@@ -974,7 +1047,7 @@ export function decorateGraph(
   // is mathematically bounded above by it (one worker doing 100% of a
   // fixed amount of work, the rest 0%, is the most skewed that work can
   // ever be split across this many workers). Used only by the cpuSkew/
-  // memorySkew heatmap modes, as a fixed color-scale ceiling.
+  // memorySkew/scheduleSkew heatmap modes, as a fixed color-scale ceiling.
   workerCount: number,
 ): GraphDecorations {
   const d: GraphDecorations = {
@@ -1014,9 +1087,14 @@ export function decorateGraph(
           return n.transitiveSkew?.cpuSkew ?? 0;
         case "memorySkew":
           return n.transitiveSkew?.memorySkew ?? 0;
+        case "scheduleSkew":
+          return n.transitiveSkew?.scheduleSkew ?? 0;
       }
     };
-    const isSkew = heatmap === "cpuSkew" || heatmap === "memorySkew";
+    const isSkew =
+      heatmap === "cpuSkew" ||
+      heatmap === "memorySkew" ||
+      heatmap === "scheduleSkew";
     const candidates = graph.nodes.filter((n) => n.kind !== "port");
     if (isSkew) {
       // A skew ratio is bounded above by workerCount (see decorateGraph's
@@ -1147,6 +1225,7 @@ export function lirSummary(
     arrangementRecords: 0n,
     arrangementSize: 0n,
     elapsedNs: 0n,
+    scheduleCount: 0n,
   };
   for (const id of memberIds) {
     const own = structure.nodes.get(id)?.own;
@@ -1154,6 +1233,7 @@ export function lirSummary(
     summary.arrangementRecords += own.arrangementRecords;
     summary.arrangementSize += own.arrangementSize;
     summary.elapsedNs += own.elapsedNs;
+    summary.scheduleCount += own.scheduleCount;
   }
   return summary;
 }
