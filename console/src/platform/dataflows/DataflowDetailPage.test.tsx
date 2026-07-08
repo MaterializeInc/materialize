@@ -571,7 +571,7 @@ describe("DataflowDetailPage", () => {
     ).toHaveTextContent("Map");
   });
 
-  it("shows a LIR group box when the toggle is on, and hides it when off", async () => {
+  it("shows a LIR group box by default, and hides it when the toggle is turned off", async () => {
     await renderComponent(
       <Routes>
         <Route
@@ -587,14 +587,7 @@ describe("DataflowDetailPage", () => {
     expect(
       await screen.findByTestId(`node-${nodeIdOf([40, 1])}`),
     ).toBeInTheDocument();
-    expect(
-      within(screen.getByTestId("react-flow")).queryByText(
-        /Join::Differential/,
-      ),
-    ).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByLabelText("Show LIR groups"));
-
+    // On by default.
     const groupNode = screen.getByTestId("node-u7/1");
     expect(groupNode).toHaveTextContent("Join::Differential");
 
@@ -604,6 +597,13 @@ describe("DataflowDetailPage", () => {
     // must not navigate anywhere, since groups aren't scopes.
     await userEvent.dblClick(groupNode);
     expect(screen.getByTestId("node-u7/1")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText("Show LIR groups"));
+    expect(
+      within(screen.getByTestId("react-flow")).queryByText(
+        /Join::Differential/,
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("opens the detail panel with LIR summary info when a group header is clicked", async () => {
@@ -620,16 +620,18 @@ describe("DataflowDetailPage", () => {
     );
 
     await screen.findByTestId(`node-${nodeIdOf([40, 1])}`);
-    await userEvent.click(screen.getByLabelText("Show LIR groups"));
     await userEvent.click(screen.getByTestId("node-u7/1"));
 
-    // The title and LirSummaryCard both render "LIR 1: Join::Differential",
-    // so assert at least one match rather than a single getByText, which
-    // throws on more than one hit.
+    // The panel title and the LIR sidebar's own row both render "LIR 1:
+    // Join::Differential", so assert at least one match rather than a
+    // single getByText, which throws on more than one hit.
     expect(
-      screen.getAllByText(/LIR 1: Join::Differential/).length,
+      screen.getAllByText("LIR 1: Join::Differential").length,
     ).toBeGreaterThan(0);
-    // Rows unique to LirSummaryCard, not NodeDetail's node-shaped rows.
+    // Rendered the same Row-shaped way as a regular node's details, not a
+    // visually distinct card.
+    expect(screen.getByText("Export")).toBeInTheDocument();
+    expect(screen.getByText("Members")).toBeInTheDocument();
     expect(screen.getByText("Records")).toBeInTheDocument();
     expect(screen.getByText("Memory")).toBeInTheDocument();
   });
