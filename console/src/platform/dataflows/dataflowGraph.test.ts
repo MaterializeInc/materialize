@@ -10,25 +10,24 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  allChannelTypes,
+  allSearchMatches,
   buildDataflowStructure,
   type ChannelRow,
+  commonAncestorScope,
   decorateGraph,
   DEFAULT_FILTERS,
-  defaultCollapseState,
   deriveVisibleGraph,
-  expandAncestorsOf,
-  expandForSearch,
   lirIndex,
   type LirSpanRow,
   lirTree,
-  MAX_VISIBLE_NODES,
   nodeIdOf,
   type OperatorRow,
+  type PerWorkerStatRow,
+  representativeInView,
   rerouteHiddenNodes,
+  subtreeSearchMatches,
   type VisibleEdge,
   type VisibleNode,
-  visibleNodeCount,
 } from "./dataflowGraph";
 
 // Dataflow 5: root [5], region [5,1] with children [5,1,1], [5,1,2], leaf [5,2].
@@ -172,19 +171,56 @@ describe("buildDataflowStructure", () => {
       channelType: "rows",
     });
   });
+
+  describe("skew", () => {
+    // Join (id 12, [5,1,1]): worker 0 does 10ns/1000B, worker 1 does
+    // 30ns/3000B -> 2x every direction. Map (id 13, [5,1,2]): only worker 0
+    // ever scheduled it (5ns) and it never arranges anything -> perfectly
+    // even CPU (a single data point can't be skewed), no memory data at all.
+    const PER_WORKER: PerWorkerStatRow[] = [
+      { id: "12", workerId: "0", elapsedNs: "10", arrangementSize: "1000" },
+      { id: "12", workerId: "1", elapsedNs: "30", arrangementSize: "3000" },
+      { id: "13", workerId: "0", elapsedNs: "5", arrangementSize: null },
+    ];
+
+    it("computes own skew as worst-worker over average, over participating workers only", () => {
+      const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, PER_WORKER);
+      const join = s.nodes.get(nodeIdOf([5, 1, 1]))!;
+      expect(join.ownSkew.cpuSkew).toBeCloseTo(1.5); // 30 / ((10+30)/2)
+      expect(join.ownSkew.memorySkew).toBeCloseTo(1.5); // 3000 / 2000
+
+      const map = s.nodes.get(nodeIdOf([5, 1, 2]))!;
+      expect(map.ownSkew.cpuSkew).toBeCloseTo(1); // one worker, one data point
+      expect(map.ownSkew.memorySkew).toEqual(0); // no memory data at all
+
+      const sink = s.nodes.get(nodeIdOf([5, 2]))!;
+      expect(sink.ownSkew).toEqual({ cpuSkew: 0, memorySkew: 0 });
+    });
+
+    it("computes transitive skew from the subtree's summed per-worker vectors, not from children's own skew", () => {
+      const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, PER_WORKER);
+      const region = s.nodes.get(nodeIdOf([5, 1]))!;
+      // cpu: worker0 = 10 (Join) + 5 (Map) = 15, worker1 = 30 (Join only,
+      // Map never touched worker 1) -> avg 22.5, skew 30/22.5.
+      expect(region.transitiveSkew.cpuSkew).toBeCloseTo(30 / 22.5);
+      // memory: Map contributes nothing, so this is just Join's own vector.
+      expect(region.transitiveSkew.memorySkew).toBeCloseTo(1.5);
+    });
+  });
 });
 
 describe("deriveVisibleGraph", () => {
   const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
   const regionId = nodeIdOf([5, 1]);
 
-  it("collapses regions to a single node with remapped edges", () => {
-    const g = deriveVisibleGraph(s, new Set([regionId]));
+  it("shows the region collapsed and the sibling leaf from the root view", () => {
+    const g = deriveVisibleGraph(s, s.root);
     expect(g.nodes.map((n) => [n.id, n.kind])).toEqual([
-      [regionId, "collapsedRegion"],
+      [regionId, "region"],
       [nodeIdOf([5, 2]), "operator"],
     ]);
-    // channel 3 region -> sink survives, channels 1 and 2 are internal
+    // channel 3 region -> sink survives, channels 1 and 2 are internal to
+    // the region and never surface at this level.
     expect(g.edges).toEqual([
       {
         id: `${regionId}=>${nodeIdOf([5, 2])}`,
@@ -195,28 +231,58 @@ describe("deriveVisibleGraph", () => {
         channelTypes: ["batches"],
       },
     ]);
-    const collapsed = g.nodes[0];
-    expect(collapsed.stats).toEqual(s.nodes.get(regionId)!.transitive);
-    expect(collapsed.childCount).toEqual(2);
+    const region = g.nodes[0];
+    expect(region.stats).toEqual(s.nodes.get(regionId)!.transitive);
+    expect(region.childCount).toEqual(2);
   });
 
-  it("expands regions with port pseudo-nodes, parents before children", () => {
-    const g = deriveVisibleGraph(s, new Set());
-    const ids = g.nodes.map((n) => n.id);
-    expect(ids.indexOf(regionId)).toBeLessThan(
-      ids.indexOf(nodeIdOf([5, 1, 1])),
+  it("drilling into the region shows its children and an inbound port", () => {
+    const g = deriveVisibleGraph(s, regionId);
+    expect(g.nodes.map((n) => [n.id, n.kind]).sort()).toEqual(
+      [
+        [nodeIdOf([5, 1, 1]), "operator"],
+        [nodeIdOf([5, 1, 2]), "operator"],
+        [`${regionId}:in:0`, "port"],
+        [`${regionId}:out:0`, "port"],
+      ].sort(),
     );
-    const port = g.nodes.find((n) => n.kind === "port")!;
-    expect(port.id).toEqual(`${regionId}:in:0`);
-    expect(port.parent).toEqual(regionId);
-    expect(port.label).toEqual("input 0");
-    expect(port.operatorId).toBeNull();
-    // port -> Join edge preserved
-    expect(g.edges.map((e) => e.id)).toContain(
-      `${regionId}:in:0=>${nodeIdOf([5, 1, 1])}`,
+    const inPort = g.nodes.find((n) => n.id === `${regionId}:in:0`)!;
+    expect(inPort.label).toEqual("input 0");
+    expect(inPort.operatorId).toBeNull();
+    // channel 1 (port fan-in) and channel 2 (internal) both survive.
+    expect(g.edges.map((e) => e.id).sort()).toEqual(
+      [
+        `${regionId}:in:0=>${nodeIdOf([5, 1, 1])}`,
+        `${nodeIdOf([5, 1, 1])}=>${nodeIdOf([5, 1, 2])}`,
+      ].sort(),
     );
-    const regionNode = g.nodes.find((n) => n.id === regionId)!;
-    expect(regionNode.operatorId).toEqual(11n);
+    // channel 3's outer half (region's own address -> sibling [5,2]) has no
+    // representable target from inside the region (the sibling isn't part
+    // of this view), so its edge is dropped, but the "out" port it resolved
+    // to registers anyway: the box's boundary traffic isn't silently erased.
+    expect(
+      g.edges.some(
+        (e) =>
+          e.source === `${regionId}:out:0` || e.target === `${regionId}:out:0`,
+      ),
+    ).toBe(false);
+    // ...and the sibling it can't show directly is recorded as a jump target.
+    const outPort = g.nodes.find((n) => n.id === `${regionId}:out:0`)!;
+    expect(outPort.peers).toEqual([
+      {
+        address: [5, 2],
+        label: "Sink",
+        messagesSent: 5n,
+        batchesSent: 2n,
+        channelTypes: ["batches"],
+        // Sink is a leaf: nothing to drill into, so the peer box itself is
+        // the target.
+        peerPortId: null,
+      },
+    ]);
+    // channel 1's other end (Join) is already visible in this same view, so
+    // the "in" port needs no jump link for it.
+    expect(inPort.peers).toEqual([]);
   });
 
   it("aggregates parallel channels between the same visible pair", () => {
@@ -237,16 +303,10 @@ describe("deriveVisibleGraph", () => {
       ],
       [],
     );
-    const g = deriveVisibleGraph(extra, new Set([regionId]));
+    const g = deriveVisibleGraph(extra, extra.root);
     const e = g.edges.find((edge) => edge.target === nodeIdOf([5, 2]))!;
     expect(e.messagesSent).toEqual(12n);
     expect(e.channelTypes).toEqual(["batches", "rows"]);
-  });
-
-  it("defaultCollapseState collapses all non-root regions", () => {
-    expect(defaultCollapseState(s)).toEqual(new Set([regionId]));
-    expect(visibleNodeCount(s, defaultCollapseState(s))).toEqual(2);
-    expect(MAX_VISIBLE_NODES).toEqual(1500);
   });
 
   it("routes an external-to-region channel through a port node, keyed by port number", () => {
@@ -287,19 +347,121 @@ describe("deriveVisibleGraph", () => {
     const externalId = nodeIdOf([5, 3]);
     const portId = `${regionId}:in:0`;
 
-    const expanded = deriveVisibleGraph(withExternal, new Set());
+    // Viewed from inside the region, the crossing's inner half (channel 1)
+    // already produced this port; the outer half's external source isn't
+    // part of this view, so it contributes no new edge or node.
+    const drilledIn = deriveVisibleGraph(withExternal, regionId);
+    const inPort = drilledIn.nodes.find((n) => n.id === portId)!;
+    expect(inPort.kind).toEqual("port");
     expect(
-      expanded.nodes.some((n) => n.id === portId && n.kind === "port"),
-    ).toBe(true);
-    const edge = expanded.edges.find((e) => e.source === externalId)!;
-    expect(edge.target).toEqual(portId);
+      drilledIn.edges.some(
+        (e) => e.source === externalId || e.target === externalId,
+      ),
+    ).toBe(false);
+    // ...but the external source is still reachable as a jump target off
+    // the port itself.
+    expect(inPort.peers).toEqual([
+      {
+        address: [5, 3],
+        label: "External",
+        messagesSent: 9n,
+        batchesSent: 3n,
+        channelTypes: ["rows"],
+        // External is a leaf too.
+        peerPortId: null,
+      },
+    ]);
 
-    // Collapsed, the crossing lands on the region's own (collapsed) node,
-    // matching how every other boundary crossing into a collapsed region
-    // behaves: the whole region is one box.
-    const collapsed = deriveVisibleGraph(withExternal, new Set([regionId]));
-    const collapsedEdge = collapsed.edges.find((e) => e.source === externalId)!;
-    expect(collapsedEdge.target).toEqual(regionId);
+    // From the root, the crossing lands on the region's own (collapsed)
+    // node, matching how every other boundary crossing into a collapsed
+    // region behaves: the whole region is one box.
+    const root = deriveVisibleGraph(withExternal, withExternal.root);
+    const rootEdge = root.edges.find((e) => e.source === externalId)!;
+    expect(rootEdge.target).toEqual(regionId);
+  });
+
+  it("fans a port out to multiple peers (one output can feed several inputs)", () => {
+    const fannedOut = buildDataflowStructure(
+      [
+        ...OPS,
+        {
+          id: "21",
+          address: ["5", "4"],
+          name: "Sink2",
+          arrangementRecords: "0",
+          arrangementSize: "0",
+          elapsedNs: "1",
+        },
+      ],
+      [
+        ...CHANNELS,
+        // Same output (region's port 0) also feeds a second sibling.
+        {
+          id: "5",
+          fromOperatorAddress: ["5", "1"],
+          fromPort: "0",
+          toOperatorAddress: ["5", "4"],
+          toPort: "0",
+          messagesSent: "2",
+          batchesSent: "1",
+          channelType: "rows",
+        },
+      ],
+      [],
+    );
+    const g = deriveVisibleGraph(fannedOut, regionId);
+    const outPort = g.nodes.find((n) => n.id === `${regionId}:out:0`)!;
+    expect(outPort.peers.map((p) => p.label).sort()).toEqual(["Sink", "Sink2"]);
+    expect(outPort.peers.find((p) => p.label === "Sink2")).toEqual({
+      address: [5, 4],
+      label: "Sink2",
+      messagesSent: 2n,
+      batchesSent: 1n,
+      channelTypes: ["rows"],
+      peerPortId: null,
+    });
+  });
+
+  it("resolves a region peer's own port, so a jump can drill straight to it", () => {
+    // Two sibling regions, A's output feeding B's input directly (not
+    // nested in each other): from inside A, B is a region peer with a
+    // real port to land on inside B; from inside B, A is the same.
+    const s2 = buildDataflowStructure(
+      [
+        { ...OPS[0], id: "1", address: ["9"], name: "Dataflow" },
+        { ...OPS[0], id: "2", address: ["9", "1"], name: "RegionA" },
+        { ...OPS[0], id: "3", address: ["9", "1", "1"], name: "LeafA" },
+        { ...OPS[0], id: "4", address: ["9", "2"], name: "RegionB" },
+        { ...OPS[0], id: "5", address: ["9", "2", "1"], name: "LeafB" },
+      ],
+      [
+        {
+          id: "1",
+          fromOperatorAddress: ["9", "1"],
+          fromPort: "3",
+          toOperatorAddress: ["9", "2"],
+          toPort: "7",
+          messagesSent: "1",
+          batchesSent: "1",
+          channelType: "rows",
+        },
+      ],
+      [],
+    );
+    const aId = nodeIdOf([9, 1]);
+    const bId = nodeIdOf([9, 2]);
+
+    const fromA = deriveVisibleGraph(s2, aId);
+    const outPort = fromA.nodes.find((n) => n.id === `${aId}:out:3`)!;
+    expect(outPort.peers).toEqual([
+      expect.objectContaining({ address: [9, 2], peerPortId: `${bId}:in:7` }),
+    ]);
+
+    const fromB = deriveVisibleGraph(s2, bId);
+    const inPort = fromB.nodes.find((n) => n.id === `${bId}:in:7`)!;
+    expect(inPort.peers).toEqual([
+      expect.objectContaining({ address: [9, 1], peerPortId: `${aId}:out:3` }),
+    ]);
   });
 
   it("drops channels that reference an address with no operator row", () => {
@@ -323,8 +485,10 @@ describe("deriveVisibleGraph", () => {
       ],
       LIR_SPANS,
     );
-    expect(() => deriveVisibleGraph(withDangling, new Set())).not.toThrow();
-    const g = deriveVisibleGraph(withDangling, new Set());
+    expect(() =>
+      deriveVisibleGraph(withDangling, withDangling.root),
+    ).not.toThrow();
+    const g = deriveVisibleGraph(withDangling, withDangling.root);
     const nodeIds = new Set(g.nodes.map((n) => n.id));
     for (const e of g.edges) {
       expect(nodeIds.has(e.source)).toBe(true);
@@ -333,27 +497,102 @@ describe("deriveVisibleGraph", () => {
   });
 });
 
+describe("commonAncestorScope / representativeInView", () => {
+  const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
+  const regionId = nodeIdOf([5, 1]);
+
+  it("a single leaf address navigates to its immediate parent scope", () => {
+    expect(commonAncestorScope(s, [[5, 1, 1]])).toEqual(regionId);
+    expect(representativeInView([5, 1, 1], [5, 1])).toEqual(
+      nodeIdOf([5, 1, 1]),
+    );
+  });
+
+  it("backs off past an address that IS the raw common prefix", () => {
+    // [5,1] is itself a prefix of [5,1,1], so it can't be the view root
+    // (nothing could highlight it as its own child); back off to its parent.
+    expect(
+      commonAncestorScope(s, [
+        [5, 1],
+        [5, 1, 1],
+      ]),
+    ).toEqual(s.root);
+    // From the root, [5,1] represents itself and [5,1,1] rolls up into it.
+    expect(representativeInView([5, 1], [5])).toEqual(regionId);
+    expect(representativeInView([5, 1, 1], [5])).toEqual(regionId);
+  });
+
+  it("returns null for an address outside the view root's subtree", () => {
+    expect(representativeInView([5, 2], [5, 1])).toBeNull();
+  });
+});
+
+describe("allSearchMatches / subtreeSearchMatches", () => {
+  const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
+  const regionId = nodeIdOf([5, 1]);
+
+  it("allSearchMatches finds matches anywhere, in address order, excluding the root", () => {
+    expect(allSearchMatches(s, "i").map((n) => n.id)).toEqual([
+      regionId, // "Region"
+      nodeIdOf([5, 1, 1]), // "Join"
+      nodeIdOf([5, 2]), // "Sink"
+    ]);
+    expect(allSearchMatches(s, "nonexistent")).toEqual([]);
+    expect(allSearchMatches(s, "")).toEqual([]);
+  });
+
+  it("subtreeSearchMatches flags a region as containing a match without matching itself", () => {
+    const { matches, containsMatch } = subtreeSearchMatches(s, "join");
+    expect(matches.has(nodeIdOf([5, 1, 1]))).toBe(true);
+    expect(matches.has(regionId)).toBe(false);
+    // The region doesn't match "join" itself, but a descendant does.
+    expect(containsMatch.has(regionId)).toBe(true);
+    expect(containsMatch.has(nodeIdOf([5, 2]))).toBe(false);
+  });
+});
+
 describe("decorateGraph", () => {
   const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
-  const expanded = deriveVisibleGraph(s, new Set());
+  const regionId = nodeIdOf([5, 1]);
+  const root = deriveVisibleGraph(s, s.root);
+  const drilledIn = deriveVisibleGraph(s, regionId);
   const heat = (t: number) => `heat(${t.toFixed(2)})`;
 
-  it("search dims non-matching leaf nodes and lists matches", () => {
+  it("a region containing a match (but not matching itself) stays undimmed and uncounted", () => {
+    const searchInfo = subtreeSearchMatches(s, "join");
     const d = decorateGraph(
-      expanded,
+      root,
       { ...DEFAULT_FILTERS, search: "join" },
       heat,
+      searchInfo,
+    );
+    // "Join" is inside the region, not visible at the root; the region
+    // doesn't match "join" by name either, so it's neither a listed match
+    // nor dimmed, while the sibling sink (no match anywhere inside it) is.
+    expect(d.searchMatches).toEqual([]);
+    expect(d.dimmedNodeIds.has(regionId)).toBe(false);
+    expect(d.dimmedNodeIds.has(nodeIdOf([5, 2]))).toBe(true);
+  });
+
+  it("a directly visible match is listed and left undimmed", () => {
+    const searchInfo = subtreeSearchMatches(s, "join");
+    const d = decorateGraph(
+      drilledIn,
+      { ...DEFAULT_FILTERS, search: "join" },
+      heat,
+      searchInfo,
     );
     expect(d.searchMatches).toEqual([nodeIdOf([5, 1, 1])]);
-    expect(d.dimmedNodeIds.has(nodeIdOf([5, 2]))).toBe(true);
     expect(d.dimmedNodeIds.has(nodeIdOf([5, 1, 1]))).toBe(false);
+    expect(d.dimmedNodeIds.has(nodeIdOf([5, 1, 2]))).toBe(true);
   });
 
   it("hideIdle hides zero-activity operators and zero-message edges, never regions or ports", () => {
     const d = decorateGraph(
-      expanded,
+      root,
       { ...DEFAULT_FILTERS, hideIdle: true },
       heat,
+      null,
     );
     // every fixture operator has elapsed > 0 except none; hide check via a synthetic idle op
     const idle = buildDataflowStructure(
@@ -372,39 +611,25 @@ describe("decorateGraph", () => {
       [],
     );
     const d2 = decorateGraph(
-      deriveVisibleGraph(idle, new Set()),
+      deriveVisibleGraph(idle, idle.root),
       { ...DEFAULT_FILTERS, hideIdle: true },
       heat,
+      null,
     );
     expect(d2.hiddenNodeIds.has(nodeIdOf([5, 3]))).toBe(true);
     expect(d2.hiddenNodeIds.has(nodeIdOf([5, 1]))).toBe(false);
     expect(d.hiddenEdgeIds.size).toBe(0); // all fixture edges have messages
   });
 
-  it("channel type filter dims non-matching edges", () => {
-    const d = decorateGraph(
-      expanded,
-      { ...DEFAULT_FILTERS, channelTypes: ["batches"] },
-      heat,
-    );
-    const rowsEdge = expanded.edges.find((e) =>
-      e.channelTypes.includes("rows"),
-    )!;
-    const batchesEdge = expanded.edges.find((e) =>
-      e.channelTypes.includes("batches"),
-    )!;
-    expect(d.dimmedEdgeIds.has(rowsEdge.id)).toBe(true);
-    expect(d.dimmedEdgeIds.has(batchesEdge.id)).toBe(false);
-  });
-
   it("heatmap colors by transitive metric and dims below threshold", () => {
     const d = decorateGraph(
-      expanded,
+      root,
       { ...DEFAULT_FILTERS, heatmap: "elapsed", heatmapThreshold: 0.5 },
       heat,
+      null,
     );
     // max transitive elapsed among visible non-ports is the region (13n)
-    expect(d.nodeColors.get(nodeIdOf([5, 1]))).toEqual("heat(1.00)");
+    expect(d.nodeColors.get(regionId)).toEqual("heat(1.00)");
     expect(d.dimmedNodeIds.has(nodeIdOf([5, 2]))).toBe(true); // 2/13 < 0.5
   });
 
@@ -415,31 +640,30 @@ describe("decorateGraph", () => {
       [],
     );
     const d = decorateGraph(
-      deriveVisibleGraph(zero, new Set()),
+      deriveVisibleGraph(zero, zero.root),
       { ...DEFAULT_FILTERS, heatmap: "elapsed" },
       heat,
+      null,
     );
     expect(d.nodeColors.size).toBe(0);
   });
-});
 
-describe("expandForSearch / allChannelTypes", () => {
-  const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
-
-  it("expands ancestors of matches", () => {
-    const next = expandForSearch(s, defaultCollapseState(s), "join");
-    expect(next.has(nodeIdOf([5, 1]))).toBe(false);
-  });
-
-  it("expandAncestorsOf expands ancestors of given addresses directly", () => {
-    const next = expandAncestorsOf(defaultCollapseState(s), [[5, 1, 1]]);
-    expect(next.has(nodeIdOf([5, 1]))).toBe(false);
-    // unrelated collapsed regions are untouched
-    expect(next.size).toEqual(defaultCollapseState(s).size - 1);
-  });
-
-  it("collects channel types", () => {
-    expect(allChannelTypes(s)).toEqual(["batches", "rows"]);
+  it("cpuSkew/memorySkew heatmap colors by transitive skew", () => {
+    const skewed = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, [
+      { id: "12", workerId: "0", elapsedNs: "10", arrangementSize: "1000" },
+      { id: "12", workerId: "1", elapsedNs: "30", arrangementSize: "3000" },
+    ]);
+    const skewedRoot = deriveVisibleGraph(skewed, skewed.root);
+    const d = decorateGraph(
+      skewedRoot,
+      { ...DEFAULT_FILTERS, heatmap: "cpuSkew" },
+      heat,
+      null,
+    );
+    // The region's subtree (containing Join) is the only skewed thing; the
+    // sibling sink has no per-worker data at all, so it's the coolest.
+    expect(d.nodeColors.get(regionId)).toEqual("heat(1.00)");
+    expect(d.nodeColors.get(nodeIdOf([5, 2]))).toEqual("heat(0.00)");
   });
 });
 
@@ -593,13 +817,14 @@ describe("rerouteHiddenNodes", () => {
     id,
     kind: "operator",
     label: id,
-    parent: null,
     stats: null,
     transitive: null,
+    transitiveSkew: null,
     childCount: 0,
     lir: [],
     address: null,
     operatorId: null,
+    peers: [],
   });
   const edge = (
     id: string,

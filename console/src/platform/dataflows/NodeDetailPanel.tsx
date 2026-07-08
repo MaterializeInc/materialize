@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, CloseButton, HStack, Text } from "@chakra-ui/react";
+import { Box, Button, CloseButton, HStack, Text } from "@chakra-ui/react";
 import React from "react";
 
 import { formatBytesShort } from "~/utils/format";
 
-import type { VisibleNode } from "./dataflowGraph";
+import type { PortPeer, VisibleNode } from "./dataflowGraph";
 import type { SelectedEdge } from "./DataflowGraphView";
+import { prettyPrintChannelType } from "./nodeStyle";
 
 export type Selection =
   | { kind: "node"; node: VisibleNode; connectedEdges?: SelectedEdge[] }
@@ -30,16 +31,17 @@ const Row = ({ label, value }: { label: string; value: string }) => (
   </HStack>
 );
 
-// Channel types are raw Rust container type signatures (e.g. nested Vec<...>
-// generics) with no spaces to wrap on, so they get their own full-width
-// stacked row instead of Row's space-between line.
+// Channel types are Rust container type signatures (pretty-printed, but
+// still nested-generic shaped, e.g. "[Rc<OrdValBatch<...>>]") long enough
+// that they get their own full-width stacked row instead of Row's
+// space-between line.
 const TypeRow = ({ channelTypes }: { channelTypes: string[] }) => (
   <Box>
     <Text fontSize="xs" color="gray.500">
       Type
     </Text>
     <Text fontSize="xs" textStyle="monospace" wordBreak="break-all">
-      {channelTypes.join(", ") || "unknown"}
+      {channelTypes.map(prettyPrintChannelType).join(", ") || "unknown"}
     </Text>
   </Box>
 );
@@ -52,12 +54,39 @@ const EdgeRows = ({ edge }: { edge: SelectedEdge }) => (
   </>
 );
 
+// A port's peer lives outside the current view (that's why it's a port and
+// not a drawn edge), so its only affordance is a jump: navigate to wherever
+// the peer actually is instead of tracing a line to it.
+const PeerRow = ({
+  peer,
+  onJumpTo,
+}: {
+  peer: PortPeer;
+  onJumpTo: (peer: PortPeer) => void;
+}) => (
+  <Box mb={2}>
+    <HStack justifyContent="space-between">
+      <Text fontSize="2xs" color="gray.500" noOfLines={1}>
+        → {peer.label}
+      </Text>
+      <Button size="2xs" variant="outline" onClick={() => onJumpTo(peer)}>
+        Jump
+      </Button>
+    </HStack>
+    <Row label="Records" value={peer.messagesSent.toString()} />
+    <Row label="Batches" value={peer.batchesSent.toString()} />
+    <TypeRow channelTypes={peer.channelTypes} />
+  </Box>
+);
+
 const NodeDetail = ({
   node,
   connectedEdges,
+  onJumpTo,
 }: {
   node: VisibleNode;
   connectedEdges?: SelectedEdge[];
+  onJumpTo: (peer: PortPeer) => void;
 }) => (
   <>
     <Row label="Kind" value={node.kind} />
@@ -126,15 +155,27 @@ const NodeDetail = ({
         ))}
       </Box>
     )}
+    {node.peers.length > 0 && (
+      <Box mt={2}>
+        <Text fontSize="xs" fontWeight="600" mb={1}>
+          Connects outside this view
+        </Text>
+        {node.peers.map((p) => (
+          <PeerRow key={p.address.join(".")} peer={p} onJumpTo={onJumpTo} />
+        ))}
+      </Box>
+    )}
   </>
 );
 
 export const NodeDetailPanel = ({
   selection,
   onClose,
+  onJumpTo,
 }: {
   selection: Selection;
   onClose: () => void;
+  onJumpTo: (peer: PortPeer) => void;
 }) => {
   const title =
     selection.kind === "node"
@@ -158,6 +199,7 @@ export const NodeDetailPanel = ({
         <NodeDetail
           node={selection.node}
           connectedEdges={selection.connectedEdges}
+          onJumpTo={onJumpTo}
         />
       ) : (
         <EdgeRows edge={selection.edge} />

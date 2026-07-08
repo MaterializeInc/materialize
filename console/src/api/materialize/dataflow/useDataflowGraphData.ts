@@ -17,6 +17,7 @@ import {
   type DataflowStructure,
   type LirSpanRow,
   type OperatorRow,
+  type PerWorkerStatRow,
 } from "~/platform/dataflows/dataflowGraph";
 
 import { queryBuilder } from "../db";
@@ -101,6 +102,36 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
         )`
         .$castTo<LirSpanRow>()
         .compile(queryBuilder),
+      // Per-worker CPU/memory, for the skew heatmap (worst worker over the
+      // average). Two independent per-worker sources full-outer-joined on
+      // (id, worker_id): an operator can show up in one and not the other
+      // (e.g. it schedules but never arranges anything), and a worker with
+      // no row in a source never touched that side of it at all, which
+      // matters for skew (see dataflowGraph.ts) and must not be coalesced
+      // to a false zero here.
+      perWorkerStats: sql`
+        WITH cpu AS (
+          SELECT mdod.id, mse.worker_id, mse.elapsed_ns
+          FROM mz_dataflow_operator_dataflows AS mdod
+          JOIN mz_scheduling_elapsed_per_worker AS mse ON mse.id = mdod.id
+          WHERE mdod.dataflow_id = ${id}
+        ),
+        memory AS (
+          SELECT mdod.id, mas.worker_id, mas.size
+          FROM mz_dataflow_operator_dataflows AS mdod
+          JOIN mz_arrangement_sizes_per_worker AS mas ON mas.operator_id = mdod.id
+          WHERE mdod.dataflow_id = ${id}
+        )
+        SELECT
+          coalesce(cpu.id, memory.id) AS id,
+          coalesce(cpu.worker_id, memory.worker_id) AS "workerId",
+          cpu.elapsed_ns AS "elapsedNs",
+          memory.size AS "arrangementSize"
+        FROM cpu
+        FULL OUTER JOIN memory
+          ON memory.id = cpu.id AND memory.worker_id = cpu.worker_id`
+        .$castTo<PerWorkerStatRow>()
+        .compile(queryBuilder),
     };
   }, [dataflowId]);
 
@@ -156,6 +187,7 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
             results.operators ?? [],
             results.channels ?? [],
             results.lirSpans ?? [],
+            results.perWorkerStats ?? [],
           ),
           fetchedAt: new Date(),
         },

@@ -37,6 +37,40 @@ export function formatElapsed(ns: bigint): string {
   return `scheduled ${Math.round(Number(ns) / 1e9)}s`;
 }
 
+// A channel's `type` column is the raw monomorphized Rust container type
+// (e.g. "alloc::vec::Vec<(mz_repr::row::Row, mz_repr::timestamp::Timestamp,
+// mz_ore::overflowing::Overflowing<i64>)>"). Path-qualified and generics-heavy,
+// so this drops module paths down to the final segment, aliases the two
+// generics that always mean the same thing in this position (the diff/count
+// column, the decoded error variant), and turns `Vec<X>` into `[X]` to match
+// how we'd write the type by hand. Anything it doesn't recognize (batch/trace
+// internals) still gets the path-stripping and Vec treatment, which is
+// already most of the noise, even without a dedicated alias.
+export function prettyPrintChannelType(raw: string): string {
+  let s = raw.replace(/(?:[A-Za-z_][A-Za-z0-9_]*::)+/g, "");
+  s = s.replace(/\bOverflowing<i64>/g, "Diff");
+  s = s.replace(/\bDataflowErrorSer\b/g, "Error");
+  // `Vec<...>` -> `[...]`, repeatedly: each pass strips one level of nesting,
+  // so a Vec inside a Vec's contents surfaces on the next iteration.
+  for (;;) {
+    const start = s.indexOf("Vec<");
+    if (start === -1) break;
+    let depth = 0;
+    let end = start + 3;
+    for (; end < s.length; end++) {
+      if (s[end] === "<") depth++;
+      else if (s[end] === ">" && --depth === 0) break;
+    }
+    s =
+      s.slice(0, start) +
+      "[" +
+      s.slice(start + 4, end) +
+      "]" +
+      s.slice(end + 1);
+  }
+  return s;
+}
+
 export type FlowNodeData = {
   node: VisibleNode;
   dimmed: boolean;
