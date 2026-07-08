@@ -36,8 +36,9 @@
 pub mod ctx;
 pub mod strategy;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use mz_controller_types::ClusterId;
 use mz_ore::soft_panic_or_log;
 
 use crate::ctx::{
@@ -46,7 +47,8 @@ use crate::ctx::{
     ReplicaShape, StateWrite,
 };
 use crate::strategy::{
-    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, Strategy,
+    BaselineStrategy, DesiredReplica, GracefulReconfigurationStrategy, LiveSignals, SignalRequest,
+    Strategy,
 };
 
 /// The cluster controller. Holds the (stateless) set of strategies and drives a
@@ -104,8 +106,8 @@ impl ClusterController {
         // still rely on the compare-and-append, not the merge, for `ALTER`
         // safety, which is why the merged write carries the cluster's `expected`.
         // See `merge_state_writes` for the join and its conflict handling.
-        let mut states = ctx.cluster_states(&cluster_ids).await;
-        self.enrich_hydration(ctx, &mut states).await;
+        let states = ctx.cluster_states(&cluster_ids).await;
+        let signals = self.fetch_signals(ctx, &states).await;
         let now = ctx.now();
         // Set when we issue any phase-1 apply, applied or rejected. Either way
         // the durable state may have moved (our write, or the concurrent `ALTER`
@@ -118,7 +120,7 @@ impl ClusterController {
         // that is probably about to go stale.
         let mut rejected = BTreeSet::new();
         for state in &states {
-            let write = self.merge_state_writes(state, now);
+            let write = self.merge_state_writes(state, &signals[&state.cluster_id], now);
             if write.is_empty() {
                 continue;
             }
@@ -141,19 +143,19 @@ impl ClusterController {
         // wrote. The first read is otherwise still current. A stale diff is
         // harmless: every create/drop carries its `expected` and is guard-rejected
         // if the durable state has since diverged.
-        let states = if phase_1_wrote {
-            let mut states = ctx.cluster_states(&cluster_ids).await;
-            self.enrich_hydration(ctx, &mut states).await;
-            states
+        let (states, signals) = if phase_1_wrote {
+            let states = ctx.cluster_states(&cluster_ids).await;
+            let signals = self.fetch_signals(ctx, &states).await;
+            (states, signals)
         } else {
-            states
+            (states, signals)
         };
         let now = ctx.now();
         for state in &states {
             if rejected.contains(&state.cluster_id) {
                 continue;
             }
-            let decisions = self.collect_replica_decisions(state, now);
+            let decisions = self.collect_replica_decisions(state, &signals[&state.cluster_id], now);
             if decisions.is_empty() {
                 continue;
             }
@@ -234,11 +236,16 @@ impl ClusterController {
     /// outcome that cannot make things worse. A persistent conflict then freezes
     /// that field and keeps tripping the alarm, which is the point: surface the
     /// design bug loudly instead of silently picking an arbitrary value.
-    fn merge_state_writes(&self, state: &ClusterState, now: mz_repr::Timestamp) -> StateWrite {
+    fn merge_state_writes(
+        &self,
+        state: &ClusterState,
+        signals: &LiveSignals,
+        now: mz_repr::Timestamp,
+    ) -> StateWrite {
         let writes: Vec<StateWrite> = self
             .strategies
             .iter()
-            .map(|strategy| strategy.update_state(state, now))
+            .map(|strategy| strategy.update_state(state, signals, now))
             .filter(|write| !write.is_empty())
             .collect();
 
@@ -291,33 +298,37 @@ impl ClusterController {
         merged
     }
 
-    /// Populate each cluster's [`ClusterState::hydrated_replicas`] live signal,
-    /// pulling it through the ctx only where a strategy needs it.
+    /// Fetch the live signals the strategies declared they need for `states`.
     ///
-    /// Hydration is only consulted by the graceful strategy, and only while a
-    /// `reconfiguration` is in flight, so we probe a cluster's replicas exactly
-    /// then. A steady cluster is never probed, keeping the seam pay-for-what-you-
-    /// use. The pull is per-cluster (the controller asks only about that cluster's
-    /// replicas).
-    async fn enrich_hydration(
+    /// Each strategy names its needs as a pure function of the durable state
+    /// ([`Strategy::signal_request`]), so the kernel stays ignorant of when a
+    /// strategy engages. Signals are fetched per cluster and only where
+    /// requested: a steady cluster is never probed, keeping the ctx seam
+    /// pay-for-what-you-use. The returned map has an entry for every state.
+    async fn fetch_signals(
         &self,
         ctx: &mut dyn ClusterControllerCtx,
-        states: &mut [ClusterState],
-    ) {
-        for state in states.iter_mut() {
-            if !state
-                .reconfiguration
-                .as_ref()
-                .is_some_and(|record| record.is_in_progress())
-            {
-                continue;
+        states: &[ClusterState],
+    ) -> BTreeMap<ClusterId, LiveSignals> {
+        let mut signals = BTreeMap::new();
+        for state in states {
+            let request = self
+                .strategies
+                .iter()
+                .fold(SignalRequest::default(), |acc, strategy| {
+                    acc.union(strategy.signal_request(state))
+                });
+            let mut live = LiveSignals::default();
+            if request.hydration {
+                let replica_ids: Vec<_> = state.replicas.iter().map(|r| r.replica_id).collect();
+                if !replica_ids.is_empty() {
+                    live.hydrated_replicas =
+                        ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+                }
             }
-            let replica_ids: Vec<_> = state.replicas.iter().map(|r| r.replica_id).collect();
-            if replica_ids.is_empty() {
-                continue;
-            }
-            state.hydrated_replicas = ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+            signals.insert(state.cluster_id, live);
         }
+        signals
     }
 
     /// Diff the unioned desired set against the actual replicas of one cluster
@@ -325,6 +336,7 @@ impl ClusterController {
     fn collect_replica_decisions(
         &self,
         state: &ClusterState,
+        signals: &LiveSignals,
         now: mz_repr::Timestamp,
     ) -> Vec<Decision> {
         // Each strategy's contribution, tagged with the strategy name for
@@ -332,7 +344,12 @@ impl ClusterController {
         let contributions: Vec<(&'static str, Vec<DesiredReplica>)> = self
             .strategies
             .iter()
-            .map(|strategy| (strategy.name(), strategy.desired_replicas(state, now)))
+            .map(|strategy| {
+                (
+                    strategy.name(),
+                    strategy.desired_replicas(state, signals, now),
+                )
+            })
             .collect();
 
         reconcile_replicas(state, &contributions)

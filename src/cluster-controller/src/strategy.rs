@@ -9,7 +9,8 @@
 
 //! The pure strategy interface and the strategy implementations.
 //!
-//! A strategy is two pure functions over `(observed cluster state, now)`:
+//! A strategy is two pure functions over `(observed cluster state, live
+//! signals, now)`:
 //!
 //! - [`Strategy::update_state`] returns the durable writes the strategy wants
 //!   (cut-overs, record writes/clears). The controller transacts these in the
@@ -19,11 +20,15 @@
 //!   strategy's contribution in the tick's second phase.
 //!
 //! Both are pure: same inputs, same output, no I/O. The controller is the sole
-//! mutator. Strategies never touch the [`ClusterControllerCtx`]; the controller
-//! assembles their inputs by pulling through it.
+//! mutator. Strategies never touch the [`ClusterControllerCtx`] directly. They
+//! declare the live signals they need via [`Strategy::signal_request`] and the
+//! controller fetches those before evaluating them.
 //!
 //! [`ClusterControllerCtx`]: crate::ctx::ClusterControllerCtx
 
+use std::collections::BTreeSet;
+
+use mz_controller_types::ReplicaId;
 use mz_repr::Timestamp;
 
 use crate::ctx::{
@@ -49,16 +54,74 @@ pub trait Strategy: Send + Sync {
     /// create; drops carry no attribution).
     fn name(&self) -> &'static str;
 
+    /// The live signals this strategy needs to evaluate `state` this tick,
+    /// declared as a pure function of the durable state. The kernel unions the
+    /// requests across strategies, fetches them through the ctx, and passes the
+    /// result to [`Strategy::update_state`] and [`Strategy::desired_replicas`].
+    /// The default requests nothing, which suits a strategy that works off
+    /// durable state alone (like the baseline).
+    fn signal_request(&self, _state: &ClusterState) -> SignalRequest {
+        SignalRequest::default()
+    }
+
     /// The durable writes this strategy wants for `state` at time `now`. The
     /// default is no write, which suits a strategy that only ever contributes
-    /// replicas (like the baseline).
-    fn update_state(&self, _state: &ClusterState, _now: Timestamp) -> StateWrite {
+    /// replicas (like the baseline). An empty [`StateWrite`] means "write
+    /// nothing": the kernel drops it without emitting a decision.
+    fn update_state(
+        &self,
+        _state: &ClusterState,
+        _signals: &LiveSignals,
+        _now: Timestamp,
+    ) -> StateWrite {
         StateWrite::default()
     }
 
     /// The replica slots this strategy contributes to `state`'s desired set at
     /// time `now`.
-    fn desired_replicas(&self, state: &ClusterState, now: Timestamp) -> Vec<DesiredReplica>;
+    fn desired_replicas(
+        &self,
+        state: &ClusterState,
+        signals: &LiveSignals,
+        now: Timestamp,
+    ) -> Vec<DesiredReplica>;
+}
+
+/// The live signals a strategy asks the kernel to fetch before evaluating a
+/// cluster, declared through [`Strategy::signal_request`].
+///
+/// Live signals are observations (hydration and the like) that are not durable
+/// state, so they never participate in the compare-and-append witness. Keeping
+/// them out of [`ClusterState`] keeps that type exactly the witness material
+/// plus the observed replica set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SignalRequest {
+    /// Probe which of the cluster's replicas report all collections hydrated.
+    pub hydration: bool,
+}
+
+impl SignalRequest {
+    /// The union of two requests: a signal is fetched if any strategy asks.
+    pub fn union(self, other: SignalRequest) -> SignalRequest {
+        // Exhaustive destructure (no `..`): a signal added to the request is a
+        // compile error here until its union is spelled out.
+        let SignalRequest { hydration } = other;
+        SignalRequest {
+            hydration: self.hydration || hydration,
+        }
+    }
+}
+
+/// The fulfilled live signals for one cluster, fetched by the kernel per the
+/// unioned [`SignalRequest`] and passed alongside [`ClusterState`].
+///
+/// A signal nobody requested is left at its empty default, so a strategy must
+/// only read what it declared in [`Strategy::signal_request`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LiveSignals {
+    /// The replicas observed this tick to have *all* current collections on the
+    /// cluster hydrated.
+    pub hydrated_replicas: BTreeSet<ReplicaId>,
 }
 
 /// The implicit baseline strategy, always present.
@@ -79,7 +142,12 @@ impl Strategy for BaselineStrategy {
         BASELINE_STRATEGY_NAME
     }
 
-    fn desired_replicas(&self, state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+    fn desired_replicas(
+        &self,
+        state: &ClusterState,
+        _signals: &LiveSignals,
+        _now: Timestamp,
+    ) -> Vec<DesiredReplica> {
         let shape = state.realized_shape();
         (0..state.replication_factor)
             .map(|_| DesiredReplica {
@@ -102,9 +170,9 @@ impl Strategy for BaselineStrategy {
 /// default) marks the record timed out without touching the realized config and
 /// stops desiring the target replicas, reverting to the pre-reconfiguration set.
 ///
-/// Both functions are pure over the observed [`ClusterState`]. Hydration is read
-/// from [`ClusterState::hydrated_replicas`], which the controller populates while
-/// an in-progress reconfiguration is present.
+/// Both functions are pure over the observed [`ClusterState`] and the fetched
+/// [`LiveSignals`]. Hydration is requested via [`Strategy::signal_request`]
+/// exactly while an in-progress reconfiguration is present.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GracefulReconfigurationStrategy;
 
@@ -121,13 +189,18 @@ impl GracefulReconfigurationStrategy {
     /// cut-over. Extra target-shape replicas beyond the rf do not block: the
     /// post-cut-over reconcile retires them anyway, so waiting for them to
     /// hydrate would only delay the cut-over.
-    fn target_hydrated(&self, state: &ClusterState, record: &ReconfigurationRecord) -> bool {
+    fn target_hydrated(
+        &self,
+        state: &ClusterState,
+        signals: &LiveSignals,
+        record: &ReconfigurationRecord,
+    ) -> bool {
         let target_shape = record.target.shape();
         let hydrated_target_replicas = state
             .replicas
             .iter()
             .filter(|r| r.shape.matches(&target_shape))
-            .filter(|r| state.hydrated_replicas.contains(&r.replica_id))
+            .filter(|r| signals.hydrated_replicas.contains(&r.replica_id))
             .count();
         let target_rf = usize::try_from(record.target.replication_factor).unwrap_or(usize::MAX);
         hydrated_target_replicas >= target_rf
@@ -139,7 +212,21 @@ impl Strategy for GracefulReconfigurationStrategy {
         GRACEFUL_RECONFIGURATION_STRATEGY_NAME
     }
 
-    fn update_state(&self, state: &ClusterState, now: Timestamp) -> StateWrite {
+    fn signal_request(&self, state: &ClusterState) -> SignalRequest {
+        SignalRequest {
+            hydration: state
+                .reconfiguration
+                .as_ref()
+                .is_some_and(|record| record.is_in_progress()),
+        }
+    }
+
+    fn update_state(
+        &self,
+        state: &ClusterState,
+        signals: &LiveSignals,
+        now: Timestamp,
+    ) -> StateWrite {
         let Some(record) = &state.reconfiguration else {
             return StateWrite::default();
         };
@@ -161,7 +248,7 @@ impl Strategy for GracefulReconfigurationStrategy {
         // target replicas and only a later tick would cut over. `>=` fires the
         // deadline the instant it is reached, so the zero-timeout cut-over happens
         // on the first tick, before any overlap replica is desired.
-        let hydrated = self.target_hydrated(state, record);
+        let hydrated = self.target_hydrated(state, signals, record);
         let deadline_reached = now >= record.deadline;
         let commit_on_timeout = deadline_reached && matches!(record.on_timeout, OnTimeout::Commit);
         if hydrated || commit_on_timeout {
@@ -207,7 +294,12 @@ impl Strategy for GracefulReconfigurationStrategy {
         StateWrite::default()
     }
 
-    fn desired_replicas(&self, state: &ClusterState, now: Timestamp) -> Vec<DesiredReplica> {
+    fn desired_replicas(
+        &self,
+        state: &ClusterState,
+        signals: &LiveSignals,
+        now: Timestamp,
+    ) -> Vec<DesiredReplica> {
         let Some(record) = &state.reconfiguration else {
             return Vec::new();
         };
@@ -229,7 +321,7 @@ impl Strategy for GracefulReconfigurationStrategy {
         // `now >= deadline` matches `update_state`'s boundary, so a zero-timeout
         // rollback stops desiring the target on the same tick it marks the
         // record timed out.
-        let timed_out = now >= record.deadline && !self.target_hydrated(state, record);
+        let timed_out = now >= record.deadline && !self.target_hydrated(state, signals, record);
         if timed_out && matches!(record.on_timeout, OnTimeout::Rollback) {
             return Vec::new();
         }

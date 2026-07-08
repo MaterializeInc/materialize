@@ -27,7 +27,7 @@ use crate::ctx::{
     ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, Decision, ObservedReplica,
     ReconfigurationAudit, ReconfigurationStatus, ReplicaShape, StateWrite,
 };
-use crate::strategy::{DesiredReplica, Strategy};
+use crate::strategy::{DesiredReplica, LiveSignals, Strategy};
 
 fn cluster(n: u64) -> ClusterId {
     ClusterId::user(n).expect("valid user cluster id")
@@ -70,7 +70,6 @@ fn state(
         reconfiguration: None,
         burst: None,
         replicas,
-        hydrated_replicas: BTreeSet::new(),
     }
 }
 
@@ -365,7 +364,12 @@ impl Strategy for FixedStrategy {
         self.name
     }
 
-    fn desired_replicas(&self, _state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+    fn desired_replicas(
+        &self,
+        _state: &ClusterState,
+        _signals: &LiveSignals,
+        _now: Timestamp,
+    ) -> Vec<DesiredReplica> {
         (0..self.count)
             .map(|_| DesiredReplica {
                 shape: shape(&self.size),
@@ -472,7 +476,12 @@ async fn caa_conflict_is_rejected_and_recovered() {
         fn name(&self) -> &'static str {
             "writing"
         }
-        fn update_state(&self, state: &ClusterState, now: Timestamp) -> StateWrite {
+        fn update_state(
+            &self,
+            state: &ClusterState,
+            _signals: &LiveSignals,
+            now: Timestamp,
+        ) -> StateWrite {
             // Only write while no record exists, so once the write lands the
             // strategy stops contributing and the controller reaches a no-op.
             if state.reconfiguration.is_some() {
@@ -496,7 +505,12 @@ async fn caa_conflict_is_rejected_and_recovered() {
                 ..Default::default()
             }
         }
-        fn desired_replicas(&self, state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+        fn desired_replicas(
+            &self,
+            state: &ClusterState,
+            _signals: &LiveSignals,
+            _now: Timestamp,
+        ) -> Vec<DesiredReplica> {
             // Mirror the realized set so phase 2 is a no-op for a steady cluster:
             // this test is about the phase-1 write recomputation, not reshaping.
             let shape = state.realized_shape();
@@ -719,13 +733,23 @@ async fn disjoint_state_writes_merge_into_one_apply() {
         fn name(&self) -> &'static str {
             "writes-size"
         }
-        fn update_state(&self, _state: &ClusterState, _now: Timestamp) -> StateWrite {
+        fn update_state(
+            &self,
+            _state: &ClusterState,
+            _signals: &LiveSignals,
+            _now: Timestamp,
+        ) -> StateWrite {
             StateWrite {
                 new_size: Some("200cc".to_string()),
                 ..Default::default()
             }
         }
-        fn desired_replicas(&self, _state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+        fn desired_replicas(
+            &self,
+            _state: &ClusterState,
+            _signals: &LiveSignals,
+            _now: Timestamp,
+        ) -> Vec<DesiredReplica> {
             // No replica contribution: this test is about the phase-1 merge, and
             // an empty cluster keeps phase 2 a no-op so the only apply is phase 1.
             Vec::new()
@@ -736,13 +760,23 @@ async fn disjoint_state_writes_merge_into_one_apply() {
         fn name(&self) -> &'static str {
             "writes-rf"
         }
-        fn update_state(&self, _state: &ClusterState, _now: Timestamp) -> StateWrite {
+        fn update_state(
+            &self,
+            _state: &ClusterState,
+            _signals: &LiveSignals,
+            _now: Timestamp,
+        ) -> StateWrite {
             StateWrite {
                 new_replication_factor: Some(2),
                 ..Default::default()
             }
         }
-        fn desired_replicas(&self, _state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+        fn desired_replicas(
+            &self,
+            _state: &ClusterState,
+            _signals: &LiveSignals,
+            _now: Timestamp,
+        ) -> Vec<DesiredReplica> {
             Vec::new()
         }
     }
@@ -782,13 +816,23 @@ async fn conflicting_state_writes_trip_the_tripwire() {
         fn name(&self) -> &'static str {
             "wants-large"
         }
-        fn update_state(&self, _state: &ClusterState, _now: Timestamp) -> StateWrite {
+        fn update_state(
+            &self,
+            _state: &ClusterState,
+            _signals: &LiveSignals,
+            _now: Timestamp,
+        ) -> StateWrite {
             StateWrite {
                 new_size: Some("400cc".to_string()),
                 ..Default::default()
             }
         }
-        fn desired_replicas(&self, _state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+        fn desired_replicas(
+            &self,
+            _state: &ClusterState,
+            _signals: &LiveSignals,
+            _now: Timestamp,
+        ) -> Vec<DesiredReplica> {
             Vec::new()
         }
     }
@@ -797,13 +841,23 @@ async fn conflicting_state_writes_trip_the_tripwire() {
         fn name(&self) -> &'static str {
             "wants-small"
         }
-        fn update_state(&self, _state: &ClusterState, _now: Timestamp) -> StateWrite {
+        fn update_state(
+            &self,
+            _state: &ClusterState,
+            _signals: &LiveSignals,
+            _now: Timestamp,
+        ) -> StateWrite {
             StateWrite {
                 new_size: Some("100cc".to_string()),
                 ..Default::default()
             }
         }
-        fn desired_replicas(&self, _state: &ClusterState, _now: Timestamp) -> Vec<DesiredReplica> {
+        fn desired_replicas(
+            &self,
+            _state: &ClusterState,
+            _signals: &LiveSignals,
+            _now: Timestamp,
+        ) -> Vec<DesiredReplica> {
             Vec::new()
         }
     }
@@ -861,8 +915,8 @@ fn record_on_timeout(
     }
 }
 
-/// Convenience: a `ClusterState` with an in-flight reconfiguration and an
-/// explicit hydrated-replica set.
+/// Convenience: a `ClusterState` with an in-flight reconfiguration, plus the
+/// [`LiveSignals`] carrying an explicit hydrated-replica set.
 fn reconfiguring_state(
     cluster_id: ClusterId,
     size: &str,
@@ -870,8 +924,8 @@ fn reconfiguring_state(
     replicas: Vec<ObservedReplica>,
     rec: ReconfigurationRecord,
     hydrated: BTreeSet<ReplicaId>,
-) -> ClusterState {
-    ClusterState {
+) -> (ClusterState, LiveSignals) {
+    let state = ClusterState {
         cluster_id,
         size: size.to_string(),
         replication_factor: rf,
@@ -880,8 +934,11 @@ fn reconfiguring_state(
         reconfiguration: Some(rec),
         burst: None,
         replicas,
+    };
+    let signals = LiveSignals {
         hydrated_replicas: hydrated,
-    }
+    };
+    (state, signals)
 }
 
 fn reconfiguration_status(state: &ClusterState) -> Option<ReconfigurationStatus> {
@@ -904,7 +961,7 @@ fn written_reconfiguration_audit(write: &StateWrite) -> Option<ReconfigurationAu
 fn graceful_desires_target_while_in_flight() {
     // Realized 100cc rf=2, target 200cc rf=2, nothing hydrated, before deadline.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, signals) = reconfiguring_state(
         c,
         "100cc",
         2,
@@ -919,9 +976,9 @@ fn graceful_desires_target_while_in_flight() {
 
     let g = GracefulReconfigurationStrategy;
     // No cut-over while not hydrated.
-    assert!(g.update_state(&state, now).is_empty());
+    assert!(g.update_state(&state, &signals, now).is_empty());
     // Desires the two target-shape replicas.
-    let desired = g.desired_replicas(&state, now);
+    let desired = g.desired_replicas(&state, &signals, now);
     assert_eq!(desired.len(), 2);
     assert!(desired.iter().all(|d| d.shape.size == "200cc"));
 }
@@ -930,7 +987,7 @@ fn graceful_desires_target_while_in_flight() {
 fn graceful_cuts_over_when_target_hydrated() {
     // Both target replicas present and hydrated -> cut over, even before deadline.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, signals) = reconfiguring_state(
         c,
         "100cc",
         2,
@@ -946,7 +1003,7 @@ fn graceful_cuts_over_when_target_hydrated() {
     let now = Timestamp::from(1000u64);
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, now);
+    let write = g.update_state(&state, &signals, now);
     assert_eq!(write.new_size.as_deref(), Some("200cc"));
     assert_eq!(write.new_replication_factor, Some(2));
     // The record is retained with terminal status on cut-over, and the write
@@ -966,7 +1023,7 @@ fn graceful_partial_hydration_does_not_cut_over() {
     // Only one of the two target replicas is hydrated: not enough for HA, so no
     // cut-over and the target set is still desired.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, signals) = reconfiguring_state(
         c,
         "100cc",
         2,
@@ -982,8 +1039,8 @@ fn graceful_partial_hydration_does_not_cut_over() {
     let now = Timestamp::from(1000u64);
 
     let g = GracefulReconfigurationStrategy;
-    assert!(g.update_state(&state, now).is_empty());
-    assert_eq!(g.desired_replicas(&state, now).len(), 2);
+    assert!(g.update_state(&state, &signals, now).is_empty());
+    assert_eq!(g.desired_replicas(&state, &signals, now).len(), 2);
 }
 
 #[mz_ore::test]
@@ -993,7 +1050,7 @@ fn graceful_rf_zero_target_cuts_over_on_first_tick() {
     // first tick, well before the deadline. The audit declares an unforced
     // (hydrated) finalize.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, signals) = reconfiguring_state(
         c,
         "100cc",
         1,
@@ -1004,7 +1061,7 @@ fn graceful_rf_zero_target_cuts_over_on_first_tick() {
     let now = Timestamp::from(1000u64); // well before the deadline
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, now);
+    let write = g.update_state(&state, &signals, now);
     assert_eq!(write.new_size.as_deref(), Some("200cc"));
     assert_eq!(write.new_replication_factor, Some(0));
     assert_eq!(
@@ -1027,7 +1084,7 @@ fn graceful_extra_unhydrated_same_shape_replica_does_not_block_cutover() {
     // surplus target-shape replicas regardless, so waiting for a stray extra
     // to hydrate would only delay the cut-over.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, signals) = reconfiguring_state(
         c,
         "100cc",
         1,
@@ -1042,7 +1099,7 @@ fn graceful_extra_unhydrated_same_shape_replica_does_not_block_cutover() {
     let now = Timestamp::from(1000u64); // before the deadline
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, now);
+    let write = g.update_state(&state, &signals, now);
     assert_eq!(
         written_reconfiguration_status(&write),
         Some(ReconfigurationStatus::Finalized),
@@ -1060,7 +1117,7 @@ fn graceful_timeout_vs_hydrated_precedence() {
     // Past the deadline AND fully hydrated: success takes precedence over timeout,
     // so we still cut over and keep desiring the target until the cut-over lands.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, signals) = reconfiguring_state(
         c,
         "100cc",
         1,
@@ -1074,14 +1131,14 @@ fn graceful_timeout_vs_hydrated_precedence() {
     let now = Timestamp::from(9999u64); // well past the deadline
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, now);
+    let write = g.update_state(&state, &signals, now);
     assert_eq!(
         write.new_size.as_deref(),
         Some("200cc"),
         "success cuts over"
     );
     // Still desired (awaiting the cut-over a rejected tick could not apply).
-    assert_eq!(g.desired_replicas(&state, now).len(), 1);
+    assert_eq!(g.desired_replicas(&state, &signals, now).len(), 1);
 }
 
 #[mz_ore::test]
@@ -1090,7 +1147,7 @@ fn graceful_timeout_marks_record_timed_out_and_drops_target() {
     // record timed out without touching the realized config, and the strategy
     // ceases to contribute the target replicas, so the controller drops them.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, signals) = reconfiguring_state(
         c,
         "100cc",
         1,
@@ -1104,7 +1161,7 @@ fn graceful_timeout_marks_record_timed_out_and_drops_target() {
     let now = Timestamp::from(9999u64);
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, now);
+    let write = g.update_state(&state, &signals, now);
     assert!(write.new_size.is_none(), "no cut-over on timeout");
     assert!(
         write.new_replication_factor.is_none()
@@ -1129,7 +1186,7 @@ fn graceful_timeout_marks_record_timed_out_and_drops_target() {
     // and wrote nothing, phase 2 sees it reached and already drops the target,
     // so the rollback's replica drops stay prompt.
     assert!(
-        g.desired_replicas(&state, now).is_empty(),
+        g.desired_replicas(&state, &signals, now).is_empty(),
         "timed out: target replicas no longer desired"
     );
 }
@@ -1141,7 +1198,7 @@ fn graceful_commit_on_timeout_cuts_over_unhydrated() {
     // replicas stay desired (they become the realized set at the cut-over), in
     // contrast to the `Rollback` default which drops them.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, signals) = reconfiguring_state(
         c,
         "100cc",
         1,
@@ -1155,7 +1212,7 @@ fn graceful_commit_on_timeout_cuts_over_unhydrated() {
     let now = Timestamp::from(9999u64); // past the deadline, target un-hydrated
 
     let g = GracefulReconfigurationStrategy;
-    let write = g.update_state(&state, now);
+    let write = g.update_state(&state, &signals, now);
     assert_eq!(
         write.new_size.as_deref(),
         Some("200cc"),
@@ -1172,7 +1229,7 @@ fn graceful_commit_on_timeout_cuts_over_unhydrated() {
         "and declares the cut-over forced"
     );
     assert_eq!(
-        g.desired_replicas(&state, now).len(),
+        g.desired_replicas(&state, &signals, now).len(),
         1,
         "commit keeps desiring the target (it becomes the realized set)"
     );
@@ -1196,14 +1253,15 @@ fn graceful_deadline_fires_at_exact_timestamp() {
         )
     };
 
+    let (early, early_signals) = mk(OnTimeout::Commit);
     assert!(
-        g.update_state(&mk(OnTimeout::Commit), Timestamp::from(deadline - 1))
+        g.update_state(&early, &early_signals, Timestamp::from(deadline - 1))
             .is_empty(),
         "no cut-over one tick before the deadline"
     );
 
-    let commit = mk(OnTimeout::Commit);
-    let write = g.update_state(&commit, Timestamp::from(deadline));
+    let (commit, commit_signals) = mk(OnTimeout::Commit);
+    let write = g.update_state(&commit, &commit_signals, Timestamp::from(deadline));
     assert_eq!(
         write.new_size.as_deref(),
         Some("200cc"),
@@ -1215,8 +1273,8 @@ fn graceful_deadline_fires_at_exact_timestamp() {
         "and marks the record finalized"
     );
 
-    let rollback = mk(OnTimeout::Rollback);
-    let write = g.update_state(&rollback, Timestamp::from(deadline));
+    let (rollback, rollback_signals) = mk(OnTimeout::Rollback);
+    let write = g.update_state(&rollback, &rollback_signals, Timestamp::from(deadline));
     assert_eq!(
         write.new_size, None,
         "rollback does not advance the realized config at the deadline"
@@ -1227,7 +1285,7 @@ fn graceful_deadline_fires_at_exact_timestamp() {
         "but marks the record timed out"
     );
     assert!(
-        g.desired_replicas(&rollback, Timestamp::from(deadline))
+        g.desired_replicas(&rollback, &rollback_signals, Timestamp::from(deadline))
             .is_empty(),
         "rollback stops desiring the target at exactly the deadline"
     );
@@ -1240,7 +1298,7 @@ fn graceful_rollback_on_timeout_before_deadline_still_overlaps() {
     // the deadline passes un-hydrated (covered by
     // graceful_timeout_marks_record_timed_out_and_drops_target).
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, signals) = reconfiguring_state(
         c,
         "100cc",
         1,
@@ -1252,11 +1310,11 @@ fn graceful_rollback_on_timeout_before_deadline_still_overlaps() {
 
     let g = GracefulReconfigurationStrategy;
     assert!(
-        g.update_state(&state, now).is_empty(),
+        g.update_state(&state, &signals, now).is_empty(),
         "no cut-over before the deadline"
     );
     assert_eq!(
-        g.desired_replicas(&state, now).len(),
+        g.desired_replicas(&state, &signals, now).len(),
         1,
         "target desired during the overlap regardless of on_timeout"
     );
@@ -1268,7 +1326,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
     // shape, so the in-flight replica is at a distinct shape and is desired
     // separately from the baseline's realized-shape replica.
     let c = cluster(1);
-    let mut state = ClusterState {
+    let state = ClusterState {
         cluster_id: c,
         size: "100cc".to_string(),
         replication_factor: 1,
@@ -1295,12 +1353,12 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
                 logging: ComputeReplicaLogging::default(),
             },
         }],
-        hydrated_replicas: BTreeSet::new(),
     };
+    let mut signals = LiveSignals::default();
     let now = Timestamp::from(1000u64);
 
     let g = GracefulReconfigurationStrategy;
-    let desired = g.desired_replicas(&state, now);
+    let desired = g.desired_replicas(&state, &signals, now);
     assert_eq!(desired.len(), 1);
     assert_eq!(
         desired[0].shape.availability_zones.0,
@@ -1311,8 +1369,8 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
 
     // Mark the realized replica hydrated: it is NOT a target replica (wrong AZ),
     // so this must not trigger a cut-over.
-    state.hydrated_replicas.insert(replica(1));
-    assert!(g.update_state(&state, now).is_empty());
+    signals.hydrated_replicas.insert(replica(1));
+    assert!(g.update_state(&state, &signals, now).is_empty());
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1321,7 +1379,7 @@ async fn graceful_full_flow_overlap_then_cutover() {
     // Tick 1 creates the two 200cc target replicas (overlap). Once they hydrate,
     // a later tick cuts over and the old 100cc replicas fall out.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, _signals) = reconfiguring_state(
         c,
         "100cc",
         2,
@@ -1398,7 +1456,7 @@ async fn graceful_alter_back_finalizes_without_churn() {
     // nothing to create. Once those replicas hydrate the cut-over just marks
     // the record finalized.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, _signals) = reconfiguring_state(
         c,
         "100cc",
         1,
@@ -1437,7 +1495,7 @@ async fn graceful_rollback_at_timeout_drops_target_through_seam() {
     // must drop the in-flight target via `apply`, revert to the pre-reconfiguration
     // set, and mark the record timed out without a cut-over.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, _signals) = reconfiguring_state(
         c,
         "100cc",
         1,
@@ -1523,7 +1581,7 @@ async fn graceful_commit_at_timeout_cuts_over_through_seam() {
     // un-hydrated 200cc target (phase 1) and then drop the now-undesired 100cc
     // replica (phase 2), marking the record finalized.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, _signals) = reconfiguring_state(
         c,
         "100cc",
         1,
@@ -1580,7 +1638,7 @@ async fn resource_exhaustion_sheds_the_reconfiguration() {
     // the same expected witness, which marks the record resource-exhausted without
     // touching the realized config or the existing replica.
     let c = cluster(1);
-    let state = reconfiguring_state(
+    let (state, _signals) = reconfiguring_state(
         c,
         "100cc",
         1,

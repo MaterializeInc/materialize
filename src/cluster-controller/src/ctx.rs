@@ -69,13 +69,6 @@ pub struct ClusterState {
     pub burst: Option<BurstRecord>,
     /// The replicas that actually exist on the cluster.
     pub replicas: Vec<ObservedReplica>,
-    /// The replicas observed this tick to have *all* current collections on the
-    /// cluster hydrated. A **live signal**, not durable state, so it is excluded
-    /// from [`ClusterState::expected`] (the compare-and-append witness).
-    ///
-    /// Populated only for clusters where a strategy needs it (pulled on demand);
-    /// empty for steady clusters the controller never probes.
-    pub hydrated_replicas: BTreeSet<ReplicaId>,
 }
 
 impl ClusterState {

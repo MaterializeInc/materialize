@@ -359,9 +359,6 @@ impl Coordinator {
             reconfiguration: expected.reconfiguration,
             burst: expected.burst,
             replicas,
-            // A live signal the controller pulls separately (via
-            // `hydrated_replicas`) only when a strategy needs it.
-            hydrated_replicas: BTreeSet::new(),
         })
     }
 
