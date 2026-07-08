@@ -1442,6 +1442,12 @@ impl PeekClient {
                     &df_meta.optimizer_notices,
                 );
 
+                // Test-only synchronization point: parks a subscribe between
+                // sequencing and dispatch, so a test can land a concurrent DROP
+                // of a dependency in this window. Used by
+                // workflow_test_drop_index_during_subscribe_sequencing.
+                fail::fail_point!("subscribe_before_dispatch");
+
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteSubscribe {
                         df_desc,
