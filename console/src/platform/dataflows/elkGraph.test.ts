@@ -20,22 +20,24 @@ import { extractPositions, NODE_DIMENSIONS, toElkGraph } from "./elkGraph";
 describe("toElkGraph", () => {
   const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
 
-  it("nests elk children by visible parent", () => {
-    const elk = toElkGraph(deriveVisibleGraph(s, new Set()));
-    const region = elk.children!.find((c) => c.id === nodeIdOf([5, 1]))!;
-    expect(region.children!.map((c) => c.id)).toEqual(
+  it("lists every visible node flat, at its kind's dimensions", () => {
+    const elk = toElkGraph(deriveVisibleGraph(s, nodeIdOf([5, 1])));
+    const ids = elk.children!.map((c) => c.id);
+    expect(ids).toEqual(
       expect.arrayContaining([
         nodeIdOf([5, 1, 1]),
         nodeIdOf([5, 1, 2]),
         `${nodeIdOf([5, 1])}:in:0`,
       ]),
     );
-    const leaf = region.children!.find((c) => c.id === nodeIdOf([5, 1, 1]))!;
+    const leaf = elk.children!.find((c) => c.id === nodeIdOf([5, 1, 1]))!;
     expect(leaf.width).toEqual(NODE_DIMENSIONS.operator.width);
+    // Flat: no node carries children of its own.
+    for (const c of elk.children!) expect(c.children).toBeUndefined();
   });
 
-  it("round-trips positions relative to parent", () => {
-    const elk = toElkGraph(deriveVisibleGraph(s, new Set()));
+  it("round-trips positions", () => {
+    const elk = toElkGraph(deriveVisibleGraph(s, s.root));
     // simulate a layout result
     elk.children![0].x = 10;
     elk.children![0].y = 20;

@@ -9,15 +9,10 @@
 
 import {
   Button,
-  Checkbox,
   FormControl,
   FormLabel,
   HStack,
   Input,
-  Menu,
-  MenuButton,
-  MenuItem,
-  MenuList,
   Select,
   Slider,
   SliderFilledTrack,
@@ -33,7 +28,6 @@ import { type Filters } from "./dataflowGraph";
 export interface DataflowToolbarProps {
   filters: Filters;
   onFiltersChange: (next: Filters) => void;
-  channelTypes: string[];
   matchCount: number;
   matchIndex: number;
   onJump: (delta: 1 | -1) => void;
@@ -42,7 +36,6 @@ export interface DataflowToolbarProps {
 export const DataflowToolbar = ({
   filters,
   onFiltersChange,
-  channelTypes,
   matchCount,
   matchIndex,
   onJump,
@@ -113,6 +106,8 @@ export const DataflowToolbar = ({
         <option value="off">Heatmap off</option>
         <option value="elapsed">Heat: elapsed</option>
         <option value="size">Heat: arrangement size</option>
+        <option value="cpuSkew">Heat: CPU skew</option>
+        <option value="memorySkew">Heat: memory skew</option>
       </Select>
       <Slider
         width="120px"
@@ -128,36 +123,6 @@ export const DataflowToolbar = ({
         </SliderTrack>
         <SliderThumb />
       </Slider>
-      <Menu closeOnSelect={false}>
-        <MenuButton as={Button} size="sm">
-          Channel types
-        </MenuButton>
-        <MenuList>
-          {channelTypes.map((t) => (
-            <MenuItem key={t}>
-              <Checkbox
-                isChecked={
-                  filters.channelTypes === null ||
-                  filters.channelTypes.includes(t)
-                }
-                onChange={(e) => {
-                  const current = filters.channelTypes ?? channelTypes;
-                  const next = e.target.checked
-                    ? [...current, t]
-                    : current.filter((x) => x !== t);
-                  onFiltersChange({
-                    ...filters,
-                    channelTypes:
-                      next.length === channelTypes.length ? null : next,
-                  });
-                }}
-              >
-                {t}
-              </Checkbox>
-            </MenuItem>
-          ))}
-        </MenuList>
-      </Menu>
     </HStack>
   );
 };

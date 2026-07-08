@@ -16,7 +16,7 @@ import {
 } from "@xyflow/react";
 import React from "react";
 
-import { HIGHLIGHT_COLORS } from "./nodeStyle";
+import { HIGHLIGHT_COLORS, prettyPrintChannelType } from "./nodeStyle";
 
 export type ChannelEdgeData = {
   messagesSent: bigint;
@@ -46,10 +46,11 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
     idle && !selected
       ? ""
       : `${compact(messagesSent)} / ${compact(batchesSent)}`;
+  const prettyTypes = channelTypes.map(prettyPrintChannelType);
   const tooltip = idle
-    ? channelTypes.join(", ") || "unknown channel type"
+    ? prettyTypes.join(", ") || "unknown channel type"
     : `${messagesSent} records / ${batchesSent} batches` +
-      (channelTypes.length > 0 ? ` · ${channelTypes.join(", ")}` : "");
+      (prettyTypes.length > 0 ? ` · ${prettyTypes.join(", ")}` : "");
   return (
     <>
       <BaseEdge

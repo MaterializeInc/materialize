@@ -25,60 +25,45 @@ export const NODE_DIMENSIONS: Record<
   { width: number; height: number }
 > = {
   operator: { width: 240, height: 72 },
-  collapsedRegion: { width: 260, height: 96 },
-  region: { width: 0, height: 0 },
+  region: { width: 260, height: 96 },
   port: { width: 90, height: 24 },
 };
 
 const LAYOUT_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
   "elk.direction": "DOWN",
-  "elk.hierarchyHandling": "INCLUDE_CHILDREN",
   "elk.padding": "[top=48,left=16,bottom=16,right=16]",
   "elk.spacing.nodeNode": "24",
   "elk.layered.spacing.nodeNodeBetweenLayers": "48",
 };
 
+// A view is always one scope's direct children, so this is always a flat,
+// single-level graph: nothing is ever nested inside anything else.
 export function toElkGraph(graph: VisibleGraph): ElkNode {
-  const elkNodes = new Map<string, ElkNode>();
-  const root: ElkNode = {
+  return {
     id: "__root__",
     layoutOptions: LAYOUT_OPTIONS,
-    children: [],
-    edges: [],
+    children: graph.nodes.map((n) => ({
+      id: n.id,
+      ...NODE_DIMENSIONS[n.kind],
+    })),
+    edges: graph.edges.map((e) => ({
+      id: e.id,
+      sources: [e.source],
+      targets: [e.target],
+    })),
   };
-  for (const node of graph.nodes) {
-    const dims = NODE_DIMENSIONS[node.kind];
-    const elkNode: ElkNode = {
-      id: node.id,
-      children: [],
-      ...(node.kind === "region" ? { layoutOptions: LAYOUT_OPTIONS } : dims),
-    };
-    elkNodes.set(node.id, elkNode);
-    const parent = node.parent ? elkNodes.get(node.parent)! : root;
-    parent.children!.push(elkNode);
-  }
-  root.edges = graph.edges.map((e) => ({
-    id: e.id,
-    sources: [e.source],
-    targets: [e.target],
-  }));
-  return root;
 }
 
 export function extractPositions(layouted: ElkNode): Positions {
   const positions: Positions = {};
-  const walk = (node: ElkNode) => {
-    for (const child of node.children ?? []) {
-      positions[child.id] = {
-        x: child.x ?? 0,
-        y: child.y ?? 0,
-        width: child.width ?? 0,
-        height: child.height ?? 0,
-      };
-      walk(child);
-    }
-  };
-  walk(layouted);
+  for (const child of layouted.children ?? []) {
+    positions[child.id] = {
+      x: child.x ?? 0,
+      y: child.y ?? 0,
+      width: child.width ?? 0,
+      height: child.height ?? 0,
+    };
+  }
   return positions;
 }

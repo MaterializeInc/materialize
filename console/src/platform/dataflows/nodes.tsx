@@ -90,9 +90,9 @@ export const OperatorNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
   </CardShell>
 );
 
-export const CollapsedRegionNode = ({
-  data,
-}: NodeProps & { data: FlowNodeData }) => (
+// Always shown collapsed (a scope is never expanded in place); double-click
+// navigates into it instead of unfolding it here.
+export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
   <CardShell data={data}>
     <HStack justifyContent="space-between" spacing={1}>
       <Text fontSize="sm" fontWeight="600" noOfLines={1}>
@@ -108,25 +108,6 @@ export const CollapsedRegionNode = ({
       </Text>
     ))}
   </CardShell>
-);
-
-export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
-  <Box
-    borderWidth="2px"
-    borderStyle="dashed"
-    borderRadius="md"
-    width="100%"
-    height="100%"
-    background={`${data.color}20`}
-    opacity={data.dimmed ? 0.25 : 1}
-    boxShadow={highlightShadow(data)}
-  >
-    <Text fontSize="sm" fontWeight="600" px={2} noOfLines={1}>
-      {data.node.label}
-    </Text>
-    <Handle type="target" position={Position.Top} />
-    <Handle type="source" position={Position.Bottom} />
-  </Box>
 );
 
 export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => (

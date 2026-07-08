@@ -8,8 +8,9 @@
 // by the Apache License, Version 2.0.
 
 import "@xyflow/react/dist/style.css";
+import "./DataflowGraphView.css";
 
-import { Box, Spinner, useToast } from "@chakra-ui/react";
+import { Box, Spinner } from "@chakra-ui/react";
 import {
   Background,
   Controls,
@@ -24,30 +25,23 @@ import React from "react";
 
 import { ChannelEdge } from "./ChannelEdge";
 import {
-  type CollapseState,
   type DataflowStructure,
   deriveVisibleGraph,
   type GraphDecorations,
-  MAX_VISIBLE_NODES,
+  type NodeId,
+  type PortPeer,
   rerouteHiddenNodes,
   type VisibleEdge,
   type VisibleNode,
-  visibleNodeCount,
 } from "./dataflowGraph";
 import { NODE_DIMENSIONS } from "./elkGraph";
-import {
-  CollapsedRegionNode,
-  OperatorNode,
-  PortNode,
-  RegionNode,
-} from "./nodes";
+import { OperatorNode, PortNode, RegionNode } from "./nodes";
 import { nodeFillColor } from "./nodeStyle";
 import { useElkLayout } from "./useElkLayout";
 
 const edgeTypes = { channel: ChannelEdge };
 const nodeTypes = {
   operator: OperatorNode,
-  collapsedRegion: CollapsedRegionNode,
   region: RegionNode,
   port: PortNode,
 };
@@ -60,8 +54,11 @@ export type SelectedEdge = VisibleEdge & {
 
 export interface DataflowGraphViewProps {
   structure: DataflowStructure;
-  collapsed: CollapseState;
-  onCollapsedChange: (next: CollapseState) => void;
+  // The scope whose direct children this view renders; double-clicking a
+  // region box navigates to a new view rooted there rather than expanding it
+  // in place.
+  focusedScope: NodeId;
+  onNavigate: (scope: NodeId) => void;
   cacheKey: string;
   decorations?: GraphDecorations;
   selectedId?: string;
@@ -72,6 +69,11 @@ export interface DataflowGraphViewProps {
   onNodeClick?: (node: VisibleNode, connectedEdges: SelectedEdge[]) => void;
   onEdgeClick?: (edge: SelectedEdge) => void;
   onPaneClick?: () => void;
+  // Double-clicking a port with exactly one peer jumps straight there; with
+  // zero or several peers it's ambiguous (or there's nothing to jump to), so
+  // the preceding click/click of the double-click has already opened the
+  // port's own detail panel instead, same as a single click would.
+  onJumpToPeer?: (peer: PortPeer) => void;
   centerRef?: React.MutableRefObject<((id: string) => void) | null>;
   // A node to center on once its layout position exists (e.g. right after an
   // expand triggered by jumping to it). Centering an id whose ancestors were
@@ -132,8 +134,8 @@ const CenterHelper = ({
 
 export const DataflowGraphView = ({
   structure,
-  collapsed,
-  onCollapsedChange,
+  focusedScope,
+  onNavigate,
   cacheKey,
   decorations,
   selectedId,
@@ -141,6 +143,7 @@ export const DataflowGraphView = ({
   onNodeClick,
   onEdgeClick,
   onPaneClick,
+  onJumpToPeer,
   centerRef,
   centerOnId,
   onCentered,
@@ -148,9 +151,8 @@ export const DataflowGraphView = ({
   fitOnIds,
   onFit,
 }: DataflowGraphViewProps) => {
-  const toast = useToast();
   const visible = React.useMemo(() => {
-    const graph = deriveVisibleGraph(structure, collapsed);
+    const graph = deriveVisibleGraph(structure, focusedScope);
     // Hidden nodes get spliced out with connectivity preserved (a hidden idle
     // run still shows a pass-through edge). Hidden edges (independently
     // zero-message) are a plain removal: nothing to reroute since both
@@ -167,12 +169,12 @@ export const DataflowGraphView = ({
     };
   }, [
     structure,
-    collapsed,
+    focusedScope,
     decorations?.hiddenNodeIds,
     decorations?.hiddenEdgeIds,
   ]);
 
-  const layoutKey = `${cacheKey}|${[...collapsed].sort().join(",")}|${
+  const layoutKey = `${cacheKey}|${focusedScope}|${
     decorations?.hiddenNodeIds
       ? [...decorations.hiddenNodeIds].sort().join(",")
       : ""
@@ -200,26 +202,6 @@ export const DataflowGraphView = ({
     onFit?.();
   }, [fitOnIds, positions, fitRef, onFit]);
 
-  const toggleRegion = React.useCallback(
-    (node: VisibleNode) => {
-      const next = new Set(collapsed);
-      if (next.has(node.id)) {
-        next.delete(node.id);
-        if (visibleNodeCount(structure, next) > MAX_VISIBLE_NODES) {
-          toast({
-            status: "warning",
-            title: `Expanding would show more than ${MAX_VISIBLE_NODES} nodes.`,
-          });
-          return;
-        }
-      } else {
-        next.add(node.id);
-      }
-      onCollapsedChange(next);
-    },
-    [collapsed, onCollapsedChange, structure, toast],
-  );
-
   const nodes: Node[] = React.useMemo(() => {
     if (!positions) return [];
     return visible.nodes.map((n) => {
@@ -228,8 +210,6 @@ export const DataflowGraphView = ({
         id: n.id,
         type: n.kind,
         position: { x: pos.x, y: pos.y },
-        parentId: n.parent ?? undefined,
-        extent: n.parent ? ("parent" as const) : undefined,
         // Match the Top/Bottom handles so bezier control points meet the
         // node edges. Without this the edge curves toward the default
         // Bottom/Top and appears detached across region boundaries.
@@ -274,17 +254,11 @@ export const DataflowGraphView = ({
           channelTypes: e.channelTypes,
           dimmed:
             (decorations?.dimmedNodeIds?.has(e.source) ?? false) ||
-            (decorations?.dimmedNodeIds?.has(e.target) ?? false) ||
-            (decorations?.dimmedEdgeIds?.has(e.id) ?? false),
+            (decorations?.dimmedNodeIds?.has(e.target) ?? false),
           selected: e.id === selectedId,
         },
       })),
-    [
-      visible,
-      decorations?.dimmedNodeIds,
-      decorations?.dimmedEdgeIds,
-      selectedId,
-    ],
+    [visible, decorations?.dimmedNodeIds, selectedId],
   );
 
   if (error) throw new Error(error);
@@ -303,7 +277,7 @@ export const DataflowGraphView = ({
         onlyRenderVisibleElements
         fitView
         minZoom={0.05}
-        // Double-click is the collapse toggle, so it must not also zoom.
+        // Double-click navigates into a region, so it must not also zoom.
         zoomOnDoubleClick={false}
         onNodeClick={(_, node) => {
           const visibleNode = (node.data as { node: VisibleNode }).node;
@@ -334,11 +308,13 @@ export const DataflowGraphView = ({
         onPaneClick={onPaneClick}
         onNodeDoubleClick={(_, node) => {
           const visibleNode = (node.data as { node: VisibleNode }).node;
-          if (
-            visibleNode.kind === "region" ||
-            visibleNode.kind === "collapsedRegion"
+          if (visibleNode.kind === "region") {
+            onNavigate(visibleNode.id);
+          } else if (
+            visibleNode.kind === "port" &&
+            visibleNode.peers.length === 1
           ) {
-            toggleRegion(visibleNode);
+            onJumpToPeer?.(visibleNode.peers[0]);
           }
         }}
         proOptions={{ hideAttribution: true }}
