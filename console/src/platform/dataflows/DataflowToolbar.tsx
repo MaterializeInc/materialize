@@ -12,8 +12,6 @@ import {
   FormControl,
   FormLabel,
   HStack,
-  Input,
-  Select,
   Slider,
   SliderFilledTrack,
   SliderThumb,
@@ -23,6 +21,9 @@ import {
 } from "@chakra-ui/react";
 import React from "react";
 
+import SearchInput from "~/components/SearchInput";
+import SimpleSelect from "~/components/SimpleSelect";
+
 import { type Filters } from "./dataflowGraph";
 
 export interface DataflowToolbarProps {
@@ -31,6 +32,12 @@ export interface DataflowToolbarProps {
   matchCount: number;
   matchIndex: number;
   onJump: (delta: 1 | -1) => void;
+  // Skew is a worst-worker-over-average ratio: on a single-worker replica
+  // there's nothing to compare against, so every node's ratio is trivially
+  // 1 (or the "no data" 0 sentinel), and the heatmap would silently render
+  // no color at all, indistinguishable from being off. Disabling the option
+  // instead of shipping a heatmap mode that quietly does nothing.
+  workerCount: number;
 }
 
 export const DataflowToolbar = ({
@@ -39,7 +46,9 @@ export const DataflowToolbar = ({
   matchCount,
   matchIndex,
   onJump,
+  workerCount,
 }: DataflowToolbarProps) => {
+  const skewDisabled = workerCount <= 1;
   const [search, setSearch] = React.useState(filters.search);
   // Debounce search input into the filters object.
   React.useEffect(() => {
@@ -52,7 +61,7 @@ export const DataflowToolbar = ({
   }, [search, filters, onFiltersChange]);
   return (
     <HStack spacing={4} flexShrink={0} flexWrap="wrap">
-      <Input
+      <SearchInput
         size="sm"
         width="240px"
         placeholder="Search operators"
@@ -104,8 +113,7 @@ export const DataflowToolbar = ({
           }
         />
       </FormControl>
-      <Select
-        size="sm"
+      <SimpleSelect
         width="180px"
         value={filters.heatmap}
         onChange={(e) =>
@@ -119,10 +127,28 @@ export const DataflowToolbar = ({
         <option value="elapsed">Heat: elapsed</option>
         <option value="size">Heat: arrangement size</option>
         <option value="schedules">Heat: schedules</option>
-        <option value="cpuSkew">Heat: CPU skew</option>
-        <option value="memorySkew">Heat: memory skew</option>
-        <option value="scheduleSkew">Heat: schedule skew</option>
-      </Select>
+        <option
+          value="cpuSkew"
+          disabled={skewDisabled}
+          title={skewDisabled ? "Requires more than 1 worker" : undefined}
+        >
+          Heat: CPU skew
+        </option>
+        <option
+          value="memorySkew"
+          disabled={skewDisabled}
+          title={skewDisabled ? "Requires more than 1 worker" : undefined}
+        >
+          Heat: memory skew
+        </option>
+        <option
+          value="scheduleSkew"
+          disabled={skewDisabled}
+          title={skewDisabled ? "Requires more than 1 worker" : undefined}
+        >
+          Heat: schedule skew
+        </option>
+      </SimpleSelect>
       <Slider
         width="120px"
         isDisabled={filters.heatmap === "off"}
