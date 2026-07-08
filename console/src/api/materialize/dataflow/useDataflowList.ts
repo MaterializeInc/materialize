@@ -83,8 +83,37 @@ export function useDataflowList(params?: DataflowListParams) {
     },
   );
 
-  // Error always wins, and a list going momentarily stale across a replica
-  // switch is masked by loading.
-  const data = !error && results ? normalize(results.list ?? []) : null;
+  // JSON tuple, not a delimiter-joined string: identifiers can themselves
+  // contain any delimiter picked.
+  const key = params
+    ? JSON.stringify([params.clusterName, params.replicaName])
+    : null;
+  const [lastGood, setLastGood] = React.useState<{
+    key: string;
+    data: DataflowListEntry[];
+  } | null>(null);
+
+  // The key for which a fetch has actually started. Without this, the
+  // previous replica's still-resident results get tagged with the new key in
+  // the render after the selection changes but before useSqlMany's effect
+  // flips loading, showing the old replica's dataflow ids under the new
+  // replica (they're per-replica, so navigating one is meaningless, and for
+  // a transient dataflow that's gone on the new replica, a crash). Since a
+  // key change alone can't equal a not-yet-updated sawLoadingForKey, this
+  // doubles as the reset: no separate render-phase state adjustment needed.
+  const [sawLoadingForKey, setSawLoadingForKey] = React.useState<string | null>(
+    null,
+  );
+
+  React.useEffect(() => {
+    if (loading) setSawLoadingForKey(key);
+    if (key && results && !error && !loading && sawLoadingForKey === key) {
+      setLastGood({ key, data: normalize(results.list ?? []) });
+    }
+  }, [key, results, error, loading, sawLoadingForKey]);
+
+  // Error always wins, and data for other params never renders.
+  const data =
+    !error && lastGood && lastGood.key === key ? lastGood.data : null;
   return { data, error, databaseError, loading, refetch };
 }

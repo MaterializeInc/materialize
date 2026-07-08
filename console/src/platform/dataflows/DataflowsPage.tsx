@@ -8,13 +8,10 @@
 // by the Apache License, Version 2.0.
 
 import {
-  Alert,
-  AlertIcon,
   Spinner,
   Table,
   Tbody,
   Td,
-  Text,
   Th,
   Thead,
   Tr,
@@ -31,6 +28,9 @@ import LabeledSelect from "~/components/LabeledSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { useAllClusters } from "~/store/allClusters";
 import { formatBytesShort } from "~/utils/format";
+
+import { formatElapsedNs } from "./dataflowGraph";
+import { UsagePrivilegeAlert } from "./UsagePrivilegeAlert";
 
 const DataflowsPage = () => {
   const { clusterId } = useParams();
@@ -103,16 +103,7 @@ const DataflowsPage = () => {
           ))}
         </LabeledSelect>
         {permissionError ? (
-          <Alert status="info" rounded="md" p={4} width="auto">
-            <AlertIcon />
-            <Text>
-              You&apos;ll need{" "}
-              <Text as="span" textStyle="monospace">
-                USAGE
-              </Text>{" "}
-              privilege on this cluster to list its dataflows.
-            </Text>
-          </Alert>
+          <UsagePrivilegeAlert action="list its dataflows" />
         ) : error ? (
           <ErrorBox message="There was an error listing dataflows" />
         ) : !data && loading ? (
@@ -135,7 +126,7 @@ const DataflowsPage = () => {
                   </Td>
                   <Td isNumeric>{d.records.toString()}</Td>
                   <Td isNumeric>{formatBytesShort(d.size)}</Td>
-                  <Td isNumeric>{Math.round(Number(d.elapsedNs) / 1e9)}s</Td>
+                  <Td isNumeric>{formatElapsedNs(d.elapsedNs)}</Td>
                 </Tr>
               ))}
             </Tbody>
