@@ -818,6 +818,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     .prefetch_credentials(
                         &storage_configuration.connection_context,
                         aws_ref.connection_id,
+                        storage_configuration.config_set(),
                         format!("aws-connection-{}", aws_ref.connection_id),
                     )
                     .await
