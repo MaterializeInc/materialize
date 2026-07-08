@@ -55,7 +55,7 @@ beforeEach(() => {
         });
       }
       return HttpResponse.json({
-        results: [operatorsResult, okResult, okResult, okResult],
+        results: [operatorsResult, okResult, okResult, okResult, okResult],
       });
     }),
   );
@@ -120,6 +120,39 @@ describe("useDataflowGraphData", () => {
 
     await waitFor(() => expect(result.current.data).not.toBeNull());
     expect(result.current.data?.structure).not.toBe(firstStructure);
+  });
+
+  it("threads the replica's worker count through from workers * processes", async () => {
+    server.use(
+      http.post("*/api/sql", async () => {
+        return HttpResponse.json({
+          results: [
+            operatorsResult,
+            okResult,
+            okResult,
+            okResult,
+            {
+              desc: { columns: [{ name: "workerCount" }] },
+              rows: [["8"]],
+            },
+          ],
+        });
+      }),
+    );
+    const Wrapper = await createProviderWrapper();
+    const { result } = renderHook(
+      () =>
+        useDataflowGraphData({
+          clusterName: "c",
+          replicaName: "r1",
+          dataflowId: "7",
+        }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    // 8, not the 1-worker fallback: proves the query result actually flows
+    // through, not just that the field exists with its default value.
+    expect(result.current.data?.workerCount).toEqual(8);
   });
 
   it("rejects a non-numeric dataflow id", async () => {

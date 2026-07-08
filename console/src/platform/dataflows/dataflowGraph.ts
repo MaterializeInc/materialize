@@ -52,7 +52,13 @@ export interface DataflowNode {
   own: NodeStats;
   transitive: NodeStats; // own + subtree, precomputed
   ownSkew: SkewStats;
-  transitiveSkew: SkewStats; // recomputed from the subtree's summed per-worker vectors, not from children's own skew (skew doesn't sum)
+  // The worst skew anywhere in the subtree (this node's own, or any
+  // descendant's), matching EXPLAIN ANALYZE's own MAX-based rollup. Not a
+  // merged-and-then-ratioed per-worker vector: two operators skewed
+  // toward different workers (or the same worker in opposite directions)
+  // can sum to a nearly-even total even though each is individually bad,
+  // which a merge would hide and a max surfaces.
+  transitiveSkew: SkewStats;
   lir: LirInfo[]; // one entry per export span covering this operator id
 }
 
@@ -164,15 +170,6 @@ const toBigInt = (v: bigint | number | string | null | undefined): bigint =>
 // rather than "counts as zero" (matching EXPLAIN ANALYZE ... WITH SKEW).
 type WorkerVector = Map<number, bigint>;
 
-function mergeWorkerVectors(a: WorkerVector, b: WorkerVector): WorkerVector {
-  if (b.size === 0) return a;
-  const merged = new Map(a);
-  for (const [workerId, v] of b) {
-    merged.set(workerId, (merged.get(workerId) ?? 0n) + v);
-  }
-  return merged;
-}
-
 function skewRatio(vector: WorkerVector): number {
   if (vector.size === 0) return 0;
   let sum = 0n;
@@ -183,6 +180,26 @@ function skewRatio(vector: WorkerVector): number {
   }
   const avg = Number(sum) / vector.size;
   return avg === 0 ? 0 : Number(max) / avg;
+}
+
+// A node's own skew is only meaningful when the underlying work is real: an
+// operator that ran once for a few nanoseconds while another worker did
+// nothing can post an enormous max/avg ratio despite contributing nothing
+// to the dataflow's actual cost, and since transitiveSkew rolls up as a
+// MAX (see DataflowNode), that single negligible node's inflated ratio
+// would otherwise become every ancestor's reported skew all the way to
+// the root. A node's own magnitude (elapsed for cpu, arrangement size for
+// memory) must be at least this fraction of the busiest single node's own
+// magnitude anywhere in the dataflow to count; below it, ownSkew reports
+// the same 0 ("no data") sentinel a node with no per-worker rows at all
+// would.
+const SKEW_MAGNITUDE_FLOOR_FRACTION = 0.01;
+
+function passesMagnitudeFloor(own: bigint, maxOwn: bigint): boolean {
+  return (
+    maxOwn === 0n ||
+    Number(own) >= Number(maxOwn) * SKEW_MAGNITUDE_FLOOR_FRACTION
+  );
 }
 
 export function buildDataflowStructure(
@@ -307,33 +324,46 @@ export function buildDataflowStructure(
     }
   }
 
-  const fillTransitive = (
-    id: NodeId,
-  ): { stats: NodeStats; cpuVec: WorkerVector; memoryVec: WorkerVector } => {
+  let maxOwnElapsedNs = 0n;
+  let maxOwnArrangementSize = 0n;
+  for (const node of nodes.values()) {
+    if (node.own.elapsedNs > maxOwnElapsedNs) {
+      maxOwnElapsedNs = node.own.elapsedNs;
+    }
+    if (node.own.arrangementSize > maxOwnArrangementSize) {
+      maxOwnArrangementSize = node.own.arrangementSize;
+    }
+  }
+
+  const fillTransitive = (id: NodeId): void => {
     const node = nodes.get(id)!;
     const ownCpuVec = ownCpuByNode.get(id) ?? new Map();
     const ownMemoryVec = ownMemoryByNode.get(id) ?? new Map();
     node.ownSkew = {
-      cpuSkew: skewRatio(ownCpuVec),
-      memorySkew: skewRatio(ownMemoryVec),
+      cpuSkew: passesMagnitudeFloor(node.own.elapsedNs, maxOwnElapsedNs)
+        ? skewRatio(ownCpuVec)
+        : 0,
+      memorySkew: passesMagnitudeFloor(
+        node.own.arrangementSize,
+        maxOwnArrangementSize,
+      )
+        ? skewRatio(ownMemoryVec)
+        : 0,
     };
     const t = { ...node.own };
-    let cpuVec = ownCpuVec;
-    let memoryVec = ownMemoryVec;
+    let cpuSkew = node.ownSkew.cpuSkew;
+    let memorySkew = node.ownSkew.memorySkew;
     for (const c of node.children) {
-      const child = fillTransitive(c);
-      t.arrangementRecords += child.stats.arrangementRecords;
-      t.arrangementSize += child.stats.arrangementSize;
-      t.elapsedNs += child.stats.elapsedNs;
-      cpuVec = mergeWorkerVectors(cpuVec, child.cpuVec);
-      memoryVec = mergeWorkerVectors(memoryVec, child.memoryVec);
+      fillTransitive(c);
+      const child = nodes.get(c)!;
+      t.arrangementRecords += child.transitive.arrangementRecords;
+      t.arrangementSize += child.transitive.arrangementSize;
+      t.elapsedNs += child.transitive.elapsedNs;
+      cpuSkew = Math.max(cpuSkew, child.transitiveSkew.cpuSkew);
+      memorySkew = Math.max(memorySkew, child.transitiveSkew.memorySkew);
     }
     node.transitive = t;
-    node.transitiveSkew = {
-      cpuSkew: skewRatio(cpuVec),
-      memorySkew: skewRatio(memoryVec),
-    };
-    return { stats: t, cpuVec, memoryVec };
+    node.transitiveSkew = { cpuSkew, memorySkew };
   };
   fillTransitive(roots[0]);
   return {
@@ -794,6 +824,12 @@ export function decorateGraph(
   filters: Filters,
   heatColor: (t: number) => string,
   searchInfo: SubtreeSearchMatches | null,
+  // The replica's total worker count: skewRatio (max-worker-over-average)
+  // is mathematically bounded above by it (one worker doing 100% of a
+  // fixed amount of work, the rest 0%, is the most skewed that work can
+  // ever be split across this many workers). Used only by the cpuSkew/
+  // memorySkew heatmap modes, as a fixed color-scale ceiling.
+  workerCount: number,
 ): GraphDecorations {
   const d: GraphDecorations = {
     dimmedNodeIds: new Set(),
@@ -834,13 +870,37 @@ export function decorateGraph(
           return n.transitiveSkew?.memorySkew ?? 0;
       }
     };
+    const isSkew = heatmap === "cpuSkew" || heatmap === "memorySkew";
     const candidates = graph.nodes.filter((n) => n.kind !== "port");
-    const max = candidates.reduce((m, n) => Math.max(m, metric(n)), 0);
-    if (max > 0) {
-      for (const n of candidates) {
-        const t = metric(n) / max;
-        d.nodeColors.set(n.id, heatColor(t));
-        if (t < filters.heatmapThreshold) d.dimmedNodeIds.add(n.id);
+    if (isSkew) {
+      // A skew ratio is bounded above by workerCount (see decorateGraph's
+      // own doc comment), and real skew clusters near 1 in practice: a
+      // linear [1, workerCount] scale would crush a genuinely bad 2x-3x
+      // skew near the cold end on any replica with more than a handful of
+      // workers. log2 spreads each doubling of skew evenly across the
+      // color range instead, matching the ratio's multiplicative nature
+      // (the same reason decibels/Richter use log scales for other
+      // ratio-based measurements), and is fixed rather than derived from
+      // whatever else happens to be in the current view.
+      const domainMax = Math.log2(Math.max(1, workerCount));
+      if (domainMax > 0) {
+        for (const n of candidates) {
+          const t = Math.max(
+            0,
+            Math.min(1, Math.log2(Math.max(1, metric(n))) / domainMax),
+          );
+          d.nodeColors.set(n.id, heatColor(t));
+          if (t < filters.heatmapThreshold) d.dimmedNodeIds.add(n.id);
+        }
+      }
+    } else {
+      const max = candidates.reduce((m, n) => Math.max(m, metric(n)), 0);
+      if (max > 0) {
+        for (const n of candidates) {
+          const t = metric(n) / max;
+          d.nodeColors.set(n.id, heatColor(t));
+          if (t < filters.heatmapThreshold) d.dimmedNodeIds.add(n.id);
+        }
       }
     }
   }

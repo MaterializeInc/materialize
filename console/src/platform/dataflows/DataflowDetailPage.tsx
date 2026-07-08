@@ -302,7 +302,13 @@ const DataflowDetailPage = () => {
     const searchInfo = filters.search
       ? subtreeSearchMatches(data.structure, filters.search)
       : null;
-    const d = decorateGraph(visible, filters, heatColor, searchInfo);
+    const d = decorateGraph(
+      visible,
+      filters,
+      heatColor,
+      searchInfo,
+      data.workerCount,
+    );
     // Pinned LIR ids dim everything outside the union of their members;
     // hovering a row (pinned or not) previews it the same way, on top of
     // whatever is already pinned. A member outside the current scope, or

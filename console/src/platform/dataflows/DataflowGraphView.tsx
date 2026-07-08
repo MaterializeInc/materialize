@@ -479,10 +479,11 @@ export const DataflowGraphView = ({
           nodeColor={(node) =>
             (node.data as { color?: string }).color ?? "#ccc"
           }
-          // A scope of plain, unarranged operators fills every node white
-          // (COLORS.noArrangementOperator), and the minimap's default node
-          // stroke is transparent on a white background, so without an
-          // explicit stroke that scope's minimap renders entirely blank.
+          // Node fills are light (operator colors and the cold end of the
+          // heatmap gradient both skew pale), and the minimap's default
+          // node stroke is transparent on its own light background, so
+          // without an explicit stroke a scope of pale nodes can render as
+          // an almost-blank minimap.
           nodeStrokeColor="#9ca3af"
         />
         {centerRef && <CenterHelper centerRef={centerRef} fitRef={fitRef} />}
