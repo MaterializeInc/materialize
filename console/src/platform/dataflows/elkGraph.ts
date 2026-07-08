@@ -82,7 +82,11 @@ export function toElkGraph(
         children: (childrenOf.get(id) ?? []).map(buildNode),
       };
     }
-    return { id, ...NODE_DIMENSIONS[nodeById.get(id)!.kind] };
+    const node = nodeById.get(id);
+    if (!node) {
+      throw new Error(`missing visible node for id ${id} building elk graph`);
+    }
+    return { id, ...NODE_DIMENSIONS[node.kind] };
   };
 
   return {
