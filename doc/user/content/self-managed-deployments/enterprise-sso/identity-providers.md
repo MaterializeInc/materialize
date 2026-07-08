@@ -5,7 +5,7 @@ menu:
   main:
     parent: "enterprise-sso"
     identifier: "enterprise-sso-identity-providers"
-    weight: 45
+    weight: 50
 ---
 
 Once the Ory stack is deployed, you connect it to your identity

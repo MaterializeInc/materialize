@@ -5,7 +5,7 @@ menu:
   main:
     parent: "enterprise-sso"
     identifier: "enterprise-sso-gcp"
-    weight: 30
+    weight: 40
 ---
 
 This guide walks through the
@@ -26,11 +26,6 @@ SCIM available when Polis is enabled.
 {{< self-managed/terraform-disclaimer >}}
 
 {{< /note >}}
-
-Before starting, work through the
-[Prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/): a
-license key carrying the `ory` entitlement, the six browser-facing DNS
-hostnames, and a cert-manager strategy.
 
 ## What Gets Created
 
@@ -70,9 +65,12 @@ additions below.
 |----------|-------------|
 | Materialize Instance | Configured for OIDC sign-in against the Hydra issuer URL. The browser-facing console hostname is registered as the OAuth2 redirect URI. |
 
-## Prerequisites
+## GCP-specific requirements
 
-### GCP Account Requirements
+Cross-cutting requirements (license key with the `ory` entitlement, DNS
+hostnames, cert-manager strategy, required tools) are covered on the shared
+[Prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/)
+page. This section only lists the GCP-specific bits.
 
 A Google account with permission to enable the required APIs on your project and to create:
 
@@ -81,23 +79,6 @@ A Google account with permission to enable the required APIs on your project and
 - Cloud Storage buckets
 - VPC networks, subnets, Cloud Router, Cloud NAT
 - Service accounts and IAM bindings
-
-### Required Tools
-
-- [Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform)
-- [gcloud CLI](https://cloud.google.com/sdk/docs/install)
-- [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
-- [Helm 3.2.0+](https://helm.sh/docs/intro/install/)
-- [GKE auth plugin](https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl#install_plugin)
-
-### License Key
-
-{{< yaml-table data="self_managed/license_key" >}}
-
-The same license key authenticates pulls from the Materialize-hosted Ory
-registry proxy (`ory.registry.cloud.materialize.com`), so it must carry the
-`ory` entitlement. See [Prerequisites: License
-key](/self-managed-deployments/enterprise-sso/prerequisites/#license-key-with-the-ory-entitlement).
 
 ## Getting Started: Enterprise SSO Example
 

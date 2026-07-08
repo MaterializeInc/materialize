@@ -5,7 +5,7 @@ menu:
   main:
     parent: "enterprise-sso"
     identifier: "enterprise-sso-troubleshooting"
-    weight: 60
+    weight: 70
 ---
 
 Common errors and fixes when deploying or operating the Ory stack.

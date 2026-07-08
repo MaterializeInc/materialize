@@ -103,16 +103,16 @@ This part is identical to the direct-OIDC path; see the
   pre-provisioning if needed)
 - How to retrieve a token from the Materialize console for SQL access
 
-## Limitations
+## Feature support
 
 | Feature | Status |
 |---|---|
 | SAML SSO | Supported via Polis |
 | SCIM user provisioning | Supported via Polis |
-| SCIM group → SQL role mapping | Not supported. Groups push to Polis but don't translate to Materialize SQL grants. Admins still run `GRANT` manually. |
+| Multiple IdPs on a single Polis tenant | Supported |
+| SCIM group to SQL role mapping | Not supported. Groups push to Polis but don't translate to Materialize SQL grants. Admins still run `GRANT` manually. |
 | Automatic role deprovisioning | Partial. SCIM-driven IdP deactivation marks the user inactive in Polis, but the Materialize SQL role isn't dropped automatically. |
-| API key management for service accounts (beyond OAuth2 client_credentials) | Tracked as future work via Ory Talos. |
-| Multiple IdPs on a single Polis tenant | Supported but not documented end-to-end in the example. |
+| Long-lived API keys for service accounts | Not supported today. OAuth2 client credentials is the current path for machine-to-machine auth; broader API key management is tracked as future work via [Ory Talos](https://www.ory.sh/talos). |
 
 ## See also
 

@@ -21,8 +21,12 @@ that pulls these images on behalf of customers. Authentication to the proxy
 uses your Materialize license key JWT (passed as the password in a Kubernetes
 `imagePullSecret`), so there is no separate Ory credential to manage.
 
-The license key must carry the `ory` entitlement. Contact Materialize sales
-or support to have one issued.
+The enterprise SSO stack requires a Materialize **enterprise** license whose
+JWT carries the `ory` entitlement. Community licenses do not include this
+entitlement and cannot pull the OEL images. If your existing license was
+issued before the `ory` entitlement existed, contact Materialize sales or
+support to have a replacement key issued; the old key will continue to work
+for Materialize itself but the Ory registry proxy will reject it.
 
 {{< note >}}
 The license key is also used by Materialize itself; the same JWT covers both.
