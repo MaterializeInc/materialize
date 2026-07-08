@@ -22,8 +22,11 @@ import { ShowCreateBlock } from "~/components/ShowCreateBlock";
 import WorkflowGraph from "~/components/WorkflowGraph/WorkflowGraph";
 import { useFlags } from "~/hooks/useFlags";
 import { MainContentContainer, Tab } from "~/layouts/BaseLayout";
+import { absoluteClusterPath } from "~/platform/routeHelpers";
 import { SentryRoutes } from "~/sentry";
+import { useAllClusters } from "~/store/allClusters";
 import { useAllObjects } from "~/store/allObjects";
+import { useRegionSlug } from "~/store/environments";
 
 import { ObjectDetailsContainer, ObjectDetailsStrip } from "./detailComponents";
 import { ObjectColumns } from "./ObjectColumns";
@@ -33,10 +36,6 @@ import { SchemaObjectHeader } from "./SchemaObjectHeader";
 import { SourceOverviewContainer } from "./SourceDetailRoutes";
 import { useSchemaObjectParams } from "./useSchemaObjectParams";
 import { useToastIfObjectNotExtant } from "./useToastIfObjectNotExtant";
-
-const DataflowVisualizer = React.lazy(
-  () => import("~/platform/clusters/DataflowVisualizer"),
-);
 
 const SIMPLE_OBJECTS_WITH_INDEXES = ["materialized-view", "view", "table"];
 const DATAFLOW_VISUALIZER_OBJECTS = ["materialized-view", "index"];
@@ -102,6 +101,8 @@ export const SimpleObjectDetailRoutes = () => {
   useToastIfObjectNotExtant();
   const { data: objects } = useAllObjects();
   const object = objects.find((o) => o.id === id);
+  const regionSlug = useRegionSlug();
+  const { getClusterById } = useAllClusters();
 
   const dataflowVisualizerEnabled = flags["visualization-features"];
 
@@ -158,10 +159,21 @@ export const SimpleObjectDetailRoutes = () => {
     });
   }
   if (shouldShowDataflowVisualizer) {
-    tabStripItems.push({
-      label: "Visualize",
-      href: `../dataflow-visualizer`,
-    });
+    // The visualizer lives on the owning cluster's dataflows page, which
+    // resolves the object's running dataflow from the ?export param. Skip the
+    // tab when the cluster is not resolvable rather than link somewhere broken.
+    const cluster = object.clusterId
+      ? getClusterById(object.clusterId)
+      : undefined;
+    if (cluster) {
+      tabStripItems.push({
+        label: "Visualize",
+        href: `${absoluteClusterPath(regionSlug, {
+          id: cluster.id,
+          name: cluster.name,
+        })}/dataflows?export=${object.id}`,
+      });
+    }
   }
 
   return (
@@ -199,9 +211,6 @@ export const SimpleObjectDetailRoutes = () => {
         )}
         {shouldShowIndexes && (
           <Route path="indexes" element={<ObjectIndexes />} />
-        )}
-        {shouldShowDataflowVisualizer && (
-          <Route path="dataflow-visualizer" element={<DataflowVisualizer />} />
         )}
         <Route path="*" element={<Navigate to="../.." replace />} />
       </Route>

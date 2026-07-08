@@ -36,6 +36,9 @@ import Sources from "./Sources";
 const DataflowDetailPage = React.lazy(
   () => import("~/platform/dataflows/DataflowDetailPage"),
 );
+const DataflowsPage = React.lazy(
+  () => import("~/platform/dataflows/DataflowsPage"),
+);
 
 // The redesigned page nests the object lists under `objects/`. Send those links
 // to the matching classic tab so they still land somewhere for opted-out users.
@@ -83,10 +86,16 @@ const ClassicClusterDetailPage = () => {
       {/* The redesigned Workers tab has no classic counterpart. */}
       <Route path={WORKERS_TAB_PATH} element={<Navigate to=".." replace />} />
       {flags["visualization-features"] && (
-        <Route
-          path="dataflows/:dataflowId"
-          element={<DataflowDetailPage key={clusterName} />}
-        />
+        <>
+          <Route
+            path="dataflows"
+            element={<DataflowsPage key={clusterName} />}
+          />
+          <Route
+            path="dataflows/:dataflowId"
+            element={<DataflowDetailPage key={clusterName} />}
+          />
+        </>
       )}
     </SentryRoutes>
   );
