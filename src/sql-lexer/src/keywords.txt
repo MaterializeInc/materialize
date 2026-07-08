@@ -156,6 +156,7 @@ Dot
 Double
 Drop
 Eager
+Edge
 Element
 Else
 Enable
@@ -408,6 +409,7 @@ Restrict
 Retain
 Return
 Returning
+Reverse
 Revoke
 Right
 Role
@@ -424,6 +426,7 @@ Schedule
 Schema
 Schemas
 Scope
+Scoring
 Second
 Seconds
 Secret

@@ -2201,6 +2201,13 @@ feature_flags!(
         scope: ParameterScope::Cluster,
     },
     {
+        name: enable_join_reverse_edge_scoring,
+        desc: "Whether join planning should credit join order candidates on whose join keys the already-placed prefix is unique, bounding the result by the candidate's size.",
+        default: false,
+        enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
+    },
+    {
         name: enable_projection_pushdown_after_relation_cse,
         desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
         default: true,
@@ -2309,6 +2316,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
+            enable_join_reverse_edge_scoring: vars.enable_join_reverse_edge_scoring(),
             enable_projection_pushdown_after_relation_cse: vars
                 .enable_projection_pushdown_after_relation_cse(),
             enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
@@ -2353,6 +2361,7 @@ mod tests {
             persist_fast_path_limit,
             reoptimize_imported_views,
             enable_join_prioritize_arranged,
+            enable_join_reverse_edge_scoring,
             enable_projection_pushdown_after_relation_cse,
             enable_less_reduce_in_eqprop,
             enable_dequadratic_eqprop_map,
@@ -2383,6 +2392,7 @@ mod tests {
         set_var!(persist_fast_path_limit);
         let _ = reoptimize_imported_views; // no corresponding var
         set_var!(enable_join_prioritize_arranged);
+        set_var!(enable_join_reverse_edge_scoring);
         set_var!(enable_projection_pushdown_after_relation_cse);
         set_var!(enable_less_reduce_in_eqprop);
         set_var!(enable_dequadratic_eqprop_map);

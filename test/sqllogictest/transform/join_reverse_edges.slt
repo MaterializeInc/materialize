@@ -318,6 +318,132 @@ CREATE TABLE d_raw (d_pk int NOT NULL, s_fk int NOT NULL, d_x int NOT NULL);
 statement ok
 CREATE VIEW d AS SELECT d_pk, max(s_fk) AS s_fk, max(d_x) AS d_x FROM d_raw GROUP BY d_pk;
 
+# The same shapes with reverse edge scoring enabled. Bounded reverse
+# edges now carry a `P` (prefix unique) mark, and order choices may
+# shift toward bounded walks.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions, enable join reverse edge scoring) AS VERBOSE TEXT FOR
+SELECT a.a_x, b.b_x, c.c_x
+FROM a_raw a, b, c
+WHERE a.b_fk = b.b_pk AND b.c_fk = c.c_pk;
+----
+Explained Query:
+  Project (#1{a_x}, #4{b_x}, #6{c_x})
+    Join on=(#0{b_fk} = #2{b_pk} AND #3{c_fk} = #5{c_pk}) type=delta
+      implementation
+        %0:a_raw » %1:b[#0{b_pk}]UKA » %2:c[#0{c_pk}]UKA
+        %1:b » %2:c[#0{c_pk}]UKA » %0:a_raw[#0{b_fk}]PKA
+        %2:c » %1:b[#1{c_fk}]PKA » %0:a_raw[#0{b_fk}]PKA
+      ArrangeBy keys=[[#0{b_fk}]]
+        ReadIndex on=a_raw a_raw_bfk_idx=[delta join 1st input (full scan)]
+      ArrangeBy keys=[[#0{b_pk}], [#1{c_fk}]]
+        ReadIndex on=b b_bpk_idx=[delta join lookup] b_cfk_idx=[delta join lookup]
+      ArrangeBy keys=[[#0{c_pk}]]
+        ReadIndex on=c c_cpk_idx=[delta join lookup]
+
+Used Indexes:
+  - materialize.public.a_raw_bfk_idx (delta join 1st input (full scan))
+  - materialize.public.b_bpk_idx (delta join lookup)
+  - materialize.public.b_cfk_idx (delta join lookup)
+  - materialize.public.c_cpk_idx (delta join lookup)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions, enable join reverse edge scoring) AS VERBOSE TEXT FOR
+SELECT a.a_x, b.b_x, c.c_x
+FROM a_raw a, b, c
+WHERE a.b_fk = b.b_pk AND b.c_fk = c.c_pk AND c.c_x = 42;
+----
+Explained Query:
+  Project (#1{a_x}, #4{b_x}, #6{c_x})
+    Filter (#6{c_x} = 42)
+      Join on=(#0{b_fk} = #2{b_pk} AND #3{c_fk} = #5{c_pk}) type=delta
+        implementation
+          %0:a_raw » %1:b[#0{b_pk}]UKA » %2:c[#0{c_pk}]UKAef
+          %1:b » %2:c[#0{c_pk}]UKAef » %0:a_raw[#0{b_fk}]PKA
+          %2:c » %1:b[#1{c_fk}]PKA » %0:a_raw[#0{b_fk}]PKA
+        ArrangeBy keys=[[#0{b_fk}]]
+          ReadIndex on=a_raw a_raw_bfk_idx=[delta join 1st input (full scan)]
+        ArrangeBy keys=[[#0{b_pk}], [#1{c_fk}]]
+          ReadIndex on=b b_bpk_idx=[delta join lookup] b_cfk_idx=[delta join lookup]
+        ArrangeBy keys=[[#0{c_pk}]]
+          ReadIndex on=c c_cpk_idx=[delta join lookup]
+
+Used Indexes:
+  - materialize.public.a_raw_bfk_idx (delta join 1st input (full scan))
+  - materialize.public.b_bpk_idx (delta join lookup)
+  - materialize.public.b_cfk_idx (delta join lookup)
+  - materialize.public.c_cpk_idx (delta join lookup)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions, enable join reverse edge scoring) AS VERBOSE TEXT FOR
+SELECT f.f_x, d1.d1_x, d2.d2_x
+FROM f_raw f, d1, d2
+WHERE f.d1_fk = d1.d1_pk AND f.d2_fk = d2.d2_pk;
+----
+Explained Query:
+  Project (#2{f_x}, #4{d1_x}, #6{d2_x})
+    Join on=(#0{d1_fk} = #3{d1_pk} AND #1{d2_fk} = #5{d2_pk}) type=delta
+      implementation
+        %0:f_raw » %1:d1[#0{d1_pk}]UKA » %2:d2[#0{d2_pk}]UKA
+        %1:d1 » %0:f_raw[#0{d1_fk}]PKA » %2:d2[#0{d2_pk}]UKA
+        %2:d2 » %0:f_raw[#1{d2_fk}]PKA » %1:d1[#0{d1_pk}]UKA
+      ArrangeBy keys=[[#0{d1_fk}], [#1{d2_fk}]]
+        ReadIndex on=f_raw f_raw_d1_idx=[delta join 1st input (full scan)] f_raw_d2_idx=[delta join lookup]
+      ArrangeBy keys=[[#0{d1_pk}]]
+        ReadIndex on=d1 d1_pk_idx=[delta join lookup]
+      ArrangeBy keys=[[#0{d2_pk}]]
+        ReadIndex on=d2 d2_pk_idx=[delta join lookup]
+
+Used Indexes:
+  - materialize.public.f_raw_d1_idx (delta join 1st input (full scan))
+  - materialize.public.f_raw_d2_idx (delta join lookup)
+  - materialize.public.d1_pk_idx (delta join lookup)
+  - materialize.public.d2_pk_idx (delta join lookup)
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions, enable join reverse edge scoring) AS VERBOSE TEXT FOR
+SELECT f.f_x, d1.d1_x, d2.d2_x
+FROM f_raw f, d1, d2
+WHERE f.d1_fk = d1.d1_pk AND f.d2_fk = d2.d2_pk AND d2.d2_x = 7;
+----
+Explained Query:
+  Project (#2{f_x}, #4{d1_x}, #6{d2_x})
+    Filter (#6{d2_x} = 7)
+      Join on=(#0{d1_fk} = #3{d1_pk} AND #1{d2_fk} = #5{d2_pk}) type=delta
+        implementation
+          %0:f_raw » %2:d2[#0{d2_pk}]UKAef » %1:d1[#0{d1_pk}]UKA
+          %1:d1 » %0:f_raw[#0{d1_fk}]PKA » %2:d2[#0{d2_pk}]UKAef
+          %2:d2 » %0:f_raw[#1{d2_fk}]PKA » %1:d1[#0{d1_pk}]UKA
+        ArrangeBy keys=[[#0{d1_fk}], [#1{d2_fk}]]
+          ReadIndex on=f_raw f_raw_d1_idx=[delta join 1st input (full scan)] f_raw_d2_idx=[delta join lookup]
+        ArrangeBy keys=[[#0{d1_pk}]]
+          ReadIndex on=d1 d1_pk_idx=[delta join lookup]
+        ArrangeBy keys=[[#0{d2_pk}]]
+          ReadIndex on=d2 d2_pk_idx=[delta join lookup]
+
+Used Indexes:
+  - materialize.public.f_raw_d1_idx (delta join 1st input (full scan))
+  - materialize.public.f_raw_d2_idx (delta join lookup)
+  - materialize.public.d1_pk_idx (delta join lookup)
+  - materialize.public.d2_pk_idx (delta join lookup)
+
+Target cluster: quickstart
+
+EOF
+
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR
 SELECT f.f_x, d.d_x, s.s_x
@@ -332,6 +458,39 @@ Explained Query:
           %0:f_raw » %1[#0]UKA » %2[#0]UKAef
           %1 » %2[#0]UKAef » %0:f_raw[#0{d1_fk}]KA
           %2 » %1[#1{s_fk}]K » %0:f_raw[#0{d1_fk}]KA
+        ArrangeBy keys=[[#0{d1_fk}]]
+          ReadIndex on=f_raw f_raw_d1_idx=[delta join 1st input (full scan)]
+        ArrangeBy keys=[[#0{d_pk}], [#1{max_s_fk}]]
+          Reduce group_by=[#0{d_pk}] aggregates=[max(#1{s_fk}), max(#2{d_x})]
+            ReadStorage materialize.public.d_raw
+        ArrangeBy keys=[[#0{s_pk}]]
+          Reduce group_by=[#0{s_pk}] aggregates=[max(#1{s_x})]
+            ReadStorage materialize.public.s_raw
+
+Source materialize.public.s_raw
+Source materialize.public.d_raw
+
+Used Indexes:
+  - materialize.public.f_raw_d1_idx (delta join 1st input (full scan))
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions, enable join reverse edge scoring) AS VERBOSE TEXT FOR
+SELECT f.f_x, d.d_x, s.s_x
+FROM f_raw f, d, s
+WHERE f.d1_fk = d.d_pk AND d.s_fk = s.s_pk AND s.s_x = 11;
+----
+Explained Query:
+  Project (#2{f_x}, #5{max_d_x}, #7{max_s_x})
+    Filter (#7{max_s_x} = 11)
+      Join on=(#0{d1_fk} = #3{d_pk} AND #4{max_s_fk} = #6{s_pk}) type=delta
+        implementation
+          %0:f_raw » %1[#0]UKA » %2[#0]UKAef
+          %1 » %2[#0]UKAef » %0:f_raw[#0{d1_fk}]PKA
+          %2 » %1[#1{s_fk}]PK » %0:f_raw[#0{d1_fk}]PKA
         ArrangeBy keys=[[#0{d1_fk}]]
           ReadIndex on=f_raw f_raw_d1_idx=[delta join 1st input (full scan)]
         ArrangeBy keys=[[#0{d_pk}], [#1{max_s_fk}]]
