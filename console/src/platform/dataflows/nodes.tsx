@@ -47,8 +47,8 @@ const CardShell = ({
     opacity={data.dimmed ? 0.25 : 1}
   >
     {children}
-    <Handle type="target" position={Position.Left} />
-    <Handle type="source" position={Position.Right} />
+    <Handle type="target" position={Position.Top} />
+    <Handle type="source" position={Position.Bottom} />
   </Box>
 );
 
@@ -103,8 +103,8 @@ export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
     <Text fontSize="sm" fontWeight="600" px={2} noOfLines={1}>
       {data.node.label}
     </Text>
-    <Handle type="target" position={Position.Left} />
-    <Handle type="source" position={Position.Right} />
+    <Handle type="target" position={Position.Top} />
+    <Handle type="source" position={Position.Bottom} />
   </Box>
 );
 
@@ -117,7 +117,7 @@ export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
     opacity={data.dimmed ? 0.25 : 1}
   >
     <Text fontSize="2xs">{data.node.label}</Text>
-    <Handle type="target" position={Position.Left} />
-    <Handle type="source" position={Position.Right} />
+    <Handle type="target" position={Position.Top} />
+    <Handle type="source" position={Position.Bottom} />
   </Box>
 );
