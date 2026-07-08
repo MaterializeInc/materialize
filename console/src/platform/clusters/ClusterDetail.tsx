@@ -44,6 +44,9 @@ import { useShowSystemObjects } from "./useShowSystemObjects";
 const DataflowDetailPage = React.lazy(
   () => import("~/platform/dataflows/DataflowDetailPage"),
 );
+const DataflowsPage = React.lazy(
+  () => import("~/platform/dataflows/DataflowsPage"),
+);
 
 const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
   const [showSystemObjects] = useShowSystemObjects();
@@ -169,10 +172,16 @@ const ClusterDetailPage = () => {
         <Route path="sources" element={<Sources key={clusterName} />} />
         <Route path="sinks" element={<Sinks key={clusterName} />} />
         {flags["visualization-features"] && (
-          <Route
-            path="dataflows/:dataflowId"
-            element={<DataflowDetailPage key={clusterName} />}
-          />
+          <>
+            <Route
+              path="dataflows"
+              element={<DataflowsPage key={clusterName} />}
+            />
+            <Route
+              path="dataflows/:dataflowId"
+              element={<DataflowDetailPage key={clusterName} />}
+            />
+          </>
         )}
       </SentryRoutes>
     </>
