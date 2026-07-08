@@ -16,7 +16,7 @@ use mz_compute_client::controller::error::CollectionLookupError;
 use mz_controller_types::ClusterId;
 use mz_ore::now::{EpochMillis, NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
-use mz_ore::{cast::CastFrom, cast::CastInto, soft_panic_or_log};
+use mz_ore::{cast::CastFrom, cast::CastInto};
 use mz_repr::adt::timestamp::TimestampLike;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Params;
@@ -391,14 +391,9 @@ impl Coordinator {
         }
     }
 
-    /// Record the end of statement execution for a statement whose beginning was logged.
-    /// It is an error to call this function for a statement whose beginning was not logged
-    /// (because it was not sampled). Requiring the opaque `StatementLoggingId` type,
-    /// which is only instantiated by `begin_statement_execution` if the statement is actually logged,
-    /// should prevent this.
-    ///
-    /// It is also an error to end the same execution twice; the duplicate end is
-    /// reported and ignored, keeping the first end.
+    /// Record the end of statement execution for a statement whose beginning
+    /// was logged. Ends are idempotent: the first end wins and later ends for
+    /// the same statement are ignored.
     pub(crate) fn end_statement_execution(
         &mut self,
         id: StatementLoggingId,
@@ -413,13 +408,24 @@ impl Coordinator {
         };
 
         let Some(began_record) = self.statement_logging.executions_begun.remove(&uuid) else {
-            // A `StatementLoggingId` is only minted when a begin is logged, so
-            // a missing entry means this execution was already ended: some bug
-            // ended it twice. That's worth a loud report, but statement
-            // logging must never abort environmentd in production.
-            soft_panic_or_log!(
-                "duplicate end_statement_execution for statement {uuid}, reason: {:?}",
-                ended_record.reason
+            // The statement was already ended; the first end wins.
+            //
+            // A missing entry can only mean a duplicate end, never an end that
+            // overtook its begin: a StatementLoggingId is only minted when a
+            // begin is logged, and begins travel the same FIFO command channel
+            // as the commands that hand statements to the coordinator, so the
+            // coordinator never ends a statement before processing its begin.
+            //
+            // Duplicate ends are legitimate, if rare. Ownership of the end is
+            // handed from the frontend to the coordinator while a statement is
+            // dispatched, and async cancellation can strike mid-handoff: if a
+            // client disconnect drops the frontend future after the
+            // coordinator registered a peek but before the frontend defused
+            // its logging guard, both sides own the end and both emit one.
+            tracing::warn!(
+                statement_uuid = %uuid,
+                reason = ?ended_record.reason,
+                "duplicate end_statement_execution, keeping the first end",
             );
             return;
         };

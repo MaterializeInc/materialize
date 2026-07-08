@@ -80,7 +80,7 @@ use crate::coord::{
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
-use crate::statement_logging::WatchSetCreation;
+use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
@@ -498,6 +498,12 @@ impl Coordinator {
                             });
                         }
                         Err(e) => {
+                            // On success the guard's contents moved into the
+                            // `Subscribing` response. On error the frontend
+                            // logs the error end, so we defuse rather than
+                            // let the guard's `Drop` emit a spurious
+                            // `Aborted`.
+                            let _ = ctx_extra.defuse();
                             let _ = tx.send(Err(e));
                         }
                     }
@@ -583,8 +589,8 @@ impl Coordinator {
                         tx,
                     );
                 }
-                Command::UnregisterFrontendPeek { uuid, tx } => {
-                    self.handle_unregister_frontend_peek(uuid, tx);
+                Command::UnregisterFrontendPeek { uuid, reason, tx } => {
+                    self.handle_unregister_frontend_peek(uuid, reason, tx);
                 }
                 Command::ExplainTimestamp {
                     conn_id,
@@ -2185,13 +2191,18 @@ impl Coordinator {
         let _ = tx.send(Ok(()));
     }
 
-    /// Handle unregistration of a frontend peek that was registered but failed to issue.
-    /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
-    fn handle_unregister_frontend_peek(&mut self, uuid: Uuid, tx: oneshot::Sender<()>) {
-        // Remove from pending_peeks (this also removes from client_pending_peeks)
+    /// Handles [`Command::UnregisterFrontendPeek`]; see its documentation for
+    /// the end-of-execution ownership contract.
+    fn handle_unregister_frontend_peek(
+        &mut self,
+        uuid: Uuid,
+        reason: StatementEndedExecutionReason,
+        tx: oneshot::Sender<()>,
+    ) {
+        // A peek missing from `pending_peeks` was already retired, and its end
+        // logged, by a concurrent teardown.
         if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-            // Retire `ExecuteContextExtra`, because the frontend will log the peek's error result.
-            let _ = pending_peek.ctx_extra.defuse();
+            self.retire_execution(reason, pending_peek.ctx_extra.defuse());
         }
         let _ = tx.send(());
     }
