@@ -1,3 +1,6 @@
+---
+headless: true
+---
 To enable Polis (SAML and SCIM):
 
 ```hcl

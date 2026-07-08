@@ -1,3 +1,6 @@
+---
+headless: true
+---
 To bring your own cert-manager `ClusterIssuer` for the browser-facing TLS certs (Hydra, Kratos, the selfservice UI, Polis, the Materialize console, and balancerd):
 
 ```hcl

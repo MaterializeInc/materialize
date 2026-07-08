@@ -1,3 +1,6 @@
+---
+headless: true
+---
 Smoke-test each browser-facing endpoint:
 
 ```bash
