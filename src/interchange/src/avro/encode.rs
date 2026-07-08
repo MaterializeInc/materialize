@@ -22,6 +22,7 @@ use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{CatalogItemId, ColumnName, Datum, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::encode::{Encode, TypedDatum, column_names_and_types};
 use crate::envelopes::{self, DBZ_ROW_TYPE_ID, ENVELOPE_CUSTOM_NAMES};
@@ -82,7 +83,23 @@ static DEBEZIUM_TRANSACTION_SCHEMA: LazyLock<Schema> = LazyLock::new(|| {
     .expect("valid schema constructed")
 });
 
-fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
+/// Identifies the schema-registry wire framing an [`AvroEncoder`] prepends to
+/// each record, carrying the registry-specific schema id.
+///
+/// The variant is fixed when the encoder is built and determines both the
+/// header written by [`Encode::encode_unchecked`] and the header stripped by
+/// [`Encode::hash`]. The two must always agree: hashing with the wrong stripper
+/// would hash a byte-shifted payload and scramble stable partitioning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvroSchemaId {
+    /// Confluent wire format: magic byte `0x00` then a 4-byte big-endian id.
+    Confluent(i32),
+    /// AWS Glue wire format: an 18-byte header carrying a schema-version UUID.
+    /// See [`crate::glue`].
+    Glue(Uuid),
+}
+
+fn encode_confluent_header(buf: &mut Vec<u8>, schema_id: i32) {
     // The first byte is a magic byte (0) that indicates the Confluent
     // serialization format version, and the next four bytes are a
     // 32-bit schema ID.
@@ -94,16 +111,26 @@ fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
 }
 
 fn encode_message_unchecked(
-    schema_id: i32,
+    schema_id: AvroSchemaId,
     row: Row,
     schema: &Schema,
     columns: &[(ColumnName, SqlColumnType)],
 ) -> Vec<u8> {
-    let mut buf = vec![];
-    encode_avro_header(&mut buf, schema_id);
     let value = encode_datums_as_avro(row.iter(), columns);
-    mz_avro::encode_unchecked(&value, schema, &mut buf);
-    buf
+    match schema_id {
+        AvroSchemaId::Confluent(id) => {
+            let mut buf = vec![];
+            encode_confluent_header(&mut buf, id);
+            mz_avro::encode_unchecked(&value, schema, &mut buf);
+            buf
+        }
+        AvroSchemaId::Glue(id) => {
+            let mut buf = vec![];
+            crate::glue::write_avro_header(&mut buf, id);
+            mz_avro::encode_unchecked(&value, schema, &mut buf);
+            buf
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -210,7 +237,7 @@ impl AvroSchemaGenerator {
 pub struct AvroEncoder {
     columns: Vec<(ColumnName, SqlColumnType)>,
     schema: Schema,
-    schema_id: i32,
+    schema_id: AvroSchemaId,
 }
 
 impl fmt::Debug for AvroEncoder {
@@ -222,7 +249,7 @@ impl fmt::Debug for AvroEncoder {
 }
 
 impl AvroEncoder {
-    pub fn new(desc: RelationDesc, debezium: bool, schema: &str, schema_id: i32) -> Self {
+    pub fn new(desc: RelationDesc, debezium: bool, schema: &str, schema_id: AvroSchemaId) -> Self {
         let mut columns = column_names_and_types(desc);
         if debezium {
             columns = envelopes::dbz_envelope(columns);
@@ -242,9 +269,22 @@ impl Encode for AvroEncoder {
     }
 
     fn hash(&self, buf: &[u8]) -> u64 {
-        // Compute a stable hash by ignoring the avro header which might contain a
-        // non-deterministic schema id.
-        let (_schema_id, payload) = crate::confluent::extract_avro_header(buf).unwrap();
+        // Compute a stable hash by ignoring the avro header, which carries a
+        // schema id that may vary run-to-run. Strip whichever framing this
+        // encoder wrote: hashing with the wrong stripper would hash a
+        // byte-shifted payload and scramble stable partitioning.
+        let payload = match self.schema_id {
+            AvroSchemaId::Confluent(_) => {
+                crate::confluent::extract_avro_header(buf)
+                    .expect("encode_unchecked wrote a Confluent header")
+                    .1
+            }
+            AvroSchemaId::Glue(_) => {
+                crate::glue::extract_avro_header(buf)
+                    .expect("encode_unchecked wrote a Glue header")
+                    .1
+            }
+        };
         seahash::hash(payload)
     }
 }
@@ -454,7 +494,7 @@ pub fn encode_debezium_transaction_unchecked(
     message_count: Option<i64>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
-    encode_avro_header(&mut buf, schema_id);
+    encode_confluent_header(&mut buf, schema_id);
 
     let transaction_id = Value::String(id.to_owned());
     let status = Value::String(status.to_owned());
@@ -503,4 +543,57 @@ pub fn encode_debezium_transaction_unchecked(
     debug_assert!(avro.validate(DEBEZIUM_TRANSACTION_SCHEMA.top_node()));
     mz_avro::encode_unchecked(&avro, &DEBEZIUM_TRANSACTION_SCHEMA, &mut buf);
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::encode::Encode;
+
+    const SCHEMA: &str = r#"{"type":"record","name":"row","fields":[{"name":"a","type":"long"}]}"#;
+
+    fn encoder(schema_id: AvroSchemaId) -> AvroEncoder {
+        let desc = RelationDesc::builder()
+            .with_column("a", SqlScalarType::Int64.nullable(false))
+            .finish();
+        AvroEncoder::new(desc, false, SCHEMA, schema_id)
+    }
+
+    fn row() -> Row {
+        Row::pack_slice(&[Datum::Int64(42)])
+    }
+
+    #[mz_ore::test]
+    fn confluent_framing() {
+        let bytes = encoder(AvroSchemaId::Confluent(7)).encode_unchecked(row());
+        let (id, payload) = crate::confluent::extract_avro_header(&bytes).unwrap();
+        assert_eq!(bytes[0], 0x00, "confluent magic byte");
+        assert_eq!(id, 7);
+        assert!(!payload.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn glue_framing() {
+        let uuid = Uuid::from_u128(0x1234_5678);
+        let bytes = encoder(AvroSchemaId::Glue(uuid)).encode_unchecked(row());
+        let (parsed, payload) = crate::glue::extract_avro_header(&bytes).unwrap();
+        assert_eq!(bytes[0], 0x03, "glue header version");
+        assert_eq!(parsed, uuid);
+        assert!(!payload.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn hash_ignores_framing() {
+        // The same row under different framings must hash identically: `hash`
+        // strips the schema-id-bearing header before hashing, so framing (and
+        // the run-to-run-varying id it carries) cannot perturb partitioning.
+        let confluent = encoder(AvroSchemaId::Confluent(7));
+        let glue = encoder(AvroSchemaId::Glue(Uuid::from_u128(0x1234_5678)));
+        let cb = confluent.encode_unchecked(row());
+        let gb = glue.encode_unchecked(row());
+        assert_eq!(confluent.hash(&cb), glue.hash(&gb));
+    }
 }
