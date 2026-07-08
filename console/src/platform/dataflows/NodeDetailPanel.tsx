@@ -14,15 +14,18 @@ import { formatBytesShort } from "~/utils/format";
 
 import {
   formatElapsedNs,
+  type LirTreeNode,
   type PortPeer,
   type VisibleNode,
 } from "./dataflowGraph";
 import type { SelectedEdge } from "./DataflowGraphView";
+import { LirSummaryCard } from "./LirPanel";
 import { prettyPrintChannelType } from "./nodeStyle";
 
 export type Selection =
   | { kind: "node"; node: VisibleNode; connectedEdges?: SelectedEdge[] }
-  | { kind: "edge"; edge: SelectedEdge };
+  | { kind: "edge"; edge: SelectedEdge }
+  | { kind: "lirGroup"; node: LirTreeNode };
 
 const Row = ({ label, value }: { label: string; value: string }) => (
   <HStack justifyContent="space-between">
@@ -181,7 +184,9 @@ export const NodeDetailPanel = ({
   const title =
     selection.kind === "node"
       ? selection.node.label
-      : `${selection.edge.sourceLabel} → ${selection.edge.targetLabel}`;
+      : selection.kind === "edge"
+        ? `${selection.edge.sourceLabel} → ${selection.edge.targetLabel}`
+        : `LIR ${selection.node.info.lirId}: ${selection.node.info.operator}`;
   return (
     <Box
       width="320px"
@@ -202,8 +207,10 @@ export const NodeDetailPanel = ({
           connectedEdges={selection.connectedEdges}
           onJumpTo={onJumpTo}
         />
-      ) : (
+      ) : selection.kind === "edge" ? (
         <EdgeRows edge={selection.edge} />
+      ) : (
+        <LirSummaryCard node={selection.node} />
       )}
     </Box>
   );

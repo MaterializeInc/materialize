@@ -92,6 +92,18 @@ export const DataflowToolbar = ({
           }
         />
       </FormControl>
+      <FormControl display="flex" alignItems="center" width="auto">
+        <FormLabel fontSize="xs" mb={0}>
+          Show LIR groups
+        </FormLabel>
+        <Switch
+          size="sm"
+          isChecked={filters.showLirGroups}
+          onChange={(e) =>
+            onFiltersChange({ ...filters, showLirGroups: e.target.checked })
+          }
+        />
+      </FormControl>
       <Select
         size="sm"
         width="180px"

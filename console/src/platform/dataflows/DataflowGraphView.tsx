@@ -28,6 +28,8 @@ import ErrorBox from "~/components/ErrorBox";
 import { ChannelEdge } from "./ChannelEdge";
 import {
   type GraphDecorations,
+  groupByLir,
+  type LirGroupNode as LirGroupNodeData,
   type NodeId,
   type PortPeer,
   rerouteHiddenNodes,
@@ -35,9 +37,18 @@ import {
   type VisibleGraph,
   type VisibleNode,
 } from "./dataflowGraph";
-import { NODE_DIMENSIONS, type Positions } from "./elkGraph";
-import { OperatorNode, PortNode, RegionNode } from "./nodes";
-import { nodeFillColor } from "./nodeStyle";
+import {
+  NODE_DIMENSIONS,
+  type Positions,
+  resolveAbsolutePositions,
+} from "./elkGraph";
+import {
+  LirGroupNode as LirGroupNodeComponent,
+  OperatorNode,
+  PortNode,
+  RegionNode,
+} from "./nodes";
+import { lirGroupColor, nodeFillColor } from "./nodeStyle";
 import { useElkLayout } from "./useElkLayout";
 
 const edgeTypes = { channel: ChannelEdge };
@@ -45,6 +56,7 @@ const nodeTypes = {
   operator: OperatorNode,
   region: RegionNode,
   port: PortNode,
+  lirGroup: LirGroupNodeComponent,
 };
 
 // An edge plus resolved endpoint labels, since VisibleEdge only carries ids.
@@ -90,6 +102,12 @@ export interface DataflowGraphViewProps {
   fitRef?: React.MutableRefObject<((ids: string[]) => void) | null>;
   fitOnIds?: string[] | null;
   onFit?: () => void;
+  // Toggled from the toolbar; grouping is computed here (from the same
+  // post-hideIdle, post-reroute node list elk actually lays out) rather than
+  // by the caller, so a hidden node can never end up as a group's only
+  // member.
+  showLirGroups?: boolean;
+  onLirGroupClick?: (group: LirGroupNodeData) => void;
 }
 
 // Exposes centering/fitting callbacks through refs once React Flow context
@@ -202,6 +220,8 @@ export const DataflowGraphView = ({
   fitRef,
   fitOnIds,
   onFit,
+  showLirGroups,
+  onLirGroupClick,
 }: DataflowGraphViewProps) => {
   const visible = React.useMemo(() => {
     // Hidden nodes get spliced out with connectivity preserved (a hidden idle
@@ -220,7 +240,12 @@ export const DataflowGraphView = ({
     };
   }, [rawVisible, decorations?.hiddenNodeIds, decorations?.hiddenEdgeIds]);
 
-  const layoutKey = `${cacheKey}|${focusedScope}|${
+  const grouping = React.useMemo(
+    () => (showLirGroups ? groupByLir(visible.nodes) : null),
+    [showLirGroups, visible.nodes],
+  );
+
+  const layoutKey = `${cacheKey}|${focusedScope}|${showLirGroups ?? false}|${
     decorations?.hiddenNodeIds
       ? [...decorations.hiddenNodeIds].sort().join(",")
       : ""
@@ -232,6 +257,18 @@ export const DataflowGraphView = ({
   const { positions, layouting, error, retry } = useElkLayout(
     visible,
     layoutKey,
+    grouping ?? undefined,
+  );
+
+  // Only ViewportGuard needs this: everything else either reads positions
+  // relative to parentId (React Flow's own convention, matching elk's) or
+  // resolves absolute position through React Flow's internal APIs.
+  const absolutePositions = React.useMemo(
+    () =>
+      positions
+        ? resolveAbsolutePositions(positions, grouping?.parentOf)
+        : null,
+    [positions, grouping],
   );
 
   React.useEffect(() => {
@@ -260,12 +297,43 @@ export const DataflowGraphView = ({
 
   const nodes: Node[] = React.useMemo(() => {
     if (!positions) return [];
-    return visible.nodes.map((n) => {
+    const groupNodes: Node[] = (grouping?.groups ?? []).map((g) => {
+      const pos = positions[g.id] ?? { x: 0, y: 0, width: 0, height: 0 };
+      return {
+        id: g.id,
+        type: "lirGroup",
+        position: { x: pos.x, y: pos.y },
+        parentId: grouping!.parentOf.get(g.id),
+        width: pos.width,
+        height: pos.height,
+        // pointerEvents: "none" on React Flow's own node wrapper (not just
+        // inside LirGroupNode's own JSX) is the other half of the
+        // click-through contract LirGroupNode's comment documents: the
+        // wrapper defaults to pointer-events:all and LirGroupNode can't
+        // override an ancestor it doesn't render. With the wrapper opted
+        // out, LirGroupNode's header (pointerEvents:"auto") still receives
+        // clicks (a descendant can always re-enable itself), and a click on
+        // the group's empty body falls through to a member's own wrapper
+        // when one is there, or further to the pane when none is.
+        style: { width: pos.width, height: pos.height, pointerEvents: "none" },
+        draggable: false,
+        connectable: false,
+        // Below its members, which draw over it; React Flow requires a
+        // group node to precede its children in this array, which the
+        // groupNodes-then-memberNodes concat below already guarantees, but
+        // an explicit zIndex also protects against member nodes elsewhere
+        // in the array being reordered by a future change.
+        zIndex: -1,
+        data: { group: g, label: g.operator, color: lirGroupColor(g.lirId) },
+      };
+    });
+    const memberNodes: Node[] = visible.nodes.map((n) => {
       const pos = positions[n.id] ?? { x: 0, y: 0, ...NODE_DIMENSIONS[n.kind] };
       return {
         id: n.id,
         type: n.kind,
         position: { x: pos.x, y: pos.y },
+        parentId: grouping?.parentOf.get(n.id),
         // Match the Top/Bottom handles so bezier control points meet the
         // node edges. Without this the edge curves toward the default
         // Bottom/Top and appears detached across region boundaries.
@@ -288,9 +356,11 @@ export const DataflowGraphView = ({
         },
       };
     });
+    return [...groupNodes, ...memberNodes];
   }, [
     visible,
     positions,
+    grouping,
     decorations?.dimmedNodeIds,
     decorations?.nodeColors,
     selectedId,
@@ -360,6 +430,10 @@ export const DataflowGraphView = ({
         // Double-click navigates into a region, so it must not also zoom.
         zoomOnDoubleClick={false}
         onNodeClick={(_, node) => {
+          if (node.type === "lirGroup") {
+            onLirGroupClick?.((node.data as { group: LirGroupNodeData }).group);
+            return;
+          }
           const visibleNode = (node.data as { node: VisibleNode }).node;
           const connectedEdges = visible.edges
             .filter(
@@ -383,6 +457,8 @@ export const DataflowGraphView = ({
         }}
         onPaneClick={onPaneClick}
         onNodeDoubleClick={(_, node) => {
+          // Groups aren't scopes: no drill-down, no jump, nothing happens.
+          if (node.type === "lirGroup") return;
           const visibleNode = (node.data as { node: VisibleNode }).node;
           if (visibleNode.kind === "region") {
             onNavigate(visibleNode.id);
@@ -413,7 +489,7 @@ export const DataflowGraphView = ({
         <ViewportGuard
           focusedScope={focusedScope}
           nodes={visible.nodes}
-          positions={positions}
+          positions={absolutePositions}
           paneRef={paneRef}
         />
       </ReactFlow>

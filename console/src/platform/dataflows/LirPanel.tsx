@@ -61,7 +61,7 @@ const LirRow = ({
   </>
 );
 
-const LirSummaryCard = ({ node }: { node: LirTreeNode }) => (
+export const LirSummaryCard = ({ node }: { node: LirTreeNode }) => (
   <Box borderWidth="1px" borderRadius="md" p={2} mb={2}>
     <Text fontSize="xs" fontWeight="600" noOfLines={2}>
       LIR {node.info.lirId}: {node.info.operator}

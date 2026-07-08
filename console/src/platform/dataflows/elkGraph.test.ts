@@ -17,7 +17,13 @@ import {
   nodeIdOf,
 } from "./dataflowGraph";
 import { CHANNELS, LIR_SPANS, OPS } from "./dataflowGraph.test";
-import { extractPositions, NODE_DIMENSIONS, toElkGraph } from "./elkGraph";
+import {
+  extractPositions,
+  NODE_DIMENSIONS,
+  type Positions,
+  resolveAbsolutePositions,
+  toElkGraph,
+} from "./elkGraph";
 
 describe("toElkGraph", () => {
   const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
@@ -157,5 +163,73 @@ describe("toElkGraph with a LIR grouping", () => {
     // Pinning this exact position discriminates the option's presence in production.
     const a3 = groupAInner.children!.find((c) => c.id === "a3")!;
     expect(a3).toMatchObject({ x: 8, y: 94 });
+  });
+});
+
+// The fix for ViewportGuard reading elk's group-relative positions as if
+// they were already absolute canvas coordinates (DataflowGraphView.tsx).
+// Exercised directly here, rather than through DataflowGraphView or
+// DataflowDetailPage, because the mocked useElkLayout those component tests
+// rely on returns the same fixed {x: 0, y: 0, ...} box for every node id via
+// a Proxy, so a group and its member always land on the same position
+// regardless of whether the offset gets resolved, which can't discriminate
+// this bug from a fix.
+describe("resolveAbsolutePositions", () => {
+  it("returns positions unchanged when there is no grouping", () => {
+    const positions: Positions = {
+      a: { x: 5, y: 5, width: 10, height: 10 },
+    };
+    expect(resolveAbsolutePositions(positions, undefined)).toBe(positions);
+    expect(resolveAbsolutePositions(positions, new Map())).toBe(positions);
+  });
+
+  it("offsets a group member by its group's own position", () => {
+    const positions: Positions = {
+      group: { x: 100, y: 200, width: 50, height: 50 },
+      member: { x: 8, y: 24, width: 10, height: 10 },
+    };
+    const parentOf = new Map([["member", "group"]]);
+    const resolved = resolveAbsolutePositions(positions, parentOf);
+    // The group itself has no parent, so its own position is already absolute.
+    expect(resolved.group).toMatchObject({ x: 100, y: 200 });
+    // The member's elk-reported position (8, 24) is relative to the group;
+    // its absolute position is the group's origin plus that offset.
+    expect(resolved.member).toMatchObject({ x: 108, y: 224 });
+  });
+
+  it("sums offsets across arbitrarily many levels of nesting", () => {
+    const positions: Positions = {
+      outer: { x: 100, y: 100, width: 300, height: 300 },
+      inner: { x: 20, y: 30, width: 200, height: 200 },
+      leaf: { x: 5, y: 7, width: 10, height: 10 },
+    };
+    const parentOf = new Map([
+      ["inner", "outer"],
+      ["leaf", "inner"],
+    ]);
+    const resolved = resolveAbsolutePositions(positions, parentOf);
+    expect(resolved.outer).toMatchObject({ x: 100, y: 100 });
+    // inner: outer's origin plus inner's own offset.
+    expect(resolved.inner).toMatchObject({ x: 120, y: 130 });
+    // leaf: inner's *absolute* origin (120, 130), not inner's raw
+    // group-relative offset (20, 30), plus leaf's own offset. Summing
+    // against the wrong (non-recursive) base would give (25, 37) instead
+    // of (125, 137), so this is the case that would fail if the resolution
+    // only walked up a single level.
+    expect(resolved.leaf).toMatchObject({ x: 125, y: 137 });
+  });
+
+  it("leaves a node with no resolvable parent position undefined", () => {
+    const positions: Positions = {
+      lone: { x: 42, y: 43, width: 1, height: 1 },
+      member: { x: 1, y: 1, width: 1, height: 1 },
+    };
+    const parentOf = new Map([["member", "group-not-in-positions"]]);
+    const resolved = resolveAbsolutePositions(positions, parentOf);
+    expect(resolved.lone).toMatchObject({ x: 42, y: 43 });
+    // The member's parent has no known position (e.g. hidden or not yet
+    // laid out), so its absolute position can't be resolved either, rather
+    // than silently treating the unresolved offset as already absolute.
+    expect(resolved.member).toBeUndefined();
   });
 });
