@@ -172,8 +172,9 @@ issues, see [Troubleshooting](/ops/troubleshooting/).
 ## Ingesting data
 
 Once a load generator source is created, use [`CREATE TABLE FROM
-SOURCE`](/sql/create-table/) to create a table for each of the tables
-described above that you want to ingest:
+SOURCE`](/sql/create-table/) to create a table for each relation described
+above that you want to ingest. For example, assuming a TPCH source named
+`tpch`:
 
 ```mzsql
 CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
@@ -184,8 +185,9 @@ For **multi-output generators** (`AUCTION`, `MARKETING`, `TPCH`), the
 (e.g. `bids`, `customers`, `lineitem`). Omitting `REFERENCE` results in an
 error, since Materialize cannot determine which table you're referring to.
 
-For **single-output generators** (e.g. `KEY VALUE`), `REFERENCE` can be
-omitted, since there is only one table available:
+Materialize's only single-output generator, `KEY VALUE`
+{{< private-preview-inline />}}, does not require `REFERENCE`, since there is
+only one table available:
 
 ```mzsql
 CREATE TABLE kv_tbl FROM SOURCE kv_gen;
