@@ -32,12 +32,11 @@ Materialize natively supports the following SQL Server types:
 <li><code>uniqueidentifier</code></li>
 </ul>
 
-#### `char`, `nchar`, and `sysname` columns
+#### `char` and `nchar` columns
 
-To preserve values exactly as SQL Server returns them, `char`, `nchar`, and
-`sysname` columns are replicated as `text` rather than fixed-length. SQL Server
-and Materialize measure fixed-length character types differently, so replicating
-as text avoids truncation and padding mismatches. Under a multi-byte collation
-(for example a UTF-8 collation, or a double-byte code page), a single character
-can occupy more than one byte, so the upstream byte length is not a usable
-character count.
+To preserve values exactly as SQL Server returns them, `char` and `nchar` columns
+are replicated as `text` rather than fixed-length. SQL Server and Materialize
+measure fixed-length character types differently, so replicating as text avoids
+truncation and padding mismatches. Under a multi-byte collation (for example a
+UTF-8 collation, or a double-byte code page), a single character can occupy more
+than one byte, so the upstream byte length is not a usable character count.
