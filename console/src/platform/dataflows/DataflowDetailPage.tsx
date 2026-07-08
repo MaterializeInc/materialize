@@ -134,28 +134,24 @@ const DataflowDetailPage = () => {
   const [matchIndex, setMatchIndex] = React.useState(0);
   const [lirHighlight, setLirHighlight] =
     React.useState<ReadonlySet<string> | null>(null);
-  // Double-click pins a LIR id's dimming permanently (until toggled off
-  // again), independent of hover, and more than one can be pinned at once.
-  // Keeping memberIds alongside the key avoids re-deriving the LIR index here
-  // just to resolve a key back to its members.
-  const [pinnedLir, setPinnedLir] = React.useState<
-    ReadonlyMap<string, NodeId[]>
-  >(new Map());
   const [pendingFitIds, setPendingFitIds] = React.useState<string[] | null>(
     null,
   );
+  // Persist independently of `selection`: closing (X) clears the selection
+  // itself, so the next click naturally reopens the panel, but collapsing
+  // should keep the panel out of the way across subsequent clicks too.
+  const [lirPanelCollapsed, setLirPanelCollapsed] = React.useState(false);
+  const [detailPanelCollapsed, setDetailPanelCollapsed] = React.useState(false);
 
   // The route only remounts on a clusterId change, so switching dataflow or
   // replica in place (via the dropdowns) keeps this component instance, its
-  // selection, filters, and pins alive. Those reference node ids from the
-  // old structure. On the new one they silently miss instead of crashing
-  // (same tolerance as focusedScope above), which for a pin means every node
-  // reads as "not in the highlighted set" and the whole graph dims with no
-  // way to un-pin. focusedScope itself needs no entry here: switching
-  // dataflow or replica always lands on a fresh URL with no scope param (the
-  // dropdowns build one from scratch), so it already reads back as the new
-  // structure's root. Reset render-phase, not via effect, so there is no
-  // render in between showing the new graph under the old pins.
+  // selection and filters alive. Those reference node ids from the old
+  // structure. On the new one they silently miss instead of crashing (same
+  // tolerance as focusedScope above). focusedScope itself needs no entry
+  // here: switching dataflow or replica always lands on a fresh URL with no
+  // scope param (the dropdowns build one from scratch), so it already reads
+  // back as the new structure's root. Reset render-phase, not via effect, so
+  // there is no render in between showing the new graph under the old state.
   const resetKey = JSON.stringify([replicaName, dataflowId]);
   const [trackedResetKey, setTrackedResetKey] = React.useState(resetKey);
   if (resetKey !== trackedResetKey) {
@@ -164,7 +160,6 @@ const DataflowDetailPage = () => {
     setFilters(DEFAULT_FILTERS);
     setMatchIndex(0);
     setLirHighlight(null);
-    setPinnedLir(new Map());
   }
 
   const centerRef = React.useRef<((id: string) => void) | null>(null);
@@ -244,27 +239,15 @@ const DataflowDetailPage = () => {
     [data, focusOn],
   );
 
-  const onTogglePinLir = React.useCallback(
-    (key: string, memberIds: NodeId[]) => {
-      setPinnedLir((prev) => {
-        const next = new Map(prev);
-        if (next.has(key)) next.delete(key);
-        else next.set(key, memberIds);
-        return next;
-      });
-    },
-    [],
-  );
-
-  const onLirGroupClick = React.useCallback(
-    (group: { id: string }) => {
+  const selectLirGroup = React.useCallback(
+    (key: string) => {
       if (!data) return;
-      const entry = lirIndex(data.structure).get(group.id);
+      const entry = lirIndex(data.structure).get(key);
       if (!entry) return;
       setSelection({
         kind: "lirGroup",
         node: {
-          key: group.id,
+          key,
           info: entry.info,
           memberIds: entry.memberIds,
           children: [],
@@ -273,6 +256,30 @@ const DataflowDetailPage = () => {
       });
     },
     [data],
+  );
+
+  const onLirGroupClick = React.useCallback(
+    (group: { id: string }) => selectLirGroup(group.id),
+    [selectLirGroup],
+  );
+
+  // A node's own LIR entries link back to that LIR's group, wherever it
+  // actually is: unlike clicking the group's box directly on the graph
+  // (already visible, no navigation needed), the group here isn't
+  // necessarily in view yet.
+  const onSelectLir = React.useCallback(
+    (exportId: string, lirId: string) => {
+      if (!data) return;
+      const key = `${exportId}/${lirId}`;
+      const entry = lirIndex(data.structure).get(key);
+      if (!entry) return;
+      const addresses = entry.memberIds
+        .map((id) => data.structure.nodes.get(id)?.address)
+        .filter((a): a is Address => a !== undefined && a.length > 1);
+      navigateAndFit(addresses);
+      selectLirGroup(key);
+    },
+    [data, navigateAndFit, selectLirGroup],
   );
 
   const allMatches = React.useMemo(
@@ -309,33 +316,25 @@ const DataflowDetailPage = () => {
       searchInfo,
       data.workerCount,
     );
-    // Pinned LIR ids dim everything outside the union of their members;
-    // hovering a row (pinned or not) previews it the same way, on top of
-    // whatever is already pinned. A member outside the current scope, or
-    // rolled up into one of its boxes, highlights that box instead of being
-    // silently dropped.
-    const memberGroups = [
-      ...(lirHighlight ? [[...lirHighlight]] : []),
-      ...pinnedLir.values(),
-    ];
-    if (memberGroups.length > 0) {
+    // Hovering a LIR row in the sidebar dims everything outside its members.
+    // A member outside the current scope, or rolled up into one of its
+    // boxes, highlights that box instead of being silently dropped.
+    if (lirHighlight) {
       const focusedScopeAddress =
         data.structure.nodes.get(focusedScope)!.address;
       const highlighted = new Set<string>();
-      for (const group of memberGroups) {
-        for (const id of group) {
-          const address = data.structure.nodes.get(id)?.address;
-          const rep =
-            address && representativeInView(address, focusedScopeAddress);
-          if (rep) highlighted.add(rep);
-        }
+      for (const id of lirHighlight) {
+        const address = data.structure.nodes.get(id)?.address;
+        const rep =
+          address && representativeInView(address, focusedScopeAddress);
+        if (rep) highlighted.add(rep);
       }
       for (const n of visible.nodes) {
         if (!highlighted.has(n.id)) d.dimmedNodeIds.add(n.id);
       }
     }
     return d;
-  }, [data, focusedScope, visibleGraph, filters, lirHighlight, pinnedLir]);
+  }, [data, focusedScope, visibleGraph, filters, lirHighlight]);
 
   React.useEffect(() => {
     setMatchIndex(0);
@@ -482,10 +481,10 @@ const DataflowDetailPage = () => {
             <HStack flex="1" minH={0} alignItems="stretch" spacing={0}>
               <LirPanel
                 structure={data.structure}
-                pinnedKeys={new Set(pinnedLir.keys())}
+                collapsed={lirPanelCollapsed}
+                onToggleCollapsed={() => setLirPanelCollapsed((prev) => !prev)}
                 onHighlight={setLirHighlight}
                 onSelect={onLirSelect}
-                onTogglePin={onTogglePinLir}
               />
               <DataflowGraphView
                 // Non-null: this branch only renders once data and
@@ -529,8 +528,13 @@ const DataflowDetailPage = () => {
               {selection && (
                 <NodeDetailPanel
                   selection={selection}
+                  collapsed={detailPanelCollapsed}
+                  onToggleCollapsed={() =>
+                    setDetailPanelCollapsed((prev) => !prev)
+                  }
                   onClose={() => setSelection(null)}
                   onJumpTo={onJumpToPeer}
+                  onSelectLir={onSelectLir}
                 />
               )}
             </HStack>
