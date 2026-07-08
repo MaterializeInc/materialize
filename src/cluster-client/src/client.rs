@@ -69,4 +69,10 @@ pub struct ClusterReplicaLocation {
     /// the replica. Connections from the controller to these addresses
     /// are sent commands, and send responses back.
     pub ctl_addrs: Vec<String>,
+    /// The expected CTP identity of each process, parallel to `ctl_addrs`.
+    ///
+    /// Entry `i` is the identity the controller expects process `i` to advertise in the CTP
+    /// handshake, or `None` to skip the check for that process. A mismatch means the connection
+    /// reached the wrong process (e.g. stale DNS or a reused pod IP).
+    pub ctl_identities: Vec<Option<String>>,
 }

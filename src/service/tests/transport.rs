@@ -57,15 +57,25 @@ async fn connect_ctp<Out: Message, In: Message>(
 ) -> transport::Client<Out, In> {
     Retry::default()
         .retry_async(|_| {
-            transport::Client::connect(address, version.clone(), timeout, timeout, metrics.clone())
+            transport::Client::connect(
+                address,
+                None,
+                version.clone(),
+                timeout,
+                timeout,
+                metrics.clone(),
+            )
         })
         .await
         .expect("retries forever")
 }
 
 /// Helper for connecting to a CTP server that retries until it encounters the expected error.
+///
+/// `expected_identity` is the CTP identity the client expects the server to advertise.
 async fn connect_ctp_error<Out: Message, In: Message>(
     address: &str,
+    expected_identity: Option<String>,
     version: Version,
     expected_error: &str,
 ) -> anyhow::Result<()> {
@@ -73,6 +83,7 @@ async fn connect_ctp_error<Out: Message, In: Message>(
         .retry_async(async |_| {
             let result = transport::Client::<(), ()>::connect(
                 address,
+                expected_identity.clone(),
                 version.clone(),
                 TIMEOUT,
                 TIMEOUT,
@@ -211,6 +222,7 @@ fn test_handshake_magic_mismatch() {
     sim.client("client", async move {
         connect_ctp_error::<(), ()>(
             "turmoil:server:7777",
+            None,
             VERSION,
             "invalid protocol magic: 0xbad",
         )
@@ -257,6 +269,7 @@ fn test_handshake_version_mismatch() {
     sim.client("client", async move {
         connect_ctp_error::<(), ()>(
             "turmoil:server:7777",
+            None,
             CLIENT_VERSION,
             "version mismatch: 1.2.3 != 1.2.4",
         )
@@ -270,7 +283,7 @@ fn test_handshake_version_mismatch() {
 
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
-fn test_handshake_fqdn_mismatch() {
+fn test_handshake_identity_mismatch() {
     let mut sim = setup();
 
     sim.host("server", move || async {
@@ -284,7 +297,7 @@ fn test_handshake_fqdn_mismatch() {
             transport::serve(
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
-                Some("wrong.server".into()),
+                Some("wrong-process".into()),
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
                 NoopMetrics,
@@ -300,8 +313,9 @@ fn test_handshake_fqdn_mismatch() {
     sim.client("client", async move {
         connect_ctp_error::<(), ()>(
             "turmoil:server:7777",
+            Some("expected-process".into()),
             VERSION,
-            "server FQDN mismatch: wrong.server != server",
+            "CTP peer identity mismatch: wrong-process != expected-process",
         )
         .await?;
 

@@ -42,7 +42,9 @@ class Clusterd(Service):
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
-            f"CLUSTERD_GRPC_HOST={name}",
+            # Replica-scoped CTP identity prefix. clusterd appends its process
+            # ordinal to form the full identity it advertises in the handshake.
+            f"CLUSTERD_CTP_IDENTITY={name}",
             # For old Mz versions
             "CLUSTERD_USE_CTP=true",
             "MZ_SOFT_ASSERTIONS=1",
