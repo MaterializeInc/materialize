@@ -375,15 +375,17 @@ impl JoinImplementation {
                 }
 
                 // Only plan a delta join if it's no new arrangements (beyond what differential planned).
-                if let Ok((delta_query_plan, 0)) = delta_queries::plan(
-                    relation,
-                    &input_mapper,
+                let delta_query_plan = optimize_orders(
+                    equivalences,
                     &available_arrangements,
                     &unique_keys,
                     &cardinalities,
                     &filters,
+                    &input_mapper,
                     features,
-                ) {
+                )
+                .and_then(|orders| delta_queries::plan(relation, &available_arrangements, orders));
+                if let Ok((delta_query_plan, 0)) = delta_query_plan {
                     tracing::debug!(plan = ?delta_query_plan, "replacing differential join with delta join");
                     *relation = delta_query_plan;
                 }
@@ -393,17 +395,25 @@ impl JoinImplementation {
 
             // To have reached here, we must be in our first run of join planning.
             //
-            // We plan a differential join first.
-            let (differential_query_plan, differential_new_arrangements) = differential::plan(
-                relation,
-                &input_mapper,
+            // We compute one order for each possible starting point, and both the
+            // differential and the delta planner choose from these.
+            //
+            // It is an invariant that the orders are in input order: the ith order begins with the ith input.
+            let orders = optimize_orders(
+                equivalences,
                 &available_arrangements,
                 &unique_keys,
                 &cardinalities,
                 &filters,
+                &input_mapper,
                 features,
             )
-            .expect("Failed to produce a differential join plan");
+            .expect("Failed to produce join orders");
+
+            // We plan a differential join first.
+            let (differential_query_plan, differential_new_arrangements) =
+                differential::plan(relation, &available_arrangements, orders.clone())
+                    .expect("Failed to produce a differential join plan");
 
             // Binary joins _must_ be differential. We won't plan a delta join.
             if num_inputs <= 2 {
@@ -456,18 +466,7 @@ impl JoinImplementation {
             //       ⨝
             //
             // At the two internal joins, the differential join will need two new arrangements.
-            //
-            // TODO(mgree): with this refactoring, we should compute `orders` once---both joins
-            //              call `optimize_orders` and we can save some work.
-            match delta_queries::plan(
-                relation,
-                &input_mapper,
-                &available_arrangements,
-                &unique_keys,
-                &cardinalities,
-                &filters,
-                features,
-            ) {
+            match delta_queries::plan(relation, &available_arrangements, orders) {
                 // If delta plan's inputs need no new arrangements, pick the delta plan.
                 Ok((delta_query_plan, 0)) => {
                     soft_assert_or_log!(
@@ -579,45 +578,29 @@ mod delta_queries {
 
     use std::collections::BTreeSet;
 
-    use mz_expr::{
-        FilterCharacteristics, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr,
-    };
-    use mz_repr::optimize::OptimizerFeatures;
+    use mz_expr::{JoinImplementation, JoinInputCharacteristics, MirRelationExpr, MirScalarExpr};
 
     use crate::TransformError;
 
     /// Creates a delta query plan, and any predicates that need to be lifted.
     /// It also returns the number of new arrangements necessary for this plan.
     ///
+    /// `orders` are the per-starting-input orders from `optimize_orders`.
+    ///
     /// The method returns `Err` if any errors occur during planning.
     pub fn plan(
         join: &MirRelationExpr,
-        input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
-        unique_keys: &[Vec<Vec<usize>>],
-        cardinalities: &[Option<usize>],
-        filters: &[FilterCharacteristics],
-        optimizer_features: &OptimizerFeatures,
+        orders: Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>>,
     ) -> Result<(MirRelationExpr, usize), TransformError> {
         let mut new_join = join.clone();
 
         if let MirRelationExpr::Join {
             inputs,
-            equivalences,
+            equivalences: _,
             implementation,
         } = &mut new_join
         {
-            // Determine a viable order for each relation, or return `Err` if none found.
-            let orders = super::optimize_orders(
-                equivalences,
-                available,
-                unique_keys,
-                cardinalities,
-                filters,
-                input_mapper,
-                optimizer_features,
-            )?;
-
             // Count new arrangements.
             let new_arrangements: usize = orders
                 .iter()
@@ -671,51 +654,37 @@ mod delta_queries {
 mod differential {
     use std::collections::BTreeSet;
 
-    use mz_expr::{Columns, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{
+        Columns, JoinImplementation, JoinInputCharacteristics, MirRelationExpr, MirScalarExpr,
+    };
     use mz_ore::soft_assert_eq_or_log;
-    use mz_repr::optimize::OptimizerFeatures;
 
     use crate::TransformError;
     use crate::join_implementation::FilterCharacteristics;
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     /// It also returns the number of new arrangements necessary for this plan.
+    ///
+    /// `orders` are the per-starting-input orders from `optimize_orders`, and we
+    /// will choose one from these.
+    ///
+    /// We could change this preference at any point, but the list of orders should still inform.
+    /// Important, we should choose something stable under re-ordering, to converge under fixed
+    /// point iteration; we choose to start with the first input optimizing our criteria, which
+    /// should remain stable even when promoted to the first position.
     pub fn plan(
         join: &MirRelationExpr,
-        input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
-        unique_keys: &[Vec<Vec<usize>>],
-        cardinalities: &[Option<usize>],
-        filters: &[FilterCharacteristics],
-        optimizer_features: &OptimizerFeatures,
+        mut orders: Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>>,
     ) -> Result<(MirRelationExpr, usize), TransformError> {
         let mut new_join = join.clone();
 
         if let MirRelationExpr::Join {
             inputs,
-            equivalences,
+            equivalences: _,
             implementation,
         } = &mut new_join
         {
-            // We compute one order for each possible starting point, and we will choose one from
-            // these.
-            //
-            // It is an invariant that the orders are in input order: the ith order begins with the ith input.
-            //
-            // We could change this preference at any point, but the list of orders should still inform.
-            // Important, we should choose something stable under re-ordering, to converge under fixed
-            // point iteration; we choose to start with the first input optimizing our criteria, which
-            // should remain stable even when promoted to the first position.
-            let mut orders = super::optimize_orders(
-                equivalences,
-                available,
-                unique_keys,
-                cardinalities,
-                filters,
-                input_mapper,
-                optimizer_features,
-            )?;
-
             // Count new arrangements.
             //
             // We collect the count for each input, to be used to calculate `new_arrangements` below.
@@ -767,7 +736,7 @@ mod differential {
                     // worst `Characteristic`: we inspect the entire `Characteristic` vector of each
                     // of these orders, and choose the best among these. This pushes bad stuff to
                     // happen later, by which time we might have applied some filters.
-                    .max_by_key(|o| o.clone())
+                    .max_by(|a, b| a.cmp(b))
                     .ok_or_else(|| {
                         TransformError::Internal(String::from(
                             "could not find max-min characteristics",
