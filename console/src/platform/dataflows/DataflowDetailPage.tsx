@@ -91,18 +91,42 @@ const DataflowDetailPage = () => {
   );
   const { data: dataflowList } = useDataflowList(listParams);
 
-  const [rawFocusedScope, setFocusedScope] = React.useState<NodeId | null>(
-    null,
-  );
-  // Derived, not synchronized via effect: a scope from a previous structure
-  // (a stale drill-down target after a refetch or a dataflow/replica switch
-  // changes the node id set) falls back to the new structure's root rather
-  // than crashing every direct `nodes.get(focusedScope)!` lookup downstream.
+  // The drill-down scope lives in the URL (as the dataflow address it
+  // resolves to, e.g. "5.1.2"), not component state: back/forward then walk
+  // the drill-down history, and a copied link reopens at the same scope.
+  // Read fresh every render rather than synchronized via effect, so a scope
+  // that doesn't resolve in the current structure (a stale link, a dataflow
+  // whose shape changed, or simply no scope param) falls back to the root
+  // rather than crashing every direct `nodes.get(focusedScope)!` lookup
+  // downstream.
+  const scopeParam = searchParams.get("scope");
+  const rawFocusedScope = scopeParam
+    ? nodeIdOf(scopeParam.split(".").map(Number))
+    : null;
   const focusedScope = data
     ? rawFocusedScope && data.structure.nodes.has(rawFocusedScope)
       ? rawFocusedScope
       : data.structure.root
     : null;
+  const setFocusedScope = React.useCallback(
+    (scope: NodeId) => {
+      const address = data?.structure.nodes.get(scope)?.address;
+      if (!address) return;
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        // The root has no scope of its own (it's exactly a link's default),
+        // so leave the URL as the plain dataflow link instead of carrying a
+        // redundant, always-implied param.
+        if (address.length > 1) {
+          next.set("scope", address.join("."));
+        } else {
+          next.delete("scope");
+        }
+        return next;
+      });
+    },
+    [data, setSearchParams],
+  );
   const [selection, setSelection] = React.useState<Selection | null>(null);
   const [filters, setFilters] = React.useState<Filters>(DEFAULT_FILTERS);
   const [matchIndex, setMatchIndex] = React.useState(0);
@@ -123,15 +147,17 @@ const DataflowDetailPage = () => {
   // replica in place (via the dropdowns) keeps this component instance, its
   // selection, filters, and pins alive. Those reference node ids from the
   // old structure. On the new one they silently miss instead of crashing
-  // (see focusedScope above), which for a pin means every node reads as
-  // "not in the highlighted set" and the whole graph dims with no way to
-  // un-pin. Reset render-phase, not via effect, so there is no render in
-  // between showing the new graph under the old pins.
+  // (same tolerance as focusedScope above), which for a pin means every node
+  // reads as "not in the highlighted set" and the whole graph dims with no
+  // way to un-pin. focusedScope itself needs no entry here: switching
+  // dataflow or replica always lands on a fresh URL with no scope param (the
+  // dropdowns build one from scratch), so it already reads back as the new
+  // structure's root. Reset render-phase, not via effect, so there is no
+  // render in between showing the new graph under the old pins.
   const resetKey = JSON.stringify([replicaName, dataflowId]);
   const [trackedResetKey, setTrackedResetKey] = React.useState(resetKey);
   if (resetKey !== trackedResetKey) {
     setTrackedResetKey(resetKey);
-    setFocusedScope(null);
     setSelection(null);
     setFilters(DEFAULT_FILTERS);
     setMatchIndex(0);
@@ -160,7 +186,7 @@ const DataflowDetailPage = () => {
       ];
       setPendingFitIds(targets);
     },
-    [data],
+    [data, setFocusedScope],
   );
 
   const onLirSelect = React.useCallback(
@@ -193,7 +219,7 @@ const DataflowDetailPage = () => {
       );
       setSelection(node ? { kind: "node", node } : null);
     },
-    [data],
+    [data, setFocusedScope],
   );
 
   // A port's peer lives outside the current view. When the peer is itself a

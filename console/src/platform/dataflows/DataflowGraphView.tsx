@@ -35,7 +35,7 @@ import {
   type VisibleGraph,
   type VisibleNode,
 } from "./dataflowGraph";
-import { NODE_DIMENSIONS } from "./elkGraph";
+import { NODE_DIMENSIONS, type Positions } from "./elkGraph";
 import { OperatorNode, PortNode, RegionNode } from "./nodes";
 import { nodeFillColor } from "./nodeStyle";
 import { useElkLayout } from "./useElkLayout";
@@ -133,6 +133,54 @@ const CenterHelper = ({
       if (fitRef) fitRef.current = null;
     };
   }, [reactFlow, centerRef, fitRef]);
+  return null;
+};
+
+// elk lays each scope out independently, starting near its own origin, so a
+// viewport pan/zoom left over from a previous, unrelated scope (or from the
+// user having panned away) can land on a spot with nothing from the new
+// scope in it at all. Once this scope's layout lands, if none of its nodes
+// are actually on screen, refit rather than leaving the canvas looking
+// empty. Checked once per scope (skipping the initial one, which React
+// Flow's own `fitView` prop already covers), not on every render, so
+// panning away deliberately after landing doesn't get fought.
+const ViewportGuard = ({
+  focusedScope,
+  nodes,
+  positions,
+  paneRef,
+}: {
+  focusedScope: NodeId;
+  nodes: VisibleNode[];
+  positions: Positions | null;
+  paneRef: React.RefObject<HTMLDivElement>;
+}) => {
+  const reactFlow = useReactFlow();
+  const checkedScopeRef = React.useRef<NodeId | null>(focusedScope);
+  React.useEffect(() => {
+    if (!positions || nodes.length === 0) return;
+    if (checkedScopeRef.current === focusedScope) return;
+    checkedScopeRef.current = focusedScope;
+    const pane = paneRef.current;
+    if (!pane) return;
+    const rect = pane.getBoundingClientRect();
+    const { x, y, zoom } = reactFlow.getViewport();
+    const visMinX = -x / zoom;
+    const visMinY = -y / zoom;
+    const visMaxX = visMinX + rect.width / zoom;
+    const visMaxY = visMinY + rect.height / zoom;
+    const anyVisible = nodes.some((n) => {
+      const p = positions[n.id];
+      return (
+        p &&
+        p.x < visMaxX &&
+        p.x + p.width > visMinX &&
+        p.y < visMaxY &&
+        p.y + p.height > visMinY
+      );
+    });
+    if (!anyVisible) void reactFlow.fitView({ padding: 0.3, duration: 300 });
+  }, [focusedScope, nodes, positions, paneRef, reactFlow]);
   return null;
 };
 
@@ -264,6 +312,11 @@ export const DataflowGraphView = ({
             (decorations?.dimmedNodeIds?.has(e.source) ?? false) ||
             (decorations?.dimmedNodeIds?.has(e.target) ?? false),
           selected: e.id === selectedId,
+          // selectedId is a node id when a node (rather than an edge) is
+          // selected; an edge's source/target are always node ids too, so
+          // this naturally never matches while an edge itself is selected,
+          // with no need to separately track which kind selectedId is.
+          connected: e.source === selectedId || e.target === selectedId,
         },
       })),
     [visible, decorations?.dimmedNodeIds, selectedId],
@@ -277,6 +330,8 @@ export const DataflowGraphView = ({
     [visible],
   );
 
+  const paneRef = React.useRef<HTMLDivElement>(null);
+
   if (error) {
     return (
       <VStack width="100%" flex="1" alignItems="flex-start" spacing={2} p={4}>
@@ -288,7 +343,7 @@ export const DataflowGraphView = ({
     );
   }
   return (
-    <Box width="100%" flex="1" position="relative">
+    <Box ref={paneRef} width="100%" flex="1" position="relative">
       {layouting && (
         <Box position="absolute" top={2} right={2} zIndex={10}>
           <Spinner size="sm" />
@@ -348,8 +403,19 @@ export const DataflowGraphView = ({
           nodeColor={(node) =>
             (node.data as { color?: string }).color ?? "#ccc"
           }
+          // A scope of plain, unarranged operators fills every node white
+          // (COLORS.noArrangementOperator), and the minimap's default node
+          // stroke is transparent on a white background, so without an
+          // explicit stroke that scope's minimap renders entirely blank.
+          nodeStrokeColor="#9ca3af"
         />
         {centerRef && <CenterHelper centerRef={centerRef} fitRef={fitRef} />}
+        <ViewportGuard
+          focusedScope={focusedScope}
+          nodes={visible.nodes}
+          positions={positions}
+          paneRef={paneRef}
+        />
       </ReactFlow>
     </Box>
   );
