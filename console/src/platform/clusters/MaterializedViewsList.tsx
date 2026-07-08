@@ -230,6 +230,7 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
   const materializedViewPath = useBuildMaterializedViewPath();
   const regionSlug = useRegionSlug();
   const dataflowVisualizerEnabled = flags["visualization-features"];
+  const { cluster } = props;
 
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -286,7 +287,7 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
                   )}
                 </Td>
                 <Td>{formattedLag}</Td>
-                {dataflowVisualizerEnabled && props.cluster && (
+                {dataflowVisualizerEnabled && cluster && (
                   <Td width="16">
                     <OverflowMenu
                       items={[
@@ -296,7 +297,7 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
                             <MenuItem
                               key="dataflow-visualizer"
                               as={Link}
-                              to={`${absoluteClusterPath(regionSlug, props.cluster!)}/dataflows?export=${v.id}`}
+                              to={`${absoluteClusterPath(regionSlug, cluster)}/dataflows?export=${v.id}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                               }}
