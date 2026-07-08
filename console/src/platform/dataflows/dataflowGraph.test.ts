@@ -213,14 +213,49 @@ describe("buildDataflowStructure", () => {
       expect(sink.ownSkew).toEqual({ cpuSkew: 0, memorySkew: 0 });
     });
 
-    it("computes transitive skew from the subtree's summed per-worker vectors, not from children's own skew", () => {
-      const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, PER_WORKER);
+    it("computes transitive skew as the max of its own and its subtree's skew, matching EXPLAIN ANALYZE's rollup, not a merged-and-then-ratioed vector", () => {
+      // Join is skewed toward worker 0 (1000 vs 0); Map is skewed toward
+      // worker 1 (0 vs 1000) by the same amount, in the opposite
+      // direction. Summed per worker, the totals are 1000/1000 across the
+      // whole region -- perfectly even -- even though both operators are
+      // individually badly skewed (2x each): a merged-vector rollup would
+      // report the region as perfectly balanced, hiding both bad actors.
+      const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, [
+        { id: "12", workerId: "0", elapsedNs: "1000", arrangementSize: "0" },
+        { id: "12", workerId: "1", elapsedNs: "0", arrangementSize: "0" },
+        { id: "13", workerId: "0", elapsedNs: "0", arrangementSize: "0" },
+        { id: "13", workerId: "1", elapsedNs: "1000", arrangementSize: "0" },
+      ]);
       const region = s.nodes.get(nodeIdOf([5, 1]))!;
-      // cpu: worker0 = 10 (Join) + 5 (Map) = 15, worker1 = 30 (Join only,
-      // Map never touched worker 1) -> avg 22.5, skew 30/22.5.
-      expect(region.transitiveSkew.cpuSkew).toBeCloseTo(30 / 22.5);
-      // memory: Map contributes nothing, so this is just Join's own vector.
-      expect(region.transitiveSkew.memorySkew).toBeCloseTo(1.5);
+      expect(region.transitiveSkew.cpuSkew).toBeCloseTo(2);
+    });
+
+    it("ignores an operator's own skew if its work is negligible next to the busiest node in the dataflow, however extreme its raw ratio, and keeps it from polluting an ancestor's rolled-up skew", () => {
+      // Join is genuinely busy (1ms) and perfectly balanced. Map's own
+      // elapsed is 1ns (0.0001% of Join's magnitude), but its per-worker
+      // split (1/0/0/0) would post the theoretical 4-worker ceiling ratio
+      // if taken at face value, despite contributing nothing real.
+      const skewedOps = OPS.map((o) =>
+        o.id === "12"
+          ? { ...o, elapsedNs: "1000000" }
+          : o.id === "13"
+            ? { ...o, elapsedNs: "1" }
+            : o,
+      );
+      const s = buildDataflowStructure(skewedOps, CHANNELS, LIR_SPANS, [
+        { id: "12", workerId: "0", elapsedNs: "500000", arrangementSize: "0" },
+        { id: "12", workerId: "1", elapsedNs: "500000", arrangementSize: "0" },
+        { id: "13", workerId: "0", elapsedNs: "1", arrangementSize: "0" },
+        { id: "13", workerId: "1", elapsedNs: "0", arrangementSize: "0" },
+        { id: "13", workerId: "2", elapsedNs: "0", arrangementSize: "0" },
+        { id: "13", workerId: "3", elapsedNs: "0", arrangementSize: "0" },
+      ]);
+      const map = s.nodes.get(nodeIdOf([5, 1, 2]))!;
+      expect(map.ownSkew.cpuSkew).toEqual(0);
+      // The region's worst real skew is Join's honest 1.0 (perfectly
+      // even), not Map's suppressed near-ceiling ratio.
+      const region = s.nodes.get(nodeIdOf([5, 1]))!;
+      expect(region.transitiveSkew.cpuSkew).toEqual(1);
     });
   });
 });
@@ -581,6 +616,7 @@ describe("decorateGraph", () => {
       { ...DEFAULT_FILTERS, search: "join" },
       heat,
       searchInfo,
+      1,
     );
     // "Join" is inside the region, not visible at the root; the region
     // doesn't match "join" by name either, so it's neither a listed match
@@ -597,6 +633,7 @@ describe("decorateGraph", () => {
       { ...DEFAULT_FILTERS, search: "join" },
       heat,
       searchInfo,
+      1,
     );
     expect(d.searchMatches).toEqual([nodeIdOf([5, 1, 1])]);
     expect(d.dimmedNodeIds.has(nodeIdOf([5, 1, 1]))).toBe(false);
@@ -609,6 +646,7 @@ describe("decorateGraph", () => {
       { ...DEFAULT_FILTERS, hideIdle: true },
       heat,
       null,
+      1,
     );
     // every fixture operator has elapsed > 0 except none; hide check via a synthetic idle op
     const idle = buildDataflowStructure(
@@ -631,6 +669,7 @@ describe("decorateGraph", () => {
       { ...DEFAULT_FILTERS, hideIdle: true },
       heat,
       null,
+      1,
     );
     expect(d2.hiddenNodeIds.has(nodeIdOf([5, 3]))).toBe(true);
     expect(d2.hiddenNodeIds.has(nodeIdOf([5, 1]))).toBe(false);
@@ -643,6 +682,7 @@ describe("decorateGraph", () => {
       { ...DEFAULT_FILTERS, heatmap: "elapsed", heatmapThreshold: 0.5 },
       heat,
       null,
+      1,
     );
     // max transitive elapsed among visible non-ports is the region (13n)
     expect(d.nodeColors.get(regionId)).toEqual("heat(1.00)");
@@ -660,6 +700,7 @@ describe("decorateGraph", () => {
       { ...DEFAULT_FILTERS, heatmap: "elapsed" },
       heat,
       null,
+      1,
     );
     expect(d.nodeColors.size).toBe(0);
   });
@@ -675,12 +716,89 @@ describe("decorateGraph", () => {
       { ...DEFAULT_FILTERS, heatmap: "cpuSkew" },
       heat,
       null,
+      4,
     );
-    // The region's subtree (containing Join) is the only skewed thing; the
-    // sibling sink has no per-worker data at all, so it's the coolest.
-    expect(d.nodeColors.get(regionId)).toEqual("heat(1.00)");
+    // The region's subtree (containing Join) is the only skewed thing (1.5
+    // ratio); the sibling sink has no per-worker data at all, so it's the
+    // coolest, and neither depends on the other being in view.
+    expect(d.nodeColors.get(regionId)).toEqual(
+      `heat(${(Math.log2(1.5) / Math.log2(4)).toFixed(2)})`,
+    );
     expect(d.nodeColors.get(nodeIdOf([5, 2]))).toEqual("heat(0.00)");
   });
+
+  it("skew heatmap floor is exactly ratio 1, ceiling is exactly the worker count", () => {
+    const perfectlyEven = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, [
+      { id: "12", workerId: "0", elapsedNs: "100", arrangementSize: "0" },
+      { id: "12", workerId: "1", elapsedNs: "100", arrangementSize: "0" },
+    ]);
+    const dAtFloor = decorateGraph(
+      deriveVisibleGraph(perfectlyEven, regionId),
+      { ...DEFAULT_FILTERS, heatmap: "cpuSkew" },
+      heat,
+      null,
+      4,
+    );
+    expect(dAtFloor.nodeColors.get(nodeIdOf([5, 1, 1]))).toEqual("heat(0.00)");
+
+    // One worker does everything, the other three do nothing (but are
+    // present, not absent): ratio hits exactly the 4-worker ceiling
+    // (400 / (400/4) = 4), so this must read as fully hot.
+    const atCeiling = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, [
+      { id: "12", workerId: "0", elapsedNs: "400", arrangementSize: "0" },
+      { id: "12", workerId: "1", elapsedNs: "0", arrangementSize: "0" },
+      { id: "12", workerId: "2", elapsedNs: "0", arrangementSize: "0" },
+      { id: "12", workerId: "3", elapsedNs: "0", arrangementSize: "0" },
+    ]);
+    const dAtCeiling = decorateGraph(
+      deriveVisibleGraph(atCeiling, regionId),
+      { ...DEFAULT_FILTERS, heatmap: "cpuSkew" },
+      heat,
+      null,
+      4,
+    );
+    expect(dAtCeiling.nodeColors.get(nodeIdOf([5, 1, 1]))).toEqual(
+      "heat(1.00)",
+    );
+  });
+
+  it("skew heatmap color for a fixed ratio does not depend on what else is in view", () => {
+    const buildWithMapData = (mapRows: PerWorkerStatRow[]) =>
+      decorateGraph(
+        deriveVisibleGraph(
+          buildDataflowStructure(OPS, CHANNELS, LIR_SPANS, [
+            { id: "12", workerId: "0", elapsedNs: "100", arrangementSize: "0" },
+            { id: "12", workerId: "1", elapsedNs: "200", arrangementSize: "0" },
+            ...mapRows,
+          ]),
+          regionId,
+        ),
+        { ...DEFAULT_FILTERS, heatmap: "cpuSkew" },
+        heat,
+        null,
+        4,
+      );
+    const mildCompanion = buildWithMapData([
+      { id: "13", workerId: "0", elapsedNs: "100", arrangementSize: "0" },
+      { id: "13", workerId: "1", elapsedNs: "105", arrangementSize: "0" },
+    ]);
+    const extremeCompanion = buildWithMapData([
+      { id: "13", workerId: "0", elapsedNs: "1", arrangementSize: "0" },
+      { id: "13", workerId: "1", elapsedNs: "1000", arrangementSize: "0" },
+    ]);
+    // Join's own ratio (200/150) never changes; its color must be identical
+    // regardless of Map's ratio, since the domain is fixed at
+    // [1, workerCount] rather than derived from whatever else is in view.
+    expect(mildCompanion.nodeColors.get(nodeIdOf([5, 1, 1]))).toEqual(
+      extremeCompanion.nodeColors.get(nodeIdOf([5, 1, 1])),
+    );
+  });
+
+  // A negligible-magnitude operator's raw skew is suppressed to the "no
+  // data" sentinel at the source (buildDataflowStructure's ownSkew, see
+  // dataflowGraph.test.ts's "skew" describe block) rather than filtered
+  // here, so decorateGraph itself no longer needs, or has, any
+  // magnitude-aware logic of its own to test.
 });
 
 describe("lirIndex", () => {

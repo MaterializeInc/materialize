@@ -28,6 +28,10 @@ export interface DataflowGraphParams {
   dataflowId: string;
 }
 
+interface ReplicaWorkerCountRow {
+  workerCount: bigint | number | string;
+}
+
 function dataflowIdLiteral(dataflowId: string) {
   if (!/^\d+$/.test(dataflowId)) {
     throw new Error(`invalid dataflow id: ${dataflowId}`);
@@ -38,11 +42,22 @@ function dataflowIdLiteral(dataflowId: string) {
 export function useDataflowGraphData(params?: DataflowGraphParams) {
   // Read primitives so an inline params object from a caller does not
   // recompile the queries (and refetch) on every render. Only the dataflow id
-  // is interpolated into the SQL. Cluster and replica reach the request
-  // through the options below, so the query text does not depend on them.
+  // is interpolated into the SQL. Cluster and replica reach the four
+  // dataflow-scoped queries below through the request options, so their text
+  // doesn't depend on them; replicaWorkers is the one exception, since
+  // mz_cluster_replicas/mz_cluster_replica_sizes are plain catalog tables,
+  // not per-replica-scoped introspection relations that the session context
+  // resolves automatically.
   const dataflowId = params?.dataflowId;
+  const clusterName = params?.clusterName;
+  const replicaName = params?.replicaName;
   const queries = React.useMemo(() => {
-    if (dataflowId === undefined) return null;
+    if (
+      dataflowId === undefined ||
+      clusterName === undefined ||
+      replicaName === undefined
+    )
+      return null;
     const id = dataflowIdLiteral(dataflowId);
     return {
       operators: sql`
@@ -132,8 +147,21 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
           ON memory.id = cpu.id AND memory.worker_id = cpu.worker_id`
         .$castTo<PerWorkerStatRow>()
         .compile(queryBuilder),
+      // The replica's total worker count (workers per process times
+      // processes), the fixed ceiling the skew heatmap normalizes against
+      // (see decorateGraph). Plain catalog tables, not introspection, so
+      // this is the one query here that needs cluster/replica in its text
+      // rather than relying on the request's session context.
+      replicaWorkers: sql`
+        SELECT crs.workers * crs.processes AS "workerCount"
+        FROM mz_cluster_replicas AS cr
+        JOIN mz_clusters AS c ON c.id = cr.cluster_id
+        JOIN mz_cluster_replica_sizes AS crs ON crs.size = cr.size
+        WHERE c.name = ${lit(clusterName)} AND cr.name = ${lit(replicaName)}`
+        .$castTo<ReplicaWorkerCountRow>()
+        .compile(queryBuilder),
     };
-  }, [dataflowId]);
+  }, [dataflowId, clusterName, replicaName]);
 
   const { results, error, databaseError, loading, refetch } = useSqlManyTyped(
     queries,
@@ -156,7 +184,11 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
     : null;
   const [lastGood, setLastGood] = React.useState<{
     key: string;
-    data: { structure: DataflowStructure; fetchedAt: Date };
+    data: {
+      structure: DataflowStructure;
+      workerCount: number;
+      fetchedAt: Date;
+    };
   } | null>(null);
 
   // Whether a fetch has actually started under the current key. Guards against
@@ -189,6 +221,10 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
             results.lirSpans ?? [],
             results.perWorkerStats ?? [],
           ),
+          // A replica always has at least 1 worker; falling back to 1 (a
+          // heatmap ceiling of log2(1) = 0, disabling skew coloring
+          // entirely) only matters if the query somehow returns no row.
+          workerCount: Number(results.replicaWorkers?.[0]?.workerCount ?? 1),
           fetchedAt: new Date(),
         },
       });

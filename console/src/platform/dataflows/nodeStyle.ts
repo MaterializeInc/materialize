@@ -11,9 +11,7 @@ import type { LirGroupNode, VisibleNode } from "./dataflowGraph";
 
 export const COLORS = {
   noArrangementRegion: "#12b886",
-  noArrangementOperator: "#ffffff",
   arrangementRegion: "#7950f2",
-  arrangementOperator: "#fab005",
 };
 
 // Mirrors theme/colors.ts blue.500 and orange.400. This app doesn't emit
@@ -52,12 +50,46 @@ export function lirGroupColor(lirId: string): string {
   return GROUP_PALETTE[Math.abs(hash) % GROUP_PALETTE.length];
 }
 
+// A muted, light subset of the spectrum for operator fills: deliberately
+// less saturated than GROUP_PALETTE so an operator's fill never reads as
+// "this is a LIR group" at a glance, while still giving operators of the
+// same kind (every "Reduce", every "Map") a consistent, recognizable color
+// instead of the old fixed white/orange pair, which made an unarranged
+// operator (the common case) invisible against a white canvas.
+const OPERATOR_PALETTE = [
+  "#a5d8ff", // blue
+  "#99e9f2", // cyan
+  "#96f2d7", // teal
+  "#b2f2bb", // green
+  "#d8f5a2", // lime
+  "#ffec99", // yellow
+  "#ffd8a8", // orange
+  "#fcc2d7", // pink
+  "#eebefa", // grape
+  "#d0bfff", // violet
+  "#bac8ff", // indigo
+];
+
+export function operatorColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  }
+  return OPERATOR_PALETTE[Math.abs(hash) % OPERATOR_PALETTE.length];
+}
+
 export function nodeFillColor(node: VisibleNode): string {
-  const arranged = (node.transitive?.arrangementRecords ?? 0n) > 0n;
   const region = node.kind !== "operator" && node.kind !== "port";
-  if (region)
-    return arranged ? COLORS.arrangementRegion : COLORS.noArrangementRegion;
-  return arranged ? COLORS.arrangementOperator : COLORS.noArrangementOperator;
+  if (!region) return operatorColor(node.label);
+  const arranged = (node.transitive?.arrangementRecords ?? 0n) > 0n;
+  return arranged ? COLORS.arrangementRegion : COLORS.noArrangementRegion;
+}
+
+// skewRatio's 0 is a "no per-worker data at all" sentinel, not a real ratio
+// (a real ratio is always >= 1); labeling it distinctly avoids it reading
+// as an implausibly perfect score.
+export function formatSkew(ratio: number): string {
+  return ratio === 0 ? "no data" : ratio.toFixed(2);
 }
 
 export function formatElapsed(ns: bigint): string {
