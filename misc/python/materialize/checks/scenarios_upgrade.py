@@ -9,6 +9,7 @@
 
 
 from dataclasses import dataclass
+from typing import Any
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
 from materialize.checks.checks import Check
@@ -100,11 +101,12 @@ class UpgradeEntireMzFromLatestSelfManaged(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self._self_managed_versions = get_self_managed_versions(
             max_version=MzVersion.parse_cargo()
         )
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self._self_managed_versions[-1]
@@ -146,11 +148,12 @@ class UpgradeEntireMzFromPreviousSelfManaged(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self._self_managed_versions = get_self_managed_versions(
             max_version=MzVersion.parse_cargo()
         )
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self._self_managed_versions[-2]
@@ -273,9 +276,10 @@ class UpgradeEntireMzFourVersions(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self.minor_versions = get_minor_versions()
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self.minor_versions[3]
@@ -324,15 +328,6 @@ class UpgradeEntireMzFourVersions(Scenario):
 
 class UpgradeV80Migration(Scenario):
     """Test upgrade v26.17.1 (catalog 80) -> v26.18.0 (catalog 81, buggy v80_to_v81) -> v26.24.0 (catalog 83, partial fix in v82_to_v83) -> current (catalog 84, full fix in v83_to_v84)"""
-
-    def __init__(
-        self,
-        checks: list[type[Check]],
-        executor: Executor,
-        features: Features,
-        seed: str | None = None,
-    ):
-        super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
         return MzVersion.parse_mz("v26.17.1")
@@ -677,9 +672,10 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self.self_managed_versions = get_compatible_upgrade_from_versions()
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self.self_managed_versions[0]
@@ -733,9 +729,10 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self.self_managed_versions = get_compatible_upgrade_from_versions()
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self.self_managed_versions[0]
@@ -799,9 +796,10 @@ class SelfManagedRandomUpgradePath(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self.self_managed_versions = get_compatible_upgrade_from_versions()
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def _generate_random_upgrade_path(
         self,
@@ -913,9 +911,10 @@ class SelfManagedEarliestToLatestDirectUpgrade(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self.self_managed_versions = get_compatible_upgrade_from_versions()
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self.self_managed_versions[0]
