@@ -51,32 +51,24 @@ For more information, see [MCP Server for Agents](/integrations/mcp-server/mcp-a
 - Fixed replicas doubling in memory during zero-downtime upgrades due to unbounded correction buffer growth in read-only materialized view sinks.
 
 ## v26.30.1
-*Released to Materialize Cloud: 2026-06-25* <br>
-*Released to Materialize Self-Managed: 2026-06-26* <br>
+*Released to Materialize Cloud: 2026-07-09* <br>
+*Released to Materialize Self-Managed: 2026-07-10* <br>
 
-### PostgreSQL Physical Replica Support {#v26.30.1-postgresql-physical-replica-support}
-Materialize now supports replicating from a physical PostgreSQL replica (hot standby), not just the primary server. This lets you offload replication load from the primary to a read replica. Connecting to a physical replica requires PostgreSQL 16 or later. If the replica is promoted to primary, the source fails and must be recreated, consistent with how Materialize handles a primary failover today.
+### PostgreSQL Physical Replica Support {#v26.30-postgresql-physical-replica-support}
+Materialize now supports replicating from a physical PostgreSQL replica (hot standby), not just the primary server. This enables setups where the replication load is offloaded from the primary to a read replica.
 
-For more information, see [CREATE SOURCE: PostgreSQL](/sql/create-source/postgres-v2/).
+### Materialize CRD v1 for Self-Managed {#v26.30-materialize-crd-v1-for-self-managed}
+Self-managed Kubernetes deployments can now opt in to the v1 Materialize Custom Resource Definition, which simplifies rollout behavior by automatically detecting spec changes instead of requiring manual `requestRollout` fields. The v1 CRD is opt-in via the `operator.args.installV1CRD` Helm value; existing v1alpha1 deployments continue to work unchanged.
 
-### MCP Developer Query Tool {#v26.30.1-mcp-developer-query-tool}
-The MCP server for developers now includes a `query` tool for running `SELECT`, `SHOW`, and `EXPLAIN` queries against user objects and clusters, mirroring the agent endpoint's query capability.
-
-### Advisory {#v26.30.1-advisory}
-
-- **MySQL zero-value YEAR columns**: This release changes how the MySQL source decodes zero-value `YEAR` columns (`0000`). Previously, zero values were decoded inconsistently: as `0` during the initial snapshot and as `1900` (an invalid year) from the binlog. Both are now decoded as the 4-digit string `0000`, matching MySQL's own representation. Non-zero years (1901–2155) are unaffected.
-
-  **Upgrade impact**: If you replicate a `YEAR` column that can hold zero values, rows ingested before the upgrade retain their old representation (`0` or `1900`) until the upstream row is modified and re-decoded. To make all rows consistent and avoid potential source errors, drop and recreate the affected source (or subsource/table) after upgrading. Sources without zero-value `YEAR` data require no action.
-
-### Improvements {#v26.30.1-improvements}
+### Improvements {#v26.30-improvements}
+- **MCP developer query tool**: The MCP developer endpoint now includes a `query` tool for running `SELECT`, `SHOW`, and `EXPLAIN` queries against user objects and clusters, mirroring the agent endpoint's query capability.
+- **MCP OAuth discovery for Frontegg**: The MCP server now advertises the Frontegg authorization server via RFC 9728 Protected Resource Metadata, enabling MCP clients that use standard OAuth discovery to connect to Materialize's MCP endpoints with Frontegg authentication.
 - **mz-debug OIDC and SASL authentication**: The `mz-debug` diagnostic tool now supports OIDC and SASL authentication modes in addition to password authentication.
 - **Faster LIKE pattern matching**: `LIKE` patterns with multiple `%` wildcards (e.g., `%a%a%a`) no longer exhibit super-linear matching time against long strings, while common patterns like `%substring%` remain on the fast string matcher.
 - **Fivetran Destination restored**: The Fivetran Destination integration, which was removed in v26.29.0, has been restored.
-- **Self-managed monitoring docs refreshed**: Self-managed deployments now have a published reference of the metrics Materialize exposes: [essential metrics](/manage/monitor/essential-metrics/) and an [appendix of all metrics](/manage/monitor/appendix-metrics/). The self-managed monitoring guides for [Prometheus and Grafana](/manage/monitor/self-managed/prometheus/) and [Datadog](/manage/monitor/self-managed/datadog/) have been refreshed with updated scrape configurations and dashboards.
 
-### Bug Fixes {#v26.30.1-bug-fixes}
+### Bug Fixes {#v26.30-bug-fixes}
 - Fixed `IS [NOT] DISTINCT FROM` binding too loosely relative to `AND`/`OR`, causing `a IS DISTINCT FROM b AND c` to silently produce wrong results by parsing as `a IS DISTINCT FROM (b AND c)` instead of `(a IS DISTINCT FROM b) AND c`.
-- Fixed the query optimizer incorrectly propagating errors through `AND`/`OR` expressions, causing queries like `false AND <error>` to produce an error instead of returning `false`.
 - Fixed `GRANT ALL ON TABLE` and `REVOKE ALL ON TABLE` on views, materialized views, and sources only granting or revoking `SELECT` instead of the full table privilege set (`SELECT`, `INSERT`, `UPDATE`, `DELETE`).
 - Fixed MySQL sources incorrectly decoding zero-value `YEAR` columns during both snapshot and replication.
 - Fixed Avro-formatted sources failing to decode records after a nullable column's type was promoted to a wider numeric type (e.g., `int` to `double`).
@@ -101,6 +93,10 @@ The MCP server for developers now includes a `query` tool for running `SELECT`, 
 - Fixed a panic when creating a Kafka sink with a non-positive `TOPIC METADATA REFRESH INTERVAL`.
 - Fixed a panic when a Kafka topic refresh interval was set to less than 1 second.
 - Fixed the MCP `read_data_product` tool failing when the `restrict_to_user_objects` option was enabled.
+
+### Agent Skills {#v26.30-agent-skills}
+- **MCP Developer Analysis**: Added worker skew analysis to detect CPU imbalance across dataflow workers.
+- **MCP Developer Analysis**: Added support for the developer `query` tool and `EXPLAIN ANALYZE` workflow, enabling richer analysis of user objects on named clusters.
 
 ## v26.29.0
 *Released to Materialize Cloud: 2026-06-18* <br>
