@@ -280,6 +280,19 @@ describe("deriveVisibleGraph", () => {
         messagesSent: 5n,
         batchesSent: 2n,
         channelTypes: ["batches"],
+        // channel 3 touches the region at exactly its own address (port 0),
+        // so this edge's source can drill straight to that inner port.
+        sourceLandings: [
+          {
+            address: [5, 1],
+            label: "output 0",
+            messagesSent: 5n,
+            batchesSent: 2n,
+            channelTypes: ["batches"],
+            peerPortId: `${regionId}:out:0`,
+          },
+        ],
+        targetLandings: [],
       },
     ]);
     const region = g.nodes[0];
@@ -473,6 +486,76 @@ describe("deriveVisibleGraph", () => {
     });
   });
 
+  it("records which of a region's own ports a merged edge's real channels land on", () => {
+    // Timely gates every scope crossing through the box's own address, one
+    // hop at a time (verified against live introspection data: real
+    // channels never skip straight past a region to something deeper
+    // inside it), so a channel touching RegionA always does so at exactly
+    // address [8,1], never deeper. Two of RegionA's own output ports (0 and
+    // 1) both happen to feed the same downstream leaf, Sink: from the
+    // root, both collapse onto the same visible edge (RegionA -> Sink),
+    // discarding which of RegionA's ports is which unless something
+    // records it separately.
+    const withPorts = buildDataflowStructure(
+      [
+        { ...OPS[0], id: "60", address: ["8"], name: "Dataflow" },
+        { ...OPS[0], id: "61", address: ["8", "1"], name: "RegionA" },
+        { ...OPS[0], id: "62", address: ["8", "1", "1"], name: "LeafInner" },
+        { ...OPS[0], id: "64", address: ["8", "2"], name: "Sink" },
+      ],
+      [
+        {
+          id: "50",
+          fromOperatorAddress: ["8", "1"],
+          fromPort: "0",
+          toOperatorAddress: ["8", "2"],
+          toPort: "0",
+          messagesSent: "3",
+          batchesSent: "1",
+          channelType: "rows",
+        },
+        {
+          id: "51",
+          fromOperatorAddress: ["8", "1"],
+          fromPort: "1",
+          toOperatorAddress: ["8", "2"],
+          toPort: "0",
+          messagesSent: "2",
+          batchesSent: "1",
+          channelType: "rows",
+        },
+      ],
+      [],
+    );
+    const g = deriveVisibleGraph(withPorts, withPorts.root);
+    const regionAId = nodeIdOf([8, 1]);
+    const edge = g.edges.find(
+      (e) => e.id === `${regionAId}=>${nodeIdOf([8, 2])}`,
+    )!;
+    expect(
+      edge.sourceLandings.sort((a, b) => a.label.localeCompare(b.label)),
+    ).toEqual([
+      {
+        address: [8, 1],
+        label: "output 0",
+        messagesSent: 3n,
+        batchesSent: 1n,
+        channelTypes: ["rows"],
+        peerPortId: `${regionAId}:out:0`,
+      },
+      {
+        address: [8, 1],
+        label: "output 1",
+        messagesSent: 2n,
+        batchesSent: 1n,
+        channelTypes: ["rows"],
+        peerPortId: `${regionAId}:out:1`,
+      },
+    ]);
+    // Sink is a leaf: it has no inner ports of its own to land on.
+    expect(edge.targetLandings).toEqual([]);
+  });
+
   it("resolves a region peer's own port, so a jump can drill straight to it", () => {
     // Two sibling regions, A's output feeding B's input directly (not
     // nested in each other): from inside A, B is a region peer with a
@@ -512,6 +595,65 @@ describe("deriveVisibleGraph", () => {
     const inPort = fromB.nodes.find((n) => n.id === `${bId}:in:7`)!;
     expect(inPort.peers).toEqual([
       expect.objectContaining({ address: [9, 1], peerPortId: `${aId}:out:3` }),
+    ]);
+  });
+
+  it("resolves a peer past a nested scope's boundary pseudo-vertex", () => {
+    // A scope's own boundary is logged as a pseudo-vertex [scope, 0], which
+    // never gets an operator row (only real children do). When a region is
+    // nested two scopes deep, its outer boundary channel targets its
+    // *enclosing* scope's pseudo-vertex directly (mirroring the [5,1,0]
+    // pattern in CHANNELS one level up), e.g. [6,1,0] -> [6,1,1] for a region
+    // at [6,1,1] inside [6,1]. [6,1,0] has no operator row, so naively
+    // resolving the peer address finds nothing; the fix is to recognize the
+    // pseudo-vertex and peel back to its enclosing scope [6,1], which does.
+    const nested = buildDataflowStructure(
+      [
+        { ...OPS[0], id: "30", address: ["6"], name: "Dataflow" },
+        { ...OPS[0], id: "31", address: ["6", "1"], name: "RegionOuter" },
+        { ...OPS[0], id: "32", address: ["6", "1", "1"], name: "RegionInner" },
+        {
+          ...OPS[0],
+          id: "33",
+          address: ["6", "1", "1", "1"],
+          name: "LeafInner",
+        },
+      ],
+      [
+        {
+          id: "40",
+          fromOperatorAddress: ["6", "1", "0"],
+          fromPort: "0",
+          toOperatorAddress: ["6", "1", "1"],
+          toPort: "0",
+          messagesSent: "4",
+          batchesSent: "1",
+          channelType: "rows",
+        },
+        {
+          id: "41",
+          fromOperatorAddress: ["6", "1", "1", "0"],
+          fromPort: "0",
+          toOperatorAddress: ["6", "1", "1", "1"],
+          toPort: "0",
+          messagesSent: "4",
+          batchesSent: "1",
+          channelType: "rows",
+        },
+      ],
+      [],
+    );
+    const outerId = nodeIdOf([6, 1]);
+    const innerId = nodeIdOf([6, 1, 1]);
+
+    const fromInner = deriveVisibleGraph(nested, innerId);
+    const inPort = fromInner.nodes.find((n) => n.id === `${innerId}:in:0`)!;
+    expect(inPort.peers).toEqual([
+      expect.objectContaining({
+        address: [6, 1],
+        label: "RegionOuter",
+        peerPortId: `${outerId}:in:0`,
+      }),
     ]);
   });
 
@@ -974,6 +1116,8 @@ describe("rerouteHiddenNodes", () => {
     messagesSent,
     batchesSent,
     channelTypes,
+    sourceLandings: [],
+    targetLandings: [],
   });
 
   it("returns the graph unchanged when nothing is hidden", () => {
@@ -1002,6 +1146,8 @@ describe("rerouteHiddenNodes", () => {
         messagesSent: 6n,
         batchesSent: 2n,
         channelTypes: ["rows"],
+        sourceLandings: [],
+        targetLandings: [],
       },
     ]);
   });

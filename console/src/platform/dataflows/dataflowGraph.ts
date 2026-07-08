@@ -119,6 +119,18 @@ export interface VisibleEdge {
   messagesSent: bigint;
   batchesSent: bigint;
   channelTypes: string[];
+  // When source/target is a collapsed region, which of its own inner ports
+  // this edge's real channel(s) land on (Timely always gates a scope
+  // crossing through the box's own address, one hop at a time, so it's
+  // never any deeper than that). Reuses PortPeer's shape: address is the
+  // box's own address (what onJumpToPeer navigates into) and peerPortId the
+  // resolved inner port (what it selects there). A merge of several real
+  // channels onto one visible edge (same collapse that merges their stats,
+  // e.g. two of a region's outputs feeding the same downstream sink) can
+  // name more than one. Empty when the endpoint is already exact (a leaf
+  // operator or port, or a box with no matching inner port for this hop).
+  sourceLandings: PortPeer[];
+  targetLandings: PortPeer[];
 }
 
 export interface VisibleGraph {
@@ -401,6 +413,10 @@ export function representativeInView(
   return null;
 }
 
+function addressesEqual(a: Address, b: Address): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 function representative(address: Address, viewRootAddress: Address): NodeId {
   return representativeInView(address, viewRootAddress) ?? nodeIdOf(address);
 }
@@ -489,7 +505,15 @@ export function deriveVisibleGraph(
   });
   const visibleIds = new Set(nodes.map((n) => n.id));
 
-  const edgesById = new Map<string, VisibleEdge & { typeSet: Set<string> }>();
+  // sourceLandings/targetLandings are computed separately (see
+  // sourceLandingsByEdge/targetLandingsByEdge below) and attached once, in
+  // the final map at the bottom, rather than threaded through here.
+  const edgesById = new Map<
+    string,
+    Omit<VisibleEdge, "sourceLandings" | "targetLandings"> & {
+      typeSet: Set<string>;
+    }
+  >();
   const ports = new Map<string, VisibleNode>();
   const portId = (p: {
     scope: NodeId;
@@ -510,7 +534,21 @@ export function deriveVisibleGraph(
     batchesSent: bigint,
     channelType: string | null,
   ) => {
-    const peerId = nodeIdOf(peerAddress);
+    // A scope's own boundary is logged as a pseudo-vertex [scope, 0], which
+    // never gets an operator row of its own (only real children do). A
+    // region nested two or more scopes deep has its outer half target that
+    // pseudo-vertex directly, one level further up than the region itself;
+    // peel back to the enclosing scope, which does have a row, so the jump
+    // still lands somewhere instead of being dropped as if elided.
+    let resolvedAddress = peerAddress;
+    while (
+      resolvedAddress.length > 0 &&
+      resolvedAddress[resolvedAddress.length - 1] === 0 &&
+      !structure.nodes.has(nodeIdOf(resolvedAddress))
+    ) {
+      resolvedAddress = resolvedAddress.slice(0, -1);
+    }
+    const peerId = nodeIdOf(resolvedAddress);
     if (!structure.nodes.has(peerId)) return; // elided scope, nothing to jump to
     const port = ports.get(portId(p))!;
     const existing = port.peers.find(
@@ -532,15 +570,60 @@ export function deriveVisibleGraph(
         peerPort,
         peerSide,
         peerId,
-        peerAddress,
+        resolvedAddress,
       );
       port.peers.push({
-        address: peerAddress,
+        address: resolvedAddress,
         label: structure.nodes.get(peerId)!.name,
         messagesSent,
         batchesSent,
         channelTypes: channelType ? [channelType] : [],
         peerPortId: fromPeer.port ? fromPeer.id : null,
+      });
+    }
+  };
+  // A channel touching a collapsed region box always does so at exactly the
+  // box's own address (Timely gates every scope crossing through a single
+  // boundary vertex, one hop at a time; a plain, non-port box reference is
+  // therefore never deeper than its own address, unlike addPeer's peers,
+  // which land outside viewRoot's subtree entirely). What can still be
+  // ambiguous is which of the box's own inner ports a given hop's port
+  // number lands on, and a merge of several such hops onto one visible
+  // edge (same collapse that merges their stats, e.g. two of a region's
+  // outputs feeding the same downstream sink) can name more than one.
+  // Recorded per side, keyed by edge id.
+  const sourceLandingsByEdge = new Map<string, Map<NodeId, PortPeer>>();
+  const targetLandingsByEdge = new Map<string, Map<NodeId, PortPeer>>();
+  const addLanding = (
+    byEdge: Map<string, Map<NodeId, PortPeer>>,
+    edgeId: string,
+    boxAddress: Address,
+    innerPortId: NodeId,
+    label: string,
+    messagesSent: bigint,
+    batchesSent: bigint,
+    channelType: string | null,
+  ) => {
+    let landings = byEdge.get(edgeId);
+    if (!landings) {
+      landings = new Map();
+      byEdge.set(edgeId, landings);
+    }
+    const existing = landings.get(innerPortId);
+    if (existing) {
+      existing.messagesSent += messagesSent;
+      existing.batchesSent += batchesSent;
+      if (channelType && !existing.channelTypes.includes(channelType)) {
+        existing.channelTypes = [...existing.channelTypes, channelType].sort();
+      }
+    } else {
+      landings.set(innerPortId, {
+        address: boxAddress,
+        label,
+        messagesSent,
+        batchesSent,
+        channelTypes: channelType ? [channelType] : [],
+        peerPortId: innerPortId,
       });
     }
   };
@@ -623,6 +706,62 @@ export function deriveVisibleGraph(
     }
     if (from.id === to.id) continue;
     const id = `${from.id}=>${to.id}`;
+    // A landing only adds information when the channel touches the box at
+    // exactly its own address (the boundary-crossing pattern endpointId's
+    // ends-in-0 pairing relies on): only then does it name one of the box's
+    // own inner ports to resolve. Anything else (a leaf collapsing into an
+    // ancestor box, an address that isn't this box's boundary at all) has
+    // no more precise a target than the box itself, already shown.
+    if (!from.port) {
+      const box = structure.nodes.get(from.id)!;
+      if (addressesEqual(ch.fromAddress, box.address)) {
+        const inner = endpointId(
+          structure,
+          ch.fromAddress,
+          ch.fromPort,
+          "from",
+          from.id,
+          box.address,
+        );
+        if (inner.port) {
+          addLanding(
+            sourceLandingsByEdge,
+            id,
+            box.address,
+            inner.id,
+            `${inner.port.direction} ${inner.port.port}`,
+            ch.messagesSent,
+            ch.batchesSent,
+            ch.channelType,
+          );
+        }
+      }
+    }
+    if (!to.port) {
+      const box = structure.nodes.get(to.id)!;
+      if (addressesEqual(ch.toAddress, box.address)) {
+        const inner = endpointId(
+          structure,
+          ch.toAddress,
+          ch.toPort,
+          "to",
+          to.id,
+          box.address,
+        );
+        if (inner.port) {
+          addLanding(
+            targetLandingsByEdge,
+            id,
+            box.address,
+            inner.id,
+            `${inner.port.direction} ${inner.port.port}`,
+            ch.messagesSent,
+            ch.batchesSent,
+            ch.channelType,
+          );
+        }
+      }
+    }
     const existing = edgesById.get(id);
     if (existing) {
       existing.messagesSent += ch.messagesSent;
@@ -643,6 +782,8 @@ export function deriveVisibleGraph(
   const edges = [...edgesById.values()].map(({ typeSet, ...e }) => ({
     ...e,
     channelTypes: [...typeSet].sort(),
+    sourceLandings: [...(sourceLandingsByEdge.get(e.id)?.values() ?? [])],
+    targetLandings: [...(targetLandingsByEdge.get(e.id)?.values() ?? [])],
   }));
   return { nodes: [...nodes, ...ports.values()], edges };
 }
@@ -780,6 +921,11 @@ export function rerouteHiddenNodes(
           messagesSent,
           batchesSent,
           channelTypes: [...types].sort(),
+          // A spliced edge crosses one or more hidden nodes: it no longer
+          // corresponds to a single real channel, so there's no landing
+          // list to carry over.
+          sourceLandings: [],
+          targetLandings: [],
         });
       }
     }
