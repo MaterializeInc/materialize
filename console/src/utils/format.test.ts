@@ -10,11 +10,31 @@
 import parse from "postgres-interval";
 
 import {
+  formatElapsedNs,
   formatInterval,
   formatIntervalShort,
   fromSeconds,
   toSeconds,
 } from "./format";
+
+describe("formatElapsedNs", () => {
+  it("formats zero as a plain 0s", () => {
+    expect(formatElapsedNs(0n)).toEqual("0s");
+  });
+
+  it("shows sub-second durations in milliseconds instead of collapsing to 0s", () => {
+    expect(formatElapsedNs(257_000_000n)).toEqual("257ms");
+  });
+
+  it("shows single-digit-second durations with one decimal place", () => {
+    expect(formatElapsedNs(1_400_000_000n)).toEqual("1.4s");
+    expect(formatElapsedNs(1_600_000_000n)).toEqual("1.6s");
+  });
+
+  it("rounds durations of 10s or more to whole seconds", () => {
+    expect(formatElapsedNs(543_400_000_000n)).toEqual("543s");
+  });
+});
 
 describe("formatIntervalShort", () => {
   it("only returns years if present", () => {
