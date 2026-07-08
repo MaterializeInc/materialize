@@ -207,9 +207,20 @@ function representative(address: Address, collapsed: CollapseState): NodeId {
   return nodeIdOf(address);
 }
 
-// A channel endpoint address ending in 0 denotes the enclosing scope's
-// input (from side) or output (to side) port.
+// A scope boundary crossing is logged as two channels that share a port
+// number but use different addressing for each half:
+//   - the outer half (external <-> scope) addresses the scope by its own
+//     operator address, e.g. an external producer's channel row targets
+//     address [5,2] directly, the same address BuildRegion's own operator
+//     row uses;
+//   - the inner half (scope <-> child) addresses the scope's internal
+//     fan-out point one level deeper, e.g. [5,2,0].
+// Both halves are mapped to the same synthetic port id, keyed by (scope,
+// direction, port number), so they visually chain through one port node
+// instead of the outer half landing on the region's own node (indistinguishable
+// from every other port sharing that scope) or the inner half dangling.
 function endpointId(
+  structure: DataflowStructure,
   address: Address,
   port: number,
   side: "from" | "to",
@@ -228,6 +239,19 @@ function endpointId(
       id: `${scopeId}:${direction === "input" ? "in" : "out"}:${port}`,
       port: { scope: scopeId, direction, port },
     };
+  }
+  const scopeId = nodeIdOf(address);
+  const scopeNode = structure.nodes.get(scopeId);
+  if (scopeNode && scopeNode.children.length > 0) {
+    const rep = representative(address, collapsed);
+    if (rep === scopeId && !collapsed.has(scopeId)) {
+      const direction = side === "to" ? "input" : "output";
+      return {
+        id: `${scopeId}:${direction === "input" ? "in" : "out"}:${port}`,
+        port: { scope: scopeId, direction, port },
+      };
+    }
+    return { id: rep };
   }
   return { id: representative(address, collapsed) };
 }
@@ -264,8 +288,25 @@ export function deriveVisibleGraph(
   const edgesById = new Map<string, VisibleEdge & { typeSet: Set<string> }>();
   const ports = new Map<string, VisibleNode>();
   for (const ch of structure.channels) {
-    const from = endpointId(ch.fromAddress, ch.fromPort, "from", collapsed);
-    const to = endpointId(ch.toAddress, ch.toPort, "to", collapsed);
+    const from = endpointId(
+      structure,
+      ch.fromAddress,
+      ch.fromPort,
+      "from",
+      collapsed,
+    );
+    const to = endpointId(structure, ch.toAddress, ch.toPort, "to", collapsed);
+    // A non-port endpoint id names an operator or region address, which must
+    // exist in the structure. Real dataflows can log channels touching an
+    // address with no corresponding operator row (e.g. an elided scope), so
+    // drop the channel rather than hand elk a reference to a node that will
+    // never be emitted.
+    if (
+      (!from.port && !structure.nodes.has(from.id)) ||
+      (!to.port && !structure.nodes.has(to.id))
+    ) {
+      continue;
+    }
     if (from.id === to.id) continue;
     for (const p of [from.port, to.port]) {
       if (

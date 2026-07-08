@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Badge, Box, Text, Tooltip } from "@chakra-ui/react";
+import { Badge, Box, HStack, Text, Tooltip } from "@chakra-ui/react";
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 import React from "react";
 
@@ -16,13 +16,16 @@ import { formatBytesShort } from "~/utils/format";
 import type { VisibleNode } from "./dataflowGraph";
 import { type FlowNodeData, formatElapsed } from "./nodeStyle";
 
+// Records and size share one line, not two: the fixed node height only has
+// room for name + a couple of stat lines before text spills out of the box.
 const statLines = (node: VisibleNode) => {
   const lines: string[] = [];
   const stats = node.stats;
   if (!stats) return lines;
   if (stats.arrangementRecords > 0n) {
-    lines.push(`${stats.arrangementRecords} arranged records`);
-    lines.push(formatBytesShort(stats.arrangementSize));
+    lines.push(
+      `${stats.arrangementRecords} rec · ${formatBytesShort(stats.arrangementSize)}`,
+    );
   }
   if (stats.elapsedNs > 0n) lines.push(formatElapsed(stats.elapsedNs));
   return lines;
@@ -78,10 +81,14 @@ export const CollapsedRegionNode = ({
   data,
 }: NodeProps & { data: FlowNodeData }) => (
   <CardShell data={data}>
-    <Text fontSize="sm" fontWeight="600" noOfLines={1}>
-      {data.node.label}
-    </Text>
-    <Badge fontSize="2xs">{data.node.childCount} children</Badge>
+    <HStack justifyContent="space-between" spacing={1}>
+      <Text fontSize="sm" fontWeight="600" noOfLines={1}>
+        {data.node.label}
+      </Text>
+      <Badge fontSize="2xs" flexShrink={0}>
+        {data.node.childCount}
+      </Badge>
+    </HStack>
     {statLines(data.node).map((line) => (
       <Text key={line} fontSize="xs" noOfLines={1}>
         {line}
