@@ -13,6 +13,7 @@ import React from "react";
 import {
   Link,
   useNavigate,
+  useNavigationType,
   useParams,
   useSearchParams,
 } from "react-router-dom";
@@ -105,31 +106,78 @@ const DataflowDetailPage = () => {
   const rawFocusedScope = scopeParam
     ? nodeIdOf(scopeParam.split(".").map(Number))
     : null;
+  const selectParam = searchParams.get("select");
   const focusedScope = data
     ? rawFocusedScope && data.structure.nodes.has(rawFocusedScope)
       ? rawFocusedScope
       : data.structure.root
     : null;
+  // Every URL-param write funnels through here: calling setSearchParams
+  // more than once in the same synchronous handler is unsafe (the second
+  // call's `prev` doesn't see the first call's pending change, so it wins
+  // and silently discards the first), so anything that needs to touch more
+  // than one param at once (see focusOn, onSelectLir below) must do it in a
+  // single mutate callback rather than composing two setters.
+  const updateSearchParams = React.useCallback(
+    (mutate: (urlParams: URLSearchParams) => void) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        mutate(next);
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
+  // The root has no scope of its own (it's exactly a link's default), so
+  // leave the URL as the plain dataflow link instead of carrying a
+  // redundant, always-implied param.
+  const applyScope = (urlParams: URLSearchParams, address: Address) => {
+    if (address.length > 1) urlParams.set("scope", address.join("."));
+    else urlParams.delete("scope");
+  };
   const setFocusedScope = React.useCallback(
     (scope: NodeId) => {
       const address = data?.structure.nodes.get(scope)?.address;
       if (!address) return;
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        // The root has no scope of its own (it's exactly a link's default),
-        // so leave the URL as the plain dataflow link instead of carrying a
-        // redundant, always-implied param.
-        if (address.length > 1) {
-          next.set("scope", address.join("."));
-        } else {
-          next.delete("scope");
-        }
-        return next;
+      // A selection from the old scope is almost never still valid in the
+      // new one (a node's id generally isn't shared across scopes, and a
+      // click immediately preceding a double-click-to-navigate already set
+      // one for the region just navigated into, which won't be a listed
+      // child of itself). focusOn and onSelectLir bypass this by writing
+      // scope and selection together in their own updateSearchParams call,
+      // so a real "navigate to X and select Y" still lands intact.
+      updateSearchParams((urlParams) => {
+        applyScope(urlParams, address);
+        urlParams.delete("select");
       });
     },
-    [data, setSearchParams],
+    [data, updateSearchParams],
   );
-  const [selection, setSelection] = React.useState<Selection | null>(null);
+  // Selection lives in the URL too (same reasoning as scope above): a
+  // copied link, a reload, or back/forward all reopen at the same node,
+  // edge, or LIR group, not just the same scope. Encoded as
+  // `<kind>:<id>` in one param; kind is always one of the three literal
+  // strings below, none of which contain ":", so splitting on the first
+  // ":" recovers id intact even though ids themselves can (port and edge
+  // ids do).
+  const selectionParamValue = (next: Selection): string => {
+    const id =
+      next.kind === "node"
+        ? next.node.id
+        : next.kind === "edge"
+          ? next.edge.id
+          : next.node.key;
+    return `${next.kind}:${id}`;
+  };
+  const setSelection = React.useCallback(
+    (next: Selection | null) => {
+      updateSearchParams((urlParams) => {
+        if (next) urlParams.set("select", selectionParamValue(next));
+        else urlParams.delete("select");
+      });
+    },
+    [updateSearchParams],
+  );
   const [filters, setFilters] = React.useState<Filters>(DEFAULT_FILTERS);
   const [matchIndex, setMatchIndex] = React.useState(0);
   const [lirHighlight, setLirHighlight] =
@@ -145,18 +193,19 @@ const DataflowDetailPage = () => {
 
   // The route only remounts on a clusterId change, so switching dataflow or
   // replica in place (via the dropdowns) keeps this component instance, its
-  // selection and filters alive. Those reference node ids from the old
-  // structure. On the new one they silently miss instead of crashing (same
-  // tolerance as focusedScope above). focusedScope itself needs no entry
-  // here: switching dataflow or replica always lands on a fresh URL with no
-  // scope param (the dropdowns build one from scratch), so it already reads
-  // back as the new structure's root. Reset render-phase, not via effect, so
-  // there is no render in between showing the new graph under the old state.
+  // filters alive. Selection and scope need no entry here: switching
+  // dataflow or replica always lands on a fresh URL built from scratch (the
+  // dropdowns pass only `replica`), which already carries neither a `scope`
+  // nor a `select` param, so both already read back as their defaults (root,
+  // nothing selected). Reset render-phase, not via effect, so there is no
+  // render in between showing the new graph under the old filters. Calling
+  // setSelection (a setSearchParams wrapper) here instead would be a
+  // different matter: mutating router state mid-render, unlike this filters
+  // state, which is local and always safe to update during render.
   const resetKey = JSON.stringify([replicaName, dataflowId]);
   const [trackedResetKey, setTrackedResetKey] = React.useState(resetKey);
   if (resetKey !== trackedResetKey) {
     setTrackedResetKey(resetKey);
-    setSelection(null);
     setFilters(DEFAULT_FILTERS);
     setMatchIndex(0);
     setLirHighlight(null);
@@ -209,14 +258,22 @@ const DataflowDetailPage = () => {
   const focusOn = React.useCallback(
     (scope: NodeId, targetId: NodeId) => {
       if (!data) return;
-      setFocusedScope(scope);
+      const address = data.structure.nodes.get(scope)?.address;
+      if (!address) return;
       setPendingFitIds([targetId]);
       const node = deriveVisibleGraph(data.structure, scope).nodes.find(
         (n) => n.id === targetId,
       );
-      setSelection(node ? { kind: "node", node } : null);
+      updateSearchParams((urlParams) => {
+        applyScope(urlParams, address);
+        if (node) {
+          urlParams.set("select", selectionParamValue({ kind: "node", node }));
+        } else {
+          urlParams.delete("select");
+        }
+      });
     },
-    [data, setFocusedScope],
+    [data, updateSearchParams],
   );
 
   // A port's peer lives outside the current view. When the peer is itself a
@@ -255,7 +312,7 @@ const DataflowDetailPage = () => {
         },
       });
     },
-    [data],
+    [data, setSelection],
   );
 
   const onLirGroupClick = React.useCallback(
@@ -276,10 +333,38 @@ const DataflowDetailPage = () => {
       const addresses = entry.memberIds
         .map((id) => data.structure.nodes.get(id)?.address)
         .filter((a): a is Address => a !== undefined && a.length > 1);
-      navigateAndFit(addresses);
-      selectLirGroup(key);
+      if (addresses.length === 0) return;
+      // Inlines navigateAndFit's scope computation and selectLirGroup's
+      // param value, rather than calling both, to land scope and
+      // selection in one updateSearchParams call: two separate calls in
+      // this same handler would have the second silently discard the
+      // first (see updateSearchParams's doc comment above).
+      const scope = commonAncestorScope(data.structure, addresses);
+      const scopeAddress = data.structure.nodes.get(scope)!.address;
+      const targets = [
+        ...new Set(
+          addresses
+            .map((a) => representativeInView(a, scopeAddress))
+            .filter((id): id is NodeId => id !== null),
+        ),
+      ];
+      setPendingFitIds(targets);
+      const lirSelection: Selection = {
+        kind: "lirGroup",
+        node: {
+          key,
+          info: entry.info,
+          memberIds: entry.memberIds,
+          children: [],
+          summary: lirSummary(data.structure, entry.memberIds),
+        },
+      };
+      updateSearchParams((urlParams) => {
+        applyScope(urlParams, scopeAddress);
+        urlParams.set("select", selectionParamValue(lirSelection));
+      });
     },
-    [data, navigateAndFit, selectLirGroup],
+    [data, updateSearchParams],
   );
 
   const allMatches = React.useMemo(
@@ -302,6 +387,82 @@ const DataflowDetailPage = () => {
         : null,
     [data, focusedScope],
   );
+
+  // Mirrors DataflowGraphView's own labelById: restoring a URL-driven
+  // selection needs edge endpoint labels independently of a click event.
+  const labelById = React.useMemo(
+    () => new Map((visibleGraph?.nodes ?? []).map((n) => [n.id, n.label])),
+    [visibleGraph],
+  );
+
+  // Re-derived from the current graph on every render rather than trusted
+  // verbatim, the same tolerance focusedScope gets above: a stale link, or
+  // a dataflow whose shape changed, just fails to resolve and this reads
+  // back as null instead of crashing.
+  const selection = React.useMemo<Selection | null>(() => {
+    if (!data || !visibleGraph || !selectParam) return null;
+    const sep = selectParam.indexOf(":");
+    if (sep === -1) return null;
+    const kind = selectParam.slice(0, sep);
+    const id = selectParam.slice(sep + 1);
+    if (kind === "node") {
+      const node = visibleGraph.nodes.find((n) => n.id === id);
+      if (!node) return null;
+      const connectedEdges =
+        node.kind === "port"
+          ? visibleGraph.edges
+              .filter((e) => e.source === node.id || e.target === node.id)
+              .map((e) => ({
+                ...e,
+                sourceLabel: labelById.get(e.source) ?? e.source,
+                targetLabel: labelById.get(e.target) ?? e.target,
+              }))
+          : undefined;
+      return { kind: "node", node, connectedEdges };
+    }
+    if (kind === "edge") {
+      const edge = visibleGraph.edges.find((e) => e.id === id);
+      if (!edge) return null;
+      return {
+        kind: "edge",
+        edge: {
+          ...edge,
+          sourceLabel: labelById.get(edge.source) ?? edge.source,
+          targetLabel: labelById.get(edge.target) ?? edge.target,
+        },
+      };
+    }
+    if (kind === "lirGroup") {
+      const entry = lirIndex(data.structure).get(id);
+      if (!entry) return null;
+      return {
+        kind: "lirGroup",
+        node: {
+          key: id,
+          info: entry.info,
+          memberIds: entry.memberIds,
+          children: [],
+          summary: lirSummary(data.structure, entry.memberIds),
+        },
+      };
+    }
+    return null;
+  }, [data, visibleGraph, selectParam, labelById]);
+
+  // Back/forward (and opening a shared link directly, which react-router
+  // also reports as "POP") can restore a selection the current viewport
+  // isn't anywhere near — a click, by contrast, always selects something
+  // already onscreen, so it doesn't need this. Re-fits only then, and only
+  // for node/edge (a lirGroup's members can be scattered outside a single
+  // fit's worth of space, so it's left to whatever the panel alone shows).
+  const navigationType = useNavigationType();
+  React.useEffect(() => {
+    if (navigationType !== "POP" || !selection) return;
+    if (selection.kind === "node") setPendingFitIds([selection.node.id]);
+    else if (selection.kind === "edge") {
+      setPendingFitIds([selection.edge.source, selection.edge.target]);
+    }
+  }, [navigationType, selection]);
 
   const decorations = React.useMemo(() => {
     if (!data || !focusedScope || !visibleGraph) return undefined;
