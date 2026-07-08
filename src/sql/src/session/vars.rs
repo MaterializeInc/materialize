@@ -1099,7 +1099,7 @@ impl SystemVar {
     }
 
     fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
-        let v = self.definition.parse(input)?;
+        let v = self.parse(input)?;
         self.dynamic_default = Some(v);
         Ok(())
     }
