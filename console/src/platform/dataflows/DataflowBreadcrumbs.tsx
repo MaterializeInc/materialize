@@ -10,6 +10,7 @@
 import { HStack, Text, useTheme } from "@chakra-ui/react";
 import React from "react";
 
+import TextLink from "~/components/TextLink";
 import { ChevronRightIcon } from "~/icons";
 import { MaterializeTheme } from "~/theme";
 
@@ -19,19 +20,24 @@ import {
   type NodeId,
 } from "./dataflowGraph";
 
+export interface DataflowBreadcrumbsProps {
+  structure: DataflowStructure;
+  focusedScope: NodeId;
+  onNavigate: (scope: NodeId) => void;
+}
+
 export const DataflowBreadcrumbs = ({
   structure,
   focusedScope,
   onNavigate,
-}: {
-  structure: DataflowStructure;
-  focusedScope: NodeId;
-  onNavigate: (scope: NodeId) => void;
-}) => {
+}: DataflowBreadcrumbsProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const path: DataflowNode[] = [];
   for (let id: NodeId | null = focusedScope; id; ) {
-    const node: DataflowNode = structure.nodes.get(id)!;
+    const node = structure.nodes.get(id);
+    if (!node) {
+      throw new Error(`missing dataflow node for id ${id} in breadcrumb path`);
+    }
     path.unshift(node);
     id = node.parent;
   }
@@ -39,20 +45,25 @@ export const DataflowBreadcrumbs = ({
     <HStack spacing={1} minWidth={0}>
       {path.map((node, i) =>
         i === path.length - 1 ? (
-          <Text key={node.id} fontSize="sm" fontWeight="600" noOfLines={1}>
+          <Text
+            key={node.id}
+            fontSize="sm"
+            fontWeight="600"
+            noOfLines={1}
+            title={node.name}
+          >
             {node.name}
           </Text>
         ) : (
           <React.Fragment key={node.id}>
-            <Text
+            <TextLink
               as="button"
               fontSize="sm"
-              color={colors.foreground.secondary}
               noOfLines={1}
               onClick={() => onNavigate(node.id)}
             >
               {node.name}
-            </Text>
+            </TextLink>
             <ChevronRightIcon
               boxSize="4"
               color={colors.foreground.secondary}
