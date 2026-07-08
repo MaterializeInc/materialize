@@ -322,14 +322,34 @@ impl<'a> Parser<'a> {
             LazyLock::new(|| Regex::new(r"(\S+) values hashing to (\S+)").unwrap());
         // CockroachDB queries may omit the `----` separator entirely, in
         // which case the query must succeed and return no rows. Detect this
-        // by checking whether the record ends (blank line or EOF) before the
-        // next `----`, which otherwise belongs to a later record.
-        let sep_start = QUERY_OUTPUT_REGEX.find(self.contents).map(|m| m.start());
-        let end_start = DOUBLE_LINE_REGEX.find(self.contents).map(|m| m.start());
-        let no_separator = match (sep_start, end_start) {
-            (None, _) => true,
-            (Some(sep), Some(end)) => end < sep,
-            (Some(_), None) => false,
+        // by checking whether the record ends before the next `----`, which
+        // otherwise belongs to a later record. A blank line only ends the
+        // record if what follows it starts a new record (directive, comment,
+        // or end of file): hand-written files contain blank lines inside a
+        // query's SQL, which CockroachDB's own files never do.
+        static RECORD_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(
+                r"^(#|$|statement( |$)|query( |$)|simple( |$)|halt( |$)|mode |copy |user |subtest( |$)|let |skipif |onlyif |hash-threshold |reset-server( |$)|replace |kv-batch-size |skip_on_retry( |$))",
+            )
+            .unwrap()
+        });
+        let sep = QUERY_OUTPUT_REGEX.find(self.contents);
+        let end = DOUBLE_LINE_REGEX.find(self.contents);
+        let no_separator = match (&sep, &end) {
+            (Some(sep), Some(end)) if sep.start() < end.start() => false,
+            (_, Some(end)) => {
+                let mut rest = &self.contents[end.end()..];
+                loop {
+                    let line_end = rest.find('\n').map_or(rest.len(), |i| i + 1);
+                    let line = rest[..line_end].trim();
+                    if line.is_empty() && line_end < rest.len() {
+                        rest = &rest[line_end..];
+                        continue;
+                    }
+                    break RECORD_START_REGEX.is_match(line);
+                }
+            }
+            (_, None) => false,
         };
         if no_separator {
             let sql = self.split_at(&DOUBLE_LINE_REGEX)?;
@@ -610,5 +630,43 @@ pub fn regexp_strip_prefix<'a>(text: &'a str, regexp: &Regex) -> Option<&'a str>
             }
         }
         None => None,
+    }
+}
+
+#[mz_ore::test]
+fn test_parse_query_blank_lines_and_missing_separator() {
+    // A blank line inside a query's SQL does not end the record.
+    let file = "query I\nSELECT 1\n\nUNION ALL SELECT 2\n----\n1\n2\n\n";
+    let records = Parser::new("f", file).parse_records().unwrap();
+    assert_eq!(records.len(), 1);
+    match &records[0] {
+        Record::Query { sql, .. } => {
+            assert!(sql.contains("UNION ALL"), "sql: {sql}")
+        }
+        other => panic!("unexpected record: {other:?}"),
+    }
+
+    // A query with no ---- separator expects zero rows, and the blank line
+    // ends the record when a new record follows.
+    let file = "query I\nSELECT 3\n\nstatement ok\nSELECT 4\n\n# comment\n\nquery I\nSELECT 5\n";
+    let records = Parser::new("f", file).parse_records().unwrap();
+    assert_eq!(records.len(), 3);
+    match &records[0] {
+        Record::Query { sql, output, .. } => {
+            assert_eq!(*sql, "SELECT 3");
+            assert_eq!(output.as_ref().unwrap().output, Output::Values(vec![]));
+        }
+        other => panic!("unexpected record: {other:?}"),
+    }
+
+    // No separator at end of file.
+    let file = "query I\nSELECT 6\n";
+    let records = Parser::new("f", file).parse_records().unwrap();
+    assert_eq!(records.len(), 1);
+    match &records[0] {
+        Record::Query { output, .. } => {
+            assert_eq!(output.as_ref().unwrap().output, Output::Values(vec![]));
+        }
+        other => panic!("unexpected record: {other:?}"),
     }
 }

@@ -110,6 +110,7 @@ IGNORE_FILENAME_RE = re.compile(
     ( .*\.(svg|png|jpg|jpeg|avif|avro|ico|woff)
     | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
     | \.(agents|claude)/skills/.*
+    | test/sqllogictest/cockroach/.*
     )
     """,
     re.VERBOSE,

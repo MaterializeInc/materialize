@@ -190,7 +190,7 @@ SELECT - -0.00::decimal, - - -0.00::decimal, - - -0.00, - -0.00
 ----
 0  0  0  0
 
-# TODO(mjibson): 
+# TODO(mjibson):
 #
 #query RRRR
 #SELECT -+-0.010::decimal, 0.020, 0.030::decimal, -0.0400000000000000000000000000

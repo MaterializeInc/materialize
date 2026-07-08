@@ -1502,7 +1502,6 @@ impl<'a> RunnerInner<'a> {
         Ok(())
     }
 
-    #[allow(clippy::disallowed_methods)]
     /// The connection records run on: the `user` directive's connection when
     /// one is active, the default connection otherwise.
     fn active_client(&self) -> &tokio_postgres::Client {
@@ -1518,6 +1517,7 @@ impl<'a> RunnerInner<'a> {
     /// Handles a `user` directive: ensures the role exists, connects as it,
     /// and makes it the active user. CockroachDB's `root` maps to the
     /// default `materialize` user.
+    #[allow(clippy::disallowed_methods)]
     async fn run_user<'r>(
         &mut self,
         user: &'r str,
@@ -1566,6 +1566,7 @@ impl<'a> RunnerInner<'a> {
         Ok(Outcome::Success)
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn run_record<'r>(
         &mut self,
         record: &'r Record<'r>,

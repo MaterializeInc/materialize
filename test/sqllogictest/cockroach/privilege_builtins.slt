@@ -752,7 +752,7 @@ NULL
 ## has_schema_privilege
 
 query BB
-SELECT has_schema_privilege(12345, 'CREATE'), 
+SELECT has_schema_privilege(12345, 'CREATE'),
        has_schema_privilege(12345, 'USAGE')
 ----
 NULL  NULL

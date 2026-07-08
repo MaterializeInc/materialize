@@ -149,4 +149,3 @@ user root
 query T
 SELECT viewowner FROM pg_views WHERE schemaname = 'public' AND viewname = 'vx'
 ----
-

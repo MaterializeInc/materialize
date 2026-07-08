@@ -116,4 +116,3 @@ ALTER SCHEMA s OWNER TO SESSION_USER
 query T
 SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 's';
 ----
-

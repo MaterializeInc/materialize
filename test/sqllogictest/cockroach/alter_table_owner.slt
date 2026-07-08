@@ -105,4 +105,3 @@ user root
 query T
 SELECT tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename = 't'
 ----
-

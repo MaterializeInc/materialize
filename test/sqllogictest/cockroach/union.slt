@@ -258,7 +258,7 @@ SELECT 1, 2 EXCEPT SELECT 3
 #
 # query error pgcode 42804 EXCEPT types int and string cannot be matched
 # SELECT 1 EXCEPT SELECT '3'
-# 
+#
 # query error UNION types int\[] and string\[] cannot be matched
 # SELECT ARRAY[1] UNION ALL SELECT ARRAY['foo']
 

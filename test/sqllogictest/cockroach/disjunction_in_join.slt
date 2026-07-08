@@ -22,7 +22,7 @@
 
 mode cockroach
 
-# Test ORed ON clause predicates which may be split into unions or 
+# Test ORed ON clause predicates which may be split into unions or
 # intersections.
 # Use tables both with and without a primary key, to test when PK columns are
 # not included and also to allow null values.

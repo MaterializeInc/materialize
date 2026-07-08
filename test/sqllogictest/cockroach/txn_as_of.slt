@@ -82,7 +82,7 @@ COMMIT
 
 # Subqueries are only allowed if the exact same timestamp is used.
 # This first two fails because '-1h' is computed for each statement based on
-# statement time so the timestamps will not be identical. The following two 
+# statement time so the timestamps will not be identical. The following two
 # tests which use a matching, fixed timestamp should be semantically valid
 # leading to a failure due to the relation not existing.
 

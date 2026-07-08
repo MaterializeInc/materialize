@@ -115,4 +115,3 @@ SELECT a, b FROM t ORDER BY a, b
 query IT
 SELECT b, a FROM t ORDER BY b, a
 ----
-
