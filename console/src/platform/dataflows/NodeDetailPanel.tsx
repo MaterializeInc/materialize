@@ -152,18 +152,18 @@ const NodeDetail = ({
     {node.childCount > 0 && (
       <Row label="Children" value={String(node.childCount)} />
     )}
-    {node.stats && (
+    {node.own && (
       <>
         <Row
           label="Arranged records"
-          value={node.stats.arrangementRecords.toString()}
+          value={node.own.arrangementRecords.toString()}
         />
         <Row
           label="Arrangement size"
-          value={formatBytesShort(node.stats.arrangementSize)}
+          value={formatBytesShort(node.own.arrangementSize)}
         />
-        <Row label="Elapsed" value={formatElapsedNs(node.stats.elapsedNs)} />
-        <Row label="Schedules" value={node.stats.scheduleCount.toString()} />
+        <Row label="Elapsed" value={formatElapsedNs(node.own.elapsedNs)} />
+        <Row label="Schedules" value={node.own.scheduleCount.toString()} />
       </>
     )}
     {node.childCount > 0 && (
@@ -189,15 +189,28 @@ const NodeDetail = ({
         />
       </>
     )}
-    {node.transitiveSkew && (
+    {node.ownSkew && (
       <>
-        <Row label="CPU skew" value={formatSkew(node.transitiveSkew.cpuSkew)} />
+        <Row label="CPU skew" value={formatSkew(node.ownSkew.cpuSkew)} />
+        <Row label="Memory skew" value={formatSkew(node.ownSkew.memorySkew)} />
         <Row
-          label="Memory skew"
+          label="Schedule skew"
+          value={formatSkew(node.ownSkew.scheduleSkew)}
+        />
+      </>
+    )}
+    {node.transitiveSkew && node.childCount > 0 && (
+      <>
+        <Row
+          label="Subtree CPU skew"
+          value={formatSkew(node.transitiveSkew.cpuSkew)}
+        />
+        <Row
+          label="Subtree memory skew"
           value={formatSkew(node.transitiveSkew.memorySkew)}
         />
         <Row
-          label="Schedule skew"
+          label="Subtree schedule skew"
           value={formatSkew(node.transitiveSkew.scheduleSkew)}
         />
       </>
