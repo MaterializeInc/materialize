@@ -231,6 +231,89 @@ describe("deriveVisibleGraph", () => {
     expect(visibleNodeCount(s, defaultCollapseState(s))).toEqual(2);
     expect(MAX_VISIBLE_NODES).toEqual(1500);
   });
+
+  it("routes an external-to-region channel through a port node, keyed by port number", () => {
+    // Materialize logs a scope boundary crossing as two channels sharing a
+    // port number but addressed differently: the outer half (external
+    // producer/consumer <-> scope) targets the scope's OWN operator address
+    // directly (no [..., 0] suffix), the same address the region's own
+    // operator row uses. Verified against live introspection data: an
+    // external channel `{5,4}->{5,2}` (to_port=0) pairs with the internal
+    // fan-out channel `{5,2,0}->{5,2,1}` (from_port=0).
+    const withExternal = buildDataflowStructure(
+      [
+        ...OPS,
+        {
+          id: "20",
+          address: ["5", "3"],
+          name: "External",
+          arrangementRecords: "0",
+          arrangementSize: "0",
+          elapsedNs: "1",
+        },
+      ],
+      [
+        ...CHANNELS,
+        {
+          id: "98",
+          fromOperatorAddress: ["5", "3"],
+          fromPort: "0",
+          toOperatorAddress: ["5", "1"],
+          toPort: "0",
+          messagesSent: "9",
+          batchesSent: "3",
+          channelType: "rows",
+        },
+      ],
+      LIR_SPANS,
+    );
+    const externalId = nodeIdOf([5, 3]);
+    const portId = `${regionId}:in:0`;
+
+    const expanded = deriveVisibleGraph(withExternal, new Set());
+    expect(
+      expanded.nodes.some((n) => n.id === portId && n.kind === "port"),
+    ).toBe(true);
+    const edge = expanded.edges.find((e) => e.source === externalId)!;
+    expect(edge.target).toEqual(portId);
+
+    // Collapsed, the crossing lands on the region's own (collapsed) node,
+    // matching how every other boundary crossing into a collapsed region
+    // behaves: the whole region is one box.
+    const collapsed = deriveVisibleGraph(withExternal, new Set([regionId]));
+    const collapsedEdge = collapsed.edges.find((e) => e.source === externalId)!;
+    expect(collapsedEdge.target).toEqual(regionId);
+  });
+
+  it("drops channels that reference an address with no operator row", () => {
+    // Real dataflows can log a channel touching a scope address that never
+    // got its own operator row (e.g. an elided region). [5, 5] does not
+    // appear in OPS.
+    const withDangling = buildDataflowStructure(
+      OPS,
+      [
+        ...CHANNELS,
+        {
+          id: "99",
+          fromOperatorAddress: ["5", "5"],
+          fromPort: "0",
+          toOperatorAddress: ["5", "2"],
+          toPort: "0",
+          messagesSent: "1",
+          batchesSent: "1",
+          channelType: "rows",
+        },
+      ],
+      LIR_SPANS,
+    );
+    expect(() => deriveVisibleGraph(withDangling, new Set())).not.toThrow();
+    const g = deriveVisibleGraph(withDangling, new Set());
+    const nodeIds = new Set(g.nodes.map((n) => n.id));
+    for (const e of g.edges) {
+      expect(nodeIds.has(e.source)).toBe(true);
+      expect(nodeIds.has(e.target)).toBe(true);
+    }
+  });
 });
 
 describe("decorateGraph", () => {
