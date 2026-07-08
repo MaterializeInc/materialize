@@ -365,6 +365,27 @@ describe("buildDataflowStructure", () => {
       const region = s.nodes.get(nodeIdOf([5, 1]))!;
       expect(region.transitiveSkew.cpuSkew).toEqual(1);
     });
+
+    it("keeps the real own skew available unfiltered, for display, even when the magnitude floor suppresses it for rollup", () => {
+      const skewedOps = OPS.map((o) =>
+        o.id === "12"
+          ? { ...o, elapsedNs: "1000000" }
+          : o.id === "13"
+            ? { ...o, elapsedNs: "1" }
+            : o,
+      );
+      const s = buildDataflowStructure(skewedOps, CHANNELS, LIR_SPANS, [
+        { id: "12", workerId: "0", elapsedNs: "500000", arrangementSize: "0" },
+        { id: "12", workerId: "1", elapsedNs: "500000", arrangementSize: "0" },
+        { id: "13", workerId: "0", elapsedNs: "1", arrangementSize: "0" },
+        { id: "13", workerId: "1", elapsedNs: "0", arrangementSize: "0" },
+        { id: "13", workerId: "2", elapsedNs: "0", arrangementSize: "0" },
+        { id: "13", workerId: "3", elapsedNs: "0", arrangementSize: "0" },
+      ]);
+      const map = s.nodes.get(nodeIdOf([5, 1, 2]))!;
+      expect(map.ownSkew.cpuSkew).toEqual(0); // suppressed, for rollup safety
+      expect(map.ownSkewRaw.cpuSkew).toBeCloseTo(4); // 1 / ((1+0+0+0)/4)
+    });
   });
 });
 
@@ -406,6 +427,13 @@ describe("deriveVisibleGraph", () => {
     const region = g.nodes[0];
     expect(region.stats).toEqual(s.nodes.get(regionId)!.transitive);
     expect(region.childCount).toEqual(2);
+    // `stats` collapses to the subtree total for a quick canvas-level read,
+    // but the detail panel needs the region's own activity (5ns) kept
+    // distinct from that total (5+7+1=13ns), or a region's own dispatch
+    // cost becomes invisible next to its children's.
+    expect(region.own).toEqual(s.nodes.get(regionId)!.own);
+    expect(region.own!.elapsedNs).toEqual(5n);
+    expect(region.transitive!.elapsedNs).toEqual(13n);
   });
 
   it("drilling into the region shows its children and an inbound port", () => {
@@ -1236,6 +1264,8 @@ describe("rerouteHiddenNodes", () => {
     label: id,
     stats: null,
     transitive: null,
+    own: null,
+    ownSkew: null,
     transitiveSkew: null,
     overheadNs: null,
     childCount: 0,
@@ -1371,6 +1401,8 @@ describe("groupByLir", () => {
     label: id,
     stats: null,
     transitive: null,
+    own: null,
+    ownSkew: null,
     transitiveSkew: null,
     overheadNs: null,
     childCount: 0,
@@ -1385,6 +1417,8 @@ describe("groupByLir", () => {
     label: id,
     stats: null,
     transitive: null,
+    own: null,
+    ownSkew: null,
     transitiveSkew: null,
     overheadNs: null,
     childCount: 0,
