@@ -946,7 +946,7 @@ export const DEFAULT_FILTERS: Filters = {
   hideIdle: false,
   heatmap: "off",
   heatmapThreshold: 0,
-  showLirGroups: false,
+  showLirGroups: true,
 };
 
 // decorateGraph returns every field set.
