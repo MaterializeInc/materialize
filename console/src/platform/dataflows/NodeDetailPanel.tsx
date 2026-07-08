@@ -53,11 +53,41 @@ const TypeRow = ({ channelTypes }: { channelTypes: string[] }) => (
   </Box>
 );
 
-const EdgeRows = ({ edge }: { edge: SelectedEdge }) => (
+// onJumpTo is omitted for the compact form used inside a node's "Connected
+// edges" list (which can be long for a hub node): landing lists there would
+// swamp the panel. The dedicated edge-selection view always passes it, to
+// show where a merged edge's real channels land inside a collapsed region.
+const EdgeRows = ({
+  edge,
+  onJumpTo,
+}: {
+  edge: SelectedEdge;
+  onJumpTo?: (peer: PortPeer) => void;
+}) => (
   <>
     <Row label="Records" value={edge.messagesSent.toString()} />
     <Row label="Batches" value={edge.batchesSent.toString()} />
     <TypeRow channelTypes={edge.channelTypes} />
+    {onJumpTo && edge.sourceLandings.length > 0 && (
+      <Box mt={2}>
+        <Text fontSize="xs" fontWeight="600" mb={1}>
+          Inside {edge.sourceLabel}
+        </Text>
+        {edge.sourceLandings.map((p) => (
+          <PeerRow key={p.address.join(".")} peer={p} onJumpTo={onJumpTo} />
+        ))}
+      </Box>
+    )}
+    {onJumpTo && edge.targetLandings.length > 0 && (
+      <Box mt={2}>
+        <Text fontSize="xs" fontWeight="600" mb={1}>
+          Inside {edge.targetLabel}
+        </Text>
+        {edge.targetLandings.map((p) => (
+          <PeerRow key={p.address.join(".")} peer={p} onJumpTo={onJumpTo} />
+        ))}
+      </Box>
+    )}
   </>
 );
 
@@ -217,7 +247,7 @@ export const NodeDetailPanel = ({
           onJumpTo={onJumpTo}
         />
       ) : selection.kind === "edge" ? (
-        <EdgeRows edge={selection.edge} />
+        <EdgeRows edge={selection.edge} onJumpTo={onJumpTo} />
       ) : (
         <LirSummaryCard node={selection.node} />
       )}
