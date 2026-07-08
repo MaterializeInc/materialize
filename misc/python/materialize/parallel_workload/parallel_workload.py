@@ -26,6 +26,9 @@ from materialize.parallel_workload.action import (
     ActionList,
     BackupRestoreAction,
     CancelAction,
+    DropClusterAction,
+    DropDatabaseAction,
+    DropSchemaAction,
     KillAction,
     StatisticsAction,
     ZeroDowntimeDeployAction,
@@ -41,9 +44,11 @@ from materialize.parallel_workload.database import (
     MAX_CLUSTERS,
     MAX_KAFKA_SINKS,
     MAX_KAFKA_SOURCES,
+    MAX_MYSQL_SOURCES,
     MAX_POSTGRES_SOURCES,
     MAX_ROLES,
     MAX_SCHEMAS,
+    MAX_SQL_SERVER_SOURCES,
     MAX_TABLES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
@@ -106,7 +111,7 @@ def run(
             f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 40 + num_threads}"
+            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES + MAX_MYSQL_SOURCES + MAX_SQL_SERVER_SOURCES) * 40 + num_threads}"
         )
         system_exe.execute(
             f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 40 + num_threads}"
@@ -327,32 +332,21 @@ def run(
     num_queries = defaultdict(Counter)
     try:
         while time.time() < end_time:
-            for thread in threads:
+            for worker, thread in zip(workers, threads):
                 if not thread.is_alive():
-                    occurred_exception = None
-                    for worker in workers:
-                        worker.end_time = time.time()
-                        occurred_exception = (
-                            occurred_exception or worker.occurred_exception
-                        )
+                    occurred_exception = worker.occurred_exception or next(
+                        (w.occurred_exception for w in workers if w.occurred_exception),
+                        None,
+                    )
+                    for w in workers:
+                        w.end_time = time.time()
                     raise WorkerFailedException(
                         f"^^^ +++ Thread {thread.name} failed, exiting",
                         occurred_exception,
                     )
             time.sleep(REPORT_TIME)
-            print(
-                "QPS: "
-                + " ".join(
-                    f"{worker.num_queries.total() / REPORT_TIME:05.1f}"
-                    for worker in workers
-                )
-            )
-            for worker in workers:
-                for action in worker.num_queries.elements():
-                    num_queries[worker.action_list][action] += worker.num_queries[
-                        action
-                    ]
-                worker.num_queries.clear()
+            qps = merge_num_queries(num_queries, workers)
+            print("QPS: " + " ".join(f"{q / REPORT_TIME:05.1f}" for q in qps))
     except KeyboardInterrupt:
         print("Keyboard interrupt, exiting")
         for worker in workers:
@@ -372,6 +366,7 @@ def run(
                 print(
                     f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
                 )
+        merge_num_queries(num_queries, workers)
         print_stats(num_queries, workers, num_threads, scenario)
 
         if num_threads >= 50:
@@ -383,7 +378,7 @@ def run(
             # take > 10 minutes to become responsive as well
             os._exit(0)
         # TODO: Reenable when https://linear.app/materializeinc/issue/DB-118 is fixed
-        # print("Threads have not stopped within 10 minutes, exiting hard")
+        # print("Threads have not stopped within 5 minutes, exiting hard")
         # os._exit(1)
         os._exit(0)
 
@@ -426,7 +421,29 @@ def run(
         #     raise ValueError("Sessions did not clean up within 30s of threads stopping")
     conn.close()
 
+    merge_num_queries(num_queries, workers)
     print_stats(num_queries, workers, num_threads, scenario)
+
+
+def merge_num_queries(
+    num_queries: defaultdict[ActionList, Counter[type[Action]]],
+    workers: list[Worker],
+) -> list[int]:
+    """Merge and reset the workers' interval counters, returning the
+    per-worker totals of the merged interval."""
+    totals = []
+    for worker in workers:
+        # Swap rather than iterate+clear: the worker thread keeps
+        # incrementing concurrently.
+        counts = worker.num_queries
+        worker.num_queries = Counter()
+        totals.append(counts.total())
+        # Scenario workers (kill, cancel, ...) have no action list, their
+        # actions don't show up in the statistics.
+        if worker.action_list is not None:
+            for action_class, count in counts.items():
+                num_queries[worker.action_list][action_class] += count
+    return totals
 
 
 def print_stats(
@@ -463,10 +480,62 @@ def print_stats(
             for action_class, count in counter.items()
         )
         print(f"  {error}: {text}")
+
+    # Coverage check: an enabled action that never once succeeded over a full
+    # run is broken (wrong SQL, impossible precondition, all errors ignored),
+    # not merely racy. Scenario-gated actions don't show up here, the worker
+    # skips inapplicable actions without counting an attempt.
+    num_successes: Counter[type[Action]] = Counter()
+    num_skips: Counter[type[Action]] = Counter()
+    num_errored: Counter[type[Action]] = Counter()
+    for worker in workers:
+        num_successes.update(worker.num_successes)
+        num_skips.update(worker.num_skips)
+        for counter in worker.ignored_errors.values():
+            num_errored.update(counter)
+    action_classes = {
+        action_class
+        for action_list in action_lists
+        for action_class in action_list.action_classes
+    }
+    # These use RESTRICT and their targets practically always contain
+    # objects (schemas and databases their items, clusters their sources,
+    # sinks, and indexes), so they exercise the rejection path and are not
+    # expected to ever succeed.
+    action_classes -= {DropClusterAction, DropDatabaseAction, DropSchemaAction}
+    never_succeeded = []
+    for action_class in sorted(action_classes, key=lambda cls: cls.__name__):
+        successes = num_successes[action_class]
+        skips = num_skips[action_class]
+        errored = num_errored[action_class]
+        if successes == 0 and skips + errored >= 20:
+            never_succeeded.append((action_class, skips, errored))
+    if never_succeeded:
+        print("--- Action coverage warnings:")
+        for action_class, skips, errored in never_succeeded:
+            print(
+                f"  {action_class.__name__} never succeeded: {skips} skipped, {errored} ignored errors"
+            )
+
+    # Most ignored errors are intentional noise: sessions poisoned with an
+    # unknown cluster, RESTRICT drops of objects with dependents, ownership
+    # failures after reconnecting as a random role. Healthy ddl-complexity
+    # runs measure ~60-80% failed queries.
     if num_threads < 50 and scenario != scenario.ZeroDowntimeDeploy:
-        assert failed < 50
+        assert failed < 90
     else:
-        assert failed < 75
+        assert failed < 95
+    if num_threads < 50 and scenario in (Scenario.Regression, Scenario.Rename):
+        # Only in scenarios without kills/restores/cancels can we be sure that
+        # an action failing on every single attempt is actually broken.
+        always_erroring = [
+            action_class.__name__
+            for action_class, skips, errored in never_succeeded
+            if errored > 0
+        ]
+        assert (
+            not always_erroring
+        ), f"Actions failing on every attempt, probably broken: {always_erroring}"
 
 
 def parse_common_args(parser: argparse.ArgumentParser) -> None:
@@ -523,7 +592,7 @@ def main() -> int:
     ports: dict[str, int] = {
         "materialized": args.port,
         "mz_system": args.system_port,
-        "http": 6876,
+        "http": args.http_port,
         "kafka": 9092,
         "schema-registry": 8081,
     }

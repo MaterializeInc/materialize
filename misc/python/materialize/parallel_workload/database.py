@@ -88,7 +88,6 @@ MAX_INITIAL_KAFKA_SOURCES = 1
 MAX_INITIAL_MYSQL_SOURCES = 1
 MAX_INITIAL_SQL_SERVER_SOURCES = 1
 MAX_INITIAL_POSTGRES_SOURCES = 1
-MAX_INITIAL_KAFKA_SINKS = 1
 
 
 class BodyFormat(Enum):
@@ -631,9 +630,7 @@ class KafkaSink(DBObject):
         if len(base_object.columns) == 1:
             formats.extend(single_column_formats)
         self.format = rng.choice(formats)
-        self.envelope = (
-            "UPSERT" if self.format == "JSON" else rng.choice(["DEBEZIUM", "UPSERT"])
-        )
+        self.envelope = rng.choice(["DEBEZIUM", "UPSERT"])
         if self.envelope == "UPSERT" or rng.choice([True, False]):
             key_cols = [
                 column
@@ -855,20 +852,29 @@ class SqlServerSource(DBObject):
 
 
 class S3Object(DBObject):
+    """A COPY TO dump of `table` that CopyFromS3Action can load back into it.
+
+    Only registered for verbatim (SELECT *) dumps of non-temp tables, so the
+    file's column names and types match the table's."""
+
     key: str
     bucket: str
     format: str
+    table: Table
 
     def __init__(
         self,
         key: str,
         bucket: str,
         format: str,
+        table: Table,
     ):
         super().__init__()
         self.key = key
         self.bucket = bucket
         self.format = format
+        self.table = table
+        self.columns = table.columns
 
     def name(self) -> str:
         return f"{self.bucket}/{self.key}"
@@ -876,26 +882,25 @@ class S3Object(DBObject):
     def __str__(self) -> str:
         return self.name()
 
-    def create(self, exe: Executor) -> None:
-        query = f"CREATE TABLE '{self.key}'("
-        query += ",\n    ".join(column.create() for column in self.columns)
-        query += ")"
-        exe.execute(query)
-
 
 class Index:
     _name: str
+    schema: Schema
     lock: threading.Lock
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, schema: Schema):
         self._name = name
+        # The index lives in the indexed object's schema. Referencing the
+        # schema object (instead of a rendered string) keeps the reference
+        # valid across schema renames.
+        self.schema = schema
         self.lock = threading.Lock()
 
     def name(self) -> str:
         return self._name
 
     def __str__(self) -> str:
-        return identifier(self.name())
+        return f"{self.schema}.{identifier(self.name())}"
 
 
 class Role:
