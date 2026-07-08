@@ -42,6 +42,7 @@ steps:
 
 
   - id: testdrive-in-cloudtest
+    topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres, self-managed]
     label: "Full Testdrive in Cloudtest (K8s)"
     depends_on: build-aarch64
     timeout_in_minutes: 180
@@ -62,6 +63,7 @@ steps:
     key: zippy
     steps:
     - id: zippy-kafka-sources-large
+      topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
       label: "Large Zippy Kafka Sources"
       depends_on: build-aarch64
       # 48h
@@ -75,6 +77,7 @@ steps:
             args: [--scenario=KafkaSourcesLarge, --actions=12500]
 
     - id: zippy-dataflows-large
+      topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
       label: "Large Zippy w/ complex dataflows"
       depends_on: build-aarch64
       # 24h
@@ -88,6 +91,7 @@ steps:
             args: [--scenario=DataflowsLarge, --actions=8000]
 
     - id: zippy-pg-cdc-large
+      topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
       label: "Large Zippy PostgresCdc"
       depends_on: build-aarch64
       timeout_in_minutes: 2880
@@ -101,6 +105,7 @@ steps:
             args: [--scenario=PostgresCdcLarge, --actions=50000]
 
     - id: zippy-mysql-cdc-large
+      topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
       label: "Large Zippy MySqlCdc"
       depends_on: build-aarch64
       timeout_in_minutes: 1440
@@ -112,6 +117,7 @@ steps:
             args: [--scenario=MySqlCdcLarge, --actions=100000, --max-execution-time=4h]
 
     - id: zippy-sql-server-cdc-large
+      topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
       label: "Large Zippy SqlServerCdc"
       depends_on: build-x86_64
       timeout_in_minutes: 1440
@@ -123,6 +129,7 @@ steps:
             args: [--scenario=SqlServerCdcLarge, --actions=100000, --max-execution-time=4h]
 
     - id: zippy-cluster-replicas-long
+      topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
       label: "Longer Zippy ClusterReplicas"
       depends_on: build-aarch64
       timeout_in_minutes: 2880
@@ -135,6 +142,7 @@ steps:
             args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=4h]
 
     - id: zippy-user-tables-large
+      topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
       label: "Large Zippy w/ user tables"
       depends_on: build-aarch64
       timeout_in_minutes: 2880
@@ -146,6 +154,7 @@ steps:
             args: [--scenario=UserTablesLarge, --actions=50000]
 
     - id: zippy-debezium-postgres-long
+      topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
       label: "Longer Zippy Debezium Postgres"
       depends_on: build-aarch64
       timeout_in_minutes: 1440
@@ -158,6 +167,7 @@ steps:
             args: [--scenario=DebeziumPostgres, --actions=500000, --max-execution-time=4h]
 
     - id: zippy-backup-and-restore-large
+      topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
       label: "Large-scale backup+restore"
       depends_on: build-aarch64
       timeout_in_minutes: 2880
@@ -170,6 +180,7 @@ steps:
             args: [--scenario=BackupAndRestoreLarge, --actions=200000]
 
     - id: zippy-kafka-parallel-insert
+      topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
       label: "Longer Zippy Kafka Parallel Insert"
       depends_on: build-aarch64
       timeout_in_minutes: 1440
@@ -185,6 +196,7 @@ steps:
     key: benchmark
     steps:
       - id: feature-benchmark-scale-plus-one
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Feature benchmark against 'common-ancestor' with --scale=+1"
         depends_on: build-x86_64
         timeout_in_minutes: 2880
@@ -197,6 +209,7 @@ steps:
               args: [--other-tag=common-ancestor, --scale=+1]
 
       - id: long-parallel-benchmark
+        topics: [cockroach, kafka, mysql, postgres]
         label: "Long Parallel Benchmark"
         depends_on: build-x86_64
         timeout_in_minutes: 1200
@@ -212,6 +225,7 @@ steps:
                 - 1200
 
       - id: long-workload-replay
+        topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Long Workload Replay (100% initial data)"
         depends_on: build-x86_64
         timeout_in_minutes: 1440
@@ -255,6 +269,7 @@ steps:
             args: [--max-joins=15, --explain-only, --runtime=6000]
 
   - id: test-preflight-check-rollback
+    topics: [0dt-migration, upgrade]
     label: Test with preflight check and rollback
     depends_on: []
     skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
@@ -266,6 +281,7 @@ steps:
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
 
   - id: nightly-preflight-check-rollback
+    topics: [0dt-migration, upgrade]
     label: Nightly with preflight check and rollback
     depends_on: []
     skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
@@ -277,6 +293,7 @@ steps:
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
 
   - id: kafka-matrix
+    topics: [kafka]
     label: Previous Kafka versions
     depends_on: build-aarch64
     timeout_in_minutes: 60
@@ -291,6 +308,7 @@ steps:
     key: mysql-versions
     steps:
       - id: mysql-cdc-8_0
+        topics: [mysql]
         label: "MySQL CDC w/ 8.0"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -302,6 +320,7 @@ steps:
               args: [ "--mysql-version=8.0.42" ]
 
       - id: mysql-cdc-8_1
+        topics: [mysql]
         label: "MySQL CDC w/ 8.1"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -313,6 +332,7 @@ steps:
               args: [ "--mysql-version=8.1.0" ]
 
       - id: mysql-cdc-8_2
+        topics: [mysql]
         label: "MySQL CDC w/ 8.2"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -324,6 +344,7 @@ steps:
               args: [ "--mysql-version=8.2.0" ]
 
       - id: mysql-cdc-8_3
+        topics: [mysql]
         label: "MySQL CDC w/ 8.3"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -335,6 +356,7 @@ steps:
               args: [ "--mysql-version=8.3.0" ]
 
       - id: mysql-cdc-8_4
+        topics: [mysql]
         label: "MySQL CDC w/ 8.4"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -346,6 +368,7 @@ steps:
               args: [ "--mysql-version=8.4.9" ]
 
       - id: mysql-cdc-9_0
+        topics: [mysql]
         label: "MySQL CDC w/ 9.0"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -357,6 +380,7 @@ steps:
               args: [ "--mysql-version=9.0.1" ]
 
       - id: mysql-cdc-9_1
+        topics: [mysql]
         label: "MySQL CDC w/ 9.1"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -368,6 +392,7 @@ steps:
               args: [ "--mysql-version=9.1.0" ]
 
       - id: mysql-cdc-9_2
+        topics: [mysql]
         label: "MySQL CDC w/ 9.2"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -379,6 +404,7 @@ steps:
               args: [ "--mysql-version=9.2.0" ]
 
       - id: mysql-cdc-9_3
+        topics: [mysql]
         label: "MySQL CDC w/ 9.3"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -390,6 +416,7 @@ steps:
               args: [ "--mysql-version=9.3.0" ]
 
       - id: mysql-cdc-9_4
+        topics: [mysql]
         label: "MySQL CDC w/ 9.4"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -401,6 +428,7 @@ steps:
               args: [ "--mysql-version=9.4.0" ]
 
       - id: mysql-cdc-9_5
+        topics: [mysql]
         label: "MySQL CDC w/ 9.5"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -412,6 +440,7 @@ steps:
               args: [ "--mysql-version=9.5.0" ]
 
       - id: mysql-cdc-9_6
+        topics: [mysql]
         label: "MySQL CDC w/ 9.6"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -426,6 +455,7 @@ steps:
     key: postgres-versions
     steps:
       - id: pg-cdc-17
+        topics: [postgres]
         label: "Postgres CDC w/ 17"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -437,6 +467,7 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-16
+        topics: [postgres]
         label: "Postgres CDC w/ 16"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -448,6 +479,7 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-15
+        topics: [postgres]
         label: "Postgres CDC w/ 15"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -459,6 +491,7 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-14
+        topics: [postgres]
         label: "Postgres CDC w/ 14"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -470,6 +503,7 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-13
+        topics: [postgres]
         label: "Postgres CDC w/ 13"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -487,6 +521,7 @@ steps:
       # SQL Server's upstream images are amd64-only, so this matrix runs on
       # x86-64 agents.
       - id: sql-server-cdc-2019
+        topics: [sql-server]
         label: "SQL Server CDC w/ 2019"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -499,6 +534,7 @@ steps:
           queue: hetzner-x86-64-4cpu-8gb
 
       - id: sql-server-cdc-2025
+        topics: [sql-server]
         label: "SQL Server CDC w/ 2025"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -514,6 +550,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-environmentd-clusterd-storage
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + restart of environmentd & storage clusterd"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
@@ -532,6 +569,7 @@ steps:
                 ]
 
       - id: checks-restart-environmentd-clusterd-storage-azurite
+        topics: [azurite, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + restart of environmentd & storage clusterd with :azure: blob store"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
@@ -550,6 +588,7 @@ steps:
                 ]
 
       - id: checks-restart-cockroach
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + restart Cockroach"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -562,6 +601,7 @@ steps:
               args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-backup-restore-before-manipulate
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks backup + restore between the two manipulate()"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -575,6 +615,7 @@ steps:
         skip: "Too flaky"
 
       - id: checks-backup-restore-after-manipulate
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks backup + restore after manipulate()"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -588,6 +629,7 @@ steps:
         skip: "Too flaky"
 
       - id: checks-backup-multi
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + multiple backups/restores"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -601,6 +643,7 @@ steps:
         skip: "Too flaky"
 
       - id: checks-upgrade-entire-mz-two-versions
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks upgrade across two versions"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -613,6 +656,7 @@ steps:
               args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-four-versions
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks upgrade across four versions"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -625,6 +669,7 @@ steps:
               args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-continue
+        topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks preflight-check and continue upgrade"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -637,6 +682,7 @@ steps:
               args: [--scenario=PreflightCheckContinue, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-clusterd-compute-first
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Platform checks upgrade, restarting compute clusterd first"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -649,6 +695,7 @@ steps:
               args: [--scenario=UpgradeClusterdComputeFirst, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-clusterd-compute-last
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Platform checks upgrade, restarting compute clusterd last"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -661,6 +708,7 @@ steps:
               args: [--scenario=UpgradeClusterdComputeLast, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-kill-clusterd-storage
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + kill storage clusterd"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -673,6 +721,7 @@ steps:
               args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-restart-source-postgres
+        topics: [debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + restart source Postgres"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -685,6 +734,7 @@ steps:
               args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg]
 
       - id: checks-restart-clusterd-compute
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + restart clusterd compute"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -697,6 +747,7 @@ steps:
               args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-drop-create-default-replica
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + DROP/CREATE replica"
         depends_on: build-x86_64
         timeout_in_minutes: 180
@@ -709,6 +760,7 @@ steps:
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-restart-entire-mz
+        topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks 0dt restart of the entire Mz"
         depends_on: build-x86_64
         timeout_in_minutes: 120
@@ -721,6 +773,7 @@ steps:
               args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-self-managed-linear-upgrade-path-manipulate-before-upgrade
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
         label: "Checks Self-Managed upgrade across all supported patch releases, manipulate before upgrade"
         depends_on: build-x86_64
         timeout_in_minutes: 240
@@ -733,6 +786,7 @@ steps:
               args: [--scenario=SelfManagedLinearUpgradePathManipulateBeforeUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-self-managed-linear-upgrade-path-manipulate-during-upgrade
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
         label: "Checks Self-Managed upgrade across all supported patch releases, manipulate during upgrade"
         depends_on: build-x86_64
         timeout_in_minutes: 240
@@ -745,6 +799,7 @@ steps:
               args: [--scenario=SelfManagedLinearUpgradePathManipulateDuringUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-bump-version
+        topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks 0dt upgrade to a bumped version"
         depends_on: build-x86_64
         timeout_in_minutes: 240
@@ -761,6 +816,7 @@ steps:
               ci-builder: stable
 
   - id: limits
+    topics: [cockroach, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
     label: "Product limits (finding new limits)"
     depends_on: build-x86_64
     agents:
@@ -777,6 +833,7 @@ steps:
     key: large-scale-ingestions
     steps:
       - id: mysql-cdc-large-scale
+        topics: [mysql]
         label: MySQL CDC large scale ingestion
         depends_on: build-x86_64
         timeout_in_minutes: 3600
@@ -788,6 +845,7 @@ steps:
           queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
 
       - id: pg-cdc-large-scale
+        topics: [postgres]
         label: Postgres CDC large scale ingestion
         depends_on: build-x86_64
         timeout_in_minutes: 3600
@@ -799,6 +857,7 @@ steps:
           queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
 
       - id: sql-server-cdc-large-scale
+        topics: [sql-server]
         label: SQL Server CDC large scale ingestion
         depends_on: build-x86_64
         timeout_in_minutes: 3600
@@ -810,6 +869,7 @@ steps:
           queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
 
       - id: upsert-large-scale
+        topics: [kafka]
         label: Upsert large scale ingestion
         depends_on: build-aarch64
         timeout_in_minutes: 3600

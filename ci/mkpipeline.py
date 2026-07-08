@@ -1378,6 +1378,8 @@ def remove_mz_specific_keys(pipeline: Any) -> None:
             del step["sanitizer"]
         if "ci_glue_exempt" in step:
             del step["ci_glue_exempt"]
+        if "topics" in step:
+            del step["topics"]
         if (
             "timeout_in_minutes" not in step
             and "prompt" not in step
