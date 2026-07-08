@@ -188,9 +188,12 @@ The SDK's UX comes from five opinions applied uniformly across languages:
    The stream yields consistent batches. Each batch contains every update for
    an interval of timestamps that a progress message has proven complete,
    plus the frontier and a resume token. Users physically cannot observe a
-   half-delivered timestamp. (An advanced `raw()` mode exposes per-row
-   delivery for power users, clearly documented as forfeiting the batch
-   guarantees.)
+   half-delivered timestamp. A batch is a consistent moment of one view, and
+   the same engine generalizes to a *cohort* of views advancing to a joint
+   consistent moment (see "Consistency layering and cohorts"). The advanced
+   `raw()` mode that exposes the decoded per-row stream (forfeiting the batch
+   guarantees) is that same underlying layer, and is the substrate cohorts
+   build on.
 2. **Resume tokens are opaque.** A token encapsulates the frontier, the
    `SNAPSHOT false AS OF frontier - 1` arithmetic, the query fingerprint, and
    a fencing epoch. Users store bytes and hand them back. There is no
@@ -206,6 +209,43 @@ The SDK's UX comes from five opinions applied uniformly across languages:
 5. **One spec, one conformance suite, three implementations.** Language
    surfaces are idiomatic, behavior is identical, and identical is checked by
    machines.
+
+### Consistency layering and cohorts
+
+The SDK is layered so that a single consistency engine serves both the
+single-view and the multi-view case:
+
+1. **Decoded stream.** The transport's `FETCH` output decoded into timestamped
+   changes and progress markers (`Data{timestamp, change}` /
+   `Progress{frontier}`). This is the `raw()` layer: composable and public, and
+   on its own forfeiting the higher guarantees.
+2. **Consistency engine.** Buffers changes and releases everything strictly
+   below a release frontier, consolidating per timestamp. It takes the release
+   frontier as an *input*: a single-view subscription passes its own frontier;
+   a cohort passes `min(frontier)` across its members. The single-view batcher
+   is literally the one-member case of the cohort engine, so there is exactly
+   one buffer-and-release implementation to get right and to test.
+3. **Batch / moment.** The closed `ConsistentBatch` (one view) or cohort
+   moment (N views) handed to the consumer, with its resume token.
+
+**Cohorts** turn N independent subscriptions into one stream of jointly
+consistent moments. Because every object in a Materialize environment shares
+one logical timeline, progress timestamps from independent subscriptions are
+directly comparable, so `min(frontier)` across members is a valid global
+consistent cut. The SDK withholds a moment until every member has closed it,
+so the consumer only ever sees jointly consistent state and never has to reason
+about the cut itself. This is a genuine Materialize differentiator (Frank
+McSherry's `mz-bridge-recipe` is the prior art) and it composes on the layering
+above rather than being a separate code path.
+
+The cohort is a shipped, first-class helper, not the core. The common
+single-view case pays none of its concept weight: `consume([oneView])` is
+identical in feel to a single subscription, and a single view is just the
+degenerate cohort of one. A cohort of N views is N subscriptions and therefore
+N connections (a long-running `SUBSCRIBE` cursor holds its connection in a
+`FETCH` loop, so several cannot be multiplexed onto one). That cost is linear
+in views and worth stating. Dynamic cohort membership (add/drop/merge/split of
+a live cohort) is deferred to future work.
 
 ### Layer 1: the subscribe client
 
@@ -269,10 +309,14 @@ Responsibilities and design points:
   resume token, so downstream checkpoints keep advancing during quiet hours.
   This directly fixes the failure mode where an idle subscription's
   checkpoint ages out of the retention window.
-- **Envelope decoding.** Three modes map to typed events:
+- **Envelope decoding.** Two modes map to typed events:
   - default diff envelope: `Insert{row, diff}` / `Retract{row, diff}` with
-    multiplicities preserved (a `diff` of -3 is three retractions and the
-    type says so),
+    multiplicities preserved (a `diff` of -3 is three retractions and the type
+    says so). Within a closed batch, diffs are consolidated per row (net
+    multiplicity, net-zero rows dropped) so a batch is a clean net delta at the
+    frontier, not a replay of intra-window churn. Consolidation and the sink's
+    upsert target key on the same content-derived row identity, so they agree
+    by construction (the `mz-bridge-recipe` technique).
   - `ENVELOPE UPSERT`: `Upsert{key, value}` / `Delete{key}` /
     `KeyViolation{key}`. Key violations are a first-class event, not an
     exception, because a crash-restart loop cannot fix them.
@@ -285,13 +329,17 @@ Responsibilities and design points:
   subscription with a "total result exceeds max size" error regardless of
   client behavior. The SDK surfaces that as a typed error with sizing
   remediation rather than as an opaque stream failure.
-- **Fetch pacing.** `FETCH <n> c WITH (timeout ...)` with adaptive sizing.
-  The client always drains the server promptly and applies backpressure to
-  the application from its own bounded buffer, because unread results buffer
-  without limit in `environmentd`. If the application cannot keep up, the
-  documented options are a larger bound, spill-to-disk (opt-in), or letting
-  the buffer block the FETCH loop and accepting server-side growth. The SDK
-  makes the trade-off visible instead of implicit.
+- **Never backpressure Materialize.** Unread `SUBSCRIBE` output buffers without
+  limit in `environmentd` (an acknowledged server TODO), so an unconsumed
+  subscription makes *Materialize* grow, not the client. The SDK therefore
+  decouples a continuous drain loop (`FETCH <n> c WITH (timeout ...)`, adaptive
+  sizing, always draining the server promptly) from delivery to the consumer,
+  with a buffer in between. That buffer is bounded and fails loud when full:
+  the client is the thing that must fall over, never the database. If the
+  consumer cannot keep up the documented options are a larger bound or opt-in
+  spill-to-disk. The SDK never silently lets the server grow, and it never
+  couples draining to the consumer's pace (the mistake in the initial
+  scaffolding, where `next()` only fetched on demand).
 - **Typed errors.** All failures map to a small taxonomy:
 
   | Error | Meaning | Default behavior |
@@ -378,15 +426,22 @@ Design points:
   - `at_least_once`: effects run first, the checkpoint commits after the
     handler returns. Result: replays possible after a crash, and
     `ctx.idempotencyKey(event)` provides a stable key derived from
-    subscription name, `mz_timestamp`, key columns, and an ordinal within
-    the batch. This fixes both observed idempotency failures: content-only
-    hashes that false-dedup distinct events, and no key at all.
+    subscription name, `mz_timestamp`, key columns, and an ordinal within the
+    *timestamp*. It must not depend on batch grouping: batch boundaries are
+    not stable across a resume (the same change can land in a
+    differently-grouped moment when frontiers tick at different wall-clock
+    instants, and only net state converges), whereas the set of updates at a
+    given `mz_timestamp` is deterministic. Keying on a within-batch ordinal
+    would silently stop deduplicating replays. This fixes both observed
+    idempotency failures: content-only hashes that false-dedup distinct
+    events, and no key at all.
 - **Retraction policy for event sinks.** Side-effecting consumers declare
   what a retraction means: `ignore`, or `compensate(fn)` (the Novu demo's
   retraction-to-revoke mapping, promoted to a supported concept).
   Compensation needs a correlation identity that is stable between an
   insert and its later retraction, which the delivery idempotency key
-  deliberately is not (it includes the timestamp and ordinal). The SDK
+  deliberately is not (it includes the timestamp and a within-timestamp
+  ordinal). The SDK
   therefore provides `ctx.correlationKey(event)`, derived from the row's
   key columns only, for exactly this purpose. The Novu demo collapsed both
   identities into one content hash, which made revokes work but false-dedups
@@ -582,7 +637,9 @@ infrastructure is a deliverable users get too:
 4. **Fencing test.** Two instances against one checkpoint, assert the stale
    epoch is refused and the destination stays consistent.
 5. **Property tests.** Random diff streams through envelope decoding and
-   batching, asserting consolidation and frontier invariants.
+   batching, asserting consolidation and frontier invariants, including the
+   cohort case: `min(frontier)` release, and a laggard member holding the joint
+   moment until it catches up.
 6. **User-facing test kit.** The fixture player from (1) is exported so sink
    authors can unit-test their `apply` implementations offline.
 
@@ -603,6 +660,22 @@ teach the naive loop. Once the SDK exists, each page leads with the SDK and
 keeps the raw `DECLARE`/`FETCH` version as an appendix for driver-only
 environments. The durable-subscriptions pattern doc becomes the conceptual
 explanation behind the SDK's design, linking to it as the implementation.
+
+### Demonstrators
+
+Two example apps ship in `examples/`, because the strongest case for the SDK
+is shown, not told:
+
+- **Always-fresh cache** (single view to Redis), modeled on Justin Bradley's
+  `mz-sink` demo: one expensive query, three read backends (recompute,
+  Materialize index, sink-backed cache) switchable live so the win is felt.
+  The messaging leads with correctness (a cache kept fresh with no invalidation
+  logic because it is downstream of the change stream), with latency as the
+  hook.
+- **Consistent cohort dashboard** (N views to one consistent view): a dashboard
+  over several views (e.g. orders, inventory, pricing) where a naive per-view
+  cache visibly tears and the cohort never does. This is the demo that sells
+  the cross-view consistency a single-view cache demo structurally cannot show.
 
 ### Materialize-side workstream (planned with the SDK, done properly)
 
@@ -704,7 +777,14 @@ Deliberately excluded from v1, recorded so reviewers can see the growth path:
 - **Fan-out helper.** One subscription demultiplexed to many in-process
   consumers by key (the websocket-server pattern, thousands of clients fed
   from one `SUBSCRIBE`). Layer 1's batch model supports it, a first-class
-  helper makes it a five-line feature.
+  helper makes it a five-line feature. This is the inverse of a cohort
+  (many-into-one). Cohorts themselves ship in v1 (see "Consistency layering
+  and cohorts").
+- **Dynamic cohort membership.** Adding, dropping, merging, and splitting the
+  members of a *live* cohort without re-subscribing, plus the durable
+  bookkeeping of the resume position a merged or split cohort resumes from.
+  The fixed-cohort case ships in v1. Live topology changes are the hard,
+  unvalidated part of `mz-bridge-recipe` and are deferred.
 - **Per-key coalescing and debounce.** Event sinks often want "at most one
   webhook per key per interval" to absorb flapping. A Layer 2 option with a
   max-delay bound, at the cost of intermediate updates, which the diff model
@@ -777,6 +857,20 @@ crisp:
   (see the Materialize-side workstream), sequenced ahead of the SDK
   behavior that depends on it.
 - **The standalone runner is a reference example**, not a core deliverable.
+- **Single-view core, cohort as a first-class generalization.** The consistent
+  batch of one view is the core primitive. Multi-view consistency ships as a
+  cohort helper on the same engine (`min(frontier)`), not as the mandatory
+  mental model. Considered and rejected: re-centering the whole SDK on cohorts
+  (the demand across all prior art, the server's native unit, and Materialize's
+  own per-object product surface are all single-view, and the cohort stays
+  composable on the layering so it is not precluded).
+- **One consistency engine, and never backpressure Materialize.** A single
+  buffer-and-release engine (single-view = cohort-of-one), fed by a continuous
+  drain into a bounded buffer that fails loud, so the client falls over, never
+  the server.
+- **Idempotency keys never depend on batch grouping.** Batch boundaries are not
+  stable across a resume, so the delivery key is derived from `mz_timestamp`
+  plus within-timestamp identity, not a within-batch ordinal.
 
 ## Open questions
 
