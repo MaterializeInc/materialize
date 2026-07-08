@@ -36,6 +36,8 @@ import {
   DEFAULT_FILTERS,
   deriveVisibleGraph,
   type Filters,
+  lirIndex,
+  lirSummary,
   type NodeId,
   nodeIdOf,
   type PortPeer,
@@ -254,6 +256,25 @@ const DataflowDetailPage = () => {
     [],
   );
 
+  const onLirGroupClick = React.useCallback(
+    (group: { id: string }) => {
+      if (!data) return;
+      const entry = lirIndex(data.structure).get(group.id);
+      if (!entry) return;
+      setSelection({
+        kind: "lirGroup",
+        node: {
+          key: group.id,
+          info: entry.info,
+          memberIds: entry.memberIds,
+          children: [],
+          summary: lirSummary(data.structure, entry.memberIds),
+        },
+      });
+    },
+    [data],
+  );
+
   const allMatches = React.useMemo(
     () => (data ? allSearchMatches(data.structure, filters.search) : []),
     [data, filters.search],
@@ -469,6 +490,7 @@ const DataflowDetailPage = () => {
                 onNavigate={setFocusedScope}
                 cacheKey={structureKey ?? ""}
                 decorations={decorations}
+                showLirGroups={filters.showLirGroups}
                 centerRef={centerRef}
                 fitRef={fitRef}
                 fitOnIds={pendingFitIds}
@@ -496,6 +518,7 @@ const DataflowDetailPage = () => {
                 onEdgeClick={(edge) => setSelection({ kind: "edge", edge })}
                 onPaneClick={() => setSelection(null)}
                 onJumpToPeer={onJumpToPeer}
+                onLirGroupClick={onLirGroupClick}
               />
               {selection && (
                 <NodeDetailPanel

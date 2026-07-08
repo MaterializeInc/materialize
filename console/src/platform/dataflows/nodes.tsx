@@ -126,10 +126,13 @@ export const PortNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
   </Box>
 );
 
-// A label-only wrapper around its members, never itself a click target
-// except its header (the body is pointerEvents="none" so clicks pass
-// through to whatever member is underneath). Its width/height come from
-// elk's auto-sized bounds, same as every other node in this file.
+// A label-only wrapper around its members. Header is clickable
+// (pointerEvents="auto"), body is not (pointerEvents="none"). For clicks on
+// the body to pass through to underlying members, the node object this
+// component is instantiated with must also set style={{pointerEvents:"none"}},
+// since React Flow's own node wrapper defaults to pointer-events:all and
+// this component's root cannot override an ancestor. Its width/height come
+// from elk's auto-sized bounds, same as every other node in this file.
 export const LirGroupNode = ({ data }: NodeProps & { data: FlowGroupData }) => (
   <Box width="100%" height="100%" position="relative" pointerEvents="none">
     <Box

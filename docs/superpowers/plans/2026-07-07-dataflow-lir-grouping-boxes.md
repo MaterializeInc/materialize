@@ -913,7 +913,16 @@ Replace the `nodes: Node[] = React.useMemo(...)` block with one that emits group
         parentId: grouping!.parentOf.get(g.id),
         width: pos.width,
         height: pos.height,
-        style: { width: pos.width, height: pos.height },
+        // pointerEvents: "none" on React Flow's own node wrapper (not just
+        // inside LirGroupNode's own JSX) is the other half of the
+        // click-through contract LirGroupNode's comment documents: the
+        // wrapper defaults to pointer-events:all and LirGroupNode can't
+        // override an ancestor it doesn't render. With the wrapper opted
+        // out, LirGroupNode's header (pointerEvents:"auto") still receives
+        // clicks (a descendant can always re-enable itself), and a click on
+        // the group's empty body falls through to a member's own wrapper
+        // when one is there, or further to the pane when none is.
+        style: { width: pos.width, height: pos.height, pointerEvents: "none" },
         draggable: false,
         connectable: false,
         // Below its members, which draw over it; React Flow requires a

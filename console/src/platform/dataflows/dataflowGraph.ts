@@ -762,6 +762,7 @@ export interface Filters {
   hideIdle: boolean;
   heatmap: "off" | "elapsed" | "size" | "cpuSkew" | "memorySkew";
   heatmapThreshold: number; // 0..1 fraction of max
+  showLirGroups: boolean;
 }
 
 export const DEFAULT_FILTERS: Filters = {
@@ -769,6 +770,7 @@ export const DEFAULT_FILTERS: Filters = {
   hideIdle: false,
   heatmap: "off",
   heatmapThreshold: 0,
+  showLirGroups: false,
 };
 
 // decorateGraph returns every field set.
