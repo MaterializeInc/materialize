@@ -18,6 +18,7 @@ import {
   defaultCollapseState,
   deriveVisibleGraph,
   expandForSearch,
+  lirIndex,
   type LirSpanRow,
   MAX_VISIBLE_NODES,
   nodeIdOf,
@@ -332,5 +333,17 @@ describe("expandForSearch / allChannelTypes", () => {
 
   it("collects channel types", () => {
     expect(allChannelTypes(s)).toEqual(["batches", "rows"]);
+  });
+});
+
+describe("lirIndex", () => {
+  it("buckets member nodes by export/lir id", () => {
+    const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
+    const index = lirIndex(s);
+    expect([...index.keys()]).toEqual(["u42/1"]);
+    // span 11..13 covers operator ids 11 ([5,1]) and 12 ([5,1,1])
+    expect(index.get("u42/1")!.memberIds.sort()).toEqual(
+      [nodeIdOf([5, 1]), nodeIdOf([5, 1, 1])].sort(),
+    );
   });
 });

@@ -441,3 +441,21 @@ export function expandForSearch(
   }
   return next;
 }
+
+// Groups operator nodes by the LIR span covering them, keyed
+// `${exportId}/${lirId}`. One dataflow can back several exports, so entries
+// are not unique per lir id across exports.
+export function lirIndex(
+  structure: DataflowStructure,
+): Map<string, { info: LirInfo; memberIds: NodeId[] }> {
+  const index = new Map<string, { info: LirInfo; memberIds: NodeId[] }>();
+  for (const node of structure.nodes.values()) {
+    for (const info of node.lir) {
+      const key = `${info.exportId}/${info.lirId}`;
+      const entry = index.get(key) ?? { info, memberIds: [] };
+      entry.memberIds.push(node.id);
+      index.set(key, entry);
+    }
+  }
+  return index;
+}
