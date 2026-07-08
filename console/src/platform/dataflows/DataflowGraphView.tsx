@@ -73,6 +73,12 @@ export interface DataflowGraphViewProps {
   onEdgeClick?: (edge: SelectedEdge) => void;
   onPaneClick?: () => void;
   centerRef?: React.MutableRefObject<((id: string) => void) | null>;
+  // A node to center on once its layout position exists (e.g. right after an
+  // expand triggered by jumping to it). Centering an id whose ancestors were
+  // just expanded can't happen synchronously: layout runs in a worker, so
+  // this id is retried across renders until its position shows up.
+  centerOnId?: string | null;
+  onCentered?: () => void;
 }
 
 // Exposes a centering callback through the ref once React Flow context exists.
@@ -116,6 +122,8 @@ export const DataflowGraphView = ({
   onEdgeClick,
   onPaneClick,
   centerRef,
+  centerOnId,
+  onCentered,
 }: DataflowGraphViewProps) => {
   const toast = useToast();
   const visible = React.useMemo(() => {
@@ -151,6 +159,12 @@ export const DataflowGraphView = ({
       : ""
   }`;
   const { positions, layouting, error } = useElkLayout(visible, layoutKey);
+
+  React.useEffect(() => {
+    if (!centerOnId || !positions?.[centerOnId]) return;
+    centerRef?.current?.(centerOnId);
+    onCentered?.();
+  }, [centerOnId, positions, centerRef, onCentered]);
 
   const toggleRegion = React.useCallback(
     (node: VisibleNode) => {

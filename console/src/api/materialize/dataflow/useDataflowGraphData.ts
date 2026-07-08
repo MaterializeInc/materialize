@@ -86,6 +86,8 @@ export function useDataflowGraphData(params?: DataflowGraphParams) {
         SELECT DISTINCT
           mlm.global_id AS "exportId",
           mlm.lir_id::text AS "lirId",
+          mlm.parent_lir_id::text AS "parentLirId",
+          mlm.nesting::int4 AS nesting,
           mlm.operator,
           mlm.operator_id_start AS "operatorIdStart",
           mlm.operator_id_end AS "operatorIdEnd"
