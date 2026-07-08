@@ -7,16 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import {
-  Alert,
-  AlertIcon,
-  Box,
-  Button,
-  HStack,
-  Spinner,
-  Text,
-  VStack,
-} from "@chakra-ui/react";
+import { Box, Button, HStack, Spinner, Text, VStack } from "@chakra-ui/react";
 import { interpolateYlOrRd } from "d3-scale-chromatic";
 import React from "react";
 import {
@@ -55,6 +46,7 @@ import { DataflowGraphView } from "./DataflowGraphView";
 import { DataflowToolbar } from "./DataflowToolbar";
 import { LirPanel } from "./LirPanel";
 import { NodeDetailPanel, type Selection } from "./NodeDetailPanel";
+import { UsagePrivilegeAlert } from "./UsagePrivilegeAlert";
 
 // Injected into decorateGraph so the pure graph module stays d3-free.
 const heatColor = (t: number) => interpolateYlOrRd(0.15 + 0.85 * t);
@@ -126,6 +118,27 @@ const DataflowDetailPage = () => {
   const [pendingFitIds, setPendingFitIds] = React.useState<string[] | null>(
     null,
   );
+
+  // The route only remounts on a clusterId change, so switching dataflow or
+  // replica in place (via the dropdowns) keeps this component instance, its
+  // selection, filters, and pins alive. Those reference node ids from the
+  // old structure. On the new one they silently miss instead of crashing
+  // (see focusedScope above), which for a pin means every node reads as
+  // "not in the highlighted set" and the whole graph dims with no way to
+  // un-pin. Reset render-phase, not via effect, so there is no render in
+  // between showing the new graph under the old pins.
+  const resetKey = JSON.stringify([replicaName, dataflowId]);
+  const [trackedResetKey, setTrackedResetKey] = React.useState(resetKey);
+  if (resetKey !== trackedResetKey) {
+    setTrackedResetKey(resetKey);
+    setFocusedScope(null);
+    setSelection(null);
+    setFilters(DEFAULT_FILTERS);
+    setMatchIndex(0);
+    setLirHighlight(null);
+    setPinnedLir(new Map());
+  }
+
   const centerRef = React.useRef<((id: string) => void) | null>(null);
   const fitRef = React.useRef<((ids: string[]) => void) | null>(null);
 
@@ -186,7 +199,7 @@ const DataflowDetailPage = () => {
   // A port's peer lives outside the current view. When the peer is itself a
   // region, peerPortId names the exact port this crossing lands on from
   // inside it, so the jump drills straight there instead of parking outside
-  // as an unlabeled box; a leaf peer has no inside to drill into, so the
+  // as an unlabeled box. A leaf peer has no inside to drill into, so the
   // fallback lands on the peer itself, in its own containing scope.
   const onJumpToPeer = React.useCallback(
     (peer: PortPeer) => {
@@ -219,10 +232,26 @@ const DataflowDetailPage = () => {
     () => (data ? allSearchMatches(data.structure, filters.search) : []),
     [data, filters.search],
   );
+  // matchIndex resets to 0 only when the search text changes (see the effect
+  // below). A refetch that shrinks the match set for the same search text,
+  // or the render between a search-text change and that effect running,
+  // otherwise leaves it pointing past the end of allMatches.
+  const activeMatchIndex = Math.min(matchIndex, allMatches.length - 1);
+
+  // Shared with DataflowGraphView via the visible prop below, so the current
+  // scope's graph is derived once per render instead of once here and again
+  // there.
+  const visibleGraph = React.useMemo(
+    () =>
+      data && focusedScope
+        ? deriveVisibleGraph(data.structure, focusedScope)
+        : null,
+    [data, focusedScope],
+  );
 
   const decorations = React.useMemo(() => {
-    if (!data || !focusedScope) return undefined;
-    const visible = deriveVisibleGraph(data.structure, focusedScope);
+    if (!data || !focusedScope || !visibleGraph) return undefined;
+    const visible = visibleGraph;
     const searchInfo = filters.search
       ? subtreeSearchMatches(data.structure, filters.search)
       : null;
@@ -253,7 +282,7 @@ const DataflowDetailPage = () => {
       }
     }
     return d;
-  }, [data, focusedScope, filters, lirHighlight, pinnedLir]);
+  }, [data, focusedScope, visibleGraph, filters, lirHighlight, pinnedLir]);
 
   React.useEffect(() => {
     setMatchIndex(0);
@@ -262,20 +291,23 @@ const DataflowDetailPage = () => {
   const onJump = React.useCallback(
     (delta: 1 | -1) => {
       if (allMatches.length === 0) return;
-      const next = (matchIndex + delta + allMatches.length) % allMatches.length;
+      const next =
+        (activeMatchIndex + delta + allMatches.length) % allMatches.length;
       setMatchIndex(next);
       navigateAndFit([allMatches[next].address]);
     },
-    [allMatches, matchIndex, navigateAndFit],
+    [allMatches, activeMatchIndex, navigateAndFit],
   );
   // Digest of the sorted node ids: identical structure across a stats-only
   // refresh yields the same key, so layout and collapse state are preserved.
-  const structureKey = data
-    ? (() => {
-        const ids = [...data.structure.nodes.keys()].sort();
-        return `${params?.dataflowId}/${params?.replicaName}/${ids.length}-${hashString(ids.join(","))}`;
-      })()
-    : null;
+  // Memoized since sorting and hashing every node id is real work on a
+  // dataflow with tens of thousands of operators, and this otherwise reran
+  // on every render, not just on a new structure.
+  const structureKey = React.useMemo(() => {
+    if (!data) return null;
+    const ids = [...data.structure.nodes.keys()].sort();
+    return `${params?.dataflowId}/${params?.replicaName}/${ids.length}-${hashString(ids.join(","))}`;
+  }, [data, params?.dataflowId, params?.replicaName]);
   if (!cluster) return null;
   if (cluster.replicas.length === 0) {
     return (
@@ -347,16 +379,7 @@ const DataflowDetailPage = () => {
           </HStack>
         )}
         {permissionError ? (
-          <Alert status="info" rounded="md" p={4} width="auto">
-            <AlertIcon />
-            <Text>
-              You&apos;ll need{" "}
-              <Text as="span" textStyle="monospace">
-                USAGE
-              </Text>{" "}
-              privilege on this cluster to visualize this dataflow.
-            </Text>
-          </Alert>
+          <UsagePrivilegeAlert action="visualize this dataflow" />
         ) : error ? (
           <VStack alignItems="flex-start" spacing={2}>
             <ErrorBox message="There was an error visualizing your dataflow" />
@@ -383,7 +406,7 @@ const DataflowDetailPage = () => {
                 filters={filters}
                 onFiltersChange={setFilters}
                 matchCount={allMatches.length}
-                matchIndex={matchIndex}
+                matchIndex={activeMatchIndex}
                 onJump={onJump}
               />
               {filters.heatmap !== "off" && (
@@ -412,7 +435,10 @@ const DataflowDetailPage = () => {
                 onTogglePin={onTogglePinLir}
               />
               <DataflowGraphView
-                structure={data.structure}
+                // Non-null: this branch only renders once data and
+                // focusedScope are both set, which is exactly when
+                // visibleGraph is computed above.
+                visible={visibleGraph!}
                 focusedScope={focusedScope}
                 onNavigate={setFocusedScope}
                 cacheKey={structureKey ?? ""}
@@ -430,7 +456,7 @@ const DataflowDetailPage = () => {
                 }
                 activeMatchId={
                   allMatches.length > 0
-                    ? nodeIdOf(allMatches[matchIndex].address)
+                    ? nodeIdOf(allMatches[activeMatchIndex].address)
                     : undefined
                 }
                 onNodeClick={(node, connectedEdges) =>
