@@ -211,6 +211,7 @@ const IndexTable = (props: IndexTableProps) => {
   const regionSlug = useRegionSlug();
   const dataflowVisualizerEnabled = flags["visualization-features"];
   const { colors } = useTheme<MaterializeTheme>();
+  const { cluster } = props;
 
   return (
     <>
@@ -282,7 +283,7 @@ const IndexTable = (props: IndexTableProps) => {
                   )}
                 </Td>
                 <Td>{formattedLag}</Td>
-                {dataflowVisualizerEnabled && props.cluster && (
+                {dataflowVisualizerEnabled && cluster && (
                   <Td width="16">
                     <OverflowMenu
                       items={[
@@ -292,7 +293,7 @@ const IndexTable = (props: IndexTableProps) => {
                             <MenuItem
                               key="dataflow-visualizer"
                               as={Link}
-                              to={`${absoluteClusterPath(regionSlug, props.cluster!)}/dataflows?export=${i.id}`}
+                              to={`${absoluteClusterPath(regionSlug, cluster)}/dataflows?export=${i.id}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                               }}
