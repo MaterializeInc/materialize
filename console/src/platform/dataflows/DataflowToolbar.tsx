@@ -120,6 +120,7 @@ export const DataflowToolbar = ({
         <option value="size">Heat: arrangement size</option>
         <option value="cpuSkew">Heat: CPU skew</option>
         <option value="memorySkew">Heat: memory skew</option>
+        <option value="scheduleSkew">Heat: schedule skew</option>
       </Select>
       <Slider
         width="120px"
