@@ -23,11 +23,27 @@ export type ChannelEdgeData = {
   dimmed: boolean;
 };
 
+const compactCount = Intl.NumberFormat("default", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+const compact = (n: bigint) => compactCount.format(n);
+
 export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
   const [path, labelX, labelY] = getBezierPath(props);
   const { messagesSent, batchesSent, channelTypes, dimmed } = props.data;
   const idle = messagesSent === 0n;
-  const label = idle ? "" : `${messagesSent} records / ${batchesSent} batches`;
+  // Inline label stays terse: compact record/batch counts only. Exact figures
+  // and the full container type names live in the tooltip, since those Rust
+  // type strings are long enough to swamp the canvas.
+  const label = idle
+    ? ""
+    : `${compact(messagesSent)} / ${compact(batchesSent)}`;
+  const tooltip = idle
+    ? channelTypes.join(", ") || "unknown channel type"
+    : `${messagesSent} records / ${batchesSent} batches` +
+      (channelTypes.length > 0 ? ` · ${channelTypes.join(", ")}` : "");
   return (
     <>
       <BaseEdge
@@ -40,7 +56,7 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
       />
       {label && (
         <EdgeLabelRenderer>
-          <Tooltip label={channelTypes.join(", ") || "unknown channel type"}>
+          <Tooltip label={tooltip}>
             <Text
               position="absolute"
               transform={`translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`}
@@ -52,7 +68,6 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
               className="nopan"
             >
               {label}
-              {channelTypes.length > 0 && ` · ${channelTypes.join(", ")}`}
             </Text>
           </Tooltip>
         </EdgeLabelRenderer>

@@ -16,6 +16,7 @@ import {
   type Edge,
   MiniMap,
   type Node,
+  Position,
   ReactFlow,
 } from "@xyflow/react";
 import React from "react";
@@ -129,6 +130,11 @@ export const DataflowGraphView = ({
         position: { x: pos.x, y: pos.y },
         parentId: n.parent ?? undefined,
         extent: n.parent ? ("parent" as const) : undefined,
+        // Match the Top/Bottom handles so bezier control points meet the
+        // node edges. Without this the edge curves toward the default
+        // Bottom/Top and appears detached across region boundaries.
+        targetPosition: Position.Top,
+        sourcePosition: Position.Bottom,
         style: { width: pos.width, height: pos.height },
         draggable: false,
         connectable: false,
@@ -177,6 +183,8 @@ export const DataflowGraphView = ({
         onlyRenderVisibleElements
         fitView
         minZoom={0.05}
+        // Double-click is the collapse toggle, so it must not also zoom.
+        zoomOnDoubleClick={false}
         onNodeClick={(_, node) =>
           onNodeClick?.((node.data as { node: VisibleNode }).node)
         }
