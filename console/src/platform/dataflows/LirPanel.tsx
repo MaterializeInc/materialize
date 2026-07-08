@@ -7,8 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, Button, HStack, Text } from "@chakra-ui/react";
+import { Box, Button, HStack, Text, useTheme } from "@chakra-ui/react";
 import React from "react";
+
+import { ChevronLeftIcon, ChevronRightIcon } from "~/icons";
+import { MaterializeTheme } from "~/theme";
 
 import {
   type DataflowStructure,
@@ -18,37 +21,46 @@ import {
   type NodeId,
 } from "./dataflowGraph";
 
-const LirRow = ({
-  node,
-  onHighlight,
-  onSelect,
-}: {
+interface LirRowProps {
   node: LirTreeNode;
   onHighlight: (ids: ReadonlySet<string> | null) => void;
   onSelect: (memberIds: NodeId[]) => void;
-}) => (
-  <>
-    <Text
-      fontSize="xs"
-      pl={node.info.nesting * 3}
-      cursor="pointer"
-      _hover={{ background: "gray.100" }}
-      onMouseEnter={() => onHighlight(new Set(node.memberIds))}
-      onMouseLeave={() => onHighlight(null)}
-      onClick={() => onSelect(node.memberIds)}
-    >
-      LIR {node.info.lirId}: {node.info.operator}
-    </Text>
-    {node.children.map((child) => (
-      <LirRow
-        key={child.key}
-        node={child}
-        onHighlight={onHighlight}
-        onSelect={onSelect}
-      />
-    ))}
-  </>
-);
+}
+
+const LirRow = ({ node, onHighlight, onSelect }: LirRowProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <>
+      <Text
+        fontSize="xs"
+        pl={node.info.nesting * 3}
+        cursor="pointer"
+        _hover={{ background: colors.background.secondary }}
+        onMouseEnter={() => onHighlight(new Set(node.memberIds))}
+        onMouseLeave={() => onHighlight(null)}
+        onClick={() => onSelect(node.memberIds)}
+      >
+        LIR {node.info.lirId}: {node.info.operator}
+      </Text>
+      {node.children.map((child) => (
+        <LirRow
+          key={child.key}
+          node={child}
+          onHighlight={onHighlight}
+          onSelect={onSelect}
+        />
+      ))}
+    </>
+  );
+};
+
+export interface LirPanelProps {
+  structure: DataflowStructure;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  onHighlight: (ids: ReadonlySet<string> | null) => void;
+  onSelect: (memberIds: NodeId[]) => void;
+}
 
 export const LirPanel = ({
   structure,
@@ -56,13 +68,8 @@ export const LirPanel = ({
   onToggleCollapsed,
   onHighlight,
   onSelect,
-}: {
-  structure: DataflowStructure;
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
-  onHighlight: (ids: ReadonlySet<string> | null) => void;
-  onSelect: (memberIds: NodeId[]) => void;
-}) => {
+}: LirPanelProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
   const index = React.useMemo(() => lirIndex(structure), [structure]);
   const tree = React.useMemo(
     () => lirTree(structure, index),
@@ -86,7 +93,7 @@ export const LirPanel = ({
           onClick={onToggleCollapsed}
           aria-label="Expand LIR panel"
         >
-          »
+          <ChevronRightIcon boxSize="3" />
         </Button>
       </Box>
     );
@@ -109,12 +116,12 @@ export const LirPanel = ({
           onClick={onToggleCollapsed}
           aria-label="Collapse LIR panel"
         >
-          «
+          <ChevronLeftIcon boxSize="3" />
         </Button>
       </HStack>
       {[...tree.entries()].map(([exportId, roots]) => (
         <Box key={exportId} mb={3}>
-          <Text fontSize="xs" color="gray.500">
+          <Text fontSize="xs" color={colors.foreground.secondary}>
             {exportId}
           </Text>
           {roots.map((root) => (

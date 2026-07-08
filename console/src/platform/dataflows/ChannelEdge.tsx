@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Button, HStack, Text, Tooltip } from "@chakra-ui/react";
+import { Button, HStack, Text, Tooltip, useTheme } from "@chakra-ui/react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -15,6 +15,8 @@ import {
   getBezierPath,
 } from "@xyflow/react";
 import React from "react";
+
+import { MaterializeTheme } from "~/theme";
 
 import type { PortPeer } from "./dataflowGraph";
 import { HIGHLIGHT_COLORS, prettyPrintChannelType } from "./nodeStyle";
@@ -47,6 +49,7 @@ const compactCount = Intl.NumberFormat("default", {
 const compact = (n: bigint) => compactCount.format(n);
 
 export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
+  const { colors } = useTheme<MaterializeTheme>();
   const [path, labelX, labelY] = getBezierPath(props);
   const {
     messagesSent,
@@ -103,7 +106,7 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
               position="absolute"
               transform={`translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`}
               fontSize="2xs"
-              background="whiteAlpha.800"
+              background={colors.background.secondary}
               px={1}
               borderRadius="sm"
               opacity={dimmed ? 0.15 : 1}
@@ -134,7 +137,7 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
                 <Button
                   size="2xs"
                   variant="outline"
-                  background="white"
+                  background={colors.background.primary}
                   // EdgeLabelRenderer portals into a different DOM subtree,
                   // but React bubbles synthetic events along the component
                   // tree, not the DOM tree: without this, the click still
@@ -155,7 +158,7 @@ export const ChannelEdge = (props: EdgeProps & { data: ChannelEdgeData }) => {
                 <Button
                   size="2xs"
                   variant="outline"
-                  background="white"
+                  background={colors.background.primary}
                   onClick={(e) => {
                     e.stopPropagation();
                     onJumpTo(targetLanding);
