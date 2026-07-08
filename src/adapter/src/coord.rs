@@ -3890,21 +3890,18 @@ impl Coordinator {
                         };
                         messages.push(Message::GroupCommitInitiate(span, Some(permit)));
                     },
-                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
-                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
-                    // Receive a batch of commands.
-                    count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
-                        if count == 0 {
-                            break;
-                        } else {
-                            messages.extend(cmd_messages.drain(..).map(
-                                |(otel_ctx, cmd)| Message::Command(otel_ctx, cmd),
-                            ));
-                        }
-                    },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                     // Receive a single command.
+                    //
+                    // Placed above `cmd_rx`: a pending read must first be
+                    // sequenced off `cmd_rx` before it can be enqueued here, so
+                    // this branch is causally downstream of `cmd_rx` and cannot
+                    // outrun it. That makes it safe above `cmd_rx` without
+                    // starving user command intake, and moving a read into the
+                    // pending set is only a cheap map insert. Below `cmd_rx` this
+                    // branch is starved by a sustained write flood, so the reads
+                    // never enter the pending set and never retire.
                     Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
                         let mut pending_read_txns = vec![pending_read_txn];
                         while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
@@ -3921,6 +3918,18 @@ impl Coordinator {
                         }
                         messages.push(Message::LinearizeReads);
                     }
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of commands.
+                    count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
+                        if count == 0 {
+                            break;
+                        } else {
+                            messages.extend(cmd_messages.drain(..).map(
+                                |(otel_ctx, cmd)| Message::Command(otel_ctx, cmd),
+                            ));
+                        }
+                    },
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
@@ -3948,6 +3957,14 @@ impl Coordinator {
                     // sub-millisecond), the lower branches (including the idle
                     // watchdog) stay reachable. See the pin above for why the
                     // future is persisted rather than recreated per iteration.
+                    //
+                    // This branch sits below `cmd_rx`, so a sustained write flood
+                    // starves it. That is fine: under load, retirement instead
+                    // rides `Message::AdvanceTimelines`, which group commit emits
+                    // on the top-priority internal channel after advancing the
+                    // oracle. This branch is the idle-period path, keeping read
+                    // latency low when there is no group commit traffic to carry
+                    // the re-check.
                     () = linearize_reads_notified.as_mut() => {
                         linearize_reads_notified.set(linearize_reads_notify.notified());
                         messages.push(Message::LinearizeReads);

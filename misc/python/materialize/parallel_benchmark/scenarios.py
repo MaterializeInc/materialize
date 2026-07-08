@@ -258,6 +258,126 @@ class PgReadReplicaRTR(Scenario):
         )
 
 
+class LinearizeReadStarvation(Scenario):
+    """
+    Guards against a coordinator priority inversion that pins strict
+    serializable reads behind sustained write traffic.
+
+    A real-time-recency strict serializable read can pick a timestamp ahead of
+    the oracle, becoming a pending linearize read that retires only once the
+    oracle advances past its chosen timestamp. The oracle advances via group
+    commit, which the coordinator's biased select polls above user command
+    intake (`cmd_rx`). Both the branch that moves a read into the pending set
+    and the branch that re-checks pending reads sit below `cmd_rx`. A sustained
+    write flood keeps `cmd_rx` runnable on every poll, so those lower branches
+    starve: the read never enters the pending set or never gets re-checked, even
+    though the same flood keeps advancing the oracle past the read's timestamp
+    on the higher-priority group commit branch. The read stays pending until the
+    flood drains.
+
+    The scenario drives both halves at once:
+
+    * A heavy closed-loop `INSERT` flood into a native table. Its group commits
+      advance the EpochMilliseconds oracle on the high-priority branch, and the
+      insert commands keep `cmd_rx` non-empty well past the command batch size.
+    * Real-time-recency strict serializable reads over a Postgres-source
+      materialized view. Real-time recency pushes them ahead of the oracle, so
+      they become pending linearize reads that the flood then starves.
+
+    When retirement is starved, the reads only retire once the flood stops at
+    the end of the load phase, so their p99 latency approaches the load-phase
+    duration and the guarantee below fails. Retiring pending reads from the
+    group commit signal (`Message::AdvanceTimelines`, on the top-priority
+    internal channel) and enqueuing them above `cmd_rx` makes them retire
+    promptly and the guarantee pass.
+    """
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        self.init(
+            [
+                TdPhase("""
+                    > DROP SECRET IF EXISTS pgpass CASCADE
+                    > CREATE SECRET pgpass AS 'postgres'
+                    > CREATE CONNECTION pg TO POSTGRES (
+                        HOST postgres,
+                        DATABASE postgres,
+                        USER postgres,
+                        PASSWORD SECRET pgpass
+                      )
+
+                    $ postgres-execute connection=postgres://postgres:postgres@postgres
+                    DROP PUBLICATION IF EXISTS mz_linearize_starvation;
+                    DROP TABLE IF EXISTS lin_src CASCADE;
+                    ALTER USER postgres WITH replication;
+                    CREATE TABLE lin_src (f1 INTEGER);
+                    ALTER TABLE lin_src REPLICA IDENTITY FULL;
+                    CREATE PUBLICATION mz_linearize_starvation FOR ALL TABLES;
+
+                    > CREATE SOURCE lin_source
+                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_linearize_starvation')
+
+                    > CREATE TABLE lin_src FROM SOURCE lin_source (REFERENCE lin_src)
+
+                    > CREATE MATERIALIZED VIEW lin_mv AS
+                      SELECT COUNT(*) FROM lin_src
+
+                    > CREATE DEFAULT INDEX ON lin_mv
+
+                    # Native table for the coordinator command flood. Writing to it
+                    # advances the same EpochMilliseconds oracle the reads wait on.
+                    > CREATE TABLE lin_flood (f1 INTEGER)
+                    """),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        # Keep the Postgres source frontier advancing so real-time
+                        # recency keeps pushing the reads ahead of the oracle.
+                        OpenLoop(
+                            action=StandaloneQuery(
+                                "INSERT INTO lin_src VALUES (1)",
+                                conn_infos["postgres"],
+                            ),
+                            dist=Periodic(per_second=100),
+                            report_regressions=False,
+                        ),
+                    ]
+                    + [
+                        # Sustained write flood. Its group commits advance the oracle
+                        # on the high-priority branch, and its commands keep cmd_rx
+                        # saturated well past the command batch size.
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "INSERT INTO lin_flood VALUES (1)",
+                                conn_infos["materialized"],
+                                strict_serializable=False,
+                            ),
+                            report_regressions=False,
+                        )
+                        for _ in range(1024)
+                    ]
+                    + [
+                        # Real-time-recency strict serializable reads. These become
+                        # pending linearize reads whose retirement the flood starves.
+                        ClosedLoop(
+                            action=ReuseConnQuery(
+                                "SET REAL_TIME_RECENCY TO TRUE; SELECT * FROM lin_mv",
+                                conn_infos["materialized"],
+                                strict_serializable=True,
+                            ),
+                            report_regressions=False,
+                        )
+                        for _ in range(8)
+                    ],
+                ),
+            ],
+            guarantees={
+                "SET REAL_TIME_RECENCY TO TRUE; SELECT * FROM lin_mv (reuse connection)": {
+                    "p99": 5000,
+                },
+            },
+        )
+
+
 class MySQLReadReplica(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(

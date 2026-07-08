@@ -224,6 +224,41 @@ If you need conflict detection, evaluate the precondition atomically with the
 commit, a real compare-and-append against the durable store. A check that merely
 precedes the write on the loop is not that, even when it reads the right state.
 
+### Coordinator work that depends on a signal must ride that signal, not a lower select branch
+
+The coordinator's main loop is a `biased` `select!`. Bias means every branch
+below the highest one can be starved: whenever a higher branch is runnable on a
+poll, the lower branches never run. A branch that a client can keep runnable
+indefinitely (user command intake on `cmd_rx`, group commit under a write flood)
+will pin the loop and starve everything beneath it for as long as the load
+lasts.
+
+Work whose progress depends on some event is therefore only safe to place below
+that event's branch if it can also be *driven* from that event, not merely
+polled for on its own low-priority branch. The concrete case: strict
+serializable reads that pick a timestamp ahead of the oracle become pending and
+retire only once the oracle advances. The oracle advances only via group commit.
+Placing the retirement re-check on its own branch below `cmd_rx` means a
+sustained write flood advances the oracle on the group commit branch while
+starving the re-check, so the reads never retire until the flood drains. This is
+a self-sustaining priority inversion, not a transient hiccup.
+
+Reordering the select does not fix this. A biased select always has a lowest
+branch, so moving the re-check up only chooses a different victim (lifting
+retirement above `cmd_rx` would let a read flood starve user commands instead).
+The fix is to couple the work to the causal signal: retire pending reads from
+the `Message::AdvanceTimelines` handler, which group commit emits on the
+top-priority internal channel after advancing the oracle. Retirement then runs
+exactly when progress is possible, on a branch load cannot starve.
+
+Repositioning a branch is only safe when it is *causally downstream* of the
+branch it moves above and does trivial work. Enqueuing a pending read can move
+above `cmd_rx` because a read must first be sequenced off `cmd_rx` before it can
+be enqueued, so the enqueue branch cannot outrun `cmd_rx` and the move
+introduces no new starvation victim. When adding or moving a branch, ask which
+branch can keep the loop busy, what sits below it, and whether anything down
+there depends on a signal it cannot also be driven by.
+
 ## Rejected Optimizations
 
 This section records specific optimizations that have been attempted and found

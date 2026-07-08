@@ -107,6 +107,14 @@ impl Coordinator {
             }
             Message::AdvanceTimelines => {
                 self.advance_timelines().boxed_local().await;
+                // Group commit emits `AdvanceTimelines` on the top-priority
+                // internal channel after advancing the oracle. Retiring pending
+                // reads here couples retirement to the only signal that can make
+                // a read ready, on a branch that a write flood cannot starve.
+                // The `LinearizeReads` re-check branch sits below `cmd_rx` and is
+                // starved under sustained load, so this is the load-bearing
+                // retirement path when writes are flowing.
+                self.message_linearize_reads().boxed_local().await;
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
