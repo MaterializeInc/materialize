@@ -115,6 +115,13 @@ class Executor:
                 if e.sqlstate is not None:
                     print(f"Query failed: {query} {e}")
                     raise QueryError(str(e), query)
+                # Only queries against Mz can be retried this way, an upstream
+                # connection must not be redirected to the Mz connection.
+                if (
+                    not isinstance(cur, psycopg.Cursor)
+                    or cur.connection is not self.mz_conn
+                ):
+                    raise
                 print("Network error, retrying")
                 time.sleep(0.01)
                 self.reconnect()
@@ -146,6 +153,12 @@ class Executor:
 
 
 class PrintExecutor(Executor):
+    def reconnect(self) -> None:
+        # Only prints transactions, needs no Materialize connection. The
+        # random service pick in the base implementation could also hit a
+        # service that is not running yet.
+        pass
+
     def create(self, logging_exe: Any | None = None) -> None:
         pass
 
