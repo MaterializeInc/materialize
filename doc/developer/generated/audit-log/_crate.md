@@ -1,6 +1,6 @@
 ---
 source: src/audit-log/src/lib.rs
-revision: 3dc710f9b1
+revision: 584bb9030c
 ---
 
 # mz-audit-log
@@ -31,7 +31,7 @@ All types derive `Serialize`/`Deserialize` with stable JSON representations; the
 ## Key types
 
 * `VersionedEvent` — top-level event envelope; use `VersionedEvent::new` to create and `serialize`/`deserialize` for I/O.
-* `EventDetails` — exhaustive enum of all event payloads; `as_json()` produces the detail object stored in the catalog table.
+* `EventDetails` — exhaustive enum of all event payloads; `as_json()` produces the detail object stored in `mz_catalog.mz_audit_events.details`. The proto twin is `mz_catalog_protos::objects::audit_log_event_v1`, which `parse_catalog_audit_log_details` (in `src/expr/src/scalar/func/impls/jsonb.rs`) reshapes back into `as_json`'s output format. The round-trip is covered by a property test in `src/catalog/tests/audit_log_details.rs`.
 * `CreateRoleV1` — audit detail for role creation, carrying `id`, `name`, and optional `auto_provision_source`.
 * `AlterClusterReconfigurationV1` — audit detail for a background cluster reconfiguration lifecycle transition, carrying `cluster_id`, `cluster_name`, `transition` (`ReconfigurationLifecycleV1`), target shape fields, and optional `deadline`.
 * `ClusterHydrationBurstV1` — audit detail for a hydration burst lifecycle transition, carrying `cluster_id`, `cluster_name`, `transition` (`HydrationBurstLifecycleV1`), and `burst_size`.

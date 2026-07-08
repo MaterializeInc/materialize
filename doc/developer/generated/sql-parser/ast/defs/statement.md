@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/statement.rs
-revision: bb08b11a38
+revision: 7441a9ee34
 ---
 
 # mz-sql-parser::ast::defs::statement
@@ -19,6 +19,7 @@ Each statement variant has a corresponding struct with its specific fields.
 `KafkaMatchingBrokerRule<T: AstInfo>` represents a `MATCHING` rule inside a `BROKERS (...)` clause that routes brokers matching a pattern through an AWS PrivateLink tunnel. Fields: `pattern: ConnectionRulePattern` and `tunnel: KafkaBrokerAwsPrivatelink<T>`. Its `AstDisplay` impl prints `MATCHING {pattern} {tunnel}`.
 
 `WithOptionValue<T>` includes a `KafkaMatchingBrokerRule(KafkaMatchingBrokerRule<T>)` variant. Its `AstDisplay` impl delegates to the inner rule's display. This variant is not redacted.
+In redacted `AstDisplay` output, `WithOptionValue::Secret` is not redacted: a secret reference is a catalog item name, not the secret value, so it is safe to show. An option that accepts an inline credential is parsed as `WithOptionValue::Value`, which is redacted by the `Value` arm together with the option's `redact_value()`. `WithOptionValue::ConnectionKafkaBroker` is still unconditionally redacted.
 
 `CreateTableFromSourceStatement<T>`'s `AstDisplay` impl opens a parenthesized column/constraint list only when `columns` is not `NotSpecified` or the `constraints` list is non-empty. When `columns` is `NotSpecified` but constraints exist, the constraints are written directly without a preceding `, ` separator.
 
