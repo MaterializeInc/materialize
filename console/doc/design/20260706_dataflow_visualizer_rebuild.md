@@ -164,9 +164,9 @@ The visible-graph derivation is `deriveVisibleGraph(structure, collapseState, fi
 ### Rendering and layout
 
 elkjs runs `elk.layered` in a web worker, direction left to right, over exactly the visible post-collapse graph.
-The console builds with Vite, so the worker is loaded via Vite's worker import (`elkjs/lib/elk-worker.min.js?worker`) passed as `workerFactory` to the ELK constructor.
+The console builds with Vite, so layout runs in a Vite module worker (`new Worker(new URL("./layout.worker.ts", import.meta.url), { type: "module" })`) that imports `elkjs/lib/elk.bundled.js` and implements the layout request protocol below.
 Phase 1 verifies this in both `vite dev` and the production build.
-If the prebuilt worker script does not survive Vite bundling, the fallback is `elk.bundled.js` on the main thread in a lazily loaded chunk, accepting UI stalls during layout.
+If the module worker fails to bundle or run `elk.bundled.js`, the fallback is running elkjs on the main thread in a lazily loaded chunk, accepting UI stalls during layout.
 Toggling collapse recomputes layout, memoized per collapse state so toggling back is instant.
 A small "layouting" overlay shows during computation while the canvas stays interactive.
 
