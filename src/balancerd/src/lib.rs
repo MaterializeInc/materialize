@@ -323,12 +323,12 @@ impl BalancerService {
         let internal_http_addr = self.internal_http.0.local_addr();
 
         // The HTTPS balancer always resolves through a TenantDnsResolver. In
-        // multi-tenant mode it shares the pgwire resolver so both listeners
-        // use one CNAME cache. In static mode pgwire does not use DNS caching,
-        // so HTTPS gets its own resolver with the default cache size.
+        // multi-tenant mode it shares the pgwire resolver so both listeners use
+        // one resolver. In static mode pgwire does not resolve through it, so
+        // HTTPS gets its own.
         let shared_dns = match self.cfg.resolver.shared_dns() {
             Some(dns) => dns,
-            None => Arc::new(TenantDnsResolver::new(DEFAULT_DNS_CACHE_SIZE)?),
+            None => Arc::new(TenantDnsResolver::new()?),
         };
 
         {
@@ -1134,18 +1134,29 @@ impl HttpsBalancer {
     }
 }
 
-/// Extracts the tenant from a CNAME.
+/// Extracts the tenant ID from an environmentd CNAME target.
+///
+/// The CNAME points at the environmentd service, of the form
+/// `<service>.<namespace>.svc.cluster.local`, e.g.
+/// `environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local`.
+/// The `<namespace>` is the environment name `environment-<tenant_id>-<index>`,
+/// where `<tenant_id>` is the tenant's UUID and `<index>` is the environment
+/// generation.
+///
+/// NOTE: `<index>` is currently always 0, since a tenant has one environment
+/// per region, but this does not rely on that so that multiple environments
+/// per tenant can be supported later.
 fn extract_tenant_from_cname(cname: &str) -> Option<String> {
     let mut parts = cname.split('.');
     let _service = parts.next();
     let Some(namespace) = parts.next() else {
         return None;
     };
-    // Trim off the starting `environmentd-`.
+    // Trim off the starting `environment-`.
     let Some((_, namespace)) = namespace.split_once('-') else {
         return None;
     };
-    // Trim off the ending `-0` (or some other number).
+    // Trim off the ending `-<index>`.
     let Some((tenant, _)) = namespace.rsplit_once('-') else {
         return None;
     };
@@ -1450,29 +1461,16 @@ impl BalancerResolver {
     }
 }
 
-/// The default number of CNAME responses cached by [`TenantDnsResolver`].
-///
-/// The cache holds one entry per distinct tenant hostname, so this bounds
-/// both memory use and the number of tenants that benefit from caching.
-pub const DEFAULT_DNS_CACHE_SIZE: usize = 1000;
-
 /// Creates a resolver from the system DNS configuration.
 ///
-/// A `cache_size` of 0 disables caching. Fails if the system DNS
-/// configuration cannot be read. We must not fall back to hickory's default
-/// config (Google public DNS) here, that would leak internal hostnames to an
-/// external party and could not resolve them anyway.
-fn create_resolver(cache_size: usize) -> Result<TokioResolver, anyhow::Error> {
+/// Caching is delegated to the infrastructure (node-local DNS), so this
+/// resolver does no caching of its own. Fails if the system DNS configuration
+/// cannot be read. We must not fall back to hickory's default config (Google
+/// public DNS) here, that would leak internal hostnames to an external party
+/// and could not resolve them anyway.
+fn create_resolver() -> Result<TokioResolver, anyhow::Error> {
     let (config, mut opts) = read_system_conf().context("reading system DNS configuration")?;
-    opts.cache_size = cache_size;
-    // Cached entries are tenant CNAMEs, which are effectively static for the
-    // life of an environment. The 10 second cap bounds how long a re-pointed
-    // CNAME is served stale. The 1 second floors keep 0-TTL records and
-    // missing CNAMEs from forcing a DNS query on every connection.
-    opts.positive_max_ttl = Some(Duration::from_secs(10));
-    opts.positive_min_ttl = Some(Duration::from_secs(1));
-    opts.negative_min_ttl = Some(Duration::from_secs(1));
-    opts.negative_max_ttl = Some(Duration::from_secs(1));
+    opts.cache_size = 0;
     // Query A records first and AAAA only on failure, rather than both.
     opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
 
@@ -1483,30 +1481,28 @@ fn create_resolver(cache_size: usize) -> Result<TokioResolver, anyhow::Error> {
     )
 }
 
-/// A resolver that uses separate caching and non-caching resolvers for different record types.
+/// Resolves tenant hostnames for pgwire and HTTPS routing.
+///
+/// Caching is delegated to the infrastructure (node-local DNS), so every
+/// lookup issues a query. CNAMEs are resolved separately from A records only
+/// because the CNAME carries the tenant, not for caching reasons.
 #[derive(Debug)]
 pub struct TenantDnsResolver {
-    caching_resolver: TokioResolver,
-    non_caching_resolver: TokioResolver,
+    resolver: TokioResolver,
 }
 
 impl TenantDnsResolver {
-    /// Creates a new resolver that caches up to `cname_cache_size` CNAME
-    /// responses. Fails if the system DNS configuration cannot be read.
-    pub fn new(cname_cache_size: usize) -> Result<Self, anyhow::Error> {
+    /// Creates a new resolver. Fails if the system DNS configuration cannot be
+    /// read.
+    pub fn new() -> Result<Self, anyhow::Error> {
         Ok(Self {
-            caching_resolver: create_resolver(cname_cache_size)?,
-            non_caching_resolver: create_resolver(0)?,
+            resolver: create_resolver()?,
         })
     }
 
-    /// Resolves a CNAME record using the caching resolver.
+    /// Resolves the CNAME a hostname points at, if any.
     async fn resolve_cname(&self, hostname: &str) -> Option<String> {
-        match self
-            .caching_resolver
-            .lookup(hostname, RecordType::CNAME)
-            .await
-        {
+        match self.resolver.lookup(hostname, RecordType::CNAME).await {
             Ok(cname_response) => {
                 if let Some(cname_record) = cname_response.iter().next() {
                     if let Some(cname_data) = cname_record.as_cname() {
@@ -1524,18 +1520,24 @@ impl TenantDnsResolver {
         }
     }
 
-    /// Resolves A records without caching.
-    async fn resolve_arec_no_cache(&self, hostname: &str) -> Result<LookupIp, anyhow::Error> {
-        self.non_caching_resolver
+    /// Resolves the A records for a hostname.
+    async fn resolve_a(&self, hostname: &str) -> Result<LookupIp, anyhow::Error> {
+        self.resolver
             .lookup_ip(hostname)
             .await
             .with_context(|| format!("resolving A records for {}", hostname))
     }
 
-    /// Resolves an address using SNI-based lookup.
+    /// Resolves the environment address for a TLS SNI servername.
     ///
-    /// Takes a template (e.g., "blncr-{}") and servername from TLS SNI,
-    /// substitutes the servername into the template, and resolves to an address and tenant.
+    /// `servername` is the first label of the SNI host, e.g.
+    /// `3dl07g8zmj91pntk4eo9cfvwe`. Substituting it into `template` (e.g.
+    /// `blncr-{}`) yields a Kubernetes hostname like
+    /// `blncr-3dl07g8zmj91pntk4eo9cfvwe`, which resolves via a CNAME to the
+    /// environmentd service, e.g.
+    /// `environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local`.
+    /// The tenant is extracted from that CNAME. See
+    /// `extract_tenant_from_cname`.
     pub async fn resolve_sni(
         &self,
         template: &str,
@@ -1556,13 +1558,12 @@ impl TenantDnsResolver {
         if let Ok(ip) = host.parse::<IpAddr>() {
             return Ok(SocketAddr::new(ip, port));
         }
-        Self::first_addr(self.resolve_arec_no_cache(host).await?, port)
+        Self::first_addr(self.resolve_a(host).await?, port)
     }
 
     /// Resolves the address and tenant from a hostname and port.
     ///
-    /// CNAMEs are resolved with caching, while A records are resolved without caching.
-    /// The tenant is extracted from the CNAME if present.
+    /// The tenant is extracted from the CNAME if the hostname points at one.
     async fn resolve(
         &self,
         host: &str,
@@ -1573,13 +1574,12 @@ impl TenantDnsResolver {
             return Ok((SocketAddr::new(ip, port), None));
         }
 
-        // Resolve CNAME with caching (these are generally static).
-        // Extract tenant from CNAME if present.
+        // The CNAME carries the tenant, so resolve it separately to extract it.
         let (ips, tenant) = if let Some(cname) = self.resolve_cname(host).await {
             let tenant = extract_tenant_from_cname(&cname);
-            (self.resolve_arec_no_cache(&cname).await?, tenant)
+            (self.resolve_a(&cname).await?, tenant)
         } else {
-            (self.resolve_arec_no_cache(host).await?, None)
+            (self.resolve_a(host).await?, None)
         };
 
         Ok((Self::first_addr(ips, port)?, tenant))

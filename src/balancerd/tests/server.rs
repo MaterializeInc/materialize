@@ -22,7 +22,7 @@ use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
-    DEFAULT_DNS_CACHE_SIZE, FronteggResolver, SniTemplate, TenantDnsResolver,
+    FronteggResolver, SniTemplate, TenantDnsResolver,
 };
 use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
@@ -149,8 +149,7 @@ async fn test_balancer() {
         (
             BalancerResolver::MultiTenant {
                 dns: Arc::new(
-                    TenantDnsResolver::new(DEFAULT_DNS_CACHE_SIZE)
-                        .expect("system DNS configuration is readable"),
+                    TenantDnsResolver::new().expect("system DNS configuration is readable"),
                 ),
                 frontegg: FronteggResolver {
                     auth: frontegg_auth,
