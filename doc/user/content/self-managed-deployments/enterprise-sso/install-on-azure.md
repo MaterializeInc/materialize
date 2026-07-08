@@ -5,7 +5,7 @@ menu:
   main:
     parent: "enterprise-sso"
     identifier: "enterprise-sso-azure"
-    weight: 20
+    weight: 30
 ---
 
 This guide walks through the
@@ -26,11 +26,6 @@ SCIM available when Polis is enabled.
 {{< self-managed/terraform-disclaimer >}}
 
 {{< /note >}}
-
-Before starting, work through the
-[Prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/): a
-license key carrying the `ory` entitlement, the six browser-facing DNS
-hostnames, and a cert-manager strategy.
 
 ## What Gets Created
 
@@ -70,9 +65,12 @@ the additions below.
 |----------|-------------|
 | Materialize Instance | Configured for OIDC sign-in against the Hydra issuer URL. The browser-facing console hostname is registered as the OAuth2 redirect URI. |
 
-## Prerequisites
+## Azure-specific requirements
 
-### Azure Account Requirements
+Cross-cutting requirements (license key with the `ory` entitlement, DNS
+hostnames, cert-manager strategy, required tools) are covered on the shared
+[Prerequisites](/self-managed-deployments/enterprise-sso/prerequisites/)
+page. This section only lists the Azure-specific bits.
 
 An active Azure subscription with permission to create:
 
@@ -82,22 +80,6 @@ An active Azure subscription with permission to create:
 - Azure Database for PostgreSQL Flexible Servers
 - Storage accounts
 - Managed identities and role assignments
-
-### Required Tools
-
-- [Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform)
-- [Azure CLI (`az`)](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
-- [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
-- [Helm 3.2.0+](https://helm.sh/docs/intro/install/)
-
-### License Key
-
-{{< yaml-table data="self_managed/license_key" >}}
-
-The same license key authenticates pulls from the Materialize-hosted Ory
-registry proxy (`ory.registry.cloud.materialize.com`), so it must carry the
-`ory` entitlement. See [Prerequisites: License
-key](/self-managed-deployments/enterprise-sso/prerequisites/#license-key-with-the-ory-entitlement).
 
 ## Getting Started: Enterprise SSO Example
 

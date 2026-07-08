@@ -5,7 +5,7 @@ menu:
   main:
     parent: "enterprise-sso"
     identifier: "enterprise-sso-operations"
-    weight: 50
+    weight: 60
 ---
 
 This page covers ongoing operations once the Ory stack is deployed and
