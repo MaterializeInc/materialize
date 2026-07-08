@@ -470,17 +470,17 @@ describe("lirTree", () => {
         id: "2",
         address: ["9", "1"],
         name: "OpA",
-        arrangementRecords: "0",
+        arrangementRecords: "100",
         arrangementSize: "0",
-        elapsedNs: "0",
+        elapsedNs: "10",
       },
       {
         id: "3",
         address: ["9", "2"],
         name: "OpB",
-        arrangementRecords: "0",
+        arrangementRecords: "200",
         arrangementSize: "0",
-        elapsedNs: "0",
+        elapsedNs: "20",
       },
     ];
     const spans: LirSpanRow[] = [
@@ -513,7 +513,7 @@ describe("lirTree", () => {
       },
     ];
     const s = buildDataflowStructure(ops, [], spans);
-    const tree = lirTree(lirIndex(s));
+    const tree = lirTree(s, lirIndex(s));
     const roots = tree.get("u1")!;
     expect(roots.map((n) => n.key)).toEqual(["u1/10"]);
     expect(roots[0].children.map((n) => n.key)).toEqual(["u1/12", "u1/11"]);
@@ -523,6 +523,68 @@ describe("lirTree", () => {
     expect(roots[0].children.find((n) => n.key === "u1/11")!.memberIds).toEqual(
       [nodeIdOf([9, 1])],
     );
+  });
+
+  it("sums own stats over members, matching EXPLAIN ANALYZE's semantics: a parent's summary includes its children's", () => {
+    const ops: OperatorRow[] = [
+      {
+        id: "1",
+        address: ["9"],
+        name: "Dataflow",
+        arrangementRecords: "0",
+        arrangementSize: "0",
+        elapsedNs: "0",
+      },
+      {
+        id: "2",
+        address: ["9", "1"],
+        name: "OpA",
+        arrangementRecords: "100",
+        arrangementSize: "0",
+        elapsedNs: "10",
+      },
+      {
+        id: "3",
+        address: ["9", "2"],
+        name: "OpB",
+        arrangementRecords: "200",
+        arrangementSize: "0",
+        elapsedNs: "20",
+      },
+    ];
+    const spans: LirSpanRow[] = [
+      {
+        exportId: "u1",
+        lirId: "10",
+        parentLirId: null,
+        nesting: 0,
+        operator: "Root",
+        operatorIdStart: "2",
+        operatorIdEnd: "4",
+      },
+      {
+        exportId: "u1",
+        lirId: "11",
+        parentLirId: "10",
+        nesting: 1,
+        operator: "OpA",
+        operatorIdStart: "2",
+        operatorIdEnd: "3",
+      },
+    ];
+    const s = buildDataflowStructure(ops, [], spans);
+    const tree = lirTree(s, lirIndex(s));
+    const root = tree.get("u1")![0];
+    expect(root.summary).toEqual({
+      arrangementRecords: 300n,
+      arrangementSize: 0n,
+      elapsedNs: 30n,
+    });
+    expect(root.children[0].summary).toEqual({
+      arrangementRecords: 100n,
+      arrangementSize: 0n,
+      elapsedNs: 10n,
+    });
   });
 });
 
