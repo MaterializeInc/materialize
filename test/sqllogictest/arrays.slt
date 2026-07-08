@@ -585,6 +585,21 @@ SELECT array_remove(ARRAY[1,1,1], 1)
 query error removing elements from multidimensional arrays is not supported
 SELECT array_remove(ARRAY[[1]], 1)
 
+query error integer list\[\] not yet supported
+SELECT array_remove(NULL, LIST[1])
+
+query error map\[text=>integer\]\[\] not yet supported
+SELECT array_remove(NULL, '{a=>1}'::map[text=>int4])
+
+statement ok
+CREATE TABLE t0 (c3 int4 list)
+
+query error integer list\[\] not yet supported
+SELECT array_remove('[2020-01-01,2021-01-01)', t0.c3) AS col0 FROM t0
+
+statement ok
+DROP TABLE t0
+
 # array_cat
 
 query T
