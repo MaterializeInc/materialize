@@ -17,10 +17,14 @@ import ELK, { type ElkNode } from "elkjs/lib/elk-api.js";
 import ElkWorker from "elkjs/lib/elk-worker.min.js?worker";
 import React from "react";
 
-import type { VisibleGraph } from "./dataflowGraph";
+import type { LirGrouping, VisibleGraph } from "./dataflowGraph";
 import { extractPositions, type Positions, toElkGraph } from "./elkGraph";
 
-export function useElkLayout(graph: VisibleGraph | null, cacheKey: string) {
+export function useElkLayout(
+  graph: VisibleGraph | null,
+  cacheKey: string,
+  grouping?: LirGrouping,
+) {
   const elkRef = React.useRef<InstanceType<typeof ELK> | null>(null);
   const requestIdRef = React.useRef(0);
   const cacheRef = React.useRef(new Map<string, Positions>());
@@ -53,7 +57,7 @@ export function useElkLayout(graph: VisibleGraph | null, cacheKey: string) {
     const elk = elkRef.current;
     if (!elk) return;
     const requestId = ++requestIdRef.current;
-    elk.layout(toElkGraph(graph)).then(
+    elk.layout(toElkGraph(graph, grouping)).then(
       (layouted: ElkNode) => {
         // Drop responses for superseded requests.
         if (requestId !== requestIdRef.current) return;
@@ -66,7 +70,7 @@ export function useElkLayout(graph: VisibleGraph | null, cacheKey: string) {
         setState({ key: cacheKey, positions: null, error: String(error) });
       },
     );
-  }, [graph, cacheKey, retryNonce]);
+  }, [graph, cacheKey, retryNonce, grouping]);
 
   return {
     positions: state.key === cacheKey ? state.positions : null,
