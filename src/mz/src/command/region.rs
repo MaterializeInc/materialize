@@ -23,6 +23,7 @@ use crate::{context::RegionContext, error::Error};
 
 use mz_cloud_api::client::{cloud_provider::CloudProvider, region::RegionState};
 use mz_ore::retry::Retry;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
@@ -134,12 +135,26 @@ pub async fn disable(cx: RegionContext, hard: bool) -> Result<(), Error> {
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {
             loading_spinner.set_message("Disabling region...");
-            cx.cloud_client()
+            match cx
+                .cloud_client()
                 .delete_region(cloud_provider.clone(), hard)
-                .await?;
-
-            loading_spinner.finish_with_message("Region disabled.");
-            Ok(())
+                .await
+            {
+                Ok(()) => {
+                    loading_spinner.finish_with_message("Region disabled.");
+                    Ok(())
+                }
+                // A 404 means no region exists, so the desired state already
+                // holds. Retrying cannot change the response, so report
+                // success instead of burning the whole retry budget.
+                Err(mz_cloud_api::error::Error::Api(err))
+                    if err.status_code == StatusCode::NOT_FOUND =>
+                {
+                    loading_spinner.finish_with_message("Region already disabled.");
+                    Ok(())
+                }
+                Err(e) => Err(e.into()),
+            }
         })
         .await
 }

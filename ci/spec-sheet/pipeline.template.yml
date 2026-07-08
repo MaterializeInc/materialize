@@ -64,15 +64,6 @@ steps:
         branches: "main"
         skip: "currently broken"
 
-      - id: build-rust-latest-beta
-        label: "Build with Latest Rust Beta"
-        command: bin/ci-builder run stable ci/test/rust-beta-build.sh
-        depends_on: []
-        timeout_in_minutes: 60
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        branches: "main"
-
       - id: devel-docker-tags
         label: Tag development docker images
         command: bin/ci-builder run min bin/pyactivate -m ci.test.dev_tag
@@ -125,7 +116,12 @@ steps:
     depends_on: devel-docker-tags
     parallelism: 7
     concurrency: 1
-    concurrency_group: "cluster-spec-sheet-account-$$BUILDKITE_PARALLEL_JOB"
+    # Each slot is one dedicated staging account from the e2e pool of 20
+    # (see staging_credentials in the composition). mkpipeline rotates the
+    # 7-shard window over the pool per build, so concurrent builds use
+    # disjoint accounts instead of queueing on the previous build's shards.
+    concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
+    concurrency_pool: 20
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster-spec-sheet
