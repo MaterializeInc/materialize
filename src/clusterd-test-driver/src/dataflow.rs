@@ -440,7 +440,7 @@ impl DataflowBuilder {
         }
         // Lower MIR -> LIR. Deterministic and self-contained.
         let lowered: DataflowDescription<LirRelationExpr, ()> =
-            LirRelationExpr::finalize_dataflow(self.mir, &features)
+            LirRelationExpr::finalize_dataflow(self.mir, &features, None)
                 .map_err(|e| anyhow::anyhow!("lowering dataflow failed: {e}"))?;
         augment(lowered, &self.sources, &self.sinks)
     }

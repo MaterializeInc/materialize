@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use mz_compute_types::plan::LoweringMetrics;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
@@ -33,6 +34,8 @@ pub struct OptimizerMetrics {
     /// Local storage of transform times; these are emitted as part of the
     /// log-line when end-to-end optimization times exceed the configured threshold.
     transform_time_seconds: std::collections::BTreeMap<String, Vec<Duration>>,
+    /// Metrics recorded during MIR to LIR lowering.
+    lowering: LoweringMetrics,
 }
 
 impl OptimizerMetrics {
@@ -66,6 +69,7 @@ impl OptimizerMetrics {
                 var_labels: ["transform"],
             )),
             transform_time_seconds: std::collections::BTreeMap::new(),
+            lowering: LoweringMetrics::register_into(registry),
         }
     }
 
@@ -74,6 +78,11 @@ impl OptimizerMetrics {
     pub fn set_e2e_optimization_time_log_threshold(&self, threshold: Duration) {
         self.e2e_optimization_time_seconds_log_threshold
             .store(duration_to_nanos(threshold), Ordering::Relaxed);
+    }
+
+    /// The metrics recorded during MIR to LIR lowering.
+    pub fn lowering(&self) -> &LoweringMetrics {
+        &self.lowering
     }
 
     pub fn observe_e2e_optimization_time(&self, object_type: &str, duration: Duration) {
