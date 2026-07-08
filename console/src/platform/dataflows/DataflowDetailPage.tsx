@@ -10,12 +10,14 @@
 import {
   Alert,
   AlertIcon,
+  Box,
   Button,
   HStack,
   Spinner,
   Text,
   VStack,
 } from "@chakra-ui/react";
+import { interpolateYlOrRd } from "d3-scale-chromatic";
 import React from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 
@@ -27,12 +29,22 @@ import { MainContentContainer } from "~/layouts/BaseLayout";
 import { useAllClusters } from "~/store/allClusters";
 
 import {
+  allChannelTypes,
   type CollapseState,
+  decorateGraph,
+  DEFAULT_FILTERS,
   defaultCollapseState,
+  deriveVisibleGraph,
+  expandForSearch,
+  type Filters,
   type VisibleNode,
 } from "./dataflowGraph";
 import { DataflowGraphView } from "./DataflowGraphView";
+import { DataflowToolbar } from "./DataflowToolbar";
 import { NodeDetailPanel } from "./NodeDetailPanel";
+
+// Injected into decorateGraph so the pure graph module stays d3-free.
+const heatColor = (t: number) => interpolateYlOrRd(0.15 + 0.85 * t);
 
 // Stable 32-bit hash so a pure stats refresh (identical node ids) keeps the
 // same structure key and reuses the layout, while any structural change
@@ -64,6 +76,42 @@ const DataflowDetailPage = () => {
   const [collapsed, setCollapsed] = React.useState<CollapseState | null>(null);
   const [selectedNode, setSelectedNode] = React.useState<VisibleNode | null>(
     null,
+  );
+  const [filters, setFilters] = React.useState<Filters>(DEFAULT_FILTERS);
+  const [matchIndex, setMatchIndex] = React.useState(0);
+  const centerRef = React.useRef<((id: string) => void) | null>(null);
+
+  const decorations = React.useMemo(
+    () =>
+      data && collapsed
+        ? decorateGraph(
+            deriveVisibleGraph(data.structure, collapsed),
+            filters,
+            heatColor,
+          )
+        : undefined,
+    [data, collapsed, filters],
+  );
+
+  // New search: expand ancestors of matches once, reset the cursor.
+  React.useEffect(() => {
+    setMatchIndex(0);
+    if (filters.search && data) {
+      setCollapsed((c) =>
+        c ? expandForSearch(data.structure, c, filters.search) : c,
+      );
+    }
+  }, [filters.search]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onJump = React.useCallback(
+    (delta: 1 | -1) => {
+      const matches = decorations?.searchMatches ?? [];
+      if (matches.length === 0) return;
+      const next = (matchIndex + delta + matches.length) % matches.length;
+      setMatchIndex(next);
+      centerRef.current?.(matches[next]);
+    },
+    [decorations?.searchMatches, matchIndex],
   );
   // Digest of the sorted node ids: identical structure across a stats-only
   // refresh yields the same key, so layout and collapse state are preserved.
@@ -134,22 +182,52 @@ const DataflowDetailPage = () => {
         ) : data.structure.nodes.size <= 1 ? (
           <Text>This dataflow contains no operators.</Text>
         ) : (
-          <HStack flex="1" minH={0} alignItems="stretch" spacing={0}>
-            <DataflowGraphView
-              structure={data.structure}
-              collapsed={collapsed}
-              onCollapsedChange={setCollapsed}
-              cacheKey={structureKey ?? ""}
-              onNodeClick={setSelectedNode}
-              onPaneClick={() => setSelectedNode(null)}
-            />
-            {selectedNode && (
-              <NodeDetailPanel
-                node={selectedNode}
-                onClose={() => setSelectedNode(null)}
+          <VStack flex="1" minH={0} alignItems="stretch" spacing={2}>
+            <HStack flexShrink={0} flexWrap="wrap" alignItems="center">
+              <DataflowToolbar
+                filters={filters}
+                onFiltersChange={setFilters}
+                channelTypes={allChannelTypes(data.structure)}
+                matchCount={decorations?.searchMatches.length ?? 0}
+                matchIndex={matchIndex}
+                onJump={onJump}
               />
-            )}
-          </HStack>
+              {filters.heatmap !== "off" && (
+                <HStack spacing={1} flexShrink={0}>
+                  <Text fontSize="xs" color="foreground.secondary">
+                    low
+                  </Text>
+                  <Box
+                    width="80px"
+                    height="10px"
+                    borderRadius="sm"
+                    background={`linear-gradient(to right, ${heatColor(0)}, ${heatColor(0.5)}, ${heatColor(1)})`}
+                  />
+                  <Text fontSize="xs" color="foreground.secondary">
+                    high
+                  </Text>
+                </HStack>
+              )}
+            </HStack>
+            <HStack flex="1" minH={0} alignItems="stretch" spacing={0}>
+              <DataflowGraphView
+                structure={data.structure}
+                collapsed={collapsed}
+                onCollapsedChange={setCollapsed}
+                cacheKey={structureKey ?? ""}
+                decorations={decorations}
+                centerRef={centerRef}
+                onNodeClick={setSelectedNode}
+                onPaneClick={() => setSelectedNode(null)}
+              />
+              {selectedNode && (
+                <NodeDetailPanel
+                  node={selectedNode}
+                  onClose={() => setSelectedNode(null)}
+                />
+              )}
+            </HStack>
+          </VStack>
         )}
       </VStack>
     </MainContentContainer>
