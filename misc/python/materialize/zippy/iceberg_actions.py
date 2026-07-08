@@ -45,8 +45,6 @@ class IcebergStart(Action):
             Service("polaris", idle=True),
         )
         username, key = setup_polaris_for_iceberg(c)
-        state.iceberg_username = username
-        state.iceberg_key = key
 
         c.testdrive(
             dedent(f"""

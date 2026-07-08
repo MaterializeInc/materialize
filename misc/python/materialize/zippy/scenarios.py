@@ -75,21 +75,36 @@ from materialize.zippy.storaged_actions import (
     StoragedStart,
 )
 from materialize.zippy.copy_s3_actions import CopyFromS3, CopyToS3
-from materialize.zippy.table_actions import DML, CreateTableParameterized, ValidateTable
-from materialize.zippy.view_actions import CreateViewParameterized, ValidateView
+from materialize.zippy.table_actions import (
+    DML,
+    CreateTableParameterized,
+    DropTable,
+    ValidateTable,
+)
+from materialize.zippy.view_actions import (
+    CreateViewParameterized,
+    DropView,
+    ValidateView,
+)
 
 
 class Scenario:
     def bootstrap(self) -> list[ActionOrFactory]:
-        return [
+        bootstrap: list[ActionOrFactory] = [
             KafkaStart,
             CockroachStart,
             BlobStoreStart,
             MzStart,
             StoragedStart,
             BalancerdStart,
-            IcebergStart,
         ]
+        # Polaris is only needed if the scenario can create Iceberg sinks.
+        if any(
+            isinstance(action, CreateIcebergSinkParameterized)
+            for action in self.actions_with_weight()
+        ):
+            bootstrap.append(IcebergStart)
+        return bootstrap
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         raise RuntimeError
@@ -120,6 +135,7 @@ class KafkaSources(Scenario):
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
+            DropView: 5,
             CreateSinkParameterized(): 5,
             CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
@@ -163,12 +179,16 @@ class UserTables(Scenario):
             Mz0dtDeploy: 10,
             BalancerdStop: 1,
             BalancerdRestart: 1,
-            BackupAndRestore: 1,
+            # No mid-test BackupAndRestore since the state of the sinks is not
+            # recorded across a backup&restore cycle, see
+            # https://github.com/MaterializeInc/database-issues/issues/9589
             KillClusterd: 10,
             # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
             # StoragedRestart: 5,
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 10,
+            DropTable: 5,
+            DropView: 5,
             CreateSinkParameterized(): 10,
             CreateIcebergSinkParameterized(): 5,
             ValidateTable: 20,

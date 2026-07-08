@@ -20,9 +20,11 @@ from materialize.zippy.framework import (
     Capability,
     State,
 )
+from materialize.zippy.iceberg_capabilities import IcebergSinkExists
 from materialize.zippy.mysql_cdc_capabilities import MySqlCdcTableExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
+from materialize.zippy.sink_capabilities import SinkExists
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.storaged_capabilities import StoragedRunning
 from materialize.zippy.table_capabilities import TableExists
@@ -135,6 +137,44 @@ class CreateView(Action):
 
     def provides(self) -> list[Capability]:
         return [self.view]
+
+
+class DropView(Action):
+    """Drops a view that no sink and no other view depends on."""
+
+    @classmethod
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning, ViewExists}
+
+    def __init__(self, capabilities: Capabilities) -> None:
+        referenced: set[str] = set()
+        for sink in capabilities.get(SinkExists):
+            referenced.add(sink.source_view.name)
+            referenced.add(sink.dest_view.name)
+        for iceberg_sink in capabilities.get(IcebergSinkExists):
+            referenced.add(iceberg_sink.source_view.name)
+        for view in capabilities.get(ViewExists):
+            referenced.update(
+                input.name for input in view.inputs if isinstance(input, ViewExists)
+            )
+
+        candidates = [
+            v for v in capabilities.get(ViewExists) if v.name not in referenced
+        ]
+        self.view: ViewExists | None = random.choice(candidates) if candidates else None
+        if self.view is not None:
+            capabilities.remove_capability_instance(self.view)
+        super().__init__(capabilities)
+
+    def __str__(self) -> str:
+        return f"{Action.__str__(self)} {self.view.name if self.view else '<none>'}"
+
+    def run(self, c: Composition, state: State) -> None:
+        if self.view is not None:
+            c.testdrive(
+                f"> DROP MATERIALIZED VIEW {self.view.name};",
+                mz_service=state.mz_service,
+            )
 
 
 class ValidateView(Action):
