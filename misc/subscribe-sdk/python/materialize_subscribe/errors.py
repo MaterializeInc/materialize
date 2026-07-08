@@ -87,6 +87,26 @@ class BufferOverflow(SubscribeError):
         )
 
 
+class CohortLagExceeded(SubscribeError):
+    """A cohort member lagged so far behind that the changes buffered for its
+    peers, waiting on it, exceeded the lag budget.
+
+    Consistency requires holding a leading member's changes until the slowest
+    catches up, so a stalled member would otherwise grow memory without bound.
+    Recover by investigating the slow view, widening the budget, or resuming
+    from the last token once it recovers.
+    """
+
+    def __init__(self, buffered: int, limit: int) -> None:
+        self.buffered = buffered
+        self.limit = limit
+        super().__init__(
+            f"cohort lag budget exceeded: {buffered} changes buffered waiting "
+            f"on a lagging member (budget {limit}). Investigate the slow view "
+            f"or widen the budget"
+        )
+
+
 class InvalidToken(SubscribeError):
     """A resume token could not be decoded."""
 

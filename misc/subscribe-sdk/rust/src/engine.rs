@@ -63,6 +63,12 @@ impl ReleaseBuffer {
         self.frontier
     }
 
+    /// The number of changes currently buffered, before consolidation. Used by
+    /// the cohort to bound how much a laggard can make its peers buffer.
+    pub(crate) fn pending(&self) -> usize {
+        self.buffered.len()
+    }
+
     /// Buffers a change. Errors if its timestamp is below the observed frontier,
     /// which the server promises never happens.
     pub(crate) fn push_data(

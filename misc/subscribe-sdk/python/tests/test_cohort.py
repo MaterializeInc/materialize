@@ -17,7 +17,7 @@ from typing import List
 
 import pytest
 
-from materialize_subscribe import Diff, DiffEnvelope, ProtocolError
+from materialize_subscribe import CohortLagExceeded, Diff, DiffEnvelope, ProtocolError
 from materialize_subscribe.cohort import CohortEngine
 
 
@@ -25,9 +25,9 @@ def diff(id_: str, d: int) -> Diff:
     return Diff(row=[id_], diff=d)
 
 
-def engine(names: List[str]) -> CohortEngine:
+def engine(names: List[str], lag_budget: int = 1 << 20) -> CohortEngine:
     specs = [(name, f"fp-{name}", DiffEnvelope()) for name in names]
-    return CohortEngine(specs, with_snapshot=True)
+    return CohortEngine(specs, with_snapshot=True, lag_budget=lag_budget)
 
 
 def test_no_release_until_every_member_reports() -> None:
@@ -106,3 +106,29 @@ def test_protocol_errors_surface_from_members() -> None:
     e.push_progress(0, 10)
     with pytest.raises(ProtocolError):
         e.push_data(0, 5, diff("late", 1))
+
+
+def test_a_laggard_past_the_lag_budget_fails_loud() -> None:
+    # Budget of two buffered changes. The `slow` member never reports, so the
+    # joint frontier never advances and `fast`'s changes pile up.
+    e = engine(["fast", "slow"], lag_budget=2)
+    e.push_data(0, 1, diff("a", 1))
+    e.push_data(0, 2, diff("b", 1))
+    with pytest.raises(CohortLagExceeded):
+        e.push_data(0, 3, diff("c", 1))
+
+
+def test_buffered_changes_free_the_budget_once_released() -> None:
+    # Once the joint frontier advances and drains the buffer, there is room to
+    # buffer again.
+    e = engine(["a", "b"], lag_budget=2)
+    e.push_data(0, 1, diff("x", 1))
+    e.push_progress(0, 2)
+    moment = e.push_progress(1, 2)
+    assert moment is not None and moment.frontier == 2
+    assert moment.views[0].updates == [diff("x", 1)]
+    # Room to buffer again (data at or above each member's frontier of 2).
+    e.push_data(0, 2, diff("y", 1))
+    e.push_data(1, 2, diff("z", 1))
+    with pytest.raises(CohortLagExceeded):
+        e.push_data(0, 2, diff("w", 1))

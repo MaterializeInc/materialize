@@ -68,6 +68,23 @@ pub enum SubscribeError {
     )]
     BufferOverflow,
 
+    /// A cohort member lagged so far behind that the changes buffered for its
+    /// peers, waiting on it, exceeded the lag budget. Consistency requires
+    /// holding a leading member's changes until the slowest catches up, so a
+    /// stalled member would otherwise grow memory without bound. Recover by
+    /// investigating the slow view, widening the budget, or resuming from the
+    /// last token once it recovers.
+    #[error(
+        "cohort lag budget exceeded: {buffered} changes buffered waiting on a \
+         lagging member (budget {limit}). Investigate the slow view or widen the budget"
+    )]
+    CohortLagExceeded {
+        /// Number of changes buffered across the cohort when the budget was hit.
+        buffered: usize,
+        /// The configured lag budget.
+        limit: usize,
+    },
+
     /// A resume token could not be decoded.
     #[error("invalid resume token: {0}")]
     InvalidToken(String),
@@ -109,6 +126,11 @@ mod tests {
         .is_retryable());
         assert!(!SubscribeError::Fatal("auth".into()).is_retryable());
         assert!(!SubscribeError::BufferOverflow.is_retryable());
+        assert!(!SubscribeError::CohortLagExceeded {
+            buffered: 3,
+            limit: 2
+        }
+        .is_retryable());
     }
 
     #[test]

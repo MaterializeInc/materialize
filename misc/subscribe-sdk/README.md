@@ -67,6 +67,12 @@ buffer. Materialize buffers unread subscribe output without bound, so a consumer
 that falls behind fails loud (a buffer-overflow error) rather than pushing that
 cost onto the server. The client falls over, never the server.
 
+A cohort carries a second bound. Consistency means a stalled member pins the
+joint frontier, so its peers' changes would buffer without limit while waiting
+for it. A lag budget caps the total buffered across the cohort and fails loud
+(a cohort-lag error) when a laggard falls too far behind, rather than growing
+memory unbounded.
+
 ## Building and testing
 
 Rust:

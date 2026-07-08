@@ -68,6 +68,7 @@ from .envelope import (
 )
 from .errors import (
     BufferOverflow,
+    CohortLagExceeded,
     CompactionHorizon,
     DependencyDropped,
     FatalError,
@@ -86,6 +87,7 @@ __all__ = [
     "BufferOverflow",
     "Change",
     "Cohort",
+    "CohortLagExceeded",
     "CohortMoment",
     "CohortToken",
     "CompactionHorizon",

@@ -64,6 +64,11 @@ class ReleaseBuffer:
         """The highest frontier observed so far."""
         return self._frontier
 
+    def pending(self) -> int:
+        """The number of changes currently buffered, before consolidation. Used
+        by the cohort to bound how much a laggard can make its peers buffer."""
+        return len(self._buffered)
+
     def push_data(self, timestamp: int, change: Change) -> None:
         """Buffers a change. Raises if its timestamp is below the observed
         frontier, which the server promises never happens."""

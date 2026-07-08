@@ -51,9 +51,16 @@ from .client import (
 )
 from .engine import ReleaseBuffer
 from .envelope import Change, Data, Envelope
-from .errors import ProtocolError, SchemaMismatch
+from .errors import CohortLagExceeded, ProtocolError, SchemaMismatch
 from .statement import Subscribe
 from .token import CohortToken
+
+# Default cohort lag budget: the most changes the cohort buffers across all
+# members while waiting for the slowest to advance the joint frontier. Exceeding
+# it raises :class:`CohortLagExceeded` rather than growing memory without bound.
+#
+# TODO: make this configurable per cohort once there are workloads to size it.
+DEFAULT_COHORT_LAG_BUDGET = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -104,7 +111,10 @@ class CohortEngine:
     """
 
     def __init__(
-        self, members: List[Tuple[str, str, Envelope]], with_snapshot: bool
+        self,
+        members: List[Tuple[str, str, Envelope]],
+        with_snapshot: bool,
+        lag_budget: int = DEFAULT_COHORT_LAG_BUDGET,
     ) -> None:
         self._members = [
             _CohortMember(name, fingerprint, envelope)
@@ -113,9 +123,19 @@ class CohortEngine:
         self._with_snapshot = with_snapshot
         self._last_release: Optional[int] = None
         self._snapshot_complete = False
+        self._lag_budget = lag_budget
 
     def push_data(self, idx: int, timestamp: int, change: Change) -> None:
-        """Buffers a change from member ``idx``."""
+        """Buffers a change from member ``idx``.
+
+        Raises :class:`CohortLagExceeded` if the cohort is already holding
+        ``lag_budget`` changes. This is the laggard backstop: a member that
+        stalls pins the joint frontier, so its peers' changes would otherwise
+        buffer without bound. The client fails loud instead.
+        """
+        buffered = sum(m.buffer.pending() for m in self._members)
+        if buffered >= self._lag_budget:
+            raise CohortLagExceeded(buffered=buffered, limit=self._lag_budget)
         self._members[idx].buffer.push_data(timestamp, change)
 
     def push_progress(self, idx: int, frontier: int) -> Optional[CohortMoment]:

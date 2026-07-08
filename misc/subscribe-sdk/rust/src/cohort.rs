@@ -45,6 +45,14 @@ use crate::error::SubscribeError;
 use crate::statement::Subscribe;
 use crate::token::CohortToken;
 
+/// Default cohort lag budget: the most changes the cohort buffers across all
+/// members while waiting for the slowest to advance the joint frontier.
+/// Exceeding it trips [`SubscribeError::CohortLagExceeded`] rather than growing
+/// memory without bound.
+///
+/// TODO: make this configurable per cohort once there are workloads to size it.
+pub(crate) const DEFAULT_COHORT_LAG_BUDGET: usize = 1 << 20;
+
 /// The changes one view contributes to a [`CohortMoment`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ViewChanges {
@@ -102,13 +110,21 @@ pub(crate) struct CohortEngine {
     last_release: Option<u64>,
     /// Whether the joint snapshot has been completed yet.
     snapshot_complete: bool,
+    /// The most changes the cohort may buffer across all members while waiting
+    /// for the slowest to advance the joint frontier. See
+    /// [`SubscribeError::CohortLagExceeded`].
+    lag_budget: usize,
 }
 
 impl CohortEngine {
     /// Builds an engine from each member's `(name, fingerprint, envelope)`, in
     /// member order. `with_snapshot` is `true` for a fresh cohort, `false` for a
-    /// resume.
-    pub(crate) fn new(members: Vec<(String, String, Envelope)>, with_snapshot: bool) -> Self {
+    /// resume. `lag_budget` bounds the total buffered across members.
+    pub(crate) fn new(
+        members: Vec<(String, String, Envelope)>,
+        with_snapshot: bool,
+        lag_budget: usize,
+    ) -> Self {
         let members = members
             .into_iter()
             .map(|(name, fingerprint, envelope)| CohortMember {
@@ -123,16 +139,29 @@ impl CohortEngine {
             with_snapshot,
             last_release: None,
             snapshot_complete: false,
+            lag_budget,
         }
     }
 
     /// Buffers a change from member `idx`.
+    ///
+    /// Fails with [`SubscribeError::CohortLagExceeded`] if the cohort is already
+    /// holding `lag_budget` changes. This is the laggard backstop: a member that
+    /// stalls pins the joint frontier, so its peers' changes would otherwise
+    /// buffer without bound. The client fails loud instead.
     pub(crate) fn push_data(
         &mut self,
         idx: usize,
         timestamp: u64,
         change: Change,
     ) -> Result<(), SubscribeError> {
+        let buffered: usize = self.members.iter().map(|m| m.buffer.pending()).sum();
+        if buffered >= self.lag_budget {
+            return Err(SubscribeError::CohortLagExceeded {
+                buffered,
+                limit: self.lag_budget,
+            });
+        }
         self.members[idx].buffer.push_data(timestamp, change)
     }
 
@@ -303,7 +332,7 @@ impl Cohort {
         Ok(Cohort {
             rx,
             status,
-            engine: CohortEngine::new(specs, token.is_none()),
+            engine: CohortEngine::new(specs, token.is_none(), DEFAULT_COHORT_LAG_BUDGET),
         })
     }
 
@@ -343,11 +372,15 @@ mod tests {
     }
 
     fn engine(members: &[&str]) -> CohortEngine {
+        engine_with_budget(members, DEFAULT_COHORT_LAG_BUDGET)
+    }
+
+    fn engine_with_budget(members: &[&str], lag_budget: usize) -> CohortEngine {
         let specs = members
             .iter()
             .map(|name| (name.to_string(), format!("fp-{name}"), Envelope::Diff))
             .collect();
-        CohortEngine::new(specs, true)
+        CohortEngine::new(specs, true, lag_budget)
     }
 
     #[test]
@@ -455,5 +488,42 @@ mod tests {
         e.push_progress(0, 10).unwrap();
         // Data below a member's own frontier is a protocol violation.
         assert!(e.push_data(0, 5, diff("late", 1)).is_err());
+    }
+
+    #[test]
+    fn a_laggard_past_the_lag_budget_fails_loud() {
+        // Budget of two buffered changes. The `slow` member never reports, so
+        // the joint frontier never advances and `fast`'s changes pile up.
+        let mut e = engine_with_budget(&["fast", "slow"], 2);
+        e.push_data(0, 1, diff("a", 1)).unwrap();
+        e.push_data(0, 2, diff("b", 1)).unwrap();
+        // The third change would exceed the budget: fail loud rather than buffer
+        // without bound behind the laggard.
+        let err = e.push_data(0, 3, diff("c", 1)).unwrap_err();
+        assert!(
+            matches!(err, SubscribeError::CohortLagExceeded { limit: 2, .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn buffered_changes_free_the_budget_once_released() {
+        // Budget of two. Once the joint frontier advances and drains the buffer,
+        // there is room to buffer again.
+        let mut e = engine_with_budget(&["a", "b"], 2);
+        e.push_data(0, 1, diff("x", 1)).unwrap();
+        e.push_progress(0, 2).unwrap();
+        let moment = e.push_progress(1, 2).unwrap().expect("moment");
+        // Joint frontier 2 released x (at t=1); the buffer is empty again.
+        assert_eq!(moment.frontier, 2);
+        assert_eq!(moment.views[0].updates, vec![diff("x", 1)]);
+        // Room to buffer again (data at or above each member's frontier of 2).
+        e.push_data(0, 2, diff("y", 1)).unwrap();
+        e.push_data(1, 2, diff("z", 1)).unwrap();
+        // Two buffered again, so the next change trips the budget.
+        assert!(matches!(
+            e.push_data(0, 2, diff("w", 1)).unwrap_err(),
+            SubscribeError::CohortLagExceeded { .. }
+        ));
     }
 }
