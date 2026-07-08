@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import type { VisibleNode } from "./dataflowGraph";
+import type { LirGroupNode, VisibleNode } from "./dataflowGraph";
 
 export const COLORS = {
   noArrangementRegion: "#12b886",
@@ -29,6 +29,28 @@ export const HIGHLIGHT_COLORS = {
   // emphasis/de-emphasis pair rather than two unrelated colors.
   connected: "#8fd2f5",
 };
+
+// A small, visually distinct palette for LIR group borders/headers, cycled
+// by a deterministic hash so the same lirId always gets the same color
+// within one render (and across re-renders, since lirId is stable).
+const GROUP_PALETTE = [
+  "#e8590c",
+  "#5f3dc4",
+  "#0b7285",
+  "#2f9e44",
+  "#c2255c",
+  "#1971c2",
+  "#e67700",
+  "#7048e8",
+];
+
+export function lirGroupColor(lirId: string): string {
+  let hash = 0;
+  for (let i = 0; i < lirId.length; i++) {
+    hash = (hash * 31 + lirId.charCodeAt(i)) | 0;
+  }
+  return GROUP_PALETTE[Math.abs(hash) % GROUP_PALETTE.length];
+}
 
 export function nodeFillColor(node: VisibleNode): string {
   const arranged = (node.transitive?.arrangementRecords ?? 0n) > 0n;
@@ -82,4 +104,10 @@ export type FlowNodeData = {
   color: string;
   selected: boolean;
   activeMatch: boolean;
+};
+
+export type FlowGroupData = {
+  group: LirGroupNode;
+  label: string;
+  color: string;
 };
