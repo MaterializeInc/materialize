@@ -9,9 +9,12 @@
 
 //! AWS configuration for sources and sinks.
 
+use std::time::{Duration, SystemTime};
+
 use anyhow::{Context, anyhow, bail};
 use aws_config::sts::AssumeRoleProvider;
 use aws_credential_types::Credentials;
+use aws_credential_types::provider::error::CredentialsError;
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_sdk_sts::error::SdkError;
 use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
@@ -19,11 +22,14 @@ use aws_types::SdkConfig;
 use aws_types::region::Region;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
+use mz_ore::task::AbortOnDropHandle;
 use mz_repr::{CatalogItemId, GlobalId};
 #[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::watch;
+use tracing::{debug, warn};
 
 use crate::AlterCompatible;
 use crate::connections::inline::{
@@ -153,6 +159,36 @@ impl AwsAssumeRole {
         .await
     }
 
+    /// Returns a provider that serves cached credentials for this role,
+    /// kept fresh by a background task that assumes the role ahead of expiry.
+    ///
+    /// Errors if the provider cannot be constructed (environment misconfiguration).
+    /// No STS call happens here, so success does not mean the role can be assumed.
+    ///
+    /// The provider's callers wait only while the first fetch is still in flight.
+    /// If fetching has failed and no unexpired credentials remain, callers receive an error.
+    pub async fn prefetch_credentials(
+        &self,
+        connection_context: &ConnectionContext,
+        connection_id: CatalogItemId,
+        diagnostic_label: String,
+    ) -> Result<SharedCredentialsProvider, anyhow::Error> {
+        let provider = self
+            .load_credentials_provider(connection_context, connection_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to initialize AssumeRole credential provider for \
+                     connection {} (role arn {})",
+                    connection_id, self.arn
+                )
+            })?;
+        Ok(SharedCredentialsProvider::new(CredentialPrefetcher::new(
+            SharedCredentialsProvider::new(provider),
+            diagnostic_label,
+        )))
+    }
+
     /// DANGEROUS: only for internal use!
     ///
     /// Like `load_credentials_provider`, but accepts an arbitrary external ID.
@@ -265,6 +301,23 @@ impl AwsConnection {
         }
     }
 
+    /// The custom DNS resolver wired into the AWS HTTP client is only
+    /// invoked for hostnames. IP-literal endpoints (e.g. `http://127.0.0.1`)
+    /// bypass it. Validate IP literals here so they cannot circumvent
+    /// the global-address enforcement.
+    pub(crate) fn validate_endpoint(
+        &self,
+        enforce_external_addresses: bool,
+    ) -> Result<(), anyhow::Error> {
+        if enforce_external_addresses
+            && let Some(endpoint) = &self.endpoint
+            && let Ok(url) = url::Url::parse(endpoint)
+        {
+            mz_ore::netio::ensure_url_ip_global(&url)?;
+        }
+        Ok(())
+    }
+
     /// Loads the AWS SDK configuration with the configuration specified on this
     /// object.
     pub async fn load_sdk_config(
@@ -331,13 +384,7 @@ impl AwsConnection {
             loader = loader.region(Region::new(region.clone()));
         }
         if let Some(endpoint) = &self.endpoint {
-            // The custom DNS resolver wired into the AWS HTTP client is only
-            // invoked for hostnames; IP-literal endpoints (e.g. `http://127.0.0.1`)
-            // bypass it. Validate IP literals here so they cannot circumvent
-            // the global-address enforcement.
-            if enforce_external_addresses && let Ok(url) = url::Url::parse(endpoint) {
-                mz_ore::netio::ensure_url_ip_global(&url)?;
-            }
+            self.validate_endpoint(enforce_external_addresses)?;
             loader = loader.http_client(mz_aws_util::http_client_with_resolver(
                 enforce_external_addresses,
             ));
@@ -454,5 +501,482 @@ impl<R: ConnectionResolver> IntoInlineConnection<AwsConnectionReference, R>
             connection: r.resolve_connection(connection).unwrap_aws(),
             connection_id,
         }
+    }
+}
+
+/// If we have N seconds before expiry,
+/// wait (N * refresh_fraction) seconds before the next refresh attempt.
+const CREDENTIAL_REFRESH_FRACTION: f64 = 0.5;
+
+/// Regardless of [`CREDENTIAL_REFRESH_FRACTION`],
+/// refresh credentials at least this often.
+///
+/// 15 minutes is an arbitrary choice.
+const CREDENTIAL_MAX_REFRESH_INTERVAL: Duration = Duration::from_mins(15);
+
+/// Lower bound on the wait between refreshes.
+const CREDENTIAL_MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The AWS SDK's default connect timeout, which applies to the prefetcher's
+/// STS calls.
+const STS_CONNECT_TIMEOUT: Duration = Duration::from_millis(3100);
+
+/// (MULTIPLE * [`STS_CONNECT_TIMEOUT`]) is how long we wait for the AWS client
+/// to try (and retry) fetching STS credentials.
+const CREDENTIAL_FETCH_BACKSTOP_MULTIPLE: u32 = 10;
+
+/// A [`ProvideCredentials`] that serves credentials from an in-memory cache kept
+/// warm by a background task.
+///
+/// The background task does all STS credentials fetches, including the first.
+/// A call that arrives before the first fetch completes waits for it.
+///
+/// A failed refresh leaves the cached credentials alone.
+/// If the cached credentials are allowed to expire, callers get the most recent fetch error instead,
+/// so a persistent failure shows its real cause.
+struct CredentialPrefetcher {
+    cache: watch::Receiver<CredentialState>,
+
+    /// Dropping the prefetcher aborts the background task.
+    _refresh_task: AbortOnDropHandle<()>,
+}
+
+/// The cache shared between the background task and callers. Both fields
+/// `None` means the first fetch has not completed yet.
+#[derive(Debug, Clone, Default)]
+struct CredentialState {
+    /// The last successfully fetched credentials.
+    creds: Option<Credentials>,
+    /// The error of the most recent failed fetch. Cleared by a successful
+    /// fetch.
+    last_error: Option<String>,
+}
+
+impl std::fmt::Debug for CredentialPrefetcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialPrefetcher")
+            // AWS's `Debug` impl for `Credentials` sanitizes secrets, so we can include it here.
+            .field("cache", &*self.cache.borrow())
+            .finish_non_exhaustive()
+    }
+}
+
+impl CredentialPrefetcher {
+    /// Spawns the background task and returns immediately.
+    fn new(inner: SharedCredentialsProvider, diagnostic_label: String) -> CredentialPrefetcher {
+        let (tx, cache) = watch::channel(CredentialState::default());
+        let task_name = format!("credential-prefetch:{diagnostic_label}");
+        let refresh_task = mz_ore::task::spawn(|| task_name, async move {
+            Self::refresh_loop(inner, tx, diagnostic_label).await;
+        })
+        .abort_on_drop();
+        CredentialPrefetcher {
+            cache,
+            _refresh_task: refresh_task,
+        }
+    }
+
+    /// Fetches a single credential through `inner`.
+    ///
+    /// Connect timeout and retry policy live in the SDK: connects time out
+    /// after [`STS_CONNECT_TIMEOUT`], and the SDK retries timed-out connects
+    /// and other transient failures itself. The timeout here is a backstop
+    /// against the one case the SDK leaves unbounded, a connection that
+    /// establishes and then stalls. A fetch that trips it is left to the
+    /// refresh loop's schedule like any other failure.
+    async fn fetch(inner: &SharedCredentialsProvider) -> Result<Credentials, anyhow::Error> {
+        let backstop = STS_CONNECT_TIMEOUT.saturating_mul(CREDENTIAL_FETCH_BACKSTOP_MULTIPLE);
+        match tokio::time::timeout(backstop, inner.provide_credentials()).await {
+            Ok(Ok(creds)) => Ok(creds),
+            Ok(Err(e)) => Err(anyhow::Error::new(e)),
+            Err(_elapsed) => Err(anyhow!("credential fetch timed out after {backstop:?}")),
+        }
+    }
+
+    async fn refresh_loop(
+        inner: SharedCredentialsProvider,
+        tx: watch::Sender<CredentialState>,
+        diagnostic_label: String,
+    ) {
+        loop {
+            match Self::fetch(&inner).await {
+                Ok(creds) => {
+                    let expiry = creds.expiry();
+                    let wait = next_refresh_wait(Some(&creds));
+                    tx.send_modify(|state| {
+                        state.creds = Some(creds);
+                        state.last_error = None;
+                    });
+                    debug!(
+                        %diagnostic_label,
+                        ?expiry,
+                        next_refresh_in = ?wait,
+                        "credential fetch succeeded"
+                    );
+                    tokio::time::sleep(wait).await;
+                }
+                Err(e) => {
+                    let error = e.display_with_causes().to_string();
+
+                    // We use the same wait-duration logic regardless of whether the fetch succeeds.
+                    // As the credentials expiry gets closer, the wait time gets shorter.
+                    let wait = next_refresh_wait(tx.borrow().creds.as_ref());
+                    warn!(
+                        %diagnostic_label,
+                        %error,
+                        next_retry_in = ?wait,
+                        "credential fetch failed; keeping last-good credentials"
+                    );
+                    tx.send_modify(|state| state.last_error = Some(error));
+                    tokio::time::sleep(wait).await;
+                }
+            }
+            // Nothing holds the cache anymore (the dataflow tore down). Stop.
+            if tx.is_closed() {
+                return;
+            }
+        }
+    }
+}
+
+/// Computes how long to wait before the next fetch, given the currently cached credentials.
+///
+/// Waits [`CREDENTIAL_REFRESH_FRACTION`] of the credentials' remaining lifetime,
+/// bounded by [`CREDENTIAL_MIN_REFRESH_INTERVAL`] and [`CREDENTIAL_MAX_REFRESH_INTERVAL`].
+///
+/// Credentials with no expiry wait the maximum.
+/// No credentials at all (fetching has not succeeded yet) waits the minimum.
+fn next_refresh_wait(creds: Option<&Credentials>) -> Duration {
+    let Some(creds) = creds else {
+        return CREDENTIAL_MIN_REFRESH_INTERVAL;
+    };
+    let Some(expiry) = creds.expiry() else {
+        return CREDENTIAL_MAX_REFRESH_INTERVAL;
+    };
+    let remaining = expiry
+        .duration_since(SystemTime::now())
+        .unwrap_or(Duration::ZERO);
+    remaining.mul_f64(CREDENTIAL_REFRESH_FRACTION).clamp(
+        CREDENTIAL_MIN_REFRESH_INTERVAL,
+        CREDENTIAL_MAX_REFRESH_INTERVAL,
+    )
+}
+
+impl ProvideCredentials for CredentialPrefetcher {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(async move {
+            let mut cache = self.cache.clone();
+            // Wait for the first fetch to conclude, one way or the other.
+            // Clone out of the `watch::Ref` so the read guard is dropped
+            // right away.
+            let state = match cache
+                .wait_for(|state| state.creds.is_some() || state.last_error.is_some())
+                .await
+            {
+                Ok(state) => state.clone(),
+                Err(_closed) => {
+                    return Err(CredentialsError::provider_error(
+                        "credential prefetcher task stopped before producing credentials",
+                    ));
+                }
+            };
+            match state.creds {
+                Some(creds) => {
+                    let now = SystemTime::now();
+                    match creds.expiry() {
+                        Some(expiry) if expiry <= now => {
+                            let age = now.duration_since(expiry).unwrap_or(Duration::ZERO);
+                            let cause = match state.last_error {
+                                Some(error) => {
+                                    format!("most recent fetch attempt failed: {error}")
+                                }
+                                None => "no refresh has completed since".to_string(),
+                            };
+                            Err(CredentialsError::provider_error(format!(
+                                "cached AWS credentials expired {age:?} ago and {cause}"
+                            )))
+                        }
+                        _ => Ok(creds),
+                    }
+                }
+                None => {
+                    let error = state
+                        .last_error
+                        .expect("wait_for guarantees creds or last_error");
+                    Err(CredentialsError::provider_error(format!(
+                        "failed to fetch AWS credentials: {error}"
+                    )))
+                }
+            }
+        })
+    }
+
+    fn fallback_on_interrupt(&self) -> Option<Credentials> {
+        self.cache.borrow().creds.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use aws_credential_types::provider::future;
+
+    use super::*;
+
+    /// A test [`ProvideCredentials`] with per-call behavior keyed on the
+    /// cumulative call count `n` (starting at 1): the first `hang_calls` calls
+    /// never resolve, the next `ok_calls` calls succeed, and every call after
+    /// that fails. Each success returns a distinct access key id (`akid-{n}`)
+    /// that expires `ttl` from now, or never for a `ttl` of `None`.
+    #[derive(Debug)]
+    struct CountingProvider {
+        calls: Arc<AtomicUsize>,
+        hang_calls: usize,
+        ok_calls: usize,
+        ttl: Option<Duration>,
+    }
+
+    impl CountingProvider {
+        fn shared(
+            hang_calls: usize,
+            ok_calls: usize,
+            ttl: Option<Duration>,
+        ) -> (Arc<AtomicUsize>, SharedCredentialsProvider) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let provider = CountingProvider {
+                calls: Arc::clone(&calls),
+                hang_calls,
+                ok_calls,
+                ttl,
+            };
+            (calls, SharedCredentialsProvider::new(provider))
+        }
+    }
+
+    impl ProvideCredentials for CountingProvider {
+        fn provide_credentials<'a>(&'a self) -> future::ProvideCredentials<'a>
+        where
+            Self: 'a,
+        {
+            let calls = Arc::clone(&self.calls);
+            let hang_calls = self.hang_calls;
+            let ok_calls = self.ok_calls;
+            let ttl = self.ttl;
+            future::ProvideCredentials::new(async move {
+                let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= hang_calls {
+                    return std::future::pending().await;
+                }
+                if n > hang_calls.saturating_add(ok_calls) {
+                    return Err(CredentialsError::provider_error("injected failure"));
+                }
+                Ok(Credentials::new(
+                    format!("akid-{n}"),
+                    "secret",
+                    None,
+                    ttl.map(|ttl| SystemTime::now() + ttl),
+                    "test",
+                ))
+            })
+        }
+    }
+
+    fn prefetcher(provider: SharedCredentialsProvider) -> CredentialPrefetcher {
+        CredentialPrefetcher::new(provider, "test".to_string())
+    }
+
+    /// One paused-clock sleep that outlasts a scheduled refresh. Credentials
+    /// without expiry refresh at `CREDENTIAL_MAX_REFRESH_INTERVAL`.
+    const PAST_NEXT_REFRESH: Duration =
+        CREDENTIAL_MAX_REFRESH_INTERVAL.saturating_add(Duration::from_secs(60));
+
+    // NOTE: These tests run on tokio's paused clock: a sleep completes as soon
+    // as the runtime is otherwise idle, so refresh schedules elapse instantly
+    // and deterministically. Credential expiry uses `SystemTime`, which does
+    // not pause, so tests that need unexpired credentials use `ttl: None` and
+    // the expiry test uses a ttl of zero.
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn cache_serves_without_recalling_inner() {
+        let (calls, inner) = CountingProvider::shared(0, usize::MAX, None);
+        let prefetcher = prefetcher(inner);
+
+        // The first call may arrive before the background task's initial
+        // fetch completes; it must wait for it rather than error.
+        for _ in 0..5 {
+            let creds = prefetcher.provide_credentials().await.unwrap();
+            assert_eq!(creds.access_key_id(), "akid-1");
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "cached reads must not call the inner provider"
+        );
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn background_refresh_advances_the_value() {
+        let (_calls, inner) = CountingProvider::shared(0, usize::MAX, None);
+        let prefetcher = prefetcher(inner);
+
+        let creds = prefetcher.provide_credentials().await.unwrap();
+        assert_eq!(creds.access_key_id(), "akid-1");
+
+        tokio::time::sleep(PAST_NEXT_REFRESH).await;
+        let creds = prefetcher.provide_credentials().await.unwrap();
+        assert_ne!(
+            creds.access_key_id(),
+            "akid-1",
+            "a refresh should have replaced the initial credentials"
+        );
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn failed_refresh_keeps_last_good() {
+        // Only the initial fetch succeeds; every refresh fails.
+        let (calls, inner) = CountingProvider::shared(0, 1, None);
+        let prefetcher = prefetcher(inner);
+
+        let creds = prefetcher.provide_credentials().await.unwrap();
+        assert_eq!(creds.access_key_id(), "akid-1");
+
+        tokio::time::sleep(PAST_NEXT_REFRESH).await;
+        assert!(
+            calls.load(Ordering::SeqCst) >= 2,
+            "a refresh attempt should have happened"
+        );
+        let creds = prefetcher.provide_credentials().await.unwrap();
+        assert_eq!(
+            creds.access_key_id(),
+            "akid-1",
+            "a failed refresh must keep serving the last-good credentials"
+        );
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn dropping_prefetcher_stops_the_task() {
+        let (calls, inner) = CountingProvider::shared(0, usize::MAX, None);
+        let prefetcher = prefetcher(inner);
+
+        prefetcher.provide_credentials().await.unwrap();
+        drop(prefetcher);
+
+        let after_drop = calls.load(Ordering::SeqCst);
+        tokio::time::sleep(PAST_NEXT_REFRESH).await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            after_drop,
+            "the refresh task must stop once the prefetcher is dropped"
+        );
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn hung_fetch_fails_then_recovers() {
+        // The first call hangs forever. The backstop timeout fails the fetch,
+        // and the next scheduled refresh succeeds.
+        let (calls, inner) = CountingProvider::shared(1, usize::MAX, None);
+        let prefetcher = prefetcher(inner);
+
+        let err = prefetcher.provide_credentials().await.unwrap_err();
+        assert!(
+            format!("{}", err.display_with_causes()).contains("timed out"),
+            "the error must name the backstop timeout: {err}"
+        );
+
+        // A fetch that has never succeeded is retried at the floor interval.
+        tokio::time::sleep(CREDENTIAL_MIN_REFRESH_INTERVAL.saturating_mul(2)).await;
+        let creds = prefetcher.provide_credentials().await.unwrap();
+        assert_eq!(creds.access_key_id(), "akid-2");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn initial_fetch_failure_returns_error() {
+        // Every fetch fails, so callers must get the fetch error rather than wait forever.
+        let (calls, inner) = CountingProvider::shared(0, 0, None);
+        let prefetcher = prefetcher(inner);
+
+        let err = prefetcher.provide_credentials().await.unwrap_err();
+        assert!(
+            format!("{}", err.display_with_causes()).contains("injected failure"),
+            "the error must carry the fetch failure cause: {err}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the caller sees the error after a single fetch attempt, retries belong to the refresh loop"
+        );
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn expired_credentials_return_error() {
+        // One successful fetch of already-expired credentials, then only
+        // failures.
+        let (calls, inner) = CountingProvider::shared(0, 1, Some(Duration::ZERO));
+        let prefetcher = prefetcher(inner);
+
+        // Expired credentials retry at the floor interval. Outwait one retry
+        // so `last_error` is populated.
+        tokio::time::sleep(PAST_NEXT_REFRESH).await;
+        assert!(
+            calls.load(Ordering::SeqCst) >= 2,
+            "a refresh attempt should have happened"
+        );
+        let err = prefetcher.provide_credentials().await.unwrap_err();
+        let msg = format!("{}", err.display_with_causes());
+        assert!(msg.contains("expired"), "{msg}");
+        assert!(
+            msg.contains("injected failure"),
+            "the error must carry the refresh failure cause: {msg}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn refresh_wait_schedule() {
+        // No credentials yet: retry at the floor.
+        assert_eq!(next_refresh_wait(None), CREDENTIAL_MIN_REFRESH_INTERVAL);
+
+        // No expiry: refresh at the cap.
+        let creds = Credentials::new("akid", "secret", None, None, "test");
+        assert_eq!(
+            next_refresh_wait(Some(&creds)),
+            CREDENTIAL_MAX_REFRESH_INTERVAL
+        );
+
+        // Mid-life: the refresh fraction of the remaining lifetime.
+        let remaining = Duration::from_secs(600);
+        let creds = Credentials::new(
+            "akid",
+            "secret",
+            None,
+            Some(SystemTime::now() + remaining),
+            "test",
+        );
+        let expected = remaining.mul_f64(CREDENTIAL_REFRESH_FRACTION);
+        let wait = next_refresh_wait(Some(&creds));
+        assert!(
+            wait > expected - Duration::from_secs(10) && wait <= expected,
+            "{wait:?}"
+        );
+
+        // Expired: retry at the floor.
+        let creds = Credentials::new(
+            "akid",
+            "secret",
+            None,
+            Some(SystemTime::now() - Duration::from_secs(10)),
+            "test",
+        );
+        assert_eq!(
+            next_refresh_wait(Some(&creds)),
+            CREDENTIAL_MIN_REFRESH_INTERVAL
+        );
     }
 }
