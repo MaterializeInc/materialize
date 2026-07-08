@@ -330,3 +330,13 @@ export function visibleNodeCount(
 ): number {
   return deriveVisibleGraph(structure, collapsed).nodes.length;
 }
+
+// All-optional here. Task 13's decorateGraph returns all fields set.
+export interface GraphDecorations {
+  dimmedNodeIds?: ReadonlySet<string>;
+  hiddenNodeIds?: ReadonlySet<string>;
+  hiddenEdgeIds?: ReadonlySet<string>;
+  dimmedEdgeIds?: ReadonlySet<string>;
+  nodeColors?: ReadonlyMap<string, string>; // heatmap override
+  searchMatches?: string[];
+}
