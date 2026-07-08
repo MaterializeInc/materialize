@@ -7,7 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Alert, AlertIcon, Spinner, Text, VStack } from "@chakra-ui/react";
+import {
+  Alert,
+  AlertIcon,
+  Button,
+  HStack,
+  Spinner,
+  Text,
+  VStack,
+} from "@chakra-ui/react";
 import React from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 
@@ -20,6 +28,16 @@ import { useAllClusters } from "~/store/allClusters";
 
 import { type CollapseState, defaultCollapseState } from "./dataflowGraph";
 import { DataflowGraphView } from "./DataflowGraphView";
+
+// Stable 32-bit hash so a pure stats refresh (identical node ids) keeps the
+// same structure key and reuses the layout, while any structural change
+// produces a new key and relayouts.
+function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++)
+    h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return h;
+}
 
 const DataflowDetailPage = () => {
   const { clusterId, dataflowId } = useParams();
@@ -35,11 +53,17 @@ const DataflowDetailPage = () => {
         : undefined,
     [cluster, replicaName, dataflowId],
   );
-  const { data, error, databaseError } = useDataflowGraphData(params);
+  const { data, error, databaseError, loading, refetch } =
+    useDataflowGraphData(params);
 
   const [collapsed, setCollapsed] = React.useState<CollapseState | null>(null);
+  // Digest of the sorted node ids: identical structure across a stats-only
+  // refresh yields the same key, so layout and collapse state are preserved.
   const structureKey = data
-    ? `${params?.dataflowId}/${params?.replicaName}/${data.structure.nodes.size}`
+    ? (() => {
+        const ids = [...data.structure.nodes.keys()].sort();
+        return `${params?.dataflowId}/${params?.replicaName}/${ids.length}-${hashString(ids.join(","))}`;
+      })()
     : null;
   React.useEffect(() => {
     if (data) setCollapsed(defaultCollapseState(data.structure));
@@ -74,6 +98,16 @@ const DataflowDetailPage = () => {
             </option>
           ))}
         </LabeledSelect>
+        {data && (
+          <HStack flexShrink={0}>
+            <Button size="sm" onClick={refetch} isDisabled={loading}>
+              Refresh
+            </Button>
+            <Text fontSize="sm" color="foreground.secondary">
+              Last fetched {data.fetchedAt.toLocaleTimeString()}
+            </Text>
+          </HStack>
+        )}
         {permissionError ? (
           <Alert status="info" rounded="md" p={4} width="auto">
             <AlertIcon />
