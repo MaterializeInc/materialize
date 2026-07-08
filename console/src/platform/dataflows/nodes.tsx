@@ -20,6 +20,7 @@ import {
   type FlowNodeData,
   formatElapsed,
   HIGHLIGHT_COLORS,
+  textColorFor,
 } from "./nodeStyle";
 
 // Records and size share one line, not two: the fixed node height only has
@@ -66,6 +67,7 @@ const CardShell = ({
     height="100%"
     overflow="hidden"
     background={data.color}
+    color={textColorFor(data.color)}
     opacity={data.dimmed ? 0.25 : 1}
     boxShadow={highlightShadow(data) ?? RESTING_SHADOW}
   >
@@ -163,7 +165,7 @@ export const LirGroupNode = ({ data }: NodeProps & { data: FlowGroupData }) => (
       background={data.color}
       borderBottomRightRadius="md"
     >
-      <Text fontSize="2xs" color="white" noOfLines={1}>
+      <Text fontSize="2xs" color={textColorFor(data.color)} noOfLines={1}>
         {data.label}
       </Text>
     </Box>
