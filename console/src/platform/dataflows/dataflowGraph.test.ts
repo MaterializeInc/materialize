@@ -23,6 +23,9 @@ import {
   MAX_VISIBLE_NODES,
   nodeIdOf,
   type OperatorRow,
+  rerouteHiddenNodes,
+  type VisibleEdge,
+  type VisibleNode,
   visibleNodeCount,
 } from "./dataflowGraph";
 
@@ -428,5 +431,129 @@ describe("lirIndex", () => {
     expect(index.get("u42/1")!.memberIds.sort()).toEqual(
       [nodeIdOf([5, 1]), nodeIdOf([5, 1, 1])].sort(),
     );
+  });
+});
+
+describe("rerouteHiddenNodes", () => {
+  const node = (id: string): VisibleNode => ({
+    id,
+    kind: "operator",
+    label: id,
+    parent: null,
+    stats: null,
+    transitive: null,
+    childCount: 0,
+    lir: [],
+    address: null,
+  });
+  const edge = (
+    id: string,
+    source: string,
+    target: string,
+    messagesSent = 0n,
+    batchesSent = 0n,
+    channelTypes: string[] = [],
+  ): VisibleEdge => ({
+    id,
+    source,
+    target,
+    messagesSent,
+    batchesSent,
+    channelTypes,
+  });
+
+  it("returns the graph unchanged when nothing is hidden", () => {
+    const g = {
+      nodes: [node("a"), node("b")],
+      edges: [edge("a=>b", "a", "b")],
+    };
+    expect(rerouteHiddenNodes(g, new Set())).toBe(g);
+  });
+
+  it("splices a pass-through edge across a single hidden node", () => {
+    const g = {
+      nodes: [node("a"), node("b"), node("c")],
+      edges: [
+        edge("a=>b", "a", "b", 3n, 1n, ["rows"]),
+        edge("b=>c", "b", "c", 3n, 1n, ["rows"]),
+      ],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["b"]));
+    expect(r.nodes.map((n) => n.id)).toEqual(["a", "c"]);
+    expect(r.edges).toEqual([
+      {
+        id: "a=>c",
+        source: "a",
+        target: "c",
+        messagesSent: 6n,
+        batchesSent: 2n,
+        channelTypes: ["rows"],
+      },
+    ]);
+  });
+
+  it("fans out through a hidden node with multiple successors", () => {
+    const g = {
+      nodes: [node("a"), node("b"), node("c"), node("d")],
+      edges: [
+        edge("a=>b", "a", "b"),
+        edge("b=>c", "b", "c"),
+        edge("b=>d", "b", "d"),
+      ],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["b"]));
+    expect(new Set(r.edges.map((e) => e.id))).toEqual(
+      new Set(["a=>c", "a=>d"]),
+    );
+  });
+
+  it("fans in from multiple sources through a hidden node", () => {
+    const g = {
+      nodes: [node("a1"), node("a2"), node("b"), node("c")],
+      edges: [
+        edge("a1=>b", "a1", "b"),
+        edge("a2=>b", "a2", "b"),
+        edge("b=>c", "b", "c"),
+      ],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["b"]));
+    expect(new Set(r.edges.map((e) => e.id))).toEqual(
+      new Set(["a1=>c", "a2=>c"]),
+    );
+  });
+
+  it("does not hang on a hidden feedback cycle and still bridges past it", () => {
+    // Timely feedback loops mean two hidden nodes can point at each other.
+    const g = {
+      nodes: [node("a"), node("l"), node("m"), node("c")],
+      edges: [
+        edge("a=>l", "a", "l"),
+        edge("l=>m", "l", "m"),
+        edge("m=>l", "m", "l"), // cycle
+        edge("m=>c", "m", "c"),
+      ],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["l", "m"]));
+    expect(r.nodes.map((n) => n.id)).toEqual(["a", "c"]);
+    expect(r.edges.map((e) => e.id)).toEqual(["a=>c"]);
+  });
+
+  it("drops an entirely hidden component with no visible endpoint", () => {
+    const g = {
+      nodes: [node("a"), node("b")],
+      edges: [edge("a=>b", "a", "b")],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["a", "b"]));
+    expect(r.nodes).toEqual([]);
+    expect(r.edges).toEqual([]);
+  });
+
+  it("keeps ordinary edges between two surviving visible nodes untouched", () => {
+    const g = {
+      nodes: [node("a"), node("b"), node("hidden")],
+      edges: [edge("a=>b", "a", "b", 5n, 1n, ["rows"])],
+    };
+    const r = rerouteHiddenNodes(g, new Set(["hidden"]));
+    expect(r.edges).toEqual(g.edges);
   });
 });

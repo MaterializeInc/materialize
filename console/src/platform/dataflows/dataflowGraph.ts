@@ -354,6 +354,120 @@ export function deriveVisibleGraph(
   return { nodes: [...nodes, ...ports.values()], edges };
 }
 
+// Hiding a run of idle operators would otherwise sever every path through
+// them, splitting the graph into disconnected islands even though a real
+// (idle) path exists. Splices a pass-through edge across each hidden run,
+// so hiding idle nodes never removes connectivity, only the boxes in
+// between. The spliced edge sums messages/batches/types along the run,
+// which is almost always 0/0 (that is why the run was hidden) and so
+// renders with the same dashed "idle" styling as an ordinary quiet edge.
+//
+// Cycles (timely feedback loops) are real and must not hang this: `path`
+// tracks nodes on the current walk, and re-entering one simply stops that
+// branch rather than looping forever.
+export function rerouteHiddenNodes(
+  graph: VisibleGraph,
+  hiddenNodeIds: ReadonlySet<string>,
+): VisibleGraph {
+  if (hiddenNodeIds.size === 0) return graph;
+  const nodes = graph.nodes.filter((n) => !hiddenNodeIds.has(n.id));
+
+  const outAdj = new Map<string, VisibleEdge[]>();
+  for (const e of graph.edges) {
+    const list = outAdj.get(e.source);
+    if (list) list.push(e);
+    else outAdj.set(e.source, [e]);
+  }
+
+  interface Agg {
+    messagesSent: bigint;
+    batchesSent: bigint;
+    types: Set<string>;
+  }
+
+  // Every visible node reachable by walking forward from `from` through only
+  // hidden nodes, with edge stats accumulated along the way.
+  function reachableVisible(from: string, path: Set<string>): Map<string, Agg> {
+    const result = new Map<string, Agg>();
+    if (path.has(from)) return result;
+    path.add(from);
+    for (const e of outAdj.get(from) ?? []) {
+      if (!hiddenNodeIds.has(e.target)) {
+        merge(result, e.target, e.messagesSent, e.batchesSent, e.channelTypes);
+      } else {
+        for (const [target, agg] of reachableVisible(e.target, path)) {
+          merge(
+            result,
+            target,
+            agg.messagesSent + e.messagesSent,
+            agg.batchesSent + e.batchesSent,
+            [...agg.types, ...e.channelTypes],
+          );
+        }
+      }
+    }
+    path.delete(from);
+    return result;
+  }
+
+  function merge(
+    into: Map<string, Agg>,
+    target: string,
+    messagesSent: bigint,
+    batchesSent: bigint,
+    types: string[],
+  ) {
+    const existing = into.get(target);
+    if (existing) {
+      existing.messagesSent += messagesSent;
+      existing.batchesSent += batchesSent;
+      for (const t of types) existing.types.add(t);
+    } else {
+      into.set(target, { messagesSent, batchesSent, types: new Set(types) });
+    }
+  }
+
+  const edgesById = new Map<string, VisibleEdge>();
+  for (const e of graph.edges) {
+    if (!hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target)) {
+      edgesById.set(e.id, e);
+    }
+  }
+  for (const e of graph.edges) {
+    if (hiddenNodeIds.has(e.source) || !hiddenNodeIds.has(e.target)) continue;
+    for (const [target, agg] of reachableVisible(
+      e.target,
+      new Set([e.source]),
+    )) {
+      const id = `${e.source}=>${target}`;
+      const messagesSent = e.messagesSent + agg.messagesSent;
+      const batchesSent = e.batchesSent + agg.batchesSent;
+      const types = new Set([...e.channelTypes, ...agg.types]);
+      const existing = edgesById.get(id);
+      if (existing) {
+        edgesById.set(id, {
+          ...existing,
+          messagesSent: existing.messagesSent + messagesSent,
+          batchesSent: existing.batchesSent + batchesSent,
+          channelTypes: [
+            ...new Set([...existing.channelTypes, ...types]),
+          ].sort(),
+        });
+      } else {
+        edgesById.set(id, {
+          id,
+          source: e.source,
+          target,
+          messagesSent,
+          batchesSent,
+          channelTypes: [...types].sort(),
+        });
+      }
+    }
+  }
+  return { nodes, edges: [...edgesById.values()] };
+}
+
 export function defaultCollapseState(
   structure: DataflowStructure,
 ): CollapseState {

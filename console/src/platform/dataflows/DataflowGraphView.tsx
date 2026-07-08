@@ -29,6 +29,7 @@ import {
   deriveVisibleGraph,
   type GraphDecorations,
   MAX_VISIBLE_NODES,
+  rerouteHiddenNodes,
   type VisibleNode,
   visibleNodeCount,
 } from "./dataflowGraph";
@@ -103,17 +104,18 @@ export const DataflowGraphView = ({
   const toast = useToast();
   const visible = React.useMemo(() => {
     const graph = deriveVisibleGraph(structure, collapsed);
-    if (!decorations?.hiddenNodeIds && !decorations?.hiddenEdgeIds)
-      return graph;
-    const hiddenNodes = decorations.hiddenNodeIds ?? new Set();
-    const hiddenEdges = decorations.hiddenEdgeIds ?? new Set();
+    // Hidden nodes get spliced out with connectivity preserved (a hidden idle
+    // run still shows a pass-through edge). Hidden edges (independently
+    // zero-message) are a plain removal: nothing to reroute since both
+    // endpoints stay visible.
+    const rerouted = decorations?.hiddenNodeIds
+      ? rerouteHiddenNodes(graph, decorations.hiddenNodeIds)
+      : graph;
+    if (!decorations?.hiddenEdgeIds?.size) return rerouted;
     return {
-      nodes: graph.nodes.filter((n) => !hiddenNodes.has(n.id)),
-      edges: graph.edges.filter(
-        (e) =>
-          !hiddenEdges.has(e.id) &&
-          !hiddenNodes.has(e.source) &&
-          !hiddenNodes.has(e.target),
+      nodes: rerouted.nodes,
+      edges: rerouted.edges.filter(
+        (e) => !decorations.hiddenEdgeIds!.has(e.id),
       ),
     };
   }, [
