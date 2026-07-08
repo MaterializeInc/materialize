@@ -7,7 +7,21 @@
  * the Business Source License, use of this software will be governed
  * by the Apache License, Version 2.0. */
 
-/* Materialize brand fonts — sourced from www-temporary/apps/web/static/fonts */
+/* Fonts served by the docs site, vendored from the Materialize website repo
+ * (www-temporary/apps/web/static/fonts) so docs and site share one type
+ * system.
+ *
+ * Licensing:
+ *
+ * - Inter is licensed under the SIL Open Font License 1.1, which permits
+ *   redistribution: https://github.com/rsms/inter/blob/master/LICENSE.txt
+ *
+ * - FAIRE Sprig Sans and FAIRE Sprig Sans Mono are Materialize brand fonts,
+ *   commercially licensed to Materialize, Inc. and already served publicly
+ *   by www.materialize.com. They are included here solely for use by the
+ *   Materialize documentation site. They are NOT covered by this
+ *   repository's license. Do not copy or reuse them in other projects.
+ */
 
 @font-face {
     font-family: "Inter";
