@@ -19,7 +19,6 @@ import {
   type VisibleNode,
 } from "./dataflowGraph";
 import type { SelectedEdge } from "./DataflowGraphView";
-import { LirSummaryCard } from "./LirPanel";
 import { formatSkew, prettyPrintChannelType } from "./nodeStyle";
 
 export type Selection =
@@ -116,26 +115,38 @@ const PeerRow = ({
   </Box>
 );
 
+// Same Row-based shape as NodeDetail, rather than a visually distinct card,
+// so a LIR group's details read like every other selection in this panel.
+const LirGroupDetail = ({ node }: { node: LirTreeNode }) => (
+  <>
+    <Row label="Export" value={node.info.exportId} />
+    <Row label="LIR ID" value={node.info.lirId} />
+    <Row label="Members" value={String(node.memberIds.length)} />
+    <Row label="Records" value={node.summary.arrangementRecords.toString()} />
+    <Row
+      label="Memory"
+      value={formatBytesShort(node.summary.arrangementSize)}
+    />
+    <Row label="Elapsed" value={formatElapsedNs(node.summary.elapsedNs)} />
+  </>
+);
+
 const NodeDetail = ({
   node,
   connectedEdges,
   onJumpTo,
+  onSelectLir,
 }: {
   node: VisibleNode;
   connectedEdges?: SelectedEdge[];
   onJumpTo: (peer: PortPeer) => void;
+  onSelectLir: (exportId: string, lirId: string) => void;
 }) => (
   <>
     <Row label="Kind" value={node.kind} />
     {node.address && <Row label="Address" value={node.address.join(".")} />}
     {node.operatorId !== null && (
       <Row label="Operator ID" value={node.operatorId.toString()} />
-    )}
-    {node.lir.length > 0 && (
-      <Row
-        label="LIR ID"
-        value={[...new Set(node.lir.map((l) => l.lirId))].join(", ")}
-      />
     )}
     {node.childCount > 0 && (
       <Row label="Children" value={String(node.childCount)} />
@@ -178,11 +189,25 @@ const NodeDetail = ({
         />
       </>
     )}
-    {node.lir.map((l) => (
-      <Text key={`${l.exportId}/${l.lirId}`} fontSize="xs" mt={2}>
-        LIR {l.lirId} ({l.exportId}): {l.operator}
-      </Text>
-    ))}
+    {node.lir.length > 0 && (
+      <Box mt={2}>
+        <Text fontSize="xs" fontWeight="600" mb={1}>
+          LIR
+        </Text>
+        {node.lir.map((l) => (
+          <Text
+            key={`${l.exportId}/${l.lirId}`}
+            fontSize="xs"
+            color="blue.600"
+            textDecoration="underline"
+            cursor="pointer"
+            onClick={() => onSelectLir(l.exportId, l.lirId)}
+          >
+            LIR {l.lirId} ({l.exportId}): {l.operator}
+          </Text>
+        ))}
+      </Box>
+    )}
     {connectedEdges && connectedEdges.length > 0 && (
       <Box mt={2}>
         <Text fontSize="xs" fontWeight="600" mb={1}>
@@ -213,13 +238,40 @@ const NodeDetail = ({
 
 export const NodeDetailPanel = ({
   selection,
+  collapsed,
+  onToggleCollapsed,
   onClose,
   onJumpTo,
+  onSelectLir,
 }: {
   selection: Selection;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   onClose: () => void;
   onJumpTo: (peer: PortPeer) => void;
+  onSelectLir: (exportId: string, lirId: string) => void;
 }) => {
+  if (collapsed) {
+    return (
+      <Box
+        width="24px"
+        borderLeftWidth="1px"
+        flexShrink={0}
+        display="flex"
+        justifyContent="center"
+        pt={2}
+      >
+        <Button
+          size="2xs"
+          variant="ghost"
+          onClick={onToggleCollapsed}
+          aria-label="Expand details panel"
+        >
+          «
+        </Button>
+      </Box>
+    );
+  }
   const title =
     selection.kind === "node"
       ? selection.node.label
@@ -238,18 +290,29 @@ export const NodeDetailPanel = ({
         <Text fontWeight="600" noOfLines={2}>
           {title}
         </Text>
-        <CloseButton onClick={onClose} />
+        <HStack spacing={1}>
+          <Button
+            size="2xs"
+            variant="ghost"
+            onClick={onToggleCollapsed}
+            aria-label="Collapse details panel"
+          >
+            »
+          </Button>
+          <CloseButton onClick={onClose} />
+        </HStack>
       </HStack>
       {selection.kind === "node" ? (
         <NodeDetail
           node={selection.node}
           connectedEdges={selection.connectedEdges}
           onJumpTo={onJumpTo}
+          onSelectLir={onSelectLir}
         />
       ) : selection.kind === "edge" ? (
         <EdgeRows edge={selection.edge} onJumpTo={onJumpTo} />
       ) : (
-        <LirSummaryCard node={selection.node} />
+        <LirGroupDetail node={selection.node} />
       )}
     </Box>
   );
