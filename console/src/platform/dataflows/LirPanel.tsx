@@ -13,30 +13,54 @@ import React from "react";
 import {
   type DataflowStructure,
   lirIndex,
-  type LirInfo,
+  lirTree,
+  type LirTreeNode,
   type NodeId,
 } from "./dataflowGraph";
+
+const LirRow = ({
+  node,
+  onHighlight,
+  onSelect,
+}: {
+  node: LirTreeNode;
+  onHighlight: (ids: ReadonlySet<string> | null) => void;
+  onSelect: (memberIds: NodeId[]) => void;
+}) => (
+  <>
+    <Text
+      fontSize="xs"
+      pl={node.info.nesting * 3}
+      cursor="pointer"
+      _hover={{ background: "gray.100" }}
+      onMouseEnter={() => onHighlight(new Set(node.memberIds))}
+      onMouseLeave={() => onHighlight(null)}
+      onClick={() => onSelect(node.memberIds)}
+    >
+      LIR {node.info.lirId}: {node.info.operator}
+    </Text>
+    {node.children.map((child) => (
+      <LirRow
+        key={child.key}
+        node={child}
+        onHighlight={onHighlight}
+        onSelect={onSelect}
+      />
+    ))}
+  </>
+);
 
 export const LirPanel = ({
   structure,
   onHighlight,
+  onSelect,
 }: {
   structure: DataflowStructure;
   onHighlight: (ids: ReadonlySet<string> | null) => void;
+  onSelect: (memberIds: NodeId[]) => void;
 }) => {
   const index = React.useMemo(() => lirIndex(structure), [structure]);
-  const byExport = React.useMemo(() => {
-    const groups = new Map<
-      string,
-      { key: string; info: LirInfo; memberIds: NodeId[] }[]
-    >();
-    for (const [key, entry] of index) {
-      const list = groups.get(entry.info.exportId) ?? [];
-      list.push({ key, ...entry });
-      groups.set(entry.info.exportId, list);
-    }
-    return groups;
-  }, [index]);
+  const tree = React.useMemo(() => lirTree(index), [index]);
   if (index.size === 0) return null;
   return (
     <Box
@@ -46,22 +70,18 @@ export const LirPanel = ({
       overflowY="auto"
       flexShrink={0}
     >
-      {[...byExport.entries()].map(([exportId, entries]) => (
+      {[...tree.entries()].map(([exportId, roots]) => (
         <Box key={exportId} mb={3}>
           <Text fontSize="xs" color="gray.500">
             {exportId}
           </Text>
-          {entries.map((e) => (
-            <Text
-              key={e.key}
-              fontSize="xs"
-              cursor="pointer"
-              _hover={{ background: "gray.100" }}
-              onMouseEnter={() => onHighlight(new Set(e.memberIds))}
-              onMouseLeave={() => onHighlight(null)}
-            >
-              LIR {e.info.lirId}: {e.info.operator}
-            </Text>
+          {roots.map((root) => (
+            <LirRow
+              key={root.key}
+              node={root}
+              onHighlight={onHighlight}
+              onSelect={onSelect}
+            />
           ))}
         </Box>
       ))}
