@@ -1238,12 +1238,19 @@ async fn read_data_product(
 /// ONLY` transaction so the cluster choice is scoped to this read and
 /// does not leak into the session.
 fn build_read_query(safe_name: &str, limit: u32, target_cluster: &str) -> String {
-    format!(
-        "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}\n; COMMIT;",
-        escaped_string_literal(target_cluster),
-        safe_name,
-        limit,
+    read_only_txn(
+        &format!("SET CLUSTER = {}", escaped_string_literal(target_cluster)),
+        &format!("SELECT * FROM {safe_name} LIMIT {limit}"),
     )
+}
+
+/// Wraps `body` in a `BEGIN READ ONLY; <set_clause>; <body>; COMMIT;` frame so
+/// `set_clause` is scoped to this read and does not leak into the session.
+///
+/// NOTE: the newline before `; COMMIT;` stops a trailing `--` comment in `body`
+/// from swallowing the `COMMIT`.
+fn read_only_txn(set_clause: &str, body: &str) -> String {
+    format!("BEGIN READ ONLY; {set_clause}; {body}\n; COMMIT;")
 }
 
 /// Validates query is a single SELECT, SHOW, or EXPLAIN statement.
@@ -1305,12 +1312,10 @@ async fn execute_query(
 
     validate_readonly_query(sql_query)?;
 
-    // Use READ ONLY transaction to prevent modifications
-    // Combine with SET CLUSTER (prometheus.rs:29-33 pattern)
-    let combined_query = format!(
-        "BEGIN READ ONLY; SET CLUSTER = {}; {}\n; COMMIT;",
-        escaped_string_literal(cluster),
-        sql_query
+    // READ ONLY prevents mutations; SET CLUSTER scopes the cluster to this read.
+    let combined_query = read_only_txn(
+        &format!("SET CLUSTER = {}", escaped_string_literal(cluster)),
+        sql_query,
     );
 
     let rows = execute_sql(client, &combined_query).await?;
@@ -1336,9 +1341,9 @@ async fn query_system_catalog(
     // from resolving to user-created objects (e.g. a view `public.mz_leak`) via
     // the session's search_path (mirrors the `BEGIN READ ONLY; SET ...` pattern
     // used by the agent `query` tool).
-    let combined_query = format!(
-        "BEGIN READ ONLY; SET search_path = mz_catalog, mz_internal, pg_catalog, information_schema; {}; COMMIT;",
-        sql_query
+    let combined_query = read_only_txn(
+        "SET search_path = mz_catalog, mz_internal, pg_catalog, information_schema",
+        sql_query,
     );
 
     let rows = execute_sql(client, &combined_query).await?;
@@ -2266,6 +2271,16 @@ mod tests {
         assert!(safe_data_product_name("my_view, secrets").is_err());
         // SQL keywords after name are rejected by the parser
         assert!(safe_data_product_name("my_view WHERE 1=1 --").is_err());
+    }
+
+    /// A trailing `--` comment in the body must not swallow the `; COMMIT;`.
+    #[mz_ore::test]
+    fn test_read_only_txn_comment_cannot_swallow_commit() {
+        let sql = read_only_txn("SET CLUSTER = 'c'", "SELECT 1 --");
+        assert!(
+            sql.contains("\n; COMMIT;"),
+            "COMMIT must sit on its own line: {sql}",
+        );
     }
 
     // ── build_read_query tests (DEX-27) ────────────────────────────────
