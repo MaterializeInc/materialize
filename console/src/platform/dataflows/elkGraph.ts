@@ -25,7 +25,7 @@ export const NODE_DIMENSIONS: Record<
   { width: number; height: number }
 > = {
   operator: { width: 240, height: 72 },
-  collapsedRegion: { width: 260, height: 88 },
+  collapsedRegion: { width: 260, height: 96 },
   region: { width: 0, height: 0 },
   port: { width: 90, height: 24 },
 };

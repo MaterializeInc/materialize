@@ -169,6 +169,11 @@ export const DataflowGraphView = ({
         // Bottom/Top and appears detached across region boundaries.
         targetPosition: Position.Top,
         sourcePosition: Position.Bottom,
+        // Set as explicit node fields, not just CSS style: the MiniMap and
+        // culled (onlyRenderVisibleElements) off-screen nodes both need a
+        // known size without waiting for DOM measurement.
+        width: pos.width,
+        height: pos.height,
         style: { width: pos.width, height: pos.height },
         draggable: false,
         connectable: false,
@@ -236,7 +241,13 @@ export const DataflowGraphView = ({
       >
         <Background />
         <Controls />
-        <MiniMap pannable zoomable />
+        <MiniMap
+          pannable
+          zoomable
+          nodeColor={(node) =>
+            (node.data as { color?: string }).color ?? "#ccc"
+          }
+        />
         {centerRef && <CenterHelper centerRef={centerRef} />}
       </ReactFlow>
     </Box>
