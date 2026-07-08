@@ -343,8 +343,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_pubsub_server_connection_channel_size
     persist_pubsub_state_cache_shard_ref_channel_size
     persist_rollup_fallback_threshold_ms
-    persist_source_fetch_concurrency
-    persist_source_hydration_frontier_coalesce_bytes
     persist_state_update_lease_timeout
     persist_state_versions_recent_live_diffs_limit
     persist_stats_audit_panic
@@ -498,6 +496,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "kafka_socket_timeout",
     "mz_metrics_lgalloc_refresh_interval",
     "persist_batch_max_run_len",
+    "persist_source_hydration_frontier_coalesce_bytes",
     "persist_validate_part_bounds_on_read",
     "persist_validate_part_bounds_on_write",
     "storage_enforce_external_addresses",
@@ -546,6 +545,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_new_outer_join_lowering
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
+    enable_scoped_system_parameters
     enable_upsert_paged_spill
     enable_upsert_v2
     enable_variadic_left_join_lowering
