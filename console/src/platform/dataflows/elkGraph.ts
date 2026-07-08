@@ -117,3 +117,37 @@ export function extractPositions(layouted: ElkNode): Positions {
   visit(layouted);
   return positions;
 }
+
+// extractPositions above deliberately leaves nested positions parent-relative
+// (elk's convention, matching React Flow's parentId semantics), which is
+// exactly right for feeding React Flow but wrong for any consumer that
+// compares positions against absolute canvas coordinates instead (e.g. a
+// viewport-visibility check reading reactFlow.getViewport()). This resolves
+// each node up its parent chain, summing offsets, before such a comparison.
+// Nesting can go arbitrarily deep, so it recurses rather than assuming one
+// level.
+export function resolveAbsolutePositions(
+  positions: Positions,
+  parentOf: LirGrouping["parentOf"] | undefined,
+): Positions {
+  if (!parentOf || parentOf.size === 0) return positions;
+  const resolved: Positions = {};
+  const resolve = (id: string): NodePosition | undefined => {
+    const cached = resolved[id];
+    if (cached) return cached;
+    const p = positions[id];
+    if (!p) return undefined;
+    const parentId = parentOf.get(id);
+    if (!parentId) {
+      resolved[id] = p;
+      return p;
+    }
+    const parentPos = resolve(parentId);
+    if (!parentPos) return undefined;
+    const abs = { ...p, x: p.x + parentPos.x, y: p.y + parentPos.y };
+    resolved[id] = abs;
+    return abs;
+  };
+  for (const id of Object.keys(positions)) resolve(id);
+  return resolved;
+}

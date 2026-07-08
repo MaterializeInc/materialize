@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
@@ -41,7 +41,11 @@ vi.mock("@xyflow/react", () => ({
     onNodeClick,
     onNodeDoubleClick,
   }: {
-    nodes: { id: string; data: { node: { label: string } } }[];
+    nodes: {
+      id: string;
+      type?: string;
+      data: { node?: { label: string }; label?: string };
+    }[];
     children?: React.ReactNode;
     onNodeClick?: (e: unknown, node: unknown) => void;
     onNodeDoubleClick?: (e: unknown, node: unknown) => void;
@@ -54,7 +58,7 @@ vi.mock("@xyflow/react", () => ({
           onClick={() => onNodeClick?.(null, n)}
           onDoubleClick={() => onNodeDoubleClick?.(null, n)}
         >
-          {n.data.node.label}
+          {n.data.node ? n.data.node.label : n.data.label}
         </div>
       ))}
       {children}
@@ -188,6 +192,31 @@ const fanOutChannelsResult = {
   ],
 };
 
+// Dataflow 40: root [40], child [40,1] "Join" (operator id 41), covered by
+// one LIR span, to exercise the "Show LIR groups" toggle in isolation from
+// every other test's dataflow 7 fixture, which has no LIR spans at all.
+const lirOperatorsResult = {
+  ...operatorsResult,
+  rows: [
+    ["40", ["40"], "Dataflow", "0", "0", "0"],
+    ["41", ["40", "1"], "Join", "0", "0", "0"],
+  ],
+};
+const lirSpansResult = {
+  desc: {
+    columns: [
+      { name: "exportId" },
+      { name: "lirId" },
+      { name: "parentLirId" },
+      { name: "nesting" },
+      { name: "operator" },
+      { name: "operatorIdStart" },
+      { name: "operatorIdEnd" },
+    ],
+  },
+  rows: [["u7", "1", null, "0", "Join::Differential", "41", "42"]],
+};
+
 beforeEach(() => {
   fitViewSpy.mockClear();
   const store = getStore();
@@ -235,6 +264,11 @@ beforeEach(() => {
             okResult,
             okResult,
           ],
+        });
+      }
+      if (body.includes("'40'")) {
+        return HttpResponse.json({
+          results: [lirOperatorsResult, okResult, lirSpansResult, okResult],
         });
       }
       return HttpResponse.json({
@@ -527,5 +561,68 @@ describe("DataflowDetailPage", () => {
     expect(
       await screen.findByTestId(`node-${nodeIdOf([7, 1])}`),
     ).toHaveTextContent("Map");
+  });
+
+  it("shows a LIR group box when the toggle is on, and hides it when off", async () => {
+    await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={<DataflowDetailPage />}
+        />
+      </Routes>,
+      {
+        initialRouterEntries: ["/clusters/u5/test_cluster/dataflows/40"],
+      },
+    );
+
+    expect(
+      await screen.findByTestId(`node-${nodeIdOf([40, 1])}`),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("react-flow")).queryByText(
+        /Join::Differential/,
+      ),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText("Show LIR groups"));
+
+    const groupNode = screen.getByTestId("node-u7/1");
+    expect(groupNode).toHaveTextContent("Join::Differential");
+
+    // Regression check for the onNodeDoubleClick guard added in Step 4:
+    // double-clicking a group must not throw (it read `.data.node.kind`
+    // unconditionally before the guard, which crashes on a group node) and
+    // must not navigate anywhere, since groups aren't scopes.
+    await userEvent.dblClick(groupNode);
+    expect(screen.getByTestId("node-u7/1")).toBeInTheDocument();
+  });
+
+  it("opens the detail panel with LIR summary info when a group header is clicked", async () => {
+    await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={<DataflowDetailPage />}
+        />
+      </Routes>,
+      {
+        initialRouterEntries: ["/clusters/u5/test_cluster/dataflows/40"],
+      },
+    );
+
+    await screen.findByTestId(`node-${nodeIdOf([40, 1])}`);
+    await userEvent.click(screen.getByLabelText("Show LIR groups"));
+    await userEvent.click(screen.getByTestId("node-u7/1"));
+
+    // The title and LirSummaryCard both render "LIR 1: Join::Differential",
+    // so assert at least one match rather than a single getByText, which
+    // throws on more than one hit.
+    expect(
+      screen.getAllByText(/LIR 1: Join::Differential/).length,
+    ).toBeGreaterThan(0);
+    // Rows unique to LirSummaryCard, not NodeDetail's node-shaped rows.
+    expect(screen.getByText("Records")).toBeInTheDocument();
+    expect(screen.getByText("Memory")).toBeInTheDocument();
   });
 });
