@@ -17,9 +17,11 @@ import {
   DEFAULT_FILTERS,
   defaultCollapseState,
   deriveVisibleGraph,
+  expandAncestorsOf,
   expandForSearch,
   lirIndex,
   type LirSpanRow,
+  lirTree,
   MAX_VISIBLE_NODES,
   nodeIdOf,
   type OperatorRow,
@@ -109,6 +111,8 @@ export const LIR_SPANS: LirSpanRow[] = [
   {
     exportId: "u42",
     lirId: "1",
+    parentLirId: null,
+    nesting: 0,
     operator: "Join::Differential",
     operatorIdStart: "11",
     operatorIdEnd: "13",
@@ -139,7 +143,13 @@ describe("buildDataflowStructure", () => {
   it("maps LIR spans to operators by id range, as an array", () => {
     const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
     expect(s.nodes.get(nodeIdOf([5, 1, 1]))!.lir).toEqual([
-      { exportId: "u42", lirId: "1", operator: "Join::Differential" },
+      {
+        exportId: "u42",
+        lirId: "1",
+        parentLirId: null,
+        nesting: 0,
+        operator: "Join::Differential",
+      },
     ]);
     // end is exclusive
     expect(s.nodes.get(nodeIdOf([5, 2]))!.lir).toEqual([]);
@@ -421,6 +431,13 @@ describe("expandForSearch / allChannelTypes", () => {
     expect(next.has(nodeIdOf([5, 1]))).toBe(false);
   });
 
+  it("expandAncestorsOf expands ancestors of given addresses directly", () => {
+    const next = expandAncestorsOf(defaultCollapseState(s), [[5, 1, 1]]);
+    expect(next.has(nodeIdOf([5, 1]))).toBe(false);
+    // unrelated collapsed regions are untouched
+    expect(next.size).toEqual(defaultCollapseState(s).size - 1);
+  });
+
   it("collects channel types", () => {
     expect(allChannelTypes(s)).toEqual(["batches", "rows"]);
   });
@@ -434,6 +451,77 @@ describe("lirIndex", () => {
     // span 11..13 covers operator ids 11 ([5,1]) and 12 ([5,1,1])
     expect(index.get("u42/1")!.memberIds.sort()).toEqual(
       [nodeIdOf([5, 1]), nodeIdOf([5, 1, 1])].sort(),
+    );
+  });
+});
+
+describe("lirTree", () => {
+  it("nests children under their parent via parentLirId, siblings descending by lir id", () => {
+    const ops: OperatorRow[] = [
+      {
+        id: "1",
+        address: ["9"],
+        name: "Dataflow",
+        arrangementRecords: "0",
+        arrangementSize: "0",
+        elapsedNs: "0",
+      },
+      {
+        id: "2",
+        address: ["9", "1"],
+        name: "OpA",
+        arrangementRecords: "0",
+        arrangementSize: "0",
+        elapsedNs: "0",
+      },
+      {
+        id: "3",
+        address: ["9", "2"],
+        name: "OpB",
+        arrangementRecords: "0",
+        arrangementSize: "0",
+        elapsedNs: "0",
+      },
+    ];
+    const spans: LirSpanRow[] = [
+      {
+        exportId: "u1",
+        lirId: "10",
+        parentLirId: null,
+        nesting: 0,
+        operator: "Root",
+        operatorIdStart: "2",
+        operatorIdEnd: "4",
+      },
+      {
+        exportId: "u1",
+        lirId: "11",
+        parentLirId: "10",
+        nesting: 1,
+        operator: "OpA",
+        operatorIdStart: "2",
+        operatorIdEnd: "3",
+      },
+      {
+        exportId: "u1",
+        lirId: "12",
+        parentLirId: "10",
+        nesting: 1,
+        operator: "OpB",
+        operatorIdStart: "3",
+        operatorIdEnd: "4",
+      },
+    ];
+    const s = buildDataflowStructure(ops, [], spans);
+    const tree = lirTree(lirIndex(s));
+    const roots = tree.get("u1")!;
+    expect(roots.map((n) => n.key)).toEqual(["u1/10"]);
+    expect(roots[0].children.map((n) => n.key)).toEqual(["u1/12", "u1/11"]);
+    expect(roots[0].memberIds.sort()).toEqual(
+      [nodeIdOf([9, 1]), nodeIdOf([9, 2])].sort(),
+    );
+    expect(roots[0].children.find((n) => n.key === "u1/11")!.memberIds).toEqual(
+      [nodeIdOf([9, 1])],
     );
   });
 });
