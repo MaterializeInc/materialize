@@ -143,11 +143,11 @@ An active AWS account with permission to create:
    }
    ```
 
-1. {{< include-md file="shared-content/self-managed/enterprise-sso/polis-tfvars.md" >}}
+1. {{% include-headless "/headless/self-managed-deployments/enterprise-sso/polis-tfvars" %}}
 
-1. {{< include-md file="shared-content/self-managed/enterprise-sso/cert-issuer-tfvars.md" >}}
+1. {{% include-headless "/headless/self-managed-deployments/enterprise-sso/cert-issuer-tfvars" %}}
 
-1. {{< include-md file="shared-content/self-managed/enterprise-sso/upstream-oidc-tfvars.md" >}}
+1. {{% include-headless "/headless/self-managed-deployments/enterprise-sso/upstream-oidc-tfvars" %}}
 
 ### Step 3: Apply the Terraform
 
@@ -177,11 +177,11 @@ An active AWS account with permission to create:
 
 ### Step 4: Create DNS Records
 
-{{< include-md file="shared-content/self-managed/enterprise-sso/dns-records.md" >}}
+{{% include-headless "/headless/self-managed-deployments/enterprise-sso/dns-records" %}}
 
 ### Step 5: Verify the Deployment
 
-{{< include-md file="shared-content/self-managed/enterprise-sso/verify.md" >}}
+{{% include-headless "/headless/self-managed-deployments/enterprise-sso/verify" %}}
 
 If you haven't configured an identity provider yet, see
 [Configure identity
@@ -226,7 +226,7 @@ NLB target groups before the destroy can finish. See the example
 for the exact cleanup commands.
 {{</ note >}}
 
-{{< include-md file="shared-content/self-managed/enterprise-sso/destroy-finalizer-note.md" >}}
+{{% include-headless "/headless/self-managed-deployments/enterprise-sso/destroy-finalizer-note" %}}
 
 ## See Also
 

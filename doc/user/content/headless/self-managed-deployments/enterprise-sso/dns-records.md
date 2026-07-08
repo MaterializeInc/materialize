@@ -1,3 +1,6 @@
+---
+headless: true
+---
 After `terraform apply`, list the LoadBalancer ingress addresses:
 
 ```bash
