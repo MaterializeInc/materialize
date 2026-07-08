@@ -253,6 +253,7 @@ beforeEach(() => {
             portJumpChannelsResult,
             okResult,
             okResult,
+            okResult,
           ],
         });
       }
@@ -263,16 +264,23 @@ beforeEach(() => {
             fanOutChannelsResult,
             okResult,
             okResult,
+            okResult,
           ],
         });
       }
       if (body.includes("'40'")) {
         return HttpResponse.json({
-          results: [lirOperatorsResult, okResult, lirSpansResult, okResult],
+          results: [
+            lirOperatorsResult,
+            okResult,
+            lirSpansResult,
+            okResult,
+            okResult,
+          ],
         });
       }
       return HttpResponse.json({
-        results: [operatorsResult, okResult, okResult, okResult],
+        results: [operatorsResult, okResult, okResult, okResult, okResult],
       });
     }),
   );

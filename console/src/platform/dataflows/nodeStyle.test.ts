@@ -9,7 +9,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { lirGroupColor, prettyPrintChannelType } from "./nodeStyle";
+import {
+  formatSkew,
+  lirGroupColor,
+  nodeFillColor,
+  operatorColor,
+  prettyPrintChannelType,
+} from "./nodeStyle";
 
 describe("lirGroupColor", () => {
   it("is deterministic for the same lirId", () => {
@@ -19,6 +25,83 @@ describe("lirGroupColor", () => {
   it("differs for different lirIds often enough to be useful", () => {
     const colors = new Set(["1", "2", "3", "4", "5", "6"].map(lirGroupColor));
     expect(colors.size).toBeGreaterThan(1);
+  });
+});
+
+describe("operatorColor", () => {
+  it("is deterministic for the same operator name", () => {
+    expect(operatorColor("Reduce")).toEqual(operatorColor("Reduce"));
+  });
+
+  it("differs for different operator names often enough to be useful", () => {
+    const colors = new Set(
+      ["Map", "Filter", "Reduce", "Join", "FlatMap", "Arrange"].map(
+        operatorColor,
+      ),
+    );
+    expect(colors.size).toBeGreaterThan(1);
+  });
+
+  it("is never pure white, unlike the old fixed operator fill", () => {
+    for (const name of ["Map", "Reduce", "Join", ""]) {
+      expect(operatorColor(name)).not.toEqual("#ffffff");
+    }
+  });
+});
+
+describe("nodeFillColor", () => {
+  const baseNode = {
+    id: "1",
+    label: "Reduce",
+    stats: null,
+    transitive: null,
+    transitiveSkew: null,
+    childCount: 0,
+    lir: [],
+    address: null,
+    operatorId: null,
+    peers: [],
+  };
+
+  it("colors an operator by its name, not by whether it's arranged", () => {
+    const unarranged = nodeFillColor({ ...baseNode, kind: "operator" });
+    const arranged = nodeFillColor({
+      ...baseNode,
+      kind: "operator",
+      transitive: {
+        arrangementRecords: 100n,
+        arrangementSize: 100n,
+        elapsedNs: 0n,
+      },
+    });
+    expect(unarranged).toEqual(operatorColor("Reduce"));
+    expect(arranged).toEqual(operatorColor("Reduce"));
+  });
+
+  it("still colors a region by whether it's arranged, unaffected by name", () => {
+    const noArrangement = nodeFillColor({ ...baseNode, kind: "region" });
+    const arranged = nodeFillColor({
+      ...baseNode,
+      kind: "region",
+      transitive: {
+        arrangementRecords: 100n,
+        arrangementSize: 100n,
+        elapsedNs: 0n,
+      },
+    });
+    expect(noArrangement).not.toEqual(arranged);
+    expect(noArrangement).not.toEqual(operatorColor("Reduce"));
+  });
+});
+
+describe("formatSkew", () => {
+  it("formats a real ratio to 2 decimal places", () => {
+    expect(formatSkew(1.5)).toEqual("1.50");
+    expect(formatSkew(1.0244)).toEqual("1.02");
+  });
+
+  it("labels the no-data sentinel (0) distinctly from a real ratio", () => {
+    expect(formatSkew(0)).toEqual("no data");
   });
 });
 

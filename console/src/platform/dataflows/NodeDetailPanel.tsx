@@ -20,7 +20,7 @@ import {
 } from "./dataflowGraph";
 import type { SelectedEdge } from "./DataflowGraphView";
 import { LirSummaryCard } from "./LirPanel";
-import { prettyPrintChannelType } from "./nodeStyle";
+import { formatSkew, prettyPrintChannelType } from "./nodeStyle";
 
 export type Selection =
   | { kind: "node"; node: VisibleNode; connectedEdges?: SelectedEdge[] }
@@ -136,6 +136,15 @@ const NodeDetail = ({
         <Row
           label="Subtree elapsed"
           value={formatElapsedNs(node.transitive.elapsedNs)}
+        />
+      </>
+    )}
+    {node.transitiveSkew && (
+      <>
+        <Row label="CPU skew" value={formatSkew(node.transitiveSkew.cpuSkew)} />
+        <Row
+          label="Memory skew"
+          value={formatSkew(node.transitiveSkew.memorySkew)}
         />
       </>
     )}
