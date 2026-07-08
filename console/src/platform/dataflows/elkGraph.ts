@@ -9,7 +9,7 @@
 
 import type { ElkNode } from "elkjs/lib/elk-api";
 
-import type { VisibleGraph, VisibleNode } from "./dataflowGraph";
+import type { LirGrouping, VisibleGraph, VisibleNode } from "./dataflowGraph";
 
 export interface NodePosition {
   x: number;
@@ -35,18 +35,60 @@ const LAYOUT_OPTIONS: Record<string, string> = {
   "elk.padding": "[top=48,left=16,bottom=16,right=16]",
   "elk.spacing.nodeNode": "24",
   "elk.layered.spacing.nodeNodeBetweenLayers": "48",
+  // Lets an edge crossing a LIR group's boundary be declared uniformly at
+  // the root: elk relocates it to the correct container itself. Harmless
+  // when there's no grouping at all (today's flat views).
+  "elk.hierarchyHandling": "INCLUDE_CHILDREN",
 };
 
-// A view is always one scope's direct children, so this is always a flat,
-// single-level graph: nothing is ever nested inside anything else.
-export function toElkGraph(graph: VisibleGraph): ElkNode {
+// A LIR group is a label-only wrapper, sized purely from its content (no
+// fixed width/height), with top padding reserved for the header strip
+// LirGroupNode renders.
+const GROUP_LAYOUT_OPTIONS: Record<string, string> = {
+  "elk.algorithm": "layered",
+  "elk.direction": "DOWN",
+  "elk.padding": "[top=24,left=8,bottom=8,right=8]",
+  "elk.spacing.nodeNode": "24",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "48",
+};
+
+// A view is always one scope's direct children, so without a grouping this
+// is flat: nothing is nested inside anything else. With a grouping, a
+// group's members (VisibleNodes or other groups) become its elk children;
+// everything else stays a direct child of the root, exactly like today.
+export function toElkGraph(
+  graph: VisibleGraph,
+  grouping?: LirGrouping,
+): ElkNode {
+  const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+  const groupById = new Map((grouping?.groups ?? []).map((g) => [g.id, g]));
+  const childrenOf = new Map<string, string[]>(); // parent id ("" = root) -> ordered child ids
+  const addChild = (parentKey: string, id: string) => {
+    const list = childrenOf.get(parentKey);
+    if (list) list.push(id);
+    else childrenOf.set(parentKey, [id]);
+  };
+  for (const n of graph.nodes)
+    addChild(grouping?.parentOf.get(n.id) ?? "", n.id);
+  for (const g of groupById.values())
+    addChild(grouping?.parentOf.get(g.id) ?? "", g.id);
+
+  const buildNode = (id: string): ElkNode => {
+    const group = groupById.get(id);
+    if (group) {
+      return {
+        id,
+        layoutOptions: GROUP_LAYOUT_OPTIONS,
+        children: (childrenOf.get(id) ?? []).map(buildNode),
+      };
+    }
+    return { id, ...NODE_DIMENSIONS[nodeById.get(id)!.kind] };
+  };
+
   return {
     id: "__root__",
     layoutOptions: LAYOUT_OPTIONS,
-    children: graph.nodes.map((n) => ({
-      id: n.id,
-      ...NODE_DIMENSIONS[n.kind],
-    })),
+    children: (childrenOf.get("") ?? []).map(buildNode),
     edges: graph.edges.map((e) => ({
       id: e.id,
       sources: [e.source],
@@ -55,15 +97,23 @@ export function toElkGraph(graph: VisibleGraph): ElkNode {
   };
 }
 
+// Recurses into nested children: elk reports every node's x/y already
+// relative to its own immediate parent, the same convention React Flow uses
+// for a node with parentId set, so no coordinate conversion happens here —
+// this only flattens the tree into one lookup map, keyed by id at any depth.
 export function extractPositions(layouted: ElkNode): Positions {
   const positions: Positions = {};
-  for (const child of layouted.children ?? []) {
-    positions[child.id] = {
-      x: child.x ?? 0,
-      y: child.y ?? 0,
-      width: child.width ?? 0,
-      height: child.height ?? 0,
-    };
-  }
+  const visit = (node: ElkNode) => {
+    for (const child of node.children ?? []) {
+      positions[child.id] = {
+        x: child.x ?? 0,
+        y: child.y ?? 0,
+        width: child.width ?? 0,
+        height: child.height ?? 0,
+      };
+      visit(child);
+    }
+  };
+  visit(layouted);
   return positions;
 }

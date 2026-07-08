@@ -17,7 +17,9 @@ import {
   decorateGraph,
   DEFAULT_FILTERS,
   deriveVisibleGraph,
+  groupByLir,
   lirIndex,
+  type LirInfo,
   type LirSpanRow,
   lirTree,
   nodeIdOf,
@@ -949,5 +951,118 @@ describe("rerouteHiddenNodes", () => {
     };
     const r = rerouteHiddenNodes(g, new Set(["hidden"]));
     expect(r.edges).toEqual(g.edges);
+  });
+});
+
+describe("groupByLir", () => {
+  const node = (
+    id: string,
+    operatorId: number,
+    lir: LirInfo[] = [],
+  ): VisibleNode => ({
+    id,
+    kind: "operator",
+    label: id,
+    stats: null,
+    transitive: null,
+    transitiveSkew: null,
+    childCount: 0,
+    lir,
+    address: null,
+    operatorId: BigInt(operatorId),
+    peers: [],
+  });
+  const port = (id: string): VisibleNode => ({
+    id,
+    kind: "port",
+    label: id,
+    stats: null,
+    transitive: null,
+    transitiveSkew: null,
+    childCount: 0,
+    lir: [],
+    address: null,
+    operatorId: null,
+    peers: [],
+  });
+  const span = (
+    exportId: string,
+    lirId: string,
+    nesting: number,
+    parentLirId: string | null,
+  ): LirInfo => ({ exportId, lirId, parentLirId, nesting, operator: lirId });
+
+  it("groups nothing when no node has lir data", () => {
+    const g = groupByLir([node("a", 1), node("b", 2)]);
+    expect(g.groups).toEqual([]);
+    expect(g.parentOf.size).toEqual(0);
+  });
+
+  it("groups a flat run under one lir id", () => {
+    const s = span("u1", "10", 0, null);
+    const g = groupByLir([
+      node("a", 1, [s]),
+      node("b", 2, [s]),
+      node("c", 3, [s]),
+    ]);
+    expect(g.groups.map((x) => x.id)).toEqual(["u1/10"]);
+    expect(g.parentOf.get("a")).toEqual("u1/10");
+    expect(g.parentOf.get("b")).toEqual("u1/10");
+    expect(g.parentOf.get("c")).toEqual("u1/10");
+  });
+
+  it("nests an inner span inside an outer span", () => {
+    const outer = span("u1", "10", 0, null);
+    const inner = span("u1", "11", 1, "10");
+    const g = groupByLir([
+      node("a", 1, [outer]),
+      node("b", 2, [outer, inner]),
+      node("c", 3, [outer, inner]),
+      node("d", 4, [outer]),
+    ]);
+    expect(g.groups.map((x) => x.id)).toEqual(["u1/10", "u1/11"]);
+    expect(g.parentOf.get("u1/11")).toEqual("u1/10");
+    expect(g.parentOf.get("a")).toEqual("u1/10");
+    expect(g.parentOf.get("b")).toEqual("u1/11");
+    expect(g.parentOf.get("c")).toEqual("u1/11");
+    expect(g.parentOf.get("d")).toEqual("u1/10");
+  });
+
+  it("leaves ports and lir-less nodes ungrouped alongside a group", () => {
+    const s = span("u1", "10", 0, null);
+    const g = groupByLir([node("a", 1, [s]), port("p"), node("b", 2)]);
+    expect(g.groups.map((x) => x.id)).toEqual(["u1/10"]);
+    expect(g.parentOf.get("a")).toEqual("u1/10");
+    expect(g.parentOf.has("p")).toEqual(false);
+    expect(g.parentOf.has("b")).toEqual(false);
+  });
+
+  it("picks the lowest exportId, leaving other-export-only nodes ungrouped", () => {
+    const sA = span("u1", "5", 0, null);
+    const sB = span("u2", "3", 0, null);
+    const g = groupByLir([
+      node("a", 1, [sA]),
+      node("b", 2, [sB]),
+      node("c", 3, [sA, sB]),
+    ]);
+    expect(g.groups.map((x) => x.id)).toEqual(["u1/5"]);
+    expect(g.parentOf.get("a")).toEqual("u1/5");
+    expect(g.parentOf.has("b")).toEqual(false);
+    expect(g.parentOf.get("c")).toEqual("u1/5");
+  });
+
+  it("sorts input by operatorId regardless of array order", () => {
+    const outer = span("u1", "10", 0, null);
+    const inner = span("u1", "11", 1, "10");
+    // Deliberately out of operatorId order.
+    const g = groupByLir([
+      node("d", 4, [outer]),
+      node("b", 2, [outer, inner]),
+      node("a", 1, [outer]),
+      node("c", 3, [outer, inner]),
+    ]);
+    expect(g.groups.map((x) => x.id)).toEqual(["u1/10", "u1/11"]);
+    expect(g.parentOf.get("b")).toEqual("u1/11");
+    expect(g.parentOf.get("c")).toEqual("u1/11");
   });
 });
