@@ -458,6 +458,34 @@ describe("DataflowDetailPage", () => {
     ).toBeVisible();
   });
 
+  // Selection lives in the URL too, the same as scope: opening a link
+  // straight at `select=...` (indistinguishable, from react-router's
+  // perspective, from landing there via the back/forward buttons) must
+  // restore the panel without any click, and fit the viewport to it since
+  // nothing guarantees it's already onscreen.
+  it("restores selection from a direct link and fits the viewport to it", async () => {
+    await renderComponent(
+      <Routes>
+        <Route
+          path="/clusters/:clusterId/:clusterName/dataflows/:dataflowId"
+          element={<DataflowDetailPage />}
+        />
+      </Routes>,
+      {
+        initialRouterEntries: [
+          `/clusters/u5/test_cluster/dataflows/8?scope=8.1&select=${encodeURIComponent(`node:${nodeIdOf([8, 1, 1])}`)}`,
+        ],
+      },
+    );
+
+    // The panel title and the node's own label both render "LeafA".
+    expect(await screen.findAllByText("LeafA")).toHaveLength(2);
+    // Present only in the detail panel's own rendering, confirming the
+    // panel (not just the node) is open.
+    expect(screen.getByText("Kind")).toBeInTheDocument();
+    expect(fitViewSpy).toHaveBeenCalledTimes(1);
+  });
+
   // elk lays each scope out from scratch, so a viewport left over from
   // wherever the user was in the previous scope can easily miss the new
   // one entirely. Navigating into a scope should recenter for that reason,
