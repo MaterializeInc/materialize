@@ -118,6 +118,7 @@ export const DataflowToolbar = ({
         <option value="off">Heatmap off</option>
         <option value="elapsed">Heat: elapsed</option>
         <option value="size">Heat: arrangement size</option>
+        <option value="schedules">Heat: schedules</option>
         <option value="cpuSkew">Heat: CPU skew</option>
         <option value="memorySkew">Heat: memory skew</option>
         <option value="scheduleSkew">Heat: schedule skew</option>

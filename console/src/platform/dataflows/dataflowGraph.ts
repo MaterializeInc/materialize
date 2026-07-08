@@ -59,6 +59,14 @@ export interface DataflowNode {
   own: NodeStats;
   transitive: NodeStats; // own + subtree, precomputed
   ownSkew: SkewStats;
+  // Same ratios as ownSkew, but never suppressed by the magnitude floor.
+  // ownSkew exists to seed transitiveSkew's MAX rollup (see its comment for
+  // why negligible nodes must not pollute an ancestor's reported skew);
+  // ownSkewRaw is this node's actual measured skew, for display when this
+  // exact node is selected, where a floor built for ancestor-safety would
+  // otherwise misreport a real (if individually low-stakes) imbalance as
+  // "no data".
+  ownSkewRaw: SkewStats;
   // The worst skew anywhere in the subtree (this node's own, or any
   // descendant's), matching EXPLAIN ANALYZE's own MAX-based rollup. Not a
   // merged-and-then-ratioed per-worker vector: two operators skewed
@@ -119,8 +127,22 @@ export interface VisibleNode {
   id: string;
   kind: "operator" | "region" | "port";
   label: string;
+  // For a region, the rolled-up subtree total (same as transitive): a
+  // quick canvas-level preview, not this node's own activity. See `own`
+  // for that.
   stats: NodeStats | null;
   transitive: NodeStats | null;
+  // This node's own stats, never rolled up: for a region, its own
+  // dispatch/activation cost distinct from anything its children did (see
+  // DataflowNode.overheadNs). `stats` collapses this into the subtree
+  // total for regions, which is the right quick read on the canvas but
+  // hides this node's own contribution entirely, which the detail panel
+  // needs to show on its own.
+  own: NodeStats | null;
+  // This node's own skew, unfiltered by the magnitude floor that guards
+  // transitiveSkew's ancestor rollup (see DataflowNode.ownSkewRaw) -- the
+  // real number for this exact node, not a heatmap-safe one.
+  ownSkew: SkewStats | null;
   transitiveSkew: SkewStats | null;
   // null for synthetic port nodes, same as transitive/transitiveSkew (no
   // operator row of their own to compute it from).
@@ -281,6 +303,7 @@ export function buildDataflowStructure(
               scheduleCount: 0n,
             },
             ownSkew: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 },
+            ownSkewRaw: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 },
             transitiveSkew: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 },
             lir: [],
             overheadNs: 0n,
@@ -323,6 +346,7 @@ export function buildDataflowStructure(
       own,
       transitive: own, // replaced below
       ownSkew: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 }, // replaced below
+      ownSkewRaw: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 }, // replaced below
       transitiveSkew: { cpuSkew: 0, memorySkew: 0, scheduleSkew: 0 }, // replaced below
       lir: spans
         .filter((s) => s.start <= opId && opId < s.end)
@@ -420,6 +444,11 @@ export function buildDataflowStructure(
       )
         ? skewRatio(ownScheduleVec)
         : 0,
+    };
+    node.ownSkewRaw = {
+      cpuSkew: skewRatio(ownCpuVec),
+      memorySkew: skewRatio(ownMemoryVec),
+      scheduleSkew: skewRatio(ownScheduleVec),
     };
     const t = { ...node.own };
     let cpuSkew = node.ownSkew.cpuSkew;
@@ -560,6 +589,8 @@ export function deriveVisibleGraph(
       label: node.name,
       stats: kind === "region" ? node.transitive : node.own,
       transitive: node.transitive,
+      own: node.own,
+      ownSkew: node.ownSkewRaw,
       transitiveSkew: node.transitiveSkew,
       overheadNs: node.overheadNs,
       childCount: node.children.length,
@@ -723,6 +754,8 @@ export function deriveVisibleGraph(
           label: `${p.direction} ${p.port}`,
           stats: null,
           transitive: null,
+          own: null,
+          ownSkew: null,
           transitiveSkew: null,
           overheadNs: null,
           childCount: 0,
@@ -1007,6 +1040,7 @@ export interface Filters {
     | "off"
     | "elapsed"
     | "size"
+    | "schedules"
     | "cpuSkew"
     | "memorySkew"
     | "scheduleSkew";
@@ -1083,6 +1117,8 @@ export function decorateGraph(
           return Number(n.transitive?.elapsedNs ?? 0n);
         case "size":
           return Number(n.transitive?.arrangementSize ?? 0n);
+        case "schedules":
+          return Number(n.transitive?.scheduleCount ?? 0n);
         case "cpuSkew":
           return n.transitiveSkew?.cpuSkew ?? 0;
         case "memorySkew":
