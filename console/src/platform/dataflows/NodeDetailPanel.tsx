@@ -44,7 +44,7 @@ const Row = ({ label, value }: RowProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   return (
     <HStack justifyContent="space-between">
-      <Text fontSize="xs" color={colors.foreground.secondary}>
+      <Text textStyle="text-ui-med" color={colors.foreground.tertiary}>
         {label}
       </Text>
       <Text fontSize="xs" textStyle="monospace">
@@ -53,6 +53,23 @@ const Row = ({ label, value }: RowProps) => {
     </HStack>
   );
 };
+
+// A border-top divider between stat groups (own vs subtree vs skew, or a
+// titled block like LIR/Connected edges), matching the workflow graph
+// sidebar's SidebarSection dividers, without that component's collapse
+// behavior, which this panel's shorter, denser content doesn't need.
+const StatGroup = ({ children }: { children: React.ReactNode }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Box mt={2} pt={2} borderTopWidth="1px" borderColor={colors.border.primary}>
+      {children}
+    </Box>
+  );
+};
+
+const SectionLabel = (props: React.PropsWithChildren) => (
+  <Text textStyle="text-small" fontWeight="500" mb={1} {...props} />
+);
 
 interface TypeRowProps {
   channelTypes: string[];
@@ -66,7 +83,7 @@ const TypeRow = ({ channelTypes }: TypeRowProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   return (
     <Box>
-      <Text fontSize="xs" color={colors.foreground.secondary}>
+      <Text textStyle="text-ui-med" color={colors.foreground.tertiary}>
         Type
       </Text>
       <Text fontSize="xs" textStyle="monospace" wordBreak="break-all">
@@ -92,24 +109,20 @@ const EdgeRows = ({ edge, onJumpTo }: EdgeRowsProps) => (
     <Row label="Batches" value={edge.batchesSent.toString()} />
     <TypeRow channelTypes={edge.channelTypes} />
     {onJumpTo && edge.sourceLandings.length > 0 && (
-      <Box mt={2}>
-        <Text fontSize="xs" fontWeight="600" mb={1}>
-          Inside {edge.sourceLabel}
-        </Text>
+      <StatGroup>
+        <SectionLabel>Inside {edge.sourceLabel}</SectionLabel>
         {edge.sourceLandings.map((p) => (
           <PeerRow key={p.address.join(".")} peer={p} onJumpTo={onJumpTo} />
         ))}
-      </Box>
+      </StatGroup>
     )}
     {onJumpTo && edge.targetLandings.length > 0 && (
-      <Box mt={2}>
-        <Text fontSize="xs" fontWeight="600" mb={1}>
-          Inside {edge.targetLabel}
-        </Text>
+      <StatGroup>
+        <SectionLabel>Inside {edge.targetLabel}</SectionLabel>
         {edge.targetLandings.map((p) => (
           <PeerRow key={p.address.join(".")} peer={p} onJumpTo={onJumpTo} />
         ))}
-      </Box>
+      </StatGroup>
     )}
   </>
 );
@@ -194,7 +207,7 @@ const NodeDetail = ({
         <Row label="Children" value={String(node.childCount)} />
       )}
       {node.own && (
-        <>
+        <StatGroup>
           <Row
             label="Arranged records"
             value={node.own.arrangementRecords.toString()}
@@ -205,13 +218,13 @@ const NodeDetail = ({
           />
           <Row label="Elapsed" value={formatElapsedNs(node.own.elapsedNs)} />
           <Row label="Schedules" value={node.own.scheduleCount.toString()} />
-        </>
+        </StatGroup>
       )}
       {node.childCount > 0 && (
         <Row label="Overhead" value={formatElapsedNs(node.overheadNs ?? 0n)} />
       )}
       {node.transitive && node.childCount > 0 && (
-        <>
+        <StatGroup>
           <Row
             label="Subtree records"
             value={node.transitive.arrangementRecords.toString()}
@@ -228,10 +241,10 @@ const NodeDetail = ({
             label="Subtree schedules"
             value={node.transitive.scheduleCount.toString()}
           />
-        </>
+        </StatGroup>
       )}
       {node.ownSkew && (
-        <>
+        <StatGroup>
           <Row label="CPU skew" value={formatSkew(node.ownSkew.cpuSkew)} />
           <Row
             label="Memory skew"
@@ -241,10 +254,10 @@ const NodeDetail = ({
             label="Schedule skew"
             value={formatSkew(node.ownSkew.scheduleSkew)}
           />
-        </>
+        </StatGroup>
       )}
       {node.transitiveSkew && node.childCount > 0 && (
-        <>
+        <StatGroup>
           <Row
             label="Subtree CPU skew"
             value={formatSkew(node.transitiveSkew.cpuSkew)}
@@ -257,13 +270,11 @@ const NodeDetail = ({
             label="Subtree schedule skew"
             value={formatSkew(node.transitiveSkew.scheduleSkew)}
           />
-        </>
+        </StatGroup>
       )}
       {node.lir.length > 0 && (
-        <Box mt={2}>
-          <Text fontSize="xs" fontWeight="600" mb={1}>
-            LIR
-          </Text>
+        <StatGroup>
+          <SectionLabel>LIR</SectionLabel>
           {node.lir.map((l) => (
             <TextLink
               key={`${l.exportId}/${l.lirId}`}
@@ -276,13 +287,11 @@ const NodeDetail = ({
               LIR {l.lirId} ({l.exportId}): {l.operator}
             </TextLink>
           ))}
-        </Box>
+        </StatGroup>
       )}
       {connectedEdges && connectedEdges.length > 0 && (
-        <Box mt={2}>
-          <Text fontSize="xs" fontWeight="600" mb={1}>
-            Connected edges
-          </Text>
+        <StatGroup>
+          <SectionLabel>Connected edges</SectionLabel>
           {connectedEdges.map((e) => (
             <Box key={e.id} mb={2}>
               <Text
@@ -295,17 +304,15 @@ const NodeDetail = ({
               <EdgeRows edge={e} />
             </Box>
           ))}
-        </Box>
+        </StatGroup>
       )}
       {node.peers.length > 0 && (
-        <Box mt={2}>
-          <Text fontSize="xs" fontWeight="600" mb={1}>
-            Connects outside this view
-          </Text>
+        <StatGroup>
+          <SectionLabel>Connects outside this view</SectionLabel>
           {node.peers.map((p) => (
             <PeerRow key={p.address.join(".")} peer={p} onJumpTo={onJumpTo} />
           ))}
-        </Box>
+        </StatGroup>
       )}
     </>
   );

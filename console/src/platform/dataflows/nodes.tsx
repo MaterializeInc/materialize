@@ -45,6 +45,11 @@ const highlightShadow = (data: FlowNodeData): string | undefined => {
   return undefined;
 };
 
+// A subtle resting shadow (matching the app's other node-graph view) so
+// cards read as raised surfaces even when unselected; highlightShadow
+// overrides it with a colored ring for selected/matched nodes.
+const RESTING_SHADOW = "0px 0.5px 2.5px 0 rgba(0, 0, 0, 0.08)";
+
 const CardShell = ({
   data,
   children,
@@ -54,7 +59,7 @@ const CardShell = ({
 }) => (
   <Box
     borderWidth="1px"
-    borderRadius="md"
+    borderRadius="8px"
     px={2}
     py={1}
     width="100%"
@@ -62,7 +67,7 @@ const CardShell = ({
     overflow="hidden"
     background={data.color}
     opacity={data.dimmed ? 0.25 : 1}
-    boxShadow={highlightShadow(data)}
+    boxShadow={highlightShadow(data) ?? RESTING_SHADOW}
   >
     {children}
     <Handle type="target" position={Position.Top} />
@@ -79,11 +84,11 @@ export const OperatorNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
       isDisabled={data.node.lir.length === 0}
     >
       <Box>
-        <Text fontSize="sm" fontWeight="600" noOfLines={1}>
+        <Text textStyle="text-ui-med" noOfLines={1}>
           {data.node.label}
         </Text>
         {statLines(data.node).map((line) => (
-          <Text key={line} fontSize="xs" noOfLines={1}>
+          <Text key={line} textStyle="text-small" noOfLines={1}>
             {line}
           </Text>
         ))}
@@ -97,7 +102,7 @@ export const OperatorNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
 export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
   <CardShell data={data}>
     <HStack justifyContent="space-between" spacing={1}>
-      <Text fontSize="sm" fontWeight="600" noOfLines={1}>
+      <Text textStyle="text-ui-med" noOfLines={1}>
         {data.node.label}
       </Text>
       <Badge fontSize="2xs" flexShrink={0}>
@@ -105,7 +110,7 @@ export const RegionNode = ({ data }: NodeProps & { data: FlowNodeData }) => (
       </Badge>
     </HStack>
     {statLines(data.node).map((line) => (
-      <Text key={line} fontSize="xs" noOfLines={1}>
+      <Text key={line} textStyle="text-small" noOfLines={1}>
         {line}
       </Text>
     ))}
