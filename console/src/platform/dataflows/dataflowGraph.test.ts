@@ -12,9 +12,13 @@ import { describe, expect, it } from "vitest";
 import {
   buildDataflowStructure,
   type ChannelRow,
+  defaultCollapseState,
+  deriveVisibleGraph,
   type LirSpanRow,
+  MAX_VISIBLE_NODES,
   nodeIdOf,
   type OperatorRow,
+  visibleNodeCount,
 } from "./dataflowGraph";
 
 // Dataflow 5: root [5], region [5,1] with children [5,1,1], [5,1,2], leaf [5,2].
@@ -148,5 +152,78 @@ describe("buildDataflowStructure", () => {
       batchesSent: 1n,
       channelType: "rows",
     });
+  });
+});
+
+describe("deriveVisibleGraph", () => {
+  const s = buildDataflowStructure(OPS, CHANNELS, LIR_SPANS);
+  const regionId = nodeIdOf([5, 1]);
+
+  it("collapses regions to a single node with remapped edges", () => {
+    const g = deriveVisibleGraph(s, new Set([regionId]));
+    expect(g.nodes.map((n) => [n.id, n.kind])).toEqual([
+      [regionId, "collapsedRegion"],
+      [nodeIdOf([5, 2]), "operator"],
+    ]);
+    // channel 3 region -> sink survives, channels 1 and 2 are internal
+    expect(g.edges).toEqual([
+      {
+        id: `${regionId}=>${nodeIdOf([5, 2])}`,
+        source: regionId,
+        target: nodeIdOf([5, 2]),
+        messagesSent: 5n,
+        batchesSent: 2n,
+        channelTypes: ["batches"],
+      },
+    ]);
+    const collapsed = g.nodes[0];
+    expect(collapsed.stats).toEqual(s.nodes.get(regionId)!.transitive);
+    expect(collapsed.childCount).toEqual(2);
+  });
+
+  it("expands regions with port pseudo-nodes, parents before children", () => {
+    const g = deriveVisibleGraph(s, new Set());
+    const ids = g.nodes.map((n) => n.id);
+    expect(ids.indexOf(regionId)).toBeLessThan(
+      ids.indexOf(nodeIdOf([5, 1, 1])),
+    );
+    const port = g.nodes.find((n) => n.kind === "port")!;
+    expect(port.id).toEqual(`${regionId}:in:0`);
+    expect(port.parent).toEqual(regionId);
+    expect(port.label).toEqual("input 0");
+    // port -> Join edge preserved
+    expect(g.edges.map((e) => e.id)).toContain(
+      `${regionId}:in:0=>${nodeIdOf([5, 1, 1])}`,
+    );
+  });
+
+  it("aggregates parallel channels between the same visible pair", () => {
+    const extra = buildDataflowStructure(
+      OPS,
+      [
+        ...CHANNELS,
+        {
+          id: "4",
+          fromOperatorAddress: ["5", "1"],
+          fromPort: "1",
+          toOperatorAddress: ["5", "2"],
+          toPort: "1",
+          messagesSent: "7",
+          batchesSent: "1",
+          channelType: "rows",
+        },
+      ],
+      [],
+    );
+    const g = deriveVisibleGraph(extra, new Set([regionId]));
+    const e = g.edges.find((edge) => edge.target === nodeIdOf([5, 2]))!;
+    expect(e.messagesSent).toEqual(12n);
+    expect(e.channelTypes).toEqual(["batches", "rows"]);
+  });
+
+  it("defaultCollapseState collapses all non-root regions", () => {
+    expect(defaultCollapseState(s)).toEqual(new Set([regionId]));
+    expect(visibleNodeCount(s, defaultCollapseState(s))).toEqual(2);
+    expect(MAX_VISIBLE_NODES).toEqual(1500);
   });
 });
