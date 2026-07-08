@@ -648,6 +648,32 @@ export interface LirTreeNode {
   info: LirInfo;
   memberIds: NodeId[];
   children: LirTreeNode[];
+  summary: NodeStats;
+}
+
+// Sums each member's OWN stats (not transitive): every operator belonging to
+// a LIR id appears in memberIds exactly once, including a parent LIR id's
+// descendants (buildDataflowStructure assigns an operator to every ancestor
+// span that contains it), so this matches EXPLAIN ANALYZE's own total_memory/
+// total_records/total_elapsed exactly without a separate query: the same
+// operator rows are already fetched for the graph itself.
+export function lirSummary(
+  structure: DataflowStructure,
+  memberIds: readonly NodeId[],
+): NodeStats {
+  const summary: NodeStats = {
+    arrangementRecords: 0n,
+    arrangementSize: 0n,
+    elapsedNs: 0n,
+  };
+  for (const id of memberIds) {
+    const own = structure.nodes.get(id)?.own;
+    if (!own) continue;
+    summary.arrangementRecords += own.arrangementRecords;
+    summary.arrangementSize += own.arrangementSize;
+    summary.elapsedNs += own.elapsedNs;
+  }
+  return summary;
 }
 
 // Arranges lirIndex's flat entries into a tree per export, following
@@ -657,6 +683,7 @@ export interface LirTreeNode {
 // matches construction order without needing it as an explicit input, the
 // same convention EXPLAIN ANALYZE's own tree rendering uses.
 export function lirTree(
+  structure: DataflowStructure,
   index: ReadonlyMap<string, { info: LirInfo; memberIds: NodeId[] }>,
 ): Map<string, LirTreeNode[]> {
   const byExport = new Map<string, Map<string, LirTreeNode>>();
@@ -667,6 +694,7 @@ export function lirTree(
       info,
       memberIds,
       children: [],
+      summary: lirSummary(structure, memberIds),
     });
     byExport.set(info.exportId, byLirId);
   }
