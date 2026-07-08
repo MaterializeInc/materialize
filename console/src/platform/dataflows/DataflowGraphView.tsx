@@ -10,7 +10,7 @@
 import "@xyflow/react/dist/style.css";
 import "./DataflowGraphView.css";
 
-import { Box, Spinner } from "@chakra-ui/react";
+import { Box, Button, Spinner, VStack } from "@chakra-ui/react";
 import {
   Background,
   Controls,
@@ -23,15 +23,16 @@ import {
 } from "@xyflow/react";
 import React from "react";
 
+import ErrorBox from "~/components/ErrorBox";
+
 import { ChannelEdge } from "./ChannelEdge";
 import {
-  type DataflowStructure,
-  deriveVisibleGraph,
   type GraphDecorations,
   type NodeId,
   type PortPeer,
   rerouteHiddenNodes,
   type VisibleEdge,
+  type VisibleGraph,
   type VisibleNode,
 } from "./dataflowGraph";
 import { NODE_DIMENSIONS } from "./elkGraph";
@@ -53,8 +54,11 @@ export type SelectedEdge = VisibleEdge & {
 };
 
 export interface DataflowGraphViewProps {
-  structure: DataflowStructure;
-  // The scope whose direct children this view renders; double-clicking a
+  // The current scope's graph, already derived by the caller (which also
+  // needs it, to decorate). Computing it again here would repeat the same
+  // work every render.
+  visible: VisibleGraph;
+  // The scope whose direct children this view renders. Double-clicking a
   // region box navigates to a new view rooted there rather than expanding it
   // in place.
   focusedScope: NodeId;
@@ -69,7 +73,7 @@ export interface DataflowGraphViewProps {
   onNodeClick?: (node: VisibleNode, connectedEdges: SelectedEdge[]) => void;
   onEdgeClick?: (edge: SelectedEdge) => void;
   onPaneClick?: () => void;
-  // Double-clicking a port with exactly one peer jumps straight there; with
+  // Double-clicking a port with exactly one peer jumps straight there. With
   // zero or several peers it's ambiguous (or there's nothing to jump to), so
   // the preceding click/click of the double-click has already opened the
   // port's own detail panel instead, same as a single click would.
@@ -133,7 +137,7 @@ const CenterHelper = ({
 };
 
 export const DataflowGraphView = ({
-  structure,
+  visible: rawVisible,
   focusedScope,
   onNavigate,
   cacheKey,
@@ -152,14 +156,13 @@ export const DataflowGraphView = ({
   onFit,
 }: DataflowGraphViewProps) => {
   const visible = React.useMemo(() => {
-    const graph = deriveVisibleGraph(structure, focusedScope);
     // Hidden nodes get spliced out with connectivity preserved (a hidden idle
     // run still shows a pass-through edge). Hidden edges (independently
     // zero-message) are a plain removal: nothing to reroute since both
     // endpoints stay visible.
     const rerouted = decorations?.hiddenNodeIds
-      ? rerouteHiddenNodes(graph, decorations.hiddenNodeIds)
-      : graph;
+      ? rerouteHiddenNodes(rawVisible, decorations.hiddenNodeIds)
+      : rawVisible;
     if (!decorations?.hiddenEdgeIds?.size) return rerouted;
     return {
       nodes: rerouted.nodes,
@@ -167,12 +170,7 @@ export const DataflowGraphView = ({
         (e) => !decorations.hiddenEdgeIds!.has(e.id),
       ),
     };
-  }, [
-    structure,
-    focusedScope,
-    decorations?.hiddenNodeIds,
-    decorations?.hiddenEdgeIds,
-  ]);
+  }, [rawVisible, decorations?.hiddenNodeIds, decorations?.hiddenEdgeIds]);
 
   const layoutKey = `${cacheKey}|${focusedScope}|${
     decorations?.hiddenNodeIds
@@ -183,11 +181,20 @@ export const DataflowGraphView = ({
       ? [...decorations.hiddenEdgeIds].sort().join(",")
       : ""
   }`;
-  const { positions, layouting, error } = useElkLayout(visible, layoutKey);
+  const { positions, layouting, error, retry } = useElkLayout(
+    visible,
+    layoutKey,
+  );
 
   React.useEffect(() => {
     if (!centerOnId || !positions?.[centerOnId]) return;
-    centerRef?.current?.(centerOnId);
+    // CenterHelper assigns centerRef.current in its own mount effect; on the
+    // rare commit where that hasn't run yet, skip without marking the
+    // request consumed (onCentered stays uncalled) so the next positions or
+    // centerOnId change gets another chance, rather than silently dropping
+    // the jump forever.
+    if (!centerRef?.current) return;
+    centerRef.current(centerOnId);
     onCentered?.();
   }, [centerOnId, positions, centerRef, onCentered]);
 
@@ -198,7 +205,8 @@ export const DataflowGraphView = ({
     // behind a filter) doesn't block the fit indefinitely.
     const present = fitOnIds.filter((id) => positions?.[id]);
     if (present.length === 0) return;
-    fitRef?.current?.(present);
+    if (!fitRef?.current) return;
+    fitRef.current(present);
     onFit?.();
   }, [fitOnIds, positions, fitRef, onFit]);
 
@@ -261,7 +269,24 @@ export const DataflowGraphView = ({
     [visible, decorations?.dimmedNodeIds, selectedId],
   );
 
-  if (error) throw new Error(error);
+  // Built once per visible-graph change instead of a .find() per connected
+  // edge in the click handlers below, which is O(nodes) per edge and adds up
+  // for a hub node in a large scope.
+  const labelById = React.useMemo(
+    () => new Map(visible.nodes.map((n) => [n.id, n.label])),
+    [visible],
+  );
+
+  if (error) {
+    return (
+      <VStack width="100%" flex="1" alignItems="flex-start" spacing={2} p={4}>
+        <ErrorBox message="There was an error laying out the dataflow graph" />
+        <Button size="sm" onClick={retry}>
+          Retry
+        </Button>
+      </VStack>
+    );
+  }
   return (
     <Box width="100%" flex="1" position="relative">
       {layouting && (
@@ -281,28 +306,24 @@ export const DataflowGraphView = ({
         zoomOnDoubleClick={false}
         onNodeClick={(_, node) => {
           const visibleNode = (node.data as { node: VisibleNode }).node;
-          const resolveLabel = (id: string) =>
-            visible.nodes.find((n) => n.id === id)?.label ?? id;
           const connectedEdges = visible.edges
             .filter(
               (e) => e.source === visibleNode.id || e.target === visibleNode.id,
             )
             .map((e) => ({
               ...e,
-              sourceLabel: resolveLabel(e.source),
-              targetLabel: resolveLabel(e.target),
+              sourceLabel: labelById.get(e.source) ?? e.source,
+              targetLabel: labelById.get(e.target) ?? e.target,
             }));
           onNodeClick?.(visibleNode, connectedEdges);
         }}
         onEdgeClick={(_, edge) => {
           const e = visible.edges.find((ve) => ve.id === edge.id);
           if (!e) return;
-          const resolveLabel = (id: string) =>
-            visible.nodes.find((n) => n.id === id)?.label ?? id;
           onEdgeClick?.({
             ...e,
-            sourceLabel: resolveLabel(e.source),
-            targetLabel: resolveLabel(e.target),
+            sourceLabel: labelById.get(e.source) ?? e.source,
+            targetLabel: labelById.get(e.target) ?? e.target,
           });
         }}
         onPaneClick={onPaneClick}

@@ -14,6 +14,7 @@ import { formatBytesShort } from "~/utils/format";
 
 import {
   type DataflowStructure,
+  formatElapsedNs,
   lirIndex,
   lirTree,
   type LirTreeNode,
@@ -86,7 +87,7 @@ const LirSummaryCard = ({ node }: { node: LirTreeNode }) => (
         Elapsed
       </Text>
       <Text fontSize="2xs" textStyle="monospace">
-        {Math.round(Number(node.summary.elapsedNs) / 1e9)}s
+        {formatElapsedNs(node.summary.elapsedNs)}
       </Text>
     </HStack>
   </Box>

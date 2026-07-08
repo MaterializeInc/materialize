@@ -154,8 +154,22 @@ describe("buildDataflowStructure", () => {
     expect(s.nodes.get(nodeIdOf([5, 2]))!.lir).toEqual([]);
   });
 
-  it("throws without exactly one root", () => {
-    expect(() => buildDataflowStructure([], [], [])).toThrow();
+  it("throws with more than one root", () => {
+    const twoRoots: OperatorRow[] = [
+      { ...OPS[0], id: "10", address: ["5"] },
+      { ...OPS[0], id: "20", address: ["6"] },
+    ];
+    expect(() => buildDataflowStructure(twoRoots, [], [])).toThrow();
+  });
+
+  it("returns a single placeholder node for a dropped dataflow, instead of throwing on zero operators", () => {
+    // A dropped or transient dataflow returns zero operator rows: a valid
+    // empty result, not an error. nodes.size === 1 here is what routes it
+    // through the same "no longer exists" branch as any other empty
+    // dataflow, rather than crashing mid-fetch.
+    const s = buildDataflowStructure([], [], []);
+    expect(s.nodes.size).toBe(1);
+    expect(s.nodes.get(s.root)).toBeDefined();
   });
 
   it("normalizes channels", () => {

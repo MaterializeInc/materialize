@@ -29,6 +29,11 @@ export function useElkLayout(graph: VisibleGraph | null, cacheKey: string) {
     positions: Positions | null;
     error: string | null;
   }>({ key: null, positions: null, error: null });
+  // Bumped by retry() to force the layout effect to run again for the same
+  // (graph, cacheKey): a failed layout is never cached, so re-running it is
+  // enough to retry, but the effect's own dependencies wouldn't otherwise
+  // change.
+  const [retryNonce, setRetryNonce] = React.useState(0);
 
   React.useEffect(() => {
     const elk = new ELK({ workerFactory: () => new ElkWorker() });
@@ -61,11 +66,12 @@ export function useElkLayout(graph: VisibleGraph | null, cacheKey: string) {
         setState({ key: cacheKey, positions: null, error: String(error) });
       },
     );
-  }, [graph, cacheKey]);
+  }, [graph, cacheKey, retryNonce]);
 
   return {
     positions: state.key === cacheKey ? state.positions : null,
     layouting: graph !== null && state.key !== cacheKey,
     error: state.key === cacheKey ? state.error : null,
+    retry: () => setRetryNonce((n) => n + 1),
   };
 }
