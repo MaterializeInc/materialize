@@ -79,13 +79,21 @@ export interface DataflowGraphViewProps {
   // this id is retried across renders until its position shows up.
   centerOnId?: string | null;
   onCentered?: () => void;
+  // Fits the viewport around a whole set of nodes (e.g. every operator
+  // belonging to one LIR id), as opposed to centerRef's single-node zoom.
+  fitRef?: React.MutableRefObject<((ids: string[]) => void) | null>;
+  fitOnIds?: string[] | null;
+  onFit?: () => void;
 }
 
-// Exposes a centering callback through the ref once React Flow context exists.
+// Exposes centering/fitting callbacks through refs once React Flow context
+// exists.
 const CenterHelper = ({
   centerRef,
+  fitRef,
 }: {
   centerRef: React.MutableRefObject<((id: string) => void) | null>;
+  fitRef?: React.MutableRefObject<((ids: string[]) => void) | null>;
 }) => {
   const reactFlow = useReactFlow();
   React.useEffect(() => {
@@ -103,10 +111,22 @@ const CenterHelper = ({
         duration: 300,
       });
     };
+    if (fitRef) {
+      // eslint-disable-next-line react-compiler/react-compiler
+      fitRef.current = (ids: string[]) => {
+        void reactFlow.fitView({
+          nodes: ids.map((id) => ({ id })),
+          duration: 300,
+          padding: 0.3,
+          maxZoom: 1,
+        });
+      };
+    }
     return () => {
       centerRef.current = null;
+      if (fitRef) fitRef.current = null;
     };
-  }, [reactFlow, centerRef]);
+  }, [reactFlow, centerRef, fitRef]);
   return null;
 };
 
@@ -124,6 +144,9 @@ export const DataflowGraphView = ({
   centerRef,
   centerOnId,
   onCentered,
+  fitRef,
+  fitOnIds,
+  onFit,
 }: DataflowGraphViewProps) => {
   const toast = useToast();
   const visible = React.useMemo(() => {
@@ -165,6 +188,17 @@ export const DataflowGraphView = ({
     centerRef?.current?.(centerOnId);
     onCentered?.();
   }, [centerOnId, positions, centerRef, onCentered]);
+
+  React.useEffect(() => {
+    if (!fitOnIds || fitOnIds.length === 0) return;
+    // Fires as soon as any targets have a position rather than waiting for
+    // every one, so a partially-expanded set (e.g. one member still hidden
+    // behind a filter) doesn't block the fit indefinitely.
+    const present = fitOnIds.filter((id) => positions?.[id]);
+    if (present.length === 0) return;
+    fitRef?.current?.(present);
+    onFit?.();
+  }, [fitOnIds, positions, fitRef, onFit]);
 
   const toggleRegion = React.useCallback(
     (node: VisibleNode) => {
@@ -318,7 +352,7 @@ export const DataflowGraphView = ({
             (node.data as { color?: string }).color ?? "#ccc"
           }
         />
-        {centerRef && <CenterHelper centerRef={centerRef} />}
+        {centerRef && <CenterHelper centerRef={centerRef} fitRef={fitRef} />}
       </ReactFlow>
     </Box>
   );

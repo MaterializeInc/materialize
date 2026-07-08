@@ -102,10 +102,18 @@ const DataflowDetailPage = () => {
   const [matchIndex, setMatchIndex] = React.useState(0);
   const [lirHighlight, setLirHighlight] =
     React.useState<ReadonlySet<string> | null>(null);
-  const [pendingCenterId, setPendingCenterId] = React.useState<string | null>(
+  // Double-click pins a LIR id's dimming permanently (until toggled off
+  // again), independent of hover, and more than one can be pinned at once.
+  // Keeping memberIds alongside the key avoids re-deriving the LIR index here
+  // just to resolve a key back to its members.
+  const [pinnedLir, setPinnedLir] = React.useState<
+    ReadonlyMap<string, NodeId[]>
+  >(new Map());
+  const [pendingFitIds, setPendingFitIds] = React.useState<string[] | null>(
     null,
   );
   const centerRef = React.useRef<((id: string) => void) | null>(null);
+  const fitRef = React.useRef<((ids: string[]) => void) | null>(null);
 
   const onLirSelect = React.useCallback(
     (memberIds: NodeId[]) => {
@@ -114,27 +122,48 @@ const DataflowDetailPage = () => {
         (id) => data.structure.nodes.get(id)!.address,
       );
       setCollapsed((c) => (c ? expandAncestorsOf(c, addresses) : c));
-      // Centering happens once the expand above lands and the newly visible
-      // node has a real layout position (see DataflowGraphView's centerOnId).
-      setPendingCenterId(memberIds[0]);
+      // Fitting happens once the expand above lands and the newly visible
+      // members have real layout positions (see DataflowGraphView's
+      // fitOnIds).
+      setPendingFitIds(memberIds);
     },
     [data],
+  );
+
+  const onTogglePinLir = React.useCallback(
+    (key: string, memberIds: NodeId[]) => {
+      setPinnedLir((prev) => {
+        const next = new Map(prev);
+        if (next.has(key)) next.delete(key);
+        else next.set(key, memberIds);
+        return next;
+      });
+    },
+    [],
   );
 
   const decorations = React.useMemo(() => {
     if (!data || !collapsed) return undefined;
     const visible = deriveVisibleGraph(data.structure, collapsed);
     const d = decorateGraph(visible, filters, heatColor);
-    // A hovered LIR row dims every visible node outside its member set, so the
-    // members stand out. Members that are collapsed away simply have no visible
-    // node to keep lit.
-    if (lirHighlight) {
+    // Pinned LIR ids dim everything outside the union of their members;
+    // hovering a row (pinned or not) previews it the same way, on top of
+    // whatever is already pinned. Members collapsed away simply have no
+    // visible node to keep lit.
+    let highlighted: Set<string> | null = null;
+    if (lirHighlight || pinnedLir.size > 0) {
+      highlighted = new Set(lirHighlight ?? []);
+      for (const memberIds of pinnedLir.values()) {
+        for (const id of memberIds) highlighted.add(id);
+      }
+    }
+    if (highlighted) {
       for (const n of visible.nodes) {
-        if (!lirHighlight.has(n.id)) d.dimmedNodeIds.add(n.id);
+        if (!highlighted.has(n.id)) d.dimmedNodeIds.add(n.id);
       }
     }
     return d;
-  }, [data, collapsed, filters, lirHighlight]);
+  }, [data, collapsed, filters, lirHighlight, pinnedLir]);
 
   // New search: expand ancestors of matches once, reset the cursor.
   React.useEffect(() => {
@@ -288,8 +317,10 @@ const DataflowDetailPage = () => {
             <HStack flex="1" minH={0} alignItems="stretch" spacing={0}>
               <LirPanel
                 structure={data.structure}
+                pinnedKeys={new Set(pinnedLir.keys())}
                 onHighlight={setLirHighlight}
                 onSelect={onLirSelect}
+                onTogglePin={onTogglePinLir}
               />
               <DataflowGraphView
                 structure={data.structure}
@@ -298,8 +329,9 @@ const DataflowDetailPage = () => {
                 cacheKey={structureKey ?? ""}
                 decorations={decorations}
                 centerRef={centerRef}
-                centerOnId={pendingCenterId}
-                onCentered={() => setPendingCenterId(null)}
+                fitRef={fitRef}
+                fitOnIds={pendingFitIds}
+                onFit={() => setPendingFitIds(null)}
                 selectedId={
                   selection?.kind === "node"
                     ? selection.node.id
