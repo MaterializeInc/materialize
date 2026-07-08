@@ -166,7 +166,7 @@ def get_variable_system_parameters(
         # -----
         # Others (ordered by name),
         VariableSystemParameter(
-            "aws_sts_connect_timeout",
+            "aws_prefetch_sts_connect_timeout",
             "3100ms",
             ["3100ms", "30s", "60s"],
         ),

@@ -254,8 +254,8 @@ pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::ne
 ///
 /// Read once when a connection is set up. Running sinks are unaffected by
 /// changes until their dataflow restarts.
-pub const AWS_STS_CONNECT_TIMEOUT: Config<Duration> = Config::new(
-    "aws_sts_connect_timeout",
+pub const AWS_PREFETCH_STS_CONNECT_TIMEOUT: Config<Duration> = Config::new(
+    "aws_prefetch_sts_connect_timeout",
     Duration::from_millis(3100),
     "Connect timeout for the AWS AssumeRole credentials prefetcher's STS calls.",
 );
@@ -399,7 +399,7 @@ pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
-        .add(&AWS_STS_CONNECT_TIMEOUT)
+        .add(&AWS_PREFETCH_STS_CONNECT_TIMEOUT)
         .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
         .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)

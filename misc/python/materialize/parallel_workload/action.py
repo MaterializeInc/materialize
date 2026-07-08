@@ -1704,7 +1704,7 @@ class FlipFlagsAction(Action):
             "5242880",
             "10485760",
         ]
-        self.flags_with_values["aws_sts_connect_timeout"] = [
+        self.flags_with_values["aws_prefetch_sts_connect_timeout"] = [
             "'3100ms'",
             "'30s'",
             "'60s'",

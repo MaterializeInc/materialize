@@ -181,17 +181,17 @@ impl AwsAssumeRole {
         configs: &ConfigSet,
         diagnostic_label: String,
     ) -> Result<SharedCredentialsProvider, anyhow::Error> {
-        let mut sts_connect_timeout = dyncfgs::AWS_STS_CONNECT_TIMEOUT.get(configs);
+        let mut sts_connect_timeout = dyncfgs::AWS_PREFETCH_STS_CONNECT_TIMEOUT.get(configs);
         if sts_connect_timeout < Duration::from_secs(1) {
             // Treat sub-second values as misconfiguration and use the default instead.
             // A timeout of zero would fail every connect outright,
             // and this knob exists to raise the timeout, not to lower it.
-            let default = *dyncfgs::AWS_STS_CONNECT_TIMEOUT.default();
+            let default = *dyncfgs::AWS_PREFETCH_STS_CONNECT_TIMEOUT.default();
             warn!(
                 %diagnostic_label,
                 configured = ?sts_connect_timeout,
                 ?default,
-                "ignoring aws_sts_connect_timeout below 1s"
+                "ignoring aws_prefetch_sts_connect_timeout below 1s"
             );
             sts_connect_timeout = default;
         }
