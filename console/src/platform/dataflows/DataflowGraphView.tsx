@@ -387,9 +387,12 @@ export const DataflowGraphView = ({
           // this naturally never matches while an edge itself is selected,
           // with no need to separately track which kind selectedId is.
           connected: e.source === selectedId || e.target === selectedId,
+          sourceLandings: e.sourceLandings,
+          targetLandings: e.targetLandings,
+          onJumpTo: onJumpToPeer,
         },
       })),
-    [visible, decorations?.dimmedNodeIds, selectedId],
+    [visible, decorations?.dimmedNodeIds, selectedId, onJumpToPeer],
   );
 
   // Built once per visible-graph change instead of a .find() per connected
