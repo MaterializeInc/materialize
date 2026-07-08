@@ -407,7 +407,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.testdrive.run(
         input=dedent("""
-            ! ALTER CLUSTER cluster_with_source set (replication factor 2000) WITH (WAIT UNTIL READY (TIMEOUT='10s', ON TIMEOUT ROLLBACK))
+            ! ALTER CLUSTER cluster_with_source set (replication factor 2000)
             contains: creating cluster replica would violate max_replicas_per_cluster limit
             """),
         no_reset=True,

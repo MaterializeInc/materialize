@@ -177,6 +177,56 @@ scale=1,workers=1
 
 > DROP CLUSTER cc_altback
 
+# ----- Non-shape changes while a reconfiguration is in flight -----
+#
+# The WAIT-without-shape rejection is planner-level and covered in
+# managed_cluster.slt. Asserted here: the replication factor is refused while
+# a reconfiguration is in flight (it is one of the four dimensions the
+# cut-over sets atomically from the record's target), and a WORKLOAD CLASS
+# change applies immediately without disturbing the reconfiguration.
+#
+# The refused ALTER is issued immediately after the SIZE change, so the
+# reconfiguration is still in flight when it lands. If the reconfiguration
+# somehow cut over first, the ALTER would succeed and this fails loudly
+# rather than hangs.
+> CREATE CLUSTER cc_nonshape (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> ALTER CLUSTER cc_nonshape SET (SIZE 'scale=1,workers=2')
+
+! ALTER CLUSTER cc_nonshape SET (REPLICATION FACTOR 2)
+contains:cannot change replication factor while a reconfiguration is in progress
+
+# WORKLOAD CLASS (system-role-only) applies immediately, whether or not the
+# reconfiguration is still in flight.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER CLUSTER cc_nonshape SET (WORKLOAD CLASS 'test')
+
+> SELECT workload_class FROM mz_internal.mz_cluster_workload_classes WHERE id = (SELECT id FROM mz_clusters WHERE name = 'cc_nonshape')
+test
+
+# The reconfiguration converges normally: the WORKLOAD CLASS change did not
+# disturb the record, and its lifecycle is exactly `started`, `finalized`.
+> SELECT size FROM mz_clusters WHERE name = 'cc_nonshape'
+scale=1,workers=2
+
+> SELECT row_number() OVER (ORDER BY id), details->>'transition' FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_nonshape' AND details->>'transition' IS NOT NULL
+1 started
+2 finalized
+
+# A shape option set to its already-realized value with nothing in flight
+# reconfigures nothing: the non-shape change applies directly, no record is
+# written, and no lifecycle transition is recorded.
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER CLUSTER cc_nonshape SET (SIZE 'scale=1,workers=2', WORKLOAD CLASS 'test2')
+
+> SELECT workload_class FROM mz_internal.mz_cluster_workload_classes WHERE id = (SELECT id FROM mz_clusters WHERE name = 'cc_nonshape')
+test2
+
+> SELECT count(*) FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_nonshape' AND details->>'transition' IS NOT NULL
+2
+
+> DROP CLUSTER cc_nonshape
+
 # ----- Per-ALTER timeout / ON TIMEOUT -----
 #
 # The deadline and the on-timeout action come from the WITH (WAIT ...) surface and

@@ -287,13 +287,6 @@ impl Coordinator {
             Unchanged => {}
         }
 
-        // A no-op `ALTER` short-circuits, but only when no reconfiguration is in
-        // flight. When the controller owns an in-flight reconfiguration, an `ALTER`
-        // that leaves the realized config unchanged is not a no-op: it re-targets
-        // (folds onto) the in-flight record. This is how an `ALTER` back to the
-        // realized shape cancels an in-flight reconfiguration, so it must reach the
-        // reshape path below rather than early-returning here. (`config` carries the
-        // in-flight record, so `new_config == config` holds for such an `ALTER`.)
         // The controller owns only *user* managed clusters (see `ManagedClusterIds`
         // in cluster_controller.rs and `controller_owns` in the managed-to-managed
         // path below). A system/builtin cluster is never converged by the
@@ -310,22 +303,53 @@ impl Coordinator {
                 .as_ref()
                 .is_some_and(|record| record.is_in_progress())
         );
-        if new_config == config && !(cluster_controller_owns && reconfiguration_in_flight) {
+
+        // Replication factor is one of the four dimensions the cut-over sets
+        // atomically from the record's target (`fold_reconfiguration_target`),
+        // so a change applied independently while a reconfiguration is in
+        // flight would be silently clobbered at cut-over. Refused even when the
+        // same statement also re-targets the shape, so a record's target
+        // replication factor is always the one it started with.
+        if cluster_controller_owns
+            && reconfiguration_in_flight
+            && !matches!(options.replication_factor, Unchanged)
+        {
+            return Err(AdapterError::AlterClusterReplicationFactorWhileReconfiguring);
+        }
+
+        // A no-op `ALTER` short-circuits, except that an `ALTER` back to the
+        // realized shape while a reconfiguration is in flight produces a
+        // byte-identical `new_config` and is still meaningful: it must reach
+        // the reshape path below to cancel the record.
+        let cancels_or_retargets =
+            reconfiguration_in_flight && alter_changes_replica_shape(options);
+        if new_config == config && !(cluster_controller_owns && cancels_or_retargets) {
             return Ok(StageResult::Response(ExecuteResponse::AlteredObject(
                 ObjectType::Cluster,
             )));
         }
 
-        // When the cluster controller owns the replica set, a config-shape change
-        // (or any change while a reconfiguration is already in flight) is reshaped
-        // into a durable `reconfiguration` record rather than driven by the legacy
-        // 3-stage machine. The controller converges on the record. Non-shape changes with
-        // no record in flight fall through to the realized-config update below.
+        // When the controller owns the replica set, a shape-changing `ALTER`
+        // reshapes into a durable `reconfiguration` record (starting,
+        // retargeting, or cancelling one) instead of going through the legacy
+        // 3-stage machine. Everything else falls through to the realized-config
+        // update below without touching the record, in flight or not.
+        //
+        // With a record in flight the statement decides: an `ALTER` back to the
+        // realized shape is value-identical yet must reach the reshape path to
+        // cancel. With nothing in flight the values decide: a shape option set
+        // to its current value reconfigures nothing, and reshaping it anyway
+        // would write a spurious pre-cancelled record.
         if cluster_controller_owns {
             if let (Managed(old_managed), Managed(new_managed)) =
                 (&config.variant, &new_config.variant)
             {
-                if self.reconfiguration_needs_record(old_managed, new_managed) {
+                let needs_record = if reconfiguration_in_flight {
+                    alter_changes_replica_shape(options)
+                } else {
+                    new_managed.replica_config_shape() != old_managed.replica_config_shape()
+                };
+                if needs_record {
                     return self
                         .reshape_alter_cluster_managed(
                             session,
@@ -431,34 +455,6 @@ impl Coordinator {
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
         )))
-    }
-
-    /// Whether a managed→managed `ALTER` must be reshaped into a durable
-    /// `reconfiguration` record (controller-driven) rather than applied to the
-    /// realized config directly.
-    ///
-    /// True when the change touches a replica's **config shape** (`SIZE`, logging,
-    /// or `AVAILABILITY ZONES`), which needs a hydrate-overlap, or when a
-    /// reconfiguration is already in flight, in which case every further `ALTER`
-    /// folds into the existing record (re-targets it and refreshes its deadline)
-    /// rather than racing a direct config write against the in-flight transition.
-    ///
-    /// The fold is an **overlay on the in-flight target, not the realized config**:
-    /// a dimension the `ALTER` set replaces the record's target for that dimension,
-    /// a dimension left unset keeps the in-flight target's value (see
-    /// [`Coordinator::reshape_alter_cluster_managed`]). This is why a record in
-    /// flight forces the record path even for a change that, against the realized
-    /// config alone, would look like a no-shape (e.g. rf-only) update: applying it
-    /// to the realized config would discard the in-flight target.
-    fn reconfiguration_needs_record(
-        &self,
-        old: &ClusterVariantManaged,
-        new: &ClusterVariantManaged,
-    ) -> bool {
-        old.reconfiguration
-            .as_ref()
-            .is_some_and(|record| record.is_in_progress())
-            || new.replica_config_shape() != old.replica_config_shape()
     }
 
     /// Validates that a reconfiguration to `target` fits the resource budget.
@@ -2018,13 +2014,24 @@ impl Coordinator {
         }
 
         // If finalization is needed, finalization should update the cluster
-        // config. A stale in-progress reconfiguration record carried by this
-        // legacy write is retained as cancelled, with the matching audit
-        // intent declared.
+        // config. Otherwise the config write happens here. With the controller
+        // owning the cluster, a record still in progress belongs to a live,
+        // converging reconfiguration this write didn't touch: carry it through
+        // untouched. Without (gate off, or a system cluster), such a record is
+        // orphaned, so retain it as cancelled with the matching audit intent
+        // rather than risk a bogus revival if the gate comes back on.
+        //
+        // NOTE: `handle_scheduling_decisions` also calls this function and
+        // bypasses the sequencer's replication-factor guard. It defers its
+        // flips itself while a reconfiguration is in progress.
         match finalization_needed {
             NeedsFinalization::No => {
                 let mut new_config = new_config;
-                let reconfiguration_audit = cancel_carried_reconfiguration(&mut new_config);
+                let reconfiguration_audit = if controller_owns {
+                    None
+                } else {
+                    cancel_carried_reconfiguration(&mut new_config)
+                };
                 ops.push(catalog::Op::UpdateClusterConfig {
                     id: cluster_id,
                     name: name.clone(),
@@ -2387,6 +2394,34 @@ fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<Reconfig
     Some(ReconfigurationAudit::Cancelled)
 }
 
+/// Whether an `ALTER` statement sets a replica config shape dimension (`SIZE`,
+/// `AVAILABILITY ZONES`, or either `INTROSPECTION` option), the changes that
+/// need a durable `reconfiguration` record and a hydrate-overlap.
+///
+/// A statement-level check, used while a reconfiguration is in flight: an
+/// `ALTER` back to the realized shape sets a shape option without changing its
+/// value, yet must reach the reshape path to cancel the record. With nothing
+/// in flight the routing compares values instead (see
+/// `sequence_alter_cluster_stage`).
+fn alter_changes_replica_shape(options: &PlanClusterOption) -> bool {
+    use mz_sql::plan::AlterOptionParameter::Unchanged;
+    let PlanClusterOption {
+        availability_zones,
+        introspection_debugging,
+        introspection_interval,
+        managed: _,
+        replicas: _,
+        replication_factor: _,
+        size,
+        schedule: _,
+        workload_class: _,
+    } = options;
+    !matches!(size, Unchanged)
+        || !matches!(availability_zones, Unchanged)
+        || !matches!(introspection_debugging, Unchanged)
+        || !matches!(introspection_interval, Unchanged)
+}
+
 /// Fold a new `ALTER` onto an in-flight reconfiguration target.
 ///
 /// `new_target` was built against the *realized* config, so any dimension the
@@ -2396,8 +2431,14 @@ fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<Reconfig
 /// keep the in-flight target's value. Only dimensions the `ALTER` explicitly set
 /// re-target. With nothing in flight (`in_flight` is `None`) the target is exactly
 /// `new_target`. This is what keeps an `ALTER` that touches one dimension (e.g.
-/// rf-only) from silently reverting the in-flight transition along every dimension
+/// AZ-only) from silently reverting the in-flight transition along every dimension
 /// it did not mention.
+///
+/// Replication factor folds the same way, but only matters for the
+/// nothing-in-flight case: a change to it while a reconfiguration is in
+/// flight is refused before an `ALTER` reaches here, so
+/// `unchanged.replication_factor` is always `true` when `in_flight` is
+/// `Some`.
 fn fold_reconfiguration_target(
     in_flight: Option<&ReconfigurationTarget>,
     new_target: ReconfigurationTarget,
@@ -2525,9 +2566,10 @@ mod tests {
 
     #[mz_ore::test]
     fn fold_all_unchanged_is_alter_back_to_in_flight() {
-        // An ALTER that sets nothing while a record is in flight (e.g. only
-        // workload_class, handled elsewhere) folds to the in-flight target
-        // unchanged, a no-op re-target, not a revert to realized.
+        // An all-unchanged fold keeps the in-flight target intact rather than
+        // reverting it to the realized shape. Unreachable from the `ALTER`
+        // path (non-shape statements no longer reach the fold), pinned as a
+        // property of the pure function.
         let in_flight = target("200cc", 2, &["az2"], true);
         let realized_shaped = target("100cc", 1, &["az1"], false);
         let folded =

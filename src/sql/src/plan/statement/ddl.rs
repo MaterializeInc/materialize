@@ -6215,6 +6215,21 @@ pub fn plan_alter_cluster(
                         ClusterAlterOptionExtracted::try_from(with_options)?;
                     alter_strategy = AlterClusterPlanStrategy::try_from(alter_strategy_extracted)?;
 
+                    // Only a replica config shape change has a hydrate-overlap
+                    // to wait on. Reject a `WAIT` on anything else rather than
+                    // accept a wait that silently has nothing to do.
+                    if !matches!(alter_strategy, AlterClusterPlanStrategy::None)
+                        && size.is_none()
+                        && availability_zones.is_none()
+                        && introspection_debugging.is_none()
+                        && introspection_interval.is_none()
+                    {
+                        sql_bail!(
+                            "WAIT can only be used together with a SIZE, AVAILABILITY ZONES, \
+                            or INTROSPECTION change"
+                        );
+                    }
+
                     match alter_strategy {
                         AlterClusterPlanStrategy::None => {}
                         _ => {
