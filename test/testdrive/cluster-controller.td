@@ -152,26 +152,28 @@ true
 
 > DROP CLUSTER cc_logging
 
-# ----- ALTER-back cancels an in-flight reconfiguration -----
+# ----- ALTER-back settles at the original shape -----
 #
-# An ALTER back to the realized shape while a reconfiguration is in flight folds
-# a target equal to the realized config onto the record and retains it as
-# cancelled instead of cutting over to the abandoned target. The ALTERs are
-# issued back to back so the first target cannot hydrate before the re-target
-# lands.
+# An ALTER to a new size immediately followed by an ALTER back to the original
+# one settles at the original size with a single replica. Whether the second
+# ALTER cancels the in-flight reconfiguration (the common case) or the first
+# has already cut over and the second reshapes back is a matter of timing, so
+# only the convergent outcome is asserted here. The cancel semantics themselves
+# (immediate terminal cancel, no churn) are pinned deterministically in the
+# controller's kernel unit tests.
 > CREATE CLUSTER cc_altback (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
 
 > ALTER CLUSTER cc_altback SET (SIZE 'scale=1,workers=2')
 > ALTER CLUSTER cc_altback SET (SIZE 'scale=1,workers=1')
 
-# The realized size remains workers=1. The reconfiguration was cancelled instead
-# of cut over to workers=2.
 > SELECT size FROM mz_clusters WHERE name = 'cc_altback'
 scale=1,workers=1
 
-# No churn: the cluster keeps its original single replica at the realized size.
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_altback'
-cc_altback r1 scale=1,workers=1
+# A single replica at the realized size. Its name is timing-dependent (a
+# cancel keeps the original replica, a cut-over-and-back advances to a fresh
+# name), so no name is asserted.
+> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_altback'
+scale=1,workers=1
 
 > DROP CLUSTER cc_altback
 
