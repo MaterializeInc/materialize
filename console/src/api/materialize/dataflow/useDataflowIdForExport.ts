@@ -40,12 +40,12 @@ export function useDataflowIdForExport(params?: DataflowIdForExportParams) {
     };
   }, [exportId]);
 
-  const { results, error, loading } = useSqlManyTyped(queries, {
+  const { results, error, databaseError, loading } = useSqlManyTyped(queries, {
     cluster: params?.clusterName,
     replica: params?.replicaName,
   });
 
   const dataflowId =
     !error && results ? (results.row?.[0]?.dataflowId ?? null) : null;
-  return { dataflowId, loading, error };
+  return { dataflowId, loading, error, databaseError };
 }

@@ -22,14 +22,13 @@ import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 
 import { useDataflowIdForExport } from "~/api/materialize/dataflow/useDataflowIdForExport";
 import { useDataflowList } from "~/api/materialize/dataflow/useDataflowList";
-import { ErrorCode } from "~/api/materialize/types";
+import { isInsufficientPrivilegeError } from "~/api/materialize/executeSql";
 import ErrorBox from "~/components/ErrorBox";
 import LabeledSelect from "~/components/LabeledSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { useAllClusters } from "~/store/allClusters";
-import { formatBytesShort } from "~/utils/format";
+import { formatBytesShort, formatElapsedNs } from "~/utils/format";
 
-import { formatElapsedNs } from "./dataflowGraph";
 import { UsagePrivilegeAlert } from "./UsagePrivilegeAlert";
 
 const DataflowsPage = () => {
@@ -63,6 +62,7 @@ const DataflowsPage = () => {
     dataflowId,
     loading: exportLoading,
     error: exportError,
+    databaseError: exportDatabaseError,
   } = useDataflowIdForExport(exportParams);
 
   if (!cluster) return null;
@@ -74,9 +74,8 @@ const DataflowsPage = () => {
     }
   }
   const permissionError =
-    databaseError &&
-    "code" in databaseError &&
-    databaseError.code === ErrorCode.INSUFFICIENT_PRIVILEGE;
+    isInsufficientPrivilegeError(databaseError) ||
+    isInsufficientPrivilegeError(exportDatabaseError);
 
   // The export resolved cleanly but no dataflow is running for it on this
   // replica. Surface that above the list, which still renders below.
