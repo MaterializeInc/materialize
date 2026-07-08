@@ -55,6 +55,8 @@ describe("nodeFillColor", () => {
     label: "Reduce",
     stats: null,
     transitive: null,
+    own: null,
+    ownSkew: null,
     transitiveSkew: null,
     overheadNs: null,
     childCount: 0,
