@@ -24,13 +24,13 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task::JoinHandle;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::Params;
 use mz_sql::plan::{
-    self, Explainee, ExplaineeStatement, Plan, QueryWhen, SelectPlan, SubscribePlan,
+    self, Explainee, ExplaineeStatement, Plan, QueryWhen, SelectPlan, SideEffectingFunc,
+    SubscribePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -400,17 +400,56 @@ impl PeekClient {
                 }
             }
             Plan::SideEffectingFunc(sef_plan) => {
-                // Side-effecting functions need Coordinator state (e.g., active_conns),
-                // so delegate to the Coordinator via a Command.
-                // The RBAC check is performed in the Coordinator where active_conns is available.
+                // Look up the target connection's authenticated role, so that
+                // check_plan can perform RBAC for side-effecting functions.
+                //
+                // The RBAC check reflects the state at this point in time. A
+                // concurrent change to the issuer's role membership does not
+                // affect the already in-flight execution, similarly to how
+                // privilege changes don't affect other kinds of in-flight
+                // statements.
+                let target_conn = match sef_plan {
+                    SideEffectingFunc::PgCancelBackend {
+                        connection_id: Some(connection_id),
+                    } => {
+                        self.call_coordinator(|tx| Command::LookupConnection {
+                            connection_id: *connection_id,
+                            tx,
+                        })
+                        .await
+                    }
+                    SideEffectingFunc::PgCancelBackend {
+                        connection_id: None,
+                    } => None,
+                };
+                let target_conn_role = target_conn.as_ref().map(|(_, role)| *role);
+
+                rbac::check_plan(
+                    &conn_catalog,
+                    target_conn_role,
+                    session,
+                    &plan,
+                    None,
+                    &resolved_ids,
+                    &sql_impl_ids,
+                )?;
+
+                // RBAC passed. Delegate execution to the Coordinator.
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteSideEffectingFunc {
                         plan: sef_plan.clone(),
                         conn_id: session.conn_id().clone(),
-                        current_role: session.role_metadata().current_role,
                         tx,
                     })
                     .await?;
+
+                // We held the target's `ConnectionId` handle from the RBAC
+                // check until the Coordinator executed the function, which
+                // prevented the raw connection ID from being reused by a new
+                // connection. So the connection the Coordinator acted on (if
+                // it found one) is the one whose role we checked above.
+                drop(target_conn);
+
                 return Ok(Some(response));
             }
             Plan::Subscribe(subscribe) => (QueryPlan::Subscribe(subscribe), ExplainContext::None),
@@ -479,9 +518,9 @@ impl PeekClient {
 
         rbac::check_plan(
             &conn_catalog,
-            // We can't look at `active_conns` here, but that's ok, because this case was handled
-            // above already inside `Command::ExecuteSideEffectingFunc`.
-            None::<fn(u32) -> Option<RoleId>>,
+            // SideEffectingFunc is handled above (with its own check_plan call) and returns
+            // early, so no target connection role is needed for the remaining plan types here.
+            None,
             session,
             &plan,
             Some(target_cluster_id),

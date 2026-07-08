@@ -404,12 +404,10 @@ pub fn check_usage(
 /// only checked by the `restrict_to_user_objects` restriction.
 pub fn check_plan(
     catalog: &impl SessionCatalog,
-    // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
-    // Only required for Plan::SideEffectingFunc; can be None for other plan types.
-    // TODO(peek-seq): Remove this when deleting the old peek sequencing. The logic here that uses
-    // `active_conns` is mirrored in `execute_side_effecting_func`, which is what the frontend peek
-    // sequencing uses.
-    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
+    // The authenticated role of the connection targeted by the plan, if the plan is a
+    // Plan::SideEffectingFunc that targets an existing connection. The role may have been
+    // dropped concurrently. Ignored for other plan types.
+    target_conn_role: Option<RoleId>,
     session: &dyn SessionMetadata,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
@@ -426,7 +424,7 @@ pub fn check_plan(
     let rbac_requirements = generate_rbac_requirements(
         catalog,
         plan,
-        active_conns,
+        target_conn_role,
         target_cluster_id,
         session.role_metadata().current_role,
     );
@@ -455,7 +453,7 @@ pub fn is_rbac_enabled_for_session(
 fn generate_rbac_requirements(
     catalog: &impl SessionCatalog,
     plan: &Plan,
-    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
+    target_conn_role: Option<RoleId>,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> RbacRequirements {
@@ -843,7 +841,7 @@ fn generate_rbac_requirements(
             for privilege in generate_rbac_requirements(
                 catalog,
                 &Plan::Select(select_plan.clone()),
-                active_conns,
+                target_conn_role,
                 target_cluster_id,
                 role_id,
             )
@@ -1567,12 +1565,8 @@ fn generate_rbac_requirements(
                     connection_id: None,
                 } => BTreeSet::new(),
                 SideEffectingFunc::PgCancelBackend {
-                    connection_id: Some(connection_id),
-                } => active_conns.expect("active_conns is required for Plan::SideEffectingFunc")(
-                    *connection_id,
-                )
-                .map(|x| [x].into())
-                .unwrap_or_default(),
+                    connection_id: Some(_),
+                } => target_conn_role.map(|x| [x].into()).unwrap_or_default(),
             };
             RbacRequirements {
                 role_membership,
