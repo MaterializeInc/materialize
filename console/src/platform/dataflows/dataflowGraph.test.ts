@@ -124,6 +124,7 @@ describe("buildDataflowStructure", () => {
     const region = s.nodes.get(nodeIdOf([5, 1]))!;
     expect(region.parent).toEqual(s.root);
     expect(region.children).toEqual([nodeIdOf([5, 1, 1]), nodeIdOf([5, 1, 2])]);
+    expect(region.operatorId).toEqual(11n);
   });
 
   it("precomputes transitive stats", () => {
@@ -199,10 +200,13 @@ describe("deriveVisibleGraph", () => {
     expect(port.id).toEqual(`${regionId}:in:0`);
     expect(port.parent).toEqual(regionId);
     expect(port.label).toEqual("input 0");
+    expect(port.operatorId).toBeNull();
     // port -> Join edge preserved
     expect(g.edges.map((e) => e.id)).toContain(
       `${regionId}:in:0=>${nodeIdOf([5, 1, 1])}`,
     );
+    const regionNode = g.nodes.find((n) => n.id === regionId)!;
+    expect(regionNode.operatorId).toEqual(11n);
   });
 
   it("aggregates parallel channels between the same visible pair", () => {
@@ -445,6 +449,7 @@ describe("rerouteHiddenNodes", () => {
     childCount: 0,
     lir: [],
     address: null,
+    operatorId: null,
   });
   const edge = (
     id: string,

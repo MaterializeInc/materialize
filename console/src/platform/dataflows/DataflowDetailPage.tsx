@@ -19,14 +19,22 @@ import {
 } from "@chakra-ui/react";
 import { interpolateYlOrRd } from "d3-scale-chromatic";
 import React from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 
 import { useDataflowGraphData } from "~/api/materialize/dataflow/useDataflowGraphData";
+import { useDataflowList } from "~/api/materialize/dataflow/useDataflowList";
 import { ErrorCode } from "~/api/materialize/types";
 import ErrorBox from "~/components/ErrorBox";
 import LabeledSelect from "~/components/LabeledSelect";
 import { MainContentContainer } from "~/layouts/BaseLayout";
+import { absoluteClusterPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
+import { useRegionSlug } from "~/store/environments";
 
 import {
   allChannelTypes,
@@ -37,12 +45,11 @@ import {
   deriveVisibleGraph,
   expandForSearch,
   type Filters,
-  type VisibleNode,
 } from "./dataflowGraph";
 import { DataflowGraphView } from "./DataflowGraphView";
 import { DataflowToolbar } from "./DataflowToolbar";
 import { LirPanel } from "./LirPanel";
-import { NodeDetailPanel } from "./NodeDetailPanel";
+import { NodeDetailPanel, type Selection } from "./NodeDetailPanel";
 
 // Injected into decorateGraph so the pure graph module stays d3-free.
 const heatColor = (t: number) => interpolateYlOrRd(0.15 + 0.85 * t);
@@ -59,6 +66,8 @@ function hashString(s: string): number {
 
 const DataflowDetailPage = () => {
   const { clusterId, dataflowId } = useParams();
+  const navigate = useNavigate();
+  const regionSlug = useRegionSlug();
   const { getClusterById } = useAllClusters();
   const cluster = clusterId ? getClusterById(clusterId) : undefined;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -74,10 +83,19 @@ const DataflowDetailPage = () => {
   const { data, error, databaseError, loading, refetch } =
     useDataflowGraphData(params);
 
-  const [collapsed, setCollapsed] = React.useState<CollapseState | null>(null);
-  const [selectedNode, setSelectedNode] = React.useState<VisibleNode | null>(
-    null,
+  // Lets the toolbar switch dataflows in place instead of forcing a trip
+  // back to the list page.
+  const listParams = React.useMemo(
+    () =>
+      cluster && replicaName
+        ? { clusterName: cluster.name, replicaName }
+        : undefined,
+    [cluster, replicaName],
   );
+  const { data: dataflowList } = useDataflowList(listParams);
+
+  const [collapsed, setCollapsed] = React.useState<CollapseState | null>(null);
+  const [selection, setSelection] = React.useState<Selection | null>(null);
   const [filters, setFilters] = React.useState<Filters>(DEFAULT_FILTERS);
   const [matchIndex, setMatchIndex] = React.useState(0);
   const [lirHighlight, setLirHighlight] =
@@ -148,18 +166,43 @@ const DataflowDetailPage = () => {
   return (
     <MainContentContainer width="100%">
       <VStack width="100%" height="100%" alignItems="stretch">
-        <LabeledSelect
-          label="Replica"
-          value={replicaName ?? ""}
-          onChange={(e) => setSearchParams({ replica: e.target.value })}
-          flexShrink={0}
-        >
-          {cluster.replicas.map((r) => (
-            <option key={r.name} value={r.name}>
-              {r.name}
-            </option>
-          ))}
-        </LabeledSelect>
+        <HStack flexShrink={0} alignItems="flex-end">
+          <LabeledSelect
+            label="Replica"
+            value={replicaName ?? ""}
+            onChange={(e) => setSearchParams({ replica: e.target.value })}
+            flexShrink={0}
+          >
+            {cluster.replicas.map((r) => (
+              <option key={r.name} value={r.name}>
+                {r.name}
+              </option>
+            ))}
+          </LabeledSelect>
+          <LabeledSelect
+            label="Dataflow"
+            value={dataflowId ?? ""}
+            onChange={(e) =>
+              navigate(
+                `${absoluteClusterPath(regionSlug, cluster)}/dataflows/${e.target.value}?replica=${replicaName}`,
+              )
+            }
+            flexShrink={0}
+            width="320px"
+          >
+            {dataflowId && !dataflowList?.some((d) => d.id === dataflowId) && (
+              // The list query hasn't resolved yet (or this dataflow just
+              // disappeared from it); keep the select populated with
+              // something so it isn't blank while data is in flight.
+              <option value={dataflowId}>Loading…</option>
+            )}
+            {(dataflowList ?? []).map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </LabeledSelect>
+        </HStack>
         {data && (
           <HStack flexShrink={0}>
             <Button size="sm" onClick={refetch} isDisabled={loading}>
@@ -235,13 +278,29 @@ const DataflowDetailPage = () => {
                 cacheKey={structureKey ?? ""}
                 decorations={decorations}
                 centerRef={centerRef}
-                onNodeClick={setSelectedNode}
-                onPaneClick={() => setSelectedNode(null)}
+                selectedId={
+                  selection?.kind === "node"
+                    ? selection.node.id
+                    : selection?.kind === "edge"
+                      ? selection.edge.id
+                      : undefined
+                }
+                activeMatchId={decorations?.searchMatches[matchIndex]}
+                onNodeClick={(node, connectedEdges) =>
+                  setSelection({
+                    kind: "node",
+                    node,
+                    connectedEdges:
+                      node.kind === "port" ? connectedEdges : undefined,
+                  })
+                }
+                onEdgeClick={(edge) => setSelection({ kind: "edge", edge })}
+                onPaneClick={() => setSelection(null)}
               />
-              {selectedNode && (
+              {selection && (
                 <NodeDetailPanel
-                  node={selectedNode}
-                  onClose={() => setSelectedNode(null)}
+                  selection={selection}
+                  onClose={() => setSelection(null)}
                 />
               )}
             </HStack>

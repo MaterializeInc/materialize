@@ -105,6 +105,20 @@ const operatorsResult = {
     ["11", ["7", "1"], "Map", "0", "0", "1"],
   ],
 };
+// The page also renders a dataflow switcher (useDataflowList), a separate
+// request from the graph data's three queries above.
+const dataflowListResult = {
+  desc: {
+    columns: [
+      { name: "id" },
+      { name: "name" },
+      { name: "records" },
+      { name: "size" },
+      { name: "elapsedNs" },
+    ],
+  },
+  rows: [["7", "Dataflow: mv", "0", "0", "0"]],
+};
 
 beforeEach(() => {
   const store = getStore();
@@ -125,6 +139,12 @@ beforeEach(() => {
             },
           ],
         });
+      }
+      const body = await request.text();
+      // useDataflowList's query targets mz_dataflows directly; none of
+      // useDataflowGraphData's three queries reference that exact table name.
+      if (body.includes("mz_dataflows")) {
+        return HttpResponse.json({ results: [dataflowListResult] });
       }
       return HttpResponse.json({
         results: [operatorsResult, okResult, okResult],
