@@ -2131,6 +2131,124 @@ CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
             """)
 
 
+class MySqlInitialLoadMultiWorkerSampled(MySqlCdc):
+    """Measure an 8-worker parallel snapshot of a table whose primary key takes
+    the sampled-boundary split path: a single-column non-integer (char) PK or a
+    composite PK.
+
+    A single-column integer PK is partitioned by a cheap MIN/MAX split. Any
+    other supported PK samples range boundaries from the primary-key index, so
+    its rows also split into disjoint ranges, one per worker. Each worker then
+    reads, decodes, and persists its own range in parallel, so the snapshot of
+    these tables scales with worker count instead of running on a single worker.
+    Compared against the single-worker MySqlInitialLoad this shows the speedup.
+
+    Has subclasses, so the runner treats it as non-leaf and never executes it
+    directly. Pick MySqlInitialLoadMultiWorkerCharPk or
+    MySqlInitialLoadMultiWorkerCompositePk via --root-scenario.
+    """
+
+    # 8 workers naturally use more memory than 1 (more concurrent data in-flight)
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.10,
+        MeasurementType.MEMORY_MZ: 0.60,
+        MeasurementType.MEMORY_CLUSTERD: 0.60,
+    }
+
+    def create_table(self) -> str:
+        """The `CREATE TABLE pk_table (...)` statement whose PK is under test."""
+        raise NotImplementedError
+
+    def row_values(self) -> str:
+        """SELECT list producing one `pk_table` row from the sequence variable
+        `@i`, which must be advanced exactly once via `@i := @i + 1`."""
+        raise NotImplementedError
+
+    def shared(self) -> Action:
+        # Batch the load so scales beyond a single cross-join (mysql.time_zone^2
+        # ≈ 3M rows) still work. @i resumes from the current row count, which is
+        # PK-type agnostic (unlike a MAX(pk) that assumes an integer key).
+        batch = 1_000_000
+        inserts = []
+        remaining = self.n()
+        while remaining > 0:
+            chunk = min(remaining, batch)
+            inserts.append(
+                "SET @i := (SELECT COUNT(*) FROM pk_table);\n"
+                f"INSERT INTO pk_table SELECT {self.row_values()} "
+                f"FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {chunk};"
+            )
+            remaining -= chunk
+        insert_stmts = "\n".join(inserts)
+        return TdAction(f"""
+$ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+$ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
+
+{self.create_table()}
+{insert_stmts}
+""")
+
+    def before(self) -> Action:
+        return TdAction("""
+> DROP SOURCE IF EXISTS mz_source_mysqlcdc CASCADE;
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
+            """)
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(f"""
+> CREATE SECRET IF NOT EXISTS mysqlpass AS '${{arg.mysql-root-password}}'
+> CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (
+    HOST mysql,
+    USER root,
+    PASSWORD SECRET mysqlpass
+  )
+
+> CREATE CLUSTER source_cluster SIZE 'scale=1,workers=8', REPLICATION FACTOR 1;
+
+> CREATE SOURCE mz_source_mysqlcdc
+  IN CLUSTER source_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_table FROM SOURCE mz_source_mysqlcdc (REFERENCE public.pk_table);
+  /* A */
+
+> SELECT count(*) FROM pk_table
+  /* B */
+{self.n()}
+            """)
+
+
+class MySqlInitialLoadMultiWorkerCharPk(MySqlInitialLoadMultiWorkerSampled):
+    """Single-column non-integer (CHAR) PK with ULID-like keys."""
+
+    def create_table(self) -> str:
+        return "CREATE TABLE pk_table (pk CHAR(26) PRIMARY KEY, f2 BIGINT);"
+
+    def row_values(self) -> str:
+        # base-36 of the sequence, left-padded to a fixed width so the keys sort
+        # lexicographically in the same order the boundaries are sampled.
+        return "LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i"
+
+
+class MySqlInitialLoadMultiWorkerCompositePk(MySqlInitialLoadMultiWorkerSampled):
+    """Composite (CHAR, BIGINT) PK, split via row-value range boundaries."""
+
+    def create_table(self) -> str:
+        return (
+            "CREATE TABLE pk_table "
+            "(region CHAR(2) NOT NULL, id BIGINT NOT NULL, f2 BIGINT, "
+            "PRIMARY KEY (region, id));"
+        )
+
+    def row_values(self) -> str:
+        # Spread rows across 5 regions; id stays globally unique so (region, id)
+        # is unique and every region partition is non-empty.
+        return "ELT((@i := @i + 1) % 5 + 1, 'aa', 'bb', 'cc', 'dd', 'ee'), @i, @i"
+
+
 class MySqlStreaming(MySqlCdc):
     """Measure the time it takes to ingest records from MySQL post-snapshot"""
 

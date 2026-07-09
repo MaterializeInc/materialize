@@ -600,6 +600,187 @@ $ mysql-execute name=mysql
 DROP TABLE pk_range_test;
 
 #
+# Same, but for a single-column non-integer (char) PK. These take the
+# sampled-boundary split path rather than the MIN/MAX fast path.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_char_test;
+CREATE TABLE pk_char_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_char_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_char_cluster SIZE 'scale=1,workers=4'
+
+> BEGIN
+> CREATE SOURCE pk_char_source
+  IN CLUSTER pk_char_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_char_table FROM SOURCE pk_char_source (REFERENCE public.pk_char_test);
+> COMMIT
+
+# Exact count and no duplicate/missing keys across the parallel ranges
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_char_table;
+1000 1000
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_char_table;
+500500
+
+> DROP SOURCE pk_char_source CASCADE;
+> DROP CLUSTER pk_char_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_char_test;
+
+#
+# Same, but for a composite PK (char, int), split via row-value range boundaries.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_comp_test;
+CREATE TABLE pk_comp_test (region CHAR(2) NOT NULL, id INT NOT NULL, val BIGINT, PRIMARY KEY (region, id));
+SET @i := 0;
+INSERT INTO pk_comp_test SELECT ELT((@i := @i + 1) % 5 + 1, 'aa', 'bb', 'cc', 'dd', 'ee'), @i, @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_comp_cluster SIZE 'scale=1,workers=4'
+
+> BEGIN
+> CREATE SOURCE pk_comp_source
+  IN CLUSTER pk_comp_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_comp_table FROM SOURCE pk_comp_source (REFERENCE public.pk_comp_test);
+> COMMIT
+
+# Exact count and no duplicate/missing keys (id alone is unique here)
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_comp_table;
+1000 1000
+
+# Every region partition is present and complete
+> SELECT region, COUNT(*) FROM pk_comp_table GROUP BY region ORDER BY region;
+aa 200
+bb 200
+cc 200
+dd 200
+ee 200
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_comp_table;
+500500
+
+> DROP SOURCE pk_comp_source CASCADE;
+> DROP CLUSTER pk_comp_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_comp_test;
+
+#
+# Fewer rows than workers: the table partitions into fewer ranges than the
+# cluster has workers, so most workers own no range. The worker responsible for
+# the table (when it is one of the surplus workers) reads nothing but still
+# emits the table's rewind request; the other surplus workers skip it entirely.
+# This is the path that previously double-read the table and duplicated rows.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_surplus_test;
+CREATE TABLE pk_surplus_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_surplus_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1 LIMIT 3;
+
+> CREATE CLUSTER pk_surplus_cluster SIZE 'scale=1,workers=16'
+
+> BEGIN
+> CREATE SOURCE pk_surplus_source
+  IN CLUSTER pk_surplus_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_surplus_table FROM SOURCE pk_surplus_source (REFERENCE public.pk_surplus_test);
+> COMMIT
+
+# All rows present exactly once, none duplicated by a surplus worker
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_surplus_table;
+3 3
+
+# Checksum: val = row number, so SUM(val) = 1 + 2 + 3 = 6
+> SELECT SUM(val) FROM pk_surplus_table;
+6
+
+> DROP SOURCE pk_surplus_source CASCADE;
+> DROP CLUSTER pk_surplus_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_surplus_test;
+
+#
+# Empty table: there are no PK boundaries to sample, so partitioning falls back
+# to a single responsible worker that reads the (empty) table.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_empty_test;
+CREATE TABLE pk_empty_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+
+> CREATE CLUSTER pk_empty_cluster SIZE 'scale=1,workers=4'
+
+> BEGIN
+> CREATE SOURCE pk_empty_source
+  IN CLUSTER pk_empty_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_empty_table FROM SOURCE pk_empty_source (REFERENCE public.pk_empty_test);
+> COMMIT
+
+> SELECT COUNT(*) FROM pk_empty_table;
+0
+
+> DROP SOURCE pk_empty_source CASCADE;
+> DROP CLUSTER pk_empty_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_empty_test;
+
+#
+# BIGINT UNSIGNED PK: excluded from the integer MIN/MAX split (whose bounds are
+# read as i64) and routed to the sampled-boundary path. Half the keys sit above
+# i64::MAX, so a partition boundary lands in the u64-only range and the range
+# predicates must compare across the full unsigned domain.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_uint_test;
+CREATE TABLE pk_uint_test (id BIGINT UNSIGNED PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_uint_test SELECT @i := @i + 1, @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 500;
+SET @j := 0;
+INSERT INTO pk_uint_test SELECT 18446744073709551115 + (@j := @j + 1), -@j FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 500;
+
+> CREATE CLUSTER pk_uint_cluster SIZE 'scale=1,workers=4'
+
+> BEGIN
+> CREATE SOURCE pk_uint_source
+  IN CLUSTER pk_uint_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_uint_table FROM SOURCE pk_uint_source (REFERENCE public.pk_uint_test);
+> COMMIT
+
+# Exact count and no duplicate/missing keys across the parallel ranges
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_uint_table;
+1000 1000
+
+# Keys span from 1 to the top of the u64 domain
+> SELECT MIN(id), MAX(id) FROM pk_uint_table;
+1 18446744073709551615
+
+# Checksum cancels: val = 1..500 for the low keys and -(1..500) for the high keys
+> SELECT SUM(val) FROM pk_uint_table;
+0
+
+> DROP SOURCE pk_uint_source CASCADE;
+> DROP CLUSTER pk_uint_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_uint_test;
+
+#
 # Remove all data on the Postgres side
 #
 

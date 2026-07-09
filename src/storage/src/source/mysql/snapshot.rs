@@ -38,9 +38,12 @@
 //!
 //! ## Parallel PK-range snapshots
 //!
-//! For tables with a single-column integer primary key, the leader queries `MIN(pk)` and `MAX(pk)`
-//! and broadcasts the bounds. Each worker computes its assigned PK range and reads only that
-//! portion of the table. Tables without a suitable PK fall back to single-worker-per-table mode.
+//! For tables with a suitable primary key, the leader computes `worker_count - 1` boundary keys
+//! that split the key domain into disjoint half-open ranges, and broadcasts them. Each worker
+//! reads only its assigned range. A single-column integer PK uses a cheap `MIN(pk)`/`MAX(pk)`
+//! split; other supported PKs (non-integer and/or composite) sample evenly spaced boundary keys
+//! with one primary-key-index scan. Tables without a suitable PK fall back to
+//! single-worker-per-table mode.
 //!
 //! ## Resource considerations
 //!
@@ -129,7 +132,8 @@ use super::{
     TransientError, return_definite_error, validate_mysql_repl_settings,
 };
 
-/// If `desc` has a single-column integer PK, return the column name.
+/// If `desc` has a single-column integer PK, return the column name. Such PKs
+/// take the cheap `MIN`/`MAX` split path in [`compute_integer_splits`].
 fn integer_pk_col(desc: &mz_mysql_util::MySqlTableDesc) -> Option<&str> {
     let pk = desc.keys.iter().find(|k| k.is_primary)?;
     if pk.columns.len() != 1 {
@@ -149,64 +153,243 @@ fn integer_pk_col(desc: &mz_mysql_util::MySqlTableDesc) -> Option<&str> {
     }
 }
 
-/// PK bounds for a table, discovered by the leader.
+/// How a PK column's values are rendered as SQL literals in range predicates.
+#[derive(Debug, Clone, Copy)]
+enum PkColKind {
+    /// Integer type, rendered and compared as a bare numeric literal.
+    Numeric,
+    /// Character type, rendered as a quoted string literal via MySQL `QUOTE()`
+    /// and compared under the column's own collation.
+    Text,
+}
+
+/// Classify a scalar type for range splitting, or `None` if unsupported.
+fn pk_col_kind(scalar_type: &SqlScalarType) -> Option<PkColKind> {
+    match scalar_type {
+        SqlScalarType::Int16
+        | SqlScalarType::Int32
+        | SqlScalarType::Int64
+        | SqlScalarType::UInt16
+        | SqlScalarType::UInt32
+        | SqlScalarType::UInt64 => Some(PkColKind::Numeric),
+        SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. } | SqlScalarType::String => {
+            Some(PkColKind::Text)
+        }
+        _ => None,
+    }
+}
+
+/// If `desc` has a primary key whose every column is a supported type, return
+/// the quoted PK columns with their kinds, in key order. Used for the general
+/// (non-integer and/or composite) sampling path in [`compute_sampled_splits`].
+fn formattable_pk(desc: &mz_mysql_util::MySqlTableDesc) -> Option<Vec<(String, PkColKind)>> {
+    let pk = desc.keys.iter().find(|k| k.is_primary)?;
+    let mut cols = Vec::with_capacity(pk.columns.len());
+    for name in &pk.columns {
+        let col = desc.columns.iter().find(|c| &c.name == name)?;
+        let kind = pk_col_kind(&col.column_type.as_ref()?.scalar_type)?;
+        cols.push((quote_identifier(name), kind));
+    }
+    Some(cols)
+}
+
+/// PK-range partition boundaries for a table, computed by the leader.
+///
+/// `pk_cols` are the quoted PK column identifiers in key order. `boundaries`
+/// holds `partition_count - 1` boundary keys; each is one SQL literal per PK
+/// column. Boundary `i` is the lower bound of partition `i + 1`, so the
+/// partitions are the half-open ranges `[boundaries[i-1], boundaries[i])`.
+///
+/// INVARIANT: boundaries are non-decreasing under the same comparison the range
+/// predicates use (per-column collation for text, numeric otherwise). That makes
+/// the partitions disjoint and exhaustive over the entire key domain, so every
+/// row is read by exactly one worker regardless of the actual data distribution.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct PkBounds {
-    pk_col: String,
-    min_val: i64,
-    max_val: i64,
+struct PkSplits {
+    pk_cols: Vec<String>,
+    boundaries: Vec<Vec<String>>,
 }
 
 /// Snapshot info broadcast from leader to all workers.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct SnapshotInfo {
     gtid_set: String,
-    /// PK bounds per table. None = no integer PK, use single-worker fallback.
-    pk_bounds: BTreeMap<MySqlTableName, Option<PkBounds>>,
+    /// PK splits per table. None = no suitable PK, use single-worker fallback.
+    pk_bounds: BTreeMap<MySqlTableName, Option<PkSplits>>,
 }
 
-/// A worker's assigned PK range for a table.
+/// A worker's assigned PK range for a table, as ready-to-splice SQL fragments.
 struct PkRange {
-    pk_col: String,
-    lower: i64,
-    upper: Option<i64>, // None = open-ended (last worker)
+    /// Comma-separated quoted PK columns, e.g. `` `a`, `b` ``.
+    pk_cols: String,
+    /// Inclusive lower bound (comma-separated literals), or `None` for the first
+    /// partition (open start).
+    lower: Option<String>,
+    /// Exclusive upper bound, or `None` for the last partition (open end).
+    upper: Option<String>,
 }
 
-/// Compute this worker's PK range. Returns None if this worker has no work.
+/// What a worker does for one table during the snapshot.
+enum ReadPlan {
+    /// Partitioned table: read this worker's assigned PK range.
+    Range(PkRange),
+    /// Unpartitioned table: this worker is responsible for it and reads it whole.
+    WholeTable,
+    /// Partitioned table this worker is responsible for but owns no range (more
+    /// workers than partitions). It reads nothing, but still opens a transaction
+    /// so it can emit the table's rewind request. Without this carve-out the
+    /// responsible surplus worker would read the whole table and duplicate the
+    /// rows already read by the range-owning workers.
+    RewindOnly,
+}
+
+/// Compute this worker's PK range from the broadcast splits, or `None` if this
+/// worker's id is beyond the partition count (fewer partitions than workers).
+fn worker_pk_range(splits: &PkSplits, worker_id: usize) -> Option<PkRange> {
+    let partitions = splits.boundaries.len() + 1;
+    if worker_id >= partitions {
+        return None;
+    }
+    let tuple = |b: &[String]| b.iter().join(", ");
+    Some(PkRange {
+        pk_cols: splits.pk_cols.iter().join(", "),
+        lower: (worker_id > 0).then(|| tuple(&splits.boundaries[worker_id - 1])),
+        upper: (worker_id < partitions - 1).then(|| tuple(&splits.boundaries[worker_id])),
+    })
+}
+
+/// Split a single-column integer PK into evenly spaced ranges using `MIN`/`MAX`,
+/// without scanning the table. Returns `None` if the key domain is too small to
+/// split across `worker_count` workers, or the table is empty.
 ///
-/// Uses `i128` intermediate arithmetic to avoid overflow when the PK range
-/// spans a large portion of the `i64` domain (e.g. `min_val = 0, max_val = 2^62`).
-fn worker_pk_range(bounds: &PkBounds, worker_id: usize, worker_count: usize) -> Option<PkRange> {
-    // Use i128 throughout to avoid overflow on large Int64 PK ranges.
-    let min = i128::from(bounds.min_val);
-    let max = i128::from(bounds.max_val);
-    let range_size = max - min + 1;
-    if range_size <= 0 {
-        return None;
+/// Uses `i128` intermediate arithmetic to avoid overflow when the range spans a
+/// large portion of the `i64` domain (e.g. `min = 0, max = 2^62`).
+async fn compute_integer_splits<Q>(
+    conn: &mut Q,
+    table: &MySqlTableName,
+    pk_col: &str,
+    worker_count: usize,
+) -> Result<Option<PkSplits>, LeaderError>
+where
+    Q: Queryable,
+{
+    let quoted = quote_identifier(pk_col);
+    // `quoted` and `table` are escaped via `quote_identifier` / `MySqlTableName::Display`,
+    // so this interpolation is safe; not parameterizable.
+    #[allow(clippy::disallowed_methods)]
+    let row: Option<(Option<i64>, Option<i64>)> = conn
+        .query_first(format!(
+            "SELECT MIN({0}) AS pk_min, MAX({0}) AS pk_max FROM {1}",
+            quoted, table
+        ))
+        .await
+        .map_err(classify_query_error)?;
+    let Some((Some(min_val), Some(max_val))) = row else {
+        return Ok(None);
+    };
+    let min = i128::from(min_val);
+    let range_size = i128::from(max_val) - min + 1;
+    let partitions = std::cmp::min(i128::cast_from(worker_count), range_size);
+    if partitions < 2 {
+        return Ok(None);
     }
-    let effective = std::cmp::min(i128::cast_from(worker_count), range_size);
-    if i128::cast_from(worker_id) >= effective {
-        return None;
+    let boundaries = (1..partitions)
+        .map(|p| vec![(min + p * range_size / partitions).to_string()])
+        .collect();
+    Ok(Some(PkSplits {
+        pk_cols: vec![quoted],
+        boundaries,
+    }))
+}
+
+/// Split an arbitrary (non-integer and/or composite) PK into evenly sized
+/// partitions by sampling `partition_count - 1` boundary keys via keyset
+/// pagination: each probe reads the first key one chunk past the previous
+/// boundary (`WHERE pk > prev ORDER BY pk LIMIT 1 OFFSET chunk-1`), so together
+/// they make a single forward pass of the PK index rather than a full sort.
+///
+/// Boundaries come back already rendered as SQL literals (`QUOTE()` for text,
+/// `CAST(.. AS CHAR)` for numeric) so the `ORDER BY` here and the range
+/// predicates compare identically (per-column collation for text). Because each
+/// boundary is found with a strict `pk > prev`, boundaries strictly increase.
+///
+/// Returns `None` if the table has fewer rows than `worker_count` or is empty,
+/// or a boundary fails to decode (e.g. a non-UTF-8 collation).
+async fn compute_sampled_splits<Q>(
+    conn: &mut Q,
+    table: &MySqlTableName,
+    pk_cols: &[(String, PkColKind)],
+    worker_count: usize,
+) -> Result<Option<PkSplits>, LeaderError>
+where
+    Q: Queryable,
+{
+    // `table` is escaped via `MySqlTableName::Display`; not parameterizable.
+    #[allow(clippy::disallowed_methods)]
+    let total: Option<u64> = conn
+        .query_first(format!("SELECT COUNT(*) FROM {}", table))
+        .await
+        .map_err(classify_query_error)?;
+    let total = total.unwrap_or(0);
+    let partitions = std::cmp::min(u64::cast_from(worker_count), total);
+    if partitions < 2 {
+        return Ok(None);
     }
-    let wid = i128::cast_from(worker_id);
-    let start_128 = min + wid * range_size / effective;
-    let start = i64::try_from(start_128).expect("PK range start fits in i64");
-    let is_last = wid == effective - 1;
-    if is_last {
-        Some(PkRange {
-            pk_col: bounds.pk_col.clone(),
-            lower: start,
-            upper: None,
+    let chunk = total / partitions;
+    let cols_ident = pk_cols.iter().map(|(c, _)| c.as_str()).join(", ");
+    let cols_literal = pk_cols
+        .iter()
+        .map(|(c, kind)| match kind {
+            PkColKind::Numeric => format!("CAST({c} AS CHAR)"),
+            PkColKind::Text => format!("QUOTE({c})"),
         })
-    } else {
-        let end_128 = min + (wid + 1) * range_size / effective;
-        let end = i64::try_from(end_128).expect("PK range end fits in i64");
-        Some(PkRange {
-            pk_col: bounds.pk_col.clone(),
-            lower: start,
-            upper: Some(end),
-        })
+        .join(", ");
+
+    let mut boundaries: Vec<Vec<String>> = Vec::with_capacity(usize::cast_from(partitions) - 1);
+    for _ in 1..partitions {
+        // Skip a chunk of rows past the previous boundary and take the next key.
+        // The first probe has no lower bound and skips a full chunk; later probes
+        // start just after the previous boundary, so `OFFSET chunk - 1`.
+        let (predicate, offset) = match boundaries.last() {
+            Some(prev) => (
+                format!(" WHERE ({}) > ({})", cols_ident, prev.iter().join(", ")),
+                chunk - 1,
+            ),
+            None => (String::new(), chunk),
+        };
+        // Identifiers are quoted via `quote_identifier`, the previous boundary is
+        // itself a value MySQL rendered as a literal, `table` via Display, and the
+        // offset is an integer, so this interpolation is safe; not parameterizable.
+        #[allow(clippy::disallowed_methods)]
+        let row: Option<MySqlRow> = conn
+            .query_first(format!(
+                "SELECT {cols_literal} FROM {table}{predicate} \
+                 ORDER BY {cols_ident} LIMIT 1 OFFSET {offset}"
+            ))
+            .await
+            .map_err(classify_query_error)?;
+        // Ran off the end (table smaller than COUNT implied): stop, and use the
+        // boundaries found so far. Fewer partitions is still correct.
+        let Some(mut row) = row else { break };
+        let mut tuple = Vec::with_capacity(pk_cols.len());
+        for i in 0..pk_cols.len() {
+            // Every column is CAST/QUOTE-ed to text, so it decodes as a String
+            // that is already a valid SQL literal. A decode failure (e.g. a
+            // non-UTF-8 collation) means we can't safely partition: fall back.
+            match row.take_opt::<String, usize>(i) {
+                Some(Ok(lit)) => tuple.push(lit),
+                _ => return Ok(None),
+            }
+        }
+        boundaries.push(tuple);
     }
+    if boundaries.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PkSplits {
+        pk_cols: pk_cols.iter().map(|(c, _)| c.clone()).collect(),
+        boundaries,
+    }))
 }
 
 /// Error from the snapshot leader's lock-acquisition / GTID-reading phase.
@@ -234,6 +417,26 @@ impl From<MySqlError> for LeaderError {
 impl From<anyhow::Error> for LeaderError {
     fn from(e: anyhow::Error) -> Self {
         LeaderError::Transient(e.into())
+    }
+}
+
+/// Classify an error from a leader query that touches the upstream tables.
+///
+/// A table dropped upstream after source planning surfaces as
+/// `ER_NO_SUCH_TABLE`, which is a definite `TableDropped` error, not a transient
+/// one. The PK-split probes and `LOCK TABLES` are the first statements to touch
+/// the tables, so a dropped table fails here. The default `From<mysql_async::Error>`
+/// conversion classifies everything as transient, which would restart the
+/// dataflow into the same error forever. Every leader query against the tables
+/// must route its error through this instead of the `?` conversion.
+fn classify_query_error(e: mysql_async::Error) -> LeaderError {
+    match e {
+        mysql_async::Error::Server(mysql_async::ServerError { code, message, .. })
+            if code == ER_NO_SUCH_TABLE =>
+        {
+            LeaderError::Definite(DefiniteError::TableDropped(message))
+        }
+        e => LeaderError::Transient(e.into()),
     }
 }
 
@@ -362,6 +565,48 @@ pub(crate) fn render<'scope>(
                                 &config.config.connection_context.ssh_tunnel_manager,
                             )
                             .await?;
+
+                        // Compute PK-range split boundaries for each table BEFORE
+                        // acquiring the lock. Single-column integer PKs use the
+                        // cheap MIN/MAX split; other supported PKs sample boundaries
+                        // with one PK-index scan, which is O(rows). Doing this work
+                        // before `LOCK TABLES` keeps the lock-hold window O(1) rather
+                        // than scaling with table size. Boundaries need not match the
+                        // exact snapshot point: they only partition the key domain and
+                        // stay correct for any data distribution (see `PkSplits`).
+                        // `None` means single-worker fallback.
+                        let mut pk_bounds_map = BTreeMap::new();
+                        for (table, outputs) in &tables_to_snapshot {
+                            let desc = &outputs[0].desc;
+                            // With a single worker there is only one reader, so
+                            // there is nothing to split. Skip the split probes
+                            // (an O(rows) COUNT(*)/index scan for sampled PKs, a
+                            // MIN/MAX probe for integer PKs) and fall back to
+                            // single-worker mode.
+                            let splits = if config.worker_count < 2 {
+                                None
+                            } else if let Some(pk_col) = integer_pk_col(desc) {
+                                compute_integer_splits(
+                                    &mut *lock_conn,
+                                    table,
+                                    pk_col,
+                                    config.worker_count,
+                                )
+                                .await?
+                            } else if let Some(pk_cols) = formattable_pk(desc) {
+                                compute_sampled_splits(
+                                    &mut *lock_conn,
+                                    table,
+                                    &pk_cols,
+                                    config.worker_count,
+                                )
+                                .await?
+                            } else {
+                                None
+                            };
+                            pk_bounds_map.insert(table.clone(), splits);
+                        }
+
                         if let Some(timeout) = config
                             .config
                             .parameters
@@ -382,23 +627,10 @@ pub(crate) fn render<'scope>(
                         // `lock_clauses` is built from `MySqlTableName::Display`, which
                         // escapes both schema and table via `quote_identifier`.
                         #[allow(clippy::disallowed_methods)]
-                        let lock_result = lock_conn
+                        lock_conn
                             .query_drop(format!("LOCK TABLES {lock_clauses}"))
-                            .await;
-                        match lock_result {
-                            Err(mysql_async::Error::Server(mysql_async::ServerError {
-                                code,
-                                message,
-                                ..
-                            })) if code == ER_NO_SUCH_TABLE => {
-                                trace!(%id, "timely-{worker_id} received unknown table error from \
-                                             lock query");
-                                return Err(LeaderError::Definite(DefiniteError::TableDropped(
-                                    message,
-                                )));
-                            }
-                            e => e?,
-                        };
+                            .await
+                            .map_err(classify_query_error)?;
 
                         // Record the frontier of future GTIDs based on the executed GTID set
                         // at the start of the snapshot
@@ -406,49 +638,6 @@ pub(crate) fn render<'scope>(
                             query_sys_var(&mut lock_conn, "global.gtid_executed").await?;
 
                         trace!(%id, "timely-{worker_id} acquired table locks");
-
-                        // Query PK bounds for each table
-                        let mut pk_bounds_map = BTreeMap::new();
-                        for (table, outputs) in &tables_to_snapshot {
-                            let desc = &outputs[0].desc;
-                            if let Some(pk_col_name) = integer_pk_col(desc) {
-                                let quoted = quote_identifier(pk_col_name);
-                                let query = format!(
-                                    "SELECT MIN({}) AS pk_min, MAX({}) AS pk_max FROM {}",
-                                    quoted, quoted, table
-                                );
-                                // `quoted` and `table` are escaped via `quote_identifier` /
-                                // `MySqlTableName::Display`, so this interpolation is safe;
-                                // not parameterizable.
-                                #[allow(clippy::disallowed_methods)]
-                                let row: Option<(
-                                    Option<i64>,
-                                    Option<i64>,
-                                )> = lock_conn.query_first(query).await?;
-                                match row {
-                                    Some((Some(min_val), Some(max_val)))
-                                        if i128::from(max_val) - i128::from(min_val) + 1
-                                            >= i128::cast_from(config.worker_count) =>
-                                    {
-                                        pk_bounds_map.insert(
-                                            table.clone(),
-                                            Some(PkBounds {
-                                                pk_col: quoted,
-                                                min_val,
-                                                max_val,
-                                            }),
-                                        );
-                                    }
-                                    _ => {
-                                        // Table is empty, too small to
-                                        // parallelize, or has NULL PKs.
-                                        pk_bounds_map.insert(table.clone(), None);
-                                    }
-                                }
-                            } else {
-                                pk_bounds_map.insert(table.clone(), None);
-                            }
-                        }
 
                         let snapshot_info = SnapshotInfo {
                             gtid_set: snapshot_gtid_set,
@@ -540,20 +729,26 @@ pub(crate) fn render<'scope>(
                 trace!(%id, "timely-{worker_id} received snapshot info at: {}",
                        snapshot_gtid_frontier.pretty());
 
-                // Precompute each table's read plan for this worker.
-                // Tables with PK bounds get a range; others use
-                // single-worker fallback via responsible_for.
-                let table_ranges: BTreeMap<_, _> = tables_to_snapshot
+                // Precompute each table's read plan for this worker. A
+                // partitioned table is read only by the workers that own a
+                // range (plus a rewind-only entry for the responsible worker if
+                // it owns none), so no row is read twice. An unpartitioned table
+                // is read whole by its single responsible worker.
+                let table_ranges: BTreeMap<_, ReadPlan> = tables_to_snapshot
                     .keys()
                     .filter_map(|table| {
-                        let range = match snapshot_info.pk_bounds.get(table) {
-                            Some(Some(bounds)) => {
-                                worker_pk_range(bounds, config.worker_id, config.worker_count)
-                            }
-                            _ => None,
+                        let plan = match snapshot_info.pk_bounds.get(table) {
+                            Some(Some(splits)) => match worker_pk_range(splits, config.worker_id) {
+                                Some(range) => Some(ReadPlan::Range(range)),
+                                None => config
+                                    .responsible_for(table)
+                                    .then_some(ReadPlan::RewindOnly),
+                            },
+                            _ => config
+                                .responsible_for(table)
+                                .then_some(ReadPlan::WholeTable),
                         };
-                        let should_read = range.is_some() || config.responsible_for(table);
-                        should_read.then(|| (table.clone(), range))
+                        plan.map(|plan| (table.clone(), plan))
                     })
                     .collect();
                 let has_work = !table_ranges.is_empty();
@@ -713,8 +908,11 @@ pub(crate) fn render<'scope>(
                 let mut snapshot_staged_total = 0;
                 for (table, outputs) in &tables_to_snapshot {
                     let pk_range = match table_ranges.get(table) {
-                        Some(range) => range.as_ref(),
-                        None => continue, // This worker has no work for this table
+                        Some(ReadPlan::Range(range)) => Some(range),
+                        Some(ReadPlan::WholeTable) => None,
+                        // RewindOnly reads nothing; its rewind is emitted below.
+                        // None: this worker has no work for this table.
+                        Some(ReadPlan::RewindOnly) | None => continue,
                     };
 
                     let mut snapshot_staged = 0;
@@ -866,9 +1064,20 @@ fn build_snapshot_query(outputs: &[SourceOutputInfo], pk_range: Option<&PkRange>
         .join(", ");
     let mut query = format!("SELECT {} FROM {}", columns, info.table_name);
     if let Some(range) = pk_range {
-        query.push_str(&format!(" WHERE {} >= {}", range.pk_col, range.lower));
-        if let Some(upper) = range.upper {
-            query.push_str(&format!(" AND {} < {}", range.pk_col, upper));
+        // Row-value comparison so composite keys use lexicographic ordering that
+        // matches the boundary `ORDER BY`. A single-column tuple is just the
+        // column. The first/last partition omits its open bound.
+        let cols = &range.pk_cols;
+        if let Some(lower) = &range.lower {
+            query.push_str(&format!(" WHERE ({cols}) >= ({lower})"));
+        }
+        if let Some(upper) = &range.upper {
+            let kw = if range.lower.is_some() {
+                "AND"
+            } else {
+                "WHERE"
+            };
+            query.push_str(&format!(" {kw} ({cols}) < ({upper})"));
         }
     }
     query
@@ -979,31 +1188,61 @@ mod tests {
             binlog_full_metadata: false,
         };
 
-        // Bounded range
+        // Middle worker: both bounds, row-value form.
         let range = PkRange {
-            pk_col: "`id`".to_string(),
-            lower: 100,
-            upper: Some(200),
+            pk_cols: "`id`".to_string(),
+            lower: Some("100".to_string()),
+            upper: Some("200".to_string()),
         };
         let query = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
         assert_eq!(
             format!(
-                "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= 100 AND `id` < 200",
+                "SELECT `id`, `name` FROM `{}`.`{}` WHERE (`id`) >= (100) AND (`id`) < (200)",
                 &schema_name, &table_name
             ),
             query
         );
 
-        // Open-ended range (last worker)
+        // First worker: open start.
         let range = PkRange {
-            pk_col: "`id`".to_string(),
-            lower: 200,
+            pk_cols: "`id`".to_string(),
+            lower: None,
+            upper: Some("200".to_string()),
+        };
+        let query = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
+        assert_eq!(
+            format!(
+                "SELECT `id`, `name` FROM `{}`.`{}` WHERE (`id`) < (200)",
+                &schema_name, &table_name
+            ),
+            query
+        );
+
+        // Last worker: open end.
+        let range = PkRange {
+            pk_cols: "`id`".to_string(),
+            lower: Some("200".to_string()),
             upper: None,
         };
         let query = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
         assert_eq!(
             format!(
-                "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= 200",
+                "SELECT `id`, `name` FROM `{}`.`{}` WHERE (`id`) >= (200)",
+                &schema_name, &table_name
+            ),
+            query
+        );
+
+        // Composite text PK: row-value comparison over quoted columns.
+        let range = PkRange {
+            pk_cols: "`a`, `b`".to_string(),
+            lower: Some("'m', 5".to_string()),
+            upper: None,
+        };
+        let query = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
+        assert_eq!(
+            format!(
+                "SELECT `id`, `name` FROM `{}`.`{}` WHERE (`a`, `b`) >= ('m', 5)",
                 &schema_name, &table_name
             ),
             query
@@ -1012,54 +1251,104 @@ mod tests {
 
     #[mz_ore::test]
     fn test_worker_pk_range() {
-        let bounds = PkBounds {
-            pk_col: "`id`".to_string(),
-            min_val: 1,
-            max_val: 100,
+        // Two partitions, single-column boundary at 51.
+        let splits = PkSplits {
+            pk_cols: vec!["`id`".to_string()],
+            boundaries: vec![vec!["51".to_string()]],
+        };
+        let r0 = worker_pk_range(&splits, 0).expect("worker 0");
+        assert_eq!(r0.pk_cols, "`id`");
+        assert_eq!(r0.lower, None); // open start
+        assert_eq!(r0.upper.as_deref(), Some("51"));
+        let r1 = worker_pk_range(&splits, 1).expect("worker 1");
+        assert_eq!(r1.lower.as_deref(), Some("51"));
+        assert_eq!(r1.upper, None); // open end
+        // Beyond the partition count → no work.
+        assert!(worker_pk_range(&splits, 2).is_none());
+
+        // Three partitions: the middle worker has both bounds.
+        let splits = PkSplits {
+            pk_cols: vec!["`id`".to_string()],
+            boundaries: vec![vec!["34".to_string()], vec!["67".to_string()]],
+        };
+        let r1 = worker_pk_range(&splits, 1).expect("worker 1");
+        assert_eq!(r1.lower.as_deref(), Some("34"));
+        assert_eq!(r1.upper.as_deref(), Some("67"));
+
+        // Composite PK: a boundary is a comma-joined tuple of per-column literals.
+        let splits = PkSplits {
+            pk_cols: vec!["`a`".to_string(), "`b`".to_string()],
+            boundaries: vec![vec!["'m'".to_string(), "5".to_string()]],
+        };
+        let r0 = worker_pk_range(&splits, 0).expect("worker 0");
+        assert_eq!(r0.pk_cols, "`a`, `b`");
+        assert_eq!(r0.upper.as_deref(), Some("'m', 5"));
+    }
+
+    #[mz_ore::test]
+    fn test_formattable_pk() {
+        use mz_mysql_util::MySqlKeyDesc;
+        use mz_repr::SqlColumnType;
+
+        let col = |name: &str, ty: SqlScalarType| MySqlColumnDesc {
+            name: name.to_string(),
+            column_type: Some(SqlColumnType {
+                scalar_type: ty,
+                nullable: false,
+            }),
+            meta: None,
+        };
+        let pk = |cols: &[&str]| {
+            BTreeSet::from([MySqlKeyDesc {
+                name: "PRIMARY".to_string(),
+                is_primary: true,
+                columns: cols.iter().map(|c| c.to_string()).collect(),
+            }])
+        };
+        let desc = |columns, keys| MySqlTableDesc {
+            schema_name: "s".to_string(),
+            name: "t".to_string(),
+            columns,
+            keys,
         };
 
-        // 2 workers, range_size = 100
-        let r0 = worker_pk_range(&bounds, 0, 2).expect("worker 0 should have range");
-        assert_eq!(r0.lower, 1);
-        assert_eq!(r0.upper, Some(51));
+        // Single char PK.
+        let cols = formattable_pk(&desc(
+            vec![col("id", SqlScalarType::Char { length: None })],
+            pk(&["id"]),
+        ))
+        .expect("char pk supported");
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].0, "`id`");
+        assert!(matches!(cols[0].1, PkColKind::Text));
 
-        let r1 = worker_pk_range(&bounds, 1, 2).expect("worker 1 should have range");
-        assert_eq!(r1.lower, 51);
-        assert!(r1.upper.is_none()); // last worker
+        // Composite (char, int) PK.
+        let cols = formattable_pk(&desc(
+            vec![
+                col("a", SqlScalarType::Char { length: None }),
+                col("b", SqlScalarType::Int64),
+            ],
+            pk(&["a", "b"]),
+        ))
+        .expect("composite pk supported");
+        assert_eq!(
+            cols.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(),
+            ["`a`", "`b`"]
+        );
 
-        // More workers than range
-        let small_bounds = PkBounds {
-            pk_col: "`id`".to_string(),
-            min_val: 1,
-            max_val: 2,
-        };
-        // range_size = 2, effective = 2
-        let r0 = worker_pk_range(&small_bounds, 0, 10).expect("worker 0 should have range");
-        assert_eq!(r0.lower, 1);
-        assert_eq!(r0.upper, Some(2));
-        let r1 = worker_pk_range(&small_bounds, 1, 10).expect("worker 1 should have range");
-        assert_eq!(r1.lower, 2);
-        assert!(r1.upper.is_none());
-        // Workers beyond effective count get nothing
-        assert!(worker_pk_range(&small_bounds, 2, 10).is_none());
+        // Unsupported column type in the PK → fall back.
+        assert!(
+            formattable_pk(&desc(vec![col("id", SqlScalarType::Bytes)], pk(&["id"]))).is_none()
+        );
 
-        // Large Int64 range — would overflow with i64 arithmetic
-        let large_bounds = PkBounds {
-            pk_col: "`id`".to_string(),
-            min_val: 0,
-            max_val: i64::MAX,
-        };
-        // With 4 workers this should not panic or wrap
-        let r0 = worker_pk_range(&large_bounds, 0, 4).expect("worker 0");
-        assert_eq!(r0.lower, 0);
-        let r3 = worker_pk_range(&large_bounds, 3, 4).expect("worker 3");
-        assert!(r3.upper.is_none()); // last worker, open-ended
-        // Ranges should be contiguous: each worker's start == previous worker's end
-        let r1 = worker_pk_range(&large_bounds, 1, 4).expect("worker 1");
-        let r2 = worker_pk_range(&large_bounds, 2, 4).expect("worker 2");
-        assert_eq!(r0.upper, Some(r1.lower));
-        assert_eq!(r1.upper, Some(r2.lower));
-        assert_eq!(r2.upper, Some(r3.lower));
+        // No primary key → fall back.
+        assert!(
+            formattable_pk(&desc(
+                vec![col("id", SqlScalarType::Int64)],
+                BTreeSet::default()
+            ))
+            .is_none()
+        );
     }
 
     #[mz_ore::test]
