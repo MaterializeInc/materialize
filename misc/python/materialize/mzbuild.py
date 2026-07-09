@@ -688,6 +688,29 @@ class CargoBuild(CargoPreImage):
             else {}
         )
 
+        # clang/lld `-22` suffixes must match the LLVM version of the rustc in
+        # rust-version (root Cargo.toml) and the apt.llvm.org release in
+        # ci/builder/Dockerfile.
+        if (
+            rd.profile == Profile.RELEASE
+            and rd.sanitizer == Sanitizer.none
+            and not rd.coverage
+        ):
+            rustflags += [
+                "-Clinker-plugin-lto",
+            ]
+            extra_env = {
+                "CC": "clang-22",
+                "CXX": "clang++-22",
+                "AR": "llvm-ar-22",
+                "RANLIB": "llvm-ranlib-22",
+                "CFLAGS": "-flto=thin",
+                "CXXFLAGS": "-flto=thin",
+                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++",
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
+                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
+            }
+
         cargo_build = rd.build(
             "build", channel=None, rustflags=rustflags, extra_env=extra_env
         )
