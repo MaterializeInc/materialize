@@ -411,6 +411,61 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+/// Regression test for stale state leaking across instances in an in-memory
+/// `Env`. Replicas without a scratch directory run all RocksDB instances in
+/// one process-shared in-memory `Env`, so an in-process dataflow restart
+/// reopens the same path in the same `Env`. Cleanup must destroy state inside
+/// that `Env`, host filesystem checks and default-`Env` destroys do not see
+/// it. The second instance must start empty.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_mem_env` on OS `linux`
+async fn mem_env_cleanup_on_reopen() -> Result<(), anyhow::Error> {
+    let mem_env = rocksdb::Env::mem_env()?;
+    // A path that does not initially exist on the host filesystem, so cleanup
+    // cannot rely on host filesystem state.
+    let t = tempfile::tempdir()?;
+    let instance_path = t.path().join("does-not-exist-on-host").join("instance");
+
+    let open = || {
+        RocksDBInstance::<String, String>::new(
+            &instance_path,
+            InstanceOptions::<bincode::DefaultOptions, String, StubMergeOperator<String>>::new(
+                mem_env.clone(),
+                2,
+                None,
+                bincode::DefaultOptions::new(),
+            ),
+            RocksDBConfig::new(Default::default(), None),
+            shared_metrics_for_tests().unwrap(),
+            instance_metrics_for_tests().unwrap(),
+        )
+    };
+
+    // First instance: write a key, then close, which runs shutdown cleanup.
+    let mut instance = open()?;
+    instance
+        .multi_update(vec![(
+            "k".to_string(),
+            KeyUpdate::Put("stale".to_string()),
+            None,
+        )])
+        .await?;
+    instance.close().await?;
+
+    // Second instance: same `Env`, same path, mirroring an in-process restart.
+    let mut instance = open()?;
+    let mut ret = vec![Default::default(); 1];
+    instance
+        .multi_get(vec!["k".to_string()], ret.iter_mut(), |value| value)
+        .await?;
+    let got = ret.into_iter().next().unwrap().map(|v| v.value);
+    instance.close().await?;
+
+    assert_eq!(got, None, "stale state survived cleanup and reopen");
+
+    Ok(())
+}
+
 /// A small validation test; Ensure that if a directory is empty, we don't fail to destroy.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
