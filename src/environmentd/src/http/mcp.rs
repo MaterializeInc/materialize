@@ -246,6 +246,28 @@ struct McpResponse {
     error: Option<McpError>,
 }
 
+impl McpResponse {
+    /// A successful JSON-RPC response carrying `result`.
+    fn success(id: serde_json::Value, result: McpResult) -> Self {
+        Self {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            id,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    /// A JSON-RPC error response carrying `error`.
+    fn error(id: serde_json::Value, error: McpError) -> Self {
+        Self {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            id,
+            result: None,
+            error: Some(error),
+        }
+    }
+}
+
 /// Typed MCP response results.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
@@ -549,18 +571,14 @@ async fn handle_mcp_request(
                 timeout = ?MCP_REQUEST_TIMEOUT,
                 "MCP request timed out",
             );
-            let response = McpResponse {
-                jsonrpc: JSONRPC_VERSION.to_string(),
-                id: request_id,
-                result: None,
-                error: Some(
-                    McpRequestError::QueryExecutionFailed(format!(
-                        "Request timed out after {} seconds.",
-                        MCP_REQUEST_TIMEOUT.as_secs(),
-                    ))
-                    .into(),
-                ),
-            };
+            let response = McpResponse::error(
+                request_id,
+                McpRequestError::QueryExecutionFailed(format!(
+                    "Request timed out after {} seconds.",
+                    MCP_REQUEST_TIMEOUT.as_secs(),
+                ))
+                .into(),
+            );
             (response, "timeout")
         }
     };
@@ -598,12 +616,7 @@ async fn handle_mcp_request_inner(
     };
 
     let response = match result {
-        Ok(result_value) => McpResponse {
-            jsonrpc: JSONRPC_VERSION.to_string(),
-            id: request_id,
-            result: Some(result_value),
-            error: None,
-        },
+        Ok(result_value) => McpResponse::success(request_id, result_value),
         Err(e) => {
             // Log non-trivial errors
             if !matches!(
@@ -612,12 +625,7 @@ async fn handle_mcp_request_inner(
             ) {
                 warn!(error = %e, method = %request.method, "MCP method execution failed");
             }
-            McpResponse {
-                jsonrpc: JSONRPC_VERSION.to_string(),
-                id: request_id,
-                result: None,
-                error: Some(e.into()),
-            }
+            McpResponse::error(request_id, e.into())
         }
     };
 
@@ -1582,6 +1590,29 @@ mod tests {
                 .status(),
             StatusCode::FORBIDDEN,
         );
+    }
+
+    /// The two constructors set the JSON-RPC version and put the payload in
+    /// the right one of the mutually-exclusive `result` / `error` fields.
+    #[mz_ore::test]
+    fn test_mcp_response_constructors() {
+        let id = serde_json::json!(1);
+
+        let ok = McpResponse::success(
+            id.clone(),
+            McpResult::ToolContent(ToolContentResult {
+                content: vec![],
+                is_error: false,
+            }),
+        );
+        assert_eq!(ok.jsonrpc, JSONRPC_VERSION);
+        assert!(ok.result.is_some());
+        assert!(ok.error.is_none());
+
+        let err = McpResponse::error(id, McpRequestError::ToolNotFound("t".to_string()).into());
+        assert_eq!(err.jsonrpc, JSONRPC_VERSION);
+        assert!(err.result.is_none());
+        assert!(err.error.is_some());
     }
 
     #[mz_ore::test]
