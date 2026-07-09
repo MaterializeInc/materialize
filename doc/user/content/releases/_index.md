@@ -15,6 +15,15 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.31.2
+*Released to Materialize Self-Managed: 2026-07-08* <br>
+
+### Bug Fixes {#v26.31.2-bug-fixes}
+
+- Fixed a priority inversion bug where sustained strict-serializable / real-time-recency reads
+  could starve group commit, leading to livelock in the database coordinator. This would cause
+  queries to hang until pending reads drained.
+
 ## v26.31.0
 *Released to Materialize Cloud: 2026-07-02* <br>
 *Released to Materialize Self-Managed: 2026-07-03* <br>
