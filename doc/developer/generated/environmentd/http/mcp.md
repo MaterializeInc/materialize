@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/mcp.rs
-revision: b17b2d42cf
+revision: c73b24bed8
 ---
 
 # environmentd::http::mcp

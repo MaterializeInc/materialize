@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/func.rs
-revision: 584bb9030c
+revision: 0ea7f0a4f5
 ---
 
 # mz-sql::func
@@ -12,4 +12,5 @@ The `MZ_INTERNAL_BUILTINS` table includes `parse_catalog_id` and `parse_catalog_
 The `MZ_CATALOG_BUILTINS` table includes `repeat_row` (backed by `TableFunc::RepeatRow`, gated by `ENABLE_REPEAT_ROW`) and `repeat_row_non_negative` (backed by `TableFunc::RepeatRowNonNegative`, gated by `ENABLE_REPEAT_ROW_NON_NEGATIVE`).
 The `MZ_UNSAFE_BUILTINS` table includes `generate_series_unoptimized` (backed by `TableFunc::GenerateSeriesUnoptimized`), an int64 `generate_series` variant that the optimizer promises to leave as an enumeration; it is provided for tests that need to rely on the enumeration work actually happening.
 `mz_all` and `mz_any` in `MZ_UNSAFE_BUILTINS` accept `Bool` parameters rather than `Any`: `AggregateFunc::All`/`Any` render as accumulable reduces whose accumulator only handles boolean datums, so accepting non-boolean arguments would crash a compute worker at runtime; restricting the parameter type to `Bool` catches the mismatch at plan time instead.
+Polymorphic array functions (e.g., `array_remove`) reject element types that resolve to `list` or `map`: such types have no pg OID and would crash the pgwire connection when encoding the row description. The check is performed in `coerce_args_to_types` after the polymorphic type is resolved, mirroring the same restriction already present in the `ARRAY[]` constructor and `array_fill`.
 This is one of the largest files in the crate and is consumed directly by `plan::query` during expression planning.

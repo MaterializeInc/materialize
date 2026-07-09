@@ -1,6 +1,6 @@
 ---
 source: src/clusterd-test-driver/src/dataflow.rs
-revision: e926ec3a86
+revision: 43a933b189
 ---
 
 # mz-clusterd-test-driver::dataflow

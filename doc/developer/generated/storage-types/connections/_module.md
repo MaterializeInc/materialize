@@ -1,13 +1,13 @@
 ---
 source: src/storage-types/src/connections.rs
-revision: 9225a5c83d
+revision: 1e24476fac
 ---
 
 # storage-types::connections
 
 Defines all connection types used to connect storage sources and sinks to external systems, along with the runtime infrastructure needed to instantiate them.
 Key types include `Connection` (an enum over Kafka, CSR, Postgres, SSH, AWS, AWS PrivateLink, GCP, MySQL, SQL Server, Glue Schema Registry, and Iceberg Catalog connections), `ConnectionContext` (holds global runtime state such as SSH tunnel managers and secret readers), and `KafkaConnection`/`PostgresConnection`/`IcebergCatalogConnection` etc.
-`IcebergCatalogConnection` holds an `IcebergCatalogImpl` (either `Rest` or `S3TablesRest`) and a URI; it implements `connect()` to return a live `Arc<dyn Catalog>`.
+`IcebergCatalogConnection` holds an `IcebergCatalogImpl` (either `Rest` or `S3TablesRest`) and a URI; it implements `connect()` to return a live `Arc<dyn Catalog>`. When the catalog auth uses AWS assume-role, `connect()` calls `prefetch_credentials` passing the `StorageConfiguration`'s `ConfigSet` so the `AWS_PREFETCH_STS_CONNECT_TIMEOUT` dyncfg is available to the credentials prefetcher.
 `GlueSchemaRegistryConnection` carries a reference to an `AwsConnection` (for credentials, region, and endpoint) and a `registry_name`. Its `validate` method calls `mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build()` and issues a `get_registry` ping to confirm the named registry exists; `validate_by_default()` returns `true` so a bad registry name surfaces at `CREATE CONNECTION` time rather than on first use.
 `AwsSdkCredentialLoader` is a private type that wraps an AWS SDK credentials provider and implements the iceberg `AwsCredentialLoad` trait, enabling refreshable assume-role credential chains for Iceberg FileIO/OpenDAL; its `load_credential` method accepts a `reqwest::Client`.
 `Sigv4Authenticator` is a private type that implements `RequestAuthenticator` for the `iceberg-catalog-rest` crate, signing each outgoing REST catalog request with AWS SigV4 using a `SharedCredentialsProvider` (so credentials are refreshed per-request). It carries `provider`, `region`, and `signing_name` fields (e.g. `"s3tables"` for S3 Tables).
