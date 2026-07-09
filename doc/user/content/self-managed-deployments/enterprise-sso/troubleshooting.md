@@ -131,6 +131,34 @@ kubectl get secret -n ory materialize-oauth2-client \
 
 Compare with the Materialize CR's `system_parameters.oidc_audience`.
 
+### JWT is missing a custom claim (e.g. `groups`) even though the IdP is sending it
+
+Kratos's OIDC jsonnet mapper exposes standard OpenID claims (`email`, `sub`,
+`aud`, `iss`, `preferred_username`, etc.) as top-level keys on the `claims`
+object, but any non-standard claim (`groups`, `department`, `tenant_id`, ...)
+lives under `claims.raw_claims`.
+
+If the mapper reads `claims.groups`, it will silently return null or an empty
+default even when the IdP token clearly contains `groups`. Read from
+`claims.raw_claims` (with a fallback for providers that flatten):
+
+```jsonnet
+local claims = std.extVar('claims');
+local raw = if std.objectHas(claims, 'raw_claims') then claims.raw_claims else {};
+local groups_from(src) = if std.objectHas(src, 'groups') then src.groups else [];
+{
+  identity: {
+    traits: {
+      email: claims.email,
+      groups: if std.length(groups_from(claims)) > 0 then groups_from(claims) else groups_from(raw),
+    },
+  },
+}
+```
+
+This is the pattern the module ships. When adding new IdP-specific custom
+claims to the mapper, always check `raw_claims` first.
+
 ### A specific cloud is hanging during destroy
 
 See the cloud-specific notes:
