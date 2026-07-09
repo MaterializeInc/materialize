@@ -281,7 +281,8 @@ pub const CONSOLE_OIDC_SCOPES: Config<&'static str> = Config::new(
 /// Interval at which to collect per-object arrangement size snapshots for the history table.
 pub const ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL: Config<Duration> = Config::new(
     "arrangement_size_history_collection_interval",
-    Duration::from_hours(1),
+    // Disabled by default until https://github.com/MaterializeInc/materialize/pull/37455 lands.
+    Duration::ZERO,
     "Interval at which to collect and snapshot per-object arrangement sizes \
      into mz_internal.mz_object_arrangement_size_history.",
 );
