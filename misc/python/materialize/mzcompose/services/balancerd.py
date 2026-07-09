@@ -50,9 +50,7 @@ class Balancerd(Service):
             if https_resolver_template is not None:
                 command.append(f"--https-resolver-template={https_resolver_template}")
         if frontegg_resolver_template is not None:
-            command.append(
-                f"--frontegg-reesolver-template={frontegg_resolver_template}"
-            )
+            command.append(f"--frontegg-resolver-template={frontegg_resolver_template}")
 
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on

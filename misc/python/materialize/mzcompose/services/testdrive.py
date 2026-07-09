@@ -97,7 +97,10 @@ class Testdrive(Service):
                 "AWS_SESSION_TOKEN",
             ]
 
-        environment += [
+        # Concatenate instead of appending so the caller's list is not
+        # mutated: constructing Testdrive twice from the same list would
+        # otherwise accumulate duplicate entries.
+        environment = environment + [
             f"CLUSTER_REPLICA_SIZES={json.dumps(cluster_replica_size)}",
             "MZ_CI_LICENSE_KEY",
             "LD_PRELOAD=libeatmydata.so",
@@ -120,6 +123,11 @@ class Testdrive(Service):
                 *(["--materialize-use-https"] if materialize_use_https else []),
                 # Faster retries
             ]
+        else:
+            # Copy so the appends below don't mutate the caller's list:
+            # constructing Testdrive twice from the same list would otherwise
+            # accumulate duplicate flags, which abort testdrive at startup.
+            entrypoint = list(entrypoint)
 
         entrypoint.append(f"--backoff-factor={backoff_factor}")
 

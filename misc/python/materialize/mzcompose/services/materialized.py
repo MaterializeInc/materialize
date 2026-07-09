@@ -50,7 +50,6 @@ class MaterializeEmulator(Service):
         name = "materialized"
 
         config: ServiceConfig = {
-            "mzbuild": name,
             "ports": [6875, 6874, 6876, 6877, 6878, 26257],
             "healthcheck": {
                 "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
@@ -59,6 +58,10 @@ class MaterializeEmulator(Service):
                 "start_period": "600s",
             },
         }
+        if image is not None:
+            config["image"] = image
+        else:
+            config["mzbuild"] = name
 
         super().__init__(name=name, config=config)
 
@@ -187,6 +190,10 @@ class Materialized(Service):
             system_parameter_defaults = get_default_system_parameters(
                 system_parameter_version or image_version
             )
+        else:
+            # Copy so the writes below don't leak into the caller's dict,
+            # which is often shared across multiple Materialized instances.
+            system_parameter_defaults = dict(system_parameter_defaults)
 
         system_parameter_defaults["default_cluster_replication_factor"] = str(
             default_replication_factor
