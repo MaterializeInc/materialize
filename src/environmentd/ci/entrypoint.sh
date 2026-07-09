@@ -1,3 +1,5 @@
+#!/bin/sh
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -7,10 +9,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+set -eu
 
-def cluster_pod_name(cluster_id: str, replica_id: str, process: int = 0) -> str:
-    return f"pod/cluster-{cluster_id}-replica-{replica_id}-gen-0-{process}"
+if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
+    unset LD_PRELOAD
+else
+    export LD_PRELOAD=libeatmydata.so
+fi
 
-
-def cluster_service_name(cluster_id: str, replica_id: str) -> str:
-    return f"service/cluster-{cluster_id}-replica-{replica_id}-gen-0"
+if environmentd "$@"; then
+    echo "environmentd exited gracefully; sleeping forever" >&2
+    sleep infinity
+else
+    exit $?
+fi

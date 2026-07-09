@@ -23,7 +23,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends eatmydata \
 # itself.
 MZFROM tini-static AS tini
 
-FROM gcr.io/distroless/cc-debian13:nonroot-28078d2e5e77671d2046dcc9e2c75334e31efa4d
+# The `materialize` user (uid/gid 999), built here because the distroless final
+# image has no shell to run `useradd`. uid 999 matches the orchestrator's
+# hardcoded runAsUser/fsGroup, so no UID gate is needed.
+FROM debian:13-slim AS useradd
+RUN groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize
+
+# `debug` variant of the same distroless build id as the plain `nonroot` pin. It
+# adds a busybox shell (`/busybox/sh`), kept intentionally so entrypoint.sh and
+# `kubectl exec` keep working. A later step can drop to the shell-less variant.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot-28078d2e5e77671d2046dcc9e2c75334e31efa4d
 
 # Ensure any Rust binaries that crash print a backtrace.
 ENV RUST_BACKTRACE=1
@@ -51,6 +61,12 @@ COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
 # backend segfaults the statically-linked `ssh` (see comments in the file).
 COPY nsswitch.conf /etc/nsswitch.conf
 
-USER nonroot
-ENV HOME=/home/nonroot
+# Run as `materialize` (uid/gid 999). The static `ssh` resolves the uid via the
+# `files` nsswitch backend against the copied /etc/passwd.
+COPY --from=useradd /etc/passwd /etc/passwd
+COPY --from=useradd /etc/group /etc/group
+COPY --from=useradd --chown=999:999 /home/materialize /home/materialize
+
+USER materialize
+ENV HOME=/home/materialize
 ENTRYPOINT []

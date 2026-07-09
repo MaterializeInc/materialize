@@ -7,13 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import subprocess
 from textwrap import dedent
 
 import pytest
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name, signal_process_in_pod
+from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
 
 
@@ -174,9 +175,11 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     # wait for the cluster to be ready first before attempting to kill it
     wait(condition="condition=Ready", resource=f"{pod_name}")
 
-    # Simulate an unexpected clusterd crash. The process is killed in place,
-    # so the container restarts within the same pod.
-    signal_process_in_pod(mz, pod_name, "clusterd", "SIGKILL")
+    try:
+        mz.kubectl("exec", pod_name, "--", "sh", "-c", "kill -9 `pidof clusterd`")
+    except subprocess.CalledProcessError as e:
+        # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
+        assert e.returncode == 137
 
     mz.testdrive.run(
         input=dedent("""
@@ -200,7 +203,14 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
 
     # Kill the environmentd and confirm the same
 
-    signal_process_in_pod(mz, "pod/environmentd-0", "environmentd", "SIGKILL")
+    mz.kubectl(
+        "exec",
+        "pod/environmentd-0",
+        "--",
+        "sh",
+        "-c",
+        "kill -9 `pidof environmentd`",
+    )
     wait(condition="condition=Ready", resource="pod/environmentd-0")
 
     mz.testdrive.run(

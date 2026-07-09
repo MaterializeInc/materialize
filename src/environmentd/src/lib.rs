@@ -141,11 +141,6 @@ pub struct Config {
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     /// The process-wide live system dyncfg set.
     pub system_dyncfgs: Arc<ConfigSet>,
-    /// Whether to idle in place, rather than exit, when this generation is
-    /// fenced out by a newer one. Set when a restart-on-exit process manager (a
-    /// Kubernetes StatefulSet) supervises the process directly, unset when a
-    /// supervising entrypoint sleeps on graceful exit instead.
-    pub idle_when_fenced_out: bool,
 
     // === Storage options. ===
     /// The interval at which to collect storage usage information.
@@ -663,7 +658,6 @@ impl Listeners {
             panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
             bootstrap_args,
             ddl_check_interval: with_0dt_deployment_ddl_check_interval,
-            idle_when_fenced_out: config.idle_when_fenced_out,
         };
         let PreflightOutput {
             openable_adapter_storage,

@@ -8,13 +8,14 @@
 # by the Apache License, Version 2.0.
 
 
+import subprocess
 from textwrap import dedent
 
 from kubernetes.client import V1Pod, V1StatefulSet
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
-from materialize.cloudtest.util.cluster import cluster_pod_name, signal_process_in_pod
+from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
 
 
@@ -90,9 +91,11 @@ def test_crash_storage(mz: MaterializeApplication) -> None:
     pod_name = cluster_pod_name(cluster_id, replica_id)
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
-    # Simulate an unexpected clusterd crash. The process is killed in place,
-    # so the container restarts within the same pod.
-    signal_process_in_pod(mz, pod_name, "clusterd", "SIGKILL")
+    try:
+        mz.kubectl("exec", pod_name, "--", "sh", "-c", "kill -9 `pidof clusterd`")
+    except subprocess.CalledProcessError as e:
+        # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
+        assert e.returncode == 137
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
 

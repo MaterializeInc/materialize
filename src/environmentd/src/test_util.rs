@@ -871,7 +871,6 @@ impl Listeners {
                 secrets_controller,
                 cloud_resource_controller: None,
                 system_dyncfgs,
-                idle_when_fenced_out: false,
                 tls: config.tls,
                 frontegg: config.frontegg,
                 frontegg_oauth_issuer_url: None,

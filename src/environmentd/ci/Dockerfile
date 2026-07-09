@@ -11,8 +11,10 @@ MZFROM openssh-static AS openssh
 
 MZFROM distroless-prod-base
 
-COPY environmentd /usr/local/bin/
+COPY environmentd entrypoint.sh /usr/local/bin/
 COPY --from=openssh /output/ssh /usr/bin/ssh
 
-# tini (from distroless-prod-base) is PID 1 so ssh tunnel subprocesses get reaped.
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/environmentd"]
+# tini (from distroless-prod-base) is PID 1 so ssh tunnel subprocesses get
+# reaped. entrypoint.sh runs environmentd, then sleeps on graceful exit. Run it
+# through busybox `sh` explicitly, as distroless has no /bin/sh.
+ENTRYPOINT ["/usr/bin/tini", "--", "/busybox/sh", "/usr/local/bin/entrypoint.sh"]

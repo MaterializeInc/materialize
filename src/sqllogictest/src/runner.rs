@@ -1224,7 +1224,6 @@ impl<'a> RunnerInner<'a> {
             secrets_controller,
             cloud_resource_controller: None,
             system_dyncfgs,
-            idle_when_fenced_out: false,
             tls: None,
             frontegg: None,
             frontegg_oauth_issuer_url: None,
