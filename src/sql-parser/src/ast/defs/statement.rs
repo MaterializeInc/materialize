@@ -4090,6 +4090,7 @@ pub enum ExplainPlanOptionName {
     EnableLetrecFixpointAnalysis,
     EnableJoinPrioritizeArranged,
     EnableProjectionPushdownAfterRelationCse,
+    EnableFixedCorrelatedCteLowering,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -4126,7 +4127,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableJoinPrioritizeArranged
-            | Self::EnableProjectionPushdownAfterRelationCse => false,
+            | Self::EnableProjectionPushdownAfterRelationCse
+            | Self::EnableFixedCorrelatedCteLowering => false,
         }
     }
 }

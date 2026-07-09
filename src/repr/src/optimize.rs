@@ -137,6 +137,8 @@ optimizer_feature_flags!({
     enable_coalesce_case_transform: bool,
     // See the feature flag of the same name.
     enable_will_distinct_propagation: bool,
+    // See the feature flag of the same name.
+    enable_fixed_correlated_cte_lowering: bool,
 });
 
 /// A trait used to implement layered config construction.

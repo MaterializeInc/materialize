@@ -110,6 +110,7 @@ Connection
 Connections
 Constraint
 Copy
+Correlated
 Count
 Counter
 Cpu
@@ -123,6 +124,7 @@ Credential
 Cross
 Cse
 Csv
+Cte
 Current
 Cursor
 Database
@@ -189,6 +191,7 @@ File
 Files
 Filter
 First
+Fixed
 Fixpoint
 Float
 Following
