@@ -30,10 +30,14 @@ use std::sync::Arc;
 use indexmap::IndexSet;
 use mz_ore::collections::HashMap;
 use mz_ore::treat_as_equal::TreatAsEqual;
-use mz_repr::{ReprColumnType, Row};
+use mz_repr::{Diff, ReprColumnType, ReprRelationType, Row};
 use smallvec::SmallVec;
 
-use crate::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc};
+use crate::{
+    AccessStrategy, AggregateExpr, BinaryFunc, ColumnOrder, EvalError, Id, JoinImplementation,
+    LetRecLimit, LocalId, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
+    UnmaterializableFunc, VariadicFunc,
+};
 
 /// Identifies a term within a [`TermGraph`].
 pub type TermId = usize;
@@ -251,12 +255,354 @@ impl TermRep for MirScalarExpr {
     }
 }
 
+/// The operator at the root of a [`MirRelationExpr`], relation children
+/// elided.
+///
+/// Scalar payloads (scalar expressions, aggregates, join metadata) remain
+/// owned ASTs. Operations on a graph of these ops are immune to relation
+/// nesting depth, but comparisons and hashes of the ops themselves still
+/// recurse into the scalar payloads.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MreOp {
+    /// See [`MirRelationExpr::Constant`].
+    Constant {
+        /// The rows of the constant, or an error.
+        rows: Result<Vec<(Row, Diff)>, EvalError>,
+        /// Schema of the constant.
+        typ: ReprRelationType,
+    },
+    /// See [`MirRelationExpr::Get`].
+    Get {
+        /// A global or local identifier of a collection.
+        id: Id,
+        /// Schema of the collection.
+        typ: ReprRelationType,
+        /// How the collection is accessed.
+        access_strategy: AccessStrategy,
+    },
+    /// A binding, applied to children `[value, body]`. See
+    /// [`MirRelationExpr::Let`].
+    Let {
+        /// The local identifier the value is bound to.
+        id: LocalId,
+    },
+    /// Recursive bindings, applied to children `[values .., body]` where the
+    /// values number `ids.len()`. See [`MirRelationExpr::LetRec`].
+    LetRec {
+        /// The local identifiers the values are bound to.
+        ids: Vec<LocalId>,
+        /// Recursion iteration limits, one per binding.
+        limits: Vec<Option<LetRecLimit>>,
+    },
+    /// See [`MirRelationExpr::Project`].
+    Project {
+        /// The retained columns, in order.
+        outputs: Vec<usize>,
+    },
+    /// See [`MirRelationExpr::Map`].
+    Map {
+        /// The appended scalar expressions.
+        scalars: Vec<MirScalarExpr>,
+    },
+    /// See [`MirRelationExpr::FlatMap`].
+    FlatMap {
+        /// The table function.
+        func: TableFunc,
+        /// Arguments to the table function.
+        exprs: Vec<MirScalarExpr>,
+    },
+    /// See [`MirRelationExpr::Filter`].
+    Filter {
+        /// The retention predicates.
+        predicates: Vec<MirScalarExpr>,
+    },
+    /// A join, applied to its input children. See [`MirRelationExpr::Join`].
+    Join {
+        /// Classes of expressions that must evaluate to equal values.
+        equivalences: Vec<Vec<MirScalarExpr>>,
+        /// The join implementation strategy.
+        implementation: JoinImplementation,
+    },
+    /// See [`MirRelationExpr::Reduce`].
+    Reduce {
+        /// Grouping key expressions.
+        group_key: Vec<MirScalarExpr>,
+        /// Aggregates to compute per group.
+        aggregates: Vec<AggregateExpr>,
+        /// Whether the input is monotonic.
+        monotonic: bool,
+        /// A user hint at the number of groups.
+        expected_group_size: Option<u64>,
+    },
+    /// See [`MirRelationExpr::TopK`].
+    TopK {
+        /// Grouping key columns.
+        group_key: Vec<usize>,
+        /// Ordering within each group.
+        order_key: Vec<ColumnOrder>,
+        /// An optional limit on returned rows per group.
+        limit: Option<MirScalarExpr>,
+        /// Rows to skip per group.
+        offset: usize,
+        /// Whether the input is monotonic.
+        monotonic: bool,
+        /// A user hint at the number of groups.
+        expected_group_size: Option<u64>,
+    },
+    /// See [`MirRelationExpr::Negate`].
+    Negate,
+    /// See [`MirRelationExpr::Threshold`].
+    Threshold,
+    /// A union, applied to children `[base, inputs ..]`. See
+    /// [`MirRelationExpr::Union`].
+    Union,
+    /// See [`MirRelationExpr::ArrangeBy`].
+    ArrangeBy {
+        /// The key sets to arrange by.
+        keys: Vec<Vec<MirScalarExpr>>,
+    },
+}
+
+impl TermRep for MirRelationExpr {
+    type Op = MreOp;
+
+    fn to_op(&self) -> MreOp {
+        match self {
+            MirRelationExpr::Constant { rows, typ } => MreOp::Constant {
+                rows: rows.clone(),
+                typ: typ.clone(),
+            },
+            MirRelationExpr::Get {
+                id,
+                typ,
+                access_strategy,
+            } => MreOp::Get {
+                id: *id,
+                typ: typ.clone(),
+                access_strategy: access_strategy.clone(),
+            },
+            MirRelationExpr::Let { id, .. } => MreOp::Let { id: *id },
+            MirRelationExpr::LetRec { ids, limits, .. } => MreOp::LetRec {
+                ids: ids.clone(),
+                limits: limits.clone(),
+            },
+            MirRelationExpr::Project { outputs, .. } => MreOp::Project {
+                outputs: outputs.clone(),
+            },
+            MirRelationExpr::Map { scalars, .. } => MreOp::Map {
+                scalars: scalars.clone(),
+            },
+            MirRelationExpr::FlatMap { func, exprs, .. } => MreOp::FlatMap {
+                func: func.clone(),
+                exprs: exprs.clone(),
+            },
+            MirRelationExpr::Filter { predicates, .. } => MreOp::Filter {
+                predicates: predicates.clone(),
+            },
+            MirRelationExpr::Join {
+                equivalences,
+                implementation,
+                ..
+            } => MreOp::Join {
+                equivalences: equivalences.clone(),
+                implementation: implementation.clone(),
+            },
+            MirRelationExpr::Reduce {
+                group_key,
+                aggregates,
+                monotonic,
+                expected_group_size,
+                ..
+            } => MreOp::Reduce {
+                group_key: group_key.clone(),
+                aggregates: aggregates.clone(),
+                monotonic: *monotonic,
+                expected_group_size: *expected_group_size,
+            },
+            MirRelationExpr::TopK {
+                group_key,
+                order_key,
+                limit,
+                offset,
+                monotonic,
+                expected_group_size,
+                ..
+            } => MreOp::TopK {
+                group_key: group_key.clone(),
+                order_key: order_key.clone(),
+                limit: limit.clone(),
+                offset: *offset,
+                monotonic: *monotonic,
+                expected_group_size: *expected_group_size,
+            },
+            MirRelationExpr::Negate { .. } => MreOp::Negate,
+            MirRelationExpr::Threshold { .. } => MreOp::Threshold,
+            MirRelationExpr::Union { .. } => MreOp::Union,
+            MirRelationExpr::ArrangeBy { keys, .. } => MreOp::ArrangeBy { keys: keys.clone() },
+        }
+    }
+
+    fn children(&self) -> impl Iterator<Item = &Self> {
+        MirRelationExpr::children(self)
+    }
+
+    fn rebuild(op: &MreOp, children: Vec<Self>) -> Self {
+        let mut children = children.into_iter();
+        match op {
+            MreOp::Constant { rows, typ } => MirRelationExpr::Constant {
+                rows: rows.clone(),
+                typ: typ.clone(),
+            },
+            MreOp::Get {
+                id,
+                typ,
+                access_strategy,
+            } => MirRelationExpr::Get {
+                id: *id,
+                typ: typ.clone(),
+                access_strategy: access_strategy.clone(),
+            },
+            MreOp::Let { id } => {
+                let value = Box::new(children.next().expect("value present"));
+                let body = Box::new(children.next().expect("body present"));
+                MirRelationExpr::Let {
+                    id: *id,
+                    value,
+                    body,
+                }
+            }
+            MreOp::LetRec { ids, limits } => {
+                let mut values = Vec::with_capacity(ids.len());
+                for _ in 0..ids.len() {
+                    values.push(children.next().expect("value present"));
+                }
+                let body = Box::new(children.next().expect("body present"));
+                MirRelationExpr::LetRec {
+                    ids: ids.clone(),
+                    values,
+                    limits: limits.clone(),
+                    body,
+                }
+            }
+            MreOp::Project { outputs } => MirRelationExpr::Project {
+                input: Box::new(children.next().expect("input present")),
+                outputs: outputs.clone(),
+            },
+            MreOp::Map { scalars } => MirRelationExpr::Map {
+                input: Box::new(children.next().expect("input present")),
+                scalars: scalars.clone(),
+            },
+            MreOp::FlatMap { func, exprs } => MirRelationExpr::FlatMap {
+                input: Box::new(children.next().expect("input present")),
+                func: func.clone(),
+                exprs: exprs.clone(),
+            },
+            MreOp::Filter { predicates } => MirRelationExpr::Filter {
+                input: Box::new(children.next().expect("input present")),
+                predicates: predicates.clone(),
+            },
+            MreOp::Join {
+                equivalences,
+                implementation,
+            } => MirRelationExpr::Join {
+                inputs: children.collect(),
+                equivalences: equivalences.clone(),
+                implementation: implementation.clone(),
+            },
+            MreOp::Reduce {
+                group_key,
+                aggregates,
+                monotonic,
+                expected_group_size,
+            } => MirRelationExpr::Reduce {
+                input: Box::new(children.next().expect("input present")),
+                group_key: group_key.clone(),
+                aggregates: aggregates.clone(),
+                monotonic: *monotonic,
+                expected_group_size: *expected_group_size,
+            },
+            MreOp::TopK {
+                group_key,
+                order_key,
+                limit,
+                offset,
+                monotonic,
+                expected_group_size,
+            } => MirRelationExpr::TopK {
+                input: Box::new(children.next().expect("input present")),
+                group_key: group_key.clone(),
+                order_key: order_key.clone(),
+                limit: limit.clone(),
+                offset: *offset,
+                monotonic: *monotonic,
+                expected_group_size: *expected_group_size,
+            },
+            MreOp::Negate => MirRelationExpr::Negate {
+                input: Box::new(children.next().expect("input present")),
+            },
+            MreOp::Threshold => MirRelationExpr::Threshold {
+                input: Box::new(children.next().expect("input present")),
+            },
+            MreOp::Union => MirRelationExpr::Union {
+                base: Box::new(children.next().expect("base present")),
+                inputs: children.collect(),
+            },
+            MreOp::ArrangeBy { keys } => MirRelationExpr::ArrangeBy {
+                input: Box::new(children.next().expect("input present")),
+                keys: keys.clone(),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use mz_repr::{Datum, ReprScalarType};
+    use mz_repr::{Datum, GlobalId, ReprScalarType, SqlScalarType};
 
     use super::*;
     use crate::func;
+
+    fn typ1() -> ReprRelationType {
+        ReprRelationType::new(vec![ReprScalarType::Int64.nullable(false)])
+    }
+
+    fn base() -> MirRelationExpr {
+        MirRelationExpr::constant(vec![vec![Datum::Int64(1)]], typ1())
+    }
+
+    /// Drops a relation expression without recursing along the relation
+    /// spine, for the same reason as `dismantle`.
+    fn dismantle_relation(expr: MirRelationExpr) {
+        use MirRelationExpr::*;
+        let mut todo = vec![expr];
+        while let Some(expr) = todo.pop() {
+            match expr {
+                Constant { .. } | Get { .. } => {}
+                Let { value, body, .. } => {
+                    todo.push(*value);
+                    todo.push(*body);
+                }
+                LetRec { values, body, .. } => {
+                    todo.extend(values);
+                    todo.push(*body);
+                }
+                Project { input, .. }
+                | Map { input, .. }
+                | FlatMap { input, .. }
+                | Filter { input, .. }
+                | Reduce { input, .. }
+                | TopK { input, .. }
+                | Negate { input }
+                | Threshold { input }
+                | ArrangeBy { input, .. } => todo.push(*input),
+                Join { inputs, .. } => todo.extend(inputs),
+                Union { base, inputs } => {
+                    todo.push(*base);
+                    todo.extend(inputs);
+                }
+            }
+        }
+    }
 
     fn col(i: usize) -> MirScalarExpr {
         MirScalarExpr::column(i)
@@ -347,5 +693,115 @@ mod tests {
         assert_eq!(graph.len(), DEPTH + 1);
         dismantle(expr);
         dismantle(extracted);
+    }
+
+    #[mz_ore::test]
+    fn roundtrip_basic_relations() {
+        let local = LocalId::new(1);
+        let exprs = vec![
+            base(),
+            MirRelationExpr::global_get(GlobalId::User(1), typ1()),
+            base().project(vec![0]),
+            MirRelationExpr::Map {
+                input: Box::new(base()),
+                scalars: vec![lit(5)],
+            },
+            base().filter(vec![col(0).call_unary(UnaryFunc::Not(func::Not))]),
+            MirRelationExpr::FlatMap {
+                input: Box::new(base()),
+                func: TableFunc::Wrap {
+                    types: vec![SqlScalarType::Int64.nullable(false)],
+                    width: 1,
+                },
+                exprs: vec![col(0)],
+            },
+            base().negate().threshold(),
+            base().union(base().negate()),
+            MirRelationExpr::join(
+                vec![
+                    MirRelationExpr::global_get(GlobalId::User(1), typ1()),
+                    MirRelationExpr::global_get(GlobalId::User(2), typ1()),
+                ],
+                vec![vec![(0, 0), (1, 0)]],
+            ),
+            MirRelationExpr::Let {
+                id: local,
+                value: Box::new(base()),
+                body: Box::new(MirRelationExpr::Get {
+                    id: Id::Local(local),
+                    typ: typ1(),
+                    access_strategy: AccessStrategy::UnknownOrLocal,
+                }),
+            },
+            MirRelationExpr::LetRec {
+                ids: vec![local],
+                values: vec![base()],
+                limits: vec![None],
+                body: Box::new(base()),
+            },
+            MirRelationExpr::Reduce {
+                input: Box::new(base()),
+                group_key: vec![col(0)],
+                aggregates: vec![],
+                monotonic: false,
+                expected_group_size: None,
+            },
+            MirRelationExpr::TopK {
+                input: Box::new(base()),
+                group_key: vec![0],
+                order_key: vec![],
+                limit: None,
+                offset: 0,
+                monotonic: false,
+                expected_group_size: None,
+            },
+            MirRelationExpr::ArrangeBy {
+                input: Box::new(base()),
+                keys: vec![vec![col(0)]],
+            },
+        ];
+        let mut graph = TermGraph::default();
+        for expr in exprs {
+            let id = graph.ensure(&expr);
+            let extracted: MirRelationExpr = graph.extract(id);
+            assert_eq!(extracted, expr);
+        }
+    }
+
+    #[mz_ore::test]
+    fn sharing_relations() {
+        let get = MirRelationExpr::global_get(GlobalId::User(1), typ1());
+        let expr = get.clone().union(get);
+        let mut graph = TermGraph::default();
+        let id = graph.ensure(&expr);
+        // Terms: the get (once) and the union.
+        assert_eq!(graph.len(), 2);
+        let extracted: MirRelationExpr = graph.extract(id);
+        assert_eq!(graph.ensure(&extracted), id);
+        assert_eq!(graph.len(), 2);
+    }
+
+    #[mz_ore::test]
+    fn deep_relations() {
+        // Deep enough that recursive traversal, comparison, or drop would
+        // overflow a default 2MiB test thread stack.
+        const DEPTH: usize = 100_000;
+        let mut expr = base();
+        for _ in 0..DEPTH {
+            // Constructed directly since the `negate` builder folds negation
+            // into constants, keeping the tree shallow.
+            expr = MirRelationExpr::Negate {
+                input: Box::new(expr),
+            };
+        }
+        let mut graph = TermGraph::default();
+        let id = graph.ensure(&expr);
+        // Every level has a distinct child, so nothing dedups.
+        assert_eq!(graph.len(), DEPTH + 1);
+        let extracted: MirRelationExpr = graph.extract(id);
+        assert_eq!(graph.ensure(&extracted), id);
+        assert_eq!(graph.len(), DEPTH + 1);
+        dismantle_relation(expr);
+        dismantle_relation(extracted);
     }
 }
