@@ -165,6 +165,39 @@ pub struct MetricsRegistry {
     postprocessors: Arc<Mutex<Vec<Box<dyn FnMut(&mut Vec<MetricFamily>) + Send + Sync>>>>,
 }
 
+/// A handle whose last-dropped clone unregisters a collector from its registry.
+///
+/// `prometheus::Registry::unregister` matches a collector by the id of its
+/// `Desc`s, not by object identity, so the handle keeps a boxed clone of the
+/// collector and hands it to `unregister` on drop.
+#[derive(Clone, Debug)]
+pub struct CollectorDropHandle {
+    #[allow(dead_code)]
+    inner: Arc<CollectorDropInner>,
+}
+
+struct CollectorDropInner {
+    registry: Registry,
+    collector: Box<dyn prometheus::core::Collector>,
+}
+
+impl std::fmt::Debug for CollectorDropInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("CollectorDropInner").finish_non_exhaustive()
+    }
+}
+
+impl Drop for CollectorDropInner {
+    fn drop(&mut self) {
+        // Reconstruct an equivalent boxed collector. unregister matches by Desc id.
+        // Ignore errors: a double-drop or already-unregistered collector is benign.
+        let _ = self.registry.unregister(std::mem::replace(
+            &mut self.collector,
+            Box::new(prometheus::IntCounter::new("mz_noop", "noop").expect("valid")),
+        ));
+    }
+}
+
 /// A wrapper for metrics to require delete on drop semantics
 ///
 /// The wrapper behaves like regular metrics but only provides functions to create delete-on-drop
@@ -286,6 +319,37 @@ impl MetricsRegistry {
         self.inner
             .register(Box::new(collector))
             .expect("registering pre-defined metrics collector");
+    }
+
+    /// Register a collector and return a handle that unregisters it on last drop.
+    ///
+    /// If a collector with the same descriptor id is already registered, this
+    /// soft-panics and returns a handle that owns no registration, so a logic
+    /// error degrades to stale metrics rather than a duplicate `MetricFamily`
+    /// that would invalidate the entire scrape.
+    pub fn register_collector_with_dropper<C>(&self, collector: C) -> CollectorDropHandle
+    where
+        C: 'static + Clone + prometheus::core::Collector,
+    {
+        match self.inner.register(Box::new(collector.clone())) {
+            Ok(()) => CollectorDropHandle {
+                inner: Arc::new(CollectorDropInner {
+                    registry: self.inner.clone(),
+                    collector: Box::new(collector),
+                }),
+            },
+            Err(e) => {
+                crate::soft_panic_or_log!("collector already registered: {e}");
+                CollectorDropHandle {
+                    inner: Arc::new(CollectorDropInner {
+                        registry: self.inner.clone(),
+                        collector: Box::new(
+                            prometheus::IntCounter::new("mz_noop", "noop").expect("valid"),
+                        ),
+                    }),
+                }
+            }
+        }
     }
 
     /// Registers a metric postprocessor.
@@ -1126,5 +1190,26 @@ mod tests {
         let wall_counter = wall_metric[0].get_counter();
         // We filtered wall time to < 10ms, so our wall time metric should be filtered out.
         assert_eq!(wall_counter.value(), 0.0);
+    }
+
+    #[crate::test]
+    fn collector_drop_handle_unregisters() {
+        use prometheus::IntGauge;
+
+        let registry = MetricsRegistry::new();
+        let gauge = IntGauge::new("mz_test_guarded", "help").unwrap();
+        gauge.set(7);
+        let before = registry.gather().len();
+
+        let handle = registry.register_collector_with_dropper(gauge.clone());
+        assert_eq!(registry.gather().len(), before + 1);
+
+        // Cloning the handle must share one registration (CLU-63 semantics).
+        let handle2 = handle.clone();
+        drop(handle);
+        assert_eq!(registry.gather().len(), before + 1);
+
+        drop(handle2);
+        assert_eq!(registry.gather().len(), before);
     }
 }
