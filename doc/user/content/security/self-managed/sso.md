@@ -492,6 +492,8 @@ is established, it persists until disconnected, regardless of token expiry.
 
 ## Connecting MCP clients
 
+*Available starting in v26.30*
+
 Materialize provides built-in [MCP servers](/integrations/mcp-server/) at
 `/api/mcp/agent` and `/api/mcp/developer`. When SSO is enabled, MCP clients
 can authenticate with OAuth instead of an [MCP
@@ -548,12 +550,6 @@ claude mcp add --transport http materialize-agent \
 
 The `--callback-port` value must match the `http://localhost:<port>/callback`
 redirect URI registered on the OIDC client.
-
-{{< note >}}
-Deployments behind a load balancer or proxy that rewrites the `Host` header
-must set the `http_host_name` configuration so that the URLs Materialize
-publishes in its resource metadata are correct.
-{{</ note >}}
 
 ## Provisioning roles
 
