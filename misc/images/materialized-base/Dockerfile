@@ -14,7 +14,9 @@ MZFROM console AS console
 # Statically-linked `ssh` client, used by the SSH tunnel feature.
 MZFROM openssh-static AS openssh-static
 
-MZFROM ubuntu-base
+# Debian 13, matching the distroless base env/clusterd use so every Materialize
+# binary runs on the same glibc and system libraries.
+FROM debian:13-slim
 
 ARG CI_SANITIZER=none
 
@@ -24,9 +26,11 @@ RUN groupadd --system --gid=999 materialize \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
         ca-certificates \
         curl \
+        eatmydata \
         gettext-base \
+        liblzma5 \
         nginx \
-        postgresql-16 \
+        postgresql-17 \
         tini \
     && if [ "$CI_SANITIZER" != "none" ]; then \
         TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
@@ -35,22 +39,22 @@ RUN groupadd --system --gid=999 materialize \
     && apt-get clean \
     && rm -rf /var/lib/postgresql \
     # Remove unused PostgreSQL binaries (keep only postgres, initdb, pg_isready, pg_ctl, psql) \
-    && find /usr/lib/postgresql/16/bin -type f \
+    && find /usr/lib/postgresql/17/bin -type f \
         ! -name postgres ! -name initdb ! -name pg_isready ! -name pg_ctl ! -name psql \
         -delete \
     # Remove PostgreSQL client binaries except psql \
     && find /usr/bin -name 'pg_*' -delete \
     # Remove docs, man pages \
-    && rm -rf /usr/share/postgresql/16/man \
+    && rm -rf /usr/share/postgresql/17/man \
     && rm -rf /usr/share/doc/postgresql* \
     # Remove LLVM bitcode (PostgreSQL JIT support, not used) \
-    && rm -rf /usr/lib/postgresql/16/lib/bitcode \
+    && rm -rf /usr/lib/postgresql/17/lib/bitcode \
     # Remove pgxs (extension build infrastructure) \
-    && rm -rf /usr/lib/postgresql/16/lib/pgxs \
+    && rm -rf /usr/lib/postgresql/17/lib/pgxs \
     # Remove static libraries \
     && find /usr/lib/postgresql -name '*.a' -delete \
     # Remove unused extension SQL files (keep only plpgsql which is needed for initdb) \
-    && find /usr/share/postgresql/16/extension -type f \
+    && find /usr/share/postgresql/17/extension -type f \
         ! -name 'plpgsql*' -delete \
     # Remove nginx docs and unnecessary files \
     && rm -rf /usr/share/doc/nginx* \
@@ -58,6 +62,11 @@ RUN groupadd --system --gid=999 materialize \
     && mkdir -p /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx \
     && touch /run/nginx.pid \
     && chown -R materialize /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx /run/nginx.pid
+
+# FoundationDB client library, dynamically linked by materialized. Keep this
+# version identical to the COPY in ubuntu-base and distroless-prod-base: all
+# three share one FoundationDB cluster during a rolling upgrade.
+COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
 
 COPY postgresql.conf pg_hba.conf /etc/postgresql/
 
