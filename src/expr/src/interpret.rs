@@ -13,6 +13,7 @@ use std::fmt::Debug;
 use mz_repr::{Datum, ReprColumnType, ReprRelationType, ReprScalarType, Row, RowArena};
 
 use crate::scalar::func::variadic::And;
+use crate::term_graph::{MseOp, TermGraph};
 use crate::{
     BinaryFunc, Eval, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
     UnmaterializableFunc, VariadicFunc, func,
@@ -415,30 +416,34 @@ pub trait Interpreter {
 
     /// Evaluate an entire expression, by delegating to the fine-grained methods on [Interpreter].
     fn expr(&self, expr: &MirScalarExpr) -> Self::Summary {
-        match expr {
-            MirScalarExpr::Column(id, _name) => self.column(*id),
-            MirScalarExpr::Literal(value, col_type) => self.literal(value, col_type),
-            MirScalarExpr::CallUnmaterializable(func) => self.unmaterializable(func),
-            MirScalarExpr::CallUnary { func, expr } => {
-                let expr_range = self.expr(expr);
-                self.unary(func, expr_range)
-            }
-            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let expr1_range = self.expr(expr1);
-                let expr2_range = self.expr(expr2);
-                self.binary(func, expr1_range, expr2_range)
-            }
-            MirScalarExpr::CallVariadic { func, exprs } => {
-                let exprs: Vec<_> = exprs.into_iter().map(|e| self.expr(e)).collect();
-                self.variadic(func, exprs)
-            }
-            MirScalarExpr::If { cond, then, els } => {
-                let cond_range = self.expr(cond);
-                let then_range = self.expr(then);
-                let els_range = self.expr(els);
-                self.cond(cond_range, then_range, els_range)
-            }
+        // A bottom-up fold in term identifier order, children before parents,
+        // so arbitrarily deep expressions cannot exhaust the stack. Term
+        // graph deduplication also evaluates each distinct subexpression
+        // once, however often it appears.
+        let mut graph = TermGraph::default();
+        let root = graph.ensure(expr);
+        let mut summaries: Vec<Self::Summary> = Vec::with_capacity(graph.len());
+        for (_id, (op, args)) in graph.iter() {
+            let summary = match op {
+                MseOp::Column(id, _name) => self.column(*id),
+                MseOp::Literal(value, col_type) => self.literal(value, col_type),
+                MseOp::CallUnmaterializable(func) => self.unmaterializable(func),
+                MseOp::CallUnary(func) => self.unary(func, summaries[args[0]].clone()),
+                MseOp::CallBinary(func) => {
+                    self.binary(func, summaries[args[0]].clone(), summaries[args[1]].clone())
+                }
+                MseOp::CallVariadic(func) => {
+                    self.variadic(func, args.iter().map(|a| summaries[*a].clone()).collect())
+                }
+                MseOp::If => self.cond(
+                    summaries[args[0]].clone(),
+                    summaries[args[1]].clone(),
+                    summaries[args[2]].clone(),
+                ),
+            };
+            summaries.push(summary);
         }
+        summaries.swap_remove(root)
     }
 
     /// Specifically, this evaluates the map and filters stages of an MFP: summarize each of the
@@ -2468,5 +2473,25 @@ mod tests {
         );
         let summary = Trace.expr(&expr);
         assert!(summary.pushdownable());
+    }
+
+    /// The default fold must not recurse per expression node, so depths far
+    /// beyond any stack budget summarize successfully.
+    #[mz_ore::test]
+    fn test_deep_expression_trace() {
+        const DEPTH: usize = 100_000;
+        let mut expr = MirScalarExpr::column(0);
+        for _ in 0..DEPTH {
+            expr = expr.call_unary(UnaryFunc::Not(func::Not));
+        }
+        let summary = Trace.expr(&expr);
+        assert!(summary.pushdownable());
+        // Deep expressions recurse on drop, so dismantle iteratively.
+        let mut todo = vec![expr];
+        while let Some(e) = todo.pop() {
+            if let MirScalarExpr::CallUnary { expr, .. } = e {
+                todo.push(*expr);
+            }
+        }
     }
 }
