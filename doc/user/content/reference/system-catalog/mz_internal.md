@@ -575,12 +575,32 @@ each materialized view with a refresh strategy other than `on-commit`.
 
 ## `mz_mcp_data_products`
 
-The `mz_mcp_data_products` view lists data products (materialized views
-and indexed views) that are available through the Model Context Protocol
-(MCP) server and that the current user has SELECT access on. Non-indexed
-regular views are excluded to avoid triggering a full recompute when an
-agent queries the data product. Comments are optional enrichment. This
-is a lightweight discovery view. Use
+The `mz_mcp_data_products` view lists data products available for discovery
+through the Model Context Protocol (MCP) server. An object counts as a data
+product, and appears in this view, when all of the following hold:
+
+- It is a **materialized view**, or a **view with at least one index**.
+  Non-indexed regular views are excluded to avoid triggering a full recompute
+  when an agent queries the data product.
+- The current role has `SELECT` on the object.
+- It is not in a system schema (`mz_catalog`, `mz_internal`, `pg_catalog`,
+  `information_schema`, `mz_introspection`).
+
+The description is the index comment when present, otherwise the object
+comment. Comments are optional enrichment, so an object without comments is
+still listed, with a null description.
+
+An object indexed on multiple clusters is advertised once per index cluster.
+A materialized view with no indexes is advertised with the cluster it
+computes on. The `cluster` value is only shown for clusters the current role
+has `USAGE` on and is null otherwise, so a data product never advertises a
+cluster the role cannot run reads on. An object can therefore appear both
+with a named cluster and with a null cluster when the role can use only some
+of its clusters. When reading a data product, the MCP server routes the read
+to an advertised cluster so it benefits from the index, and falls back to the
+session's default cluster when no advertised cluster is usable.
+
+This is a lightweight discovery view. Use
 [`mz_mcp_data_product_details`](#mz_mcp_data_product_details) for full column
 schema information.
 
