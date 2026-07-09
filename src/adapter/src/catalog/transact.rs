@@ -1092,7 +1092,7 @@ impl Catalog {
                 tx.remove_item(replacement_id)?;
 
                 new_entry.id = replacement_id;
-                tx_replace_item(tx, state, id, new_entry)?;
+                tx_replace_item(tx, state, id, new_entry, &mut temporary_item_updates)?;
 
                 let comment_id = CommentObjectId::MaterializedView(replacement_id);
                 tx.drop_comments(&[comment_id].into())?;
@@ -2966,17 +2966,33 @@ fn tx_replace_item(
     state: &CatalogState,
     id: CatalogItemId,
     new_entry: CatalogEntry,
+    temporary_item_updates: &mut Vec<(TemporaryItem, StateDiff)>,
 ) -> Result<(), AdapterError> {
     let new_id = new_entry.id;
 
     // Rewrite dependent objects to point to the new ID.
     for use_id in new_entry.referenced_by() {
+        let dependent = state.get_entry(use_id);
+
+        // Temporary items live only in the in-memory catalog, never in the durable
+        // transaction. They must be rewritten via `temporary_item_updates`. Routing them
+        // through `tx.update_item` would be a no-op (they are not in `tx`), leaving the
+        // temporary object referencing the removed `id` and tripping the catalog
+        // consistency check. Mirrors how `Op::RenameItem` handles temporary dependents.
+        if dependent.item().is_temporary() {
+            let mut rewritten = dependent.clone();
+            rewritten.item = rewritten.item.replace_item_refs(id, new_id);
+            temporary_item_updates.push((dependent.clone().into(), StateDiff::Retraction));
+            temporary_item_updates.push((rewritten.into(), StateDiff::Addition));
+            continue;
+        }
+
         // The dependent might be dropped in the same tx, so check.
         if tx.get_item(use_id).is_none() {
             continue;
         }
 
-        let mut dependent = state.get_entry(use_id).clone();
+        let mut dependent = dependent.clone();
         dependent.item = dependent.item.replace_item_refs(id, new_id);
         tx.update_item(*use_id, dependent.into())?;
     }
