@@ -15,7 +15,7 @@ import { Navigate, Outlet, Route } from "react-router-dom";
 import { useCanViewBilling, useCurrentOrganization } from "~/api/auth";
 import { SupportButton } from "~/components/SupportLink";
 import { CloudRuntimeConfig } from "~/config/AppConfigSwitch";
-import { PageHeader, PageTab, PageTabStrip, Tab } from "~/layouts/BaseLayout";
+import { PageHeader, PageTabStrip, Tab } from "~/layouts/BaseLayout";
 import { SentryRoutes } from "~/sentry";
 import { MaterializeTheme } from "~/theme";
 
@@ -24,6 +24,12 @@ import PricingPage from "./PricingPage";
 import { useRecentInvoices } from "./queries";
 import UsagePage from "./UsagePage";
 import { getIsUpgradedPlan } from "./utils";
+
+// Static reference material, not account-specific data, so it lives to the
+// right of the account tabs rather than behind the (root-only) Billing tab.
+const PRICING_TAB: Tab[] = [
+  { label: "Pricing", href: "/usage/pricing", end: true },
+];
 
 const UsageLayout = ({ isBillingVisible }: { isBillingVisible: boolean }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -58,24 +64,29 @@ const UsageLayout = ({ isBillingVisible }: { isBillingVisible: boolean }) => {
             <SupportButton>Contact support</SupportButton>
           </HStack>
 
-          <HStack width="100%" spacing="3" pr="7">
+          {/* Each PageTabStrip draws its underline only across its own width,
+              which would leave gaps in the strips' spacing and the row's
+              right padding. The same 1px inset line on the row itself keeps
+              it continuous. Bottom-align the strips (the active tab's 1px
+              borderBottom makes its strip 1px taller; centering would float
+              the other strip's underline off the row's) so all the underline
+              segments land on the same pixel row. */}
+          <HStack
+            width="100%"
+            spacing="3"
+            pr="7"
+            alignItems="flex-end"
+            boxShadow={`inset 0px -1px 0px 0px ${colors.border.primary}`}
+          >
             <Box flex="1" minWidth="0">
               <PageTabStrip tabData={navItems} />
             </Box>
-            {/* Static reference material, not account-specific data, so it
-                lives here rather than behind the (root-only) Billing tab.
-                Styled as a PageTab (not a Button) to read as another pill in
-                the strip rather than an unrelated bordered button. */}
-            <PageTab
-              to="/usage/pricing"
-              tabProps={{
-                flexShrink: 0,
-                borderRadius: "4px",
-                _hover: { background: colors.background.secondary },
-              }}
-            >
-              Pricing
-            </PageTab>
+            {/* A separate single-tab strip so Pricing shares the tab strip's
+                hover pill and active underline instead of hand-rolled hover
+                styling. */}
+            <Box flexShrink={0}>
+              <PageTabStrip tabData={PRICING_TAB} />
+            </Box>
           </HStack>
         </VStack>
       </PageHeader>
