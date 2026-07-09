@@ -237,27 +237,43 @@ user → Applications → "..." → Push profile updates.
 
 ### Step 4. (Optional) Sync groups
 
-Group memberships also push to Polis, but currently **don't translate
-to Materialize SQL role grants**. The OIDC token Polis issues to Kratos
-doesn't include a group claim today, and Materialize has no setting that
-maps OIDC groups to SQL role memberships.
+Group memberships flow through the stack in two independent ways:
 
-If you want group push to land in Polis:
+1. **SAML attribute statement**: on each login, the IdP attaches the
+   user's group memberships to the SAML assertion. Polis passes them
+   through as an OIDC claim, Kratos writes them onto the identity
+   trait, and the Ory stack embeds them in the JWT as a `groups` claim
+   that Materialize can read. **Refreshed on every login.**
+2. **SCIM directory push**: the IdP synchronizes group entities and
+   memberships into Polis's directory. **Refreshed continuously**, but
+   doesn't itself change the contents of a JWT already in flight; the
+   user has to log in again to see updates.
+
+For the SAML attribute path (recommended):
+
+1. In your SAML app configuration, add a `groups` attribute statement
+   (Okta: Sign On tab → Attribute Statements → legacy Group Attribute
+   Statements → Name: `groups`, Filter: `Matches regex .*`).
+2. Log in via the console. The `groups` JWT claim will contain the
+   user's group names.
+
+For the SCIM directory push (audit + future integration):
 
 1. Create a group in your IdP and add users to it.
 2. Open the SAML app → **Push Groups** tab → "Push Groups" → "by name"
    → search and add the group → save.
 
-Polis will SCIM-sync the group entity. Confirm:
+Confirm the push landed in Polis:
 
 ```bash
 curl -s -H "Authorization: Api-Key $POLIS_API_KEY" \
   "https://<your-polis-hostname>/api/v1/dsync/groups?tenant=<customer-name>&product=materialize&directoryId=$DIRECTORY_ID" | jq .
 ```
 
-Mapping these groups to Materialize SQL grants currently has to be done
-manually with `GRANT role_name TO "user@email"`. We track the
-end-to-end automation as future work.
+Neither path today translates group membership into automatic `GRANT`
+statements on the Materialize side. Admins still run
+`GRANT role_name TO "user@email"` manually; the `groups` JWT claim is
+available for downstream tooling to consume once that automation lands.
 
 ## What happens when users sign in
 
