@@ -764,6 +764,12 @@ def _resolve_shard_marker(value: str, index: int) -> str:
     )
 
 
+def _resolve_pool_slot_marker(value: str, slot: int) -> str:
+    return value.replace("$$CI_CONCURRENCY_POOL_SLOT", str(slot)).replace(
+        "$CI_CONCURRENCY_POOL_SLOT", str(slot)
+    )
+
+
 def expand_parallel_concurrency_groups(pipeline: Any) -> None:
     """Fan out a `parallelism` step whose concurrency group is per-shard.
 
@@ -779,22 +785,51 @@ def expand_parallel_concurrency_groups(pipeline: Any) -> None:
     name and passing `BUILDKITE_PARALLEL_JOB` / `BUILDKITE_PARALLEL_JOB_COUNT` via
     `env` so the mzcompose-side sharding (`buildkite.shard_list`) and any per-shard
     resource selection keep working unchanged.
+
+    A step may additionally declare `concurrency_pool: P` and use the
+    `$$CI_CONCURRENCY_POOL_SLOT` marker in its concurrency group. The N shards
+    then occupy a window of N slots out of a pool of P, rotated by N each build:
+    shard I of build B gets slot `(B*N + I) % P`. Concurrent builds thus land on
+    disjoint slots (up to P // N fully concurrent builds) instead of queueing on
+    the previous build's groups. The slot is passed to the job via the
+    `CI_CONCURRENCY_POOL_SLOT` env variable so it can select the matching
+    resource (e.g. a staging account). The group name must contain nothing
+    shard-specific besides the slot, so that a group uniquely identifies the
+    pooled resource across builds.
     """
 
     def fan_out(step: dict[str, Any]) -> list[dict[str, Any]]:
         group = step.get("concurrency_group")
-        if not isinstance(group, str) or "BUILDKITE_PARALLEL_JOB" not in group:
+        pool = step.pop("concurrency_pool", None)
+        if not isinstance(group, str) or (
+            "BUILDKITE_PARALLEL_JOB" not in group
+            and "CI_CONCURRENCY_POOL_SLOT" not in group
+        ):
             return [step]
         count = step.pop("parallelism", 1)
+
+        def slot(index: int) -> int:
+            assert pool is not None
+            build_number = int(os.environ.get("BUILDKITE_BUILD_NUMBER", "0"))
+            return (build_number * count + index) % pool
+
+        def resolve(value: str, index: int) -> str:
+            value = _resolve_shard_marker(value, index)
+            if pool is not None:
+                value = _resolve_pool_slot_marker(value, slot(index))
+            return value
+
         if count <= 1:
             # Nothing to fan out (e.g. CI_UNPARALLELIZE stripped parallelism);
-            # just resolve the marker to a single concrete group.
-            step["concurrency_group"] = _resolve_shard_marker(group, 0)
+            # just resolve the markers to a single concrete group.
+            step["concurrency_group"] = resolve(group, 0)
+            if pool is not None:
+                step.setdefault("env", {})["CI_CONCURRENCY_POOL_SLOT"] = str(slot(0))
             return [step]
         shards = []
         for index in range(count):
             shard = copy.deepcopy(step)
-            shard["concurrency_group"] = _resolve_shard_marker(group, index)
+            shard["concurrency_group"] = resolve(group, index)
             if "id" in shard:
                 shard["id"] = f"{step['id']}-{index}"
             if "key" in shard:
@@ -804,6 +839,8 @@ def expand_parallel_concurrency_groups(pipeline: Any) -> None:
             env = shard.setdefault("env", {})
             env["BUILDKITE_PARALLEL_JOB"] = str(index)
             env["BUILDKITE_PARALLEL_JOB_COUNT"] = str(count)
+            if pool is not None:
+                env["CI_CONCURRENCY_POOL_SLOT"] = str(slot(index))
             shards.append(shard)
         return shards
 
