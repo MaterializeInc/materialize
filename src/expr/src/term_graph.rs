@@ -17,6 +17,12 @@
 //! before parents. That order lets consumers traverse expressions bottom-up
 //! with a loop rather than recursion, avoiding the stack hazards that owning
 //! expression trees carry.
+//!
+//! Expression types opt in by implementing [`TermRep`], which splits a node
+//! into an operator (children elided) and child references, and reassembles
+//! a node from an operator and owned children. [`TermGraph::ensure`] and
+//! [`TermGraph::extract`] then convert in both directions, linearly and
+//! iteratively.
 
 use std::hash::Hash;
 use std::sync::Arc;
@@ -34,6 +40,24 @@ pub type TermId = usize;
 
 /// An operator applied to identifiers of previously inserted terms.
 pub type Term<Op> = (Op, SmallVec<[TermId; 2]>);
+
+/// Types interconvertible with the terms of a [`TermGraph`].
+pub trait TermRep: Sized {
+    /// The operator type heading each term.
+    type Op: Clone + Eq + Hash;
+
+    /// The operator at the root of `self`, children elided.
+    fn to_op(&self) -> Self::Op;
+
+    /// The direct children of `self`, in the order `rebuild` expects them.
+    fn children(&self) -> impl Iterator<Item = &Self>;
+
+    /// Reassembles a node from its operator and owned children.
+    ///
+    /// The children arrive in the order `children` produced them, and there
+    /// are exactly as many as the original node had.
+    fn rebuild(op: &Self::Op, children: Vec<Self>) -> Self;
+}
 
 /// A deduplicating map from terms to dense identifiers.
 ///
@@ -86,6 +110,73 @@ impl<Op: Eq + Hash> TermGraph<Op> {
     pub fn iter(&self) -> impl Iterator<Item = (TermId, &Term<Op>)> {
         self.terms.iter().enumerate()
     }
+
+    /// Introduces `root` and its distinct subexpressions, returning the
+    /// identifier of `root`.
+    ///
+    /// Iterative, so arbitrarily deep expressions cannot exhaust the stack.
+    /// Structurally equal subexpressions receive equal identifiers.
+    pub fn ensure<T: TermRep<Op = Op>>(&mut self, root: &T) -> TermId {
+        // The reverse of a depth-first pre-order lists children after their
+        // parents, so the reversed list can be processed children first.
+        let mut stack = vec![root];
+        let mut rev_order = Vec::new();
+        while let Some(expr) = stack.pop() {
+            rev_order.push(expr);
+            stack.extend(expr.children());
+        }
+        // Identifiers for processed nodes, keyed by node address. Comparing
+        // the expressions themselves would recurse, reintroducing the stack
+        // hazard this type exists to avoid.
+        let mut ids: HashMap<*const T, TermId> = HashMap::default();
+        let mut root_id = 0;
+        for expr in rev_order.into_iter().rev() {
+            let args: SmallVec<[TermId; 2]> = expr
+                .children()
+                .map(|child| ids[&std::ptr::from_ref(child)])
+                .collect();
+            root_id = self.insert((expr.to_op(), args));
+            ids.insert(std::ptr::from_ref(expr), root_id);
+        }
+        // The root is first in `rev_order`, so it is processed last.
+        root_id
+    }
+
+    /// Builds the owned expression rooted at `id`.
+    ///
+    /// Iterative, but the result is an owning tree. A deep result carries the
+    /// usual expression tree stack hazards (drop, comparison), which the
+    /// caller owns. Shared subterms are duplicated in the result, which can
+    /// be much larger than the graph that describes it.
+    pub fn extract<T: TermRep<Op = Op>>(&self, id: TermId) -> T {
+        enum Step {
+            Descend(TermId),
+            Emit(TermId),
+        }
+        let mut todo = vec![Step::Descend(id)];
+        // Completed subexpressions. When `Emit(id)` is popped, the results
+        // for `id`'s children sit on top, first child topmost.
+        let mut done: Vec<T> = Vec::new();
+        while let Some(step) = todo.pop() {
+            match step {
+                Step::Descend(id) => {
+                    todo.push(Step::Emit(id));
+                    for child in self.term(id).1.iter() {
+                        todo.push(Step::Descend(*child));
+                    }
+                }
+                Step::Emit(id) => {
+                    let (op, args) = self.term(id);
+                    let children = (0..args.len())
+                        .map(|_| done.pop().expect("child result present"))
+                        .collect();
+                    done.push(T::rebuild(op, children));
+                }
+            }
+        }
+        assert_eq!(done.len(), 1);
+        done.pop().expect("exactly one result")
+    }
 }
 
 /// The operator at the root of a [`MirScalarExpr`], children elided.
@@ -112,112 +203,51 @@ pub enum MseOp {
     If,
 }
 
-impl TermGraph<MseOp> {
-    /// Introduces `root` and its distinct subexpressions, returning the
-    /// identifier of `root`.
-    ///
-    /// Iterative, so arbitrarily deep expressions cannot exhaust the stack.
-    /// Structurally equal subexpressions receive equal identifiers.
-    pub fn ensure(&mut self, root: &MirScalarExpr) -> TermId {
-        // The reverse of a depth-first pre-order lists children after their
-        // parents, so the reversed list can be processed children first.
-        let mut stack = vec![root];
-        let mut rev_order = Vec::new();
-        while let Some(expr) = stack.pop() {
-            rev_order.push(expr);
-            stack.extend(expr.children());
+impl TermRep for MirScalarExpr {
+    type Op = MseOp;
+
+    fn to_op(&self) -> MseOp {
+        match self {
+            MirScalarExpr::Column(col, name) => MseOp::Column(*col, name.clone()),
+            MirScalarExpr::Literal(row, typ) => MseOp::Literal(row.clone(), typ.clone()),
+            MirScalarExpr::CallUnmaterializable(func) => MseOp::CallUnmaterializable(func.clone()),
+            MirScalarExpr::CallUnary { func, .. } => MseOp::CallUnary(func.clone()),
+            MirScalarExpr::CallBinary { func, .. } => MseOp::CallBinary(func.clone()),
+            MirScalarExpr::CallVariadic { func, .. } => MseOp::CallVariadic(func.clone()),
+            MirScalarExpr::If { .. } => MseOp::If,
         }
-        // Identifiers for processed nodes, keyed by node address. Comparing
-        // the expressions themselves would recurse, reintroducing the stack
-        // hazard this type exists to avoid.
-        let mut ids: HashMap<*const MirScalarExpr, TermId> = HashMap::default();
-        let mut root_id = 0;
-        for expr in rev_order.into_iter().rev() {
-            let args: SmallVec<[TermId; 2]> = expr
-                .children()
-                .map(|child| ids[&std::ptr::from_ref(child)])
-                .collect();
-            let op = match expr {
-                MirScalarExpr::Column(col, name) => MseOp::Column(*col, name.clone()),
-                MirScalarExpr::Literal(row, typ) => MseOp::Literal(row.clone(), typ.clone()),
-                MirScalarExpr::CallUnmaterializable(func) => {
-                    MseOp::CallUnmaterializable(func.clone())
-                }
-                MirScalarExpr::CallUnary { func, .. } => MseOp::CallUnary(func.clone()),
-                MirScalarExpr::CallBinary { func, .. } => MseOp::CallBinary(func.clone()),
-                MirScalarExpr::CallVariadic { func, .. } => MseOp::CallVariadic(func.clone()),
-                MirScalarExpr::If { .. } => MseOp::If,
-            };
-            root_id = self.insert((op, args));
-            ids.insert(std::ptr::from_ref(expr), root_id);
-        }
-        // The root is first in `rev_order`, so it is processed last.
-        root_id
     }
 
-    /// Builds the owned [`MirScalarExpr`] rooted at `id`.
-    ///
-    /// Iterative, but the result is an owning tree. A deep result carries the
-    /// usual `MirScalarExpr` stack hazards (drop, comparison), which the
-    /// caller owns. Shared subterms are duplicated in the result, which can
-    /// be much larger than the graph that describes it.
-    pub fn extract(&self, id: TermId) -> MirScalarExpr {
-        enum Step {
-            Descend(TermId),
-            Emit(TermId),
+    fn children(&self) -> impl Iterator<Item = &Self> {
+        MirScalarExpr::children(self)
+    }
+
+    fn rebuild(op: &MseOp, children: Vec<Self>) -> Self {
+        let mut children = children.into_iter();
+        let mut next = || children.next().expect("child present");
+        match op {
+            MseOp::Column(col, name) => MirScalarExpr::Column(*col, name.clone()),
+            MseOp::Literal(row, typ) => MirScalarExpr::Literal(row.clone(), typ.clone()),
+            MseOp::CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.clone()),
+            MseOp::CallUnary(func) => MirScalarExpr::CallUnary {
+                func: func.clone(),
+                expr: Box::new(next()),
+            },
+            MseOp::CallBinary(func) => MirScalarExpr::CallBinary {
+                func: func.clone(),
+                expr1: Box::new(next()),
+                expr2: Box::new(next()),
+            },
+            MseOp::CallVariadic(func) => MirScalarExpr::CallVariadic {
+                func: func.clone(),
+                exprs: children.collect(),
+            },
+            MseOp::If => MirScalarExpr::If {
+                cond: Box::new(next()),
+                then: Box::new(next()),
+                els: Box::new(next()),
+            },
         }
-        let mut todo = vec![Step::Descend(id)];
-        // Completed subexpressions. When `Emit(id)` is popped, the results
-        // for `id`'s children sit on top, first child topmost.
-        let mut done: Vec<MirScalarExpr> = Vec::new();
-        while let Some(step) = todo.pop() {
-            match step {
-                Step::Descend(id) => {
-                    todo.push(Step::Emit(id));
-                    for child in self.term(id).1.iter() {
-                        todo.push(Step::Descend(*child));
-                    }
-                }
-                Step::Emit(id) => {
-                    let (op, args) = self.term(id);
-                    let expr = match op {
-                        MseOp::Column(col, name) => MirScalarExpr::Column(*col, name.clone()),
-                        MseOp::Literal(row, typ) => {
-                            MirScalarExpr::Literal(row.clone(), typ.clone())
-                        }
-                        MseOp::CallUnmaterializable(func) => {
-                            MirScalarExpr::CallUnmaterializable(func.clone())
-                        }
-                        MseOp::CallUnary(func) => MirScalarExpr::CallUnary {
-                            func: func.clone(),
-                            expr: Box::new(done.pop().expect("child result present")),
-                        },
-                        MseOp::CallBinary(func) => MirScalarExpr::CallBinary {
-                            func: func.clone(),
-                            expr1: Box::new(done.pop().expect("child result present")),
-                            expr2: Box::new(done.pop().expect("child result present")),
-                        },
-                        MseOp::CallVariadic(func) => {
-                            let exprs = (0..args.len())
-                                .map(|_| done.pop().expect("child result present"))
-                                .collect();
-                            MirScalarExpr::CallVariadic {
-                                func: func.clone(),
-                                exprs,
-                            }
-                        }
-                        MseOp::If => MirScalarExpr::If {
-                            cond: Box::new(done.pop().expect("child result present")),
-                            then: Box::new(done.pop().expect("child result present")),
-                            els: Box::new(done.pop().expect("child result present")),
-                        },
-                    };
-                    done.push(expr);
-                }
-            }
-        }
-        assert_eq!(done.len(), 1);
-        done.pop().expect("exactly one result")
     }
 }
 
@@ -271,7 +301,8 @@ mod tests {
         let mut graph = TermGraph::default();
         for expr in exprs {
             let id = graph.ensure(&expr);
-            assert_eq!(graph.extract(id), expr);
+            let extracted: MirScalarExpr = graph.extract(id);
+            assert_eq!(extracted, expr);
         }
     }
 
@@ -284,8 +315,8 @@ mod tests {
         // Terms: col 0, col 1, the inner sum (once), the outer sum.
         assert_eq!(graph.len(), 4);
         // Re-ensuring the extraction reproduces the identifier and adds nothing.
-        let extracted = graph.ensure(&graph.extract(id));
-        assert_eq!(extracted, id);
+        let extracted: MirScalarExpr = graph.extract(id);
+        assert_eq!(graph.ensure(&extracted), id);
         assert_eq!(graph.len(), 4);
     }
 
@@ -311,7 +342,7 @@ mod tests {
         assert_eq!(graph.len(), DEPTH + 1);
         // Equality on the deep trees would recurse, so round-trip through
         // `ensure` instead, which must reproduce the identifier exactly.
-        let extracted = graph.extract(id);
+        let extracted: MirScalarExpr = graph.extract(id);
         assert_eq!(graph.ensure(&extracted), id);
         assert_eq!(graph.len(), DEPTH + 1);
         dismantle(expr);
