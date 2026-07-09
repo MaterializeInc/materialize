@@ -486,7 +486,8 @@ reqwest-retry = "0.8.0"
 rlimit = "0.11.0"
 rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
-rustls = "0.23.38"
+rustls = { version = "0.23.38", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 rpassword = "7.5.1"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 ryu = "1.0.23"
@@ -538,6 +539,7 @@ tokio = { version = "1.52.3", features = ["full", "test-util"] }
 tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"
 tokio-openssl = "0.6.5"
+tokio-rustls = { version = "0.26", default-features = false }
 tokio-postgres = "0.7.15"
 tokio-stream = "0.1.18"
 tokio-test = "0.4.5"

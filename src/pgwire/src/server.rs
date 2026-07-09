@@ -19,7 +19,7 @@ use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::now::{SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, FrontendStartupMessage,
-    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
+    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, TlsStream, decode_startup,
 };
 use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
@@ -245,7 +245,7 @@ impl Server {
                                         let _ = ssl_stream.get_mut().shutdown().await;
                                         return Err(e.into());
                                     }
-                                    Conn::Ssl(ssl_stream)
+                                    Conn::Ssl(TlsStream::Openssl(ssl_stream))
                                 }
                                 (mut conn, _) => {
                                     trace!("cid={} send=RejectSsl", conn_id);

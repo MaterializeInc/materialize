@@ -7621,6 +7621,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "rand 0.9.4",
+ "rustls",
  "scopeguard",
  "sentry",
  "sentry-panic",
@@ -7634,6 +7635,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-openssl",
+ "tokio-rustls",
  "tokio-test",
  "tonic",
  "tracing",
@@ -7922,9 +7924,11 @@ dependencies = [
  "derivative",
  "mz-ore",
  "mz-server-core",
+ "openssl",
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
 ]
 
@@ -8998,9 +9002,12 @@ dependencies = [
  "openssl",
  "openssl-sys",
  "postgres-openssl",
+ "rustls",
+ "rustls-pki-types",
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
 ]
 
@@ -11491,7 +11498,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f"
 dependencies = [
  "aws-lc-rs",
- "log",
  "once_cell",
  "ring",
  "rustls-pki-types",

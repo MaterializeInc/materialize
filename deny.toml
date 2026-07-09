@@ -159,6 +159,10 @@ skip = [
     { name = "rand_core", version = "0.10.1" },
     { name = "getrandom", version = "0.4.2" },
     { name = "cpufeatures", version = "0.3.0" },
+    # Pulled in by rustls ecosystem
+    { name = "core-foundation", version = "0.9.3" },
+    { name = "openssl-probe", version = "0.1.6" },
+    { name = "security-framework", version = "2.10.0" },
 ]
 
 [[bans.deny]]
