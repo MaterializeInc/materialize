@@ -92,9 +92,21 @@ In your IdP, create a SAML 2.0 application with:
 - **NameID format**: EmailAddress
 - **Attribute statements**: at minimum, `firstName`, `lastName`, `email`
   mapped from the IdP user profile fields.
+- **Group attribute statement** (optional but required for `groups` in
+  the JWT): name `groups`, filter `Matches regex .*` (or a narrower
+  filter to scope which groups flow through).
 
 Save and grab the SAML metadata URL (or download the metadata XML).
 Assign users (or groups) to the app so they can authenticate through it.
+
+{{< note >}}
+**Okta:** Group Attribute Statements live under the SAML app's **Sign
+On** tab, inside the collapsed **Show legacy configuration** panel, not
+in the newer expression-based Attribute Statements section at the top.
+The new expression UI does not expose `Groups.startsWith` or
+`Arrays.flatten` on trial / integrator tenants, so use the legacy Group
+Attribute Statements section for `groups`.
+{{</ note >}}
 
 ### Step 2. Get the Polis admin API key
 
@@ -204,15 +216,29 @@ Steps for Okta (other IdPs vary in wording but follow the same shape):
 1. Open the SAML application you created above.
 2. **General** tab → Provisioning → switch to "SCIM" → Save.
 3. A **Provisioning** tab appears. Click into it → **Integration**:
-   - SCIM connector base URL: paste `scim.endpoint`
+   - SCIM connector base URL: paste `scim.endpoint` **with a trailing
+     slash**. Okta rejects the URL without one ("Invalid Base URL for
+     the SCIM Connector").
    - Unique identifier for users: `email`
-   - Supported provisioning actions: Push New Users, Push Profile
-     Updates, Push Groups
-   - Authentication Mode: HTTP Header
-   - Authorization: paste `scim.secret`
-   - **Test Connector Configuration** -- expect green checks
+   - Supported provisioning actions: Import New Users and Profile
+     Updates, Push New Users, Push Profile Updates, Push Groups
+   - Authentication Mode: **HTTP Header** (not Basic Auth)
+   - Authorization / Token: paste `scim.secret`
+   - **Skip "Test Connector Configuration"**. Polis doesn't implement
+     the SCIM discovery endpoints (`/ServiceProviderConfig`,
+     `/ResourceTypes`, `/Schemas`) that Okta probes during the test.
+     Save without running the test; the actual provisioning calls to
+     `/Users` and `/Groups` work.
 4. **Provisioning** → **To App** → Edit → enable Create Users, Update
    User Attributes, Deactivate Users. Save.
+5. **Push Groups** tab (appears once SCIM is enabled) → **Push Groups
+   → By name** → pick each group you want in Polis's directory → tick
+   "Push group memberships immediately" → Save. This creates the group
+   entity in Polis; individual users are still pushed via the
+   Assignments step below.
+6. **Assignments** tab → **Assign → Assign to People** (or **Assign to
+   Groups**) → assign the users / groups that should be provisioned.
+   Okta pushes a SCIM POST per user within seconds.
 
 ### Step 3. Verify the push
 
