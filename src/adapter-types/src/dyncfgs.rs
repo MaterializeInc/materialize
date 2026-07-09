@@ -118,6 +118,21 @@ pub const ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP: Config<bool> = Config::new(
     "Share one timestamp-oracle read_ts across a burst of pipelined peeks on a connection.",
 );
 
+/// Overlap the compute-result awaits of a burst of pipelined peeks.
+///
+/// A fast-path peek returns a deferred row stream: the peek is issued to the
+/// cluster and the result is awaited later, while sending rows. Normally pgwire
+/// processes one statement fully before the next, so those awaits serialize.
+/// With this on, pgwire issues every peek in a drained pipeline burst first
+/// (deferring each statement's wire responses), then drains the row streams in
+/// order, so the cluster works on all the peeks concurrently. Composes with
+/// `enable_pipelined_peek_shared_timestamp`. Requires the frontend-peek path.
+pub const ENABLE_PIPELINED_PEEK_OVERLAP: Config<bool> = Config::new(
+    "enable_pipelined_peek_overlap",
+    false,
+    "Overlap the compute-result awaits of a burst of pipelined peeks on a connection.",
+);
+
 /// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
 pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Duration> = Config::new(
     "plan_insights_notice_fast_path_clusters_optimize_duration",
@@ -380,6 +395,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&ENABLE_FRONTEND_SUBSCRIBES)
         .add(&ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP)
+        .add(&ENABLE_PIPELINED_PEEK_OVERLAP)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_PASSWORD_AUTH)

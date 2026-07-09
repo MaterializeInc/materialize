@@ -642,6 +642,9 @@ where
         tokio_metrics_intervals,
         pending: VecDeque::new(),
         in_burst: false,
+        capturing: None,
+        defer_peek: false,
+        deferred_peek: None,
     };
 
     select! {
@@ -861,6 +864,36 @@ where
     /// Whether a pipeline burst is currently open (see `pending`). While open,
     /// no further draining happens; it closes on the next socket read.
     in_burst: bool,
+    /// When `Some`, `send` appends to this buffer instead of writing to the
+    /// socket. Used by the pipelined-peek overlap path to defer a statement's
+    /// early responses (BindComplete, RowDescription) while later peeks in the
+    /// burst are issued, so they can be flushed in the correct order afterwards.
+    capturing: Option<Vec<BackendMessage>>,
+    /// When set, `send_execute_response` stashes a streaming/immediate peek
+    /// response into `deferred_peek` instead of awaiting and sending its rows.
+    /// The overlap path issues all peeks this way, then drains them in order.
+    defer_peek: bool,
+    /// The peek stashed by the last `send_execute_response` under `defer_peek`.
+    deferred_peek: Option<DeferredPeek>,
+}
+
+/// A peek response whose rows are streamed later, once every peek in a
+/// pipelined burst has been issued (see `run_overlapped_burst`).
+struct DeferredPeek {
+    response: ExecuteResponse,
+    row_desc: Option<RelationDesc>,
+    portal_name: String,
+    max_rows: ExecuteCount,
+    execute_started: Instant,
+}
+
+/// One statement's deferred pgwire output in a pipelined-peek burst, emitted in
+/// statement order after all peeks are issued.
+enum BurstItem {
+    /// Captured early responses (BindComplete, RowDescription, ...).
+    Messages(Vec<BackendMessage>),
+    /// A peek whose rows (and compute-result await) are produced at emit time.
+    Peek(DeferredPeek),
 }
 
 enum SendRowsEndedReason {
@@ -925,6 +958,248 @@ where
             }
         }
         drained
+    }
+
+    /// Drive a drained pipelined burst with compute-await overlap: issue every
+    /// peek before sending any rows (so the cluster runs them concurrently),
+    /// then emit each statement's responses in statement order. `first_*`
+    /// describe the Execute that opened the burst; its Bind/Describe were
+    /// already sent, so only its response onward is deferred.
+    ///
+    /// Correctness leans on read-only peeks: each issued peek owns its read
+    /// holds and result stream independently of the session transaction, so
+    /// committing a statement's implicit transaction (as the normal path does,
+    /// at the next Bind) before its rows are drained does not disturb it.
+    /// Anything the burst does not drive falls back to the normal loop via
+    /// `pending`, and on error the rest is handed to the normal loop (which
+    /// rejects it under the now-aborted transaction, matching Postgres pipeline
+    /// semantics), so correctness never depends on the burst's shape.
+    async fn run_overlapped_burst(
+        &mut self,
+        first_portal: String,
+        first_max_rows: ExecuteCount,
+        first_received: Option<EpochMillis>,
+        mut drained: VecDeque<FrontendMessage>,
+    ) -> Result<State, io::Error> {
+        self.adapter_client.begin_pipeline_burst();
+        self.in_burst = true;
+        let mut items: Vec<BurstItem> = Vec::new();
+
+        // Issue the triggering Execute (its Bind/Describe already went out).
+        let (captured, peek, state) = self
+            .issue_burst_execute(first_portal, first_max_rows, first_received)
+            .await?;
+        items.extend(captured.map(BurstItem::Messages));
+        items.extend(peek.map(BurstItem::Peek));
+        if !matches!(state, State::Ready) {
+            return self.end_burst_to_pending(items, drained, state).await;
+        }
+        self.mark_implicit_commit();
+
+        while let Some(msg) = drained.pop_front() {
+            match msg {
+                FrontendMessage::Bind {
+                    portal_name,
+                    statement_name,
+                    param_formats,
+                    raw_params,
+                    result_formats,
+                } => {
+                    self.capturing = Some(Vec::new());
+                    let state = self
+                        .bind(
+                            portal_name,
+                            statement_name,
+                            param_formats,
+                            raw_params,
+                            result_formats,
+                        )
+                        .await;
+                    let captured = self.capturing.take().unwrap_or_default();
+                    let state = state?;
+                    items.push(BurstItem::Messages(captured));
+                    if !matches!(state, State::Ready) {
+                        return self.end_burst_to_pending(items, drained, state).await;
+                    }
+                }
+                FrontendMessage::DescribePortal { name } => {
+                    self.capturing = Some(Vec::new());
+                    let state = self.describe_portal(&name).await;
+                    let captured = self.capturing.take().unwrap_or_default();
+                    let state = state?;
+                    items.push(BurstItem::Messages(captured));
+                    if !matches!(state, State::Ready) {
+                        return self.end_burst_to_pending(items, drained, state).await;
+                    }
+                }
+                FrontendMessage::DescribeStatement { name } => {
+                    self.capturing = Some(Vec::new());
+                    let state = self.describe_statement(&name).await;
+                    let captured = self.capturing.take().unwrap_or_default();
+                    let state = state?;
+                    items.push(BurstItem::Messages(captured));
+                    if !matches!(state, State::Ready) {
+                        return self.end_burst_to_pending(items, drained, state).await;
+                    }
+                }
+                FrontendMessage::Parse {
+                    name,
+                    sql,
+                    param_types,
+                } => {
+                    self.capturing = Some(Vec::new());
+                    let state = self.parse(name, sql, param_types).await;
+                    let captured = self.capturing.take().unwrap_or_default();
+                    let state = state?;
+                    items.push(BurstItem::Messages(captured));
+                    if !matches!(state, State::Ready) {
+                        return self.end_burst_to_pending(items, drained, state).await;
+                    }
+                }
+                FrontendMessage::Execute {
+                    portal_name,
+                    max_rows,
+                } => {
+                    let max_rows = match usize::try_from(max_rows) {
+                        Ok(0) | Err(_) => ExecuteCount::All,
+                        Ok(n) => ExecuteCount::Count(n),
+                    };
+                    let (captured, peek, state) = self
+                        .issue_burst_execute(portal_name, max_rows, None)
+                        .await?;
+                    items.extend(captured.map(BurstItem::Messages));
+                    items.extend(peek.map(BurstItem::Peek));
+                    if !matches!(state, State::Ready) {
+                        return self.end_burst_to_pending(items, drained, state).await;
+                    }
+                    self.mark_implicit_commit();
+                }
+                FrontendMessage::Sync => {
+                    let state = self.flush_burst(items).await?;
+                    self.end_burst();
+                    if !matches!(state, State::Ready) {
+                        return Ok(state);
+                    }
+                    return self.sync().await;
+                }
+                FrontendMessage::Flush => {
+                    let state = self.flush_burst(std::mem::take(&mut items)).await?;
+                    self.flush().await?;
+                    if !matches!(state, State::Ready) {
+                        self.end_burst();
+                        return Ok(state);
+                    }
+                    // Keep collecting after a Flush.
+                }
+                other => {
+                    // A message type the burst does not drive: emit what we have,
+                    // then hand this message and the rest to the normal loop.
+                    let state = self.flush_burst(items).await?;
+                    self.end_burst();
+                    drained.push_front(other);
+                    self.pending = drained;
+                    return Ok(state);
+                }
+            }
+        }
+
+        // Ran out of drained messages without a Sync (more may still arrive).
+        // Emit what we have; the burst closes on the next socket read.
+        let state = self.flush_burst(items).await?;
+        self.end_burst();
+        Ok(state)
+    }
+
+    /// Issue one Execute in the overlap path: run the normal execute flow with
+    /// output captured and the response deferred. Returns any captured early
+    /// messages (notices, or an error from the pre-execute checks), the deferred
+    /// response (if one was produced), and the resulting state.
+    async fn issue_burst_execute(
+        &mut self,
+        portal_name: String,
+        max_rows: ExecuteCount,
+        received: Option<EpochMillis>,
+    ) -> Result<(Option<Vec<BackendMessage>>, Option<DeferredPeek>, State), io::Error> {
+        self.capturing = Some(Vec::new());
+        self.defer_peek = true;
+        let state = self
+            .execute(
+                portal_name,
+                max_rows,
+                portal_exec_message,
+                None,
+                ExecuteTimeout::None,
+                None,
+                received,
+            )
+            .await;
+        self.defer_peek = false;
+        let captured = self.capturing.take().unwrap_or_default();
+        let state = state?;
+        let captured = (!captured.is_empty()).then_some(captured);
+        Ok((captured, self.deferred_peek.take(), state))
+    }
+
+    /// Emit deferred burst items in statement order. Peeks are sent here, which
+    /// is where their (now overlapped) compute results are awaited.
+    async fn flush_burst(&mut self, items: Vec<BurstItem>) -> Result<State, io::Error> {
+        let mut state = State::Ready;
+        for item in items {
+            match item {
+                BurstItem::Messages(msgs) => self.send_all(msgs).await?,
+                BurstItem::Peek(p) => {
+                    state = self
+                        .send_execute_response(
+                            p.response,
+                            p.row_desc,
+                            p.portal_name,
+                            p.max_rows,
+                            portal_exec_message,
+                            None,
+                            ExecuteTimeout::None,
+                            p.execute_started,
+                        )
+                        .await?;
+                    if !matches!(state, State::Ready) {
+                        return Ok(state);
+                    }
+                }
+            }
+        }
+        Ok(state)
+    }
+
+    /// Flush pending deferred items, close the burst, and hand any remaining
+    /// drained messages to the normal loop. Used on error: the rest is processed
+    /// under the now-aborted transaction (skip-to-Sync semantics).
+    async fn end_burst_to_pending(
+        &mut self,
+        items: Vec<BurstItem>,
+        drained: VecDeque<FrontendMessage>,
+        state: State,
+    ) -> Result<State, io::Error> {
+        let flush_state = self.flush_burst(items).await?;
+        self.end_burst();
+        self.pending = drained;
+        Ok(if !matches!(flush_state, State::Ready) {
+            flush_state
+        } else {
+            state
+        })
+    }
+
+    fn end_burst(&mut self) {
+        self.adapter_client.end_pipeline_burst();
+        self.in_burst = false;
+    }
+
+    /// Mark the current implicit transaction for commit, as the normal Execute
+    /// path does, so the next `ensure_transaction` (at the following Bind or
+    /// Sync) commits it.
+    fn mark_implicit_commit(&mut self) {
+        if self.adapter_client.session().transaction().is_implicit() {
+            self.txn_needs_commit = true;
+        }
     }
 
     #[instrument(level = "debug")]
@@ -1029,22 +1304,6 @@ where
                 portal_name,
                 max_rows,
             }) => {
-                // If the client has pipelined further messages that have already
-                // arrived, drain them now so this peek and they can share a
-                // single oracle read timestamp (see the `PeekClient` burst
-                // methods). We drain before executing, so the timestamp taken
-                // during this peek is within every drained statement's real-time
-                // bounds. Only on the frontend-peek path, and not when already
-                // inside a drained burst (avoids re-draining newer messages into
-                // the same burst).
-                if self.adapter_client.should_drain_pipeline_burst() && !self.in_burst {
-                    let drained = self.drain_buffered();
-                    if !drained.is_empty() {
-                        self.adapter_client.begin_pipeline_burst();
-                        self.in_burst = true;
-                        self.pending.extend(drained);
-                    }
-                }
                 let max_rows = match usize::try_from(max_rows) {
                     Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
                     Ok(n) => ExecuteCount::Count(n),
@@ -1052,36 +1311,67 @@ where
                 let execute_root_span =
                     tracing::info_span!(parent: None, "advance_ready", otel.name = message_name);
                 execute_root_span.follows_from(tracing::Span::current());
-                let state = self
-                    .execute(
-                        portal_name,
-                        max_rows,
-                        portal_exec_message,
-                        None,
-                        ExecuteTimeout::None,
-                        None,
-                        Some(received),
-                    )
-                    .instrument(execute_root_span)
-                    .await?;
-                // In PostgreSQL, when using the extended query protocol, some statements may
-                // trigger an eager commit of the current implicit transaction,
-                // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
-                //
-                // In Materialize, however, we eagerly commit every statement outside of an explicit
-                // transaction when using the extended query protocol. This allows us to eliminate
-                // the possibility of a multiple statement implicit transaction, which in turn
-                // allows us to apply single-statement optimizations to queries issued in implicit
-                // transactions in the extended query protocol.
-                //
-                // We don't immediately commit here to allow users to page through the portal if
-                // necessary. Committing the transaction would destroy the portal before the next
-                // Execute command has a chance to resume it. So we instead mark the transaction
-                // for commit the next time that `ensure_transaction` is called.
-                if self.adapter_client.session().transaction().is_implicit() {
-                    self.txn_needs_commit = true;
+
+                // If the client has pipelined further messages that have already
+                // arrived, drain them into a burst so its peeks can share a read
+                // timestamp (`enable_pipelined_peek_shared_timestamp`) and/or
+                // overlap their compute-result awaits (`enable_pipelined_peek_overlap`).
+                // We drain before executing, so a shared timestamp is within
+                // every drained statement's real-time bounds. Not when already
+                // inside a drained burst (avoids re-draining newer messages).
+                let drained = if self.adapter_client.should_drain_pipeline_burst() && !self.in_burst
+                {
+                    self.drain_buffered()
+                } else {
+                    Vec::new()
+                };
+
+                if !drained.is_empty() && self.adapter_client.should_overlap_pipeline_burst() {
+                    // Overlap: issue every peek, then drain their row streams in
+                    // order. This drives the triggering Execute, the drained
+                    // statements, and their transactions itself.
+                    self.run_overlapped_burst(portal_name, max_rows, Some(received), drained.into())
+                        .instrument(execute_root_span)
+                        .await?
+                } else {
+                    if !drained.is_empty() {
+                        // Shared-timestamp only: process the burst serially, one
+                        // statement per loop iteration, sharing the read_ts.
+                        self.adapter_client.begin_pipeline_burst();
+                        self.in_burst = true;
+                        self.pending.extend(drained);
+                    }
+                    let state = self
+                        .execute(
+                            portal_name,
+                            max_rows,
+                            portal_exec_message,
+                            None,
+                            ExecuteTimeout::None,
+                            None,
+                            Some(received),
+                        )
+                        .instrument(execute_root_span)
+                        .await?;
+                    // In PostgreSQL, when using the extended query protocol, some statements may
+                    // trigger an eager commit of the current implicit transaction,
+                    // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
+                    //
+                    // In Materialize, however, we eagerly commit every statement outside of an explicit
+                    // transaction when using the extended query protocol. This allows us to eliminate
+                    // the possibility of a multiple statement implicit transaction, which in turn
+                    // allows us to apply single-statement optimizations to queries issued in implicit
+                    // transactions in the extended query protocol.
+                    //
+                    // We don't immediately commit here to allow users to page through the portal if
+                    // necessary. Committing the transaction would destroy the portal before the next
+                    // Execute command has a chance to resume it. So we instead mark the transaction
+                    // for commit the next time that `ensure_transaction` is called.
+                    if self.adapter_client.session().transaction().is_implicit() {
+                        self.txn_needs_commit = true;
+                    }
+                    state
                 }
-                state
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
                 self.describe_statement(&name).await?
@@ -1960,6 +2250,14 @@ where
         M: Into<BackendMessage>,
     {
         let message: BackendMessage = message.into();
+
+        // In capture mode, buffer the message instead of writing it, so the
+        // pipelined-peek overlap path can reorder it after issuing later peeks.
+        if let Some(buf) = &mut self.capturing {
+            buf.push(message);
+            return Ok(());
+        }
+
         let is_error =
             matches!(&message, BackendMessage::ErrorResponse(e) if e.severity.is_error());
 
@@ -2018,6 +2316,24 @@ where
         timeout: ExecuteTimeout,
         execute_started: Instant,
     ) -> Result<State, io::Error> {
+        // Overlap path: defer sending this statement's response so later peeks
+        // in the burst can be issued first (a peek's rows are only awaited when
+        // sent). Everything needed to send later is stashed; the burst driver
+        // re-enters this function with `defer_peek` cleared. Applies to any
+        // response type, so a non-peek statement in the burst still sends its
+        // response in order; only read-only peeks actually benefit from the
+        // deferral, and the burst is entered only on that opt-in path.
+        if self.defer_peek {
+            self.deferred_peek = Some(DeferredPeek {
+                response,
+                row_desc,
+                portal_name,
+                max_rows,
+                execute_started,
+            });
+            return Ok(State::Ready);
+        }
+
         let mut tag = response.tag();
 
         macro_rules! command_complete {

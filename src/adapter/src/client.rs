@@ -306,6 +306,7 @@ impl Client {
             peek_client,
             enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
             enable_pipelined_peek_shared_timestamp: false, // initialized below
+            enable_pipelined_peek_overlap: false,   // initialized below
         };
 
         let session = client.session();
@@ -453,8 +454,12 @@ Issue a SQL query to get started. Need help?
         let enable_pipelined_peek_shared_timestamp =
             mz_adapter_types::dyncfgs::ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP
                 .get(catalog.system_vars().dyncfgs());
+        let enable_pipelined_peek_overlap =
+            mz_adapter_types::dyncfgs::ENABLE_PIPELINED_PEEK_OVERLAP
+                .get(catalog.system_vars().dyncfgs());
         client.enable_frontend_peek_sequencing = enable_frontend_peek_sequencing;
         client.enable_pipelined_peek_shared_timestamp = enable_pipelined_peek_shared_timestamp;
+        client.enable_pipelined_peek_overlap = enable_pipelined_peek_overlap;
 
         Ok(client)
     }
@@ -642,6 +647,9 @@ pub struct SessionClient {
     /// peeks (`ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP`). Cached at startup like
     /// `enable_frontend_peek_sequencing`.
     enable_pipelined_peek_shared_timestamp: bool,
+    /// Whether to overlap the compute-result awaits of a pipelined burst of
+    /// peeks (`ENABLE_PIPELINED_PEEK_OVERLAP`). Cached at startup.
+    enable_pipelined_peek_overlap: bool,
 }
 
 impl SessionClient {
@@ -657,12 +665,20 @@ impl SessionClient {
         self.peek_client.end_pipeline_burst();
     }
 
-    /// Whether the pgwire layer should drain pipelined messages into a burst so
-    /// its peeks can share a read timestamp. Requires both the frontend-peek
-    /// path (where sharing takes effect) and the burst feature flag; inert by
-    /// default.
+    /// Whether the pgwire layer should drain pipelined messages into a burst.
+    /// Requires the frontend-peek path (where the optimizations take effect) and
+    /// at least one burst feature flag; inert by default.
     pub fn should_drain_pipeline_burst(&self) -> bool {
-        self.enable_frontend_peek_sequencing && self.enable_pipelined_peek_shared_timestamp
+        self.enable_frontend_peek_sequencing
+            && (self.enable_pipelined_peek_shared_timestamp || self.enable_pipelined_peek_overlap)
+    }
+
+    /// Whether the pgwire layer should process a drained burst by issuing all
+    /// its peeks first and then draining their row streams in order, overlapping
+    /// the compute-result awaits. When false a drained burst is processed
+    /// serially (only `enable_pipelined_peek_shared_timestamp` takes effect).
+    pub fn should_overlap_pipeline_burst(&self) -> bool {
+        self.enable_frontend_peek_sequencing && self.enable_pipelined_peek_overlap
     }
 
     /// Parses a SQL expression, reporting failures as a telemetry event if
