@@ -2060,6 +2060,9 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(SCHEMA) {
             self.parse_create_schema()
                 .map_parser_err(StatementKind::CreateSchema)
+        } else if self.peek_keywords(&[METRIC, SINK]) {
+            self.parse_create_metric_sink()
+                .map_parser_err(StatementKind::CreateMetricSink)
         } else if self.peek_keyword(SINK) {
             self.parse_create_sink()
                 .map_parser_err(StatementKind::CreateSink)
@@ -3617,6 +3620,21 @@ impl<'a> Parser<'a> {
         Ok(Statement::CreateSink(statement))
     }
 
+    fn parse_create_metric_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[METRIC, SINK])?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = Some(self.parse_item_name()?);
+        let in_cluster = self.parse_optional_in_cluster()?;
+        self.expect_keyword(FROM)?;
+        let from = self.parse_raw_name()?;
+        Ok(Statement::CreateMetricSink(CreateMetricSinkStatement {
+            name,
+            in_cluster,
+            if_not_exists,
+            from,
+        }))
+    }
+
     /// Parse the name of a CREATE SINK optional parameter
     fn parse_create_sink_option_name(&mut self) -> Result<CreateSinkOptionName, ParserError> {
         let name = match self.expect_one_of_keywords(&[PARTITION, SNAPSHOT, VERSION, COMMIT])? {
@@ -4943,6 +4961,7 @@ impl<'a> Parser<'a> {
             | ObjectType::MaterializedView
             | ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -5784,7 +5803,7 @@ impl<'a> Parser<'a> {
             ObjectType::NetworkPolicy => self
                 .parse_alter_network_policy()
                 .map_parser_err(StatementKind::AlterNetworkPolicy),
-            ObjectType::Func | ObjectType::Subsource => parser_err!(
+            ObjectType::Func | ObjectType::Subsource | ObjectType::MetricSink => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
@@ -6533,6 +6552,7 @@ impl<'a> Parser<'a> {
             ObjectType::View => &[SET, RENAME, OWNER, RESET],
             ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Role
@@ -7379,6 +7399,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Source
             | ObjectType::Subsource
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -8170,6 +8191,10 @@ impl<'a> Parser<'a> {
                 ObjectType::Sink => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::Sink { in_cluster }
+                }
+                ObjectType::MetricSink => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::MetricSink { in_cluster }
                 }
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
@@ -9780,6 +9805,7 @@ impl<'a> Parser<'a> {
                 )
             }
             ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::ClusterReplica
             | ObjectType::Role
@@ -9811,6 +9837,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCE,
                 SINK,
+                METRIC,
                 INDEX,
                 TYPE,
                 ROLE,
@@ -9834,6 +9861,13 @@ impl<'a> Parser<'a> {
                 }
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
+                METRIC => {
+                    if let Err(e) = self.expect_keyword(SINK) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::MetricSink
+                }
                 INDEX => ObjectType::Index,
                 TYPE => ObjectType::Type,
                 ROLE | USER => ObjectType::Role,
@@ -9870,6 +9904,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCE,
                 SINK,
+                METRIC,
                 INDEX,
                 TYPE,
                 ROLE,
@@ -9894,6 +9929,14 @@ impl<'a> Parser<'a> {
                 }
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
+                METRIC => {
+                    if self.parse_keyword(SINK) {
+                        ObjectType::MetricSink
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 INDEX => ObjectType::Index,
                 TYPE => ObjectType::Type,
                 ROLE | USER => ObjectType::Role,
@@ -9984,6 +10027,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCES,
                 SINKS,
+                METRIC,
                 INDEXES,
                 TYPES,
                 ROLES,
@@ -10009,6 +10053,14 @@ impl<'a> Parser<'a> {
                 }
                 SOURCES => ObjectType::Source,
                 SINKS => ObjectType::Sink,
+                METRIC => {
+                    if self.parse_keyword(SINKS) {
+                        ObjectType::MetricSink
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 INDEXES => ObjectType::Index,
                 TYPES => ObjectType::Type,
                 ROLES | USERS => ObjectType::Role,

@@ -290,6 +290,7 @@ Membership
 Memory
 Message
 Metadata
+Metric
 Minute
 Minutes
 Mock

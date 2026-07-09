@@ -217,6 +217,20 @@ SHOW SINKS FROM foo.bar IN CLUSTER baz
 Show(ShowObjects(ShowObjectsStatement { object_type: Sink { in_cluster: Some(Unresolved(Ident("baz"))) }, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
 
 parse-statement
+SHOW METRIC SINKS
+----
+SHOW METRIC SINKS
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: MetricSink { in_cluster: None }, from: None, filter: None }))
+
+parse-statement
+SHOW METRIC SINKS IN CLUSTER baz
+----
+SHOW METRIC SINKS IN CLUSTER baz
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: MetricSink { in_cluster: Some(Unresolved(Ident("baz"))) }, from: None, filter: None }))
+
+parse-statement
 SHOW TABLES LIKE '%foo%'
 ----
 SHOW TABLES LIKE '%foo%'

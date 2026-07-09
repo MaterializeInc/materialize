@@ -53,6 +53,7 @@ pub enum Statement<T: AstInfo> {
     CreateSource(CreateSourceStatement<T>),
     CreateSubsource(CreateSubsourceStatement<T>),
     CreateSink(CreateSinkStatement<T>),
+    CreateMetricSink(CreateMetricSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
@@ -132,6 +133,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSource(stmt) => f.write_node(stmt),
             Statement::CreateSubsource(stmt) => f.write_node(stmt),
             Statement::CreateSink(stmt) => f.write_node(stmt),
+            Statement::CreateMetricSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
@@ -239,6 +241,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSource => "create_source",
         StatementKind::CreateSubsource => "create_subsource",
         StatementKind::CreateSink => "create_sink",
+        StatementKind::CreateMetricSink => "create_metric_sink",
         StatementKind::CreateView => "create_view",
         StatementKind::CreateMaterializedView => "create_materialized_view",
         StatementKind::CreateTable => "create_table",
@@ -1431,6 +1434,36 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
     }
 }
 impl_display_t!(CreateSinkStatement);
+
+/// `CREATE METRIC SINK`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateMetricSinkStatement<T: AstInfo> {
+    pub name: Option<UnresolvedItemName>,
+    pub in_cluster: Option<T::ClusterName>,
+    pub if_not_exists: bool,
+    pub from: T::ItemName,
+}
+
+impl<T: AstInfo> AstDisplay for CreateMetricSinkStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE METRIC SINK ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        if let Some(name) = &self.name {
+            f.write_node(name);
+            f.write_str(" ");
+        }
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str("IN CLUSTER ");
+            f.write_node(cluster);
+            f.write_str(" ");
+        }
+        f.write_str("FROM ");
+        f.write_node(&self.from);
+    }
+}
+impl_display_t!(CreateMetricSinkStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ViewDefinition<T: AstInfo> {
@@ -3489,6 +3522,9 @@ pub enum ShowObjectType<T: AstInfo> {
     Sink {
         in_cluster: Option<T::ClusterName>,
     },
+    MetricSink {
+        in_cluster: Option<T::ClusterName>,
+    },
     Type,
     Role,
     Cluster,
@@ -3541,6 +3577,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::View => "VIEWS",
             ShowObjectType::Source { .. } => "SOURCES",
             ShowObjectType::Sink { .. } => "SINKS",
+            ShowObjectType::MetricSink { .. } => "METRIC SINKS",
             ShowObjectType::Type => "TYPES",
             ShowObjectType::Role => "ROLES",
             ShowObjectType::Cluster => "CLUSTERS",
@@ -3581,6 +3618,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::MaterializedView { in_cluster }
             | ShowObjectType::Index { in_cluster, .. }
             | ShowObjectType::Sink { in_cluster }
+            | ShowObjectType::MetricSink { in_cluster }
             | ShowObjectType::Source { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
@@ -4323,6 +4361,7 @@ pub enum ObjectType {
     MaterializedView,
     Source,
     Sink,
+    MetricSink,
     Index,
     Type,
     Role,
@@ -4345,6 +4384,7 @@ impl ObjectType {
             | ObjectType::MaterializedView
             | ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -4369,6 +4409,7 @@ impl AstDisplay for ObjectType {
             ObjectType::MaterializedView => "MATERIALIZED VIEW",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
+            ObjectType::MetricSink => "METRIC SINK",
             ObjectType::Index => "INDEX",
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",
