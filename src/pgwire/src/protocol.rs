@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::convert::TryFrom;
 use std::future::Future;
 use std::ops::Deref;
@@ -640,6 +640,8 @@ where
         adapter_client,
         txn_needs_commit: false,
         tokio_metrics_intervals,
+        pending: VecDeque::new(),
+        in_burst: false,
     };
 
     select! {
@@ -852,6 +854,13 @@ where
     adapter_client: mz_adapter::SessionClient,
     txn_needs_commit: bool,
     tokio_metrics_intervals: I,
+    /// Pipelined messages that had already arrived and were drained ahead of a
+    /// peek so the burst can share one read timestamp. Processed before reading
+    /// the socket again. See `drain_buffered` and the `Execute` handler.
+    pending: VecDeque<FrontendMessage>,
+    /// Whether a pipeline burst is currently open (see `pending`). While open,
+    /// no further draining happens; it closes on the next socket read.
+    in_burst: bool,
 }
 
 enum SendRowsEndedReason {
@@ -894,6 +903,30 @@ where
         }
     }
 
+    /// Pull messages that have already arrived on the connection without
+    /// blocking, up to a cap. Used to gather a pipelined burst so its peeks can
+    /// share one read timestamp: every returned message had arrived before this
+    /// call, the precondition for reusing a timestamp taken afterwards.
+    ///
+    /// `recv()` is cancel-safe, so polling it once with `now_or_never` and
+    /// dropping an unfinished future loses no data. A terminal result (EOF or
+    /// error) reached mid-drain is not re-enqueued; the next socket read
+    /// observes the same terminal state. Bursts only form on a live connection
+    /// with buffered input, where that case is not hit.
+    fn drain_buffered(&mut self) -> Vec<FrontendMessage> {
+        // Bound the burst so a client streaming without pause cannot make us
+        // buffer without limit.
+        const MAX_BURST: usize = 1024;
+        let mut drained = Vec::new();
+        while drained.len() < MAX_BURST {
+            match self.conn.recv().now_or_never() {
+                Some(Ok(Some(message))) => drained.push(message),
+                _ => break,
+            }
+        }
+        drained
+    }
+
     #[instrument(level = "debug")]
     async fn advance_ready(&mut self) -> Result<State, io::Error> {
         // Start a new metrics interval before the `recv()` call.
@@ -901,31 +934,45 @@ where
             .next()
             .expect("infinite iterator");
 
-        // Handle timeouts first so we don't execute any statements when there's a pending timeout.
-        let message = select! {
-            biased;
+        // Process any drained pipeline messages before reading the socket
+        // again. These had already arrived when we drained them, so they belong
+        // to the current burst and may share its read timestamp. Only once they
+        // are exhausted do we read the socket, where a message may be newer than
+        // the burst's shared timestamp, so we close the burst first.
+        let message = if let Some(message) = self.pending.pop_front() {
+            Some(message)
+        } else {
+            if self.in_burst {
+                self.adapter_client.end_pipeline_burst();
+                self.in_burst = false;
+            }
 
-            // `recv_timeout()` is cancel-safe as per it's docs.
-            Some(timeout) = self.adapter_client.recv_timeout() => {
-                let err: AdapterError = timeout.into();
-                let conn_id = self.adapter_client.session().conn_id();
-                tracing::warn!("session timed out, conn_id {}", conn_id);
+            // Handle timeouts first so we don't execute any statements when there's a pending timeout.
+            select! {
+                biased;
 
-                // Process the error, doing any state cleanup.
-                let error_response = err.into_response(Severity::Fatal);
-                let error_state = self.send_error_and_get_state(error_response).await;
+                // `recv_timeout()` is cancel-safe as per it's docs.
+                Some(timeout) = self.adapter_client.recv_timeout() => {
+                    let err: AdapterError = timeout.into();
+                    let conn_id = self.adapter_client.session().conn_id();
+                    tracing::warn!("session timed out, conn_id {}", conn_id);
 
-                // Terminate __after__ we do any cleanup.
-                self.adapter_client.terminate().await;
+                    // Process the error, doing any state cleanup.
+                    let error_response = err.into_response(Severity::Fatal);
+                    let error_state = self.send_error_and_get_state(error_response).await;
 
-                // We must wait for the client to send a request before we can send the error response.
-                // Due to the PG wire protocol, we can't send an ErrorResponse unless it is in response
-                // to a client message.
-                let _ = self.conn.recv().await?;
-                return error_state;
-            },
-            // `recv()` is cancel-safe as per it's docs.
-            message = self.conn.recv() => message?,
+                    // Terminate __after__ we do any cleanup.
+                    self.adapter_client.terminate().await;
+
+                    // We must wait for the client to send a request before we can send the error response.
+                    // Due to the PG wire protocol, we can't send an ErrorResponse unless it is in response
+                    // to a client message.
+                    let _ = self.conn.recv().await?;
+                    return error_state;
+                },
+                // `recv()` is cancel-safe as per it's docs.
+                message = self.conn.recv() => message?,
+            }
         };
 
         // Take the metrics since just before the `recv`.
@@ -982,6 +1029,22 @@ where
                 portal_name,
                 max_rows,
             }) => {
+                // If the client has pipelined further messages that have already
+                // arrived, drain them now so this peek and they can share a
+                // single oracle read timestamp (see the `PeekClient` burst
+                // methods). We drain before executing, so the timestamp taken
+                // during this peek is within every drained statement's real-time
+                // bounds. Only on the frontend-peek path, and not when already
+                // inside a drained burst (avoids re-draining newer messages into
+                // the same burst).
+                if self.adapter_client.should_drain_pipeline_burst() && !self.in_burst {
+                    let drained = self.drain_buffered();
+                    if !drained.is_empty() {
+                        self.adapter_client.begin_pipeline_burst();
+                        self.in_burst = true;
+                        self.pending.extend(drained);
+                    }
+                }
                 let max_rows = match usize::try_from(max_rows) {
                     Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
                     Ok(n) => ExecuteCount::Count(n),

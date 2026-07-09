@@ -101,6 +101,23 @@ pub const ENABLE_FRONTEND_SUBSCRIBES: Config<bool> = Config::new(
     "Enable sending subscribes down the new frontend-peek path.",
 );
 
+/// Share a single timestamp-oracle `read_ts` across a burst of pipelined
+/// peeks on one connection.
+///
+/// When a client pipelines statements (sends them without waiting for each
+/// response), the frontend-peek path still reads a fresh oracle timestamp per
+/// query, one round-trip each. All queries in such a burst have arrived before
+/// any response is sent, so a single `read_ts` taken during the burst is within
+/// the real-time bounds of every one of them (the same argument that makes
+/// `BatchingTimestampOracle` correct). This reuses that timestamp across the
+/// burst, removing the extra round-trips. Only the pgwire-drained burst may
+/// reuse it, never a statement that arrived afterwards.
+pub const ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP: Config<bool> = Config::new(
+    "enable_pipelined_peek_shared_timestamp",
+    false,
+    "Share one timestamp-oracle read_ts across a burst of pipelined peeks on a connection.",
+);
+
 /// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
 pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Duration> = Config::new(
     "plan_insights_notice_fast_path_clusters_optimize_duration",
@@ -362,6 +379,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&ENABLE_FRONTEND_SUBSCRIBES)
+        .add(&ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_PASSWORD_AUTH)
