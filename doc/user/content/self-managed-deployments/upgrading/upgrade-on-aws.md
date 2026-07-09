@@ -96,6 +96,9 @@ module "materialize_instance" {
 
 {{< self-managed/crd-version-note "v1alpha1" >}}
 
+{{< include-from-yaml data="self_managed/upgrades"
+name="upgrade-tf-v4-crd-version-default" >}}
+
 {{< include-from-yaml data="self_managed/crd_version_checks"
 name="check-crd-version-tf" >}}
 
