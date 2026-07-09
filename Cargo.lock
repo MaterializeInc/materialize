@@ -7013,6 +7013,7 @@ dependencies = [
  "fallible-iterator 0.2.0",
  "hex",
  "hmac",
+ "indexmap 2.11.4",
  "insta",
  "itertools 0.14.0",
  "md-5",
