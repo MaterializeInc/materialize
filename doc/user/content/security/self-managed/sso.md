@@ -551,6 +551,12 @@ claude mcp add --transport http materialize-agent \
 The `--callback-port` value must match the `http://localhost:<port>/callback`
 redirect URI registered on the OIDC client.
 
+{{< note >}}
+Deployments behind a load balancer or proxy that rewrites the `Host` header
+must set the `http_host_name` configuration so that the URLs Materialize
+publishes in its resource metadata are correct.
+{{</ note >}}
+
 ## Provisioning roles
 
 ### Mapping IdP users to Materialize roles
