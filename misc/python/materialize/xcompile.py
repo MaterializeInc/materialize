@@ -116,6 +116,7 @@ def cargo(
     rustflags += [
         "-Clink-arg=-Wl,--compress-debug-sections=zstd",
         "-Clink-arg=-Wl,-O3",
+        "-Clink-arg=-Wl,--icf=all",
         "-Csymbol-mangling-version=v0",
         f"-Ctarget-cpu={_target_cpu}",
         f"-Ctarget-feature={_target_features}",
