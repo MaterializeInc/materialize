@@ -187,7 +187,7 @@ authentication mechanisms.
    | `name_prefix` | Set a prefix for all resource names (e.g., `simple-demo`) as well as your release name for the Operator |
    | `region`      | Set the GCP region for the deployment (e.g., `us-central1`).  |
    | `license_key` | Set to your Materialize license key.     |
-   | `crd_version` | CRD API version to use for the Materialize instance: `v1` or `v1alpha1`. |
+   | `crd_version` | CRD API version to use for the Materialize instance: `v1` (default starting in TF v4.0.0) or `v1alpha1`. |
    | `labels`      | Set to the labels to apply to resources. |
 
    {{% include-from-yaml data="self_managed/installation"
@@ -198,7 +198,7 @@ authentication mechanisms.
    name_prefix = "simple-demo"
    region      = "us-central1"
    license_key = "your-materialize-license-key"
-   crd_version = "v1"   # v1 is available for Materialize v26.30+ and TF v3.1.1+.
+   crd_version = "v1"   # Default starting in TF v4.0.0. v1 requires Materialize v26.30+.
    labels = {
      environment = "demo"
      created_by  = "terraform"
