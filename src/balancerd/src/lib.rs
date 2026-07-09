@@ -668,6 +668,10 @@ impl PgwireBalancer {
             Err(err) => {
                 let sql_state = match &err {
                     ResolveError::InvalidPassword => SqlState::INVALID_PASSWORD,
+                    ResolveError::Client(details) => {
+                        warn!("client-caused connection failure: {details:#}");
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    }
                     ResolveError::Internal(details) => {
                         error!("resolving connection destination: {details:#}");
                         SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
@@ -1169,6 +1173,16 @@ fn extract_tenant_from_cname(cname: &str) -> Option<String> {
     Some(tenant.to_string())
 }
 
+/// Strips the surrounding brackets from an IPv6 host literal, e.g. `[::1]`
+/// becomes `::1`. Leaves other hosts unchanged. This lets a bracketed IPv6
+/// literal in an address template parse as an `IpAddr` and resolve, matching
+/// what `tokio::net::lookup_host` accepts.
+fn strip_ipv6_brackets(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
+}
+
 impl mz_server_core::Server for HttpsBalancer {
     const NAME: &'static str = "https_balancer";
 
@@ -1323,12 +1337,19 @@ pub enum BalancerResolver {
 /// An error resolving a connection's destination.
 ///
 /// The `Display` of this error is sent to unauthenticated clients, so it must
-/// not contain internal details such as hostnames. Those belong in the
-/// `Internal` source error, which is only logged.
+/// not contain internal details such as hostnames. Those belong in the source
+/// error attached to each variant, which is only logged.
 #[derive(Debug, thiserror::Error)]
 enum ResolveError {
     #[error("invalid password")]
     InvalidPassword,
+    /// A failure caused by client input, e.g. a bogus SNI that does not resolve
+    /// or a protocol violation. An unauthenticated client can trigger these at
+    /// will, so they are logged at `warn!`, not `error!`, to avoid making
+    /// client noise look like server faults and spamming the error log.
+    #[error("internal error")]
+    Client(#[source] anyhow::Error),
+    /// A server-side fault.
     #[error("internal error")]
     Internal(#[from] anyhow::Error),
 }
@@ -1382,9 +1403,12 @@ impl BalancerResolver {
                 let has_sni = servername.is_some();
                 let resolved_addr = match (servername, sni_resolver.as_ref()) {
                     (Some(servername), Some(SniTemplate { template, port })) => {
+                        // The servername is client-supplied, so a resolution
+                        // failure here is a client error, not a server fault.
                         let (addr, tenant) = dns_resolver
                             .resolve_sni(template, *port, servername)
-                            .await?;
+                            .await
+                            .map_err(ResolveError::Client)?;
                         debug!("pgwire SNI resolved tenant: {:?}", tenant);
                         ResolvedAddr {
                             addr,
@@ -1399,7 +1423,9 @@ impl BalancerResolver {
                         let password = match conn.recv().await? {
                             Some(FrontendMessage::Password { password }) => password,
                             _ => {
-                                return Err(anyhow::anyhow!("expected Password message").into());
+                                return Err(ResolveError::Client(anyhow::anyhow!(
+                                    "expected Password message"
+                                )));
                             }
                         };
 
@@ -1552,6 +1578,7 @@ impl TenantDnsResolver {
     /// Resolves the address for a hostname, skipping CNAME resolution and
     /// tenant extraction. Use when the tenant is already known.
     async fn resolve_addr(&self, host: &str, port: u16) -> Result<SocketAddr, anyhow::Error> {
+        let host = strip_ipv6_brackets(host);
         // IP literals need no resolution. Resolving them through hickory
         // would walk the search domain list first when ndots is large, as it
         // is in Kubernetes.
@@ -1569,6 +1596,7 @@ impl TenantDnsResolver {
         host: &str,
         port: u16,
     ) -> Result<(SocketAddr, Option<String>), anyhow::Error> {
+        let host = strip_ipv6_brackets(host);
         // IP literals need no resolution and carry no tenant CNAME.
         if let Ok(ip) = host.parse::<IpAddr>() {
             return Ok((SocketAddr::new(ip, port), None));
@@ -1669,5 +1697,16 @@ mod tests {
                 "{name} got {cname:?} expected {expect:?}"
             );
         }
+    }
+
+    #[mz_ore::test]
+    fn test_strip_ipv6_brackets() {
+        assert_eq!(strip_ipv6_brackets("[::1]"), "::1");
+        assert_eq!(strip_ipv6_brackets("[2001:db8::1]"), "2001:db8::1");
+        // Hosts without a matched bracket pair are left untouched.
+        assert_eq!(strip_ipv6_brackets("127.0.0.1"), "127.0.0.1");
+        assert_eq!(strip_ipv6_brackets("host.example.com"), "host.example.com");
+        assert_eq!(strip_ipv6_brackets("[unclosed"), "[unclosed");
+        assert_eq!(strip_ipv6_brackets("unopened]"), "unopened]");
     }
 }

@@ -231,6 +231,30 @@ async fn test_balancer() {
         let res: i32 = pg_client.query_one("SELECT 2", &[]).await.unwrap().get(0);
         assert_eq!(res, 2);
 
+        // A wrong password on the Frontegg (multi-tenant) path must fail with
+        // SQLSTATE 28P01 and the exact opaque message "invalid password", with
+        // no internal detail leaked to the client.
+        if is_multi_tenant_resolver {
+            let wrong_password = format!("mzp_{}{}", Uuid::new_v4(), Uuid::new_v4());
+            let bad_conn_str = format!(
+                "user={frontegg_user} password={wrong_password} host={} port={} sslmode=require",
+                balancer_pgwire_listen.ip(),
+                balancer_pgwire_listen.port()
+            );
+            let err = match tokio_postgres::connect(&bad_conn_str, tls.clone()).await {
+                Ok(_) => panic!("connection with wrong password should have failed"),
+                Err(e) => e,
+            };
+            let db_err = err
+                .as_db_error()
+                .expect("expected a database error from the server");
+            assert_eq!(
+                db_err.code(),
+                &tokio_postgres::error::SqlState::INVALID_PASSWORD
+            );
+            assert_eq!(db_err.message(), "invalid password");
+        }
+
         // Assert cancellation is propagated.
         let cancel = pg_client.cancel_token();
         let copy = pg_client
