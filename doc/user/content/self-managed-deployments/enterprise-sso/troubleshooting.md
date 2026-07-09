@@ -159,6 +159,48 @@ local groups_from(src) = if std.objectHas(src, 'groups') then src.groups else []
 This is the pattern the module ships. When adding new IdP-specific custom
 claims to the mapper, always check `raw_claims` first.
 
+### Okta reports "Invalid Base URL for the SCIM Connector"
+
+The SCIM connector base URL Polis returns
+(`<polis-hostname>/api/scim/v2.0/<directoryId>`) must be entered into Okta
+**with a trailing slash**. Without it, Okta's client-side validation rejects
+the URL before making any HTTP request. Add `/` at the end and re-test.
+
+### Okta's "Test Connector Configuration" fails, but SCIM push still works
+
+Polis doesn't implement SCIM's discovery endpoints (`/ServiceProviderConfig`,
+`/ResourceTypes`, `/Schemas`); Okta's connector test probes these and errors
+out. The SCIM operations Okta uses to push users and groups (`GET /Users`,
+`POST /Users`, `POST /Groups`) work fine.
+
+Save the connector configuration without running the test; provisioning
+still works end to end.
+
+### Users don't appear in Polis's directory after assigning a group
+
+Assigning a group to the SAML app under **Assignments** normally triggers
+user provisioning for each member, but Okta silently skips users whose
+profile is missing an attribute the SCIM mapping requires (email in
+particular).
+
+Diagnose and unstick:
+
+1. Check the app's **Assignments** tab — each assigned user has a push
+   status column. A red icon means provisioning failed; hover for the
+   reason.
+2. Force a push manually: **Assignments** tab → **Assign → Assign to
+   People** and add the user by email.
+3. Verify in Polis:
+
+   ```bash
+   curl -s -H "Authorization: Api-Key $POLIS_API_KEY" \
+     "https://<your-polis-hostname>/api/v1/dsync/users?directoryId=$DIRECTORY_ID" | jq .
+   ```
+
+Note: pushing a group via the **Push Groups** tab creates the group entity
+in Polis but does **not** push its members as SCIM users. Members are
+provisioned via **Assignments**.
+
 ### A specific cloud is hanging during destroy
 
 See the cloud-specific notes:
