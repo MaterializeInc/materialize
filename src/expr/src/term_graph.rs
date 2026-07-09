@@ -61,6 +61,10 @@ pub trait TermRep: Sized {
     /// The children arrive in the order `children` produced them, and there
     /// are exactly as many as the original node had.
     fn rebuild(op: &Self::Op, children: Vec<Self>) -> Self;
+
+    /// Decomposes `self` into its operator and owned children, the inverse
+    /// of `rebuild`.
+    fn into_parts(self) -> (Self::Op, Vec<Self>);
 }
 
 /// A deduplicating map from terms to dense identifiers.
@@ -144,6 +148,42 @@ impl<Op: Eq + Hash> TermGraph<Op> {
         }
         // The root is first in `rev_order`, so it is processed last.
         root_id
+    }
+
+    /// Like [`TermGraph::ensure`], but consumes the expression, moving its
+    /// operator payloads into the graph rather than cloning them.
+    ///
+    /// Also iterative, including the teardown of `root`, so this doubles as
+    /// a stack-safe way to dispose of arbitrarily deep expressions.
+    pub fn ensure_owned<T: TermRep<Op = Op>>(&mut self, root: T) -> TermId {
+        // Decompose nodes into an arena, recording child slots. Slots are
+        // assigned before children are pushed, so a child's slot is always
+        // larger than its parent's and a reverse sweep is children first.
+        let mut arena: Vec<Option<(Op, Vec<usize>)>> = vec![None];
+        let mut todo: Vec<(usize, T)> = vec![(0, root)];
+        while let Some((slot, node)) = todo.pop() {
+            let (op, children) = node.into_parts();
+            let base = arena.len();
+            let slots: Vec<usize> = (0..children.len()).map(|i| base + i).collect();
+            for (i, child) in children.into_iter().enumerate() {
+                arena.push(None);
+                todo.push((base + i, child));
+            }
+            arena[slot] = Some((op, slots));
+        }
+        let mut ids = vec![0; arena.len()];
+        for slot in (0..arena.len()).rev() {
+            let (op, slots) = arena[slot].take().expect("slot populated");
+            let args: SmallVec<[TermId; 2]> = slots.iter().map(|s| ids[*s]).collect();
+            ids[slot] = self.insert((op, args));
+        }
+        ids[0]
+    }
+
+    /// Consumes the graph, yielding terms in identifier order, so children
+    /// before parents.
+    pub fn into_terms(self) -> impl Iterator<Item = Term<Op>> {
+        self.terms.into_iter()
     }
 
     /// Builds the owned expression rooted at `id`.
@@ -251,6 +291,22 @@ impl TermRep for MirScalarExpr {
                 then: Box::new(next()),
                 els: Box::new(next()),
             },
+        }
+    }
+
+    fn into_parts(self) -> (MseOp, Vec<Self>) {
+        match self {
+            MirScalarExpr::Column(col, name) => (MseOp::Column(col, name), Vec::new()),
+            MirScalarExpr::Literal(row, typ) => (MseOp::Literal(row, typ), Vec::new()),
+            MirScalarExpr::CallUnmaterializable(func) => {
+                (MseOp::CallUnmaterializable(func), Vec::new())
+            }
+            MirScalarExpr::CallUnary { func, expr } => (MseOp::CallUnary(func), vec![*expr]),
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                (MseOp::CallBinary(func), vec![*expr1, *expr2])
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => (MseOp::CallVariadic(func), exprs),
+            MirScalarExpr::If { cond, then, els } => (MseOp::If, vec![*cond, *then, *els]),
         }
     }
 }
@@ -553,6 +609,98 @@ impl TermRep for MirRelationExpr {
             },
         }
     }
+
+    fn into_parts(self) -> (MreOp, Vec<Self>) {
+        match self {
+            MirRelationExpr::Constant { rows, typ } => (MreOp::Constant { rows, typ }, Vec::new()),
+            MirRelationExpr::Get {
+                id,
+                typ,
+                access_strategy,
+            } => (
+                MreOp::Get {
+                    id,
+                    typ,
+                    access_strategy,
+                },
+                Vec::new(),
+            ),
+            MirRelationExpr::Let { id, value, body } => (MreOp::Let { id }, vec![*value, *body]),
+            MirRelationExpr::LetRec {
+                ids,
+                values,
+                limits,
+                body,
+            } => {
+                let mut children = values;
+                children.push(*body);
+                (MreOp::LetRec { ids, limits }, children)
+            }
+            MirRelationExpr::Project { input, outputs } => {
+                (MreOp::Project { outputs }, vec![*input])
+            }
+            MirRelationExpr::Map { input, scalars } => (MreOp::Map { scalars }, vec![*input]),
+            MirRelationExpr::FlatMap { input, func, exprs } => {
+                (MreOp::FlatMap { func, exprs }, vec![*input])
+            }
+            MirRelationExpr::Filter { input, predicates } => {
+                (MreOp::Filter { predicates }, vec![*input])
+            }
+            MirRelationExpr::Join {
+                inputs,
+                equivalences,
+                implementation,
+            } => (
+                MreOp::Join {
+                    equivalences,
+                    implementation,
+                },
+                inputs,
+            ),
+            MirRelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+                monotonic,
+                expected_group_size,
+            } => (
+                MreOp::Reduce {
+                    group_key,
+                    aggregates,
+                    monotonic,
+                    expected_group_size,
+                },
+                vec![*input],
+            ),
+            MirRelationExpr::TopK {
+                input,
+                group_key,
+                order_key,
+                limit,
+                offset,
+                monotonic,
+                expected_group_size,
+            } => (
+                MreOp::TopK {
+                    group_key,
+                    order_key,
+                    limit,
+                    offset,
+                    monotonic,
+                    expected_group_size,
+                },
+                vec![*input],
+            ),
+            MirRelationExpr::Negate { input } => (MreOp::Negate, vec![*input]),
+            MirRelationExpr::Threshold { input } => (MreOp::Threshold, vec![*input]),
+            MirRelationExpr::Union { base, inputs } => {
+                let mut children = vec![*base];
+                children.extend(inputs);
+                (MreOp::Union, children)
+            }
+            MirRelationExpr::ArrangeBy { input, keys } => (MreOp::ArrangeBy { keys }, vec![*input]),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -693,6 +841,47 @@ mod tests {
         assert_eq!(graph.len(), DEPTH + 1);
         dismantle(expr);
         dismantle(extracted);
+    }
+
+    #[mz_ore::test]
+    fn ensure_owned_matches_ensure() {
+        let exprs = vec![
+            lit(7),
+            col(0).call_binary(lit(1), func::AddInt64),
+            col(0).if_then_else(lit(1), lit(2)),
+        ];
+        let mut graph = TermGraph::default();
+        for expr in exprs {
+            let borrowed = graph.ensure(&expr);
+            assert_eq!(graph.ensure_owned(expr), borrowed);
+        }
+    }
+
+    #[mz_ore::test]
+    fn deep_owned_teardown() {
+        // `ensure_owned` consumes the expression iteratively, so it needs no
+        // separate dismantling even at depths where drop would overflow.
+        const DEPTH: usize = 100_000;
+        let mut expr = col(0);
+        for _ in 0..DEPTH {
+            expr = expr.call_unary(UnaryFunc::Not(func::Not));
+        }
+        let mut graph = TermGraph::default();
+        let id = graph.ensure_owned(expr);
+        assert_eq!(id, DEPTH);
+        assert_eq!(graph.len(), DEPTH + 1);
+    }
+
+    #[mz_ore::test]
+    fn into_terms_order() {
+        let mut graph = TermGraph::default();
+        graph.ensure(&col(0).call_binary(lit(1), func::AddInt64));
+        let len = graph.len();
+        let terms: Vec<_> = graph.into_terms().collect();
+        assert_eq!(terms.len(), len);
+        for (id, (_op, args)) in terms.iter().enumerate() {
+            assert!(args.iter().all(|a| *a < id));
+        }
     }
 
     #[mz_ore::test]
