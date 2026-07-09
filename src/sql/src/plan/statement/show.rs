@@ -386,6 +386,10 @@ pub fn show_objects<'a>(
         ShowObjectType::Subsource { on_source } => show_subsources(scx, from, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
         ShowObjectType::Sink { in_cluster } => show_sinks(scx, from, in_cluster, filter),
+        // TODO: wire up to `mz_metric_sinks` once the builtin table exists.
+        ShowObjectType::MetricSink { in_cluster: _ } => {
+            bail_unsupported!("SHOW METRIC SINKS")
+        }
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => {
@@ -724,7 +728,8 @@ pub fn show_columns<'a>(
         | ty @ CatalogItemType::Func
         | ty @ CatalogItemType::Secret
         | ty @ CatalogItemType::Type
-        | ty @ CatalogItemType::Sink => {
+        | ty @ CatalogItemType::Sink
+        | ty @ CatalogItemType::MetricSink => {
             sql_bail!("{full_name} is a {ty} and so does not have columns");
         }
     }

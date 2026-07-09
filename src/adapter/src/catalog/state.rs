@@ -453,6 +453,10 @@ impl CatalogState {
                 let from_item_id = self.get_entry_by_global_id(&sink.from).id();
                 self.introspection_dependencies_inner(from_item_id, out)
             }
+            CatalogItem::MetricSink(metric_sink) => {
+                let from_item_id = self.get_entry_by_global_id(&metric_sink.from).id();
+                self.introspection_dependencies_inner(from_item_id, out)
+            }
             CatalogItem::Index(idx) => {
                 let on_item_id = self.get_entry_by_global_id(&idx.on).id();
                 self.introspection_dependencies_inner(on_item_id, out)
@@ -1888,6 +1892,7 @@ impl CatalogState {
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
+            | CatalogItemType::MetricSink
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index

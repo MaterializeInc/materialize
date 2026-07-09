@@ -375,7 +375,8 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            CatalogItem::Log(_) | CatalogItem::Secret(_) => vec![],
+            // TODO: pack a row into a `mz_metric_sinks` builtin table once it exists.
+            CatalogItem::Log(_) | CatalogItem::Secret(_) | CatalogItem::MetricSink(_) => vec![],
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, connection, diff)
             }

@@ -2442,6 +2442,10 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::Index => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
+                // Metric sinks are never durably persisted, so this is never reached.
+                CatalogItemType::MetricSink => {
+                    unreachable!("metric sinks are never durably serialized")
+                }
             }
         }
 
@@ -2507,6 +2511,10 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::Index => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
+                // Metric sinks are never durably persisted, so this is never reached.
+                CatalogItemType::MetricSink => {
+                    unreachable!("metric sinks are never durably serialized")
+                }
             }
         }
 

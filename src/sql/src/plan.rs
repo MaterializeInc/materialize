@@ -280,6 +280,9 @@ impl Plan {
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
             StatementKind::CreateSink => &[PlanKind::CreateSink],
+            // Planning for `CREATE METRIC SINK` is not yet implemented, so it
+            // has no `PlanKind` to produce.
+            StatementKind::CreateMetricSink => &[],
             StatementKind::CreateSource | StatementKind::CreateSubsource => {
                 &[PlanKind::CreateSource]
             }
@@ -360,6 +363,7 @@ impl Plan {
                 ObjectType::MaterializedView => "drop materialized view",
                 ObjectType::Source => "drop source",
                 ObjectType::Sink => "drop sink",
+                ObjectType::MetricSink => "drop metric sink",
                 ObjectType::Index => "drop index",
                 ObjectType::Type => "drop type",
                 ObjectType::Role => "drop roles",
@@ -400,6 +404,7 @@ impl Plan {
                 ObjectType::MaterializedView => "alter materialized view",
                 ObjectType::Source => "alter source",
                 ObjectType::Sink => "alter sink",
+                ObjectType::MetricSink => "alter metric sink",
                 ObjectType::Index => "alter index",
                 ObjectType::Type => "alter type",
                 ObjectType::Role => "alter role",
@@ -435,6 +440,7 @@ impl Plan {
                 ObjectType::MaterializedView => "alter materialized view owner",
                 ObjectType::Source => "alter source owner",
                 ObjectType::Sink => "alter sink owner",
+                ObjectType::MetricSink => "alter metric sink owner",
                 ObjectType::Index => "alter index owner",
                 ObjectType::Type => "alter type owner",
                 ObjectType::Role => "alter role owner",

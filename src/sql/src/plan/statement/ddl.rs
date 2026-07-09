@@ -3285,7 +3285,7 @@ fn plan_sink(
                     });
                 }
             }
-            Sink | View | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | View | Index | Type | Func | Secret | Connection => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
@@ -4099,7 +4099,7 @@ pub fn plan_create_index(
                     );
                 }
             }
-            Sink | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | Index | Type | Func | Secret | Connection => {
                 sql_bail!(
                     "index cannot be created on {} because it is a {}",
                     on_name.full_name_str(),
@@ -5705,6 +5705,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         | ObjectType::MaterializedView
         | ObjectType::Source
         | ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster
@@ -5721,6 +5722,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Sink
+            | CatalogItemType::MetricSink
             | CatalogItemType::Type
             | CatalogItemType::Secret
             | CatalogItemType::Connection => true,
@@ -6425,7 +6427,7 @@ pub fn plan_alter_item_set_cluster(
     // Prevent access to `SET CLUSTER` for unsupported objects.
     match object_type {
         ObjectType::MaterializedView => {}
-        ObjectType::Index | ObjectType::Sink | ObjectType::Source => {
+        ObjectType::Index | ObjectType::Sink | ObjectType::MetricSink | ObjectType::Source => {
             bail_unsupported!(29606, format!("ALTER {object_type} SET CLUSTER"))
         }
         ObjectType::Table
@@ -6873,6 +6875,7 @@ pub fn plan_alter_object_swap(
             | ObjectType::MaterializedView
             | ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Role
@@ -7909,6 +7912,7 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::MaterializedView
         | ObjectType::Source
         | ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster

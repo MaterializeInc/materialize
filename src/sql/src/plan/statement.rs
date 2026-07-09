@@ -152,6 +152,13 @@ pub fn describe(
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
+        // Planning for `CREATE METRIC SINK` is not yet implemented.
+        Statement::CreateMetricSink(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "CREATE METRIC SINK".to_string(),
+                discussion_no: None,
+            });
+        }
         Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
@@ -357,6 +364,13 @@ pub fn plan(
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
+        // Planning for `CREATE METRIC SINK` is not yet implemented.
+        Statement::CreateMetricSink(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "CREATE METRIC SINK".to_string(),
+                discussion_no: None,
+            });
+        }
         Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
@@ -502,6 +516,7 @@ impl PartialEq<ObjectType> for CatalogItemType {
             (CatalogItemType::Source, ObjectType::Source)
             | (CatalogItemType::Table, ObjectType::Table)
             | (CatalogItemType::Sink, ObjectType::Sink)
+            | (CatalogItemType::MetricSink, ObjectType::MetricSink)
             | (CatalogItemType::View, ObjectType::View)
             | (CatalogItemType::MaterializedView, ObjectType::MaterializedView)
             | (CatalogItemType::Index, ObjectType::Index)
@@ -1080,6 +1095,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateSchema(_) => DDL,
             Statement::CreateSecret(_) => DDL,
             Statement::CreateSink(_) => DDL,
+            Statement::CreateMetricSink(_) => DDL,
             Statement::CreateWebhookSource(_) => DDL,
             Statement::CreateSource(_) => DDL,
             Statement::CreateSubsource(_) => DDL,

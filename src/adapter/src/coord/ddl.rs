@@ -1203,7 +1203,8 @@ impl Coordinator {
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
-                        | CatalogItem::Func(_) => {}
+                        | CatalogItem::Func(_)
+                        | CatalogItem::MetricSink(_) => {}
                     }
                 }
                 Op::DropObjects(drop_object_infos) => {
@@ -1282,7 +1283,8 @@ impl Coordinator {
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
                                     | CatalogItem::Type(_)
-                                    | CatalogItem::Func(_) => {}
+                                    | CatalogItem::Func(_)
+                                    | CatalogItem::MetricSink(_) => {}
                                 }
                             }
                         }
@@ -1312,7 +1314,8 @@ impl Coordinator {
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
-                    | CatalogItem::Func(_) => {}
+                    | CatalogItem::Func(_)
+                    | CatalogItem::MetricSink(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }

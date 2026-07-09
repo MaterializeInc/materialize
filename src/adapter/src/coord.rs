@@ -2694,6 +2694,10 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_) => {}
+                // Metric sinks are never durably persisted, so no bootstrapped entry is ever one.
+                CatalogItem::MetricSink(_) => {
+                    unreachable!("metric sinks are never durably serialized")
+                }
             }
         }
 
@@ -3263,6 +3267,10 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => (),
+                // Metric sinks are never durably persisted, so no bootstrapped entry is ever one.
+                CatalogItem::MetricSink(_) => {
+                    unreachable!("metric sinks are never durably serialized")
+                }
             }
         }
 
@@ -3662,6 +3670,10 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => (),
+                // Metric sinks are never durably persisted, so no bootstrapped entry is ever one.
+                CatalogItem::MetricSink(_) => {
+                    unreachable!("metric sinks are never durably serialized")
+                }
             }
         }
 
@@ -3694,6 +3706,10 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => continue,
+                // Metric sinks are never durably persisted, so no bootstrapped entry is ever one.
+                CatalogItem::MetricSink(_) => {
+                    unreachable!("metric sinks are never durably serialized")
+                }
             };
             if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
                 catalog_ids.push(gid);

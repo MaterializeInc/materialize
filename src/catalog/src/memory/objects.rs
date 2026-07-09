@@ -850,6 +850,7 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
+    MetricSink(MetricSink),
 }
 
 impl From<CatalogEntry> for durable::Item {
@@ -1602,6 +1603,40 @@ impl Index {
     }
 }
 
+/// A metric sink, a compute object that exports a relation's rows as Prometheus metrics.
+///
+/// Metric sinks are never persisted in the durable catalog: they are recreated in memory
+/// each time they're needed, so `to_serialized`/`into_serialized` are unreachable for them.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricSink {
+    /// Parse-able SQL that defines this metric sink.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this metric sink from outside the catalog, e.g. compute.
+    pub global_id: GlobalId,
+    /// Collection we read into this metric sink.
+    pub from: GlobalId,
+    /// Other catalog objects referenced by this metric sink.
+    pub resolved_ids: ResolvedIds,
+    /// Cluster this metric sink runs on.
+    pub cluster_id: ClusterId,
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
+}
+
+impl MetricSink {
+    /// The [`GlobalId`] that refers to this metric sink.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
     /// Parse-able SQL that defines this type.
@@ -1731,6 +1766,7 @@ impl CatalogItem {
             CatalogItem::Func(_) => CatalogItemType::Func,
             CatalogItem::Secret(_) => CatalogItemType::Secret,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
+            CatalogItem::MetricSink(_) => CatalogItemType::MetricSink,
         }
     }
 
@@ -1749,6 +1785,7 @@ impl CatalogItem {
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
             CatalogItem::Table(table) => {
                 return itertools::Either::Left(table.collections.values().copied());
             }
@@ -1771,6 +1808,7 @@ impl CatalogItem {
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
             CatalogItem::Table(table) => table.global_id_writes(),
         }
     }
@@ -1780,6 +1818,7 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(idx) => idx.optimized_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.optimized_plan.as_ref(),
+            CatalogItem::MetricSink(ms) => ms.optimized_plan.as_ref(),
             _ => None,
         }
     }
@@ -1789,6 +1828,7 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(idx) => idx.physical_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.physical_plan.as_ref(),
+            CatalogItem::MetricSink(ms) => ms.physical_plan.as_ref(),
             _ => None,
         }
     }
@@ -1798,6 +1838,7 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(idx) => idx.dataflow_metainfo.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_ref(),
+            CatalogItem::MetricSink(ms) => ms.dataflow_metainfo.as_ref(),
             _ => None,
         }
     }
@@ -1824,6 +1865,11 @@ impl CatalogItem {
                 &mut mv.physical_plan,
                 &mut mv.dataflow_metainfo,
             )),
+            CatalogItem::MetricSink(ms) => Some((
+                &mut ms.optimized_plan,
+                &mut ms.physical_plan,
+                &mut ms.dataflow_metainfo,
+            )),
             _ => None,
         }
     }
@@ -1841,7 +1887,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => false,
         }
     }
 
@@ -1867,7 +1914,8 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::Type(_) => None,
+            | CatalogItem::Type(_)
+            | CatalogItem::MetricSink(_) => None,
         }
     }
 
@@ -1934,6 +1982,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
+            CatalogItem::MetricSink(metric_sink) => &metric_sink.resolved_ids,
         }
     }
 
@@ -1960,6 +2009,7 @@ impl CatalogItem {
             }
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
+            CatalogItem::MetricSink(_) => {}
         }
         uses
     }
@@ -1978,7 +2028,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => None,
         }
     }
 
@@ -1996,7 +2047,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => (),
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => (),
         }
     }
 
@@ -2020,7 +2072,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => {
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => {
                 unreachable!("only views, indexes, and tables can be temporary")
             }
         }
@@ -2102,6 +2155,11 @@ impl CatalogItem {
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
+            CatalogItem::MetricSink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::MetricSink(i))
+            }
         }
     }
 
@@ -2172,6 +2230,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
+            CatalogItem::MetricSink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::MetricSink(i))
+            }
         }
     }
 
@@ -2233,6 +2296,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::Connection(i)
+            }
+            CatalogItem::MetricSink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::MetricSink(i)
             }
         }
     }
@@ -2411,7 +2479,8 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
-            | CatalogItem::Connection(Connection { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::Connection(Connection { create_sql, .. })
+            | CatalogItem::MetricSink(MetricSink { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -2437,6 +2506,7 @@ impl CatalogItem {
     pub fn is_compute_object_on_cluster(&self) -> Option<ClusterId> {
         match self {
             CatalogItem::Index(index) => Some(index.cluster_id),
+            CatalogItem::MetricSink(metric_sink) => Some(metric_sink.cluster_id),
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Log(_)
@@ -2454,6 +2524,7 @@ impl CatalogItem {
         match self {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
+            CatalogItem::MetricSink(metric_sink) => Some(metric_sink.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion { cluster_id, .. }
                 | DataSourceDesc::OldSyntaxIngestion { cluster_id, .. } => Some(*cluster_id),
@@ -2491,7 +2562,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => None,
         }
     }
 
@@ -2512,7 +2584,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => return None,
         };
         Some(cw)
     }
@@ -2536,7 +2609,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => return None,
         };
         Some(custom_logical_compaction_window.unwrap_or(CompactionWindow::Default))
     }
@@ -2556,7 +2630,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => false,
         }
     }
 
@@ -2613,6 +2688,7 @@ impl CatalogItem {
                 BTreeMap::new(),
             ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::MetricSink(_) => unreachable!("metric sinks are never serialized"),
         }
     }
 
@@ -2658,6 +2734,7 @@ impl CatalogItem {
                 (connection.create_sql, connection.global_id, BTreeMap::new())
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::MetricSink(_) => unreachable!("metric sinks are never serialized"),
         }
     }
 
@@ -2676,6 +2753,7 @@ impl CatalogItem {
             CatalogItem::Func(func) => return Some(func.global_id),
             CatalogItem::Secret(secret) => return Some(secret.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
+            CatalogItem::MetricSink(metric_sink) => return Some(metric_sink.global_id),
         };
         match version {
             RelationVersionSelector::Latest => collections.values().last().copied(),
@@ -2880,7 +2958,8 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => None,
         }
     }
 
@@ -2912,6 +2991,11 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is an index.
     pub fn is_index(&self) -> bool {
         matches!(self.item(), CatalogItem::Index(_))
+    }
+
+    /// Reports whether this catalog entry is a metric sink.
+    pub fn is_metric_sink(&self) -> bool {
+        matches!(self.item(), CatalogItem::MetricSink(_))
     }
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
@@ -3009,6 +3093,9 @@ impl CatalogEntry {
             Connection => CommentObjectId::Connection(self.id),
             Type => CommentObjectId::Type(self.id),
             Secret => CommentObjectId::Secret(self.id),
+            // `COMMENT ON METRIC SINK` isn't parseable, so `CommentObjectId` has no
+            // corresponding variant and this is never reached.
+            MetricSink => unreachable!("comments on metric sinks are not supported"),
         }
     }
 }
@@ -3806,6 +3893,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             }
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
+            CatalogItem::MetricSink(MetricSink { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
         }

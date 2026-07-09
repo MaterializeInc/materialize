@@ -1610,7 +1610,8 @@ impl Coordinator {
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
-                    | CatalogItem::Secret(_) => {
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::MetricSink(_) => {
                         // Other item types don't have connection dependencies
                         // that need updating.
                     }
@@ -1827,6 +1828,11 @@ impl CatalogImplication {
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
+                // Metric sinks are never durably persisted, so a parsed durable item can
+                // never be one.
+                CatalogItem::MetricSink(_) => {
+                    unreachable!("metric sinks are never durably serialized")
+                }
             },
             ParsedStateUpdateKind::TemporaryItem {
                 durable_item: _,
@@ -1866,6 +1872,11 @@ impl CatalogImplication {
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
+                // Metric sinks are never durably persisted, so a parsed durable item can
+                // never be one.
+                CatalogItem::MetricSink(_) => {
+                    unreachable!("metric sinks are never durably serialized")
+                }
             },
             ParsedStateUpdateKind::Cluster {
                 durable_cluster: _,

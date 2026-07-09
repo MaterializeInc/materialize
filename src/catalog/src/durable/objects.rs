@@ -1499,6 +1499,12 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
             assert_eq!(tokens.next(), Some("VIEW"));
             CatalogItemType::MaterializedView
         }
+        // Metric sinks are never durably persisted, so this arm is unreachable in practice.
+        // It exists to keep this parser's round-trip honest with the SQL grammar.
+        Some("METRIC") => {
+            assert_eq!(tokens.next(), Some("SINK"));
+            CatalogItemType::MetricSink
+        }
         Some("INDEX") => CatalogItemType::Index,
         Some("TYPE") => CatalogItemType::Type,
         Some("FUNCTION") => CatalogItemType::Func,

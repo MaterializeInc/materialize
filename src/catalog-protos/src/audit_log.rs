@@ -100,6 +100,13 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             mz_audit_log::ObjectType::MaterializedView => {
                 crate::objects::audit_log_event_v1::ObjectType::MaterializedView
             }
+            // Metric sinks are never persisted, so no audit log event referencing one is ever
+            // durably serialized. The catalog-protos schema doesn't have a discriminant for this
+            // variant yet; adding one is out of scope until audit logging for metric sinks is
+            // implemented.
+            mz_audit_log::ObjectType::MetricSink => {
+                unreachable!("metric sink audit log events are not yet supported")
+            }
             mz_audit_log::ObjectType::NetworkPolicy => {
                 crate::objects::audit_log_event_v1::ObjectType::NetworkPolicy
             }

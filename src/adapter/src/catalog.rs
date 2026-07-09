@@ -1531,6 +1531,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::MaterializedView => ObjectType::MaterializedView,
             mz_sql::catalog::ObjectType::Source => ObjectType::Source,
             mz_sql::catalog::ObjectType::Sink => ObjectType::Sink,
+            mz_sql::catalog::ObjectType::MetricSink => ObjectType::MetricSink,
             mz_sql::catalog::ObjectType::Index => ObjectType::Index,
             mz_sql::catalog::ObjectType::Type => ObjectType::Type,
             mz_sql::catalog::ObjectType::Role => ObjectType::Role,

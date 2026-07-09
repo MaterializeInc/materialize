@@ -223,6 +223,9 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             CatalogItemType::Func => crate::objects::CatalogItemType::Func,
             CatalogItemType::Secret => crate::objects::CatalogItemType::Secret,
             CatalogItemType::Connection => crate::objects::CatalogItemType::Connection,
+            // Metric sinks are never durably serialized (see `CatalogItem::to_serialized`), so
+            // this conversion is never reached.
+            CatalogItemType::MetricSink => unreachable!("metric sinks are never serialized"),
         }
     }
 
@@ -265,6 +268,8 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             ObjectType::Schema => crate::objects::ObjectType::Schema,
             ObjectType::Func => crate::objects::ObjectType::Func,
             ObjectType::NetworkPolicy => crate::objects::ObjectType::NetworkPolicy,
+            // Metric sinks are never durably serialized, so this conversion is never reached.
+            ObjectType::MetricSink => unreachable!("metric sinks are never serialized"),
         }
     }
 
