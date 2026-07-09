@@ -44,9 +44,6 @@ for path in sys.argv[1:]:
                     found_non_comment = True
                     break
 
-            # Match awk behavior: only report errors if we actually
-            # encountered a non-comment line (empty files and
-            # all-comment files are silently accepted).
             if not found_non_comment:
                 continue
 

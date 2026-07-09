@@ -415,6 +415,45 @@ def retry(fn: Callable, timeout: int) -> None:
     fn()
 
 
+def download_repo_file_at_tag(path: str, tag: str) -> bytes:
+    """Fetch a repository file at a git tag from GitHub.
+
+    Uses the authenticated Contents API when GITHUB_TOKEN is set (5000
+    requests/hour), which is what CI relies on. Falls back to anonymous
+    raw.githubusercontent.com otherwise. Anonymous raw content throttles
+    shared CI IPs with 429, so retry with backoff on rate-limit and 5xx
+    statuses, honoring Retry-After when present.
+    """
+    token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+        "GITHUB_TOKEN"
+    )
+    if token:
+        url = f"https://api.github.com/repos/MaterializeInc/materialize/contents/{path}?ref={tag}"
+        headers = {
+            "Accept": "application/vnd.github.raw",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+    else:
+        url = f"https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/{tag}/{path}"
+        headers = {}
+
+    delay = 2.0
+    for _ in range(8):
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return response.content
+        if response.status_code not in (429, 500, 502, 503, 504):
+            break
+        wait = float(response.headers.get("Retry-After", delay))
+        print(f"Got {response.status_code} for {url}, retrying in {wait}s")
+        time.sleep(wait)
+        delay = min(delay * 2, 60)
+    raise AssertionError(
+        f"Failed to download {path} at {tag} from {url}: {response.status_code}"
+    )
+
+
 # TODO: Cover src/cloud-resources/src/crd/materialize.rs
 # TODO: Cover https://materialize.com/docs/installation/configuration/
 
@@ -2173,13 +2212,9 @@ def workflow_documentation_defaults(
             if version == current_version:
                 shutil.copyfile(path, os.path.join(dir, file))
             else:
-                url = f"https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/{version}/{path}"
-                response = requests.get(url)
-                assert (
-                    response.status_code == 200
-                ), f"Failed to download {file} from {url}: {response.status_code}"
+                content = download_repo_file_at_tag(path, str(version))
                 with open(os.path.join(dir, file), "wb") as f:
-                    f.write(response.content)
+                    f.write(content)
 
         with open(os.path.join(dir, "sample-values.yaml")) as f:
             sample_values = yaml.load(f, Loader=yaml.Loader)

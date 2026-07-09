@@ -192,6 +192,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     0dt_deployment_hydration_check_interval
     arrangement_exert_proportionality
     arrangement_size_history_retention_period
+    aws_prefetch_sts_connect_timeout
     catalog_info_metrics_reconcile_interval
     cluster_alter_check_ready_interval
     cluster_check_scheduling_policies_interval
@@ -488,6 +489,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
+    "enable_scoped_system_parameters",
     "enable_timely_zero_copy_lgalloc",
     "enable_upsert_paged_spill",
     "enable_zero_downtime_cluster_reconfiguration",
@@ -545,7 +547,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_new_outer_join_lowering
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
-    enable_scoped_system_parameters
     enable_upsert_paged_spill
     enable_upsert_v2
     enable_variadic_left_join_lowering
