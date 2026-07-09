@@ -1806,6 +1806,17 @@ pub fn plan_nested_query(
         project,
         group_size_hints,
     } = qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
+    // A nested query is an unordered relation. Its `ORDER BY` is only observable
+    // in combination with a row-limiting clause (`LIMIT`/`OFFSET`), which selects
+    // which rows survive. Without such a clause the ordering has no defined
+    // meaning, so it is dropped rather than materialized into a `TopK`.
+    //
+    // NOTE: This diverges from PostgreSQL, where an order-sensitive aggregate
+    // (`array_agg`, `string_agg`, ...) in the outer query observes a sorted
+    // subquery's output as an executor artifact. That behavior is not guaranteed
+    // by the SQL standard and PostgreSQL itself documents it as fragile. Callers
+    // that need a specific aggregation order must use the in-aggregate
+    // `agg(value ORDER BY ...)` form instead.
     if limit.is_some()
         || !offset
             .clone()

@@ -24,8 +24,10 @@ _value_    | `text`  | The values to concatenate.
 
 `list_agg` returns a [`list`](/sql/types/list) value.
 
-This function always executes on the data from `value` as if it were sorted in ascending order before the function call. Any specified ordering is
-ignored. If you need to perform aggregation in a specific order, you must specify `ORDER BY` within the aggregate function call itself. Otherwise incoming rows are not guaranteed any order.
+Any `ORDER BY` applied to the input rows, for example in a feeding subquery, is
+ignored. The order in which values are aggregated is otherwise unspecified. To
+aggregate in a specific order, specify `ORDER BY` within the aggregate function
+call itself.
 
 ## Details
 
