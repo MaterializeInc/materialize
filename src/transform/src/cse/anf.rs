@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 
+use mz_expr::term_graph::{MreOp, TermGraph, TermId, TermRep};
 use mz_expr::visit::VisitChildren;
 use mz_expr::{AccessStrategy, Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::id_gen::IdGen;
@@ -73,8 +74,18 @@ impl ANF {
 /// use of the expression from which they have been extracted.
 #[derive(Clone, Debug)]
 struct Bindings {
-    /// A list of let-bound expressions and their order / identifier.
-    bindings: BTreeMap<MirRelationExpr, u64>,
+    /// Deduplicated terms for all bound expressions and their local `Get`
+    /// children.
+    ///
+    /// Bound expressions are flat: their relation inputs are local `Get`
+    /// terms referencing prior bindings. `LetRec` expressions are the
+    /// exception, and are stored whole in `letrec_bindings`.
+    graph: TermGraph<MreOp>,
+    /// The order / identifier for each let-bound term in `graph`.
+    bindings: BTreeMap<TermId, u64>,
+    /// Bound `LetRec` expressions, stored whole since their values and body
+    /// are subtrees rather than references to prior bindings.
+    letrec_bindings: BTreeMap<MirRelationExpr, u64>,
     /// Mapping from conventional local `Get` identifiers to new ones.
     rebindings: BTreeMap<LocalId, LocalId>,
     // A guard for tracking the maximum depth of recursive tree traversal.
@@ -90,7 +101,9 @@ impl CheckedRecursion for Bindings {
 impl Default for Bindings {
     fn default() -> Bindings {
         Bindings {
+            graph: TermGraph::default(),
             bindings: BTreeMap::new(),
+            letrec_bindings: BTreeMap::new(),
             rebindings: BTreeMap::new(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
@@ -201,12 +214,25 @@ impl Bindings {
                     body_anf.populate_expression(body);
 
                     // Collect the bindings that are new to this `LetRec` scope (delineated by `id_boundary`).
-                    let mut bindings = scoped_anf
-                        .bindings
-                        .into_iter()
-                        .filter(|(_e, i)| i > &id_boundary)
-                        .map(|(e, i)| (i, e))
-                        .collect::<Vec<_>>();
+                    let Bindings {
+                        graph: scoped_graph,
+                        bindings: scoped_bindings,
+                        letrec_bindings: scoped_letrec_bindings,
+                        rebindings: scoped_rebindings,
+                        ..
+                    } = scoped_anf;
+                    let mut bindings = build_values(
+                        scoped_graph,
+                        scoped_bindings
+                            .into_iter()
+                            .filter(|(_t, i)| *i > id_boundary),
+                    );
+                    bindings.extend(
+                        scoped_letrec_bindings
+                            .into_iter()
+                            .filter(|(_e, i)| *i > id_boundary)
+                            .map(|(e, i)| (i, e)),
+                    );
                     // Add bindings corresponding to `(ids, values)` using after identifiers.
                     bindings.extend(after_ids.iter().cloned().zip_eq(values.drain(..)));
                     bindings.sort();
@@ -241,7 +267,7 @@ impl Bindings {
                     // New limits will all be `None`, except for any pre-existing limits.
                     let mut new_limits: BTreeMap<LocalId, _> = BTreeMap::default();
                     for (id, limit) in ids.iter().zip_eq(limits.iter()) {
-                        new_limits.insert(scoped_anf.rebindings[id], limit.clone());
+                        new_limits.insert(scoped_rebindings[id], limit.clone());
                     }
                     for id in new_ids.iter() {
                         if !new_limits.contains_key(id) {
@@ -297,12 +323,22 @@ impl Bindings {
                 // Do nothing, as the expression is already a local `Get` expression.
             } else {
                 // Either find an instance of `relation` or insert this one.
-                let id = this
-                    .bindings
-                    .entry(relation.take_dangerous())
-                    .or_insert_with(|| id_gen.allocate_id());
+                // `LetRec` values and bodies are subtrees rather than
+                // references to prior bindings, so they bypass the graph.
+                let id = if matches!(relation, MirRelationExpr::LetRec { .. }) {
+                    *this
+                        .letrec_bindings
+                        .entry(relation.take_dangerous())
+                        .or_insert_with(|| id_gen.allocate_id())
+                } else {
+                    let term = this.graph.ensure_owned(relation.take_dangerous());
+                    *this
+                        .bindings
+                        .entry(term)
+                        .or_insert_with(|| id_gen.allocate_id())
+                };
                 *relation = MirRelationExpr::Get {
-                    id: Id::Local(LocalId::new(*id)),
+                    id: Id::Local(LocalId::new(id)),
                     typ,
                     access_strategy: AccessStrategy::UnknownOrLocal,
                 }
@@ -319,10 +355,11 @@ impl Bindings {
     /// afterwards to remove `Let` bindings that it deems unhelpful.
     fn populate_expression(self, expression: &mut MirRelationExpr) {
         // Convert the bindings in to a sequence, by the local identifier.
-        let mut bindings = self.bindings.into_iter().collect::<Vec<_>>();
-        bindings.sort_by_key(|(_, i)| *i);
+        let mut bindings = build_values(self.graph, self.bindings.into_iter());
+        bindings.extend(self.letrec_bindings.into_iter().map(|(e, i)| (i, e)));
+        bindings.sort_by_key(|(i, _)| *i);
 
-        for (value, index) in bindings.into_iter().rev() {
+        for (index, value) in bindings.into_iter().rev() {
             let new_expression = MirRelationExpr::Let {
                 id: LocalId::new(index),
                 value: Box::new(value),
@@ -331,4 +368,38 @@ impl Bindings {
             *expression = new_expression;
         }
     }
+}
+
+/// Rebuilds the flat expression for each bound term in `wanted`, tagged with
+/// its binding identifier.
+///
+/// Consumes `graph`, moving each bound term's payloads into its rebuilt
+/// expression. The children of bound terms are always local `Get` terms,
+/// never other bound terms, and stay in place so that every parent can
+/// restore them, cloning their payloads per use.
+fn build_values(
+    graph: TermGraph<MreOp>,
+    wanted: impl Iterator<Item = (TermId, u64)>,
+) -> Vec<(u64, MirRelationExpr)> {
+    let mut terms: Vec<_> = graph
+        .into_terms()
+        .map(|(op, args)| (Some(op), args))
+        .collect();
+    wanted
+        .map(|(term, index)| {
+            let args = terms[term].1.clone();
+            let op = terms[term].0.take().expect("bound term present");
+            let children = args
+                .iter()
+                .map(|arg| {
+                    let get = terms[*arg]
+                        .0
+                        .as_ref()
+                        .expect("children of bound terms are unbound local Gets");
+                    MirRelationExpr::rebuild(get, Vec::new())
+                })
+                .collect();
+            (index, MirRelationExpr::from_parts(op, children))
+        })
+        .collect()
 }
