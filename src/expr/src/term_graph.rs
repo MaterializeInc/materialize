@@ -56,15 +56,20 @@ pub trait TermRep: Sized {
     /// The direct children of `self`, in the order `rebuild` expects them.
     fn children(&self) -> impl Iterator<Item = &Self>;
 
-    /// Reassembles a node from its operator and owned children.
+    /// Reassembles a node from its operator and owned children, the inverse
+    /// of `into_parts`.
     ///
     /// The children arrive in the order `children` produced them, and there
     /// are exactly as many as the original node had.
-    fn rebuild(op: &Self::Op, children: Vec<Self>) -> Self;
+    fn from_parts(op: Self::Op, children: Vec<Self>) -> Self;
 
-    /// Decomposes `self` into its operator and owned children, the inverse
-    /// of `rebuild`.
+    /// Decomposes `self` into its operator and owned children.
     fn into_parts(self) -> (Self::Op, Vec<Self>);
+
+    /// Like `from_parts`, but cloning the operator's payloads.
+    fn rebuild(op: &Self::Op, children: Vec<Self>) -> Self {
+        Self::from_parts(op.clone(), children)
+    }
 }
 
 /// A deduplicating map from terms to dense identifiers.
@@ -266,24 +271,24 @@ impl TermRep for MirScalarExpr {
         MirScalarExpr::children(self)
     }
 
-    fn rebuild(op: &MseOp, children: Vec<Self>) -> Self {
+    fn from_parts(op: MseOp, children: Vec<Self>) -> Self {
         let mut children = children.into_iter();
         let mut next = || children.next().expect("child present");
         match op {
-            MseOp::Column(col, name) => MirScalarExpr::Column(*col, name.clone()),
-            MseOp::Literal(row, typ) => MirScalarExpr::Literal(row.clone(), typ.clone()),
-            MseOp::CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.clone()),
+            MseOp::Column(col, name) => MirScalarExpr::Column(col, name),
+            MseOp::Literal(row, typ) => MirScalarExpr::Literal(row, typ),
+            MseOp::CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func),
             MseOp::CallUnary(func) => MirScalarExpr::CallUnary {
-                func: func.clone(),
+                func,
                 expr: Box::new(next()),
             },
             MseOp::CallBinary(func) => MirScalarExpr::CallBinary {
-                func: func.clone(),
+                func,
                 expr1: Box::new(next()),
                 expr2: Box::new(next()),
             },
             MseOp::CallVariadic(func) => MirScalarExpr::CallVariadic {
-                func: func.clone(),
+                func,
                 exprs: children.collect(),
             },
             MseOp::If => MirScalarExpr::If {
@@ -502,30 +507,23 @@ impl TermRep for MirRelationExpr {
         MirRelationExpr::children(self)
     }
 
-    fn rebuild(op: &MreOp, children: Vec<Self>) -> Self {
+    fn from_parts(op: MreOp, children: Vec<Self>) -> Self {
         let mut children = children.into_iter();
         match op {
-            MreOp::Constant { rows, typ } => MirRelationExpr::Constant {
-                rows: rows.clone(),
-                typ: typ.clone(),
-            },
+            MreOp::Constant { rows, typ } => MirRelationExpr::Constant { rows, typ },
             MreOp::Get {
                 id,
                 typ,
                 access_strategy,
             } => MirRelationExpr::Get {
-                id: *id,
-                typ: typ.clone(),
-                access_strategy: access_strategy.clone(),
+                id,
+                typ,
+                access_strategy,
             },
             MreOp::Let { id } => {
                 let value = Box::new(children.next().expect("value present"));
                 let body = Box::new(children.next().expect("body present"));
-                MirRelationExpr::Let {
-                    id: *id,
-                    value,
-                    body,
-                }
+                MirRelationExpr::Let { id, value, body }
             }
             MreOp::LetRec { ids, limits } => {
                 let mut values = Vec::with_capacity(ids.len());
@@ -534,36 +532,36 @@ impl TermRep for MirRelationExpr {
                 }
                 let body = Box::new(children.next().expect("body present"));
                 MirRelationExpr::LetRec {
-                    ids: ids.clone(),
+                    ids,
                     values,
-                    limits: limits.clone(),
+                    limits,
                     body,
                 }
             }
             MreOp::Project { outputs } => MirRelationExpr::Project {
                 input: Box::new(children.next().expect("input present")),
-                outputs: outputs.clone(),
+                outputs,
             },
             MreOp::Map { scalars } => MirRelationExpr::Map {
                 input: Box::new(children.next().expect("input present")),
-                scalars: scalars.clone(),
+                scalars,
             },
             MreOp::FlatMap { func, exprs } => MirRelationExpr::FlatMap {
                 input: Box::new(children.next().expect("input present")),
-                func: func.clone(),
-                exprs: exprs.clone(),
+                func,
+                exprs,
             },
             MreOp::Filter { predicates } => MirRelationExpr::Filter {
                 input: Box::new(children.next().expect("input present")),
-                predicates: predicates.clone(),
+                predicates,
             },
             MreOp::Join {
                 equivalences,
                 implementation,
             } => MirRelationExpr::Join {
                 inputs: children.collect(),
-                equivalences: equivalences.clone(),
-                implementation: implementation.clone(),
+                equivalences,
+                implementation,
             },
             MreOp::Reduce {
                 group_key,
@@ -572,10 +570,10 @@ impl TermRep for MirRelationExpr {
                 expected_group_size,
             } => MirRelationExpr::Reduce {
                 input: Box::new(children.next().expect("input present")),
-                group_key: group_key.clone(),
-                aggregates: aggregates.clone(),
-                monotonic: *monotonic,
-                expected_group_size: *expected_group_size,
+                group_key,
+                aggregates,
+                monotonic,
+                expected_group_size,
             },
             MreOp::TopK {
                 group_key,
@@ -586,12 +584,12 @@ impl TermRep for MirRelationExpr {
                 expected_group_size,
             } => MirRelationExpr::TopK {
                 input: Box::new(children.next().expect("input present")),
-                group_key: group_key.clone(),
-                order_key: order_key.clone(),
-                limit: limit.clone(),
-                offset: *offset,
-                monotonic: *monotonic,
-                expected_group_size: *expected_group_size,
+                group_key,
+                order_key,
+                limit,
+                offset,
+                monotonic,
+                expected_group_size,
             },
             MreOp::Negate => MirRelationExpr::Negate {
                 input: Box::new(children.next().expect("input present")),
@@ -605,7 +603,7 @@ impl TermRep for MirRelationExpr {
             },
             MreOp::ArrangeBy { keys } => MirRelationExpr::ArrangeBy {
                 input: Box::new(children.next().expect("input present")),
-                keys: keys.clone(),
+                keys,
             },
         }
     }
