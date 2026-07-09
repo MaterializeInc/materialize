@@ -37,6 +37,7 @@ pub use desc::{ProtoSqlServerColumnDesc, ProtoSqlServerTableDesc};
 use crate::cdc::Lsn;
 use crate::config::TunnelConfig;
 use crate::desc::SqlServerColumnDecodeType;
+use crate::inspect::EngineEdition;
 
 /// Higher level wrapper around a [`tiberius::Client`] that models transaction
 /// management like other database clients.
@@ -45,6 +46,9 @@ pub struct Client {
     tx: UnboundedSender<Request>,
     // The configuration used to create this client.
     config: Config,
+    // Cached engine edition of the connected instance. Immutable for the life
+    // of a connection, so we query it at most once and reuse it.
+    engine_edition: Option<EngineEdition>,
 }
 // While a Client could implement Clone, it's not obvious how multiple Clients
 // using the same SQL Server connection would interact, so ban it for now.
@@ -130,7 +134,11 @@ impl Client {
         // TODO(sql_server2): Add a lot more logging here like the Postgres and MySQL clients have.
 
         Ok((
-            Client { tx, config },
+            Client {
+                tx,
+                config,
+                engine_edition: None,
+            },
             Connection {
                 rx,
                 client,
@@ -325,6 +333,17 @@ impl Client {
                 "expected one row, got {other:?}"
             ))),
         }
+    }
+
+    /// Returns the [`EngineEdition`] of the connected instance, querying it on
+    /// first access and caching the result for the life of this [`Client`].
+    pub async fn engine_edition(&mut self) -> Result<EngineEdition, SqlServerError> {
+        if let Some(edition) = self.engine_edition {
+            return Ok(edition);
+        }
+        let edition = crate::inspect::get_engine_edition(self).await?;
+        self.engine_edition = Some(edition);
+        Ok(edition)
     }
 
     /// Return a [`CdcStream`] that can be used to track changes for the specified
