@@ -94,7 +94,7 @@ def _perform_get_request(request_path: str, params: dict[str, Any]) -> Response:
         print("Authentication token is not specified or empty!")
 
     url = f"{BUILDKITE_API_URL}/{request_path}"
-    response = requests.get(headers=headers, url=url, params=params)
+    response = requests.get(headers=headers, url=url, params=params, timeout=60)
 
     if response.status_code == STATUS_CODE_RATE_LIMIT_EXCEEDED:
         raise RateLimitExceeded([])

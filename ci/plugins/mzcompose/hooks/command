@@ -87,14 +87,18 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     chmod 777 coverage/
 fi
 
-STOP_RUNNING=false
+HEAP_PROFILE_PID=""
 
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
-    (while [ "$STOP_RUNNING" != "true" ]; do
+    (while true; do
          sleep 30
          bin/ci-builder run stable --detach bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
      done
     ) &
+    # Track the loop's PID so cleanup can stop it. Assigning a shared variable
+    # cannot reach the subshell, which has its own copy, so the loop would
+    # otherwise keep spawning containers throughout the whole teardown.
+    HEAP_PROFILE_PID=$!
 fi
 
 EXTRA_ARGS=$(echo "${CI_EXTRA_ARGS:-}" | jq -r ".[\"$BUILDKITE_STEP_KEY\"] // \"\"")
@@ -273,7 +277,10 @@ cleanup() {
 
   TRUFFLEHOG_PID=""
   if is_truthy "${CI_HEAP_PROFILES:-}"; then
-      STOP_RUNNING=true
+      [ -n "$HEAP_PROFILE_PID" ] && kill "$HEAP_PROFILE_PID" 2>/dev/null || true
+      # ci-annotate-errors is passed trufflehog.log unconditionally below, but
+      # the trufflehog scan is skipped here, so create an empty log for it.
+      touch trufflehog.log
   else
       ci_unimportant_heading "Running trufflehog to scan artifacts for secrets & uploading artifacts"
       {

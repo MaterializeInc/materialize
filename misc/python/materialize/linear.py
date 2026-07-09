@@ -69,6 +69,7 @@ def _search_issues_graphql(token: str) -> list[dict[str, Any]]:
                 "Content-Type": "application/json",
             },
             json={"query": query, "variables": variables},
+            timeout=60,
         )
 
         if response.status_code != 200:

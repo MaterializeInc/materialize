@@ -145,7 +145,7 @@ IGNORE_RE = re.compile(
     # Expected in restart test
     ( restart-materialized-1\ \ \|\ thread\ 'coordinator'\ panicked\ at\ 'can't\ persist\ timestamp
     # Expected in restart test
-    | restart-materialized-1\ *|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
+    | restart-materialized-1\ *\|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     | cluster-clusterd1-1\ .*\ replica\ expired
@@ -668,8 +668,10 @@ def annotate_logged_errors(
                 if match and issue.info["state"] == "CLOSED":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
-                        buildkite_label.lower(),
+                        buildkite_label.lower().rstrip("01234567889 "),
                     ):
+                        continue
+                    if issue.location and issue.location != location:
                         continue
 
                     if issue.info["number"] not in already_reported_issue_numbers:
@@ -719,7 +721,12 @@ def annotate_logged_errors(
                     location: str = error.file
                     location_url = None
 
-                handle_error(error.match.decode("utf-8"), None, location, location_url)
+                handle_error(
+                    error.match.decode("utf-8", errors="replace"),
+                    None,
+                    location,
+                    location_url,
+                )
             elif isinstance(error, JunitError):
                 if "in Code Coverage" in error.text or "covered" in error.message:
                     msg = "\n".join(filter(None, [error.message, error.text]))
@@ -926,15 +933,24 @@ def _collect_errors_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
 def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
     collected_panics = []
 
-    open_panics = {}
+    open_panics: dict[bytes, bytes] = {}
+
+    def flush_open_panic(service: bytes) -> None:
+        # A panic whose following log line we never saw: a second panic of the
+        # same service interleaving, or a panic at end of file. Emit it without
+        # its trailing message rather than crashing the annotator. Both cases
+        # are otherwise rare enough that losing the message is acceptable.
+        panic_without_ts = TIMESTAMP_IN_PANIC_RE.sub(b"", open_panics.pop(service))
+        if not IGNORE_RE.search(panic_without_ts):
+            collected_panics.append(ErrorLog(panic_without_ts, log_file_name))
+
     for line in iter(data.readline, b""):
         # Don't try to match regexes on HUGE lines, since it can take too long
         line = line.rstrip(b"\n")[:8192]
         if match := PANIC_IN_SERVICE_START_RE.match(line):
             service = match.group("service")
-            assert (
-                service not in open_panics
-            ), f"Two panics of same service {service} interleaving: {line}"
+            if service in open_panics:
+                flush_open_panic(service)
             open_panics[service] = line
         elif open_panics:
             if match := SERVICES_LOG_LINE_RE.match(line):
@@ -951,7 +967,8 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
                             panic_without_ts + b" " + match.group("msg"), log_file_name
                         )
                     )
-    assert not open_panics, f"Panic log never finished: {open_panics}"
+    for service in list(open_panics):
+        flush_open_panic(service)
 
     return collected_panics
 
@@ -1001,9 +1018,20 @@ def get_failures_on_main(test_analytics: TestAnalyticsDb) -> BuildHistory:
         test_analytics.on_data_retrieval_failed(e)
 
     print("Loading build history from buildkite instead")
-    return _get_failures_on_main_from_buildkite(
-        pipeline_slug=pipeline_slug, step_key=step_key, parallel_job=parallel_job
-    )
+    try:
+        return _get_failures_on_main_from_buildkite(
+            pipeline_slug=pipeline_slug, step_key=step_key, parallel_job=parallel_job
+        )
+    except Exception as e:
+        # Build history is informational, so a failure here (e.g. a Buildkite
+        # API hiccup) must not crash the annotator and turn an otherwise
+        # green job red.
+        print(
+            f"Loading build history from buildkite failed, continuing without it: {e}"
+        )
+        return BuildHistory(
+            pipeline=pipeline_slug, branch="main", last_build_step_outcomes=[]
+        )
 
 
 def _get_failures_on_main_from_buildkite(

@@ -88,9 +88,9 @@ def check_workspace_dependencies(workspace: Workspace) -> bool:
 def main() -> None:
     workspace = Workspace(MZ_ROOT)
     lints = [check_rust_versions, check_default_members, check_workspace_dependencies]
-    success = True
-    for lint in lints:
-        success = success and lint(workspace)
+    # Run every lint, then combine. `success and lint(...)` would short-circuit
+    # and skip the remaining lints after the first failure, under-reporting.
+    success = all([lint(workspace) for lint in lints])
     if not success:
         sys.exit(1)
 

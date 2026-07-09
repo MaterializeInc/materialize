@@ -294,9 +294,12 @@ def upload_debug_data_to_polarsignals(
 
         with tempfile.NamedTemporaryFile() as tarball:
             _create_source_tarball(repo, bin_path, tarball)
-            result = result or _upload_source_tarball_to_polarsignals(
+            # Assign first, then combine. `result or upload(...)` would
+            # short-circuit and never run the upload once result is True.
+            uploaded = _upload_source_tarball_to_polarsignals(
                 repo, bin_path, tarball, build_id, token
             )
+            result = result and uploaded
     return result
 
 
