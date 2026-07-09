@@ -202,12 +202,9 @@ tables. If specified, they are silently ignored.
 
 ### Handling table schema changes
 
-Load generator sources do not support [source
-versioning](/ingest-data/mysql/source-versioning/). The tables produced by a
-load generator have a fixed schema defined by Materialize, not by an upstream
-system, so there is no upstream schema change to handle. If you're using a
-PostgreSQL, MySQL, or SQL Server source, see the corresponding guide for
-handling upstream schema changes with zero downtime.
+The tables produced by a load generator have a fixed schema defined by
+Materialize, not by an upstream system, so there is no upstream schema change to
+handle.
 
 ## Examples
 
@@ -402,8 +399,10 @@ tables, and then explicitly create tables for only the ones you want:
 CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 1);
 
+BEGIN;
 CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
 CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+COMMIT;
 ```
 
 Unlike the [previous example](#creating-a-tpch-load-generator), `FOR ALL
