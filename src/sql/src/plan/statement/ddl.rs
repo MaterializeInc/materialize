@@ -4947,6 +4947,7 @@ pub fn unplan_create_cluster(
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
                 enable_join_prioritize_arranged,
+                enable_join_reverse_edge_scoring: _,
                 enable_projection_pushdown_after_relation_cse,
                 enable_less_reduce_in_eqprop: _,
                 enable_dequadratic_eqprop_map: _,

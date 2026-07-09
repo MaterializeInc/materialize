@@ -4089,6 +4089,7 @@ pub enum ExplainPlanOptionName {
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
     EnableJoinPrioritizeArranged,
+    EnableJoinReverseEdgeScoring,
     EnableProjectionPushdownAfterRelationCse,
 }
 
@@ -4126,6 +4127,7 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableJoinPrioritizeArranged
+            | Self::EnableJoinReverseEdgeScoring
             | Self::EnableProjectionPushdownAfterRelationCse => false,
         }
     }

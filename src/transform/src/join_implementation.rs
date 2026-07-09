@@ -16,14 +16,14 @@
 //! determining the orders of collections, lifting predicates if useful arrangements exist,
 //! and identifying opportunities to use indexes to replace filters.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    Columns, FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper,
-    MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+    Columns, FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputCharacteristicsVersion,
+    JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
@@ -375,15 +375,17 @@ impl JoinImplementation {
                 }
 
                 // Only plan a delta join if it's no new arrangements (beyond what differential planned).
-                if let Ok((delta_query_plan, 0)) = delta_queries::plan(
-                    relation,
-                    &input_mapper,
+                let delta_query_plan = optimize_orders(
+                    equivalences,
                     &available_arrangements,
                     &unique_keys,
                     &cardinalities,
                     &filters,
+                    &input_mapper,
                     features,
-                ) {
+                )
+                .and_then(|orders| delta_queries::plan(relation, &available_arrangements, orders));
+                if let Ok((delta_query_plan, 0)) = delta_query_plan {
                     tracing::debug!(plan = ?delta_query_plan, "replacing differential join with delta join");
                     *relation = delta_query_plan;
                 }
@@ -393,17 +395,25 @@ impl JoinImplementation {
 
             // To have reached here, we must be in our first run of join planning.
             //
-            // We plan a differential join first.
-            let (differential_query_plan, differential_new_arrangements) = differential::plan(
-                relation,
-                &input_mapper,
+            // We compute one order for each possible starting point, and both the
+            // differential and the delta planner choose from these.
+            //
+            // It is an invariant that the orders are in input order: the ith order begins with the ith input.
+            let orders = optimize_orders(
+                equivalences,
                 &available_arrangements,
                 &unique_keys,
                 &cardinalities,
                 &filters,
+                &input_mapper,
                 features,
             )
-            .expect("Failed to produce a differential join plan");
+            .expect("Failed to produce join orders");
+
+            // We plan a differential join first.
+            let (differential_query_plan, differential_new_arrangements) =
+                differential::plan(relation, &available_arrangements, orders.clone())
+                    .expect("Failed to produce a differential join plan");
 
             // Binary joins _must_ be differential. We won't plan a delta join.
             if num_inputs <= 2 {
@@ -456,18 +466,7 @@ impl JoinImplementation {
             //       ⨝
             //
             // At the two internal joins, the differential join will need two new arrangements.
-            //
-            // TODO(mgree): with this refactoring, we should compute `orders` once---both joins
-            //              call `optimize_orders` and we can save some work.
-            match delta_queries::plan(
-                relation,
-                &input_mapper,
-                &available_arrangements,
-                &unique_keys,
-                &cardinalities,
-                &filters,
-                features,
-            ) {
+            match delta_queries::plan(relation, &available_arrangements, orders) {
                 // If delta plan's inputs need no new arrangements, pick the delta plan.
                 Ok((delta_query_plan, 0)) => {
                     soft_assert_or_log!(
@@ -579,45 +578,29 @@ mod delta_queries {
 
     use std::collections::BTreeSet;
 
-    use mz_expr::{
-        FilterCharacteristics, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr,
-    };
-    use mz_repr::optimize::OptimizerFeatures;
+    use mz_expr::{JoinImplementation, JoinInputCharacteristics, MirRelationExpr, MirScalarExpr};
 
     use crate::TransformError;
 
     /// Creates a delta query plan, and any predicates that need to be lifted.
     /// It also returns the number of new arrangements necessary for this plan.
     ///
+    /// `orders` are the per-starting-input orders from `optimize_orders`.
+    ///
     /// The method returns `Err` if any errors occur during planning.
     pub fn plan(
         join: &MirRelationExpr,
-        input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
-        unique_keys: &[Vec<Vec<usize>>],
-        cardinalities: &[Option<usize>],
-        filters: &[FilterCharacteristics],
-        optimizer_features: &OptimizerFeatures,
+        orders: Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>>,
     ) -> Result<(MirRelationExpr, usize), TransformError> {
         let mut new_join = join.clone();
 
         if let MirRelationExpr::Join {
             inputs,
-            equivalences,
+            equivalences: _,
             implementation,
         } = &mut new_join
         {
-            // Determine a viable order for each relation, or return `Err` if none found.
-            let orders = super::optimize_orders(
-                equivalences,
-                available,
-                unique_keys,
-                cardinalities,
-                filters,
-                input_mapper,
-                optimizer_features.enable_join_prioritize_arranged,
-            )?;
-
             // Count new arrangements.
             let new_arrangements: usize = orders
                 .iter()
@@ -671,51 +654,37 @@ mod delta_queries {
 mod differential {
     use std::collections::BTreeSet;
 
-    use mz_expr::{Columns, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{
+        Columns, JoinImplementation, JoinInputCharacteristics, MirRelationExpr, MirScalarExpr,
+    };
     use mz_ore::soft_assert_eq_or_log;
-    use mz_repr::optimize::OptimizerFeatures;
 
     use crate::TransformError;
     use crate::join_implementation::FilterCharacteristics;
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     /// It also returns the number of new arrangements necessary for this plan.
+    ///
+    /// `orders` are the per-starting-input orders from `optimize_orders`, and we
+    /// will choose one from these.
+    ///
+    /// We could change this preference at any point, but the list of orders should still inform.
+    /// Important, we should choose something stable under re-ordering, to converge under fixed
+    /// point iteration; we choose to start with the first input optimizing our criteria, which
+    /// should remain stable even when promoted to the first position.
     pub fn plan(
         join: &MirRelationExpr,
-        input_mapper: &JoinInputMapper,
         available: &[Vec<Vec<MirScalarExpr>>],
-        unique_keys: &[Vec<Vec<usize>>],
-        cardinalities: &[Option<usize>],
-        filters: &[FilterCharacteristics],
-        optimizer_features: &OptimizerFeatures,
+        mut orders: Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>>,
     ) -> Result<(MirRelationExpr, usize), TransformError> {
         let mut new_join = join.clone();
 
         if let MirRelationExpr::Join {
             inputs,
-            equivalences,
+            equivalences: _,
             implementation,
         } = &mut new_join
         {
-            // We compute one order for each possible starting point, and we will choose one from
-            // these.
-            //
-            // It is an invariant that the orders are in input order: the ith order begins with the ith input.
-            //
-            // We could change this preference at any point, but the list of orders should still inform.
-            // Important, we should choose something stable under re-ordering, to converge under fixed
-            // point iteration; we choose to start with the first input optimizing our criteria, which
-            // should remain stable even when promoted to the first position.
-            let mut orders = super::optimize_orders(
-                equivalences,
-                available,
-                unique_keys,
-                cardinalities,
-                filters,
-                input_mapper,
-                optimizer_features.enable_join_prioritize_arranged,
-            )?;
-
             // Count new arrangements.
             //
             // We collect the count for each input, to be used to calculate `new_arrangements` below.
@@ -767,7 +736,7 @@ mod differential {
                     // worst `Characteristic`: we inspect the entire `Characteristic` vector of each
                     // of these orders, and choose the best among these. This pushes bad stuff to
                     // happen later, by which time we might have applied some filters.
-                    .max_by_key(|o| o.clone())
+                    .max_by(|a, b| a.cmp(b))
                     .ok_or_else(|| {
                         TransformError::Internal(String::from(
                             "could not find max-min characteristics",
@@ -989,6 +958,25 @@ fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
     }
 }
 
+/// Deduplicates prefix keys, drops keys that are supersets of other keys,
+/// and truncates to [`MAX_PREFIX_KEYS`].
+///
+/// The sort makes the truncation deterministic, which order stability under
+/// re-planning requires.
+fn minimize_prefix_keys(keys: &mut Vec<BTreeSet<MirScalarExpr>>) {
+    keys.sort_by(|a, b| (a.len(), a).cmp(&(b.len(), b)));
+    keys.dedup();
+    let mut minimized: Vec<BTreeSet<MirScalarExpr>> = Vec::new();
+    for key in keys.drain(..) {
+        // Sorted by size, so any subset of `key` already kept suffices.
+        if !minimized.iter().any(|kept| kept.is_subset(&key)) {
+            minimized.push(key);
+        }
+    }
+    minimized.truncate(MAX_PREFIX_KEYS);
+    *keys = minimized;
+}
+
 /// Permute the keys in `order` to compensate for projections being lifted from inputs.
 /// `lifted_projections` has an optional projection for each input.
 fn permute_order(
@@ -1014,8 +1002,15 @@ fn optimize_orders(
     cardinalities: &[Option<usize>],     // cardinalities of input relations
     filters: &[FilterCharacteristics],   // filter characteristics per input
     input_mapper: &JoinInputMapper,      // join helper
-    enable_join_prioritize_arranged: bool,
+    optimizer_features: &OptimizerFeatures,
 ) -> Result<Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>>, TransformError> {
+    let version = if optimizer_features.enable_join_reverse_edge_scoring {
+        JoinInputCharacteristicsVersion::V3
+    } else if optimizer_features.enable_join_prioritize_arranged {
+        JoinInputCharacteristicsVersion::V2
+    } else {
+        JoinInputCharacteristicsVersion::V1
+    };
     let mut orderer = Orderer::new(
         equivalences,
         available,
@@ -1023,12 +1018,22 @@ fn optimize_orders(
         cardinalities,
         filters,
         input_mapper,
-        enable_join_prioritize_arranged,
+        version,
     );
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
         .collect::<Result<Vec<_>, _>>()
 }
+
+/// The maximum number of prefix unique keys tracked while ordering.
+///
+/// Placements that are unique in neither direction pair every prefix key with
+/// every key of the incoming relation, so the tracked set can grow
+/// quadratically. Truncating only weakens the `prefix_unique` signal (fewer
+/// uniqueness claims), it never overclaims. The bound is arbitrary, chosen
+/// small because keys beyond the first few come from repeated non-unique
+/// pairings and rarely get covered later.
+const MAX_PREFIX_KEYS: usize = 8;
 
 struct Orderer<'a> {
     inputs: usize,
@@ -1040,6 +1045,9 @@ struct Orderer<'a> {
     input_mapper: &'a JoinInputMapper,
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
     unique_arrangement: Vec<Vec<bool>>,
+    // A map from global expressions to the equivalence classes containing
+    // them, used to test prefix key coverage through the equivalences.
+    expr_classes: BTreeMap<&'a MirScalarExpr, Vec<usize>>,
 
     order: Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>,
     placed: Vec<bool>,
@@ -1048,8 +1056,12 @@ struct Orderer<'a> {
     arrangement_active: Vec<Vec<usize>>,
     priority_queue:
         std::collections::BinaryHeap<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>,
+    // Unique keys (as sets of global expressions) of the join of the placed
+    // inputs, `None` until the starting input is placed. Maintained only for
+    // `JoinInputCharacteristicsVersion::V3`, and always `None` otherwise.
+    prefix_keys: Option<Vec<BTreeSet<MirScalarExpr>>>,
 
-    enable_join_prioritize_arranged: bool,
+    version: JoinInputCharacteristicsVersion,
 }
 
 impl<'a> Orderer<'a> {
@@ -1060,7 +1072,7 @@ impl<'a> Orderer<'a> {
         cardinalities: &'a [Option<usize>],
         filters: &'a [FilterCharacteristics],
         input_mapper: &'a JoinInputMapper,
-        enable_join_prioritize_arranged: bool,
+        version: JoinInputCharacteristicsVersion,
     ) -> Self {
         let inputs = arrangements.len();
         // A map from inputs to the equivalence classes in which they are referenced.
@@ -1082,6 +1094,15 @@ impl<'a> Orderer<'a> {
                 }));
             }
         }
+        let mut expr_classes = BTreeMap::new();
+        for (index, equivalence) in equivalences.iter().enumerate() {
+            for expr in equivalence.iter() {
+                expr_classes
+                    .entry(expr)
+                    .or_insert_with(Vec::new)
+                    .push(index);
+            }
+        }
 
         let order = Vec::with_capacity(inputs);
         let placed = vec![false; inputs];
@@ -1099,14 +1120,103 @@ impl<'a> Orderer<'a> {
             input_mapper,
             reverse_equivalences,
             unique_arrangement,
+            expr_classes,
             order,
             placed,
             bound,
             equivalences_active,
             arrangement_active,
             priority_queue,
-            enable_join_prioritize_arranged,
+            prefix_keys: None,
+            version,
         }
+    }
+
+    /// Whether the placed prefix is unique on the expressions equated with
+    /// the given key of `rel`, which bounds the extended join result by
+    /// `rel`'s size (each row of `rel` matches at most one prefix row).
+    ///
+    /// Each key component reaches the prefix through the equivalence classes
+    /// containing it. A prefix key is covered when each of its elements
+    /// shares a class with some key component. An empty key covers exactly
+    /// the empty prefix key, i.e. a cross join against an at-most-one-row
+    /// prefix counts as prefix unique.
+    fn candidate_prefix_unique(&self, rel: usize, key: &[MirScalarExpr]) -> bool {
+        match &self.prefix_keys {
+            Some(prefix_keys) => self.prefix_covered(prefix_keys, rel, key),
+            None => false,
+        }
+    }
+
+    fn prefix_covered(
+        &self,
+        prefix_keys: &[BTreeSet<MirScalarExpr>],
+        rel: usize,
+        key: &[MirScalarExpr],
+    ) -> bool {
+        let mut key_classes = BTreeSet::new();
+        for k in key.iter() {
+            let global = self.input_mapper.map_expr_to_global(k.clone(), rel);
+            if let Some(classes) = self.expr_classes.get(&global) {
+                key_classes.extend(classes.iter().copied());
+            }
+        }
+        prefix_keys.iter().any(|prefix_key| {
+            prefix_key.iter().all(|expr| {
+                self.expr_classes
+                    .get(expr)
+                    .is_some_and(|classes| classes.iter().any(|c| key_classes.contains(c)))
+            })
+        })
+    }
+
+    /// Folds a newly placed input into `prefix_keys`, using the standard
+    /// join key inference: when the equated expressions cover a unique key
+    /// of the incoming relation the old prefix keys remain keys, when they
+    /// cover a prefix key the incoming relation's keys become keys, and
+    /// otherwise the pairwise unions are keys. The pairwise unions are what
+    /// lets `prefix_unique` compose along chains of placements.
+    fn update_prefix_keys(&mut self, input: usize) {
+        if !matches!(self.version, JoinInputCharacteristicsVersion::V3) {
+            return;
+        }
+        let rel_keys: Vec<BTreeSet<MirScalarExpr>> = self.unique_keys[input]
+            .iter()
+            .map(|cols| {
+                cols.iter()
+                    .map(|c| {
+                        self.input_mapper
+                            .map_expr_to_global(MirScalarExpr::column(*c), input)
+                    })
+                    .collect()
+            })
+            .collect();
+        let Some(prefix_keys) = &self.prefix_keys else {
+            // `input` is the starting input, whose keys seed the prefix keys.
+            self.prefix_keys = Some(rel_keys);
+            return;
+        };
+        let forward = self.unique_keys[input].iter().any(|cols| {
+            cols.iter()
+                .all(|c| self.bound[input].contains(&MirScalarExpr::column(*c)))
+        });
+        let reverse = self.prefix_covered(prefix_keys, input, &self.bound[input]);
+        let mut new_keys = Vec::new();
+        if forward {
+            new_keys.extend(prefix_keys.iter().cloned());
+        }
+        if reverse {
+            new_keys.extend(rel_keys.iter().cloned());
+        }
+        if !forward && !reverse {
+            for pk in prefix_keys.iter() {
+                for rk in rel_keys.iter() {
+                    new_keys.push(pk.union(rk).cloned().collect());
+                }
+            }
+        }
+        minimize_prefix_keys(&mut new_keys);
+        self.prefix_keys = Some(new_keys);
     }
 
     fn optimize_order_for(
@@ -1123,6 +1233,7 @@ impl<'a> Orderer<'a> {
         for index in 0..self.equivalences.len() {
             self.equivalences_active[index] = false;
         }
+        self.prefix_keys = None;
 
         // Introduce cross joins as a possibility.
         for input in 0..self.inputs {
@@ -1136,13 +1247,16 @@ impl<'a> Orderer<'a> {
                 self.arrangement_active[input].push(pos);
                 self.priority_queue.push((
                     JoinInputCharacteristics::new(
+                        self.version,
                         is_unique,
+                        // No prefix has formed yet against which to claim
+                        // uniqueness.
+                        false,
                         0,
                         true,
                         cardinality,
                         self.filters[input].clone(),
                         input,
-                        self.enable_join_prioritize_arranged,
                     ),
                     vec![],
                     input,
@@ -1150,13 +1264,14 @@ impl<'a> Orderer<'a> {
             } else {
                 self.priority_queue.push((
                     JoinInputCharacteristics::new(
+                        self.version,
                         is_unique,
+                        false,
                         0,
                         false,
                         cardinality,
                         self.filters[input].clone(),
                         input,
-                        self.enable_join_prioritize_arranged,
                     ),
                     vec![],
                     input,
@@ -1186,13 +1301,17 @@ impl<'a> Orderer<'a> {
         // We start with some default values:
         let mut start_tuple = (
             JoinInputCharacteristics::new(
+                self.version,
                 false,
+                // The starting input is trivially bounded by itself. All
+                // starts get the same treatment, so this cannot skew the
+                // cross-order comparison.
+                true,
                 0,
                 false,
                 self.cardinalities[start],
                 self.filters[start].clone(),
                 start,
-                self.enable_join_prioritize_arranged,
             ),
             vec![],
             start,
@@ -1223,13 +1342,14 @@ impl<'a> Orderer<'a> {
                     .is_some();
                 start_tuple = (
                     JoinInputCharacteristics::new(
+                        self.version,
                         is_unique,
+                        true,
                         candidate_start_key.len(),
                         arranged,
                         cardinality,
                         self.filters[start].clone(),
                         start,
-                        self.enable_join_prioritize_arranged,
                     ),
                     candidate_start_key,
                     start,
@@ -1264,6 +1384,9 @@ impl<'a> Orderer<'a> {
     /// keys are available to consider (both arranged, and unarranged).
     fn order_input(&mut self, input: usize) {
         self.placed[input] = true;
+        // Fold the newly placed input into the prefix keys before scoring
+        // new candidates against the extended prefix.
+        self.update_prefix_keys(input);
         for (equivalence, expr_index) in self.reverse_equivalences[input].iter() {
             if !self.equivalences_active[*equivalence] {
                 // Placing `input` *may* activate the equivalence. Each of its columns
@@ -1312,15 +1435,18 @@ impl<'a> Orderer<'a> {
                                             self.arrangement_active[rel].push(pos);
                                             // TODO: This could be pre-computed, as it is independent of the order.
                                             let is_unique = self.unique_arrangement[rel][pos];
+                                            let prefix_unique =
+                                                self.candidate_prefix_unique(rel, key);
                                             self.priority_queue.push((
                                                 JoinInputCharacteristics::new(
+                                                    self.version,
                                                     is_unique,
+                                                    prefix_unique,
                                                     key.len(),
                                                     true,
                                                     self.cardinalities[rel],
                                                     self.filters[rel].clone(),
                                                     rel,
-                                                    self.enable_join_prioritize_arranged,
                                                 ),
                                                 key.clone(),
                                                 rel,
@@ -1335,15 +1461,18 @@ impl<'a> Orderer<'a> {
                                         self.bound[rel].contains(&MirScalarExpr::column(*c))
                                     })
                                 });
+                                let prefix_unique =
+                                    self.candidate_prefix_unique(rel, &self.bound[rel]);
                                 self.priority_queue.push((
                                     JoinInputCharacteristics::new(
+                                        self.version,
                                         is_unique,
+                                        prefix_unique,
                                         self.bound[rel].len(),
                                         false,
                                         self.cardinalities[rel],
                                         self.filters[rel].clone(),
                                         rel,
-                                        self.enable_join_prioritize_arranged,
                                     ),
                                     self.bound[rel].clone(),
                                     rel,

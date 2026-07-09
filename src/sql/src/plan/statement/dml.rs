@@ -573,6 +573,7 @@ generate_extracted_config!(
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
     (EnableJoinPrioritizeArranged, Option<bool>, Default(None)),
+    (EnableJoinReverseEdgeScoring, Option<bool>, Default(None)),
     (
         EnableProjectionPushdownAfterRelationCse,
         Option<bool>,
@@ -627,6 +628,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
                 enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
+                enable_join_reverse_edge_scoring: v.enable_join_reverse_edge_scoring,
                 enable_projection_pushdown_after_relation_cse: v
                     .enable_projection_pushdown_after_relation_cse,
                 enable_less_reduce_in_eqprop: Default::default(),
