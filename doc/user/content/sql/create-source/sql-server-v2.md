@@ -32,6 +32,8 @@ for the database that you would like to replicate.
   Server](#prerequisite-creating-a-connection-to-sql-server) in Materialize.
   - The connection setup depends on your network security configuration.
 
+{{% include-headless "/headless/sql-server-deployment-guides" %}}
+
 ## Syntax
 
 {{% include-syntax file="examples/create_source_sql_server" example="syntax" %}}
@@ -154,7 +156,9 @@ an SSH bastion server to accept connections from Materialize, check
 
 #### Creating the source in Materialize
 
-You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
+You **must** enable Change Data Capture. See the setup instructions for
+[Azure SQL Database](/ingest-data/sql-server/azure-db/#a-configure-azure-sql-database)
+or [self-hosted SQL Server](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
 
 Once CDC is enabled for all of the tables you wish to create subsources for, you can create a `SOURCE` in
 Materialize to begin replicating data!
