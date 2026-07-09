@@ -76,4 +76,19 @@ printf '<user>:<password>' | base64
 echo '<your-base64-token>' | base64 --decode
 ```
 
+## OAuth sign-in fails (Self-Managed)
+
+**Symptom:** The browser sign-in fails at the identity provider (for example,
+with a registration error or `invalid_scope`), or sign-in completes but the
+client reports that the credentials were rejected on connect.
+
+**Cause:** OAuth for Self-Managed deployments relies on your SSO identity
+provider. Most enterprise IdPs need additional configuration for MCP clients,
+such as a pre-registered OAuth client, an authentication claim in access
+tokens, and the authorization server audience in `oidc_audience`.
+
+**Fix:** See [Connecting MCP
+clients](/security/self-managed/sso/#connecting-mcp-clients) for the
+requirements and a troubleshooting table.
+
 Make sure the decoded output matches `user:password` exactly.

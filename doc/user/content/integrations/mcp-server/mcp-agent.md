@@ -321,8 +321,13 @@ URL: `<baseURL>/api/mcp/agent`.
 
 {{< tab "Self-Managed" >}}
 
-Self-Managed deployments using OAuth require SSO, which uses TLS. Get your MCP
-server URL from the Materialize Console:
+Self-Managed deployments using OAuth require SSO, which uses TLS. Your
+identity provider may also need additional configuration for MCP clients, such
+as a pre-registered OAuth client if your IdP does not support anonymous
+dynamic client registration. See [Connecting MCP
+clients](/security/self-managed/sso/#connecting-mcp-clients).
+
+Get your MCP server URL from the Materialize Console:
 
 1. Log in via the Materialize Console.
 
