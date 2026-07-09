@@ -1135,6 +1135,12 @@ class Database:
         | View
         | Table
     ]:
+        # Temp objects are intentionally included. Referencing one from a
+        # persistent object (sink, non-temp view) must be rejected by the
+        # server, not accepted, so keeping them here lets the workload stress
+        # that boundary and surface panics. The expected rejection ("non-
+        # temporary items cannot depend on temporary item") and cross-session
+        # "unknown catalog item" are ignored, see Action.errors_to_ignore.
         return (
             self.tables
             + self.views

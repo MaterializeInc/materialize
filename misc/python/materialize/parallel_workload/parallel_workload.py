@@ -126,6 +126,16 @@ def run(
             f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 40 + num_threads}"
         )
         system_exe.execute("ALTER SYSTEM SET max_secrets = 1000000")
+        # Per-source secrets and connections accumulate in the public schema
+        # over a run, faster than drops reclaim them, so raise the per-schema
+        # object cap alongside max_secrets. The per-connection-type caps
+        # (region-wide) accumulate the same way as pg/mysql/sql_server sources
+        # churn, so raise them too.
+        system_exe.execute("ALTER SYSTEM SET max_objects_per_schema = 1000000")
+        system_exe.execute("ALTER SYSTEM SET max_postgres_connections = 1000000")
+        system_exe.execute("ALTER SYSTEM SET max_mysql_connections = 1000000")
+        system_exe.execute("ALTER SYSTEM SET max_sql_server_connections = 1000000")
+        system_exe.execute("ALTER SYSTEM SET max_kafka_connections = 1000000")
         system_exe.execute("ALTER SYSTEM SET idle_in_transaction_session_timeout = 0")
         # Most queries should not fail because of privileges
         for object_type in [
@@ -488,11 +498,21 @@ def print_stats(
     num_successes: Counter[type[Action]] = Counter()
     num_skips: Counter[type[Action]] = Counter()
     num_errored: Counter[type[Action]] = Counter()
+    # "must be owner of" and "permission denied for" are pervasive noise from
+    # ReconnectAction reconnecting as a random role, not evidence that an
+    # action's SQL or preconditions are broken. Tracked separately so a
+    # rarely-run action that never lands a lucky owner-matching session (e.g.
+    # DropClusterReplicaAction, gated on an unmanaged cluster having a spare
+    # replica) doesn't trip the broken-action assertion below.
+    ownership_noise = {"must be owner of", "permission denied for"}
+    num_errored_real: Counter[type[Action]] = Counter()
     for worker in workers:
         num_successes.update(worker.num_successes)
         num_skips.update(worker.num_skips)
-        for counter in worker.ignored_errors.values():
+        for error, counter in worker.ignored_errors.items():
             num_errored.update(counter)
+            if error not in ownership_noise:
+                num_errored_real.update(counter)
     action_classes = {
         action_class
         for action_list in action_lists
@@ -520,18 +540,23 @@ def print_stats(
     # Most ignored errors are intentional noise: sessions poisoned with an
     # unknown cluster, RESTRICT drops of objects with dependents, ownership
     # failures after reconnecting as a random role. Healthy ddl-complexity
-    # runs measure ~60-80% failed queries.
-    if num_threads < 50 and scenario != scenario.ZeroDowntimeDeploy:
+    # runs measure ~60-80% failed queries, cancel storms and 0dt fencing
+    # push it higher still.
+    if num_threads < 50 and scenario not in (
+        Scenario.ZeroDowntimeDeploy,
+        Scenario.Cancel,
+    ):
         assert failed < 90
     else:
-        assert failed < 95
+        assert failed < 98
     if num_threads < 50 and scenario in (Scenario.Regression, Scenario.Rename):
         # Only in scenarios without kills/restores/cancels can we be sure that
-        # an action failing on every single attempt is actually broken.
+        # an action failing on every single attempt is actually broken, and
+        # only when the failures aren't just ownership noise (see above).
         always_erroring = [
             action_class.__name__
             for action_class, skips, errored in never_succeeded
-            if errored > 0
+            if num_errored_real[action_class] > 0
         ]
         assert (
             not always_erroring

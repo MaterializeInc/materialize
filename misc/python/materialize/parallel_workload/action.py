@@ -45,6 +45,7 @@ from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
     DATA_TYPES,
     DB,
+    MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
     MAX_COLUMNS,
     MAX_DBS,
@@ -193,6 +194,11 @@ class Action:
             "is only defined for finite arguments",
             "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
+            # A persistent object (sink, non-temp view) referencing a temporary
+            # one is correctly rejected. We still let the workload attempt it,
+            # a path that wrongly accepts it instead panics the coordinator on
+            # catalog apply, which surfaces as an unexpected failure.
+            "non-temporary items cannot depend on temporary item",
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -243,6 +249,7 @@ class Action:
                     "Can't create a connection to host",
                     "Connection refused",
                     "Cursor closed",
+                    "the connection is lost",
                     # websockets
                     "Connection to remote host was lost.",
                     "socket is already closed.",
@@ -264,8 +271,15 @@ class Action:
             # Expected, see database-issues#6156. For BackupRestore the
             # restore rolls the catalog back to the backup point, so objects
             # created after the backup vanish while still being tracked.
+            # "invalid database" is the CREATE SCHEMA wording for a database
+            # that vanished the same way (CreateSchemaAction does not lock it).
             result.extend(
-                ["unknown catalog item", "unknown schema", "unknown database"]
+                [
+                    "unknown catalog item",
+                    "unknown schema",
+                    "unknown database",
+                    "invalid database",
+                ]
             )
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
@@ -645,7 +659,9 @@ class CopyFromS3Action(Action):
                 # CSV cannot distinguish NULL from the empty string, so the
                 # roundtrip can produce NULLs for NOT NULL columns.
                 "violates not-null constraint",
-                # TODO: Remove when SS-341 is fixed
+                # COPY TO can write types (e.g. arrays) that COPY FROM's
+                # parquet reader cannot decode yet.
+                # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
                 "parquet error",
                 "timeout: error trying to connect",
             ]
@@ -896,6 +912,13 @@ class UpdateAction(Action):
         result.extend(
             [
                 "canceling statement due to statement timeout",
+                # A random SET expression can evaluate to NULL (e.g. a map-key
+                # miss) even for a NOT NULL column. That is a legitimate
+                # rejection, not a bug, and the column type can't be coerced
+                # away without breaking bare-literal casts (e.g. text->bytea).
+                # The base list ignores this only for DDL complexity, UPDATE
+                # can hit it in any complexity.
+                "violates not-null constraint",
             ]
         )
 
@@ -1298,10 +1321,10 @@ class ReplaceMaterializedViewAction(Action):
         )
         time.sleep(self.rng.random())
         try:
-            # TODO: SQL-504 Also run ALTER MATERIALIZED VIEW {view} APPLY
-            # REPLACEMENT {tmp_mv} here.
-            # sequence_alter_materialized_view_apply_replacement_finish with
-            # CatalogInconsistencies { object_dependencies: [MissingUses ...] }.
+            # Also run ALTER MATERIALIZED VIEW {view} APPLY REPLACEMENT
+            # {tmp_mv} here, applying while the target has a temporary
+            # dependent panics the coordinator's consistency check.
+            # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-504 is fixed
             exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
         except QueryError:
             # Clean up, a leaked replacement blocks all future replacements
@@ -1353,6 +1376,10 @@ class AlterIcebergSinkFromAction(Action):
                 new_cols = {c.name(True): (c.data_type, c.nullable) for c in o.columns}
                 if old_cols == new_cols:
                     objs.append(o)
+            # ALTER SINK ... SET FROM a temporary object panics the coordinator
+            # (uncatchable) because the UpdateItem catalog path skips the
+            # temp-dependency check that CREATE enforces. Exclude temp objects.
+            objs = [o for o in objs if not getattr(o, "temp", False)]
             if not objs:
                 return False
             sink.base_object = self.rng.choice(objs)
@@ -1427,6 +1454,10 @@ class AlterKafkaSinkFromAction(Action):
                     }
                     if old_cols == new_cols:
                         objs.append(o)
+            # ALTER SINK ... SET FROM a temporary object panics the coordinator
+            # (uncatchable) because the UpdateItem catalog path skips the
+            # temp-dependency check that CREATE enforces. Exclude temp objects.
+            objs = [o for o in objs if not getattr(o, "temp", False)]
             if not objs:
                 return False
             sink.base_object = self.rng.choice(objs)
@@ -2394,8 +2425,14 @@ class CreateClusterReplicaAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks. Only unmanaged
-            # clusters support CREATE CLUSTER REPLICA.
-            unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
+            # clusters support CREATE CLUSTER REPLICA. Without the
+            # MAX_CLUSTER_REPLICAS cap the replica count random-walks upward
+            # (drops skip at <= 1 replica) into max_replicas_per_cluster.
+            unmanaged_clusters = [
+                c
+                for c in exe.db.clusters[1:]
+                if not c.managed and len(c.replicas) < MAX_CLUSTER_REPLICAS
+            ]
             if not unmanaged_clusters:
                 return False
             cluster = self.rng.choice(unmanaged_clusters)
@@ -2534,14 +2571,26 @@ class ReconnectAction(Action):
                 exe.db.views[:] = [v for v in exe.db.views if v not in exe.temp_objects]
             exe.temp_objects.clear()
         host = exe.db.host
-        port = exe.db.ports[exe.mz_service]
+
+        def pg_port() -> int:
+            # System workers (e.g. the Cancel worker) live on the internal
+            # port, everyone else on the external one of the current service.
+            if exe.user == "mz_system":
+                return exe.db.ports[
+                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
+                ]
+            return exe.db.ports[exe.mz_service]
+
         with exe.db.lock:
             if self.random_role and exe.db.roles:
                 user = self.rng.choice(
                     ["materialize", str(self.rng.choice(exe.db.roles))]
                 )
             else:
-                user = "materialize"
+                # Keep the executor's original user, e.g. the Cancel worker
+                # must stay mz_system or its cancels fail with "must be a
+                # member of"
+                user = exe.user
             conn = exe.cur.connection
 
         if exe.ws and exe.use_ws:
@@ -2596,8 +2645,10 @@ class ReconnectAction(Action):
             NUM_ATTEMPTS if exe.db.scenario != Scenario.ZeroDowntimeDeploy else 1000000
         ):
             try:
+                # Recompute the port each attempt, mz_service flips between
+                # the services during zero-downtime deploys.
                 conn = psycopg.connect(
-                    host=host, port=port, user=user, dbname="materialize"
+                    host=host, port=pg_port(), user=user, dbname="materialize"
                 )
                 conn.autocommit = exe.autocommit
                 cur = conn.cursor()
@@ -2988,6 +3039,18 @@ class CreateMySqlSourceAction(Action):
                 source.create(exe)
                 exe.db.mysql_sources.append(source)
             except:
+                # Creation can fail after CREATE CONNECTION but before the
+                # source is appended, orphaning the connection (the mypass
+                # secret is shared). Best-effort drop by name so it doesn't
+                # accumulate toward max_mysql_connections.
+                for stmt in (
+                    f"DROP SOURCE IF EXISTS {schema}.{identifier(f'mysql_source{source_id}')} CASCADE",
+                    f"DROP CONNECTION IF EXISTS mysql{source_id}",
+                ):
+                    try:
+                        exe.execute(stmt, http=Http.NO)
+                    except QueryError:
+                        pass
                 if exe.db.scenario not in (
                     Scenario.Kill,
                     Scenario.ZeroDowntimeDeploy,
@@ -3028,6 +3091,14 @@ class DropMySqlSourceAction(Action):
             exe.execute(query, http=Http.RANDOM)
             exe.db.mysql_sources.remove(source)
             source.executor.mz_conn.close()
+            source.executor.mysql_conn.close()
+            # The executor's per-source connection would otherwise accumulate
+            # in materialize.public until max_objects_per_schema is hit (its
+            # secret mypass is shared between sources)
+            exe.execute(
+                f"DROP CONNECTION IF EXISTS mysql{source.executor.num}",
+                http=Http.RANDOM,
+            )
         return True
 
 
@@ -3068,6 +3139,20 @@ class CreatePostgresSourceAction(Action):
                 source.create(exe)
                 exe.db.postgres_sources.append(source)
             except:
+                # Creation can fail after CREATE SECRET/CONNECTION but before
+                # the source is appended, so DropPostgresSourceAction never
+                # reclaims them and they accumulate toward
+                # max_postgres_connections / max_objects_per_schema. Best-effort
+                # drop what this source id would have created, by name.
+                for stmt in (
+                    f"DROP SOURCE IF EXISTS {schema}.{identifier(f'postgres_source{source_id}')} CASCADE",
+                    f"DROP CONNECTION IF EXISTS pg{source_id}",
+                    f"DROP SECRET IF EXISTS pgpass{source_id}",
+                ):
+                    try:
+                        exe.execute(stmt, http=Http.NO)
+                    except QueryError:
+                        pass
                 if exe.db.scenario not in (
                     Scenario.Kill,
                     Scenario.ZeroDowntimeDeploy,
@@ -3108,6 +3193,18 @@ class DropPostgresSourceAction(Action):
             exe.execute(query, http=Http.RANDOM)
             exe.db.postgres_sources.remove(source)
             source.executor.mz_conn.close()
+            source.executor.pg_conn.close()
+            # The executor's per-source connection and secret would otherwise
+            # accumulate in materialize.public until max_objects_per_schema
+            # is hit
+            exe.execute(
+                f"DROP CONNECTION IF EXISTS pg{source.executor.num}",
+                http=Http.RANDOM,
+            )
+            exe.execute(
+                f"DROP SECRET IF EXISTS pgpass{source.executor.num}",
+                http=Http.RANDOM,
+            )
         return True
 
 
@@ -3150,6 +3247,18 @@ class CreateSqlServerSourceAction(Action):
                 source.create(exe)
                 exe.db.sql_server_sources.append(source)
             except:
+                # Creation can fail after CREATE CONNECTION but before the
+                # source is appended, orphaning the connection (the
+                # sql_server_pass secret is shared). Best-effort drop by name
+                # so it doesn't accumulate toward max_sql_server_connections.
+                for stmt in (
+                    f"DROP SOURCE IF EXISTS {schema}.{identifier(f'sql_server_source{source_id}')} CASCADE",
+                    f"DROP CONNECTION IF EXISTS sql_server{source_id}",
+                ):
+                    try:
+                        exe.execute(stmt, http=Http.NO)
+                    except QueryError:
+                        pass
                 if exe.db.scenario not in (
                     Scenario.Kill,
                     Scenario.ZeroDowntimeDeploy,
@@ -3190,6 +3299,13 @@ class DropSqlServerSourceAction(Action):
             exe.execute(query, http=Http.RANDOM)
             exe.db.sql_server_sources.remove(source)
             source.executor.mz_conn.close()
+            # The executor's per-source connection would otherwise accumulate
+            # in materialize.public until max_objects_per_schema is hit (its
+            # secret sql_server_pass is shared between sources)
+            exe.execute(
+                f"DROP CONNECTION IF EXISTS sql_server{source.executor.num}",
+                http=Http.RANDOM,
+            )
         return True
 
 

@@ -56,6 +56,7 @@ class Executor:
     last_status: str
     action_run_since_last_commit_rollback: bool
     autocommit: bool
+    user: str
 
     def __init__(
         self,
@@ -63,11 +64,15 @@ class Executor:
         cur: psycopg.Cursor,
         ws: websocket.WebSocket | None,
         db: "Database",
+        user: str = "materialize",
     ):
         self.rng = rng
         self.cur = cur
         self.ws = ws
         self.db = db
+        # The user this executor's worker originally connected as, e.g.
+        # mz_system for the Cancel worker. Reconnects have to restore it.
+        self.user = user
         self.pg_pid = -1
         self.insert_table = None
         self.temp_objects = []
@@ -92,12 +97,19 @@ class Executor:
     def _end_transaction(self, command: str, http: Http) -> None:
         self.insert_table = None
         self.log(command)
+        ws_error = None
         try:
             # When this executor uses the WS session, statements executed with
             # http != Http.NO accumulate in the WS session's transaction, so
             # that transaction has to be ended along with the pg session's.
+            # The pg session's transaction must be ended even if the WS
+            # session fails, otherwise an aborted transaction lingers and
+            # fails all subsequent statements.
             if self.use_ws and self.ws and http != Http.NO:
-                self.ws_query(f"{command};")
+                try:
+                    self.ws_query(f"{command};")
+                except QueryError as e:
+                    ws_error = e
             if command == "commit":
                 self.cur.connection.commit()
             else:
@@ -106,6 +118,8 @@ class Executor:
             raise
         except Exception as e:
             raise QueryError(str(e), command)
+        if ws_error is not None:
+            raise ws_error
         # TODO(def-): Enable when things are stable
         # self.use_ws = self.rng.choice([True, False]) if self.ws else False
 

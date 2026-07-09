@@ -74,21 +74,34 @@ class Worker:
     def run(
         self, host: str, pg_port: int, http_port: int, user: str, database: Database
     ) -> None:
-        self.conn = psycopg.connect(
-            host=host, port=pg_port, user=user, dbname="materialize"
-        )
-        self.conn.autocommit = self.autocommit
-        cur = self.conn.cursor()
-        ws = websocket.WebSocket()
-        ws_conn_id, ws_secret_key = ws_connect(ws, host, http_port, user)
-        self.exe = Executor(self.rng, cur, ws, database)
-        self.exe.set_isolation("SERIALIZABLE")
-        cur.execute("SET auto_route_catalog_queries TO false")
-        if self.exe.use_ws:
-            self.exe.pg_pid = ws_conn_id
-        else:
-            cur.execute("SELECT pg_backend_pid()")
-            self.exe.pg_pid = cur.fetchall()[0][0]
+        # In scenarios with kills and deploys materialized can go down at any
+        # point during the setup, keep retrying.
+        for i in range(300):
+            try:
+                self.conn = psycopg.connect(
+                    host=host, port=pg_port, user=user, dbname="materialize"
+                )
+                self.conn.autocommit = self.autocommit
+                cur = self.conn.cursor()
+                ws = websocket.WebSocket()
+                ws_conn_id, ws_secret_key = ws_connect(ws, host, http_port, user)
+                self.exe = Executor(self.rng, cur, ws, database, user=user)
+                self.exe.set_isolation("SERIALIZABLE")
+                cur.execute("SET auto_route_catalog_queries TO false")
+                if self.exe.use_ws:
+                    self.exe.pg_pid = ws_conn_id
+                else:
+                    cur.execute("SELECT pg_backend_pid()")
+                    self.exe.pg_pid = cur.fetchall()[0][0]
+            except Exception:
+                if time.time() > self.end_time:
+                    return
+                if i == 299:
+                    raise
+                time.sleep(1)
+            else:
+                break
+        assert self.exe
 
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]
@@ -97,24 +110,14 @@ class Worker:
             if self.exe.rollback_next:
                 try:
                     self.exe.rollback()
-                except QueryError as e:
-                    # ROLLBACK can itself be cancelled by
-                    # `pg_cancel_backend`, leaving psycopg in
-                    # `InFailedSqlTransaction`. Force a reconnect rather
-                    # than retry the rollback.
-                    if (
-                        "Please disconnect and re-connect" in e.msg
-                        or "server closed the connection unexpectedly" in e.msg
-                        or "Can't create a connection to host" in e.msg
-                        or "Connection refused" in e.msg
-                        or "the connection is lost" in e.msg
-                        or "connection in transaction status INERROR" in e.msg
-                        or "canceling statement due to user request" in e.msg
-                        or "current transaction is aborted" in e.msg
-                    ):
-                        self.exe.reconnect_next = True
-                        self.exe.rollback_next = False
-                        continue
+                except QueryError:
+                    # ROLLBACK can itself fail, e.g. cancelled by
+                    # `pg_cancel_backend` or on a broken WS session. Force a
+                    # reconnect rather than leaving a session with an open
+                    # aborted transaction behind.
+                    self.exe.reconnect_next = True
+                    self.exe.rollback_next = False
+                    continue
                 self.exe.rollback_next = False
             if self.exe.reconnect_next:
                 self.exe.reconnect_next = False
@@ -123,8 +126,14 @@ class Worker:
                 self.run_action(
                     ReconnectAction(self.rng, self.composition, random_role=False)
                 )
-                if self.exe.reconnect_next:
-                    # Reconnecting failed with an ignored error, retry
+                if self.exe.reconnect_next or self.exe.rollback_next:
+                    # Reconnecting failed with an ignored error. Always retry
+                    # the reconnect, never fall through to the action: the
+                    # old session may hold an aborted transaction that fails
+                    # all statements.
+                    self.exe.reconnect_next = True
+                    self.exe.rollback_next = False
+                    time.sleep(1)
                     continue
             self.run_action(action)
 
