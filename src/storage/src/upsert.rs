@@ -554,7 +554,9 @@ where
     let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
     let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
 
-    let env = instance_context.rocksdb_env.clone();
+    let env = instance_context
+        .rocksdb_env()
+        .expect("failed to create rocksdb env");
 
     // A closure that will initialize and return a configured RocksDB instance
     let rocksdb_init_fn = move || async move {

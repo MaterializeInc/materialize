@@ -929,8 +929,8 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
 ///
 /// `DB::destroy` resolves paths through the `Env` in its options. Destroying
 /// with default options only ever touches the host filesystem, which misses
-/// state written through a different `Env`, like the process-shared in-memory
-/// `Env` used by replicas without a scratch directory.
+/// state written through a different `Env`, like the in-memory `Env` used by
+/// replicas without a scratch directory.
 fn destroy_options(env: &Env) -> RocksDBOptions {
     let mut options = RocksDBOptions::default();
     options.set_env(env);

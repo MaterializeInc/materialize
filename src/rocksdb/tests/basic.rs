@@ -412,11 +412,10 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 }
 
 /// Regression test for stale state leaking across instances in an in-memory
-/// `Env`. Replicas without a scratch directory run all RocksDB instances in
-/// one process-shared in-memory `Env`, so an in-process dataflow restart
-/// reopens the same path in the same `Env`. Cleanup must destroy state inside
-/// that `Env`, host filesystem checks and default-`Env` destroys do not see
-/// it. The second instance must start empty.
+/// `Env`. When an instance is closed and another opens the same path in the
+/// same in-memory `Env`, cleanup must destroy state inside that `Env`, host
+/// filesystem checks and default-`Env` destroys do not see it. The second
+/// instance must start empty.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_mem_env` on OS `linux`
 async fn mem_env_cleanup_on_reopen() -> Result<(), anyhow::Error> {

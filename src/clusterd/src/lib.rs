@@ -438,7 +438,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
+        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
         storage_log_writers,
     )
     .await?;

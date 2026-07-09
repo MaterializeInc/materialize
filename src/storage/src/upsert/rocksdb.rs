@@ -207,20 +207,19 @@ mod tests {
 
     /// Regression test for stale upsert state surviving an in-process dataflow
     /// restart on replicas without a scratch directory. Those replicas keep
-    /// upsert state in a process-shared in-memory `Env`, so a restarted
-    /// dataflow reopens the same path in the same `Env` and must start empty.
-    /// If a finalized value survives, rehydration re-inserts the persist
-    /// snapshot on top of it, the merge yields `diff_sum == 2`, and
-    /// `ensure_decoded` panics with `invalid upsert state`.
+    /// upsert state in an in-memory `Env`, and a restarted dataflow that
+    /// reopens the same path in the same `Env` must start empty. If a
+    /// finalized value survives, rehydration re-inserts the persist snapshot
+    /// on top of it, the merge yields `diff_sum == 2`, and `ensure_decoded`
+    /// panics with `invalid upsert state`.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // rocksdb FFI is unsupported under miri
     async fn stale_state_corrupts_rehydration() {
         let source_id = GlobalId::User(0);
         let upsert_metrics = test_metrics(source_id);
 
-        // One shared in-memory env, as `StorageInstanceContext` builds per
-        // clusterd process, and a path that does not initially exist on the
-        // host filesystem.
+        // One in-memory env reused by both instances, and a path that does
+        // not initially exist on the host filesystem.
         let mem_env = Env::mem_env().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("does-not-exist-on-host").join("instance");
