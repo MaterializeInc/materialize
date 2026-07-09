@@ -166,6 +166,38 @@ and re-apply. The UI is then available at
 configure a NextAuth provider for login (see
 [Polis hosted-mode docs](https://www.ory.sh/docs/polis/deploy/env-variables)).
 
+### Unlock the Polis admin UI without SMTP
+
+The default admin login flow uses an email magic link, which requires
+SMTP to be configured. If you don't want to run SMTP just to access the
+admin plane, Polis exposes a built-in reserved tenant
+(`_jackson_boxyhq` / `_jackson_admin_portal`) whose sole purpose is to
+gate the admin UI login on a SAML IdP you already have. Registering
+your customer's IdP there lets operators sign into the admin UI via
+their own SSO with no mail server involved.
+
+Reuse the same Okta (or other) SAML app you configured for user login,
+then register a second connection under the reserved tenant:
+
+```bash
+curl -sS -H "Authorization: Api-Key $POLIS_API_KEY" \
+  -X POST "https://<your-polis-hostname>/api/v1/connections" \
+  --data-urlencode "tenant=_jackson_boxyhq" \
+  --data-urlencode "product=_jackson_admin_portal" \
+  --data-urlencode "name=admin-bootstrap" \
+  --data-urlencode "encodedRawMetadata=$(base64 < okta-metadata.xml | tr -d '\n')" \
+  --data-urlencode "defaultRedirectUrl=https://<your-polis-hostname>/admin/sso-connection" \
+  --data-urlencode 'redirectUrl=["https://<your-polis-hostname>/api/auth/callback/boxyhq-saml"]'
+```
+
+Then browse to `https://<your-polis-hostname>/admin/auth/login` and
+click "**Sign in with SAML**". The flow bounces through your IdP and
+lands you at the Polis admin dashboard.
+
+For a production deployment, register a **separate** SAML app on the
+IdP side for admin access (rather than reusing the end-user app), so
+you can control admin membership independently.
+
 ## Disable registration in Kratos
 
 By default Kratos allows users to register new identities through the
