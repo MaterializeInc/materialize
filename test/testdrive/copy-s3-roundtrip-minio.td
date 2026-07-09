@@ -526,3 +526,20 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/10 sort-rows=true
 
 > SELECT COUNT(*) FROM (SELECT * FROM t_wide_from EXCEPT SELECT * FROM t_wide) AS diff
 0
+
+# Regression: an array column must survive a parquet round-trip. COPY TO
+# parquet encodes an array as an Arrow struct {items, dimensions}, but the
+# COPY FROM parquet reader has no decoder for SqlScalarType::Array, so the
+# COPY INTO below currently fails with "parquet error".
+> CREATE TABLE t_arr_src (arr INT[])
+> INSERT INTO t_arr_src VALUES (ARRAY[1, 2, 3])
+
+> COPY t_arr_src TO 's3://copytos3/roundtrip/arr_parquet'
+  WITH (AWS CONNECTION = aws_conn, FORMAT = 'parquet')
+
+> CREATE TABLE t_arr_from_parquet (arr INT[])
+
+> COPY INTO t_arr_from_parquet FROM 's3://copytos3/roundtrip/arr_parquet' (FORMAT PARQUET, AWS CONNECTION = aws_conn)
+
+> SELECT arr FROM t_arr_from_parquet
+{1,2,3}
