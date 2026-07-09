@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::metric;
-use mz_ore::metrics::{MetricTag, MetricVisibility, MetricsRegistry};
+use mz_ore::metrics::{MetricTag, MetricVisibility, MetricsRegistry, UIntGauge};
 use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
@@ -52,6 +52,9 @@ pub struct Metrics {
     pub result_rows_first_to_last_byte_seconds: HistogramVec,
     pub pgwire_ensure_transaction_seconds: HistogramVec,
     pub catalog_snapshot_seconds: HistogramVec,
+    pub catalog_snapshot_cache: IntCounterVec,
+    pub catalog_arc_strong_count: UIntGauge,
+    pub catalog_arc_weak_count: UIntGauge,
     pub pgwire_recv_scheduling_delay_ms: HistogramVec,
     pub catalog_transact_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
@@ -241,9 +244,28 @@ impl Metrics {
             )),
             catalog_snapshot_seconds: registry.register(metric!(
                 name: "mz_catalog_snapshot_seconds",
-                help: "The time it takes to run `catalog_snapshot` when fetching the catalog.",
+                help: "The time it takes to fetch a catalog snapshot from the Coordinator. \
+                       Only observed on session snapshot cache misses.",
                 var_labels: ["context"],
                 buckets: histogram_seconds_buckets(0.001, 512.0),
+            )),
+            catalog_snapshot_cache: registry.register(metric!(
+                name: "mz_catalog_snapshot_cache",
+                help: "Hits and misses of the session-side catalog snapshot cache. A miss \
+                       costs a Coordinator round-trip.",
+                var_labels: ["context", "result"],
+            )),
+            catalog_arc_strong_count: registry.register(metric!(
+                name: "mz_catalog_arc_strong_count",
+                help: "The number of strong references to the current catalog snapshot: roughly, \
+                       in-flight users plus a small constant baseline.",
+            )),
+            catalog_arc_weak_count: registry.register(metric!(
+                name: "mz_catalog_arc_weak_count",
+                help: "The number of weak references to the current catalog snapshot: sessions \
+                       whose snapshot cache points at the current catalog version (older \
+                       versions are not counted). Drops on catalog changes and recovers as \
+                       session caches repopulate.",
             )),
             pgwire_recv_scheduling_delay_ms: registry.register(metric!(
                 name: "mz_pgwire_recv_scheduling_delay_ms",

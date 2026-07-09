@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use differential_dataflow::consolidation::consolidate;
 use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
@@ -53,6 +53,13 @@ pub type StorageCollectionsHandle =
 #[derive(Debug)]
 pub struct PeekClient {
     coordinator_client: Client,
+    /// Cache of the latest catalog snapshot. Serves
+    /// [`PeekClient::catalog_snapshot`] without a Coordinator round-trip
+    /// while the catalog's transient revision is unchanged.
+    ///
+    /// Holds a `Weak` so that an idle session does not keep a superseded
+    /// catalog version alive.
+    catalog_cache: Weak<Catalog>,
     /// Channels to talk to each compute Instance task directly. Lazily populated.
     /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
     /// if a long-running user session keeps peeking on clusters that are being created and dropped
@@ -72,8 +79,12 @@ pub struct PeekClient {
 
 impl PeekClient {
     /// Creates a PeekClient.
+    ///
+    /// `catalog` seeds the catalog snapshot cache, so that the session's
+    /// first statements don't need a `Command::CatalogSnapshot` round-trip.
     pub fn new(
         coordinator_client: Client,
+        catalog: &Arc<Catalog>,
         storage_collections: StorageCollectionsHandle,
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
@@ -82,6 +93,7 @@ impl PeekClient {
     ) -> Self {
         Self {
             coordinator_client,
+            catalog_cache: Arc::downgrade(catalog),
             compute_instances: Default::default(), // lazily populated
             storage_collections,
             transient_id_gen,
@@ -128,18 +140,53 @@ impl PeekClient {
         Ok(self.oracles.get_mut(&timeline).expect("ensured above"))
     }
 
-    /// Fetch a snapshot of the catalog for use in frontend peek sequencing.
-    /// Records the time taken in the adapter metrics, labeled by `context`.
-    pub async fn catalog_snapshot(&self, context: &str) -> Arc<Catalog> {
+    /// Fetch a snapshot of the catalog.
+    ///
+    /// Serves from the session-side cache when the catalog's transient
+    /// revision is unchanged since the cached snapshot was taken (see
+    /// [`Catalog::transient_revision_is_current`]). An unchanged revision
+    /// means the cached snapshot is identical to what a fresh fetch would
+    /// return. Otherwise falls back to a `Command::CatalogSnapshot`
+    /// round-trip and re-populates the cache.
+    ///
+    /// Cache misses record the round-trip time in the adapter metrics,
+    /// labeled by `context`. Hits and misses are counted in
+    /// `catalog_snapshot_cache`.
+    pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
+        // NOTE: The upgrade can fail even when the revision is unchanged: any
+        // in-place mutation of the Coordinator's catalog (including
+        // revision-preserving ones) moves it to a new allocation, and the
+        // cached allocation is freed once its last user drops. We then fall
+        // through to a refetch.
+        let cached = self
+            .catalog_cache
+            .upgrade()
+            .filter(|catalog| catalog.transient_revision_is_current());
+        if let Some(catalog) = cached {
+            self.coordinator_client
+                .metrics()
+                .catalog_snapshot_cache
+                .with_label_values(&[context, "hit"])
+                .inc();
+            return catalog;
+        }
+
+        // The cache is empty, stale, or its allocation is gone: do the
+        // round-trip.
         let start = std::time::Instant::now();
         let CatalogSnapshot { catalog } = self
             .call_coordinator(|tx| Command::CatalogSnapshot { tx })
             .await;
-        self.coordinator_client
-            .metrics()
+        let metrics = self.coordinator_client.metrics();
+        metrics
             .catalog_snapshot_seconds
             .with_label_values(&[context])
             .observe(start.elapsed().as_secs_f64());
+        metrics
+            .catalog_snapshot_cache
+            .with_label_values(&[context, "miss"])
+            .inc();
+        self.catalog_cache = Arc::downgrade(&catalog);
         catalog
     }
 
