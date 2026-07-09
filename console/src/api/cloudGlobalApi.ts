@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { formatRFC3339 } from "date-fns";
 import createClient from "openapi-fetch";
 
 import { NOT_SUPPORTED_MESSAGE } from "~/config/AppConfig";
+import { formatDateInUtc } from "~/utils/dateFormat";
 
 import { apiClient } from "./apiClient";
 import {
@@ -154,24 +154,16 @@ export async function getCredits(requestOptions: OpenApiRequestOptions = {}) {
   return handleOpenApiResponseWithBody(data, response);
 }
 
-export async function getDailyCosts(
-  startDate: Date,
-  endDate: Date,
-  requestOptions: OpenApiRequestOptions = {},
-) {
-  const { headers, ...options } = requestOptions;
-  const { data, response } = await getClient().GET("/api/costs/daily", {
-    params: {
-      query: {
-        startDate: formatRFC3339(startDate),
-        endDate: formatRFC3339(endDate),
-      },
-    },
-    signal: requestOptions?.signal,
-    headers,
-    ...options,
-  });
-  return handleOpenApiResponseWithBody(data, response);
+/**
+ * The day before `date`, in UTC. Pure calendar arithmetic (`Date.UTC`
+ * tolerates a day value of 0, rolling back into the previous month), not
+ * millisecond subtraction, so this stays correct regardless of `date`'s time
+ * component.
+ */
+function utcDayBefore(date: Date): Date {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - 1),
+  );
 }
 
 export async function getCostsBreakdownDaily(
@@ -185,8 +177,13 @@ export async function getCostsBreakdownDaily(
     {
       params: {
         query: {
-          startDate: formatRFC3339(startDate),
-          endDate: formatRFC3339(endDate),
+          // Both query params are inclusive calendar days (bare `YYYY-MM-DD`,
+          // no time component — see `DateRange` in cloud's interface.rs),
+          // unlike every other date param on this client. `startDate`/`endDate`
+          // here are the internal [start, end) convention used throughout the
+          // console, so the exclusive `endDate` becomes the day before it.
+          startDate: formatDateInUtc(startDate, "yyyy-MM-dd"),
+          endDate: formatDateInUtc(utcDayBefore(endDate), "yyyy-MM-dd"),
         },
       },
       signal: requestOptions?.signal,

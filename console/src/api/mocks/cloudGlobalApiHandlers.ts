@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { addDays, differenceInDays, formatISO, parseISO } from "date-fns";
+import { addDays, differenceInDays, formatISO } from "date-fns";
 import { http, HttpResponse } from "msw";
 
 import {
@@ -19,7 +19,6 @@ import {
   Region,
   Regions,
 } from "~/api/cloudGlobalApi";
-import { assert } from "~/util";
 
 export const buildCloudRegionsReponse = (
   options: {
@@ -109,24 +108,6 @@ export function generateDailyCostResponsePayload(
   };
   return response;
 }
-
-export const buildDailyCostResponse = (
-  options: { payload?: DailyCosts; status?: number } = {},
-) =>
-  http.get("*/api/costs/daily", (info) => {
-    let payload = options.payload;
-    if (!payload) {
-      const url = new URL(info.request.url);
-      const startParam = url.searchParams.get("startDate");
-      assert(startParam !== null);
-      const startDate = parseISO(startParam);
-      const endParam = url.searchParams.get("endDate");
-      assert(endParam !== null);
-      const endDate = parseISO(endParam);
-      payload = generateDailyCostResponsePayload(startDate, endDate);
-    }
-    return HttpResponse.json(payload, { status: options.status ?? 200 });
-  });
 
 export const buildDailyCostBreakdownResponse = (
   options: { payload?: DailyCostBreakdown; status?: number } = {},

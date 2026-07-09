@@ -20,7 +20,6 @@ import {
   buildCloudRegionsReponse,
   buildCreditsResponse,
   buildDailyCostBreakdownResponse,
-  buildDailyCostResponse,
   buildInvoicesResponse,
 } from "~/api/mocks/cloudGlobalApiHandlers";
 import server from "~/api/mocks/server";
@@ -33,7 +32,7 @@ import {
 import { assert } from "~/util";
 import { formatCurrency } from "~/utils/format";
 
-import { getTimeRange } from "./queries";
+import { getDayAlignedRange } from "./queries";
 import UsagePage from "./UsagePage";
 import { getTimeRangeSlice } from "./utils";
 
@@ -91,7 +90,6 @@ describe("UsagePage", () => {
   });
 
   it("renders a unified account & cluster ledger for a parent org", async () => {
-    server.use(buildDailyCostResponse());
     server.use(
       buildDailyCostBreakdownResponse({
         payload: {
@@ -178,7 +176,6 @@ describe("UsagePage", () => {
   });
 
   it("shows a plan-details box beside the breakdown, itemizing last 30 days by account", async () => {
-    server.use(buildDailyCostResponse());
     server.use(
       buildDailyCostBreakdownResponse({
         payload: {
@@ -236,7 +233,6 @@ describe("UsagePage", () => {
   });
 
   it("renders storage and egress as distinct region-qualified rows", async () => {
-    server.use(buildDailyCostResponse());
     server.use(
       buildDailyCostBreakdownResponse({
         payload: {
@@ -299,7 +295,6 @@ describe("UsagePage", () => {
     // category can only occur against a backend that predates the `category`
     // field. It should render "<region> / Other" rather than mislabel as a
     // cluster or crash.
-    server.use(buildDailyCostResponse());
     server.use(
       buildDailyCostBreakdownResponse({
         payload: {
@@ -334,7 +329,6 @@ describe("UsagePage", () => {
   });
 
   it("filters the ledger by region", async () => {
-    server.use(buildDailyCostResponse());
     server.use(
       buildDailyCostBreakdownResponse({
         payload: {
@@ -425,7 +419,6 @@ describe("UsagePage", () => {
 
   it("displays the invoices table for direct-billed organizations", async () => {
     server.use(
-      buildDailyCostResponse(),
       buildInvoicesResponse({
         invoices: [
           {
@@ -447,10 +440,7 @@ describe("UsagePage", () => {
   });
 
   it("hides the invoice history section entirely for an account with no invoices (e.g. an Orb hierarchy leaf account, which never has its own)", async () => {
-    server.use(
-      buildDailyCostResponse(),
-      buildInvoicesResponse({ invoices: [] }),
-    );
+    server.use(buildInvoicesResponse({ invoices: [] }));
     renderComponent(<UsagePage />);
     await waitFor(async () =>
       expect(
@@ -471,7 +461,6 @@ describe("UsagePage", () => {
           },
         }),
       }),
-      buildDailyCostResponse(),
     );
     renderComponent(<UsagePage />);
 
@@ -532,7 +521,7 @@ describe("UsagePage", () => {
   });
 
   it("generates appropriate time components for a time range", () => {
-    const [start, end] = getTimeRange(7);
+    const [start, end] = getDayAlignedRange(7);
     expect(start.getUTCHours()).toEqual(0);
     expect(start.getUTCHours()).toEqual(0);
     expect(start.getUTCMinutes()).toEqual(0);

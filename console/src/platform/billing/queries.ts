@@ -20,14 +20,11 @@ import {
   detachPaymentMethod,
   getCostsBreakdownDaily,
   getCredits,
-  getDailyCosts,
   Organization,
   recentInvoices,
   setDefaultPaymentMethod,
 } from "~/api/cloudGlobalApi";
 import { nowUTC } from "~/util";
-
-import { ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS } from "./constants";
 
 export const creditBalanceQueryKeys = {
   all: () => buildGlobalQueryKey("credits"),
@@ -35,18 +32,6 @@ export const creditBalanceQueryKeys = {
 
 export const invoiceQueryKeys = {
   all: () => buildGlobalQueryKey("invoices"),
-};
-
-export const dailyCostQueryKeys = {
-  all: () => buildGlobalQueryKey("dailyCosts"),
-  list: (timeSpan: number, queryTime: Date) =>
-    [
-      ...dailyCostQueryKeys.all(),
-      buildQueryKeyPart("list", {
-        timeSpan,
-        queryTime,
-      }),
-    ] as const,
 };
 
 export const costBreakdownDailyQueryKeys = {
@@ -94,7 +79,7 @@ export function useRecentInvoices() {
 // whole window by a day. Date.UTC's day component tolerates values outside
 // 1-31 (e.g. `date + 1`) and normalizes into the next/previous month, so this
 // stays entirely within UTC calendar arithmetic.
-function getDayAlignedRange(span: number): [Date, Date] {
+export function getDayAlignedRange(span: number): [Date, Date] {
   const now = nowUTC();
   const endDate = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
@@ -107,28 +92,6 @@ function getDayAlignedRange(span: number): [Date, Date] {
     ),
   );
   return [startDate, endDate];
-}
-
-export function getTimeRange(span: number): [Date, Date] {
-  // Some fields on the usage page, such as the rolling average in the plan
-  // details component, requires a certain number of days' worth of data. That
-  // span of time may be greater than what is being visually filtered, so set
-  // the minimum-queried range to what the rolling average needs.
-  return getDayAlignedRange(
-    Math.max(span, ROLLING_AVG_TIME_RANGE_LOOKBACK_DAYS),
-  );
-}
-
-export function useDailyCosts(timeSpan: number, queryTime: Date) {
-  return useQuery({
-    queryKey: dailyCostQueryKeys.list(timeSpan, queryTime),
-    queryFn: async ({ queryKey, signal }) => {
-      const [_, { timeSpan: queryTimeSpan }] = queryKey;
-      const [startDate, endDate] = getTimeRange(queryTimeSpan);
-      const response = await getDailyCosts(startDate, endDate, { signal });
-      return response.data;
-    },
-  });
 }
 
 /**
