@@ -15,6 +15,36 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.32.0
+*Released to Materialize Cloud: 2026-07-09* <br>
+*Released to Materialize Self-Managed: 2026-07-10* <br>
+
+### Improvements {#v26.32-improvements}
+- **`COPY TO` replica routing**: `COPY TO` now honors the session's `cluster_replica` setting, matching the behavior of regular `SELECT` queries.
+
+### Bug Fixes {#v26.32-bug-fixes}
+- Fixed internal HTTP endpoints not enforcing role-based authorization in Self-Managed deployments with password or OIDC authentication, allowing any authenticated user to access internal administration routes.
+- Fixed `CREATE REPLACEMENT MATERIALIZED VIEW ... FOR <target>` not requiring ownership of the target view, allowing another role to block the owner from using the replacement workflow on their own object.
+- Fixed secret values potentially appearing in `mz_internal.mz_statement_execution_history` error messages when `CREATE SECRET` or `ALTER SECRET` commands failed.
+- Fixed `COMMENT` bodies and `PARTITION BY` option values not being redacted in redacted SQL output, leaking user-provided text across the redaction boundary.
+- Fixed float-to-integer casts silently accepting out-of-range boundary values instead of raising errors, affecting `float4`-to-`uint32`/`uint64` and `float8`-to-`uint8` conversions.
+- Fixed narrowing integer casts (`uint4` to `uint2`, `smallint`, or `integer`) silently filtering out rows with out-of-range values instead of raising errors when used in indexed filter expressions.
+- Fixed incorrect results when casting arrays between element types.
+- Fixed `varchar` columns reporting incorrect column type metadata.
+- Fixed read-only transactions incorrectly accepting write operations after a constant expression peek (e.g., `SELECT 1`), which could silently commit data or cause panics on subsequent writes.
+- Fixed a priority inversion where sustained strict-serializable reads could stall the coordinator by starving group commit, causing the environment to appear stuck until clients disconnected.
+- Fixed coordinator stalls when granting privileges to many roles in a single transaction.
+- Fixed `generate_series` entering an infinite loop when called with a timestamp interval that mixes months and days in a way that prevents forward progress (e.g., `INTERVAL '1 month -29 days'`).
+- Fixed `mz_sleep` panicking on invalid input values instead of returning an error.
+- Fixed stale query cancellations from a previous statement incorrectly canceling the next statement within an explicit transaction.
+- Fixed `ALTER CLUSTER ... WITH (WAIT FOR ...)` and `WITH (WAIT UNTIL READY ...)` being silently accepted and ignored on unmanaged clusters instead of returning an error.
+- Fixed `SUBSCRIBE` returning an internal error code (`XX000`) instead of the standard "undefined object" code (`42704`) when referencing a non-existent object.
+- Fixed `TopK` query optimization losing `expected_group_size` hints during operator fusion, causing unnecessary overhead in query execution.
+- Fixed `app.kubernetes.io/name` label missing from environmentd Kubernetes resources when using the `v1alpha1` CRD.
+
+### Agent Skills {#v26.32-agent-skills}
+- **MCP Developer Analysis**: Updated to document the developer `query` tool and `EXPLAIN ANALYZE` workflow for querying user objects on named clusters.
+
 ## v26.31.2
 *Released to Materialize Self-Managed: 2026-07-08* <br>
 
