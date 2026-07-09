@@ -155,9 +155,11 @@ SET application_name = 'hello'
 statement ok
 SET extra_float_digits = 0
 
-# Not supported by Materialize.
-onlyif cockroach
-statement error 123 is outside the valid range for parameter "extra_float_digits"
+# SQL-481 (https://linear.app/materializeinc/issue/SQL-481): Materialize accepts
+# extra_float_digits without range-checking it. PG and CockroachDB reject values
+# outside -15..3.
+# PG/CRDB: statement error 123 is outside the valid range for parameter "extra_float_digits"
+statement ok
 SET extra_float_digits = 123
 
 statement ok

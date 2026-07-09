@@ -201,6 +201,11 @@ SELECT a, b, c FROM abc_decimal WHERE EXISTS (SELECT * FROM def_decimal WHERE a:
 1  1  1
 1  1  1
 
+# DB-130 / DB-137 (https://linear.app/materializeinc/issue/DB-130): Materialize's
+# numeric-to-text cast drops trailing-zero scale, so 1, 1.0 and 1.00 all cast to
+# "1" and compare equal, making every abc/def pair match. PG and CockroachDB keep
+# the scale ("1", "1.0", "1.00"), so this cross join matches only scale-aligned
+# pairs and returns 4 rows (all "1 1 1"), not 12.
 query RRR rowsort
 SELECT a, b, c FROM abc_decimal, def_decimal WHERE a::string=d::string or a::string=e::string
 ----

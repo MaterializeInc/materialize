@@ -551,6 +551,17 @@ set time zone 'UTC'; select extract(epoch from TIMESTAMP WITH TIME ZONE '2010-11
 ----
 1.28910594e+09
 
+# database-issues#6283 (https://github.com/MaterializeInc/database-issues/issues/6283):
+# Materialize does not day-justify timestamp subtraction, so the result is a flat
+# hour count rather than "N days HH:MM:SS", and EXTRACT(DAY ...) on it returns 0.
+# The age()/subtraction regression block below is skipped because it also depends
+# on SET TIME ZONE (SQL-501), so this minimal record captures the divergence.
+# PG: 2 days 06:00:00
+query T
+SELECT ('2001-01-03 06:00:00'::timestamp - '2001-01-01 00:00:00'::timestamp)::text
+----
+54:00:00
+
 # Not supported by Materialize.
 onlyif cockroach
 query TTTTTT
@@ -773,6 +784,10 @@ SELECT to_char(d1, 'FMIYYY FMIYY FMIY FMI FMIW FMIDDD FMID')
 1997 997 97 7 24 164 3
 2001 1 1 1 38 265 6
 
+# SQL-488 (https://linear.app/materializeinc/issue/SQL-488): Materialize does not
+# implement the FF1-FF6 fractional-second patterns and copies them into the output
+# literally. PG expands them (e.g. the .78901234 row would give "7 78 789 7890
+# 78901 789012 ..." instead of "FF1 FF2 ..."). MS and US work.
 query T
 SELECT to_char(d, 'FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  MS US')
    FROM (VALUES

@@ -83,7 +83,11 @@ SELECT foo.* FROM (SELECT i, i%2 FROM generate_series(1, 10) i ORDER BY i % 5 AS
 7  1
 9  1
 
-# The subquery ordering is propagated to the aggregation.
+# CLU-160 (https://linear.app/materializeinc/issue/CLU-160): Materialize ignores
+# an ORDER BY inside a subquery feeding array_agg, so the aggregate reflects the
+# generate_series order rather than the requested one. PG honors the subquery
+# order (standard-unspecified, but PG-compatible).
+# PG: {1,3,5,2,4}
 query T
 SELECT array_agg(i) FROM (SELECT * FROM generate_series(1, 5) i ORDER BY i%2 DESC, i)
 ----

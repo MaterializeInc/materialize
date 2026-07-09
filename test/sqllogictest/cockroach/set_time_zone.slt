@@ -22,9 +22,14 @@
 
 mode cockroach
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+# SQL-501 (https://linear.app/materializeinc/issue/SQL-501) and database-issues#1599
+# (https://github.com/MaterializeInc/database-issues/issues/1599): Materialize's
+# TimeZone session variable only accepts "UTC". It rejects the numeric offsets,
+# POSIX forms, and IANA names below, all of which PG and CockroachDB accept as
+# "statement ok" (their SHOW TIME ZONE would then reflect the zone instead of
+# staying UTC). AT TIME ZONE '<iana>' still works; only the session variable is
+# restricted.
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE 0
 
 query T
@@ -39,9 +44,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +0000 UTC
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE 10
 
 query T
@@ -56,9 +59,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1000 +1000
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE -10
 
 query T
@@ -73,9 +74,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1000 -1000
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE '10'
 
 query T
@@ -90,9 +89,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1000 +1000
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE '+10'
 
 query T
@@ -107,9 +104,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1000 +1000
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE '-10'
 
 query T
@@ -124,9 +119,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1000 -1000
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE '+10.5'
 
 query T
@@ -141,9 +134,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1030 +1030
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE '-10.5'
 
 query T
@@ -158,9 +149,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1030 -1030
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE '+10.555'
 
 query T
@@ -175,9 +164,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1033 +1033
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE '-10.555'
 
 query T
@@ -192,9 +179,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1033 -1033
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE '     +10'
 
 query T
@@ -209,9 +194,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +1000 +1000
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE '     -10'
 
 query T
@@ -226,9 +209,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -1000 -1000
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE 'GMT+3'
 
 query T
@@ -243,9 +224,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -0300 -0300
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE 'GMT-3'
 
 query T
@@ -260,9 +239,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +0300 +0300
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE 'UTC+3'
 
 query T
@@ -277,9 +254,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 -0300 -0300
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE 'UTC-3'
 
 query T
@@ -294,9 +269,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +0300 +0300
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE 'Asia/Tokyo'
 
 query T
@@ -311,9 +284,7 @@ SELECT TIME '05:40:00'::TIMETZ
 ----
 0000-01-01 05:40:00 +0900 +0900
 
-# Not supported by Materialize.
-onlyif cockroach
-statement ok
+statement error invalid value for parameter "TimeZone"
 SET TIME ZONE 'zulu'
 
 query T

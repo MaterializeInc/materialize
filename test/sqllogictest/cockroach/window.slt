@@ -4684,6 +4684,9 @@ SELECT json_object_agg(s, s) OVER (ORDER BY s DESC) FROM t54604
 {"4": "4", "5": "5"}
 {"5": "5"}
 
+# database-issues#7085 (https://github.com/MaterializeInc/database-issues/issues/7085):
+# Materialize's jsonb text output omits the spaces PG inserts after ':' and ','.
+# PG/CRDB render "{"1": "1", "2": "2", ...}" (see the json_object_agg variant above).
 query T rowsort
 SELECT jsonb_object_agg(s, s) OVER (ORDER BY s RANGE UNBOUNDED PRECEDING) FROM t54604
 ----

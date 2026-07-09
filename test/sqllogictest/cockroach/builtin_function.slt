@@ -2376,9 +2376,13 @@ timestamp with time zone
 bytea
 bigint[]
 
-# Not supported by Materialize.
-onlyif cockroach
-query T
+# SQL-492 (https://linear.app/materializeinc/issue/SQL-492), root cause CLU-159
+# (https://linear.app/materializeinc/issue/CLU-159): format_type expands to a
+# large expression, and constant-folding it across many VALUES rows exceeds the
+# optimizer's recursion limit. PG evaluates all 44 rows and returns the formatted
+# type names (anyelement, bit, boolean, bytea, bpchar, "char", date, numeric,
+# double precision, real, interval, numeric, oid, oidvector, inet, ...).
+query error exceeded recursion limit of 2048
 VALUES (format_type('anyelement'::regtype, -1)),
        (format_type('bit'::regtype, -1)),
        (format_type('bool'::regtype, -1)),
@@ -2423,51 +2427,6 @@ VALUES (format_type('anyelement'::regtype, -1)),
        (format_type('varchar[]'::regtype, -1)),
        (format_type('pg_catalog.int4'::regtype, -1)),
        (format_type('pg_catalog.int2'::regtype, -1))
-----
-anyelement
-bit
-boolean
-bytea
-bpchar
-"char"
-date
-numeric
-double precision
-real
-interval
-numeric
-oid
-oidvector
-inet
-bigint
-integer
-smallint
-int2vector
-interval
-jsonb
-name
-regclass
-regnamespace
-regproc
-regprocedure
-regrole
-regtype
-text
-time without time zone
-timestamp without time zone
-timestamp with time zone
-record
-uuid
-unknown
-bit varying
-character varying
-void
-bigint[]
-smallint[]
-text[]
-character varying[]
-integer
-smallint
 
 query T
 VALUES (format_type('anyelement'::regtype, NULL)),
