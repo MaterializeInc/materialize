@@ -111,8 +111,9 @@ class Column:
 
     def kafka_value(self, rng: random.Random) -> Any:
         """Generate a value suitable for Kafka serialization."""
-        if self.default and rng.randrange(10) == 0 and self.default != "NULL":
-            return str(self.default)
+        # The captured default is a SQL expression (now(), 'x'::text, ...), not
+        # a typed value, so it can't be injected into an Avro-serialized field
+        # or a webhook body. Only value() (which builds SQL) can use it.
         if self.nullable and rng.randrange(10) == 0:
             return None
 
@@ -140,16 +141,18 @@ class Column:
             return long_tail_float(-1_000_000_000.0, 1_000_000_000.0, rng=rng)
 
         elif self.typ in ("text", "bytea"):
+            # Raw string: Avro serialization and webhook bodies must not carry
+            # the SQL quotes that literal() would add.
             shaped = self._shaped_text(rng)
             if shaped is not None:
-                return literal(shaped)
-            return literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
+                return shaped
+            return long_tail_text(self.chars, 100, self._hot_strings, rng=rng)
 
         elif self.typ in ("character", "character varying"):
             shaped = self._shaped_text(rng)
             if shaped is not None:
-                return literal(shaped)
-            return literal(long_tail_text(self.chars, 10, self._hot_strings, rng=rng))
+                return shaped
+            return long_tail_text(self.chars, 10, self._hot_strings, rng=rng)
 
         elif self.typ == "uuid":
             return str(uuid.UUID(int=rng.getrandbits(128), version=4))
@@ -214,8 +217,16 @@ class Column:
 
     def value(self, rng: random.Random, in_query: bool = True) -> Any:
         """Generate a value suitable for SQL queries or COPY operations."""
-        if self.default and rng.randrange(10) == 0 and self.default != "NULL":
-            return str(self.default) if in_query else self.default
+        # The captured default is a SQL expression (now(), 'x'::text, ...), so it
+        # is only valid spliced into a SQL statement. As a COPY text datum it
+        # would be inserted literally (e.g. the text "now()"), so skip it there.
+        if (
+            in_query
+            and self.default
+            and rng.randrange(10) == 0
+            and self.default != "NULL"
+        ):
+            return str(self.default)
 
         if self.nullable and rng.randrange(10) == 0:
             return "NULL" if in_query else None

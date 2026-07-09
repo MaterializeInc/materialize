@@ -309,6 +309,12 @@ def benchmark(
         "schema-registry",
         "ssh-bastion-host",
         "testdrive",
+        # Object-store and Iceberg-catalog state must be reset too, else it
+        # persists between the reference and current runs of a comparison.
+        "polaris",
+        "polaris-bootstrap",
+        "minio",
+        "azurite",
     ]
 
     # When scale_data is false, use 100% initial data

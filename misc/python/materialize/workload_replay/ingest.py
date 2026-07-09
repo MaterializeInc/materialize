@@ -393,6 +393,10 @@ def ingest(
 
         with conn.cursor() as cur:
             cur.execute(stmt)
+        # The connection is opened with autocommit=False, so without this commit
+        # the implicit InnoDB transaction is discarded on close and no rows are
+        # ingested.
+        conn.commit()
         conn.close()
 
     elif source["type"] == "kafka":

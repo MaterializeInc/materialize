@@ -204,6 +204,10 @@ def _mysql_chunk(
         with conn.cursor() as cur:
             cur.execute(stmt)
 
+    # The connection is opened with autocommit=False, so without this commit
+    # the implicit InnoDB transaction is discarded on close and the source
+    # snapshots empty.
+    conn.commit()
     conn.close()
     return num_rows
 
@@ -543,6 +547,23 @@ def create_ingestions(
                             print(e)
                             stop_event.set()
                             raise
+
+                    threads.append(
+                        PropagatingThread(
+                            target=continuous_ingestion_webhook,
+                            name=f"ingest-{pretty_name}",
+                            args=(
+                                db,
+                                schema,
+                                name,
+                                source,
+                                pretty_name,
+                                batch_size,
+                                period_s,
+                                random.Random(random.randrange(SEED_RANGE)),
+                            ),
+                        )
+                    )
 
                 elif not source.get("children", {}):
                     if "messages_second" not in source:

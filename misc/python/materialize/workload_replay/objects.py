@@ -554,9 +554,12 @@ def run_create_objects_part_1(
                         time.sleep(1)
 
                 if source["type"] == "webhook":
-                    # Checking secrets makes ingestion into webhooks difficult, remove the check instead
+                    # Checking secrets makes ingestion into webhooks difficult, remove the check instead.
+                    # Anchor to end-of-string rather than a trailing semicolon:
+                    # raw captures end with ';', but the anonymizer re-renders
+                    # statements without one, and the CHECK clause is always last.
                     source["create_sql"] = re.sub(
-                        r"\s*CHECK\s*\(.*?\)\s*;",
+                        r"\s*CHECK\s*\(.*?\)\s*;?\s*$",
                         "",
                         source["create_sql"],
                         flags=re.DOTALL | re.IGNORECASE,
