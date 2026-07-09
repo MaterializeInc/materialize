@@ -47,6 +47,12 @@ ENV RUST_LIB_BACKTRACE=0
 COPY --from=eatmydata /usr/lib/*/libeatmydata.so /usr/lib/
 COPY --from=tini /output/tini /usr/bin/tini
 
+# liblzma (xz), dynamically linked by environmentd and clusterd. The distroless
+# base does not ship it, so without this both binaries fail at startup with
+# "error while loading shared libraries: liblzma.so.5". ubuntu-base gets it
+# implicitly as a system package.
+COPY --from=eatmydata /usr/lib/*/liblzma.so.5* /usr/lib/
+
 # FoundationDB client library, dynamically linked by environmentd and clusterd.
 # NOTE: this tag is coupled to two other pins and all three must move
 # together: the same COPY in `ubuntu-base` (both prod bases must ship an
