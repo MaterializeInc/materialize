@@ -78,7 +78,6 @@ impl PeekClient {
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
-        catalog: Option<Arc<Catalog>>,
         session: &mut Session,
         outer_ctx_extra: &mut Option<ExecuteContextGuard>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
@@ -97,16 +96,7 @@ impl PeekClient {
             }
         }
 
-        // TODO(peek-seq): This snapshot is wasted when we end up bailing out from the frontend peek
-        // sequencing. We could solve this is with that optimization where we
-        // continuously keep a catalog snapshot in the session, and only get a new one when the
-        // catalog revision has changed, which we could see with an atomic read.
-        // But anyhow, this problem will just go away when we reach the point that we never fall
-        // back to the old sequencing.
-        let catalog = match catalog {
-            Some(c) => c,
-            None => self.catalog_snapshot("try_frontend_peek").await,
-        };
+        let catalog = self.catalog_snapshot("try_frontend_peek").await;
 
         // Extract things from the portal.
         let (stmt, params, logging, lifecycle_timestamps) = {

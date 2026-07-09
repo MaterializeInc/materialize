@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::sync::atomic;
 use std::time::Duration;
 
 use itertools::Itertools;
@@ -521,6 +522,13 @@ impl Catalog {
         drop(storage);
         if let Some(new_state) = new_state {
             self.transient_revision += 1;
+            // Publish the new revision before returning. Everything that can
+            // reveal this transaction's effects (responses, notices, builtin
+            // table writes) happens after `transact` returns, so any session
+            // that has observed such evidence is guaranteed to see this bump
+            // and refresh its cached catalog snapshot.
+            self.shared_transient_revision
+                .store(self.transient_revision, atomic::Ordering::SeqCst);
             self.state = new_state;
         }
 

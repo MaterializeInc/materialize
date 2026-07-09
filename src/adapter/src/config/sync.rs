@@ -145,7 +145,7 @@ async fn sync_scoped_params(
     }
     *maybe_dirty = true;
 
-    let catalog = client.catalog_snapshot().await;
+    let catalog = client.catalog_snapshot_expensive().await;
 
     // Push the desired state to the coordinator, which holds the working copy
     // and resolves each layer at its boundary: the controller's per-replica

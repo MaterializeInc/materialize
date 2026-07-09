@@ -14,6 +14,7 @@ mod builtin_schema_migration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
@@ -567,6 +568,7 @@ impl Catalog {
                 state,
                 expr_cache_handle,
                 transient_revision: 1,
+                shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
 

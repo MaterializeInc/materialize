@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt};
@@ -140,6 +141,19 @@ pub struct Catalog {
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
+    /// The latest `transient_revision`, shared by all clones of this catalog.
+    /// While `transient_revision` is this clone's own revision, frozen when
+    /// the snapshot was taken, this field always tracks the latest revision
+    /// across all clones. Comparing the two lets a snapshot holder detect
+    /// from off-thread whether its snapshot is still current, via
+    /// [`Catalog::transient_revision_is_current`], without a Coordinator
+    /// round-trip (see `PeekClient::catalog_snapshot`).
+    ///
+    /// The store happens in `transact`, before the transaction's effects can
+    /// be observed anywhere (responses, notices, builtin table writes), so a
+    /// session that has observed any evidence of a catalog change is
+    /// guaranteed to see the corresponding bump.
+    shared_transient_revision: Arc<AtomicU64>,
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
@@ -151,6 +165,7 @@ impl Clone for Catalog {
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
+            shared_transient_revision: Arc::clone(&self.shared_transient_revision),
         }
     }
 }
@@ -308,6 +323,18 @@ impl Catalog {
     /// restart on every load.
     pub fn transient_revision(&self) -> u64 {
         self.transient_revision
+    }
+
+    /// Reports whether this catalog's transient revision is still the latest,
+    /// i.e., whether no catalog transaction has committed since this snapshot
+    /// was taken. Can be called on a snapshot from off-thread, without a
+    /// Coordinator round-trip. See the field documentation on
+    /// `shared_transient_revision`.
+    pub fn transient_revision_is_current(&self) -> bool {
+        self.transient_revision
+            == self
+                .shared_transient_revision
+                .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Creates a debug catalog from the current
@@ -2433,6 +2460,8 @@ mod tests {
             .await
             .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
+            assert!(catalog.transient_revision_is_current());
+            let snapshot = catalog.clone();
             let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(
@@ -2447,6 +2476,10 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
+            assert!(catalog.transient_revision_is_current());
+            // The pre-transaction snapshot detects its own staleness through
+            // the shared latest revision.
+            assert!(!snapshot.transient_revision_is_current());
             catalog.expire().await;
         }
         {

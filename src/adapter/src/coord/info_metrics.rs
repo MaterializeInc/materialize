@@ -21,6 +21,7 @@
 //! catalog. It's okay if the info metrics are not exactly up to date and
 //! eventually consistent.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_adapter_types::dyncfgs::CATALOG_INFO_METRICS_RECONCILE_INTERVAL;
@@ -28,6 +29,7 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, ClusterVariant, DataSourceDesc,
 };
 use mz_controller::clusters::ReplicaLocation;
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
     DeleteOnDropGauge, Histogram, MetricTag, MetricVisibility, MetricsRegistry, UIntGaugeVec,
@@ -277,6 +279,8 @@ impl Coordinator {
     pub(crate) fn spawn_catalog_info_metrics_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let mut metrics = CatalogInfoMetrics::new(&self.catalog_info_metrics_registry);
+        let catalog_arc_strong_count = self.metrics.catalog_arc_strong_count.clone();
+        let catalog_arc_weak_count = self.metrics.catalog_arc_weak_count.clone();
         task::spawn(|| "catalog_info_metrics", async move {
             loop {
                 let (tx, rx) = oneshot::channel();
@@ -291,6 +295,14 @@ impl Coordinator {
                 let Ok(CatalogSnapshot { catalog }) = rx.await else {
                     break;
                 };
+
+                // Sample the reference counts of the current catalog
+                // allocation. The strong count includes this task's own
+                // snapshot. The weak count is the number of session catalog
+                // caches pointing at the current allocation (sessions caching
+                // an older version are not counted).
+                catalog_arc_strong_count.set(u64::cast_from(Arc::strong_count(&catalog)));
+                catalog_arc_weak_count.set(u64::cast_from(Arc::weak_count(&catalog)));
 
                 // The reconcile cadence is a dyncfg; a zero interval disables
                 // reconciliation.
