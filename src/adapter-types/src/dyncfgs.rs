@@ -114,7 +114,7 @@ pub const ENABLE_FRONTEND_SUBSCRIBES: Config<bool> = Config::new(
 /// reuse it, never a statement that arrived afterwards.
 pub const ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP: Config<bool> = Config::new(
     "enable_pipelined_peek_shared_timestamp",
-    false,
+    true,
     "Share one timestamp-oracle read_ts across a burst of pipelined peeks on a connection.",
 );
 
@@ -129,7 +129,7 @@ pub const ENABLE_PIPELINED_PEEK_SHARED_TIMESTAMP: Config<bool> = Config::new(
 /// `enable_pipelined_peek_shared_timestamp`. Requires the frontend-peek path.
 pub const ENABLE_PIPELINED_PEEK_OVERLAP: Config<bool> = Config::new(
     "enable_pipelined_peek_overlap",
-    false,
+    true,
     "Overlap the compute-result awaits of a burst of pipelined peeks on a connection.",
 );
 
