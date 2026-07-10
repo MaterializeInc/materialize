@@ -19,8 +19,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AstInfo, Format, FormatSpecifier, KafkaSourceConfigOptionName, PgConfigOptionName,
-    RawClusterName, RawItemName, Value, WithOptionValue,
+    AstInfo, AvroSchema, CreateSubsourceOptionName, Format, FormatSpecifier,
+    KafkaSourceConfigOptionName, PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName,
+    SourceEnvelope, SourceErrorPolicy, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -702,6 +703,194 @@ fn parse_kafka_source_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     Ok(jsonb)
 }
 
+/// Extracts source-export (source table) metadata from a catalog `create_sql`.
+///
+/// Returns, for a `CREATE TABLE ... FROM SOURCE` or a non-progress
+/// `CREATE SUBSOURCE ... OF SOURCE ...` statement:
+///
+/// ```json
+/// {
+///   "source_id": "<parent source item id>",
+///   "external_reference": ["part1", "part2", ...],
+///   "envelope_type": <text | null>,
+///   "key_format": <text | null>,
+///   "value_format": <text | null>
+/// }
+/// ```
+///
+/// `envelope_type`, `key_format`, and `value_format` are always null for a
+/// `CREATE SUBSOURCE` (the postgres/mysql/sql-server exports that use the old
+/// subsource syntax carry neither format nor envelope). They may also be null
+/// for a `CREATE TABLE ... FROM SOURCE` that omits FORMAT/ENVELOPE.
+///
+/// Returns jsonb `null` for progress subsources and for any statement that is
+/// not a source export. The caller distinguishes the four source-table views
+/// by joining `source_id` against `mz_sources` and filtering on the parent's
+/// type, so this helper stays connection-type agnostic.
+///
+/// Errors if the statement fails to parse, references an unresolved item name,
+/// or is a non-progress subsource missing its OF SOURCE or EXTERNAL REFERENCE.
+///
+/// The `key_format`/`value_format` derivation mirrors the runtime
+/// `DataSourceDesc::formats()` that the removed `pack_kafka_source_tables_update`
+/// packer read. A bare FORMAT only carries a key when it resolves to an
+/// encoding that has one, which among bare formats is only Avro or Protobuf
+/// read from a Confluent Schema Registry whose purified seed carries a key
+/// schema. A KEY FORMAT ... VALUE FORMAT ... spec always carries both.
+#[sqlfunc]
+fn parse_source_export_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    fn get_item_id(item: RawItemName) -> Result<String, &'static str> {
+        match item {
+            RawItemName::Id(id, _, _) => Ok(id),
+            RawItemName::Name(_) => Err("unresolved item name"),
+        }
+    }
+
+    fn format_name<T: AstInfo>(fmt: &Format<T>) -> &'static str {
+        match fmt {
+            Format::Bytes => "bytes",
+            Format::Avro(_) => "avro",
+            Format::Protobuf(_) => "protobuf",
+            Format::Regex(_) => "regex",
+            Format::Csv { .. } => "csv",
+            Format::Json { .. } => "json",
+            Format::Text => "text",
+        }
+    }
+
+    // A bare FORMAT resolves to an encoding with a key only for Avro or
+    // Protobuf read from a schema registry whose purified seed carries a key
+    // schema. Every other bare format is value-only.
+    fn bare_format_has_key<T: AstInfo>(fmt: &Format<T>) -> bool {
+        match fmt {
+            Format::Avro(AvroSchema::Csr { csr_connection }) => csr_connection
+                .seed
+                .as_ref()
+                .is_some_and(|seed| seed.key_schema.is_some()),
+            Format::Protobuf(ProtobufSchema::Csr { csr_connection }) => csr_connection
+                .seed
+                .as_ref()
+                .is_some_and(|seed| seed.key.is_some()),
+            _ => false,
+        }
+    }
+
+    fn key_value_formats<T: AstInfo>(
+        spec: &FormatSpecifier<T>,
+    ) -> (Option<&'static str>, Option<&'static str>) {
+        match spec {
+            FormatSpecifier::KeyValue { key, value } => {
+                (Some(format_name(key)), Some(format_name(value)))
+            }
+            FormatSpecifier::Bare(fmt) => {
+                let value = Some(format_name(fmt));
+                let key = bare_format_has_key(fmt).then(|| format_name(fmt));
+                (key, value)
+            }
+        }
+    }
+
+    fn envelope_name(envelope: &SourceEnvelope) -> &'static str {
+        match envelope {
+            SourceEnvelope::None => "none",
+            SourceEnvelope::Debezium => "debezium",
+            SourceEnvelope::Upsert {
+                value_decode_err_policy,
+            } => {
+                if value_decode_err_policy
+                    .iter()
+                    .any(|p| matches!(p, SourceErrorPolicy::Inline { .. }))
+                {
+                    "upsert-value-err-inline"
+                } else {
+                    "upsert"
+                }
+            }
+            SourceEnvelope::CdcV2 => "materialize",
+        }
+    }
+
+    let parse = || -> Result<serde_json::Value, String> {
+        let mut stmts = mz_sql_parser::parser::parse_statements(a)
+            .map_err(|e| format!("failed to parse create_sql: {e}"))?;
+        let stmt = match stmts.len() {
+            1 => stmts.remove(0).ast,
+            n => return Err(format!("expected a single statement, found {n}")),
+        };
+
+        use mz_sql_parser::ast::Statement::{CreateSubsource, CreateTableFromSource};
+        match stmt {
+            CreateTableFromSource(stmt) => {
+                let source_id = get_item_id(stmt.source)?;
+                let external_reference = stmt
+                    .external_reference
+                    .ok_or("missing external reference on CREATE TABLE FROM SOURCE")?
+                    .0
+                    .into_iter()
+                    .map(|ident| ident.into_string())
+                    .collect::<Vec<_>>();
+
+                let envelope_type = stmt.envelope.as_ref().map(envelope_name);
+                let (key_format, value_format) = match &stmt.format {
+                    Some(spec) => key_value_formats(spec),
+                    None => (None, None),
+                };
+
+                Ok(json!({
+                    "source_id": source_id,
+                    "external_reference": external_reference,
+                    "envelope_type": envelope_type,
+                    "key_format": key_format,
+                    "value_format": value_format,
+                }))
+            }
+            CreateSubsource(stmt) => {
+                // Progress subsources track ingestion progress and are not
+                // source tables. They have no external reference.
+                let is_progress = stmt
+                    .with_options
+                    .iter()
+                    .any(|o| matches!(o.name, CreateSubsourceOptionName::Progress));
+                if is_progress {
+                    return Ok(serde_json::Value::Null);
+                }
+
+                let source_id = stmt
+                    .of_source
+                    .ok_or("non-progress CREATE SUBSOURCE without OF SOURCE")
+                    .and_then(get_item_id)?;
+
+                let external_reference = stmt
+                    .with_options
+                    .into_iter()
+                    .find(|o| matches!(o.name, CreateSubsourceOptionName::ExternalReference))
+                    .and_then(|o| match o.value {
+                        Some(WithOptionValue::UnresolvedItemName(name)) => Some(name),
+                        _ => None,
+                    })
+                    .ok_or("CREATE SUBSOURCE missing EXTERNAL REFERENCE option")?
+                    .0
+                    .into_iter()
+                    .map(|ident| ident.into_string())
+                    .collect::<Vec<_>>();
+
+                Ok(json!({
+                    "source_id": source_id,
+                    "external_reference": external_reference,
+                    "envelope_type": serde_json::Value::Null,
+                    "key_format": serde_json::Value::Null,
+                    "value_format": serde_json::Value::Null,
+                }))
+            }
+            _ => Ok(serde_json::Value::Null),
+        }
+    };
+
+    let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
+    let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
+    Ok(jsonb)
+}
+
 #[cfg(test)]
 mod tests {
     use mz_repr::adt::jsonb::Jsonb;
@@ -886,6 +1075,165 @@ mod tests {
              IN CLUSTER [u42] \
              FROM KAFKA CONNECTION k_conn (TOPIC 'test') FORMAT TEXT";
         let err = super::parse_kafka_source_details(sql).unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("unresolved item name")),
+            "wrong error variant/message"
+        );
+    }
+
+    // --- parse_source_export_details -----------------------------------------
+
+    fn table_from_source_sql(reference: &str, suffix: &str) -> String {
+        format!(
+            "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+             FROM SOURCE [u1 AS \"materialize\".\"public\".\"src\"] \
+             (REFERENCE = {reference}){suffix}"
+        )
+    }
+
+    #[mz_ore::test]
+    fn export_table_postgres_style_no_format() {
+        // Postgres/mysql/sql-server tables carry a multi-part external
+        // reference and no format or envelope.
+        let sql = table_from_source_sql("\"db\".\"public\".\"t\"", "");
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["db", "public", "t"],
+                "envelope_type": null,
+                "key_format": null,
+                "value_format": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn export_table_kafka_bare_value_only() {
+        // A bare non-registry FORMAT is value-only: no key format.
+        let sql = table_from_source_sql("\"topic\"", " FORMAT TEXT ENVELOPE NONE");
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["topic"],
+                "envelope_type": "none",
+                "key_format": null,
+                "value_format": "text",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn export_table_kafka_key_value_format() {
+        let sql = table_from_source_sql(
+            "\"topic\"",
+            " KEY FORMAT TEXT VALUE FORMAT TEXT ENVELOPE NONE",
+        );
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["topic"],
+                "envelope_type": "none",
+                "key_format": "text",
+                "value_format": "text",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn export_table_kafka_bare_avro_seed_with_key() {
+        // A bare Avro CSR format whose seed carries a key schema resolves to
+        // an encoding with a key, so key_format mirrors value_format. This is
+        // the upsert/debezium path.
+        let sql = table_from_source_sql(
+            "\"topic\"",
+            " FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY \
+             CONNECTION [u5 AS \"materialize\".\"public\".\"csr\"] \
+             SEED KEY SCHEMA 'k' VALUE SCHEMA 'v' ENVELOPE UPSERT",
+        );
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["topic"],
+                "envelope_type": "upsert",
+                "key_format": "avro",
+                "value_format": "avro",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn export_table_kafka_bare_avro_seed_without_key() {
+        // A bare Avro CSR seed with only a value schema is value-only.
+        let sql = table_from_source_sql(
+            "\"topic\"",
+            " FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY \
+             CONNECTION [u5 AS \"materialize\".\"public\".\"csr\"] \
+             SEED VALUE SCHEMA 'v' ENVELOPE NONE",
+        );
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["topic"],
+                "envelope_type": "none",
+                "key_format": null,
+                "value_format": "avro",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn export_subsource_non_progress() {
+        // Old-syntax subsource: external reference lives in a WITH option, and
+        // there is never a format or envelope.
+        let sql = "CREATE SUBSOURCE \"materialize\".\"public\".\"sub\" (id int4) \
+             OF SOURCE [u1 AS \"materialize\".\"public\".\"src\"] \
+             WITH (EXTERNAL REFERENCE = \"db\".\"public\".\"t\")";
+        let out = super::parse_source_export_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "source_id": "u1",
+                "external_reference": ["db", "public", "t"],
+                "envelope_type": null,
+                "key_format": null,
+                "value_format": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn export_progress_subsource_returns_null_jsonb() {
+        let sql = "CREATE SUBSOURCE \"materialize\".\"public\".\"progress\" (id int4) \
+             WITH (PROGRESS)";
+        let out = super::parse_source_export_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn export_non_source_export_returns_null_jsonb() {
+        let sql = "CREATE VIEW v AS SELECT 1";
+        let out = super::parse_source_export_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    fn export_unresolved_source_name_errors() {
+        let sql = "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+             FROM SOURCE src (REFERENCE = \"topic\")";
+        let err = super::parse_source_export_details(sql).unwrap_err();
         assert!(
             matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("unresolved item name")),
             "wrong error variant/message"
