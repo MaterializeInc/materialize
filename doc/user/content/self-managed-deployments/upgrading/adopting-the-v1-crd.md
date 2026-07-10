@@ -56,6 +56,12 @@ Terraform modules, `crd_version` defaults to `v1` starting in v4.0.0. Upgrading
 the operator to v26.30+ does not change your existing `v1alpha1` CRs or their
 behavior; you can continue using `v1alpha1` until the next major release.
 
+The two versions also differ in their default for [role-based access
+control](/security/self-managed/access-control/): new `v1` resources default
+`enableRbac` to `true`, while `v1alpha1` defaults it to `false`. Converting an
+existing resource between versions carries over its stored `enableRbac` value,
+so adopting `v1` does not change the RBAC posture of an existing instance.
+
 {{< important >}}
 
 In the next major release, all Materialize CRs will be force upgraded to `v1`.
