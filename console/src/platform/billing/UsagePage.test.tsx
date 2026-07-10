@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { render, screen, waitFor, within } from "@testing-library/react";
+import { http, HttpResponse } from "msw";
 import React, { ReactElement } from "react";
 
 import {
@@ -177,6 +178,50 @@ describe("UsagePage", () => {
     const range = within(await breakdown.findByTestId("account-spend-range"));
     expect(range.getByText("Spend between", { exact: false })).toBeVisible();
     expect(range.getAllByText("01-15-24")).toHaveLength(2);
+  });
+
+  it("sends bare inclusive UTC calendar dates to the breakdown endpoint (SAS-151)", async () => {
+    // Regression guard for the timestamp-serialization bug class: the query
+    // params must be plain YYYY-MM-DD (no time component, no local-zone
+    // offset for a shifted wall-clock date to hide in), computed from UTC
+    // calendar fields, both ends inclusive.
+    const captured: URLSearchParams[] = [];
+    server.use(
+      http.get("*/api/costs/breakdown/daily", ({ request }) => {
+        captured.push(new URL(request.url).searchParams);
+        return HttpResponse.json({ days: [] });
+      }),
+    );
+    // Computed before render so a UTC-midnight rollover mid-test can't skew
+    // the expectation.
+    const now = new Date();
+    const utcDay = (offset: number) =>
+      new Date(
+        Date.UTC(
+          now.getUTCFullYear(),
+          now.getUTCMonth(),
+          now.getUTCDate() + offset,
+        ),
+      )
+        .toISOString()
+        .slice(0, 10);
+
+    renderComponent(<UsagePage />);
+    // The page fires two breakdown queries: the selected range (default
+    // "Last 7 days") and the fixed 30-day plan-details window.
+    await waitFor(() => expect(captured.length).toBeGreaterThanOrEqual(2));
+
+    for (const params of captured) {
+      expect(params.get("startDate")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(params.get("endDate")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+    // "Last N days" is the N inclusive UTC days ending today, so exactly N
+    // buckets can come back — the 31-buckets-for-30-days symptom is pinned
+    // out here.
+    const sevenDay = captured.find((p) => p.get("startDate") === utcDay(-6));
+    expect(sevenDay?.get("endDate")).toBe(utcDay(0));
+    const thirtyDay = captured.find((p) => p.get("startDate") === utcDay(-29));
+    expect(thirtyDay?.get("endDate")).toBe(utcDay(0));
   });
 
   it("renders 0.0% shares for an all-zero period instead of NaN (SAS-144)", async () => {
