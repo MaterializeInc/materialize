@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::iter;
 use std::sync::LazyLock;
 
@@ -1746,9 +1746,11 @@ fn generate_read_privileges_inner(
     seen: &mut BTreeSet<(ObjectId, RoleId)>,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     let mut privileges = Vec::new();
-    let mut views = Vec::new();
 
-    for id in ids {
+    // Iterative worklist traversal rather than recursion. View dependency
+    // chains are user controlled and can be arbitrarily deep.
+    let mut queue: VecDeque<(CatalogItemId, RoleId)> = ids.map(|id| (id, role_id)).collect();
+    while let Some((id, role_id)) = queue.pop_front() {
         if seen.insert((id.into(), role_id)) {
             let item = catalog.get_item(&id);
             let schema_id: ObjectId = item.name().qualifiers.clone().into();
@@ -1758,7 +1760,8 @@ fn generate_read_privileges_inner(
             match item.item_type() {
                 CatalogItemType::View | CatalogItemType::MaterializedView => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
-                    views.push((item.references().items().copied(), item.owner_id()));
+                    let view_owner = item.owner_id();
+                    queue.extend(item.references().items().map(|id| (*id, view_owner)));
                 }
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
@@ -1769,12 +1772,6 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
             }
         }
-    }
-
-    for (view_ids, view_owner) in views {
-        privileges.extend_from_slice(&generate_read_privileges_inner(
-            catalog, view_ids, view_owner, seen,
-        ));
     }
 
     privileges
