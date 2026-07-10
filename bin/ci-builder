@@ -280,6 +280,12 @@ case "$cmd" in
                 --env AZURE_SERVICE_ACCOUNT_USERNAME
                 --env AZURE_SERVICE_ACCOUNT_PASSWORD
                 --env AZURE_SERVICE_ACCOUNT_TENANT
+                # For test/sql-server-cdc `azure` workflow
+                --env AZURE_SQL_HOST
+                --env AZURE_SQL_PORT
+                --env AZURE_SQL_DATABASE
+                --env AZURE_SQL_USER
+                --env AZURE_SQL_PASSWORD
                 --env GCP_SERVICE_ACCOUNT_JSON
                 # For test/gcp Iceberg E2E
                 --env ICEBERG_GCS_BUCKET

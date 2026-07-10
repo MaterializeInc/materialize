@@ -12,6 +12,7 @@ Native SQL Server source tests, functional.
 """
 
 import glob
+import os
 import pathlib
 import random
 import threading
@@ -67,7 +68,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print(f"Running with SQL Server version {args.sql_server_version}")
 
     def process(name: str) -> None:
-        if name in ("default", "large-scale"):
+        # `azure` runs against an external Azure SQL Database and requires
+        # credentials from the environment, so it is not part of the default run.
+        if name in ("default", "large-scale", "azure"):
             return
         with c.test_case(name):
             with c.override(
@@ -146,6 +149,93 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
     c.test_parts(sharded_files, run)
+
+
+def workflow_azure(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    Exercise the SQL Server source happy path against a real Azure SQL Database.
+
+    Connection details are read from the environment and no local SQL Server
+    container is started:
+
+        AZURE_SQL_HOST      hostname of the Azure SQL Database server
+        AZURE_SQL_PORT      port (default 1433)
+        AZURE_SQL_DATABASE  database to ingest from
+        AZURE_SQL_USER      login with db_owner on that database
+        AZURE_SQL_PASSWORD  password for that login
+
+    The password must not contain a single quote, semicolon, or closing brace,
+    as it is interpolated into a testdrive SQL string and an ADO connection
+    string.
+    """
+    parser.parse_args()
+
+    def require_env(name: str, default: str | None = None) -> str:
+        value = os.environ.get(name, default)
+        if not value:
+            raise ValueError(
+                f"{name} must be set in the environment to run the `azure` workflow"
+            )
+        return value
+
+    tvars = [
+        f"--var=azure-sql-host={require_env('AZURE_SQL_HOST')}",
+        f"--var=azure-sql-port={require_env('AZURE_SQL_PORT', '1433')}",
+        f"--var=azure-sql-database={require_env('AZURE_SQL_DATABASE')}",
+        f"--var=azure-sql-user={require_env('AZURE_SQL_USER')}",
+        f"--var=azure-sql-password={require_env('AZURE_SQL_PASSWORD')}",
+        # A distinct, complexity-compliant password for the provisioned
+        # least-privilege user. Randomized per run so state left by a crashed run
+        # cannot collide with the new one.
+        f"--var=mz-least-priv-password=Mz!{random.getrandbits(48):012x}Az",
+    ]
+
+    c.up("materialized", Service("testdrive", idle=True))
+
+    # Prepare the upstream database, including the ticker table the background
+    # thread below drives.
+    c.run_testdrive_files("--max-errors=1", *tvars, "azure/setup.td")
+
+    # Azure SQL Database has no SQL Server Agent, so nothing advances the CDC max
+    # LSN on its own. Drive a ticker from a background thread for the rest of the
+    # workflow, otherwise CREATE SOURCE stalls at startup waiting for the LSN to
+    # move. The ticker uses --no-reset so it never drops the Materialize objects
+    # created by the main thread.
+    ticker_thread = threading.Thread(
+        target=lambda: c.run_testdrive_files(
+            "--no-reset", "--max-errors=1", *tvars, "azure/ticker.td"
+        ),
+        daemon=True,
+    )
+    ticker_thread.start()
+    try:
+        # Happy path and least-privilege checks share one testdrive process so
+        # the happy-path source survives into the restart check below.
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            *tvars,
+            "azure/happy-path.td",
+            "azure/privileges.td",
+        )
+
+        # Restart Materialize and confirm the source resumes. This is where the
+        # engine-edition gating runs at runtime: the replication operator
+        # re-checks the SQL Server Agent and the progress operator re-queries
+        # restore history, both of which must be skipped for Azure SQL Database.
+        c.kill("materialized")
+        c.up("materialized", Service("testdrive", idle=True))
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            *tvars,
+            "azure/verify-restart.td",
+        )
+    finally:
+        c.run_testdrive_files(
+            "--no-reset", "--max-errors=1", *tvars, "azure/ticker-stop.td"
+        )
+        ticker_thread.join()
 
 
 def workflow_no_agent(c: Composition, parser: WorkflowArgumentParser) -> None:
