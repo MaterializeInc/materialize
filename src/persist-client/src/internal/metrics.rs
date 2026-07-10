@@ -2332,7 +2332,7 @@ impl WatchMetrics {
             )),
             notify_upper_sent: registry.register(metric!(
                 name: "mz_persist_watch_notify_upper_sent",
-                help: "count of upper-advance watch notifications sent to a non-empty broadcast channel",
+                help: "count of strict shard upper advances signaled to upper waiters",
             )),
             notify_noop: registry.register(metric!(
                 name: "mz_persist_watch_notify_noop",

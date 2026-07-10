@@ -30,7 +30,6 @@ use mz_persist::location::{
     VersionedData,
 };
 use mz_persist_types::{Codec, Codec64};
-use timely::PartialOrder;
 use timely::progress::Timestamp;
 use tokio::sync::{Mutex, OnceCell};
 use tracing::debug;
@@ -601,7 +600,7 @@ impl StateCache {
 pub(crate) struct LockingTypedState<K, V, T, D> {
     shard_id: ShardId,
     state: RwLock<TypedState<K, V, T, D>>,
-    notifier: StateWatchNotifier,
+    notifier: StateWatchNotifier<T>,
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
@@ -641,10 +640,16 @@ impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
         cfg: Arc<PersistConfig>,
         subscription_token: Arc<ShardSubscriptionToken>,
         diagnostics: &Diagnostics,
-    ) -> Self {
+    ) -> Self
+    where
+        // Bounds needed to seed the notifier with the shard's current upper.
+        T: Timestamp + Lattice + Codec64,
+        D: Codec64,
+    {
+        let notifier = StateWatchNotifier::new(Arc::clone(&metrics), initial_state.upper().clone());
         Self {
             shard_id,
-            notifier: StateWatchNotifier::new(Arc::clone(&metrics)),
+            notifier,
             state: RwLock::new(initial_state),
             cfg: Arc::clone(&cfg),
             shard_metrics: metrics.shards.shard(&shard_id, &diagnostics.shard_name),
@@ -722,18 +727,15 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
             Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
         };
         let seqno_before = state.seqno;
-        // Snapshot the upper before the modification so we can tell whether it
-        // advanced. Cheap: the upper is typically a single-element antichain.
-        let upper_before = state.upper().clone();
         let ret = f(&mut state);
         let seqno_after = state.seqno;
         debug_assert!(seqno_after >= seqno_before);
         if seqno_after > seqno_before {
-            // Only wake upper waiters when the upper actually advanced. The seqno
-            // bumps for many non-data reasons (GC, rollups, since-downgrades,
-            // other writers' CaAs) and those must not re-activate upper waiters.
-            let upper_advanced = PartialOrder::less_than(&upper_before, state.upper());
-            self.notifier.notify(seqno_after, upper_advanced);
+            // The notifier only advances the upper waiters' signal on a strict
+            // upper advance. The seqno bumps for many non-data reasons (GC,
+            // rollups, since-downgrades, other writers' CaAs) and those must not
+            // re-activate upper waiters.
+            self.notifier.notify(seqno_after, state.upper());
         }
         // For now, make sure to notify while under lock. It's possible to move
         // this out of the lock window, see [StateWatchNotifier::notify].
@@ -809,7 +811,7 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         }
     }
 
-    pub(crate) fn notifier(&self) -> &StateWatchNotifier {
+    pub(crate) fn notifier(&self) -> &StateWatchNotifier<T> {
         &self.notifier
     }
 }

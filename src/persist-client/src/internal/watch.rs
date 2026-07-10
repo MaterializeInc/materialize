@@ -9,33 +9,37 @@
 
 //! Notifications for state changes.
 
+use differential_dataflow::lattice::Lattice;
 use mz_persist::location::SeqNo;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
-use tokio::sync::{Notify, broadcast};
+use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
+use tokio::sync::{Notify, broadcast, watch};
 use tracing::debug;
 
 use crate::cache::LockingTypedState;
 use crate::internal::metrics::Metrics;
 
 #[derive(Debug)]
-pub struct StateWatchNotifier {
+pub struct StateWatchNotifier<T> {
     metrics: Arc<Metrics>,
     /// Fires on every strict seqno advance. Used by waiters that care about any
     /// state change (e.g. lease/seqno machinery via [StateWatch::wait_for_seqno_ge]).
     seqno_tx: broadcast::Sender<SeqNo>,
-    /// Fires only when the shard upper (write frontier) strictly advances, carrying
-    /// the seqno at which that happened. Used by [StateWatch::wait_for_upper_seqno_ge]
-    /// so upper waiters (Listen/Subscribe/snapshot) don't wake on GC, rollups, or
-    /// since-downgrades that bump the seqno without moving the upper.
-    upper_tx: broadcast::Sender<SeqNo>,
+    /// Holds the current shard upper (write frontier), advanced only when the upper
+    /// strictly moves forward. Used by [StateWatch::wait_for_upper_past] so upper
+    /// waiters (Listen/Subscribe/snapshot) don't wake on GC, rollups, or since-
+    /// downgrades that bump the seqno without moving the upper. The watch channel
+    /// coalesces: a waiter always reads the latest upper, never a stale intermediate.
+    upper_tx: watch::Sender<Antichain<T>>,
 }
 
-impl StateWatchNotifier {
-    pub(crate) fn new(metrics: Arc<Metrics>) -> Self {
+impl<T: Timestamp + Lattice> StateWatchNotifier<T> {
+    pub(crate) fn new(metrics: Arc<Metrics>, initial_upper: Antichain<T>) -> Self {
         let (seqno_tx, _rx) = broadcast::channel(1);
-        let (upper_tx, _rx) = broadcast::channel(1);
+        let (upper_tx, _rx) = watch::channel(initial_upper);
         StateWatchNotifier {
             metrics,
             seqno_tx,
@@ -45,18 +49,19 @@ impl StateWatchNotifier {
 
     /// Wake up any watchers of this state.
     ///
-    /// `seqno` is the state's seqno after the modification, and `upper_advanced`
-    /// must be true iff the shard upper strictly advanced in the same modification.
+    /// `seqno` is the state's seqno after the modification, and `upper` is the
+    /// shard upper after the modification.
     ///
     /// This must be called while under the same lock that modified the state to
-    /// avoid any potential for out of order SeqNos in the broadcast channels.
+    /// avoid any potential for out of order SeqNos in the seqno broadcast channel,
+    /// and so the watched upper never regresses.
     ///
     /// This restriction can be lifted (i.e. we could notify after releasing the
     /// write lock), but we'd have to reason about out of order SeqNos in the
-    /// broadcast channels. In particular, if we see `RecvError::Lagged` then
+    /// broadcast channel. In particular, if we see `RecvError::Lagged` then
     /// it's possible we lost X+1 and got X, so if X isn't sufficient to return,
     /// we'd need to grab the read lock and verify the real SeqNo.
-    pub(crate) fn notify(&self, seqno: SeqNo, upper_advanced: bool) {
+    pub(crate) fn notify(&self, seqno: SeqNo, upper: &Antichain<T>) {
         match self.seqno_tx.send(seqno) {
             // Someone got woken up.
             Ok(_) => {
@@ -67,13 +72,19 @@ impl StateWatchNotifier {
                 self.metrics.watch.notify_noop.inc();
             }
         }
-        if upper_advanced {
-            // send only errors when there are no receivers, which is fine. A full
-            // buffer does not error: the channel drops the oldest value and the
-            // receiver observes Lagged, which is handled in wait_for_upper_seqno_ge.
-            if self.upper_tx.send(seqno).is_ok() {
-                self.metrics.watch.notify_upper_sent.inc();
+        // Advance the watched upper only on a strict advance. send_if_modified does
+        // not require live receivers and never errors, so an advance is recorded
+        // even when no one waits; a later subscriber reads the up-to-date value.
+        let upper_advanced = self.upper_tx.send_if_modified(|current| {
+            if PartialOrder::less_than(current, upper) {
+                current.clone_from(upper);
+                true
+            } else {
+                false
             }
+        });
+        if upper_advanced {
+            self.metrics.watch.notify_upper_sent.inc();
         }
     }
 }
@@ -82,41 +93,40 @@ impl StateWatchNotifier {
 ///
 /// This exposes two independent signals over the same state:
 /// - [Self::wait_for_seqno_ge] wakes on any strict seqno advance.
-/// - [Self::wait_for_upper_seqno_ge] wakes only when the shard upper advances.
+/// - [Self::wait_for_upper_past] wakes only when the shard upper advances.
 ///
-/// Invariants (both signals):
+/// Invariants:
 /// - The `state.seqno` only advances (never regresses). This is guaranteed by
 ///   LockingTypedState.
-/// - `*_high_water` is always <= `state.seqno`.
+/// - `seqno_high_water` is always <= `state.seqno`.
 /// - If `seqno_high_water` is < `state.seqno`, then we'll get a notification on
 ///   `seqno_rx`. This is maintained by notifying new seqnos under the same lock
 ///   which adds them.
-/// - If the upper advanced past the seqno recorded in `upper_seqno_high_water`,
-///   then we'll get a notification on `upper_rx`. This is maintained by notifying
-///   under the same lock that advanced the upper.
-/// - Each `*_high_water` always holds the highest value received in its channel.
-///   This is maintained by the wait methods taking an exclusive reference to self.
+/// - `seqno_high_water` always holds the highest value received on `seqno_rx`.
+///   This is maintained by the wait method taking an exclusive reference to self.
+/// - `upper_rx` holds the shard upper, advanced under the same lock that advances
+///   the upper. It coalesces, so a waiter always observes the latest upper.
 #[derive(Debug)]
 pub struct StateWatch<K, V, T, D> {
     metrics: Arc<Metrics>,
     state: Arc<LockingTypedState<K, V, T, D>>,
     seqno_high_water: SeqNo,
     seqno_rx: broadcast::Receiver<SeqNo>,
-    /// The highest seqno at which we've observed the upper advance, as delivered by
-    /// `upper_rx`. Initialized to the seqno at subscribe time: any upper advance
-    /// after that point happens at a strictly greater seqno and fires `upper_rx`.
-    upper_seqno_high_water: SeqNo,
-    upper_rx: broadcast::Receiver<SeqNo>,
+    upper_rx: watch::Receiver<Antichain<T>>,
 }
 
 impl<K, V, T, D> StateWatch<K, V, T, D> {
     pub(crate) fn new(state: Arc<LockingTypedState<K, V, T, D>>, metrics: Arc<Metrics>) -> Self {
-        // Important! We have to subscribe to the broadcast channels _before_ we
-        // grab the current seqno. Otherwise, we could race with a write to
+        // Important! We have to subscribe to the seqno broadcast channel _before_
+        // we grab the current seqno. Otherwise, we could race with a write to
         // state and miss a notification. Tokio guarantees that "the returned
         // Receiver will receive values sent after the call to subscribe", and
         // the read_lock linearizes the subscribe to be _before_ whatever
         // seqno we get here.
+        //
+        // The upper watch needs no such care: it retains the latest upper, and
+        // `subscribe` hands the receiver that value, so a waiter reads the current
+        // upper directly and parks only for the next advance.
         let seqno_rx = state.notifier().seqno_tx.subscribe();
         let upper_rx = state.notifier().upper_tx.subscribe();
         let seqno_high_water = state.read_lock(&metrics.locks.watch, |x| x.seqno);
@@ -125,7 +135,6 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
             state,
             seqno_high_water,
             seqno_rx,
-            upper_seqno_high_water: seqno_high_water,
             upper_rx,
         }
     }
@@ -169,49 +178,41 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
         self
     }
 
-    /// Blocks until the shard upper has advanced at a SeqNo >= the requested one.
+    /// Blocks until the shard upper has advanced past `frontier`.
     ///
     /// Unlike [Self::wait_for_seqno_ge], this only wakes on upper advances, not on
-    /// seqno bumps caused by GC, rollups, since-downgrades, or no-op CaAs. Callers
-    /// waiting for a specific frontier (e.g. `wait_for_upper_past`) pass the seqno
-    /// after which they need a fresh upper and re-check the upper once woken.
+    /// seqno bumps caused by GC, rollups, since-downgrades, or no-op CaAs.
     ///
     /// This method is cancel-safe.
-    pub async fn wait_for_upper_seqno_ge(&mut self, requested: SeqNo) -> &mut Self {
+    pub async fn wait_for_upper_past(&mut self, frontier: &Antichain<T>) -> &mut Self
+    where
+        T: Timestamp,
+    {
         self.metrics.watch.notify_wait_started.inc();
         debug!(
-            "wait_for_upper_seqno_ge {} {}",
+            "wait_for_upper_past {} {:?}",
             self.state.shard_id(),
-            requested
+            frontier.elements()
         );
         loop {
-            if self.upper_seqno_high_water >= requested {
+            // Bind the comparison so the borrow guard drops before the await.
+            let past = PartialOrder::less_than(frontier, &*self.upper_rx.borrow_and_update());
+            if past {
                 break;
             }
-            match self.upper_rx.recv().await {
-                Ok(x) => {
-                    self.metrics.watch.notify_recv.inc();
-                    assert!(x >= self.upper_seqno_high_water);
-                    self.upper_seqno_high_water = x;
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    unreachable!("we're holding on to a reference to the sender")
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    self.metrics.watch.notify_lagged.inc();
-                    // Buffer (of size 1) filled up. The broadcast channel keeps
-                    // the most recent value, so loop around and read it. This does
-                    // not busy-loop: after consuming the retained value the next
-                    // recv parks until the upper advances again.
-                    continue;
-                }
-            }
+            // `changed` only errors once every sender has dropped. We hold the
+            // state Arc that owns the notifier's sender, so it outlives us.
+            self.upper_rx
+                .changed()
+                .await
+                .expect("notifier sender outlives the watch");
+            self.metrics.watch.notify_recv.inc();
         }
         self.metrics.watch.notify_wait_finished.inc();
         debug!(
-            "wait_for_upper_seqno_ge {} {} returning",
+            "wait_for_upper_past {} {:?} returning",
             self.state.shard_id(),
-            requested
+            frontier.elements()
         );
         self
     }
