@@ -18,15 +18,16 @@ use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
     AlterSourceTimestampIntervalV1, ClusterHydrationBurstV1, ClusterReplicaLoggingV1,
     CreateClusterReplicaV1, CreateClusterReplicaV2, CreateClusterReplicaV3, CreateClusterReplicaV4,
-    CreateIndexV1, CreateMaterializedViewV1, CreateOrDropClusterReplicaReasonV1, CreateRoleV1,
-    CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3, CreateSourceSinkV4,
-    DropClusterReplicaV1, DropClusterReplicaV2, DropClusterReplicaV3, EventDetails, EventType,
-    EventV1, FromPreviousIdV1, FullNameV1, GrantRoleV1, GrantRoleV2, HydrationBurstLifecycleV1,
-    IdFullNameV1, IdNameV1, ReconfigurationLifecycleV1, RefreshDecisionWithReasonV1,
-    RefreshDecisionWithReasonV2, RenameClusterReplicaV1, RenameClusterV1, RenameItemV1,
-    RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1,
-    SchedulingDecisionsWithReasonsV1, SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1,
-    ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+    CreateIndexV1, CreateMaterializedViewV1, CreateMetricSinkV1,
+    CreateOrDropClusterReplicaReasonV1, CreateRoleV1, CreateSourceSinkV1, CreateSourceSinkV2,
+    CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2,
+    DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
+    GrantRoleV1, GrantRoleV2, HydrationBurstLifecycleV1, IdFullNameV1, IdNameV1,
+    ReconfigurationLifecycleV1, RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2,
+    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
+    RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1,
+    SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1,
+    UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
 };
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
@@ -100,13 +101,8 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             mz_audit_log::ObjectType::MaterializedView => {
                 crate::objects::audit_log_event_v1::ObjectType::MaterializedView
             }
-            // `Catalog::should_audit_log_item` excludes metric sinks from the audit log, so no
-            // `MetricSink` audit event is ever constructed and this arm never runs on a real
-            // catalog transaction. The `#[proptest(skip)]` on `mz_audit_log::ObjectType::MetricSink`
-            // keeps the roundtrip proptest from generating one either. The catalog-protos schema
-            // has no discriminant for this variant, so there is nothing correct to return here.
             mz_audit_log::ObjectType::MetricSink => {
-                unreachable!("metric sink audit log events are never durably logged")
+                crate::objects::audit_log_event_v1::ObjectType::MetricSink
             }
             mz_audit_log::ObjectType::NetworkPolicy => {
                 crate::objects::audit_log_event_v1::ObjectType::NetworkPolicy
@@ -160,6 +156,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             }
             crate::objects::audit_log_event_v1::ObjectType::MaterializedView => {
                 Ok(mz_audit_log::ObjectType::MaterializedView)
+            }
+            crate::objects::audit_log_event_v1::ObjectType::MetricSink => {
+                Ok(mz_audit_log::ObjectType::MetricSink)
             }
             crate::objects::audit_log_event_v1::ObjectType::NetworkPolicy => {
                 Ok(mz_audit_log::ObjectType::NetworkPolicy)
@@ -961,6 +960,31 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV4> for Create
     }
 }
 
+impl RustType<crate::objects::audit_log_event_v1::CreateMetricSinkV1> for CreateMetricSinkV1 {
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateMetricSinkV1 {
+        crate::objects::audit_log_event_v1::CreateMetricSinkV1 {
+            id: self.id.to_string(),
+            cluster_id: self
+                .cluster_id
+                .as_ref()
+                .map(|id| crate::objects::StringWrapper {
+                    inner: id.to_string(),
+                }),
+            name: self.name.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::CreateMetricSinkV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateMetricSinkV1 {
+            id: proto.id,
+            cluster_id: proto.cluster_id.map(|s| s.inner),
+            name: proto.name.into_rust()?,
+        })
+    }
+}
+
 impl RustType<crate::objects::audit_log_event_v1::CreateIndexV1> for CreateIndexV1 {
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateIndexV1 {
         crate::objects::audit_log_event_v1::CreateIndexV1 {
@@ -1558,6 +1582,7 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             EventDetails::ResetAllV1 => ResetAllV1(Empty {}),
             EventDetails::RotateKeysV1(details) => RotateKeysV1(details.into_proto()),
             EventDetails::CreateRoleV1(details) => CreateRoleV1(details.into_proto()),
+            EventDetails::CreateMetricSinkV1(details) => CreateMetricSinkV1(details.into_proto()),
         }
     }
 
@@ -1647,6 +1672,9 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             ),
             ClusterHydrationBurstV1(details) => {
                 Ok(EventDetails::ClusterHydrationBurstV1(details.into_rust()?))
+            }
+            CreateMetricSinkV1(details) => {
+                Ok(EventDetails::CreateMetricSinkV1(details.into_rust()?))
             }
         }
     }
