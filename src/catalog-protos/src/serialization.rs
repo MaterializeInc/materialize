@@ -223,9 +223,14 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             CatalogItemType::Func => crate::objects::CatalogItemType::Func,
             CatalogItemType::Secret => crate::objects::CatalogItemType::Secret,
             CatalogItemType::Connection => crate::objects::CatalogItemType::Connection,
-            // Metric sinks are never durably serialized (see `CatalogItem::to_serialized`), so
-            // this conversion is never reached.
-            CatalogItemType::MetricSink => unreachable!("metric sinks are never serialized"),
+            // This conversion is only exercised for `GidMappingKey`/`SystemObjectDescription`,
+            // which describe builtin (system) objects and are populated from
+            // `Builtin::catalog_item_type`. Metric sinks are created only as user items via
+            // `CREATE METRIC SINK`, there is no `Builtin::MetricSink` variant, so this arm is
+            // never reached.
+            CatalogItemType::MetricSink => {
+                unreachable!("metric sinks are never builtin/system objects")
+            }
         }
     }
 
@@ -268,8 +273,13 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             ObjectType::Schema => crate::objects::ObjectType::Schema,
             ObjectType::Func => crate::objects::ObjectType::Func,
             ObjectType::NetworkPolicy => crate::objects::ObjectType::NetworkPolicy,
-            // Metric sinks are never durably serialized, so this conversion is never reached.
-            ObjectType::MetricSink => unreachable!("metric sinks are never serialized"),
+            // This conversion is only exercised for `DefaultPrivilegesKey`. `ALTER DEFAULT
+            // PRIVILEGES .. ON METRIC SINKS` is rejected in `plan_alter_default_privileges`
+            // ("METRIC SINKS do not have privileges"), so a `DefaultPrivilegeObject` naming a
+            // metric sink is never constructed and this arm is never reached.
+            ObjectType::MetricSink => {
+                unreachable!("metric sinks never appear in default privileges")
+            }
         }
     }
 
@@ -427,10 +437,11 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             CommentObjectId::Sink(global_id) => {
                 crate::objects::CommentObject::Sink(global_id.into_proto())
             }
-            // `COMMENT ON METRIC SINK` isn't parseable and metric sinks are never durably
-            // persisted, so no durable `Comment` record ever references one.
+            // `COMMENT ON METRIC SINK` isn't parseable (`CommentObjectType` has no `MetricSink`
+            // variant), so `plan_comment` never constructs this id and no durable `Comment`
+            // record ever references one.
             CommentObjectId::MetricSink(_) => {
-                unreachable!("comments on metric sinks are never durably serialized")
+                unreachable!("comments on metric sinks are never planned, so never serialized")
             }
             CommentObjectId::Index(global_id) => {
                 crate::objects::CommentObject::Index(global_id.into_proto())
