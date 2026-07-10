@@ -1149,7 +1149,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_SQL_SERVER_SOURCE_TABLES),
         Builtin::Table(&MZ_KAFKA_SOURCE_TABLES),
         Builtin::Table(&MZ_SINKS),
-        Builtin::Table(&MZ_METRIC_SINKS),
+        Builtin::MaterializedView(&MZ_METRIC_SINKS),
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_TYPE_PG_METADATA),

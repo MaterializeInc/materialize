@@ -186,7 +186,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_metric_sinks
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_objects

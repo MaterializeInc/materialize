@@ -534,6 +534,14 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 "subsource"
             }
             CreateSink(_) => "sink",
+            CreateMetricSink(stmt) => {
+                let Some(in_cluster) = stmt.in_cluster else {
+                    return Err("missing IN CLUSTER".into());
+                };
+                let cluster_id = get_cluster_id(in_cluster)?;
+                info.insert("cluster_id", json!(cluster_id));
+                "metric_sink"
+            }
             CreateIndex(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());

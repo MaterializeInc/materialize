@@ -1114,50 +1114,110 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| 
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
     }),
 });
-pub static MZ_METRIC_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_metric_sinks",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_METRIC_SINKS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column("create_sql", SqlScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the metric sink."),
-        ("oid", "A PostgreSQL-compatible OID for the metric sink."),
-        (
-            "schema_id",
-            "The ID of the schema to which the metric sink belongs. Corresponds to `mz_schemas.id`.",
-        ),
-        ("name", "The name of the metric sink."),
-        (
-            "cluster_id",
-            "The ID of the cluster maintaining the metric sink. Corresponds to `mz_clusters.id`.",
-        ),
-        (
-            "owner_id",
-            "The role ID of the owner of the metric sink. Corresponds to `mz_roles.id`.",
-        ),
-        (
-            "create_sql",
-            "The `CREATE` SQL statement for the metric sink.",
-        ),
-        (
-            "redacted_create_sql",
-            "The redacted `CREATE` SQL statement for the metric sink.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: None,
+pub static MZ_METRIC_SINKS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_metric_sinks",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_METRIC_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the metric sink."),
+            ("oid", "A PostgreSQL-compatible OID for the metric sink."),
+            (
+                "schema_id",
+                "The ID of the schema to which the metric sink belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the metric sink."),
+            (
+                "cluster_id",
+                "The ID of the cluster maintaining the metric sink. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the metric sink. Corresponds to `mz_roles.id`.",
+            ),
+            (
+                "create_sql",
+                "The `CREATE` SQL statement for the metric sink.",
+            ),
+            (
+                "redacted_create_sql",
+                "The redacted `CREATE` SQL statement for the metric sink.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'cluster_id' AS cluster_id,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+    mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+FROM mz_internal.mz_catalog_raw
+WHERE
+    data->>'kind' = 'Item' AND
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'metric_sink'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "metric_sink",
+            description: "A sink that publishes rows into the in-process Prometheus metrics registry",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "in_schema",
+                        target: "schema",
+                        properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "owned_by",
+                        target: "role",
+                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "runs_on_cluster",
+                        target: "cluster",
+                        properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("oid", SemanticType::OID),
+                    ("schema_id", SemanticType::SchemaId),
+                    ("cluster_id", SemanticType::ClusterId),
+                    ("owner_id", SemanticType::RoleId),
+                    ("create_sql", SemanticType::SqlDefinition),
+                    ("redacted_create_sql", SemanticType::RedactedSqlDefinition),
+                ]
+            },
+        }),
+    }
 });
 // mz_sources is generated dynamically in BUILTINS_STATIC via builtin::make_mz_sources()
 // with builtin source/log entries inlined as VALUES. See builtin/builtin.rs.

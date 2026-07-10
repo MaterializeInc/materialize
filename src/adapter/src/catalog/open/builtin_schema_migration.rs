@@ -268,6 +268,15 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_audit_events",
         ),
+        // `mz_metric_sinks` changed from a builtin table to a materialized view over
+        // `mz_catalog_raw`, matching the other builtin catalog tables already converted
+        // (`mz_connections`, `mz_secrets`, `mz_materialized_views`).
+        MigrationStep::replacement(
+            "26.33.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_metric_sinks",
+        ),
     ]
 });
 

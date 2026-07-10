@@ -5506,7 +5506,36 @@ FROM
         ON clusters.id = metric_sinks.cluster_id
     LEFT JOIN comments ON metric_sinks.id = comments.id",
     access: vec![PUBLIC_SELECT],
-    ontology: None,
+    ontology: Some(Ontology {
+        entity_name: "show_metric_sink",
+        description: "A summary of a metric sink for `SHOW METRIC SINKS`, joined with its cluster name",
+        links: &const {
+            [
+                OntologyLink {
+                    name: "details_of",
+                    target: "metric_sink",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                },
+                OntologyLink {
+                    name: "in_schema",
+                    target: "schema",
+                    properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "runs_on_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                },
+            ]
+        },
+        column_semantic_types: &const {
+            [
+                ("id", SemanticType::CatalogItemId),
+                ("schema_id", SemanticType::SchemaId),
+                ("cluster_id", SemanticType::ClusterId),
+            ]
+        },
+    }),
 });
 
 pub static MZ_SHOW_MATERIALIZED_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
