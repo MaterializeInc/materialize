@@ -226,8 +226,8 @@ struct SinkState {
     /// Accumulated multiplicity per row identity over all closed timestamps.
     working: BTreeMap<RowKey, i64>,
     published: BTreeMap<PublishedKey, PublishedValue>,
-    /// Net count of live errors on the sink's input (can rise and fall as errors are
-    /// retracted); publication is frozen while this is nonzero.
+    /// Net count of live errors on the sink's input. Can rise and fall as errors are
+    /// retracted. Publication is frozen while this is nonzero.
     errors: i64,
     frontier_ms: u64,
     skipped: u64,
@@ -553,7 +553,7 @@ impl SinkCollector {
             ),
             collisions_gauge: gauge(
                 "mz_metric_sink_collisions",
-                "The number of input rows whose metric name and labels match another live row.",
+                "The number of series with more than one distinct live value for the same metric name and labels.",
             ),
         }
     }
