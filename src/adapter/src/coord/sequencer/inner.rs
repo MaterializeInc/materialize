@@ -3525,6 +3525,16 @@ impl Coordinator {
             version: from_entry.version,
         };
 
+        // `resolved_ids` was derived from the old `create_sql`, so it still
+        // references the old input. `create_sql` and `from` above already
+        // point at the new input, so sync the dependency set to match.
+        // Otherwise the in-memory catalog disagrees with `create_sql` until
+        // the next reload, and the temporary-dependency check in
+        // `Op::UpdateItem` (which reads `uses()`) would not see the new input.
+        let mut resolved_ids = resolved_ids;
+        resolved_ids.remove_item(&self.catalog().resolve_item_id(&old_sink.from));
+        resolved_ids.add_item(from_entry.id());
+
         let new_sink = Sink {
             create_sql: stmt.to_ast_string_stable(),
             global_id,
@@ -3533,7 +3543,7 @@ impl Coordinator {
             envelope: sink_plan.envelope,
             version: sink_plan.version,
             with_snapshot,
-            resolved_ids: resolved_ids.clone(),
+            resolved_ids,
             cluster_id: in_cluster,
             commit_interval: sink_plan.commit_interval,
         };

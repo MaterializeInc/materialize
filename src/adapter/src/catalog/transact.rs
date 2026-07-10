@@ -2676,6 +2676,31 @@ impl Catalog {
                 )?;
             }
             Op::UpdateItem { id, name, to_item } => {
+                // A non-temporary item must not depend on a temporary one.
+                // Temporary objects are session-scoped and never persisted, so
+                // a durable item referencing one is a dangling reference that
+                // panics the coordinator when its create_sql is re-planned on
+                // catalog apply (apply emits durable items before temporary
+                // ones, relying on this invariant). `Op::CreateItem` enforces
+                // it; mirror it here so ALTER paths (e.g. ALTER SINK ... SET
+                // FROM) cannot repoint a persistent item at a temporary one.
+                if !to_item.is_temporary() {
+                    if let Some(temp_id) =
+                        to_item
+                            .uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
+                    {
+                        let temp_item = state.get_entry(temp_id);
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::InvalidTemporaryDependency(temp_item.name().item.clone()),
+                        )));
+                    }
+                }
+
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();
