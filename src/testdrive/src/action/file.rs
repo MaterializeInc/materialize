@@ -49,27 +49,35 @@ pub(crate) fn build_compression(cmd: &mut BuiltinCommand) -> Result<Compression,
     }
 }
 
-/// Returns an iterator of lines that form the content of a file.
-pub(crate) fn build_contents(
-    cmd: &mut BuiltinCommand,
-) -> Result<Box<dyn Iterator<Item = Vec<u8>> + Send + Sync + 'static>, anyhow::Error> {
+/// Returns the full contents of a file: an optional header line, then the
+/// input lines repeated `repeat` times, each line followed by a newline. With
+/// `trailing-newline=false` the final newline is omitted.
+pub(crate) fn build_contents(cmd: &mut BuiltinCommand) -> Result<Vec<u8>, anyhow::Error> {
     let header = cmd.args.opt_string("header");
     let trailing_newline = cmd.args.opt_bool("trailing-newline")?.unwrap_or(true);
-    let repeat = cmd.args.opt_parse("repeat")?.unwrap_or(1);
+    let repeat: usize = cmd.args.opt_parse("repeat")?.unwrap_or(1);
 
-    // Collect our contents into a buffer.
-    let mut contents = vec![];
+    let mut lines = vec![];
     for line in &cmd.input {
-        contents.push(bytes::unescape(line.as_bytes())?);
+        lines.push(bytes::unescape(line.as_bytes())?);
+    }
+
+    let mut contents = vec![];
+    if let Some(header) = header {
+        contents.extend_from_slice(header.as_bytes());
+        contents.push(b'\n');
+    }
+    for _ in 0..repeat {
+        for line in &lines {
+            contents.extend_from_slice(line);
+            contents.push(b'\n');
+        }
     }
     if !trailing_newline {
         contents.pop();
     }
 
-    let header_line = header.into_iter().map(|val| val.as_bytes().to_vec());
-    let content_lines = std::iter::repeat_n(contents, repeat).flatten();
-
-    Ok(Box::new(header_line.chain(content_lines)))
+    Ok(contents)
 }
 
 fn build_path(state: &State, cmd: &mut BuiltinCommand) -> Result<PathBuf, anyhow::Error> {
@@ -112,10 +120,7 @@ pub async fn run_append(
         Compression::None => Box::new(file),
     };
 
-    for line in contents {
-        file.write_all(&line).await?;
-        file.write_all("\n".as_bytes()).await?;
-    }
+    file.write_all(&contents).await?;
     file.shutdown().await?;
 
     Ok(ControlFlow::Continue)

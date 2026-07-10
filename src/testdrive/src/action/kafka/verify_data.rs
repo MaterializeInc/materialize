@@ -167,6 +167,12 @@ pub async fn run_verify_data(
         .subscribe(&[&topic])
         .context("subscribing to kafka topic")?;
 
+    // NOTE: consumption stops after exactly as many messages as expected (the
+    // consumer group's committed offsets make consecutive kafka-verify-data
+    // commands resume where the previous one stopped, so tests verify a topic
+    // in chunks). This means extra or duplicated records past the expected
+    // count are NOT detected by this command alone. They only surface as a
+    // mismatch in a subsequent kafka-verify-data on the same topic.
     let (mut stream_messages_remaining, stream_timeout) = match partial_search {
         Some(size) => (size, state.timeout),
         None => (expected_messages.len(), Duration::from_secs(15)),
@@ -252,15 +258,23 @@ pub async fn run_verify_data(
         resolve_glue_schemas(state, &actual_bytes, &mut format).await?
     } else {
         let key_schema = if let Format::Avro = format.key {
-            let schema = state
+            // A missing key subject means the topic is unkeyed. Any other error
+            // must propagate: swallowing it would silently disable key
+            // verification.
+            let schema = match state
                 .ccsr_client
                 .get_schema_by_subject(&format!("{}-key", topic))
                 .await
-                .ok()
-                .map(|key_schema| {
-                    avro::parse_schema(&key_schema.raw, &[]).context("parsing avro schema")
-                })
-                .transpose()?;
+            {
+                Ok(key_schema) => {
+                    Some(avro::parse_schema(&key_schema.raw, &[]).context("parsing avro schema")?)
+                }
+                Err(
+                    mz_ccsr::GetBySubjectError::SubjectNotFound
+                    | mz_ccsr::GetBySubjectError::VersionNotFound(_),
+                ) => None,
+                Err(e) => return Err(anyhow::Error::from(e).context("fetching key schema")),
+            };
             // for avro, we can determine if a key is required based on the presence of the key schema
             // rather than requiring the user to specify the key=true flag
             if schema.is_some() {
@@ -519,7 +533,15 @@ fn parse_expected_messages(
                 Format::Bytes => {
                     unimplemented!("bytes format not yet supported in tests")
                 }
-                Format::Text => Some(DecodedValue::Text(value.to_string())),
+                // Take JSON strings verbatim, like the key path above. The
+                // actual message is decoded as raw text, so keeping the JSON
+                // quotes would make string values never match.
+                Format::Text => Some(DecodedValue::Text(
+                    value
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| value.to_string()),
+                )),
             },
         };
 

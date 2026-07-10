@@ -572,6 +572,8 @@ CREATE TABLE postgres_execute (f1 INTEGER);
 
 If any of the statements fail, the entire test will fail. Any result sets returned from the server are ignored and not checked for correctness.
 
+With `background=true` (only valid for URL connections), the statements execute in the background while the test continues. The task is joined at the end of the file, and a failure or a task that does not complete within the default timeout fails the test.
+
 #### `$ postgres-connect name=.... url=...`
 
 Creates a named psql connection that can be used by multiple `$ postgres-execute` statements
@@ -639,6 +641,8 @@ BEGIN TRANSACTION INSERT INTO t1 VALUES (1); INSERT INTO t2 VALUES (2); COMMIT;
 ```
 
 The output of the queries is not validated in any way. An error during execution will cause the test to fail.
+
+Transient SQL Server errors (deadlock victim, agent still starting) are retried by re-executing the failed line in its entirety. With `split-lines=false` the whole body is one query, so a retry re-executes all of it. Keep each line (or, with `split-lines=false`, the body) a single statement or safe to re-execute.
 
 ## Connecting to DuckDB
 
@@ -859,6 +863,12 @@ be ordered according to the following rules:
  - earlier timestamps sort first
  - deletes sort before inserts
  - as all items are sorted as strings, "10" sorts before "2"
+
+The action consumes exactly as many messages as the test expects and stops. Consecutive
+`$ kafka-verify-data` commands on the same topic resume where the previous one stopped, so a topic
+is verified in chunks. This also means a single `$ kafka-verify-data` does not detect extra or
+duplicated records past the expected count. They only surface as a mismatch in a subsequent
+`$ kafka-verify-data` on the same topic.
 
 It is possible to call `$ kafka-verify-data` multiple times on the same topic in case the test needs to check
 that the data arrives in some partial order. For example, to make sure that all of timestamp `1` arrived

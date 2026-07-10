@@ -266,6 +266,9 @@ pub struct State {
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
+    /// Tasks spawned by `postgres-execute background=true`. Joined at the end
+    /// of the file so their failures fail the test.
+    background_tasks: Vec<(String, task::JoinHandle<Result<(), anyhow::Error>>)>,
 
     // === Fivetran state. ===
     fivetran_destination_url: String,
@@ -442,6 +445,24 @@ impl State {
     /// the consistency checks should be skipped for this current run.
     pub fn clear_skip_consistency_checks(&mut self) -> bool {
         std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
+    }
+
+    /// Joins all tasks spawned by `postgres-execute background=true`,
+    /// returning one error per task that failed or did not complete within the
+    /// default timeout. Must be called before the end of the file so that
+    /// background failures fail the test.
+    pub(crate) async fn join_background_tasks(&mut self) -> Vec<anyhow::Error> {
+        let mut errors = Vec::new();
+        for (desc, handle) in self.background_tasks.drain(..) {
+            match tokio::time::timeout(self.default_timeout, handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => errors.push(e.context(format!("background query failed: {desc}"))),
+                Err(_) => errors.push(anyhow!(
+                    "background query did not complete before the end of the file: {desc}"
+                )),
+            }
+        }
+        errors
     }
 
     pub async fn reset_materialize(&self) -> Result<(), anyhow::Error> {
@@ -967,6 +988,14 @@ impl Run for PosCommand {
                     }
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
+                sql.expected_detail = match sql.expected_detail {
+                    Some(s) => Some(subst(&s, &state.cmd_vars)?),
+                    None => None,
+                };
+                sql.expected_hint = match sql.expected_hint {
+                    Some(s) => Some(subst(&s, &state.cmd_vars)?),
+                    None => None,
+                };
                 sql::run_fail_sql(sql, state).await
             }
         };
@@ -1179,6 +1208,7 @@ pub async fn create_state(
         mysql_clients: BTreeMap::new(),
         postgres_clients: BTreeMap::new(),
         sql_server_clients: BTreeMap::new(),
+        background_tasks: Vec::new(),
 
         // === Fivetran state. ===
         fivetran_destination_url: config.fivetran_destination_url.clone(),

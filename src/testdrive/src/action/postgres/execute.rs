@@ -31,7 +31,7 @@ async fn execute_input(cmd: BuiltinCommand, client: &Client) -> Result<(), anyho
 
 pub async fn run_execute(
     mut cmd: BuiltinCommand,
-    state: &State,
+    state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let connection = cmd.args.string("connection")?;
     let background = cmd.args.opt_bool("background")?.unwrap_or(false);
@@ -40,12 +40,13 @@ pub async fn run_execute(
     match (connection.starts_with("postgres://"), background) {
         (true, true) => {
             let (client_inner, _) = postgres_client(&connection, state.default_timeout).await?;
-            task::spawn(|| "postgres-execute", async move {
-                match execute_input(cmd, &client_inner).await {
-                    Ok(_) => {}
-                    Err(e) => println!("Error in backgrounded postgres-execute query: {e}"),
-                }
+            let desc = cmd.input.first().cloned().unwrap_or_default();
+            let handle = task::spawn(|| "postgres-execute", async move {
+                execute_input(cmd, &client_inner).await
             });
+            // The task is joined at the end of the file so that failures fail
+            // the test, as documented.
+            state.background_tasks.push((desc, handle));
         }
         (false, true) => bail!("cannot use 'background' arg with referenced connection"),
         (true, false) => {

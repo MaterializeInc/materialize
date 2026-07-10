@@ -260,7 +260,7 @@ impl Drop for TestServerWithStatementLoggingChecks {
                      WHERE
                        (finished_at IS NULL OR finished_status IS NULL)
                        AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'
-                       AND finished_status != 'aborted'",
+                       AND finished_status IS DISTINCT FROM 'aborted'",
                     &[],
                 );
 

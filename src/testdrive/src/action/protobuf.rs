@@ -27,6 +27,8 @@ pub async fn run_compile_descriptors(
         .map(|s| s.into())
         .collect();
     let output = cmd.args.string("output")?;
+    let set_var = cmd.args.opt_string("set-var");
+    cmd.args.done()?;
     for path in inputs.iter().chain(iter::once(&output)) {
         if path.contains(path::MAIN_SEPARATOR) {
             // The goal isn't security, but preventing mistakes.
@@ -57,7 +59,7 @@ pub async fn run_compile_descriptors(
     if !status.success() {
         bail!("protoc exited unsuccessfully");
     }
-    if let Some(var) = cmd.args.opt_string("set-var") {
+    if let Some(var) = set_var {
         let res = std::fs::read(output_path)?;
         let hex_encoded = hex::encode(res);
         state.cmd_vars.insert(var, format!("\\x{hex_encoded}"));
