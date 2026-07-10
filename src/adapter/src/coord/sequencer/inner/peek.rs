@@ -1118,11 +1118,15 @@ impl Coordinator {
         // necessary to support PG's `BEGIN` semantics, whose behavior can
         // depend on whether or not reads have occurred in the txn.
         let mut transaction_determination = determination.clone();
+        // No session-local commit for Coordinator-sequenced peeks: we stored
+        // transaction read holds above, which `Command::Commit` releases.
+        let allow_session_local_commit = false;
         if when.is_transactional() {
             session.add_transaction_ops(TransactionOps::Peeks {
                 determination: transaction_determination,
                 cluster_id,
                 requires_linearization,
+                allow_session_local_commit,
             })?;
         } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
             // If the query uses AS OF, then ignore the timestamp.
@@ -1131,6 +1135,7 @@ impl Coordinator {
                 determination: transaction_determination,
                 cluster_id,
                 requires_linearization,
+                allow_session_local_commit,
             })?;
         };
 

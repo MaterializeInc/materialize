@@ -225,6 +225,12 @@ impl Coordinator {
     ///
     /// Returns a notify that resolves once any `mz_subscriptions` retractions
     /// caused by cleanup are durable.
+    ///
+    /// NOTE: `SessionClient::end_transaction` commits eligible single-peek
+    /// transactions session-locally, skipping this cleanup on the grounds
+    /// that it is a no-op for them. When adding cleanup here for state that
+    /// the frontend peek sequencing of a plain `SELECT` can create, revisit
+    /// `TransactionOps::Peeks::allow_session_local_commit`.
     pub(crate) async fn clear_connection(
         &mut self,
         conn_id: &ConnectionId,

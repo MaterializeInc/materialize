@@ -4130,3 +4130,149 @@ fn test_grant_all_on_view_suppresses_non_applicable_notice() {
         );
     }
 }
+
+/// Test that a single-peek transaction commits in the session task, without a
+/// `Command::Commit` round-trip to the Coordinator (the `command-commit`
+/// message), when `enable_session_local_commit` is on.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_session_local_commit() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_session_local_commit".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // The number of `command-commit` Coordinator messages processed so far.
+    let command_commits = || {
+        server
+            .metrics_registry()
+            .gather()
+            .into_iter()
+            .find(|metric_family| metric_family.name() == "mz_slow_message_handling")
+            .map(|metric_family| {
+                metric_family
+                    .get_metric()
+                    .iter()
+                    .filter(|metric| {
+                        metric
+                            .get_label()
+                            .iter()
+                            .any(|label| label.value() == "command-commit")
+                    })
+                    .map(|metric| metric.get_histogram().get_sample_count())
+                    .sum::<u64>()
+            })
+            .unwrap_or(0)
+    };
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES (1), (2)")
+        .unwrap();
+
+    // Use prepared statements so each execution is a single Bind/Execute/Sync
+    // round. An unprepared `query` additionally sends a Parse/Describe/Sync
+    // round, whose Sync commits an *empty* implicit transaction, and empty
+    // transactions (not being single-peek transactions) still commit via the
+    // Coordinator.
+    let select_one = client.prepare("SELECT 1").unwrap();
+    let select_t = client.prepare("SELECT * FROM t").unwrap();
+
+    // Constant peeks have no timestamp, so they are eligible under any
+    // isolation level, including the default strict serializable.
+    let before = command_commits();
+    for _ in 0..10 {
+        let rows = client.query(&select_one, &[]).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+    assert_eq!(
+        command_commits(),
+        before,
+        "autocommit constant SELECTs must not send command-commit"
+    );
+
+    // Non-constant peeks: run under serializable isolation, where eligibility
+    // doesn't depend on the timestamp the peek happened to choose. (Under
+    // strict serializable, a peek whose timestamp is ahead of the oracle falls
+    // back to the Coordinator commit path, so counting there would be racy.)
+    client
+        .batch_execute("SET transaction_isolation = serializable")
+        .unwrap();
+    let before = command_commits();
+    for _ in 0..10 {
+        let rows = client.query(&select_t, &[]).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+    assert_eq!(
+        command_commits(),
+        before,
+        "autocommit SELECTs must not send command-commit"
+    );
+    client.batch_execute("RESET transaction_isolation").unwrap();
+
+    // The metric is observed after the Coordinator sends the response the
+    // client is waiting on, so retry briefly when asserting growth.
+    let assert_command_commits_grow = |before: u64, what: &str| {
+        let grew = Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                if command_commits() > before {
+                    Ok(())
+                } else {
+                    Err("no command-commit observed yet")
+                }
+            });
+        assert!(grew.is_ok(), "{what}: expected a command-commit message");
+    };
+
+    // Autocommit writes still commit via the Coordinator.
+    let before = command_commits();
+    client.batch_execute("INSERT INTO t VALUES (3)").unwrap();
+    assert_command_commits_grow(before, "autocommit write");
+
+    // Smoke test that with the flag on, a multi-statement transaction still
+    // takes the Coordinator fall-back path successfully. (Its COMMIT is a
+    // regular executed statement, not a `command-commit` message, so there is
+    // nothing to count here.)
+    let mut txn = client.transaction().unwrap();
+    let rows = txn.query("SELECT * FROM t", &[]).unwrap();
+    assert_eq!(rows.len(), 3);
+    let rows = txn.query("SELECT a FROM t WHERE a = 1", &[]).unwrap();
+    assert_eq!(rows.len(), 1);
+    txn.commit().unwrap();
+
+    // A strict serializable peek whose timestamp is ahead of the oracle read
+    // timestamp must fall back to the Coordinator commit path: the commit is
+    // what gates releasing the results until the oracle passes the peek's
+    // timestamp (`Coordinator::message_linearize_reads`). A REFRESH AT
+    // materialized view whose first refresh is in the near future forces such
+    // a timestamp.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW refresh_mv \
+             WITH (REFRESH AT mz_now()::text::int8 + 2000) AS SELECT 1",
+        )
+        .unwrap();
+    let refresh_mv_select = client.prepare("SELECT * FROM refresh_mv").unwrap();
+    let before = command_commits();
+    // Blocks for ~2s, until the timestamp oracle passes the refresh time.
+    let rows = client.query(&refresh_mv_select, &[]).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_command_commits_grow(before, "peek with a linearize wait");
+
+    // Turning the flag off takes effect for subsequent statements: commits go
+    // back through the Coordinator.
+    let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
+    internal_client
+        .batch_execute("ALTER SYSTEM SET enable_session_local_commit = false")
+        .unwrap();
+    let before = command_commits();
+    let rows = client.query("SELECT 1", &[]).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_command_commits_grow(before, "autocommit SELECT with the flag off");
+}
