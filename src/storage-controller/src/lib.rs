@@ -2738,6 +2738,8 @@ where
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating storage controller");
 
+        let metrics = StorageControllerMetrics::new(metrics_registry, controller_metrics);
+
         let persist_table_worker = if read_only {
             let txns_write = txns_client
                 .open_writer(
@@ -2763,7 +2765,7 @@ where
             )
             .await;
             txns.upgrade_version().await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns)
+            persist_handles::PersistTableWriteWorker::new_txns(txns, metrics.table_apply_seconds())
         };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
@@ -2782,8 +2784,6 @@ where
         maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         let (instance_response_tx, instance_response_rx) = mpsc::unbounded_channel();
-
-        let metrics = StorageControllerMetrics::new(metrics_registry, controller_metrics);
 
         let now_dt = mz_ore::now::to_datetime(now());
 

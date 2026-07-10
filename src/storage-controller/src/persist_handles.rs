@@ -19,6 +19,7 @@ use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
+use mz_ore::metrics::{Histogram, MetricsFutureExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::ShardId;
 use mz_persist_client::write::WriteHandle;
@@ -178,6 +179,7 @@ impl PersistTableWriteWorker {
 
     pub(crate) fn new_txns(
         txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
+        apply_seconds: Histogram,
     ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
@@ -186,6 +188,7 @@ impl PersistTableWriteWorker {
                 txns,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
+                apply_seconds,
             };
             worker.run(rx).await
         });
@@ -281,6 +284,10 @@ struct TxnsTableWorker {
     txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
+    /// Latency of the deferred apply, which runs after the append response is
+    /// returned. This is the coverage `mz_append_table_duration_seconds` loses
+    /// by responding before applying.
+    apply_seconds: Histogram,
 }
 
 impl TxnsTableWorker {
@@ -492,7 +499,11 @@ impl TxnsTableWorker {
                 let _ = tx.send(Ok(()));
 
                 debug!("applying {:?}", apply);
-                let tidy = apply.apply(&mut self.txns).await;
+                let tidy = apply
+                    .apply(&mut self.txns)
+                    .wall_time()
+                    .observe(self.apply_seconds.clone())
+                    .await;
                 self.tidy.merge(tidy);
 
                 // We don't serve any reads out of this TxnsHandle, so go ahead

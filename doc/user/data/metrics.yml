@@ -3478,6 +3478,20 @@ metrics:
   - replica_id
   source: src/storage-client/src/metrics.rs
   visibility: internal
+- name: mz_storage_controller_table_apply_seconds_bucket
+  help: Latency of applying a durable table append to its data shards, performed off the write critical path after the append response is returned.
+  labels:
+  - le
+  source: src/storage-client/src/metrics.rs
+  visibility: internal
+- name: mz_storage_controller_table_apply_seconds_count
+  help: Latency of applying a durable table append to its data shards, performed off the write critical path after the append response is returned.
+  source: src/storage-client/src/metrics.rs
+  visibility: internal
+- name: mz_storage_controller_table_apply_seconds_sum
+  help: Latency of applying a durable table append to its data shards, performed off the write critical path after the append response is returned.
+  source: src/storage-client/src/metrics.rs
+  visibility: internal
 - name: mz_storage_regressed_offset_known
   help: number of regressed offset_known stats for this id
   labels:
