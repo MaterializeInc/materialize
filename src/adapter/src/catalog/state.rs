@@ -434,35 +434,45 @@ impl CatalogState {
     /// depends on.
     pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         let mut out = Vec::new();
-        self.introspection_dependencies_inner(id, &mut out);
-        out
-    }
 
-    fn introspection_dependencies_inner(&self, id: CatalogItemId, out: &mut Vec<CatalogItemId>) {
-        match self.get_entry(&id).item() {
-            CatalogItem::Log(_) => out.push(id),
-            item @ (CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::Connection(_)) => {
-                // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
-                for item_id in item.references().items() {
-                    self.introspection_dependencies_inner(*item_id, out);
+        // Iterative worklist traversal rather than recursion. The dependency
+        // chain is user controlled and can be arbitrarily deep.
+        let mut queue: VecDeque<CatalogItemId> = [id].into_iter().collect();
+        let mut seen: BTreeSet<CatalogItemId> = [id].into_iter().collect();
+        while let Some(id) = queue.pop_front() {
+            match self.get_entry(&id).item() {
+                CatalogItem::Log(_) => out.push(id),
+                item @ (CatalogItem::View(_)
+                | CatalogItem::MaterializedView(_)
+                | CatalogItem::Connection(_)) => {
+                    // TODO Unclear if this table wants to include all uses or only references.
+                    for item_id in item.references().items() {
+                        if seen.insert(*item_id) {
+                            queue.push_back(*item_id);
+                        }
+                    }
                 }
+                CatalogItem::Sink(sink) => {
+                    let from_item_id = self.get_entry_by_global_id(&sink.from).id();
+                    if seen.insert(from_item_id) {
+                        queue.push_back(from_item_id);
+                    }
+                }
+                CatalogItem::Index(idx) => {
+                    let on_item_id = self.get_entry_by_global_id(&idx.on).id();
+                    if seen.insert(on_item_id) {
+                        queue.push_back(on_item_id);
+                    }
+                }
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_) => (),
             }
-            CatalogItem::Sink(sink) => {
-                let from_item_id = self.get_entry_by_global_id(&sink.from).id();
-                self.introspection_dependencies_inner(from_item_id, out)
-            }
-            CatalogItem::Index(idx) => {
-                let on_item_id = self.get_entry_by_global_id(&idx.on).id();
-                self.introspection_dependencies_inner(on_item_id, out)
-            }
-            CatalogItem::Table(_)
-            | CatalogItem::Source(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_) => (),
         }
+
+        out
     }
 
     /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
@@ -644,21 +654,41 @@ impl CatalogState {
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
-        let object_id = ObjectId::Item(item_id);
-        if !seen.contains(&object_id) {
-            seen.insert(object_id.clone());
-            let entry = self.get_entry(&item_id);
-            for dependent_id in entry.used_by() {
-                dependents.extend_from_slice(&self.item_dependents(*dependent_id, seen));
-            }
-            dependents.push(object_id);
-            // We treat the progress collection as if it depends on the source
-            // for dropping. We have additional code in planning to create a
-            // kind of special-case "CASCADE" for this dependency.
-            if let Some(progress_id) = entry.progress_id() {
-                dependents.extend_from_slice(&self.item_dependents(progress_id, seen));
+
+        // Iterative post-order traversal rather than recursion. Dependency
+        // chains are user controlled and can be arbitrarily deep (e.g. a long
+        // chain of stacked views), so recursing risks a stack overflow.
+        enum Work {
+            Enter(CatalogItemId),
+            Emit(ObjectId),
+        }
+        let mut stack = vec![Work::Enter(item_id)];
+        while let Some(work) = stack.pop() {
+            match work {
+                Work::Enter(item_id) => {
+                    let object_id = ObjectId::Item(item_id);
+                    if !seen.insert(object_id.clone()) {
+                        continue;
+                    }
+                    let entry = self.get_entry(&item_id);
+                    // Pushed in reverse of the desired output order: dependents
+                    // first, then self, then the progress collection. We treat
+                    // the progress collection as if it depends on the source
+                    // for dropping. We have additional code in planning to
+                    // create a kind of special-case "CASCADE" for this
+                    // dependency.
+                    if let Some(progress_id) = entry.progress_id() {
+                        stack.push(Work::Enter(progress_id));
+                    }
+                    stack.push(Work::Emit(object_id));
+                    for dependent_id in entry.used_by().iter().rev() {
+                        stack.push(Work::Enter(*dependent_id));
+                    }
+                }
+                Work::Emit(object_id) => dependents.push(object_id),
             }
         }
+
         dependents
     }
 
@@ -2853,5 +2883,71 @@ impl OptimizerCatalog for Catalog {
 impl Catalog {
     pub fn as_optimizer_catalog(self: Arc<Self>) -> Arc<dyn OptimizerCatalog> {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A deep dependency chain (a long chain of stacked views) must not
+    /// overflow the stack when computing its dependents, and the dependents
+    /// must come out in reverse-dependency order (deepest dependent first,
+    /// root last) so that `DROP ... CASCADE` drops them in a valid order.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn item_dependents_deep_chain_no_stack_overflow() {
+        use mz_ore::cast::CastFrom;
+
+        Catalog::with_debug(|mut catalog| async move {
+            // Deep enough that the previous recursive implementation overflowed
+            // the stack.
+            const DEPTH: usize = 100_000;
+            // Well above any id the debug catalog assigns, so the synthetic
+            // chain does not collide with real entries.
+            const BASE: u64 = 1 << 40;
+
+            // Clone a builtin log entry as a template so we don't have to
+            // construct a `CatalogItem` by hand. `item_dependents` only reads
+            // `used_by`/`progress_id`, and a log's `progress_id` is `None`.
+            let template = catalog
+                .state
+                .entry_by_id
+                .values()
+                .find(|entry| matches!(entry.item(), CatalogItem::Log(_)))
+                .expect("debug catalog has log sources")
+                .clone();
+
+            // Build a chain where entry `BASE + i` is used by `BASE + i + 1`.
+            for i in 0..=DEPTH {
+                let id = CatalogItemId::User(BASE + u64::cast_from(i));
+                let mut entry = template.clone();
+                entry.id = id;
+                entry.referenced_by = Vec::new();
+                entry.used_by = if i < DEPTH {
+                    vec![CatalogItemId::User(BASE + u64::cast_from(i + 1))]
+                } else {
+                    Vec::new()
+                };
+                catalog.state.entry_by_id.insert(id, entry);
+            }
+
+            let mut seen = BTreeSet::new();
+            let dependents = catalog
+                .state
+                .item_dependents(CatalogItemId::User(BASE), &mut seen);
+
+            // Every element of the chain appears exactly once.
+            assert_eq!(dependents.len(), DEPTH + 1);
+            // Reverse-dependency order: the deepest dependent is first and the
+            // root we asked about is last.
+            for (offset, dependent) in dependents.iter().enumerate() {
+                let expected = CatalogItemId::User(BASE + u64::cast_from(DEPTH - offset));
+                assert_eq!(dependent, &ObjectId::Item(expected));
+            }
+
+            catalog.expire().await;
+        })
+        .await
     }
 }
