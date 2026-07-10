@@ -166,7 +166,7 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
 /// The SQL planner guarantees (`validate_metric_sink_desc`) that the relation exposes
 /// `metric_name`, `labels`, `value`, and `help` of the required type, and the shaping `Map` it
 /// adds (`shape_metric_sink_source`) guarantees `metric_kind` and `name_valid`. `metric_name` and
-/// `value` may still be `Datum::Null`; the rest are non-null by construction. Column position
+/// `value` may still be `Datum::Null`. The rest are non-null by construction. Column position
 /// within the row is unconstrained.
 struct ColumnIndices {
     metric_name: usize,
@@ -201,11 +201,11 @@ impl ColumnIndices {
 /// The planner already did the row-wise shaping (see `optimize::metric_sink::
 /// shape_metric_sink_source`): `labels`/`help` are coalesced to their identity element, and
 /// `metric_kind`/`name_valid` classify the row without this needing to parse `metric_type` or
-/// validate `metric_name` itself. `metric_name` may still be `Datum::Null`; that takes the same
+/// validate `metric_name` itself. `metric_name` may still be `Datum::Null`, which takes the same
 /// skip path as any other invalid name because `name_valid` is computed from it upstream and is
 /// `false` (or, defensively, `Datum::Null`, treated the same as `false`) whenever `metric_name`
 /// is. `value` has no identity element (there is no numeric value that means "absent"), so it
-/// stays `Option<f64>`; a null value is a real row identity, just one that never contributes to a
+/// stays `Option<f64>`. A null value is a real row identity, just one that never contributes to a
 /// series' published value. Strings borrow from `datums`, so the caller must own what it needs
 /// (see `SinkState::stage_ok`) before the row backing `datums` is dropped.
 fn extract_row<'a>(

@@ -276,7 +276,7 @@ impl GlobalLirPlan {
 ///
 /// No row is dropped or filtered here: the operator still needs every row, including the ones
 /// this marks invalid, to count `skipped`/`null_values`. Only the pure per-row shaping moves to
-/// MIR; dedup, collision detection, and family-conflict counting stay in the operator, because
+/// MIR. Dedup, collision detection, and family-conflict counting stay in the operator, because
 /// they need cross-row state (the frontier-gated fold) that a `Map` can't express.
 ///
 /// TODO: A full move would also express the dedup/collision/family-conflict logic in MIR (e.g.
