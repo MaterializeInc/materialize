@@ -228,8 +228,8 @@ fn default_read_limit() -> u32 {
 #[derive(Debug, Deserialize)]
 struct QueryParams {
     cluster: String,
-    // Only honored on the developer endpoint; the agent endpoint's dispatch
-    // arm drops it (replica pinning is not part of the agent surface).
+    // Only honored on the developer endpoint. The agent endpoint's dispatch
+    // arm drops it, since replica pinning is not part of the agent surface.
     cluster_replica: Option<String>,
     sql_query: String,
 }
@@ -909,7 +909,7 @@ async fn handle_tools_list(
                             },
                             "cluster_replica": {
                                 "type": "string",
-                                "description": "Optional replica name (e.g. 'r1') to pin the read to one replica of the cluster. Required for EXPLAIN ANALYZE on clusters with more than one replica; find replica names in mz_catalog.mz_cluster_replicas."
+                                "description": "Optional replica name (e.g. 'r1') to pin the read to one replica of the cluster. Required for EXPLAIN ANALYZE on clusters with more than one replica. Find replica names in mz_catalog.mz_cluster_replicas."
                             },
                             "sql_query": {
                                 "type": "string",
@@ -2372,9 +2372,9 @@ mod tests {
     #[mz_ore::test]
     fn test_query_set_clause_escapes_replica_name() {
         let clause = query_set_clause("c", Some("evil'; DROP TABLE secrets; --"));
-        assert!(
-            clause.contains("SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'"),
-            "single quote must be doubled inside the literal: {clause}",
+        assert_eq!(
+            clause,
+            "SET CLUSTER = 'c'; SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'"
         );
     }
 

@@ -598,6 +598,97 @@ def workflow_endpoints(c: Composition) -> None:
             print_statement=False,
         )
 
+    # -- QAR-136: developer query pins reads to a named cluster replica -------
+    #
+    # On a cluster with more than one replica, introspection reads (including
+    # EXPLAIN ANALYZE) must target a specific replica. The developer `query`
+    # tool accepts an optional `cluster_replica` for this. Verify the three
+    # observable behaviors: untargeted EXPLAIN ANALYZE fails and names the
+    # remedy, a pinned one succeeds, and a nonexistent replica surfaces a
+    # clean ExecutionError.
+
+    with c.test_case("developer_query_cluster_replica_pinning"):
+        c.sql(
+            """
+            DROP CLUSTER IF EXISTS qar136_two_replicas CASCADE;
+            CREATE CLUSTER qar136_two_replicas REPLICAS (
+                r1 (SIZE 'scale=1,workers=1'),
+                r2 (SIZE 'scale=1,workers=1')
+            );
+            GRANT USAGE ON CLUSTER qar136_two_replicas TO anonymous_http_user;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        def qar136_query(req_id: int, arguments: dict) -> dict:
+            r = post_mcp(
+                c,
+                "developer",
+                jsonrpc(
+                    "tools/call",
+                    {"name": "query", "arguments": arguments},
+                    req_id=req_id,
+                ),
+            )
+            assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
+            return r.json()
+
+        # Without a replica pin, the introspection read cannot choose among
+        # the two replicas. The error should point at the remedy.
+        body = qar136_query(
+            2900,
+            {
+                "cluster": "qar136_two_replicas",
+                "sql_query": "EXPLAIN ANALYZE CLUSTER MEMORY",
+            },
+        )
+        err = body.get("error")
+        assert err is not None, (
+            "untargeted EXPLAIN ANALYZE on a 2-replica cluster should fail, "
+            f"but got: {body}"
+        )
+        assert (
+            "replica" in err["message"].lower()
+        ), f"error should mention replica targeting: {err['message']!r}"
+
+        # Pinned to r1, the same read succeeds.
+        body = qar136_query(
+            2901,
+            {
+                "cluster": "qar136_two_replicas",
+                "cluster_replica": "r1",
+                "sql_query": "EXPLAIN ANALYZE CLUSTER MEMORY",
+            },
+        )
+        assert "error" not in body, f"pinned EXPLAIN ANALYZE errored: {body}"
+        content = body["result"]["content"]
+        assert content and content[0]["type"] == "text", f"unexpected content: {content}"
+
+        # A nonexistent replica surfaces the SQL layer's error as a clean
+        # ExecutionError rather than anything worse.
+        body = qar136_query(
+            2902,
+            {
+                "cluster": "qar136_two_replicas",
+                "cluster_replica": "no_such_replica",
+                "sql_query": "EXPLAIN ANALYZE CLUSTER MEMORY",
+            },
+        )
+        err = body.get("error")
+        assert err is not None, f"nonexistent replica should fail, but got: {body}"
+        assert (
+            err["data"]["error_type"] == "ExecutionError"
+        ), f"unexpected error_type: {err}"
+
+        c.sql(
+            "DROP CLUSTER IF EXISTS qar136_two_replicas CASCADE",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
     # -- agent: query tool disable/enable via flag --------------------------------
 
     with c.test_case("agent_query_tool_disable_via_flag"):
