@@ -155,7 +155,11 @@ SERVICES = [
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
-            "--https-sni-resolver-template=sni.test:6876",
+            # HTTPS resolves directly to materialized. The generic HTTPS tests
+            # (http, ip-forwarding) do not run dnsmasq, so this must resolve
+            # without the sni.test CNAME. Workflows that exercise SNI routing
+            # over pgwire start dnsmasq and rely on the pgwire template below.
+            "--https-sni-resolver-template=materialized:6876",
             "--pgwire-sni-resolver-template=sni.test:6875",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
