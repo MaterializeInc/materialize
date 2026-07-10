@@ -274,9 +274,10 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             ObjectType::Func => crate::objects::ObjectType::Func,
             ObjectType::NetworkPolicy => crate::objects::ObjectType::NetworkPolicy,
             // This conversion is only exercised for `DefaultPrivilegesKey`. `ALTER DEFAULT
-            // PRIVILEGES .. ON METRIC SINKS` is rejected in `plan_alter_default_privileges`
-            // ("METRIC SINKS do not have privileges"), so a `DefaultPrivilegeObject` naming a
-            // metric sink is never constructed and this arm is never reached.
+            // PRIVILEGES .. ON METRIC SINKS` is rejected by the parser in
+            // `expect_grant_revoke_object_type_inner` before the AST node is built, so a
+            // `DefaultPrivilegeObject` naming a metric sink is never constructed and this arm is
+            // never reached.
             ObjectType::MetricSink => {
                 unreachable!("metric sinks never appear in default privileges")
             }
@@ -437,9 +438,10 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             CommentObjectId::Sink(global_id) => {
                 crate::objects::CommentObject::Sink(global_id.into_proto())
             }
-            // `COMMENT ON METRIC SINK` isn't parseable (`CommentObjectType` has no `MetricSink`
-            // variant), so `plan_comment` never constructs this id and no durable `Comment`
-            // record ever references one.
+            // `CommentObjectId::MetricSink` is constructed on the drop path, but only to build a
+            // predicate that deletes any matching comment rows. It is never serialized into a
+            // durable `Comment` record, because `COMMENT ON METRIC SINK` isn't parseable
+            // (`CommentObjectType` has no `MetricSink` variant), so no such record ever exists.
             CommentObjectId::MetricSink(_) => {
                 unreachable!("comments on metric sinks are never planned, so never serialized")
             }
