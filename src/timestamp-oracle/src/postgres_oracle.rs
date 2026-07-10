@@ -17,11 +17,11 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use deadpool_postgres::PoolError;
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::tokio_postgres::error::SqlState;
 use deadpool_postgres::tokio_postgres::types::ToSql;
 use deadpool_postgres::tokio_postgres::{Row, Statement};
-use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
@@ -36,7 +36,7 @@ use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
 use mz_pgrepr::Numeric;
-use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
+use mz_postgres_client::{Connection, PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use mz_repr::Timestamp;
 use postgres_protocol::escape::escape_identifier;
 use serde::{Deserialize, Serialize};
@@ -80,7 +80,7 @@ const CRDB_CONFIGURE_ZONE: &str =
 /// NOTE: `mz-timestamp-oracle` currently keeps its Postgres surface local; it
 /// does not use `mz-postgres-util` wrappers.
 async fn pg_batch_execute(
-    client: &Object,
+    client: &Connection,
     query: &str,
 ) -> Result<(), deadpool_postgres::tokio_postgres::Error> {
     #[allow(clippy::disallowed_methods)]
@@ -88,7 +88,7 @@ async fn pg_batch_execute(
 }
 
 async fn pg_query_one_prepared(
-    client: &Object,
+    client: &Connection,
     statement: &Statement,
     params: &[&(dyn ToSql + Sync)],
 ) -> Result<Row, deadpool_postgres::tokio_postgres::Error> {
@@ -97,7 +97,7 @@ async fn pg_query_one_prepared(
 }
 
 async fn pg_execute_prepared(
-    client: &Object,
+    client: &Connection,
     statement: &Statement,
     params: &[&(dyn ToSql + Sync)],
 ) -> Result<u64, deadpool_postgres::tokio_postgres::Error> {
@@ -712,7 +712,7 @@ where
         oracle
     }
 
-    async fn get_connection(&self) -> Result<Object, PoolError> {
+    async fn get_connection(&self) -> Result<Connection, PoolError> {
         self.postgres_client.get_connection().await
     }
 

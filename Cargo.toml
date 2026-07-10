@@ -347,6 +347,7 @@ ctor = "0.9.1"
 custom-labels = "0.4.6"
 darling = "0.23.0"
 datadriven = "0.9.0"
+deadpool = { version = "0.9.5", default-features = false, features = ["managed"] }
 deadpool-postgres = "0.10.3"
 dec = "0.4.9"
 derivative = "2.2.0"
