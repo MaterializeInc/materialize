@@ -354,6 +354,7 @@ differential-dataflow = "0.24.0"
 differential-dogs3 = "0.24.0"
 digest = "0.10.7"
 dirs = "6.0.0"
+domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
 duckdb = { version = "1.4.3", default-features = false, features = ["native-tls"] }
 dynfmt = { version = "0.1.5", features = ["curly"] }
 either = "1.16.0"
@@ -378,7 +379,6 @@ headers = "0.4.1"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hibitset = "0.6.4"
-hickory-resolver = "0.25.2"
 hmac = "0.12.1"
 http = "1.4.0"
 http-body-util = "0.1.3"
