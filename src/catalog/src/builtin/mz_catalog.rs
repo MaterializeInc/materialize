@@ -1114,6 +1114,51 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| 
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
     }),
 });
+pub static MZ_METRIC_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_metric_sinks",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_METRIC_SINKS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("oid", SqlScalarType::Oid.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("owner_id", SqlScalarType::String.nullable(false))
+        .with_column("create_sql", SqlScalarType::String.nullable(false))
+        .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .with_key(vec![1])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("id", "Materialize's unique ID for the metric sink."),
+        ("oid", "A PostgreSQL-compatible OID for the metric sink."),
+        (
+            "schema_id",
+            "The ID of the schema to which the metric sink belongs. Corresponds to `mz_schemas.id`.",
+        ),
+        ("name", "The name of the metric sink."),
+        (
+            "cluster_id",
+            "The ID of the cluster maintaining the metric sink. Corresponds to `mz_clusters.id`.",
+        ),
+        (
+            "owner_id",
+            "The role ID of the owner of the metric sink. Corresponds to `mz_roles.id`.",
+        ),
+        (
+            "create_sql",
+            "The `CREATE` SQL statement for the metric sink.",
+        ),
+        (
+            "redacted_create_sql",
+            "The redacted `CREATE` SQL statement for the metric sink.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
 // mz_sources is generated dynamically in BUILTINS_STATIC via builtin::make_mz_sources()
 // with builtin source/log entries inlined as VALUES. See builtin/builtin.rs.
 pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {

@@ -20,7 +20,7 @@ use mz_catalog::builtin::{
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
     MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_METRIC_SINKS, MZ_MYSQL_SOURCE_TABLES,
     MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES,
     MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS,
     MZ_SOURCE_REFERENCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
@@ -31,8 +31,8 @@ use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, Index, MaterializedView, Sink,
-    Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, Index, MaterializedView,
+    MetricSink, Sink, Table, TableDataSource, Type, View,
 };
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
@@ -375,8 +375,10 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            // TODO: pack a row into a `mz_metric_sinks` builtin table once it exists.
-            CatalogItem::Log(_) | CatalogItem::Secret(_) | CatalogItem::MetricSink(_) => vec![],
+            CatalogItem::MetricSink(metric_sink) => {
+                self.pack_metric_sink_update(id, oid, schema_id, name, owner_id, metric_sink, diff)
+            }
+            CatalogItem::Log(_) | CatalogItem::Secret(_) => vec![],
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, connection, diff)
             }
@@ -1062,6 +1064,37 @@ impl CatalogState {
         ));
 
         updates
+    }
+
+    fn pack_metric_sink_update(
+        &self,
+        id: CatalogItemId,
+        oid: u32,
+        schema_id: &SchemaSpecifier,
+        name: &str,
+        owner_id: &RoleId,
+        metric_sink: &MetricSink,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let create_stmt = mz_sql::parse::parse(&metric_sink.create_sql)
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", metric_sink.create_sql))
+            .into_element()
+            .ast;
+
+        vec![BuiltinTableUpdate::row(
+            &*MZ_METRIC_SINKS,
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::UInt32(oid),
+                Datum::String(&schema_id.to_string()),
+                Datum::String(name),
+                Datum::String(&metric_sink.cluster_id.to_string()),
+                Datum::String(&owner_id.to_string()),
+                Datum::String(&metric_sink.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
+            ]),
+            diff,
+        )]
     }
 
     fn pack_index_update(

@@ -900,6 +900,7 @@ mz_message_counts_sent_raw_s3_primary_idx
 mz_message_counts_sent_raw_s4_primary_idx
 mz_message_counts_sent_raw_s5_primary_idx
 mz_message_counts_sent_raw_u1_primary_idx
+mz_metric_sinks
 mz_minimal_name_qualification
 mz_mysql_source_tables
 mz_name_rank
@@ -1026,6 +1027,7 @@ mz_show_indexes
 mz_show_indexes_ind
 mz_show_materialized_views
 mz_show_materialized_views_ind
+mz_show_metric_sinks
 mz_show_my_cluster_privileges
 mz_show_my_database_privileges
 mz_show_my_default_privileges

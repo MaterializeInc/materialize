@@ -44,7 +44,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_i
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, GlobalId, SqlColumnType, strconv};
+use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, SqlColumnType, strconv};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     AutoProvisionSource, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -858,7 +858,10 @@ impl Catalog {
         }
 
         // Replay the accumulated `MetricSinkOp`s onto the final `state`, mirroring what was
-        // already done to `preliminary_state` per-op above.
+        // already done to `preliminary_state` per-op above. Metric sinks bypass
+        // `StateUpdateKind`/`apply_updates` entirely (see `MetricSinkOp`), so the
+        // `mz_metric_sinks` builtin table update has to be packed here explicitly rather than
+        // falling out of the usual `apply_updates` path above.
         for metric_sink_op in metric_sink_updates {
             match metric_sink_op {
                 MetricSinkOp::Insert {
@@ -868,15 +871,25 @@ impl Catalog {
                     owner_id,
                     privileges,
                     metric_sink,
-                } => state.to_mut().insert_metric_sink(
-                    id,
-                    oid,
-                    name,
-                    owner_id,
-                    privileges,
-                    metric_sink,
-                ),
-                MetricSinkOp::Remove(id) => state.to_mut().remove_metric_sink(id),
+                } => {
+                    state.to_mut().insert_metric_sink(
+                        id,
+                        oid,
+                        name,
+                        owner_id,
+                        privileges,
+                        metric_sink,
+                    );
+                    let update = state.pack_item_update(id, Diff::ONE);
+                    builtin_table_updates
+                        .extend(state.to_mut().resolve_builtin_table_updates(update));
+                }
+                MetricSinkOp::Remove(id) => {
+                    let update = state.pack_item_update(id, Diff::MINUS_ONE);
+                    builtin_table_updates
+                        .extend(state.to_mut().resolve_builtin_table_updates(update));
+                    state.to_mut().remove_metric_sink(id);
+                }
             }
         }
 
