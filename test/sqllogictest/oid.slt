@@ -1096,8 +1096,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16945  mz_role_parameters
 16946  mz_materialized_view_refresh_strategies
 16947  mz_cluster_schedules
-16948  mz_postgres_source_tables
-16949  mz_mysql_source_tables
 16950  mz_kafka_sources_ind
 16951  mz_webhook_sources_ind
 16952  mz_history_retention_strategies
@@ -1167,7 +1165,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17022  mz_wallclock_global_lag_history
 17023  mz_wallclock_global_lag_recent_history
 17024  mz_wallclock_global_lag_recent_history_ind
-17025  mz_kafka_source_tables
 17030  mz_objects_id_namespace_types
 17031  mz_object_history
 17032  mz_object_history_ind
@@ -1191,7 +1188,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17054  mz_wallclock_global_lag
 17055  mz_wallclock_global_lag_histogram_raw
 17056  mz_wallclock_global_lag_histogram
-17057  mz_sql_server_source_tables
 17058  mz_license_keys
 17059  mz_role_auth
 17060  mz_iceberg_sinks
@@ -1240,3 +1236,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17104  mz_cluster_auto_scaling_strategies_ind
 17105  parse_postgres_source_details
 17106  parse_kafka_source_details
+17107  mz_postgres_source_tables
+17108  mz_mysql_source_tables
+17109  mz_sql_server_source_tables
+17110  mz_kafka_source_tables
+17111  parse_source_export_details
