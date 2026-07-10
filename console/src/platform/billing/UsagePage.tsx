@@ -28,7 +28,9 @@ import { MainContentContainer } from "~/layouts/BaseLayout";
 import { MaterializeTheme } from "~/theme";
 import { nowUTC } from "~/util";
 
-import AccountSpendBreakdown from "./AccountSpendBreakdown";
+import AccountSpendBreakdown, {
+  AccountSpendLedger,
+} from "./AccountSpendBreakdown";
 import InvoiceTable from "./InvoiceTable";
 import { AccountSpendPlanDetails } from "./PlanDetails";
 import { useDailyCostsBreakdown, useRecentInvoices } from "./queries";
@@ -127,6 +129,7 @@ const UsagePage = () => {
         <Grid
           templateAreas={`
             "breakdown breakdownDetails"
+            "ledger ledger"
             "invoices ."`}
           gridTemplateColumns="minmax(500px, 70%) minmax(300px, 3fr)"
           gridColumnGap={12}
@@ -148,6 +151,17 @@ const UsagePage = () => {
             <AccountSpendPlanDetails
               days={costBreakdownDays ?? null}
               last30Days={last30BreakdownDays ?? null}
+              regionFilter={regionFilter}
+            />
+          </GridItem>
+          {/* The ledger spans both columns (SAS-154): its own grid row means
+              the Plan details box's bottom edge can never crowd it, no matter
+              how tall either column's content is. */}
+          <GridItem area="ledger">
+            <AccountSpendLedger
+              days={costBreakdownDays ?? null}
+              isLoading={isCostBreakdownLoading}
+              isError={isCostBreakdownError}
               regionFilter={regionFilter}
             />
           </GridItem>

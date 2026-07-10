@@ -602,18 +602,16 @@ const UnifiedLedger = ({
  * (replica size) needs per-cluster replica sizes the endpoint does not yet
  * carry either, so that remains a separate follow-up.
  */
-const AccountSpendBreakdown = ({
-  days,
-  isLoading,
-  isError,
-  error,
-  regionFilter,
-  setRegionFilter,
-  timeRange,
-  setTimeRange,
-}: AccountSpendBreakdownProps) => {
-  const { colors } = useTheme<MaterializeTheme>();
-
+// Shared pivot of the dense day series into everything the chart and the
+// ledger render: account order (biggest spender first), colors, stacked chart
+// rows, per-account sparkline series, aggregated accounts, period total, and
+// the date range. The chart and the ledger live in separate grid cells
+// (SAS-154), so both derive from this one hook and can never disagree on
+// ordering or colors.
+function useAccountSpendPivot(
+  days: CostBreakdownDay[] | null,
+  regionFilter: "all" | string,
+) {
   const filteredDays = useMemo(
     () => (days ? filterDaysByRegion(days, regionFilter) : null),
     [days, regionFilter],
@@ -667,6 +665,34 @@ const AccountSpendBreakdown = ({
       )
     : null;
 
+  return {
+    accountIds,
+    rows,
+    colorFor,
+    series,
+    orderedAccounts,
+    totalSpend,
+    rangeStart,
+    rangeEnd,
+  };
+}
+
+const AccountSpendBreakdown = ({
+  days,
+  isLoading,
+  isError,
+  error,
+  regionFilter,
+  setRegionFilter,
+  timeRange,
+  setTimeRange,
+}: AccountSpendBreakdownProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const { accountIds, rows, colorFor, totalSpend } = useAccountSpendPivot(
+    days,
+    regionFilter,
+  );
+
   return (
     <Box data-testid="account-spend-breakdown">
       <HStack gap={4} mb={4}>
@@ -706,27 +732,67 @@ const AccountSpendBreakdown = ({
             accountIds={accountIds}
             colorFor={colorFor}
           />
-          <Text textStyle="heading-sm" mt={6} data-testid="account-spend-range">
-            Spend between{" "}
-            {rangeStart && rangeEnd && (
-              <>
-                <chakra.time dateTime={rangeStart} color={colors.accent.green}>
-                  {rangeStart}
-                </chakra.time>{" "}
-                and{" "}
-                <chakra.time dateTime={rangeEnd} color={colors.accent.green}>
-                  {rangeEnd}
-                </chakra.time>
-              </>
-            )}
-          </Text>
-          <UnifiedLedger
-            accounts={orderedAccounts}
-            series={series}
-            colorFor={colorFor}
-          />
         </Box>
       )}
+    </Box>
+  );
+};
+
+export type AccountSpendLedgerProps = {
+  days: CostBreakdownDay[] | null;
+  isLoading: boolean;
+  isError: boolean;
+  regionFilter: "all" | string;
+};
+
+/**
+ * The "Spend between …" heading and the unified per-account ledger, split from
+ * AccountSpendBreakdown so the page can give the table its own full-width grid
+ * row beneath the chart and Plan details columns (SAS-154). Loading, error,
+ * and empty states are surfaced by AccountSpendBreakdown, so this renders
+ * nothing in those states.
+ */
+export const AccountSpendLedger = ({
+  days,
+  isLoading,
+  isError,
+  regionFilter,
+}: AccountSpendLedgerProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const {
+    accountIds,
+    colorFor,
+    series,
+    orderedAccounts,
+    rangeStart,
+    rangeEnd,
+  } = useAccountSpendPivot(days, regionFilter);
+
+  if (isLoading || isError || !days || accountIds.length === 0) {
+    return null;
+  }
+
+  return (
+    <Box data-testid="account-spend-ledger">
+      <Text textStyle="heading-sm" data-testid="account-spend-range">
+        Spend between{" "}
+        {rangeStart && rangeEnd && (
+          <>
+            <chakra.time dateTime={rangeStart} color={colors.accent.green}>
+              {rangeStart}
+            </chakra.time>{" "}
+            and{" "}
+            <chakra.time dateTime={rangeEnd} color={colors.accent.green}>
+              {rangeEnd}
+            </chakra.time>
+          </>
+        )}
+      </Text>
+      <UnifiedLedger
+        accounts={orderedAccounts}
+        series={series}
+        colorFor={colorFor}
+      />
     </Box>
   );
 };

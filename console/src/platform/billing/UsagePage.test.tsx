@@ -139,9 +139,12 @@ describe("UsagePage", () => {
         { timeout: 5_000 },
       ),
     );
+    // The ledger lives in its own full-width grid row below the chart and
+    // plan-details columns (SAS-154).
+    const ledger = within(await screen.findByTestId("account-spend-ledger"));
     // One expandable row per account, biggest spender first, each showing that
     // account's period total (parent 14 = 10 + 4, child 5).
-    const accountRows = await breakdown.findAllByTestId("account-row");
+    const accountRows = await ledger.findAllByTestId("account-row");
     expect(accountRows).toHaveLength(2);
     expect(within(accountRows[0]).getByText(formatCurrency(14))).toBeVisible();
     expect(within(accountRows[1]).getByText(formatCurrency(5))).toBeVisible();
@@ -153,19 +156,19 @@ describe("UsagePage", () => {
     // region-qualified ("aws/us-east-1 / <cluster>").
     for (const cluster of ["quickstart.r1", "compute.r1", "prod.r1"]) {
       expect(
-        await breakdown.findByText(`aws/us-east-1 / ${cluster}`),
+        await ledger.findByText(`aws/us-east-1 / ${cluster}`),
       ).toBeVisible();
     }
     // The segmented-by-account chart and the grand-total row (19 = 14 + 5) are
     // present.
     expect(await breakdown.findByTestId("account-spend-chart")).toBeVisible();
-    const totalRow = within(await breakdown.findByTestId("account-total-row"));
+    const totalRow = within(await ledger.findByTestId("account-total-row"));
     expect(totalRow.getByText(formatCurrency(19))).toBeVisible();
     // A Usage column sits between "Account / cluster" and "Share of total"
     // (SAS-145): the endpoint doesn't carry usage quantities yet, so each of
     // the 3 cluster rows shows a placeholder rather than a number.
-    expect(await breakdown.findByText("Usage")).toBeVisible();
-    expect(breakdown.getAllByText("—")).toHaveLength(3);
+    expect(await ledger.findByText("Usage")).toBeVisible();
+    expect(ledger.getAllByText("—")).toHaveLength(3);
     // The section leads with the period total (19 = 14 + 5), mirroring the
     // legacy chart panel, and a "Spend between …" range above the table,
     // mirroring the legacy "Spend between …" breakdown. oneDay()'s single
@@ -175,7 +178,7 @@ describe("UsagePage", () => {
         formatCurrency(19),
       ),
     ).toBeVisible();
-    const range = within(await breakdown.findByTestId("account-spend-range"));
+    const range = within(await ledger.findByTestId("account-spend-range"));
     expect(range.getByText("Spend between", { exact: false })).toBeVisible();
     expect(range.getAllByText("01-15-24")).toHaveLength(2);
   });
@@ -259,19 +262,15 @@ describe("UsagePage", () => {
     );
     renderComponent(<UsagePage />);
 
-    const breakdown = within(
-      await screen.findByTestId(
-        "account-spend-breakdown",
-        {},
-        { timeout: 5_000 },
-      ),
+    const ledger = within(
+      await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
     );
-    const accountRows = await breakdown.findAllByTestId("account-row");
+    const accountRows = await ledger.findAllByTestId("account-row");
     expect(accountRows).toHaveLength(2);
     for (const row of accountRows) {
       expect(within(row).getByText("0.0%")).toBeVisible();
     }
-    expect(breakdown.queryByText(/NaN/)).not.toBeInTheDocument();
+    expect(ledger.queryByText(/NaN/)).not.toBeInTheDocument();
   });
 
   it("shows a plan-details box beside the breakdown, itemizing last 30 days by account", async () => {
@@ -371,22 +370,15 @@ describe("UsagePage", () => {
     );
     renderComponent(<UsagePage />);
 
-    const breakdown = within(
-      await screen.findByTestId(
-        "account-spend-breakdown",
-        {},
-        { timeout: 5_000 },
-      ),
+    const ledger = within(
+      await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
     );
     // The account renders expanded, so its clusters are visible inline. Scope
-    // lookups to this table: SpendBreakdown ("Spend between …") renders the same
-    // "<region> / Storage" text from the daily costs. Storage and egress (both
-    // empty cluster_grouping_key) stay on separate rows via `category`.
-    expect(
-      await breakdown.findByText("aws/us-east-1 / default.r1"),
-    ).toBeVisible();
-    expect(await breakdown.findByText("aws/us-east-1 / Storage")).toBeVisible();
-    expect(await breakdown.findByText("aws/us-east-1 / Egress")).toBeVisible();
+    // lookups to the ledger table. Storage and egress (both empty
+    // cluster_grouping_key) stay on separate rows via `category`.
+    expect(await ledger.findByText("aws/us-east-1 / default.r1")).toBeVisible();
+    expect(await ledger.findByText("aws/us-east-1 / Storage")).toBeVisible();
+    expect(await ledger.findByText("aws/us-east-1 / Egress")).toBeVisible();
   });
 
   it("falls back to 'Other' when a row has neither cluster key nor category", async () => {
@@ -416,15 +408,11 @@ describe("UsagePage", () => {
     );
     renderComponent(<UsagePage />);
 
-    const breakdown = within(
-      await screen.findByTestId(
-        "account-spend-breakdown",
-        {},
-        { timeout: 5_000 },
-      ),
+    const ledger = within(
+      await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
     );
     // The account renders expanded, so its one cluster row is visible inline.
-    expect(await breakdown.findByText("aws/us-east-1 / Other")).toBeVisible();
+    expect(await ledger.findByText("aws/us-east-1 / Other")).toBeVisible();
   });
 
   it("filters the ledger by region", async () => {
@@ -462,17 +450,13 @@ describe("UsagePage", () => {
     );
     renderComponent(<UsagePage />);
 
-    const breakdown = within(
-      await screen.findByTestId(
-        "account-spend-breakdown",
-        {},
-        { timeout: 5_000 },
-      ),
+    const ledger = within(
+      await screen.findByTestId("account-spend-ledger", {}, { timeout: 5_000 }),
     );
     // Both accounts show before filtering.
-    expect(await breakdown.findAllByTestId("account-row")).toHaveLength(2);
+    expect(await ledger.findAllByTestId("account-row")).toHaveLength(2);
     const totalRowBefore = within(
-      await breakdown.findByTestId("account-total-row"),
+      await ledger.findByTestId("account-total-row"),
     );
     expect(totalRowBefore.getByText(formatCurrency(15))).toBeVisible();
 
@@ -496,12 +480,12 @@ describe("UsagePage", () => {
     // Only the us-east-1 account remains, and the grand total drops to just
     // its cost — the eu-west-1 account is filtered out entirely.
     await waitFor(async () => {
-      expect(await breakdown.findAllByTestId("account-row")).toHaveLength(1);
+      expect(await ledger.findAllByTestId("account-row")).toHaveLength(1);
     });
-    const accountRows = await breakdown.findAllByTestId("account-row");
+    const accountRows = await ledger.findAllByTestId("account-row");
     expect(within(accountRows[0]).getByText(formatCurrency(10))).toBeVisible();
     const totalRowAfter = within(
-      await breakdown.findByTestId("account-total-row"),
+      await ledger.findByTestId("account-total-row"),
     );
     expect(totalRowAfter.getByText(formatCurrency(10))).toBeVisible();
 
