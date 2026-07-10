@@ -672,6 +672,10 @@ impl PgwireBalancer {
                         warn!("client-caused connection failure: {details:#}");
                         SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
                     }
+                    ResolveError::Upstream(details) => {
+                        warn!("upstream not available: {details:#}");
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    }
                     ResolveError::Internal(details) => {
                         error!("resolving connection destination: {details:#}");
                         SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
@@ -1343,12 +1347,20 @@ pub enum BalancerResolver {
 enum ResolveError {
     #[error("invalid password")]
     InvalidPassword,
-    /// A failure caused by client input, e.g. a bogus SNI that does not resolve
-    /// or a protocol violation. An unauthenticated client can trigger these at
-    /// will, so they are logged at `warn!`, not `error!`, to avoid making
-    /// client noise look like server faults and spamming the error log.
+    /// A client protocol violation, e.g. sending the wrong message during
+    /// startup. An unauthenticated client can trigger these at will, so they
+    /// are logged at `warn!`, not `error!`, to avoid making client noise look
+    /// like server faults and spamming the error log.
     #[error("internal error")]
     Client(#[source] anyhow::Error),
+    /// The tenant's upstream backend could not be reached, e.g. its hostname
+    /// did not resolve. Reported to the client with a distinct, non-leaking
+    /// message rather than a generic internal error, so a down environment is
+    /// not mistaken for a balancerd bug. Logged at `warn!`: a bogus SNI reaches
+    /// this from an unauthenticated client, and a genuinely down environment is
+    /// an operational condition, not a balancerd fault.
+    #[error("upstream server not available")]
+    Upstream(#[source] anyhow::Error),
     /// A server-side fault.
     #[error("internal error")]
     Internal(#[from] anyhow::Error),
@@ -1403,12 +1415,13 @@ impl BalancerResolver {
                 let has_sni = servername.is_some();
                 let resolved_addr = match (servername, sni_resolver.as_ref()) {
                     (Some(servername), Some(SniTemplate { template, port })) => {
-                        // The servername is client-supplied, so a resolution
-                        // failure here is a client error, not a server fault.
+                        // A resolution failure here means the tenant's backend
+                        // is unreachable (or the client sent a bogus SNI). Not
+                        // a server fault.
                         let (addr, tenant) = dns_resolver
                             .resolve_sni(template, *port, servername)
                             .await
-                            .map_err(ResolveError::Client)?;
+                            .map_err(ResolveError::Upstream)?;
                         debug!("pgwire SNI resolved tenant: {:?}", tenant);
                         ResolvedAddr {
                             addr,
@@ -1450,8 +1463,12 @@ impl BalancerResolver {
                             format!("invalid port in addr_template: {}", port_str)
                         })?;
                         // The tenant is already known from authentication, so
-                        // skip the CNAME lookup that resolve() would do.
-                        let addr = dns_resolver.resolve_addr(hostname, port).await?;
+                        // skip the CNAME lookup that resolve() would do. A
+                        // failure here means the tenant's backend is unreachable.
+                        let addr = dns_resolver
+                            .resolve_addr(hostname, port)
+                            .await
+                            .map_err(ResolveError::Upstream)?;
                         let tenant = auth_session.tenant_id().to_string();
                         debug!("Frontegg resolved tenant: {}", tenant);
                         ResolvedAddr {
