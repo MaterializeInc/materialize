@@ -85,20 +85,28 @@ impl ConfigFile {
 
     /// Loads a configuration file from the specified path.
     pub async fn load(path: PathBuf) -> Result<ConfigFile, Error> {
-        // Create the parent directory if it doesn't exist
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await?;
+        // Open for reading only if the file already exists, so that a
+        // read-only mount of an existing config file (e.g. a sandboxed
+        // environment that bind-mounts `mz.toml` read-only) doesn't fail a
+        // command that never intends to write to it. Only fall back to
+        // creating the file, which requires write access, when it's missing.
+        let mut file = match OpenOptions::new().read(true).open(&path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(parent) = path.parent() {
+                    if !parent.exists() {
+                        fs::create_dir_all(parent).await?;
+                    }
+                }
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(&path)?
             }
-        }
-
-        // Create the file if it doesn't exist
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)?;
+            Err(e) => return Err(e.into()),
+        };
 
         let mut buffer = String::new();
         file.read_to_string(&mut buffer)?;
