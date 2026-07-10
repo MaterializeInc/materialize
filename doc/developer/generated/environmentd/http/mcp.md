@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/mcp.rs
-revision: c73b24bed8
+revision: be4e00849a
 ---
 
 # environmentd::http::mcp
@@ -16,5 +16,6 @@ SQL parsing in MCP uses `parse_with_limit` for statements and `parse_item_name_w
 Enforces read-only SQL validation and AST-based system-table access control before executing queries; the developer endpoint allows SHOW and EXPLAIN statements without table references but rejects constant SELECT queries (e.g., `SELECT 1`) to prevent misuse for arbitrary computation.
 `read_data_product` uses `mz_internal.mz_show_my_cluster_privileges` (rather than `has_cluster_privilege`) to check cluster USAGE before routing the read; this avoids triggering `restrict_to_user_objects` since `mz_show_my_cluster_privileges` only exposes the session role's own privileges.
 `execute_sql` delegates to the private `select_single_rows(results: Vec<SqlResult>)` function, which returns the rows of the single row-returning statement in the response. `select_single_rows` surfaces the first error encountered; a second row-returning statement is an `Internal` error rather than a silently dropped result. The framing statements around a user query (`BEGIN`, `SET`, `COMMIT`) report `Ok` with no rows, so only the user's statement contributes rows.
+`McpResponse` is the top-level JSON-RPC 2.0 response envelope; `McpResponse::success(id, result)` builds a response carrying `result` and `McpResponse::error(id, error)` builds one carrying `error`, with exactly one of the two fields set.
 `McpRequestError` maps domain errors to standard JSON-RPC error codes.
 Prometheus metrics are collected via `McpMetrics` (injected as an Axum `Extension`): request counts labeled by endpoint, JSON-RPC method, and status; tool call counts and durations labeled by endpoint and tool name. `ToolCallGuard` is an RAII guard that records tool call duration and status on drop, ensuring metrics are recorded even when a future is dropped early (e.g. by a timeout).
