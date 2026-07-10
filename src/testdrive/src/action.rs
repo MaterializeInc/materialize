@@ -215,9 +215,6 @@ pub struct MaterializeState {
 }
 
 pub struct State {
-    // The Config that this `State` was originally created from.
-    pub config: Config,
-
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
     cmd_vars: BTreeMap<String, String>,
@@ -1121,8 +1118,6 @@ pub async fn create_state(
     };
 
     let mut state = State {
-        config: config.clone(),
-
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
         cmd_vars: BTreeMap::new(),

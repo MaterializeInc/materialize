@@ -13,9 +13,8 @@ use std::io::Write as _;
 use std::str::FromStr;
 use std::time::Duration;
 
-use crate::action;
-use crate::action::{ControlFlow, Run, State};
-use crate::parser::{BuiltinCommand, LineReader, parse};
+use crate::action::{ControlFlow, State};
+use crate::parser::BuiltinCommand;
 use anyhow::{Context, anyhow, bail};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_persist_client::{PersistLocation, ShardId};
@@ -260,14 +259,11 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
 /// normal `.td`s, but not after cluster tests and whatnot that kill/restart the system.
 /// (Also, this can take several seconds due to the 5 sec buffering, so we run this only in Nightly
 /// by default.)
-async fn check_statement_logging(orig_state: &State) -> Result<(), anyhow::Error> {
+async fn check_statement_logging(state: &State) -> Result<(), anyhow::Error> {
     use crate::util::postgres::postgres_client;
 
-    // Create new Testdrive state, so that we create a new session to Materialize, and we forget any
-    // weird Testdrive setting that the `.td` file before us might have set.
-    let (mut state, state_cleanup) = action::create_state(&orig_state.config).await?;
-
-    // First, query the current value of enable_rbac_checks so we can restore it later
+    // Connect as mz_system, which is a superuser and can read
+    // mz_internal.mz_recent_activity_log with RBAC enforced.
     let mz_system_url = format!(
         "postgres://mz_system:materialize@{}",
         state.materialize.internal_sql_addr
@@ -275,49 +271,38 @@ async fn check_statement_logging(orig_state: &State) -> Result<(), anyhow::Error
 
     let (client, _handle) = postgres_client(&mz_system_url, state.default_timeout)
         .await
-        .context("connecting as mz_system to query enable_rbac_checks")?;
+        .context("connecting as mz_system to check the statement log")?;
 
-    let row = query_one(&client, sql!("SHOW enable_rbac_checks"), &[])
-        .await
-        .context("querying enable_rbac_checks")?;
-
-    let original_value: String = row.get(0);
-
-    // Create a testdrive script to check that all statements have finished executing.
-    // We disable RBAC checks so we can query mz_internal tables, similar to statement-logging.td.
-    // We restore the setting to its original value at the end.
-    let check_script = format!(
-        r#"
-$ postgres-execute connection=postgres://mz_system:materialize@{0}
-ALTER SYSTEM SET enable_rbac_checks = false
-
-> SELECT count(*)
-  FROM mz_internal.mz_recent_activity_log
-  WHERE
-    (finished_at IS NULL OR finished_status IS NULL)
-    AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'
-    AND finished_status != 'aborted';
-0
-
-$ postgres-execute connection=postgres://mz_system:materialize@{0}
-ALTER SYSTEM SET enable_rbac_checks = {1}
-"#,
-        state.materialize.internal_sql_addr, original_value
+    // Statement log writes are buffered and flushed every 5 seconds, so retry
+    // until in-flight statements have drained. The marker string in the query
+    // text filters the query out of its own result, since it is necessarily
+    // unfinished while it runs.
+    let check = sql!(
+        "SELECT count(*)
+        FROM mz_internal.mz_recent_activity_log
+        WHERE
+            (finished_at IS NULL OR finished_status IS NULL)
+            AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'
+            AND finished_status != 'aborted'"
     );
-
-    let mut line_reader = LineReader::new(&check_script);
-    let cmds = parse(&mut line_reader).map_err(|e| anyhow!("{}", e.source))?;
-
-    for cmd in cmds {
-        cmd.run(&mut state)
-            .await
-            .map_err(|e| anyhow!("{}", e.source))?;
-    }
-
-    drop(state);
-    state_cleanup.await?;
-
-    Ok(())
+    Retry::default()
+        .max_duration(state.default_timeout)
+        .retry_async_canceling(|_| {
+            let client = &client;
+            let check = &check;
+            async move {
+                let row = query_one(client, check.clone(), &[])
+                    .await
+                    .context("querying statement log")?;
+                let count: i64 = row.get(0);
+                if count == 0 {
+                    Ok(())
+                } else {
+                    bail!("{count} statements not in a finished state");
+                }
+            }
+        })
+        .await
 }
 
 /// Checks if the provided `shard_id` is a tombstone, returning an error if it's not.
