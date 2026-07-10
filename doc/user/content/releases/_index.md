@@ -22,6 +22,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 ### Improvements {#v26.32-improvements}
 - **`COPY TO` replica routing**: `COPY TO` now honors the session's `cluster_replica` setting, matching the behavior of regular `SELECT` queries.
 
+### Agent Skills {#v26.32-agent-skills}
+- **MCP Developer Analysis**: Updated to document the developer `query` tool and `EXPLAIN ANALYZE` workflow for querying user objects on named clusters.
+
 ### Bug Fixes {#v26.32-bug-fixes}
 - Fixed internal HTTP endpoints not enforcing role-based authorization in Self-Managed deployments with password or OIDC authentication, allowing any authenticated user to access internal administration routes.
 - Fixed `CREATE REPLACEMENT MATERIALIZED VIEW ... FOR <target>` not requiring ownership of the target view, allowing another role to block the owner from using the replacement workflow on their own object.
@@ -41,9 +44,6 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - Fixed `SUBSCRIBE` returning an internal error code (`XX000`) instead of the standard "undefined object" code (`42704`) when referencing a non-existent object.
 - Fixed `TopK` query optimization losing `expected_group_size` hints during operator fusion, causing unnecessary overhead in query execution.
 - Fixed `app.kubernetes.io/name` label missing from environmentd Kubernetes resources when using the `v1alpha1` CRD.
-
-### Agent Skills {#v26.32-agent-skills}
-- **MCP Developer Analysis**: Updated to document the developer `query` tool and `EXPLAIN ANALYZE` workflow for querying user objects on named clusters.
 
 ## v26.31.2
 *Released to Materialize Self-Managed: 2026-07-08* <br>
