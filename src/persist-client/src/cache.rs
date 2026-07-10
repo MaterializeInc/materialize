@@ -600,7 +600,7 @@ impl StateCache {
 pub(crate) struct LockingTypedState<K, V, T, D> {
     shard_id: ShardId,
     state: RwLock<TypedState<K, V, T, D>>,
-    notifier: StateWatchNotifier,
+    notifier: StateWatchNotifier<T>,
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
@@ -640,10 +640,16 @@ impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
         cfg: Arc<PersistConfig>,
         subscription_token: Arc<ShardSubscriptionToken>,
         diagnostics: &Diagnostics,
-    ) -> Self {
+    ) -> Self
+    where
+        // Bounds needed to seed the notifier with the shard's current upper.
+        T: Timestamp + Lattice + Codec64,
+        D: Codec64,
+    {
+        let notifier = StateWatchNotifier::new(Arc::clone(&metrics), initial_state.upper().clone());
         Self {
             shard_id,
-            notifier: StateWatchNotifier::new(Arc::clone(&metrics)),
+            notifier,
             state: RwLock::new(initial_state),
             cfg: Arc::clone(&cfg),
             shard_metrics: metrics.shards.shard(&shard_id, &diagnostics.shard_name),
@@ -696,11 +702,16 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         f(&state)
     }
 
-    pub(crate) fn write_lock<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(
-        &self,
-        metrics: &LockMetrics,
-        f: F,
-    ) -> R {
+    pub(crate) fn write_lock<R, F>(&self, metrics: &LockMetrics, f: F) -> R
+    where
+        F: FnOnce(&mut TypedState<K, V, T, D>) -> R,
+        // Bounds needed to read the shard upper. All callers are in contexts that
+        // already satisfy these (they mutate a fully-typed shard state).
+        K: Codec,
+        V: Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Codec64,
+    {
         metrics.acquire_count.inc();
         let mut state = match self.state.try_write() {
             Ok(x) => x,
@@ -720,7 +731,11 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         let seqno_after = state.seqno;
         debug_assert!(seqno_after >= seqno_before);
         if seqno_after > seqno_before {
-            self.notifier.notify(seqno_after);
+            // The notifier only advances the upper waiters' signal on a strict
+            // upper advance. The seqno bumps for many non-data reasons (GC,
+            // rollups, since-downgrades, other writers' CaAs) and those must not
+            // re-activate upper waiters.
+            self.notifier.notify(seqno_after, state.upper());
         }
         // For now, make sure to notify while under lock. It's possible to move
         // this out of the lock window, see [StateWatchNotifier::notify].
@@ -796,7 +811,7 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         }
     }
 
-    pub(crate) fn notifier(&self) -> &StateWatchNotifier {
+    pub(crate) fn notifier(&self) -> &StateWatchNotifier<T> {
         &self.notifier
     }
 }
