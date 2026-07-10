@@ -100,12 +100,13 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             mz_audit_log::ObjectType::MaterializedView => {
                 crate::objects::audit_log_event_v1::ObjectType::MaterializedView
             }
-            // Metric sinks are never persisted, so no audit log event referencing one is ever
-            // durably serialized. The catalog-protos schema doesn't have a discriminant for this
-            // variant yet; adding one is out of scope until audit logging for metric sinks is
-            // implemented.
+            // `Catalog::should_audit_log_item` excludes metric sinks from the audit log, so no
+            // `MetricSink` audit event is ever constructed and this arm never runs on a real
+            // catalog transaction. The `#[proptest(skip)]` on `mz_audit_log::ObjectType::MetricSink`
+            // keeps the roundtrip proptest from generating one either. The catalog-protos schema
+            // has no discriminant for this variant, so there is nothing correct to return here.
             mz_audit_log::ObjectType::MetricSink => {
-                unreachable!("metric sink audit log events are not yet supported")
+                unreachable!("metric sink audit log events are never durably logged")
             }
             mz_audit_log::ObjectType::NetworkPolicy => {
                 crate::objects::audit_log_event_v1::ObjectType::NetworkPolicy

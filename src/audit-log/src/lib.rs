@@ -157,6 +157,10 @@ pub enum ObjectType {
     Func,
     Index,
     MaterializedView,
+    // Metric sinks are never durably audit-logged (see `should_audit_log_item` in
+    // adapter's catalog transact module), so no `MetricSink` audit event ever needs
+    // protobuf encoding. Exclude it from the roundtrip proptest to match that invariant.
+    #[proptest(skip)]
     MetricSink,
     NetworkPolicy,
     Role,
