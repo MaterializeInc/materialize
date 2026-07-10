@@ -152,13 +152,7 @@ pub fn describe(
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
-        // Planning for `CREATE METRIC SINK` is not yet implemented.
-        Statement::CreateMetricSink(_) => {
-            return Err(PlanError::Unsupported {
-                feature: "CREATE METRIC SINK".to_string(),
-                discussion_no: None,
-            });
-        }
+        Statement::CreateMetricSink(stmt) => ddl::describe_create_metric_sink(&scx, stmt)?,
         Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
@@ -364,13 +358,7 @@ pub fn plan(
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
-        // Planning for `CREATE METRIC SINK` is not yet implemented.
-        Statement::CreateMetricSink(_) => {
-            return Err(PlanError::Unsupported {
-                feature: "CREATE METRIC SINK".to_string(),
-                discussion_no: None,
-            });
-        }
+        Statement::CreateMetricSink(stmt) => ddl::plan_create_metric_sink(scx, stmt),
         Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),

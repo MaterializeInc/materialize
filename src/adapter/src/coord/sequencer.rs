@@ -282,6 +282,12 @@ impl Coordinator {
                 Plan::CreateSink(plan) => {
                     self.sequence_create_sink(ctx, plan, resolved_ids).await;
                 }
+                Plan::CreateMetricSink(plan) => {
+                    let result = self
+                        .sequence_create_metric_sink(ctx.session(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(result);
+                }
                 Plan::CreateView(plan) => {
                     self.sequence_create_view(ctx, plan, resolved_ids).await;
                 }

@@ -31,8 +31,8 @@ use mz_catalog::durable::objects::{
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
-    Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, MetricSink,
+    NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -2094,6 +2094,36 @@ impl CatalogState {
         };
 
         self.insert_entry(entry);
+    }
+
+    /// Installs a `CatalogItem::MetricSink` directly, bypassing the durable
+    /// `Transaction`/`StateUpdateKind` pipeline that every other item type flows through.
+    ///
+    /// Metric sinks are never durably persisted (`to_serialized`/`into_serialized` panic for
+    /// them, see `CatalogItem::MetricSink`), so `Catalog::transact_op` routes them here instead
+    /// of through `Transaction::insert_user_item`.
+    pub(super) fn insert_metric_sink(
+        &mut self,
+        id: CatalogItemId,
+        oid: u32,
+        name: QualifiedItemName,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+        metric_sink: MetricSink,
+    ) {
+        self.insert_item(
+            id,
+            oid,
+            name,
+            CatalogItem::MetricSink(metric_sink),
+            owner_id,
+            PrivilegeMap::from_mz_acl_items(privileges),
+        );
+    }
+
+    /// Removes a `CatalogItem::MetricSink` directly. See `insert_metric_sink`.
+    pub(super) fn remove_metric_sink(&mut self, id: CatalogItemId) {
+        self.drop_item(id);
     }
 
     #[mz_ore::instrument(level = "trace")]

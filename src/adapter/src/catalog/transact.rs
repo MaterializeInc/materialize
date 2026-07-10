@@ -32,8 +32,8 @@ use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, SourceReferences,
-    StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
+    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, MetricSink,
+    SourceReferences, StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
 };
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -400,9 +400,31 @@ enum TransactInnerMode {
     DryRun,
 }
 
+/// A non-durable install or removal of a `CatalogItem::MetricSink`.
+///
+/// Metric sinks are never durably persisted (`to_serialized`/`into_serialized` panic for them,
+/// see `CatalogItem::MetricSink`), so unlike every other item they have no representation in
+/// `Transaction`'s diffs or in `StateUpdateKind`. `transact_op` returns these alongside the
+/// temporary item diffs, and `transact_inner` applies them straight to `CatalogState`.
+#[derive(Clone)]
+enum MetricSinkOp {
+    Insert {
+        id: CatalogItemId,
+        oid: u32,
+        name: QualifiedItemName,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+        metric_sink: MetricSink,
+    },
+    Remove(CatalogItemId),
+}
+
 impl Catalog {
     fn should_audit_log_item(item: &CatalogItem) -> bool {
-        !item.is_temporary()
+        // Metric sinks are never durably persisted, so they must not flow into the durable
+        // audit log either: `mz_audit_log::ObjectType` has no variant to encode them (see
+        // `CatalogItem::MetricSink`), and encoding one panics.
+        !item.is_temporary() && !matches!(item, CatalogItem::MetricSink(_))
     }
 
     /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
@@ -717,9 +739,10 @@ impl Catalog {
         let mut storage_collections_to_register = BTreeMap::new();
 
         let mut updates = Vec::new();
+        let mut metric_sink_updates = Vec::new();
 
         for op in ops {
-            let temporary_item_updates = Self::transact_op(
+            let (temporary_item_updates, op_metric_sink_updates) = Self::transact_op(
                 oracle_write_ts,
                 session,
                 op,
@@ -732,6 +755,31 @@ impl Catalog {
                 &mut storage_collections_to_register,
             )
             .await?;
+
+            // Metric sinks are never durably persisted, so they have no representation in `tx`'s
+            // diffs at all; apply them to `preliminary_state` directly instead of via
+            // `apply_updates`. See `MetricSinkOp`.
+            for metric_sink_op in &op_metric_sink_updates {
+                match metric_sink_op.clone() {
+                    MetricSinkOp::Insert {
+                        id,
+                        oid,
+                        name,
+                        owner_id,
+                        privileges,
+                        metric_sink,
+                    } => preliminary_state.to_mut().insert_metric_sink(
+                        id,
+                        oid,
+                        name,
+                        owner_id,
+                        privileges,
+                        metric_sink,
+                    ),
+                    MetricSinkOp::Remove(id) => preliminary_state.to_mut().remove_metric_sink(id),
+                }
+            }
+            metric_sink_updates.extend(op_metric_sink_updates);
 
             // Temporary items are not stored in the durable catalog, so they need to be handled
             // separately for updating state and builtin tables.
@@ -809,6 +857,29 @@ impl Catalog {
             parsed_catalog_updates.extend(op_catalog_updates);
         }
 
+        // Replay the accumulated `MetricSinkOp`s onto the final `state`, mirroring what was
+        // already done to `preliminary_state` per-op above.
+        for metric_sink_op in metric_sink_updates {
+            match metric_sink_op {
+                MetricSinkOp::Insert {
+                    id,
+                    oid,
+                    name,
+                    owner_id,
+                    privileges,
+                    metric_sink,
+                } => state.to_mut().insert_metric_sink(
+                    id,
+                    oid,
+                    name,
+                    owner_id,
+                    privileges,
+                    metric_sink,
+                ),
+                MetricSinkOp::Remove(id) => state.to_mut().remove_metric_sink(id),
+            }
+        }
+
         match state {
             Cow::Owned(state) => Ok(Some(state)),
             Cow::Borrowed(_) => Ok(None),
@@ -822,6 +893,9 @@ impl Catalog {
     /// Optionally returns a builtin table update for any builtin table updates than cannot be
     /// derived from the durable catalog state, and temporary item diffs. These are all very weird
     /// scenarios and ideally in the future don't exist.
+    ///
+    /// Also returns any `MetricSinkOp`s: metric sinks are never durably persisted, so unlike
+    /// every other item they cannot be derived from `tx`'s diffs at all, durable or otherwise.
     #[instrument]
     async fn transact_op(
         oracle_write_ts: mz_repr::Timestamp,
@@ -834,8 +908,9 @@ impl Catalog {
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
-    ) -> Result<Vec<(TemporaryItem, StateDiff)>, AdapterError> {
+    ) -> Result<(Vec<(TemporaryItem, StateDiff)>, Vec<MetricSinkOp>), AdapterError> {
         let mut temporary_item_updates = Vec::new();
+        let mut metric_sink_updates = Vec::new();
 
         match op {
             Op::CheckClusterState {
@@ -1499,84 +1574,109 @@ impl Catalog {
 
                 let temporary_oids = state.get_temporary_oids().collect();
 
-                if item.is_temporary() {
-                    if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
-                        || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
-                    {
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::InvalidTemporarySchema,
-                        )));
+                match &item {
+                    // Metric sinks are never durably persisted (`to_serialized` panics for
+                    // them, see `CatalogItem::MetricSink`), so they cannot flow through
+                    // `Transaction`/`StateUpdateKind` like every other item type. Install them
+                    // directly into `CatalogState` instead; see `MetricSinkOp`.
+                    CatalogItem::MetricSink(metric_sink) => {
+                        let oid = tx.allocate_oid(&temporary_oids)?;
+                        metric_sink_updates.push(MetricSinkOp::Insert {
+                            id,
+                            oid,
+                            name: name.clone(),
+                            owner_id,
+                            privileges: privileges.clone(),
+                            metric_sink: metric_sink.clone(),
+                        });
+                        info!(
+                            "create metric sink {} ({})",
+                            state.resolve_full_name(&name, None),
+                            id
+                        );
                     }
-                    let oid = tx.allocate_oid(&temporary_oids)?;
+                    _ if item.is_temporary() => {
+                        if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
+                            || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
+                        {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::InvalidTemporarySchema,
+                            )));
+                        }
+                        let oid = tx.allocate_oid(&temporary_oids)?;
 
-                    let schema_id = name.qualifiers.schema_spec.clone().into();
-                    let item_type = item.typ();
-                    let (create_sql, global_id, versions) = item.to_serialized();
+                        let schema_id = name.qualifiers.schema_spec.clone().into();
+                        let item_type = item.typ();
+                        let (create_sql, global_id, versions) = item.to_serialized();
 
-                    let item = TemporaryItem {
-                        id,
-                        oid,
-                        global_id,
-                        schema_id,
-                        name: name.item.clone(),
-                        create_sql,
-                        conn_id: item.conn_id().cloned(),
-                        owner_id,
-                        privileges: privileges.clone(),
-                        extra_versions: versions,
-                    };
-                    temporary_item_updates.push((item, StateDiff::Addition));
+                        let item = TemporaryItem {
+                            id,
+                            oid,
+                            global_id,
+                            schema_id,
+                            name: name.item.clone(),
+                            create_sql,
+                            conn_id: item.conn_id().cloned(),
+                            owner_id,
+                            privileges: privileges.clone(),
+                            extra_versions: versions,
+                        };
+                        temporary_item_updates.push((item, StateDiff::Addition));
 
-                    info!(
-                        "create temporary {} {} ({})",
-                        item_type,
-                        state.resolve_full_name(&name, None),
-                        id
-                    );
-                } else {
-                    if let Some(temp_id) =
-                        item.uses()
-                            .iter()
-                            .find(|id| match state.try_get_entry(*id) {
-                                Some(entry) => entry.item().is_temporary(),
-                                None => temporary_ids.contains(id),
-                            })
-                    {
-                        let temp_item = state.get_entry(temp_id);
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::InvalidTemporaryDependency(temp_item.name().item.clone()),
-                        )));
+                        info!(
+                            "create temporary {} {} ({})",
+                            item_type,
+                            state.resolve_full_name(&name, None),
+                            id
+                        );
                     }
-                    if name.qualifiers.database_spec == ResolvedDatabaseSpecifier::Ambient
-                        && !system_user
-                    {
-                        let schema_name = state
-                            .resolve_full_name(&name, session.map(|session| session.conn_id()))
-                            .schema;
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(schema_name),
-                        )));
+                    _ => {
+                        if let Some(temp_id) =
+                            item.uses()
+                                .iter()
+                                .find(|id| match state.try_get_entry(*id) {
+                                    Some(entry) => entry.item().is_temporary(),
+                                    None => temporary_ids.contains(id),
+                                })
+                        {
+                            let temp_item = state.get_entry(temp_id);
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::InvalidTemporaryDependency(
+                                    temp_item.name().item.clone(),
+                                ),
+                            )));
+                        }
+                        if name.qualifiers.database_spec == ResolvedDatabaseSpecifier::Ambient
+                            && !system_user
+                        {
+                            let schema_name = state
+                                .resolve_full_name(&name, session.map(|session| session.conn_id()))
+                                .schema;
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlySystemSchema(schema_name),
+                            )));
+                        }
+                        let schema_id = name.qualifiers.schema_spec.clone().into();
+                        let item_type = item.typ();
+                        let (create_sql, global_id, versions) = item.to_serialized();
+                        tx.insert_user_item(
+                            id,
+                            global_id,
+                            schema_id,
+                            &name.item,
+                            create_sql,
+                            owner_id,
+                            privileges.clone(),
+                            &temporary_oids,
+                            versions,
+                        )?;
+                        info!(
+                            "create {} {} ({})",
+                            item_type,
+                            state.resolve_full_name(&name, None),
+                            id
+                        );
                     }
-                    let schema_id = name.qualifiers.schema_spec.clone().into();
-                    let item_type = item.typ();
-                    let (create_sql, global_id, versions) = item.to_serialized();
-                    tx.insert_user_item(
-                        id,
-                        global_id,
-                        schema_id,
-                        &name.item,
-                        create_sql,
-                        owner_id,
-                        privileges.clone(),
-                        &temporary_oids,
-                        versions,
-                    )?;
-                    info!(
-                        "create {} {} ({})",
-                        item_type,
-                        state.resolve_full_name(&name, None),
-                        id
-                    );
                 }
 
                 if Self::should_audit_log_item(&item) {
@@ -1769,13 +1869,25 @@ impl Catalog {
                 // Drop any associated comments.
                 tx.drop_comments(&delta.comments)?;
 
-                // Drop any items.
-                let (durable_items_to_drop, temporary_items_to_drop): (BTreeSet<_>, BTreeSet<_>) =
-                    delta
-                        .items
-                        .iter()
-                        .map(|id| id)
-                        .partition(|id| !state.get_entry(*id).item().is_temporary());
+                // Drop any items. Metric sinks are never durably persisted (see the
+                // `Op::CreateItem` handling above), so they are removed directly from
+                // `CatalogState` via `MetricSinkOp` rather than through `tx.remove_items`, which
+                // would fail to find a durable record for them.
+                let mut durable_items_to_drop = BTreeSet::new();
+                let mut temporary_items_to_drop = BTreeSet::new();
+                for id in &delta.items {
+                    match state.get_entry(id).item() {
+                        CatalogItem::MetricSink(_) => {
+                            metric_sink_updates.push(MetricSinkOp::Remove(*id));
+                        }
+                        item if item.is_temporary() => {
+                            temporary_items_to_drop.insert(*id);
+                        }
+                        _ => {
+                            durable_items_to_drop.insert(*id);
+                        }
+                    }
+                }
                 tx.remove_items(&durable_items_to_drop)?;
                 temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
                     let entry = state.get_entry(&id);
@@ -2879,7 +2991,7 @@ impl Catalog {
                 }
             }
         };
-        Ok(temporary_item_updates)
+        Ok((temporary_item_updates, metric_sink_updates))
     }
 
     fn log_update(state: &CatalogState, id: &CatalogItemId) {

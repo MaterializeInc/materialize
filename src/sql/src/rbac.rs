@@ -630,6 +630,30 @@ fn generate_rbac_requirements(
                 ..Default::default()
             }
         }
+        Plan::CreateMetricSink(plan::CreateMetricSinkPlan {
+            name,
+            metric_sink,
+            if_not_exists: _,
+            in_cluster,
+        }) => {
+            let mut privileges = vec![(
+                SystemObjectId::Object(name.qualifiers.clone().into()),
+                AclMode::CREATE,
+                role_id,
+            )];
+            let items = iter::once(metric_sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
+            privileges.push((
+                SystemObjectId::Object((*in_cluster).into()),
+                AclMode::CREATE,
+                role_id,
+            ));
+            RbacRequirements {
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateTable(plan::CreateTablePlan {
             name,
             table: _,

@@ -427,6 +427,11 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             CommentObjectId::Sink(global_id) => {
                 crate::objects::CommentObject::Sink(global_id.into_proto())
             }
+            // `COMMENT ON METRIC SINK` isn't parseable and metric sinks are never durably
+            // persisted, so no durable `Comment` record ever references one.
+            CommentObjectId::MetricSink(_) => {
+                unreachable!("comments on metric sinks are never durably serialized")
+            }
             CommentObjectId::Index(global_id) => {
                 crate::objects::CommentObject::Index(global_id.into_proto())
             }

@@ -3093,9 +3093,7 @@ impl CatalogEntry {
             Connection => CommentObjectId::Connection(self.id),
             Type => CommentObjectId::Type(self.id),
             Secret => CommentObjectId::Secret(self.id),
-            // `COMMENT ON METRIC SINK` isn't parseable, so `CommentObjectId` has no
-            // corresponding variant and this is never reached.
-            MetricSink => unreachable!("comments on metric sinks are not supported"),
+            MetricSink => CommentObjectId::MetricSink(self.id),
         }
     }
 }

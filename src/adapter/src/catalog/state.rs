@@ -74,9 +74,9 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext,
+    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -1494,6 +1494,12 @@ impl CatalogState {
                 cluster_id: in_cluster,
                 commit_interval: sink.commit_interval,
             }),
+            // Metric sinks are never durably persisted (see `CatalogItem::MetricSink`), so their
+            // `create_sql` is never parsed on catalog boot. The sequencer builds the
+            // `CatalogItem::MetricSink` directly instead of going through this path.
+            Plan::CreateMetricSink(CreateMetricSinkPlan { .. }) => {
+                unreachable!("metric sinks are never durably serialized")
+            }
             Plan::CreateType(CreateTypePlan { typ, .. }) => {
                 // Even if we don't need the `RelationDesc` here, error out
                 // early and eagerly, as a kind of soft assertion that we _can_
@@ -2715,6 +2721,7 @@ impl CatalogState {
             | CommentObjectId::MaterializedView(id)
             | CommentObjectId::Source(id)
             | CommentObjectId::Sink(id)
+            | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
@@ -2744,6 +2751,7 @@ impl CatalogState {
             | CommentObjectId::MaterializedView(id)
             | CommentObjectId::Source(id)
             | CommentObjectId::Sink(id)
+            | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)

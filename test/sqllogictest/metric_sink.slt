@@ -1,0 +1,91 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the CREATE METRIC SINK / DROP METRIC SINK plan layer: the
+# `enable_metric_sink` feature flag gate, schema validation of the source
+# relation, item-type validation of the source, and non-durable catalog
+# install/drop. Rendering the metric sink's compute dataflow is out of scope
+# here.
+
+mode cockroach
+
+statement ok
+CREATE VIEW good AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement error CREATE METRIC SINK is not available
+CREATE METRIC SINK s IN CLUSTER quickstart FROM good
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_metric_sink = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE METRIC SINK s IN CLUSTER quickstart FROM good
+
+statement ok
+CREATE VIEW bad AS SELECT 1 AS x
+
+statement error metric sink source must expose column "metric_name"
+CREATE METRIC SINK s2 IN CLUSTER quickstart FROM bad
+
+statement ok
+CREATE VIEW missing_column AS SELECT
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement error metric sink source must expose column "metric_name"
+CREATE METRIC SINK s3 IN CLUSTER quickstart FROM missing_column
+
+statement ok
+CREATE VIEW wrong_type AS SELECT
+    1 AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement error metric sink source column "metric_name" must be NOT NULL and of the required type
+CREATE METRIC SINK s4 IN CLUSTER quickstart FROM wrong_type
+
+statement ok
+CREATE VIEW nullable_column AS SELECT
+    CAST(NULL AS text) AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement error metric sink source column "metric_name" must be NOT NULL and of the required type
+CREATE METRIC SINK s5 IN CLUSTER quickstart FROM nullable_column
+
+statement ok
+CREATE SECRET metric_secret AS 'password'
+
+statement error cannot create metric sink from metric_secret because it is a secret
+CREATE METRIC SINK s6 IN CLUSTER quickstart FROM metric_secret
+
+statement error unknown catalog item 's7'
+DROP METRIC SINK s7
+
+statement ok
+DROP METRIC SINK IF EXISTS s7
+
+statement ok
+DROP METRIC SINK s
+
+statement error unknown catalog item 's'
+DROP METRIC SINK s

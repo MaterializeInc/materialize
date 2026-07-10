@@ -147,6 +147,7 @@ pub enum Plan {
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
+    CreateMetricSink(CreateMetricSinkPlan),
     CreateType(CreateTypePlan),
     Comment(CommentPlan),
     DiscardTemp,
@@ -280,9 +281,7 @@ impl Plan {
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
             StatementKind::CreateSink => &[PlanKind::CreateSink],
-            // Planning for `CREATE METRIC SINK` is not yet implemented, so it
-            // has no `PlanKind` to produce.
-            StatementKind::CreateMetricSink => &[],
+            StatementKind::CreateMetricSink => &[PlanKind::CreateMetricSink],
             StatementKind::CreateSource | StatementKind::CreateSubsource => {
                 &[PlanKind::CreateSource]
             }
@@ -352,6 +351,7 @@ impl Plan {
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateIndex(_) => "create index",
+            Plan::CreateMetricSink(_) => "create metric sink",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
             Plan::Comment(_) => "comment",
@@ -805,6 +805,14 @@ pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
     pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateMetricSinkPlan {
+    pub name: QualifiedItemName,
+    pub metric_sink: MetricSink,
+    pub if_not_exists: bool,
+    pub in_cluster: ClusterId,
 }
 
 #[derive(Debug)]
@@ -1952,6 +1960,15 @@ pub struct Index {
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub compaction_window: Option<CompactionWindow>,
+    pub cluster_id: ClusterId,
+}
+
+#[derive(Clone, Debug)]
+pub struct MetricSink {
+    /// Parse-able SQL that defines this metric sink.
+    pub create_sql: String,
+    /// Collection we read into this metric sink.
+    pub from: GlobalId,
     pub cluster_id: ClusterId,
 }
 

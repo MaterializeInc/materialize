@@ -1635,6 +1635,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
             CommentObjectId::Source(_) => ObjectType::Source,
             CommentObjectId::Sink(_) => ObjectType::Sink,
+            CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
             CommentObjectId::Index(_) => ObjectType::Index,
             CommentObjectId::Func(_) => ObjectType::Func,
             CommentObjectId::Connection(_) => ObjectType::Connection,
