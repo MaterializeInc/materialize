@@ -197,13 +197,15 @@ def resolve_tag(tag: str) -> str | None:
 
 
 def update_captured_workloads_repo() -> None:
-    """Clone or update the captured-workloads repository."""
+    """Clone the captured-workloads repository and check out the pinned commit."""
     path = pathlib.Path(MZ_ROOT / "test" / "workload-replay" / "captured-workloads")
-    if (path / ".git").is_dir():
-        commit = "598060c6cf4c2d69730a1313a46704f8663e24fa"
-        spawn.runv(["git", "-C", str(path), "fetch"])
-        spawn.runv(["git", "-C", str(path), "checkout", commit])
-    else:
+    # Pin the commit so replay is reproducible. This must be applied to fresh
+    # clones (every CI run) too, not only to pre-existing checkouts.
+    commit = "598060c6cf4c2d69730a1313a46704f8663e24fa"
+    public_url = "https://github.com/MaterializeInc/captured-workloads"
+
+    used_token = False
+    if not (path / ".git").is_dir():
         path.mkdir(exist_ok=True)
         if ui.env_is_truthy("CI"):
             github_token = os.environ.get(
@@ -212,24 +214,21 @@ def update_captured_workloads_repo() -> None:
             assert (
                 github_token
             ), "GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN or GITHUB_TOKEN must be set in CI"
+            # check=True so a failed clone fails here, not later as a confusing
+            # "no workload files found".
             subprocess.run(
                 [
                     "git",
                     "clone",
                     f"https://materializebot:{urllib.parse.quote(github_token, safe='')}@github.com/MaterializeInc/captured-workloads",
                     str(path),
-                ]
+                ],
+                check=True,
             )
+            used_token = True
         else:
             try:
-                spawn.runv(
-                    [
-                        "git",
-                        "clone",
-                        "https://github.com/MaterializeInc/captured-workloads",
-                        str(path),
-                    ]
-                )
+                spawn.runv(["git", "clone", public_url, str(path)])
             except:
                 spawn.runv(
                     [
@@ -239,6 +238,13 @@ def update_captured_workloads_repo() -> None:
                         str(path),
                     ]
                 )
+
+    spawn.runv(["git", "-C", str(path), "fetch"])
+    spawn.runv(["git", "-C", str(path), "checkout", commit])
+
+    if used_token:
+        # Don't leave the access token behind in .git/config.
+        spawn.runv(["git", "-C", str(path), "remote", "set-url", "origin", public_url])
 
 
 def get_paths(globs: list[str]) -> list[pathlib.Path]:

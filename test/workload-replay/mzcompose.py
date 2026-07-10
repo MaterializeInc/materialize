@@ -164,6 +164,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     def run(file: pathlib.Path) -> None:
+        # Anonymized captures reuse object names (cluster_0, db_0, ...) across
+        # files and test() does not clean up between them, so reset all state
+        # first. Otherwise the second file fails on duplicate CREATE
+        # CLUSTER/DATABASE. Resetting before each run also recovers cleanly when
+        # a previous file failed partway through.
+        service_names = [s.name for s in SERVICES]
+        try:
+            c.kill(*service_names)
+        except Exception:
+            pass
+        c.rm(*service_names, destroy_volumes=True)
+        c.rm_volumes("mzdata")
+
         with open(file) as f:
             workload = yaml.load(f, Loader=yaml.CSafeLoader)
         # When scale_data is false, use 100% initial data

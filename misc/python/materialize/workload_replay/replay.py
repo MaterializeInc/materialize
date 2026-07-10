@@ -22,7 +22,7 @@ import time
 from typing import Any
 
 import psycopg
-from psycopg.sql import SQL, Literal
+from psycopg.sql import SQL, Identifier, Literal
 
 from materialize.mzcompose.composition import Composition
 
@@ -62,7 +62,16 @@ def run_query(
         )
         cur.execute(SQL("SET cluster = {}").format(Literal(query["cluster"])))
         cur.execute(SQL("SET database = {}").format(Literal(query["database"])))
-        cur.execute(f"SET search_path = {','.join(query['search_path'])}".encode())
+        # Quote each schema as an identifier so names with special characters
+        # survive, and skip empty entries (an empty captured search_path would
+        # otherwise render as "SET search_path =", a syntax error).
+        search_path = [s for s in query["search_path"] if s]
+        if search_path:
+            cur.execute(
+                SQL("SET search_path = {}").format(
+                    SQL(", ").join(Identifier(s) for s in search_path)
+                )
+            )
 
         stats["total"] += 1
 
@@ -74,25 +83,44 @@ def run_query(
             start_time = time.time()
 
             if query["statement_type"] == "subscribe":
-                if query.get("duration"):
-                    duration = query["duration"]
-                    cur.execute(
-                        SQL("SET LOCAL statement_timeout = {}").format(
-                            Literal(int(duration * 1000))
-                        )
-                    )
-                    end_deadline = start_time + duration
+                # cur.stream() blocks on the socket waiting for the next
+                # SUBSCRIBE row, so over quiet data the per-row deadline and
+                # stop_event checks below never run and the worker thread would
+                # hang past shutdown. A watchdog cancels the query to unblock the
+                # read. statement_timeout can't do this: SUBSCRIBE is exempt from
+                # it, and SET LOCAL would evaporate anyway on the autocommit
+                # connection sql_connection() returns.
+                duration = query.get("duration")
+                deadline = start_time + duration if duration else None
+                subscribe_done = threading.Event()
+
+                def cancel_subscribe() -> None:
+                    while not subscribe_done.is_set():
+                        if stop_event.is_set():
+                            break
+                        if deadline is not None and time.time() >= deadline:
+                            break
+                        subscribe_done.wait(timeout=0.5)
+                    if not subscribe_done.is_set():
+                        conn.cancel()
+
+                watchdog = threading.Thread(
+                    target=cancel_subscribe, name="subscribe-watchdog"
+                )
+                watchdog.start()
                 row_count = 0
                 try:
                     for row in cur.stream(sql.encode(), params):
                         row_count += 1
-                        if query.get("duration"):
-                            if time.time() >= end_deadline:
-                                break
                         if stop_event.is_set():
-                            return
+                            break
+                        if deadline is not None and time.time() >= deadline:
+                            break
                 except psycopg.errors.QueryCanceled:
                     pass
+                finally:
+                    subscribe_done.set()
+                    watchdog.join()
 
                 end_time = time.time()
                 stats["timings"].append((sql, end_time - start_time))
