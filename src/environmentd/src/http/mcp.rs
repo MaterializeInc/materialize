@@ -228,8 +228,8 @@ fn default_read_limit() -> u32 {
 #[derive(Debug, Deserialize)]
 struct QueryParams {
     cluster: String,
-    // Only honored on the developer endpoint. The agent endpoint's dispatch
-    // arm drops it, since replica pinning is not part of the agent surface.
+    /// Only honored on the developer endpoint. The agent endpoint's dispatch
+    /// arm drops it, since replica pinning is not part of the agent surface.
     cluster_replica: Option<String>,
     sql_query: String,
 }

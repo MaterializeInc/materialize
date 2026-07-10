@@ -650,7 +650,7 @@ def workflow_endpoints(c: Composition) -> None:
             f"but got: {body}"
         )
         assert (
-            "replica" in err["message"].lower()
+            "log source reads must target a replica" in err["message"].lower()
         ), f"error should mention replica targeting: {err['message']!r}"
 
         # Pinned to r1, the same read succeeds.
