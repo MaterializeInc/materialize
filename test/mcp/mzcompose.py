@@ -664,7 +664,9 @@ def workflow_endpoints(c: Composition) -> None:
         )
         assert "error" not in body, f"pinned EXPLAIN ANALYZE errored: {body}"
         content = body["result"]["content"]
-        assert content and content[0]["type"] == "text", f"unexpected content: {content}"
+        assert (
+            content and content[0]["type"] == "text"
+        ), f"unexpected content: {content}"
 
         # A nonexistent replica surfaces the SQL layer's error as a clean
         # ExecutionError rather than anything worse.

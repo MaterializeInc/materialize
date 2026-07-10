@@ -909,7 +909,7 @@ async fn handle_tools_list(
                             },
                             "cluster_replica": {
                                 "type": "string",
-                                "description": "Optional replica name (e.g. 'r1') to pin the read to one replica of the cluster. Required for EXPLAIN ANALYZE on clusters with more than one replica. Find replica names in mz_catalog.mz_cluster_replicas."
+                                "description": "Optional replica name (e.g. 'r1') to target one replica of the cluster. Required for EXPLAIN ANALYZE on clusters with more than one replica. Find replica names in mz_catalog.mz_cluster_replicas."
                             },
                             "sql_query": {
                                 "type": "string",
