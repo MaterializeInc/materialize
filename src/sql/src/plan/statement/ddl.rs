@@ -4104,6 +4104,14 @@ fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
     Ok(())
 }
 
+/// Plans a metric sink over `stmt.from`, a relation exposing the columns in
+/// `METRIC_SINK_SOURCE_COLUMNS`.
+///
+/// The sink emits one Prometheus series per distinct `(metric_name, labels)` row, so a source
+/// with high-cardinality labels produces a correspondingly large series count. A null `value`
+/// does not publish as zero: it leaves that series absent from the exposition (a gap) until a
+/// non-null value arrives for the same `(metric_name, labels)`. Callers who want zero-fill
+/// instead of a gap write `coalesce(value, 0)` themselves.
 pub fn plan_create_metric_sink(
     scx: &StatementContext,
     mut stmt: CreateMetricSinkStatement<Aug>,

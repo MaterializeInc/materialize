@@ -29,13 +29,10 @@ class MetricSink(Check):
                 > CREATE TABLE metric_sink_table (k TEXT NOT NULL, val DOUBLE NOT NULL)
                 > INSERT INTO metric_sink_table VALUES ('a', 1)
 
-                # `map_build` always reports a nullable result regardless of its input's
-                # nullability, so `coalesce` with a non-null default is required for
-                # `labels` to satisfy the metric sink source schema's NOT NULL requirement.
                 > CREATE VIEW metric_sink_view AS
                   SELECT 'mz_check_metric_sink_value'::text AS metric_name,
                          'gauge'::text AS metric_type,
-                         coalesce(map_build(LIST[ROW('k', k)])::map[text=>text], '{{}}'::map[text=>text]) AS labels,
+                         map_build(LIST[ROW('k', k)])::map[text=>text] AS labels,
                          val AS value,
                          'metric emitted by the MetricSink platform check'::text AS help
                   FROM metric_sink_table

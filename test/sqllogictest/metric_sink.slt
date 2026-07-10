@@ -58,19 +58,28 @@ CREATE VIEW wrong_type AS SELECT
     1.0::double AS value,
     'h'::text AS help
 
-statement error metric sink source column "metric_name" must be NOT NULL and of the required type
+statement error metric sink source column "metric_name" is not of the required type
 CREATE METRIC SINK s4 IN CLUSTER quickstart FROM wrong_type
 
+# Nullability is a runtime concern for the sink operator (null value => the
+# series gaps until a non-null value arrives), not a plan-time rejection.
+# `map_build` always reports a nullable result, and `val` here is a nullable
+# column, so this view exercises nullable `labels` and `value` without a
+# `coalesce` workaround, and the sink still plans.
 statement ok
-CREATE VIEW nullable_column AS SELECT
-    CAST(NULL AS text) AS metric_name,
-    'gauge'::text AS metric_type,
-    '{}'::map[text=>text] AS labels,
-    1.0::double AS value,
-    'h'::text AS help
+CREATE TABLE nullable_src (k text NOT NULL, val double)
 
-statement error metric sink source column "metric_name" must be NOT NULL and of the required type
-CREATE METRIC SINK s5 IN CLUSTER quickstart FROM nullable_column
+statement ok
+CREATE VIEW nullable_ok AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    map_build(LIST[ROW('k', k)])::map[text=>text] AS labels,
+    val AS value,
+    'h'::text AS help
+FROM nullable_src
+
+statement ok
+CREATE METRIC SINK s5 IN CLUSTER quickstart FROM nullable_ok
 
 statement ok
 CREATE SECRET metric_secret AS 'password'

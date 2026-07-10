@@ -19,17 +19,14 @@ $ set-sql-timeout duration=60s
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_metric_sink = true;
 
-> CREATE TABLE t (k text NOT NULL, val double NOT NULL)
+> CREATE TABLE t (k text NOT NULL, val double)
 
 > INSERT INTO t VALUES ('a', 1), ('b', 2)
 
-# `map_build` always reports a nullable result regardless of its input's
-# nullability, so `coalesce` with a non-null default is required for `labels`
-# to satisfy the metric sink source schema's NOT NULL requirement.
 > CREATE VIEW v AS
   SELECT 'mz_metric_sink_test_value'::text AS metric_name,
          'gauge'::text AS metric_type,
-         coalesce(map_build(LIST[ROW('k', k)])::map[text=>text], '{}'::map[text=>text]) AS labels,
+         map_build(LIST[ROW('k', k)])::map[text=>text] AS labels,
          val AS value,
          'a metric emitted by the metric sink e2e test'::text AS help
   FROM t
@@ -78,6 +75,42 @@ true
 
 > SELECT value = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_metric_sink_collisions' AND labels -> 'sink' = '${sink-id}'
+true
+
+> SELECT value = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_null_values' AND labels -> 'sink' = '${sink-id}'
+true
+
+# A null `value` does not publish a zero: the `(metric_name, labels)` series
+# for 'c' is absent from the registry (a gap) while its only live value is
+# null, and the sink counts it in `mz_metric_sink_null_values`.
+> INSERT INTO t VALUES ('c', NULL)
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_test_value'
+2
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_test_value' AND labels -> 'k' = 'c'
+0
+
+> SELECT value = 1 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_null_values' AND labels -> 'sink' = '${sink-id}'
+true
+
+# The gap closes once a non-null value arrives for the same series.
+> UPDATE t SET val = 3 WHERE k = 'c'
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_test_value'
+3
+
+> SELECT value = 3 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_test_value' AND labels -> 'k' = 'c'
+true
+
+> SELECT value = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_null_values' AND labels -> 'sink' = '${sink-id}'
 true
 
 > DROP METRIC SINK s
