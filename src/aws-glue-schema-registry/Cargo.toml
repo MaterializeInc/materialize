@@ -17,5 +17,12 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[features]
+# Exposes constructors for injecting a mocked SDK client.
+test-util = []
+
 [dev-dependencies]
+aws-sdk-glue = { workspace = true, features = ["test-util"] }
+aws-smithy-mocks.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+tokio.workspace = true

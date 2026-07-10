@@ -64,7 +64,7 @@ mod config;
 pub use client::{
     Client, Compatibility, CreateSchemaError, DataFormat, GetRegistryError,
     GetSchemaByDefinitionError, GetSchemaError, GetSchemaVersionError, RegisterSchemaVersionError,
-    Registry, RegistryLifecycleStatus, Schema, SchemaLifecycleStatus, SchemaVersion,
-    SchemaVersionLifecycleStatus,
+    RegisteredSchemaVersion, Registry, RegistryLifecycleStatus, Schema, SchemaLifecycleStatus,
+    SchemaVersion, SchemaVersionLifecycleStatus,
 };
 pub use config::ClientConfig;
