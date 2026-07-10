@@ -682,9 +682,17 @@ def workflow_mz_not_running(c: Composition) -> None:
         sql_cursor(c)
         raise RuntimeError("connect() expected to fail")
     except OperationalError as e:
+        # With Mz down, balancerd cannot reach the upstream and reports an
+        # opaque error to the client (it does not leak the internal DNS or
+        # connection failure): "internal error" when the tenant hostname
+        # cannot be resolved, "upstream server not available" when it resolves
+        # but the connection is refused. The remaining strings are client-side
+        # failures that can occur depending on how the connection drops.
         assert any(
             expected in str(e)
             for expected in [
+                "internal error",
+                "upstream server not available",
                 "No route to host",
                 "Connection timed out",
                 "failure in name resolution",
@@ -692,7 +700,7 @@ def workflow_mz_not_running(c: Composition) -> None:
                 "Name or service not known",
                 "SSL connection has been closed unexpectedly",
             ]
-        )
+        ), f"unexpected error connecting with Mz down: {e}"
     except:
         raise RuntimeError("connect() threw an unexpected exception")
 
