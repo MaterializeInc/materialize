@@ -7,11 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use maplit::btreemap;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, MetricSink};
 use mz_ore::instrument;
-use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OverrideFrom;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -19,7 +17,6 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
-use crate::catalog::CatalogState;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
@@ -212,38 +209,15 @@ impl Coordinator {
             owner_id,
         }];
 
-        // Pre-allocate a vector of transient GlobalIds for each notice.
-        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
-            .map(|(_item_id, global_id)| global_id)
-            .take(global_lir_plan.df_meta().optimizer_notices.len())
-            .collect::<Vec<_>>();
-
-        // Render optimizer notices before the catalog transaction, mirroring
-        // `create_index_finish`: this way notice text resolves the new sink's own `global_id` to
-        // its intended human-readable name rather than a bare transient id.
-        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
-        let df_meta = {
-            let system_catalog = self.catalog().for_system_session();
-            let full_name = self.catalog().resolve_full_name(&name, None);
-            let from_entry = self.catalog().get_entry_by_global_id(&metric_sink.from);
-            let from_desc = from_entry
-                .relation_desc()
-                .expect("can only create a metric sink on items with a valid description");
-            let transient_items = btreemap! {
-                global_id => TransientItem::new(
-                    Some(full_name.into_parts()),
-                    Some(from_desc.iter_names().map(|c| c.to_string()).collect()),
-                )
-            };
-            let humanizer = ExprHumanizerExt::new(transient_items, &system_catalog);
-            CatalogState::render_notices_core(
-                &humanizer,
-                (self.catalog().config().now)(),
-                &raw_df_meta,
-                notice_ids,
-                Some(global_id),
-            )
-        };
+        // Render optimizer notices before the catalog transaction: this way notice text resolves
+        // the new sink's own `global_id` to its intended human-readable name rather than a bare
+        // transient id.
+        let (df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let from_entry = self.catalog().get_entry_by_global_id(&metric_sink.from);
+        let from_desc = from_entry
+            .relation_desc()
+            .expect("can only create a metric sink on items with a valid description");
+        let df_meta = self.render_create_item_notices(&name, global_id, &from_desc, &raw_df_meta);
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
@@ -259,27 +233,20 @@ impl Coordinator {
                     let notice_builtin_updates_fut =
                         coord.persist_dataflow_metainfo(df_meta, global_id).await;
 
-                    // Put in place read holds so that ship_dataflow, below, which calls
-                    // update_read_capabilities, can successfully do so: otherwise the since of
-                    // dependencies might move along concurrently, pulling the rug from under us.
-                    let read_holds = coord.acquire_read_holds(&id_bundle);
-                    let since = read_holds.least_valid_read();
-                    df_desc.set_as_of(since);
-
+                    // `ship_new_dataflow` puts in place a read hold across shipping, so that
+                    // update_read_capabilities can successfully act on `id_bundle`: otherwise the
+                    // since of dependencies might move along concurrently, pulling the rug from
+                    // under us.
                     coord
-                        .ship_dataflow_and_notice_builtin_table_updates(
+                        .ship_new_dataflow(
+                            &id_bundle,
                             df_desc,
                             in_cluster,
                             notice_builtin_updates_fut,
-                            None,
                         )
                         .await;
                     // No `allow_writes` here: metric sinks write to the in-process metrics
                     // registry, not to external/persist state.
-
-                    // Drop read holds after the dataflow has been shipped, at which point
-                    // compute will have put in its own read holds.
-                    drop(read_holds);
                 })
             })
             .await;
