@@ -27,6 +27,7 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./test/cargo-fuzz/mzcompose.py" `# Enabled in release qualification later in the cargo-fuzz stack` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
         -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
+        -not -wholename "./test/pipeline-benchmark/mzcompose.py" `# Only run manually` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
     while read -r composition; do
         if ! grep -q "composition: $composition" ci/*/pipeline.template.yml; then

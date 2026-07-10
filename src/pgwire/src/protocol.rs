@@ -645,6 +645,7 @@ where
         capturing: None,
         defer_peek: false,
         deferred_peek: None,
+        burst_bail: None,
     };
 
     select! {
@@ -875,6 +876,23 @@ where
     defer_peek: bool,
     /// The peek stashed by the last `send_execute_response` under `defer_peek`.
     deferred_peek: Option<DeferredPeek>,
+    /// Set by `send_execute_response` under `defer_peek` when it hits a response
+    /// that must talk to the client directly (COPY, SUBSCRIBE) and so can be
+    /// neither captured nor deferred. The burst driver flushes what it has, ends
+    /// the burst, and runs this response in normal mode. See `run_overlapped_burst`.
+    burst_bail: Option<BurstBail>,
+}
+
+/// A response that cannot participate in a pipelined-overlap burst because it
+/// interacts with the client socket directly (COPY FROM/TO, SUBSCRIBE). It is
+/// re-dispatched through `send_execute_response` in normal mode after the burst
+/// flushes and ends.
+struct BurstBail {
+    response: ExecuteResponse,
+    row_desc: Option<RelationDesc>,
+    portal_name: String,
+    max_rows: ExecuteCount,
+    execute_started: Instant,
 }
 
 /// A peek response whose rows are streamed later, once every peek in a
@@ -885,6 +903,24 @@ struct DeferredPeek {
     portal_name: String,
     max_rows: ExecuteCount,
     execute_started: Instant,
+    /// Portal-derived state captured while the portal was still valid, so the
+    /// rows can be streamed after the portal is gone (rebound or committed away
+    /// by later statements in the burst).
+    detached: DetachedPeek,
+}
+
+/// The portal-derived inputs `send_rows` normally reads from the session portal,
+/// captured at peek-issue time for a deferred pipelined-overlap peek. By the
+/// time such a peek streams its rows a later statement in the burst may have
+/// rebound its portal (typically the unnamed portal `""`) or committed the
+/// implicit transaction that owned it, so the portal can no longer be consulted.
+/// A frontend read-only peek's row stream owns its read holds independently of
+/// the session transaction, so only this metadata needs preserving.
+struct DetachedPeek {
+    /// The bound result formats, already padded to the result arity at Bind.
+    result_formats: Vec<Format>,
+    /// The statement-type label for the first-to-last-byte metric.
+    statement_type: &'static str,
 }
 
 /// One statement's deferred pgwire output in a pipelined-peek burst, emitted in
@@ -960,6 +996,20 @@ where
         drained
     }
 
+    /// Receive the next frontend message, taking from the drained `pending`
+    /// buffer before the socket. Statement handlers that read further client
+    /// messages mid-statement (COPY FROM STDIN) must use this rather than
+    /// `conn.recv` directly, so a burst's drained messages (e.g. the statement's
+    /// own trailing `Sync`, which COPY mode absorbs) are seen in wire order
+    /// instead of being stranded in `pending` and misinterpreted later.
+    async fn recv_msg(&mut self) -> Result<Option<FrontendMessage>, io::Error> {
+        if let Some(message) = self.pending.pop_front() {
+            Ok(Some(message))
+        } else {
+            self.conn.recv().await
+        }
+    }
+
     /// Drive a drained pipelined burst with compute-await overlap: issue every
     /// peek before sending any rows (so the cluster runs them concurrently),
     /// then emit each statement's responses in statement order. `first_*`
@@ -991,6 +1041,9 @@ where
             .await?;
         items.extend(captured.map(BurstItem::Messages));
         items.extend(peek.map(BurstItem::Peek));
+        if let Some(bail) = self.burst_bail.take() {
+            return self.end_burst_with_bail(items, bail, drained).await;
+        }
         if !matches!(state, State::Ready) {
             return self.end_burst_to_pending(items, drained, state).await;
         }
@@ -1069,31 +1122,23 @@ where
                         .await?;
                     items.extend(captured.map(BurstItem::Messages));
                     items.extend(peek.map(BurstItem::Peek));
+                    if let Some(bail) = self.burst_bail.take() {
+                        return self.end_burst_with_bail(items, bail, drained).await;
+                    }
                     if !matches!(state, State::Ready) {
                         return self.end_burst_to_pending(items, drained, state).await;
                     }
                     self.mark_implicit_commit();
                 }
-                FrontendMessage::Sync => {
-                    let state = self.flush_burst(items).await?;
-                    self.end_burst();
-                    if !matches!(state, State::Ready) {
-                        return Ok(state);
-                    }
-                    return self.sync().await;
-                }
-                FrontendMessage::Flush => {
-                    let state = self.flush_burst(std::mem::take(&mut items)).await?;
-                    self.flush().await?;
-                    if !matches!(state, State::Ready) {
-                        self.end_burst();
-                        return Ok(state);
-                    }
-                    // Keep collecting after a Flush.
-                }
                 other => {
-                    // A message type the burst does not drive: emit what we have,
-                    // then hand this message and the rest to the normal loop.
+                    // A message the burst does not drive itself (Sync, Flush, a
+                    // simple Query, ...): emit the peeks issued so far (this is
+                    // where the overlap pays off, e.g. all peeks before a
+                    // trailing Sync are issued before any rows drain), then hand
+                    // this message and the rest back to the normal loop via
+                    // `pending`. Routing Sync/Flush through the normal loop keeps
+                    // their handling in one place and ensures no drained message
+                    // is dropped.
                     let state = self.flush_burst(items).await?;
                     self.end_burst();
                     drained.push_front(other);
@@ -1158,6 +1203,7 @@ where
                             None,
                             ExecuteTimeout::None,
                             p.execute_started,
+                            Some(p.detached),
                         )
                         .await?;
                     if !matches!(state, State::Ready) {
@@ -1186,6 +1232,45 @@ where
         } else {
             state
         })
+    }
+
+    /// Finish a burst that hit a response which must talk to the client
+    /// directly (COPY, SUBSCRIBE; see `BurstBail`). Emit the peeks issued before
+    /// it in statement order, end the burst, then run that response in normal
+    /// mode, and hand any remaining drained messages to the normal loop.
+    async fn end_burst_with_bail(
+        &mut self,
+        items: Vec<BurstItem>,
+        bail: BurstBail,
+        drained: VecDeque<FrontendMessage>,
+    ) -> Result<State, io::Error> {
+        let flush_state = self.flush_burst(items).await?;
+        self.end_burst();
+        // Restore the drained messages to `pending` before running the bailed
+        // statement. A COPY reads them via `recv_msg` (so COPY mode absorbs its
+        // own trailing `Sync`, as it would on the socket); anything else is
+        // handled by the normal loop after this statement completes.
+        self.pending = drained;
+        if !matches!(flush_state, State::Ready) {
+            // A peek issued before this statement errored; per skip-to-Sync the
+            // interactive statement does not run (its response is dropped, and
+            // the client is already skipping to the next Sync).
+            return Ok(flush_state);
+        }
+        // `defer_peek` and `capturing` were cleared when the burst issued this
+        // statement, so this runs normally, straight to the socket.
+        self.send_execute_response(
+            bail.response,
+            bail.row_desc,
+            bail.portal_name,
+            bail.max_rows,
+            portal_exec_message,
+            None,
+            ExecuteTimeout::None,
+            bail.execute_started,
+            None,
+        )
+        .await
     }
 
     fn end_burst(&mut self) {
@@ -1318,15 +1403,35 @@ where
                 // overlap their compute-result awaits (`enable_pipelined_peek_overlap`).
                 // We drain before executing, so a shared timestamp is within
                 // every drained statement's real-time bounds. Not when already
-                // inside a drained burst (avoids re-draining newer messages).
-                let drained = if self.adapter_client.should_drain_pipeline_burst() && !self.in_burst
+                // inside a drained burst (avoids re-draining newer messages), and
+                // only from an autocommit state: an explicit or multi-statement
+                // implicit transaction may resume a portal across statements,
+                // which a burst cannot serve (see `allows_pipeline_burst`).
+                let drained = if self.adapter_client.should_drain_pipeline_burst()
+                    && !self.in_burst
+                    && self
+                        .adapter_client
+                        .session()
+                        .transaction()
+                        .allows_pipeline_burst()
                 {
                     self.drain_buffered()
                 } else {
                     Vec::new()
                 };
 
-                if !drained.is_empty() && self.adapter_client.should_overlap_pipeline_burst() {
+                // Only worth a burst if the drain caught another statement to
+                // overlap or share a timestamp with. A lone trailing Sync/Flush,
+                // which every single-statement query produces, is no pipeline: a
+                // burst would add cost and (via `run_overlapped_burst` ->
+                // `issue_burst_execute`) call-stack depth below the planner for
+                // no benefit. See the recursion-limit regression in
+                // database-issues#9996.
+                let has_pipelined_stmt = drained
+                    .iter()
+                    .any(|msg| matches!(msg, FrontendMessage::Execute { .. }));
+
+                if has_pipelined_stmt && self.adapter_client.should_overlap_pipeline_burst() {
                     // Overlap: issue every peek, then drain their row streams in
                     // order. This drives the triggering Execute, the drained
                     // statements, and their transactions itself.
@@ -1334,11 +1439,17 @@ where
                         .instrument(execute_root_span)
                         .await?
                 } else {
-                    if !drained.is_empty() {
+                    if has_pipelined_stmt {
                         // Shared-timestamp only: process the burst serially, one
                         // statement per loop iteration, sharing the read_ts.
                         self.adapter_client.begin_pipeline_burst();
                         self.in_burst = true;
+                        self.pending.extend(drained);
+                    } else {
+                        // No pipelined statement, but the drain may still have
+                        // pulled this statement's trailing Sync/Flush off the
+                        // socket. Replay it via `pending` (no burst opened) so the
+                        // normal loop handles it.
                         self.pending.extend(drained);
                     }
                     let state = self
@@ -1419,7 +1530,20 @@ where
     }
 
     async fn advance_drain(&mut self) -> Result<State, io::Error> {
-        let message = self.conn.recv().await?;
+        // Drain buffered burst messages before the socket, exactly as
+        // `advance_ready` does. A burst that errors returns `State::Drain` with
+        // its trailing messages (including the `Sync` that ends the skip) still
+        // in `pending`; reading the socket instead would block forever waiting
+        // for a `Sync` that has already arrived.
+        let message = if let Some(message) = self.pending.pop_front() {
+            Some(message)
+        } else {
+            if self.in_burst {
+                self.adapter_client.end_pipeline_burst();
+                self.in_burst = false;
+            }
+            self.conn.recv().await?
+        };
         if message.is_some() {
             self.adapter_client
                 .remove_idle_in_transaction_session_timeout();
@@ -1498,6 +1622,7 @@ where
                     None,
                     ExecuteTimeout::None,
                     execute_started,
+                    None,
                 )
                 .await
             }
@@ -1964,6 +2089,7 @@ where
                                 fetch_portal_name,
                                 timeout,
                                 execute_started,
+                                None,
                             )
                             .await
                         }
@@ -1985,6 +2111,7 @@ where
                             get_response,
                             fetch_portal_name,
                             timeout,
+                            None,
                         )
                         .await
                     {
@@ -2315,16 +2442,79 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
         execute_started: Instant,
+        // `Some` when re-entered from the pipelined-overlap flush to stream a
+        // deferred peek whose portal may be gone. Forwarded to `send_rows`.
+        detached: Option<DetachedPeek>,
     ) -> Result<State, io::Error> {
-        // Overlap path: defer sending this statement's response so later peeks
-        // in the burst can be issued first (a peek's rows are only awaited when
-        // sent). Everything needed to send later is stashed; the burst driver
-        // re-enters this function with `defer_peek` cleared. Applies to any
-        // response type, so a non-peek statement in the burst still sends its
-        // response in order; only read-only peeks actually benefit from the
-        // deferral, and the burst is entered only on that opt-in path.
-        if self.defer_peek {
+        // Overlap path: defer sending this peek's rows so later peeks in the
+        // burst can be issued first (a peek's rows are only awaited when sent).
+        // We only defer a peek that is safe to stream after its portal is gone:
+        //
+        //   * A row-streaming peek. These are the only responses that benefit,
+        //     and the only ones whose `send_rows` reaches into the session
+        //     portal that a later statement in the burst may destroy.
+        //   * Fetching all rows. A partial fetch (`max_rows` limited) leaves
+        //     rows in its portal for a later `Execute`/`FETCH` to resume, which
+        //     detached streaming cannot preserve, so run it inline instead.
+        //   * In an implicit transaction. A peek in an explicit transaction may
+        //     have its portal resumed later in the transaction, so it too must
+        //     keep the live portal and run inline. (Bursts are only entered from
+        //     an implicit transaction, but a `BEGIN` earlier in the burst can
+        //     open an explicit one.)
+        //
+        // Every other response is emitted immediately (into the burst's capture
+        // buffer, preserving statement order) and never touches a portal that
+        // could go away. Capturing the portal-derived state here, while the
+        // portal is still valid, lets the deferred send avoid the portal.
+        if self.defer_peek
+            && matches!(
+                response,
+                ExecuteResponse::SendingRowsStreaming { .. }
+                    | ExecuteResponse::SendingRowsImmediate { .. }
+            )
+            && matches!(max_rows, ExecuteCount::All)
+            && self.adapter_client.session().transaction().is_implicit()
+        {
+            let portal = self
+                .adapter_client
+                .session()
+                .get_portal_unverified(&portal_name)
+                .expect("portal exists when issuing a deferred peek");
+            let detached = DetachedPeek {
+                result_formats: portal.result_formats.clone(),
+                statement_type: portal
+                    .stmt
+                    .as_ref()
+                    .map(|stmt| metrics::statement_type_label_value(stmt.deref()))
+                    .unwrap_or("no-statement"),
+            };
             self.deferred_peek = Some(DeferredPeek {
+                response,
+                row_desc,
+                portal_name,
+                max_rows,
+                execute_started,
+                detached,
+            });
+            return Ok(State::Ready);
+        }
+
+        // A response that talks to the client socket directly (COPY streams a
+        // CopyResponse and then reads/writes CopyData, SUBSCRIBE streams rows as
+        // they arrive) cannot run inside a burst: its output would be captured
+        // instead of sent, and draining would disturb its client I/O. Hand it
+        // back to the burst driver, which flushes what it has, ends the burst,
+        // and re-dispatches this response in normal mode. Detected here, before
+        // any such I/O begins.
+        if self.defer_peek
+            && matches!(
+                response,
+                ExecuteResponse::CopyFrom { .. }
+                    | ExecuteResponse::CopyTo { .. }
+                    | ExecuteResponse::Subscribing { .. }
+            )
+        {
+            self.burst_bail = Some(BurstBail {
                 response,
                 row_desc,
                 portal_name,
@@ -2401,6 +2591,7 @@ where
                     get_response,
                     fetch_portal_name,
                     timeout,
+                    detached,
                 )
                 .instrument(span)
                 .await
@@ -2428,6 +2619,7 @@ where
                     get_response,
                     fetch_portal_name,
                     timeout,
+                    detached,
                 )
                 .instrument(span)
                 .await
@@ -2489,6 +2681,8 @@ where
                         get_response,
                         fetch_portal_name,
                         timeout,
+                        // Subscribes are never deferred by the overlap path.
+                        None,
                     )
                     .await
                 {
@@ -2728,6 +2922,12 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
+        // `Some` for a deferred pipelined-overlap peek whose portal may already
+        // be gone. In that mode `send_rows` uses the captured result formats and
+        // never reads or writes the session portal (`portal_name`); see
+        // [`DetachedPeek`]. A detached peek is always a non-FETCH read-only peek,
+        // so `fetch_portal_name` is `None` and portal resumption never applies.
+        detached: Option<DetachedPeek>,
     ) -> Result<(State, SendRowsEndedReason), io::Error> {
         // If this portal is being executed from a FETCH then we need to use the result
         // format type of the outer portal.
@@ -2736,13 +2936,16 @@ where
         } else {
             &portal_name
         };
-        let result_formats = self
-            .adapter_client
-            .session()
-            .get_portal_unverified(result_format_portal_name)
-            .expect("valid fetch portal name for send rows")
-            .result_formats
-            .clone();
+        let result_formats = match &detached {
+            Some(detached) => detached.result_formats.clone(),
+            None => self
+                .adapter_client
+                .session()
+                .get_portal_unverified(result_format_portal_name)
+                .expect("valid fetch portal name for send rows")
+                .result_formats
+                .clone(),
+        };
 
         let (mut wait_once, mut deadline) = match timeout {
             ExecuteTimeout::None => (false, None),
@@ -2753,8 +2956,11 @@ where
             ExecuteTimeout::WaitOnce => (true, None),
         };
 
-        // Sanity check that the various `RelationDesc`s match up.
-        {
+        // Sanity check that the various `RelationDesc`s match up. Skipped for a
+        // detached peek: `row_desc` is already the authoritative description
+        // captured at issue time, and the portal it would check against may have
+        // been rebound to a different statement or committed away.
+        if detached.is_none() {
             let portal_name_desc = &self
                 .adapter_client
                 .session()
@@ -2925,12 +3131,6 @@ where
             }
         }
 
-        let portal = self
-            .adapter_client
-            .session()
-            .get_portal_unverified_mut(&portal_name)
-            .expect("valid portal name for send rows");
-
         let saw_rows = rows.remaining.saw_rows;
         let no_more_rows = rows.no_more_rows();
         let metric_recorded = rows.remaining.metric_recorded;
@@ -2941,8 +3141,17 @@ where
         }
 
         // Always return rows back, even if it's empty. This prevents an unclosed
-        // portal from re-executing after it has been emptied.
-        *portal.state = PortalState::InProgress(Some(rows));
+        // portal from re-executing after it has been emptied. Skipped for a
+        // detached peek: it is a single-shot autocommit peek whose portal is
+        // gone, so there is nothing to resume and no portal to write to.
+        if detached.is_none() {
+            let portal = self
+                .adapter_client
+                .session()
+                .get_portal_unverified_mut(&portal_name)
+                .expect("valid portal name for send rows");
+            *portal.state = PortalState::InProgress(Some(rows));
+        }
 
         let fetch_portal = fetch_portal_name.map(|name| {
             self.adapter_client
@@ -2956,16 +3165,22 @@ where
         // Attend to metrics if there are no more rows. Only record once per stream
         // to avoid polluting the histogram when an exhausted cursor is FETCHed again.
         if no_more_rows && !metric_recorded {
-            let statement_type = if let Some(stmt) = &self
-                .adapter_client
-                .session()
-                .get_portal_unverified(&portal_name)
-                .expect("valid portal name for send_rows")
-                .stmt
-            {
-                metrics::statement_type_label_value(stmt.deref())
-            } else {
-                "no-statement"
+            let statement_type = match &detached {
+                // The portal is gone; use the label captured at issue time.
+                Some(detached) => detached.statement_type,
+                None => {
+                    if let Some(stmt) = &self
+                        .adapter_client
+                        .session()
+                        .get_portal_unverified(&portal_name)
+                        .expect("valid portal name for send_rows")
+                        .stmt
+                    {
+                        metrics::statement_type_label_value(stmt.deref())
+                    } else {
+                        "no-statement"
+                    }
+                }
             };
             let duration = if saw_rows {
                 recorded_first_row_instant
@@ -3242,7 +3457,7 @@ where
                 // the error, otherwise they'd be misinterpreted as top-level
                 // protocol messages and cause a deadlock.
                 loop {
-                    match self.conn.recv().await? {
+                    match self.recv_msg().await? {
                         Some(FrontendMessage::CopyData(_)) => {}
                         Some(FrontendMessage::CopyDone) | Some(FrontendMessage::CopyFail(_)) => {
                             break;
@@ -3288,7 +3503,7 @@ where
         // Receive loop: accumulate CopyData, split at row boundaries,
         // round-robin raw chunks to parallel batch builder workers.
         loop {
-            let message = self.conn.recv().await?;
+            let message = self.recv_msg().await?;
             match message {
                 Some(FrontendMessage::CopyData(buf)) => {
                     if saw_end_marker {
@@ -3396,7 +3611,7 @@ where
         // avoid desynchronizing the protocol state machine.
         if !saw_copy_done {
             loop {
-                match self.conn.recv().await? {
+                match self.recv_msg().await? {
                     Some(FrontendMessage::CopyData(_)) => {}
                     Some(FrontendMessage::CopyDone) | Some(FrontendMessage::CopyFail(_)) => {
                         break;
