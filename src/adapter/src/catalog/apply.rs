@@ -31,8 +31,8 @@ use mz_catalog::durable::objects::{
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, MetricSink,
-    NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
+    Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -2100,75 +2100,6 @@ impl CatalogState {
         self.insert_entry(entry);
     }
 
-    /// Installs a `CatalogItem::MetricSink` directly, bypassing the durable
-    /// `Transaction`/`StateUpdateKind` pipeline that every other item type flows through.
-    ///
-    /// Metric sinks are never durably persisted (`to_serialized`/`into_serialized` panic for
-    /// them, see `CatalogItem::MetricSink`), so `Catalog::transact_op` routes them here instead
-    /// of through `Transaction::insert_user_item`.
-    pub(super) fn insert_metric_sink(
-        &mut self,
-        id: CatalogItemId,
-        oid: u32,
-        name: QualifiedItemName,
-        owner_id: RoleId,
-        privileges: Vec<MzAclItem>,
-        metric_sink: MetricSink,
-    ) {
-        self.insert_item(
-            id,
-            oid,
-            name,
-            CatalogItem::MetricSink(metric_sink),
-            owner_id,
-            PrivilegeMap::from_mz_acl_items(privileges),
-        );
-    }
-
-    /// Removes a `CatalogItem::MetricSink` directly. See `insert_metric_sink`.
-    pub(super) fn remove_metric_sink(&mut self, id: CatalogItemId) {
-        self.drop_item(id);
-    }
-
-    /// Replaces an existing `CatalogItem::MetricSink` entry in place. See `insert_metric_sink`.
-    ///
-    /// Used for owner, privilege, and rename changes, which never alter a metric sink's
-    /// dependency graph. It deliberately does not go through `drop_item`/`insert_entry`: a metric
-    /// sink can be reassigned or have its source renamed in the same transaction that drops one
-    /// of its dependencies, and re-installing it would then panic on the missing dependency.
-    /// `used_by`/`referenced_by` are carried over from `entry`, which callers clone from the
-    /// current entry, so the dependency graph is preserved.
-    pub(super) fn update_metric_sink(&mut self, entry: CatalogEntry) {
-        let id = entry.id;
-        let old_name = self
-            .entry_by_id
-            .get(&id)
-            .expect("catalog out of sync")
-            .name()
-            .clone();
-        // A self-rename changes the schema item map key; re-key it.
-        if old_name != *entry.name() {
-            let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-            let old_schema = self.get_schema_mut(
-                &old_name.qualifiers.database_spec,
-                &old_name.qualifiers.schema_spec,
-                conn_id,
-            );
-            old_schema
-                .items
-                .remove(&old_name.item)
-                .expect("catalog out of sync");
-            let new_name = entry.name().clone();
-            let new_schema = self.get_schema_mut(
-                &new_name.qualifiers.database_spec,
-                &new_name.qualifiers.schema_spec,
-                conn_id,
-            );
-            new_schema.items.insert(new_name.item, id);
-        }
-        self.entry_by_id.insert(id, entry);
-    }
-
     #[mz_ore::instrument(level = "trace")]
     fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
@@ -2513,12 +2444,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::Table => tables.push(update),
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
+                | CatalogItemType::Index
+                | CatalogItemType::MetricSink => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
-                // Metric sinks are never durably persisted, so this is never reached.
-                CatalogItemType::MetricSink => {
-                    unreachable!("metric sinks are never durably serialized")
-                }
             }
         }
 
@@ -2582,12 +2510,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::Table => tables.push(update),
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
+                | CatalogItemType::Index
+                | CatalogItemType::MetricSink => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
-                // Metric sinks are never durably persisted, so this is never reached.
-                CatalogItemType::MetricSink => {
-                    unreachable!("metric sinks are never durably serialized")
-                }
             }
         }
 

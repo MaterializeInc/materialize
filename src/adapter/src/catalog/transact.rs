@@ -32,8 +32,8 @@ use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, MetricSink,
-    SourceReferences, StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
+    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, SourceReferences,
+    StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
 };
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -44,7 +44,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_i
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, SqlColumnType, strconv};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, SqlColumnType, strconv};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     AutoProvisionSource, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -400,41 +400,9 @@ enum TransactInnerMode {
     DryRun,
 }
 
-/// A non-durable install or removal of a `CatalogItem::MetricSink`.
-///
-/// Metric sinks are never durably persisted (`to_serialized`/`into_serialized` panic for them,
-/// see `CatalogItem::MetricSink`), so unlike every other item they have no representation in
-/// `Transaction`'s diffs or in `StateUpdateKind`. `transact_op` returns these alongside the
-/// temporary item diffs, and `transact_inner` applies them straight to `CatalogState`.
-#[derive(Clone)]
-enum MetricSinkOp {
-    Insert {
-        id: CatalogItemId,
-        oid: u32,
-        name: QualifiedItemName,
-        owner_id: RoleId,
-        privileges: Vec<MzAclItem>,
-        metric_sink: MetricSink,
-    },
-    Remove(CatalogItemId),
-    /// In-place update of an existing metric sink's catalog entry, carrying the full updated
-    /// entry (with the same id).
-    ///
-    /// Owner, privilege, and rename changes are routed here rather than `tx.update_item`, because
-    /// a metric sink can never be written to `tx`: its serialization panics (see
-    /// `CatalogItem::MetricSink`). Unlike a `Remove` + `Insert` pair, an in-place update stays
-    /// valid when a dependency is dropped later in the same transaction: none of these mutations
-    /// change the dependency graph, so no re-install (which would panic on the missing
-    /// dependency) is needed.
-    Update(Box<CatalogEntry>),
-}
-
 impl Catalog {
     fn should_audit_log_item(item: &CatalogItem) -> bool {
-        // Metric sinks are never durably persisted, so they must not flow into the durable
-        // audit log either: `mz_audit_log::ObjectType` has no variant to encode them (see
-        // `CatalogItem::MetricSink`), and encoding one panics.
-        !item.is_temporary() && !matches!(item, CatalogItem::MetricSink(_))
+        !item.is_temporary()
     }
 
     /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
@@ -749,10 +717,9 @@ impl Catalog {
         let mut storage_collections_to_register = BTreeMap::new();
 
         let mut updates = Vec::new();
-        let mut metric_sink_updates = Vec::new();
 
         for op in ops {
-            let (temporary_item_updates, op_metric_sink_updates) = Self::transact_op(
+            let temporary_item_updates = Self::transact_op(
                 oracle_write_ts,
                 session,
                 op,
@@ -765,34 +732,6 @@ impl Catalog {
                 &mut storage_collections_to_register,
             )
             .await?;
-
-            // Metric sinks are never durably persisted, so they have no representation in `tx`'s
-            // diffs at all; apply them to `preliminary_state` directly instead of via
-            // `apply_updates`. See `MetricSinkOp`.
-            for metric_sink_op in &op_metric_sink_updates {
-                match metric_sink_op.clone() {
-                    MetricSinkOp::Insert {
-                        id,
-                        oid,
-                        name,
-                        owner_id,
-                        privileges,
-                        metric_sink,
-                    } => preliminary_state.to_mut().insert_metric_sink(
-                        id,
-                        oid,
-                        name,
-                        owner_id,
-                        privileges,
-                        metric_sink,
-                    ),
-                    MetricSinkOp::Remove(id) => preliminary_state.to_mut().remove_metric_sink(id),
-                    MetricSinkOp::Update(entry) => {
-                        preliminary_state.to_mut().update_metric_sink(*entry)
-                    }
-                }
-            }
-            metric_sink_updates.extend(op_metric_sink_updates);
 
             // Temporary items are not stored in the durable catalog, so they need to be handled
             // separately for updating state and builtin tables.
@@ -870,54 +809,6 @@ impl Catalog {
             parsed_catalog_updates.extend(op_catalog_updates);
         }
 
-        // Replay the accumulated `MetricSinkOp`s onto the final `state`, mirroring what was
-        // already done to `preliminary_state` per-op above. Metric sinks bypass
-        // `StateUpdateKind`/`apply_updates` entirely (see `MetricSinkOp`), so the
-        // `mz_metric_sinks` builtin table update has to be packed here explicitly rather than
-        // falling out of the usual `apply_updates` path above.
-        for metric_sink_op in metric_sink_updates {
-            match metric_sink_op {
-                MetricSinkOp::Insert {
-                    id,
-                    oid,
-                    name,
-                    owner_id,
-                    privileges,
-                    metric_sink,
-                } => {
-                    state.to_mut().insert_metric_sink(
-                        id,
-                        oid,
-                        name,
-                        owner_id,
-                        privileges,
-                        metric_sink,
-                    );
-                    let update = state.pack_item_update(id, Diff::ONE);
-                    builtin_table_updates
-                        .extend(state.to_mut().resolve_builtin_table_updates(update));
-                }
-                MetricSinkOp::Remove(id) => {
-                    let update = state.pack_item_update(id, Diff::MINUS_ONE);
-                    builtin_table_updates
-                        .extend(state.to_mut().resolve_builtin_table_updates(update));
-                    state.to_mut().remove_metric_sink(id);
-                }
-                MetricSinkOp::Update(entry) => {
-                    // Retract the old builtin-table row, swap the entry in place, then add the
-                    // new row. In-place avoids re-installing dependencies (see `MetricSinkOp`).
-                    let id = entry.id;
-                    let retraction = state.pack_item_update(id, Diff::MINUS_ONE);
-                    builtin_table_updates
-                        .extend(state.to_mut().resolve_builtin_table_updates(retraction));
-                    state.to_mut().update_metric_sink(*entry);
-                    let addition = state.pack_item_update(id, Diff::ONE);
-                    builtin_table_updates
-                        .extend(state.to_mut().resolve_builtin_table_updates(addition));
-                }
-            }
-        }
-
         match state {
             Cow::Owned(state) => Ok(Some(state)),
             Cow::Borrowed(_) => Ok(None),
@@ -931,9 +822,6 @@ impl Catalog {
     /// Optionally returns a builtin table update for any builtin table updates than cannot be
     /// derived from the durable catalog state, and temporary item diffs. These are all very weird
     /// scenarios and ideally in the future don't exist.
-    ///
-    /// Also returns any `MetricSinkOp`s: metric sinks are never durably persisted, so unlike
-    /// every other item they cannot be derived from `tx`'s diffs at all, durable or otherwise.
     #[instrument]
     async fn transact_op(
         oracle_write_ts: mz_repr::Timestamp,
@@ -946,9 +834,8 @@ impl Catalog {
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
-    ) -> Result<(Vec<(TemporaryItem, StateDiff)>, Vec<MetricSinkOp>), AdapterError> {
+    ) -> Result<Vec<(TemporaryItem, StateDiff)>, AdapterError> {
         let mut temporary_item_updates = Vec::new();
-        let mut metric_sink_updates = Vec::new();
 
         match op {
             Op::CheckClusterState {
@@ -1613,26 +1500,6 @@ impl Catalog {
                 let temporary_oids = state.get_temporary_oids().collect();
 
                 match &item {
-                    // Metric sinks are never durably persisted (`to_serialized` panics for
-                    // them, see `CatalogItem::MetricSink`), so they cannot flow through
-                    // `Transaction`/`StateUpdateKind` like every other item type. Install them
-                    // directly into `CatalogState` instead; see `MetricSinkOp`.
-                    CatalogItem::MetricSink(metric_sink) => {
-                        let oid = tx.allocate_oid(&temporary_oids)?;
-                        metric_sink_updates.push(MetricSinkOp::Insert {
-                            id,
-                            oid,
-                            name: name.clone(),
-                            owner_id,
-                            privileges: privileges.clone(),
-                            metric_sink: metric_sink.clone(),
-                        });
-                        info!(
-                            "create metric sink {} ({})",
-                            state.resolve_full_name(&name, None),
-                            id
-                        );
-                    }
                     _ if item.is_temporary() => {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                             || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
@@ -1772,14 +1639,20 @@ impl Catalog {
                                 },
                             )
                         }
+                        CatalogItem::MetricSink(ms) => {
+                            EventDetails::CreateMetricSinkV1(mz_audit_log::CreateMetricSinkV1 {
+                                id: id.to_string(),
+                                cluster_id: Some(ms.cluster_id.to_string()),
+                                name,
+                            })
+                        }
                         CatalogItem::Table(_)
                         | CatalogItem::Log(_)
                         | CatalogItem::View(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
-                        | CatalogItem::Connection(_)
-                        | CatalogItem::MetricSink(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
+                        | CatalogItem::Connection(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
                             id: id.to_string(),
                             name,
                         }),
@@ -1907,17 +1780,11 @@ impl Catalog {
                 // Drop any associated comments.
                 tx.drop_comments(&delta.comments)?;
 
-                // Drop any items. Metric sinks are never durably persisted (see the
-                // `Op::CreateItem` handling above), so they are removed directly from
-                // `CatalogState` via `MetricSinkOp` rather than through `tx.remove_items`, which
-                // would fail to find a durable record for them.
+                // Drop any items.
                 let mut durable_items_to_drop = BTreeSet::new();
                 let mut temporary_items_to_drop = BTreeSet::new();
                 for id in &delta.items {
                     match state.get_entry(id).item() {
-                        CatalogItem::MetricSink(_) => {
-                            metric_sink_updates.push(MetricSinkOp::Remove(*id));
-                        }
                         item if item.is_temporary() => {
                             temporary_items_to_drop.insert(*id);
                         }
@@ -2255,12 +2122,7 @@ impl Catalog {
                             let entry = state.get_entry(id);
                             let mut new_entry = entry.clone();
                             update_privilege_fn(&mut new_entry.privileges);
-                            if let CatalogItem::MetricSink(_) = new_entry.item() {
-                                // Metric sinks are never durably persisted, so the privilege
-                                // change lives only in `CatalogState` via `MetricSinkOp`, never in
-                                // `tx`. See `CatalogItem::MetricSink` and `Op::CreateItem`.
-                                metric_sink_updates.push(MetricSinkOp::Update(Box::new(new_entry)));
-                            } else if !new_entry.item().is_temporary() {
+                            if !new_entry.item().is_temporary() {
                                 tx.update_item(*id, new_entry.into())?;
                             } else {
                                 temporary_item_updates
@@ -2511,13 +2373,7 @@ impl Catalog {
                             }))
                         })?;
 
-                    if let CatalogItem::MetricSink(_) = to_entry.item() {
-                        // A metric sink that reads from the renamed item is a dependent here. It
-                        // is never durably persisted, so its rewritten references live only in
-                        // `CatalogState` via `MetricSinkOp`, never in `tx`. See
-                        // `CatalogItem::MetricSink` and `Op::CreateItem`.
-                        metric_sink_updates.push(MetricSinkOp::Update(Box::new(to_entry)));
-                    } else if !to_entry.item().is_temporary() {
+                    if !to_entry.item().is_temporary() {
                         tx.update_item(*id, to_entry.into())?;
                     } else {
                         temporary_item_updates
@@ -2526,12 +2382,7 @@ impl Catalog {
                     }
                     updates.push(*id);
                 }
-                if let CatalogItem::MetricSink(_) = new_entry.item() {
-                    // Renaming a metric sink itself: never durably persisted, so the new name
-                    // lives only in `CatalogState` via `MetricSinkOp`. See
-                    // `CatalogItem::MetricSink` and `Op::CreateItem`.
-                    metric_sink_updates.push(MetricSinkOp::Update(Box::new(new_entry)));
-                } else if !new_entry.item().is_temporary() {
+                if !new_entry.item().is_temporary() {
                     tx.update_item(id, new_entry.into())?;
                 } else {
                     temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
@@ -2607,14 +2458,7 @@ impl Catalog {
                         })?;
 
                     // Queue updates for Catalog storage and Builtin Tables.
-                    if let CatalogItem::MetricSink(_) = new_entry.item() {
-                        // A metric sink reached here is either a member of the renamed
-                        // schema or a dependent whose `FROM` object lives in it. It is
-                        // never durably persisted, so its rewritten references live only
-                        // in `CatalogState` via `MetricSinkOp`, never in `tx`. See
-                        // `CatalogItem::MetricSink` and `Op::CreateItem`.
-                        metric_sink_updates.push(MetricSinkOp::Update(Box::new(new_entry)));
-                    } else if !new_entry.item().is_temporary() {
+                    if !new_entry.item().is_temporary() {
                         items_to_update.insert(*id, new_entry.into());
                     } else {
                         temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
@@ -2775,12 +2619,7 @@ impl Catalog {
                             new_owner,
                         );
                         new_entry.owner_id = new_owner;
-                        if let CatalogItem::MetricSink(_) = new_entry.item() {
-                            // Metric sinks are never durably persisted, so the owner change lives
-                            // only in `CatalogState` via `MetricSinkOp`, never in `tx`. See
-                            // `CatalogItem::MetricSink` and `Op::CreateItem`.
-                            metric_sink_updates.push(MetricSinkOp::Update(Box::new(new_entry)));
-                        } else if !new_entry.item().is_temporary() {
+                        if !new_entry.item().is_temporary() {
                             tx.update_item(*id, new_entry.into())?;
                         } else {
                             temporary_item_updates
@@ -2870,11 +2709,6 @@ impl Catalog {
                 )?;
             }
             Op::UpdateItem { id, name, to_item } => {
-                // NOTE: This durably serializes the item via `tx.update_item`, which
-                // panics for a `CatalogItem::MetricSink` (see `Op::CreateItem`). It is
-                // unreachable for metric sinks: every producer redefines a specific
-                // non-metric-sink item (source, sink, connection, secret), and metric
-                // sinks expose no `ALTER` that redefines the item.
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();
@@ -3083,7 +2917,7 @@ impl Catalog {
                 }
             }
         };
-        Ok((temporary_item_updates, metric_sink_updates))
+        Ok(temporary_item_updates)
     }
 
     fn log_update(state: &CatalogState, id: &CatalogItemId) {

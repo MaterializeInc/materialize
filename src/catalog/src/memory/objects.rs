@@ -1604,9 +1604,6 @@ impl Index {
 }
 
 /// A metric sink, a compute object that exports a relation's rows as Prometheus metrics.
-///
-/// Metric sinks are never persisted in the durable catalog: they are recreated in memory
-/// each time they're needed, so `to_serialized`/`into_serialized` are unreachable for them.
 #[derive(Debug, Clone, Serialize)]
 pub struct MetricSink {
     /// Parse-able SQL that defines this metric sink.
@@ -2688,7 +2685,7 @@ impl CatalogItem {
                 BTreeMap::new(),
             ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::MetricSink(_) => unreachable!("metric sinks are never serialized"),
+            CatalogItem::MetricSink(ms) => (ms.create_sql.clone(), ms.global_id, BTreeMap::new()),
         }
     }
 
@@ -2734,7 +2731,7 @@ impl CatalogItem {
                 (connection.create_sql, connection.global_id, BTreeMap::new())
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::MetricSink(_) => unreachable!("metric sinks are never serialized"),
+            CatalogItem::MetricSink(ms) => (ms.create_sql, ms.global_id, BTreeMap::new()),
         }
     }
 

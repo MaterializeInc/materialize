@@ -31,7 +31,7 @@ use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
-    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
     NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
     TableDataSource, Type, View,
 };
@@ -1494,11 +1494,17 @@ impl CatalogState {
                 cluster_id: in_cluster,
                 commit_interval: sink.commit_interval,
             }),
-            // Metric sinks are never durably persisted (see `CatalogItem::MetricSink`), so their
-            // `create_sql` is never parsed on catalog boot. The sequencer builds the
-            // `CatalogItem::MetricSink` directly instead of going through this path.
-            Plan::CreateMetricSink(CreateMetricSinkPlan { .. }) => {
-                unreachable!("metric sinks are never durably serialized")
+            Plan::CreateMetricSink(CreateMetricSinkPlan { metric_sink, .. }) => {
+                CatalogItem::MetricSink(MetricSink {
+                    create_sql: metric_sink.create_sql,
+                    global_id,
+                    from: metric_sink.from,
+                    resolved_ids,
+                    cluster_id: metric_sink.cluster_id,
+                    optimized_plan: None,
+                    physical_plan: None,
+                    dataflow_metainfo: None,
+                })
             }
             Plan::CreateType(CreateTypePlan { typ, .. }) => {
                 // Even if we don't need the `RelationDesc` here, error out

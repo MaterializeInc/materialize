@@ -9,7 +9,7 @@
 
 # Tests for the CREATE METRIC SINK / DROP METRIC SINK plan layer: the
 # `enable_metric_sink` feature flag gate, schema validation of the source
-# relation, item-type validation of the source, and non-durable catalog
+# relation, item-type validation of the source, and durable catalog
 # install/drop. Rendering the metric sink's compute dataflow is out of scope
 # here.
 
@@ -91,10 +91,8 @@ statement error unknown catalog item 's'
 DROP METRIC SINK s
 
 # Regression: mutating the owner of a metric sink must not panic environmentd.
-# Metric sinks are non-durable (they are never serialized), so REASSIGN OWNED
-# routes the owner change through the in-memory catalog only, never a durable
-# write or a durable audit event. Before the fix, this panicked on the
-# `unreachable!` serialization arm.
+# Metric sinks are durably persisted like any other catalog item, so REASSIGN
+# OWNED routes the owner change through the normal durable transaction path.
 
 statement ok
 CREATE ROLE metric_role_1
@@ -119,7 +117,7 @@ SELECT r.name
 metric_role_1
 
 # Reassign again, this time from a non-default owner, exercising the same
-# in-memory path once more.
+# durable path once more.
 simple conn=mz_system,user=mz_system
 REASSIGN OWNED BY metric_role_1 TO metric_role_2;
 ----
@@ -145,10 +143,9 @@ SELECT count(*) FROM mz_metric_sinks WHERE name = 's_owned'
 0
 
 # Regression: ALTER SCHEMA ... RENAME must not panic environmentd when a metric
-# sink is reachable. Metric sinks are non-durable (never serialized), so the
-# rename routes the rewritten item through the in-memory catalog only, never a
-# durable `tx.update_item`. Before the fix, both reachability paths below hit
-# the `unreachable!` serialization arm.
+# sink is reachable. Metric sinks are durably persisted like any other catalog
+# item, so the rename routes the rewritten item through the normal durable
+# `tx.update_item` path.
 
 # A fresh source view: earlier `DROP OWNED BY ... CASCADE` reassigned and
 # dropped the views created above.
@@ -202,7 +199,7 @@ SELECT count(*) FROM mz_metric_sinks WHERE name = 'ms_dependent'
 ----
 1
 
-# The rename was applied in-memory: the sink's create_sql now references the
+# The rename was applied durably: the sink's create_sql now references the
 # renamed schema.
 query I
 SELECT count(*)
@@ -212,9 +209,8 @@ SELECT count(*)
 1
 
 # Regression: renaming an item that a metric sink reads from (ALTER ... RENAME)
-# rewrites the sink's create_sql via the same in-memory path. This exercises the
-# dependent (`referenced_by`) rename that would otherwise hit an `unreachable!`
-# in the SQL rename transform.
+# rewrites the sink's create_sql via the same durable path. This exercises the
+# dependent (`referenced_by`) rename.
 statement ok
 CREATE VIEW rename_src AS SELECT
     'm'::text AS metric_name,
