@@ -1371,7 +1371,7 @@ fn validate_cluster_replica(cluster_replica: Option<&str>) -> Result<(), McpRequ
     if let Some(replica) = cluster_replica {
         if replica.trim().is_empty() {
             return Err(McpRequestError::QueryValidationFailed(
-                "cluster_replica must not be empty".to_string(),
+                "cluster_replica must not be empty or whitespace-only".to_string(),
             ));
         }
     }
