@@ -61,7 +61,7 @@ data](/reference/system-catalog/mz_introspection/) is replica-specific.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `cluster` | string | Yes | Exact cluster name the query should run on. |
-| `cluster_replica` | string | No | Available starting in v26.33. Replica name (e.g. `r1`) to target one replica of the cluster. Required for `EXPLAIN ANALYZE` on clusters with more than one replica. Find replica names in `mz_catalog.mz_cluster_replicas`. |
+| `cluster_replica` | string | No | Available starting in v26.34.0. Replica name (e.g. `r1`) to target one replica of the cluster. Required for `EXPLAIN ANALYZE` on clusters with more than one replica. Find replica names in `mz_catalog.mz_cluster_replicas`. |
 | `sql_query` | string | Yes | `SELECT`, `SHOW`, or `EXPLAIN` statement. |
 
 Only one statement per call is allowed. Write operations (`INSERT`, `UPDATE`,
