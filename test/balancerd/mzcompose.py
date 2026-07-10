@@ -227,15 +227,22 @@ def grant_all_admin_user(c: Composition):
 
 
 # Assert that contains is present in balancer metrics.
+# Per-connection metrics (tx/rx) are only recorded once the proxied connection
+# closes, and there is a short delay between the client disconnecting and
+# balancerd recording them, so poll for a few seconds.
 def assert_metrics(c: Composition, contains: str):
-    result = c.exec(
-        "materialized",
-        "curl",
-        "http://balancerd:6878/metrics",
-        "-s",
-        capture=True,
-    )
-    assert contains in result.stdout
+    for _ in range(20):
+        result = c.exec(
+            "materialized",
+            "curl",
+            "http://balancerd:6878/metrics",
+            "-s",
+            capture=True,
+        )
+        if contains in result.stdout:
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"{contains!r} not found in balancerd metrics")
 
 
 def sql_cursor(
@@ -727,9 +734,11 @@ def workflow_user(c: Composition) -> None:
         ),
     ):
         c.up("balancerd", "dnsmasq", "frontegg-mock", "materialized")
-        # Metrics aren't recorded until the connection has closed
-        # Non-admin user.
-        with contextlib.closing(sql_cursor(c, email=OTHER_USER)) as cursor:
+        # Non-admin user. Close the connection, not just the cursor: the tx/rx
+        # metrics are only recorded once balancerd finishes proxying, which
+        # happens when the client connection closes.
+        cursor = sql_cursor(c, email=OTHER_USER)
+        with contextlib.closing(cursor.connection):
             try:
                 cursor.execute("DROP DATABASE materialize CASCADE")
                 raise RuntimeError("execute() expected to fail")
@@ -740,7 +749,6 @@ def workflow_user(c: Composition) -> None:
 
             cursor.execute("SELECT current_user()")
             assert OTHER_USER in str(cursor.fetchall())
-            cursor.close()
 
         assert_metrics(c, 'mz_balancer_tenant_connection_active{source="pgwire"')
         assert_metrics(c, 'mz_balancer_tenant_connection_rx{source="pgwire"')
