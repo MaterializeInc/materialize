@@ -172,6 +172,8 @@ pub struct MetricsRegistry {
 /// collector and hands it to `unregister` on drop.
 #[derive(Clone, Debug)]
 pub struct CollectorDropHandle {
+    // Never read: retained solely so the collector is unregistered when the
+    // last clone of this handle drops (see `CollectorDropInner`'s `Drop` impl).
     #[allow(dead_code)]
     inner: Arc<CollectorDropInner>,
 }

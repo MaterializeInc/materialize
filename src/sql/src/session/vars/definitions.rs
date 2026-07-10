@@ -2161,9 +2161,11 @@ feature_flags!(
         name: enable_metric_sink,
         desc: "CREATE METRIC SINK",
         default: false,
-        // Metric sinks are never durably persisted, so there is no re-parse-on-boot case to
-        // force this on for.
-        enable_for_item_parsing: false,
+        // Metric sink catalog items are durably persisted like any other item (see
+        // `item_type` in durable/objects.rs) and are re-parsed from `create_sql` on
+        // catalog boot, which re-checks this flag. Force it on so boot doesn't fail
+        // for a metric sink created while the flag was enabled.
+        enable_for_item_parsing: true,
     },
     {
         name: enable_unlimited_retain_history,
