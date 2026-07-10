@@ -1499,7 +1499,7 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
             assert_eq!(tokens.next(), Some("VIEW"));
             CatalogItemType::MaterializedView
         }
-        // Metric sinks are durably persisted like any other catalog item; this is the live
+        // Metric sinks are durably persisted like any other catalog item. This is the live
         // parse path for their `create_sql`.
         Some("METRIC") => {
             assert_eq!(tokens.next(), Some("SINK"));

@@ -2727,7 +2727,7 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_) => {}
                 // Metric sinks are durable catalog items, but re-optimizing and shipping their
-                // dataflow on boot is deferred to bootstrap rehydration; skip for now.
+                // dataflow on boot is deferred to bootstrap rehydration. Skip for now.
                 CatalogItem::MetricSink(_) => {}
             }
         }
@@ -3700,7 +3700,7 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => (),
-                // No physical plan is built for a metric sink on boot; re-optimizing and shipping
+                // No physical plan is built for a metric sink on boot. Re-optimizing and shipping
                 // its dataflow is deferred to bootstrap rehydration.
                 CatalogItem::MetricSink(_) => (),
             }
