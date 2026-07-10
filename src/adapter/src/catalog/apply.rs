@@ -2130,6 +2130,45 @@ impl CatalogState {
         self.drop_item(id);
     }
 
+    /// Replaces an existing `CatalogItem::MetricSink` entry in place. See `insert_metric_sink`.
+    ///
+    /// Used for owner, privilege, and rename changes, which never alter a metric sink's
+    /// dependency graph. It deliberately does not go through `drop_item`/`insert_entry`: a metric
+    /// sink can be reassigned or have its source renamed in the same transaction that drops one
+    /// of its dependencies, and re-installing it would then panic on the missing dependency.
+    /// `used_by`/`referenced_by` are carried over from `entry`, which callers clone from the
+    /// current entry, so the dependency graph is preserved.
+    pub(super) fn update_metric_sink(&mut self, entry: CatalogEntry) {
+        let id = entry.id;
+        let old_name = self
+            .entry_by_id
+            .get(&id)
+            .expect("catalog out of sync")
+            .name()
+            .clone();
+        // A self-rename changes the schema item map key; re-key it.
+        if old_name != *entry.name() {
+            let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
+            let old_schema = self.get_schema_mut(
+                &old_name.qualifiers.database_spec,
+                &old_name.qualifiers.schema_spec,
+                conn_id,
+            );
+            old_schema
+                .items
+                .remove(&old_name.item)
+                .expect("catalog out of sync");
+            let new_name = entry.name().clone();
+            let new_schema = self.get_schema_mut(
+                &new_name.qualifiers.database_spec,
+                &new_name.qualifiers.schema_spec,
+                conn_id,
+            );
+            new_schema.items.insert(new_name.item, id);
+        }
+        self.entry_by_id.insert(id, entry);
+    }
+
     #[mz_ore::instrument(level = "trace")]
     fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");

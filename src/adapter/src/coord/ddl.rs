@@ -320,6 +320,10 @@ impl Coordinator {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut webhook_sources_to_restart = BTreeSet::new();
+        // Metric sinks bypass the `ParsedStateUpdate` pipeline that tears down every other
+        // compute object (see `CatalogItem::MetricSink`), so their compute dataflow is dropped
+        // explicitly here, mirroring the explicit ship at create.
+        let mut metric_sink_collections_to_drop: Vec<(ClusterId, GlobalId)> = Vec::new();
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut clusters_to_create = vec![];
@@ -342,9 +346,21 @@ impl Coordinator {
                 catalog::Op::DropObjects(drop_object_infos) => {
                     for drop_object_info in drop_object_infos {
                         match &drop_object_info {
-                            catalog::DropObjectInfo::Item(_) => {
-                                // Nothing to do, these will be handled by
-                                // applying the side effects that we return.
+                            catalog::DropObjectInfo::Item(item_id) => {
+                                // Most items are handled by applying the side effects
+                                // (`ParsedStateUpdate`s) that we return. Metric sinks bypass that
+                                // pipeline entirely (they are never durably persisted, see
+                                // `CatalogItem::MetricSink`), so their compute dataflow would leak.
+                                // Collect their compute collections here and drop them explicitly
+                                // after the transaction, mirroring the explicit ship at create (see
+                                // `create_metric_sink_finish`). Dropping the collection releases the
+                                // dataflow token, which unregisters the sink's collector.
+                                if let CatalogItem::MetricSink(metric_sink) =
+                                    self.catalog().get_entry(item_id).item()
+                                {
+                                    metric_sink_collections_to_drop
+                                        .push((metric_sink.cluster_id, metric_sink.global_id));
+                                }
                             }
                             catalog::DropObjectInfo::Cluster(id) => {
                                 clusters_to_drop.push(*id);
@@ -527,6 +543,10 @@ impl Coordinator {
         let _: () = async {
             if !webhook_sources_to_restart.is_empty() {
                 self.restart_webhook_sources(webhook_sources_to_restart);
+            }
+
+            if !metric_sink_collections_to_drop.is_empty() {
+                self.drop_compute_collections(metric_sink_collections_to_drop);
             }
 
             if update_metrics_config {

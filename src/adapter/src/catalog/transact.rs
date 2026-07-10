@@ -417,6 +417,16 @@ enum MetricSinkOp {
         metric_sink: MetricSink,
     },
     Remove(CatalogItemId),
+    /// In-place update of an existing metric sink's catalog entry, carrying the full updated
+    /// entry (with the same id).
+    ///
+    /// Owner, privilege, and rename changes are routed here rather than `tx.update_item`, because
+    /// a metric sink can never be written to `tx`: its serialization panics (see
+    /// `CatalogItem::MetricSink`). Unlike a `Remove` + `Insert` pair, an in-place update stays
+    /// valid when a dependency is dropped later in the same transaction: none of these mutations
+    /// change the dependency graph, so no re-install (which would panic on the missing
+    /// dependency) is needed.
+    Update(Box<CatalogEntry>),
 }
 
 impl Catalog {
@@ -777,6 +787,9 @@ impl Catalog {
                         metric_sink,
                     ),
                     MetricSinkOp::Remove(id) => preliminary_state.to_mut().remove_metric_sink(id),
+                    MetricSinkOp::Update(entry) => {
+                        preliminary_state.to_mut().update_metric_sink(*entry)
+                    }
                 }
             }
             metric_sink_updates.extend(op_metric_sink_updates);
@@ -889,6 +902,18 @@ impl Catalog {
                     builtin_table_updates
                         .extend(state.to_mut().resolve_builtin_table_updates(update));
                     state.to_mut().remove_metric_sink(id);
+                }
+                MetricSinkOp::Update(entry) => {
+                    // Retract the old builtin-table row, swap the entry in place, then add the
+                    // new row. In-place avoids re-installing dependencies (see `MetricSinkOp`).
+                    let id = entry.id;
+                    let retraction = state.pack_item_update(id, Diff::MINUS_ONE);
+                    builtin_table_updates
+                        .extend(state.to_mut().resolve_builtin_table_updates(retraction));
+                    state.to_mut().update_metric_sink(*entry);
+                    let addition = state.pack_item_update(id, Diff::ONE);
+                    builtin_table_updates
+                        .extend(state.to_mut().resolve_builtin_table_updates(addition));
                 }
             }
         }
@@ -2230,7 +2255,12 @@ impl Catalog {
                             let entry = state.get_entry(id);
                             let mut new_entry = entry.clone();
                             update_privilege_fn(&mut new_entry.privileges);
-                            if !new_entry.item().is_temporary() {
+                            if let CatalogItem::MetricSink(_) = new_entry.item() {
+                                // Metric sinks are never durably persisted, so the privilege
+                                // change lives only in `CatalogState` via `MetricSinkOp`, never in
+                                // `tx`. See `CatalogItem::MetricSink` and `Op::CreateItem`.
+                                metric_sink_updates.push(MetricSinkOp::Update(Box::new(new_entry)));
+                            } else if !new_entry.item().is_temporary() {
                                 tx.update_item(*id, new_entry.into())?;
                             } else {
                                 temporary_item_updates
@@ -2255,6 +2285,14 @@ impl Catalog {
                         }
                     }
                 }
+                // Metric sinks must not be durably audited: `mz_audit_log::ObjectType` has no
+                // variant for them and encoding one panics (see `should_audit_log_item`).
+                let should_log = match &target_id {
+                    SystemObjectId::Object(ObjectId::Item(item_id)) => {
+                        Self::should_audit_log_item(state.get_entry(item_id).item())
+                    }
+                    _ => true,
+                };
                 let object_type = state.get_system_object_type(&target_id);
                 let object_id_str = match &target_id {
                     SystemObjectId::System => "SYSTEM".to_string(),
@@ -2262,6 +2300,9 @@ impl Catalog {
                 };
                 // One audit event per grantee, even though the batch is a single durable write.
                 for privilege in &privileges {
+                    if !should_log {
+                        break;
+                    }
                     CatalogState::add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
@@ -2470,7 +2511,13 @@ impl Catalog {
                             }))
                         })?;
 
-                    if !to_entry.item().is_temporary() {
+                    if let CatalogItem::MetricSink(_) = to_entry.item() {
+                        // A metric sink that reads from the renamed item is a dependent here. It
+                        // is never durably persisted, so its rewritten references live only in
+                        // `CatalogState` via `MetricSinkOp`, never in `tx`. See
+                        // `CatalogItem::MetricSink` and `Op::CreateItem`.
+                        metric_sink_updates.push(MetricSinkOp::Update(Box::new(to_entry)));
+                    } else if !to_entry.item().is_temporary() {
                         tx.update_item(*id, to_entry.into())?;
                     } else {
                         temporary_item_updates
@@ -2479,7 +2526,12 @@ impl Catalog {
                     }
                     updates.push(*id);
                 }
-                if !new_entry.item().is_temporary() {
+                if let CatalogItem::MetricSink(_) = new_entry.item() {
+                    // Renaming a metric sink itself: never durably persisted, so the new name
+                    // lives only in `CatalogState` via `MetricSinkOp`. See
+                    // `CatalogItem::MetricSink` and `Op::CreateItem`.
+                    metric_sink_updates.push(MetricSinkOp::Update(Box::new(new_entry)));
+                } else if !new_entry.item().is_temporary() {
                     tx.update_item(id, new_entry.into())?;
                 } else {
                     temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
@@ -2716,7 +2768,12 @@ impl Catalog {
                             new_owner,
                         );
                         new_entry.owner_id = new_owner;
-                        if !new_entry.item().is_temporary() {
+                        if let CatalogItem::MetricSink(_) = new_entry.item() {
+                            // Metric sinks are never durably persisted, so the owner change lives
+                            // only in `CatalogState` via `MetricSinkOp`, never in `tx`. See
+                            // `CatalogItem::MetricSink` and `Op::CreateItem`.
+                            metric_sink_updates.push(MetricSinkOp::Update(Box::new(new_entry)));
+                        } else if !new_entry.item().is_temporary() {
                             tx.update_item(*id, new_entry.into())?;
                         } else {
                             temporary_item_updates
@@ -2741,21 +2798,31 @@ impl Catalog {
                     }
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 }
-                let object_type = state.get_object_type(&id);
-                CatalogState::add_to_audit_log(
-                    &state.system_configuration,
-                    oracle_write_ts,
-                    session,
-                    tx,
-                    audit_events,
-                    EventType::Alter,
-                    object_type_to_audit_object_type(object_type),
-                    EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
-                        object_id: id.to_string(),
-                        old_owner_id: old_owner.to_string(),
-                        new_owner_id: new_owner.to_string(),
-                    }),
-                )?;
+                // Metric sinks must not be durably audited: `mz_audit_log::ObjectType` has no
+                // variant for them and encoding one panics (see `should_audit_log_item`).
+                let should_log = match &id {
+                    ObjectId::Item(item_id) => {
+                        Self::should_audit_log_item(state.get_entry(item_id).item())
+                    }
+                    _ => true,
+                };
+                if should_log {
+                    let object_type = state.get_object_type(&id);
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        object_type_to_audit_object_type(object_type),
+                        EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
+                            object_id: id.to_string(),
+                            old_owner_id: old_owner.to_string(),
+                            new_owner_id: new_owner.to_string(),
+                        }),
+                    )?;
+                }
             }
             Op::UpdateClusterConfig { id, name, config } => {
                 let mut cluster = state.get_cluster(id).clone();

@@ -89,3 +89,57 @@ DROP METRIC SINK s
 
 statement error unknown catalog item 's'
 DROP METRIC SINK s
+
+# Regression: mutating the owner of a metric sink must not panic environmentd.
+# Metric sinks are non-durable (they are never serialized), so REASSIGN OWNED
+# routes the owner change through the in-memory catalog only, never a durable
+# write or a durable audit event. Before the fix, this panicked on the
+# `unreachable!` serialization arm.
+
+statement ok
+CREATE ROLE metric_role_1
+
+statement ok
+CREATE ROLE metric_role_2
+
+statement ok
+CREATE METRIC SINK s_owned IN CLUSTER quickstart FROM good
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY materialize TO metric_role_1;
+----
+COMPLETE 0
+
+query T
+SELECT r.name
+  FROM mz_metric_sinks ms
+  JOIN mz_roles r ON ms.owner_id = r.id
+  WHERE ms.name = 's_owned'
+----
+metric_role_1
+
+# Reassign again, this time from a non-default owner, exercising the same
+# in-memory path once more.
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY metric_role_1 TO metric_role_2;
+----
+COMPLETE 0
+
+query T
+SELECT r.name
+  FROM mz_metric_sinks ms
+  JOIN mz_roles r ON ms.owner_id = r.id
+  WHERE ms.name = 's_owned'
+----
+metric_role_2
+
+# DROP OWNED BY the owning role must tear the sink down without panicking.
+simple conn=mz_system,user=mz_system
+DROP OWNED BY metric_role_2 CASCADE;
+----
+COMPLETE 0
+
+query I
+SELECT count(*) FROM mz_metric_sinks WHERE name = 's_owned'
+----
+0
