@@ -437,8 +437,11 @@ impl Coordinator {
                     indexes_to_drop.push((index.cluster_id, index.global_id()));
                     dropped_item_names.insert(index.global_id(), full_name);
                 }
-                CatalogImplication::MetricSink(CatalogImplicationKind::Added(metric_sink)) => {
-                    tracing::debug!(?metric_sink, "not handling AddMetricSink in here yet");
+                CatalogImplication::MetricSink(CatalogImplicationKind::Added(_metric_sink)) => {
+                    // No controller action needed here, mirroring `Index`: create-time shipping
+                    // of the dataflow is the sequencer's job (`create_metric_sink_finish`), and
+                    // rehydration after a restart is handled separately during bootstrap
+                    // (`bootstrap_dataflow_plans`).
                 }
                 CatalogImplication::MetricSink(CatalogImplicationKind::Altered { .. }) => {
                     // No action needed: owner, privilege, and rename changes are

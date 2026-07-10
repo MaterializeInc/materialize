@@ -1499,89 +1499,84 @@ impl Catalog {
 
                 let temporary_oids = state.get_temporary_oids().collect();
 
-                match &item {
-                    _ if item.is_temporary() => {
-                        if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
-                            || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
-                        {
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::InvalidTemporarySchema,
-                            )));
-                        }
-                        let oid = tx.allocate_oid(&temporary_oids)?;
-
-                        let schema_id = name.qualifiers.schema_spec.clone().into();
-                        let item_type = item.typ();
-                        let (create_sql, global_id, versions) = item.to_serialized();
-
-                        let item = TemporaryItem {
-                            id,
-                            oid,
-                            global_id,
-                            schema_id,
-                            name: name.item.clone(),
-                            create_sql,
-                            conn_id: item.conn_id().cloned(),
-                            owner_id,
-                            privileges: privileges.clone(),
-                            extra_versions: versions,
-                        };
-                        temporary_item_updates.push((item, StateDiff::Addition));
-
-                        info!(
-                            "create temporary {} {} ({})",
-                            item_type,
-                            state.resolve_full_name(&name, None),
-                            id
-                        );
+                if item.is_temporary() {
+                    if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
+                        || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
+                    {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::InvalidTemporarySchema,
+                        )));
                     }
-                    _ => {
-                        if let Some(temp_id) =
-                            item.uses()
-                                .iter()
-                                .find(|id| match state.try_get_entry(*id) {
-                                    Some(entry) => entry.item().is_temporary(),
-                                    None => temporary_ids.contains(id),
-                                })
-                        {
-                            let temp_item = state.get_entry(temp_id);
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::InvalidTemporaryDependency(
-                                    temp_item.name().item.clone(),
-                                ),
-                            )));
-                        }
-                        if name.qualifiers.database_spec == ResolvedDatabaseSpecifier::Ambient
-                            && !system_user
-                        {
-                            let schema_name = state
-                                .resolve_full_name(&name, session.map(|session| session.conn_id()))
-                                .schema;
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlySystemSchema(schema_name),
-                            )));
-                        }
-                        let schema_id = name.qualifiers.schema_spec.clone().into();
-                        let item_type = item.typ();
-                        let (create_sql, global_id, versions) = item.to_serialized();
-                        tx.insert_user_item(
-                            id,
-                            global_id,
-                            schema_id,
-                            &name.item,
-                            create_sql,
-                            owner_id,
-                            privileges.clone(),
-                            &temporary_oids,
-                            versions,
-                        )?;
-                        info!(
-                            "create {} {} ({})",
-                            item_type,
-                            state.resolve_full_name(&name, None),
-                            id
-                        );
+                    let oid = tx.allocate_oid(&temporary_oids)?;
+
+                    let schema_id = name.qualifiers.schema_spec.clone().into();
+                    let item_type = item.typ();
+                    let (create_sql, global_id, versions) = item.to_serialized();
+
+                    let item = TemporaryItem {
+                        id,
+                        oid,
+                        global_id,
+                        schema_id,
+                        name: name.item.clone(),
+                        create_sql,
+                        conn_id: item.conn_id().cloned(),
+                        owner_id,
+                        privileges: privileges.clone(),
+                        extra_versions: versions,
+                    };
+                    temporary_item_updates.push((item, StateDiff::Addition));
+
+                    info!(
+                        "create temporary {} {} ({})",
+                        item_type,
+                        state.resolve_full_name(&name, None),
+                        id
+                    );
+                } else {
+                    if let Some(temp_id) =
+                        item.uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
+                    {
+                        let temp_item = state.get_entry(temp_id);
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::InvalidTemporaryDependency(temp_item.name().item.clone()),
+                        )));
                     }
+                    if name.qualifiers.database_spec == ResolvedDatabaseSpecifier::Ambient
+                        && !system_user
+                    {
+                        let schema_name = state
+                            .resolve_full_name(&name, session.map(|session| session.conn_id()))
+                            .schema;
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlySystemSchema(schema_name),
+                        )));
+                    }
+                    let schema_id = name.qualifiers.schema_spec.clone().into();
+                    let item_type = item.typ();
+                    let (create_sql, global_id, versions) = item.to_serialized();
+                    tx.insert_user_item(
+                        id,
+                        global_id,
+                        schema_id,
+                        &name.item,
+                        create_sql,
+                        owner_id,
+                        privileges.clone(),
+                        &temporary_oids,
+                        versions,
+                    )?;
+                    info!(
+                        "create {} {} ({})",
+                        item_type,
+                        state.resolve_full_name(&name, None),
+                        id
+                    );
                 }
 
                 if Self::should_audit_log_item(&item) {
@@ -1781,18 +1776,12 @@ impl Catalog {
                 tx.drop_comments(&delta.comments)?;
 
                 // Drop any items.
-                let mut durable_items_to_drop = BTreeSet::new();
-                let mut temporary_items_to_drop = BTreeSet::new();
-                for id in &delta.items {
-                    match state.get_entry(id).item() {
-                        item if item.is_temporary() => {
-                            temporary_items_to_drop.insert(*id);
-                        }
-                        _ => {
-                            durable_items_to_drop.insert(*id);
-                        }
-                    }
-                }
+                let (durable_items_to_drop, temporary_items_to_drop): (BTreeSet<_>, BTreeSet<_>) =
+                    delta
+                        .items
+                        .iter()
+                        .map(|id| id)
+                        .partition(|id| !state.get_entry(*id).item().is_temporary());
                 tx.remove_items(&durable_items_to_drop)?;
                 temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
                     let entry = state.get_entry(&id);
@@ -2147,8 +2136,9 @@ impl Catalog {
                         }
                     }
                 }
-                // Metric sinks must not be durably audited: `mz_audit_log::ObjectType` has no
-                // variant for them and encoding one panics (see `should_audit_log_item`).
+                // Skip the audit log for temporary items, matching `Op::CreateItem`.
+                // Metric sinks are not temporary, so they are audited here like any
+                // other item, via `UpdatePrivilegeV1`.
                 let should_log = match &target_id {
                     SystemObjectId::Object(ObjectId::Item(item_id)) => {
                         Self::should_audit_log_item(state.get_entry(item_id).item())
@@ -2644,8 +2634,9 @@ impl Catalog {
                     }
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 }
-                // Metric sinks must not be durably audited: `mz_audit_log::ObjectType` has no
-                // variant for them and encoding one panics (see `should_audit_log_item`).
+                // Skip the audit log for temporary items, matching `Op::CreateItem`.
+                // Metric sinks are not temporary, so they are audited here like any
+                // other item, via `UpdateOwnerV1`.
                 let should_log = match &id {
                     ObjectId::Item(item_id) => {
                         Self::should_audit_log_item(state.get_entry(item_id).item())
