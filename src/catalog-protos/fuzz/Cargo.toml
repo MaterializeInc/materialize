@@ -1,0 +1,28 @@
+# Fuzz crate for mz-catalog-protos serde round-trip properties. Catalog
+# state is durable on-disk data, so a decoder bug here is a catalog-corruption
+# risk. mz-catalog-protos uses serde (not prost) for the on-wire form, so
+# the fuzz target is a serde_json round-trip rather than a proto one.
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-catalog-protos-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-catalog-protos = { path = "..", features = ["proptest"] }
+proptest = "1"
+serde = "1.0"
+serde_json = "1.0"
+
+[[bin]]
+name = "catalog_objects_serde_roundtrip"
+path = "fuzz_targets/catalog_objects_serde_roundtrip.rs"
+test = false
+doc = false
+bench = false
