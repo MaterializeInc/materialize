@@ -185,7 +185,7 @@ impl ColumnIndices {
 /// `is_valid_metric_name`/`MetricKind::parse`, so it takes the same skip path as any other
 /// invalid value without special-casing here. `labels` and `help` have an obvious identity
 /// element, so null becomes `{}` and `""` respectively. `value` has no identity element (there is
-/// no numeric value that means "absent"), so it stays `Option<f64>`; a null value is a real row
+/// no numeric value that means "absent"), so it stays `Option<f64>`. A null value is a real row
 /// identity, just one that never contributes to a series' published value.
 fn extract_row(
     cols: &ColumnIndices,
@@ -226,7 +226,7 @@ fn extract_row(
 /// a null `value` column. A null value is its own distinct row identity, not a stand-in for any
 /// particular number, so it is kept apart from every `Some(_)` identity rather than coerced to
 /// one. `Option<u64>` stays totally ordered (derived `Ord` places `None` before every `Some`), so
-/// the tuple is still usable as a map key; recover a real value with `f64::from_bits`. The name
+/// the tuple is still usable as a map key. Recover a real value with `f64::from_bits`. The name
 /// and labels lead the tuple so that a `BTreeMap<RowKey, _>` keeps all rows of one `(metric_name,
 /// labels)` series adjacent.
 type RowKey = (String, Vec<(String, String)>, Option<u64>, String, String);
