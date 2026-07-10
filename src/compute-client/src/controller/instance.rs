@@ -1545,6 +1545,7 @@ impl Instance {
                 ComputeSinkConnection::CopyToS3Oneshot(conn) => {
                     ComputeSinkConnection::CopyToS3Oneshot(conn)
                 }
+                ComputeSinkConnection::MetricSink(conn) => ComputeSinkConnection::MetricSink(conn),
             };
             let desc = ComputeSinkDesc {
                 from: se.from,

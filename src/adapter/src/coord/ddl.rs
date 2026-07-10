@@ -342,10 +342,6 @@ impl Coordinator {
                 catalog::Op::DropObjects(drop_object_infos) => {
                     for drop_object_info in drop_object_infos {
                         match &drop_object_info {
-                            catalog::DropObjectInfo::Item(_) => {
-                                // Nothing to do, these will be handled by
-                                // applying the side effects that we return.
-                            }
                             catalog::DropObjectInfo::Cluster(id) => {
                                 clusters_to_drop.push(*id);
                             }
@@ -1203,7 +1199,8 @@ impl Coordinator {
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
-                        | CatalogItem::Func(_) => {}
+                        | CatalogItem::Func(_)
+                        | CatalogItem::MetricSink(_) => {}
                     }
                 }
                 Op::DropObjects(drop_object_infos) => {
@@ -1282,7 +1279,8 @@ impl Coordinator {
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
                                     | CatalogItem::Type(_)
-                                    | CatalogItem::Func(_) => {}
+                                    | CatalogItem::Func(_)
+                                    | CatalogItem::MetricSink(_) => {}
                                 }
                             }
                         }
@@ -1312,7 +1310,8 @@ impl Coordinator {
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
-                    | CatalogItem::Func(_) => {}
+                    | CatalogItem::Func(_)
+                    | CatalogItem::MetricSink(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }

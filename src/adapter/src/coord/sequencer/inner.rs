@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use futures::future::{BoxFuture, FutureExt};
 use futures::{Future, StreamExt, future};
 use itertools::Itertools;
+use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
@@ -25,6 +26,9 @@ use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
+use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_expr::{
     CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -36,12 +40,12 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::explain::json::json_string;
+use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, RelationVersion, RelationVersionSelector, Row, RowArena,
-    RowIterator, Timestamp,
+    CatalogItemId, Datum, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    Row, RowArena, RowIterator, Timestamp,
 };
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{
@@ -97,7 +101,9 @@ use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, Span, info, warn};
 
-use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
+use crate::catalog::{
+    self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
+};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
@@ -120,7 +126,7 @@ use crate::session::{
     WriteLocks, WriteOp,
 };
 use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
-use crate::{PeekResponseUnary, ReadHolds};
+use crate::{CollectionIdBundle, PeekResponseUnary, ReadHolds};
 
 /// A future that resolves to a real-time recency timestamp.
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
@@ -129,6 +135,7 @@ mod cluster;
 mod copy_from;
 mod create_index;
 mod create_materialized_view;
+mod create_metric_sink;
 mod create_view;
 mod explain_timestamp;
 mod peek;
@@ -4928,6 +4935,72 @@ impl Coordinator {
         notices: &[RawOptimizerNotice],
     ) {
         emit_optimizer_notices(&*self.catalog, ctx.session(), notices);
+    }
+
+    /// Renders `raw_df_meta`'s optimizer notices against a humanizer that resolves the
+    /// about-to-be-created item's own `global_id` to `name`, rather than to a bare transient
+    /// id. `source_desc` supplies the target's column names for humanized output.
+    ///
+    /// Shared by the `CREATE INDEX` and `CREATE METRIC SINK` `_finish` stages, which both
+    /// render notices before the catalog transaction that creates the item, so the rendered
+    /// text can already refer to the item by its intended name.
+    fn render_create_item_notices(
+        &self,
+        name: &QualifiedItemName,
+        global_id: GlobalId,
+        source_desc: &RelationDesc,
+        raw_df_meta: &DataflowMetainfo,
+    ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
+        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, notice_id)| notice_id)
+            .take(raw_df_meta.optimizer_notices.len())
+            .collect::<Vec<_>>();
+
+        let system_catalog = self.catalog().for_system_session();
+        let full_name = self.catalog().resolve_full_name(name, None);
+        let transient_items = btreemap! {
+            global_id => TransientItem::new(
+                Some(full_name.into_parts()),
+                Some(source_desc.iter_names().map(|c| c.to_string()).collect()),
+            )
+        };
+        let humanizer = ExprHumanizerExt::new(transient_items, &system_catalog);
+        CatalogState::render_notices_core(
+            &humanizer,
+            (self.catalog().config().now)(),
+            raw_df_meta,
+            notice_ids,
+            Some(global_id),
+        )
+    }
+
+    /// Sets `df_desc`'s as-of from a read hold on `id_bundle`, ships the dataflow, and drops
+    /// the hold once compute has taken its own (compute puts in its own read holds during
+    /// `create_dataflow`, so it is safe to release this one right after shipping).
+    ///
+    /// Shared by the `CREATE INDEX` and `CREATE METRIC SINK` `_finish` stages, which both need
+    /// a read hold across shipping to keep the since of `id_bundle` from advancing underneath
+    /// the as-of they just picked.
+    async fn ship_new_dataflow(
+        &mut self,
+        id_bundle: &CollectionIdBundle,
+        mut df_desc: DataflowDescription<LirRelationExpr>,
+        instance: ComputeInstanceId,
+        notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
+    ) {
+        let read_holds = self.acquire_read_holds(id_bundle);
+        let since = read_holds.least_valid_read();
+        df_desc.set_as_of(since);
+
+        self.ship_dataflow_and_notice_builtin_table_updates(
+            df_desc,
+            instance,
+            notice_builtin_updates_fut,
+            None,
+        )
+        .await;
+
+        drop(read_holds);
     }
 
     /// Persist already-rendered optimizer notices for a newly created

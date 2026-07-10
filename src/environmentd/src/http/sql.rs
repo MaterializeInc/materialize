@@ -1502,6 +1502,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedTable { .. }
         | ExecuteResponse::CreatedIndex { .. }
         | ExecuteResponse::CreatedIntrospectionSubscribe
+        | ExecuteResponse::CreatedMetricSink { .. }
         | ExecuteResponse::CreatedSecret { .. }
         | ExecuteResponse::CreatedSource { .. }
         | ExecuteResponse::CreatedSink { .. }

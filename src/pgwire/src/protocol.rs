@@ -2299,6 +2299,7 @@ where
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
             | ExecuteResponse::CreatedIntrospectionSubscribe
+            | ExecuteResponse::CreatedMetricSink { .. }
             | ExecuteResponse::CreatedMaterializedView { .. }
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedSchema { .. }

@@ -5473,6 +5473,71 @@ FROM
     ontology: None,
 });
 
+pub static MZ_SHOW_METRIC_SINKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_show_metric_sinks",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_METRIC_SINKS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("cluster", SqlScalarType::String.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("comment", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'metric sink' AND object_sub_id IS NULL
+)
+SELECT
+    metric_sinks.id,
+    metric_sinks.name,
+    clusters.name AS cluster,
+    schema_id,
+    cluster_id,
+    COALESCE(comments.comment, '') as comment
+FROM
+    mz_catalog.mz_metric_sinks AS metric_sinks
+    JOIN
+        mz_catalog.mz_clusters AS clusters
+        ON clusters.id = metric_sinks.cluster_id
+    LEFT JOIN comments ON metric_sinks.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "show_metric_sink",
+        description: "A summary of a metric sink for `SHOW METRIC SINKS`, joined with its cluster name",
+        links: &const {
+            [
+                OntologyLink {
+                    name: "details_of",
+                    target: "metric_sink",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                },
+                OntologyLink {
+                    name: "in_schema",
+                    target: "schema",
+                    properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "runs_on_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                },
+            ]
+        },
+        column_semantic_types: &const {
+            [
+                ("id", SemanticType::CatalogItemId),
+                ("schema_id", SemanticType::SchemaId),
+                ("cluster_id", SemanticType::ClusterId),
+            ]
+        },
+    }),
+});
+
 pub static MZ_SHOW_MATERIALIZED_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_materialized_views",
     schema: MZ_INTERNAL_SCHEMA,

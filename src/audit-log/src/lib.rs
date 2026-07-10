@@ -157,6 +157,7 @@ pub enum ObjectType {
     Func,
     Index,
     MaterializedView,
+    MetricSink,
     NetworkPolicy,
     Role,
     Secret,
@@ -180,6 +181,7 @@ impl ObjectType {
             ObjectType::Func => "Function",
             ObjectType::Index => "Index",
             ObjectType::MaterializedView => "Materialized View",
+            ObjectType::MetricSink => "Metric Sink",
             ObjectType::NetworkPolicy => "Network Policy",
             ObjectType::Role => "Role",
             ObjectType::Schema => "Schema",
@@ -254,6 +256,7 @@ pub enum EventDetails {
     ResetAllV1,
     RotateKeysV1(RotateKeysV1),
     CreateRoleV1(CreateRoleV1),
+    CreateMetricSinkV1(CreateMetricSinkV1),
 }
 
 #[derive(
@@ -971,6 +974,25 @@ pub struct CreateSourceSinkV4 {
     Hash,
     Arbitrary
 )]
+pub struct CreateMetricSinkV1 {
+    pub id: String,
+    pub cluster_id: Option<String>,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
 pub struct CreateIndexV1 {
     pub id: String,
     pub cluster_id: String,
@@ -1425,6 +1447,7 @@ impl EventDetails {
             EventDetails::ResetAllV1 => serde_json::Value::Null,
             EventDetails::RotateKeysV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateMetricSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }

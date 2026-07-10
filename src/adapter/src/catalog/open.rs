@@ -928,6 +928,7 @@ fn add_new_remove_old_builtin_items_migration(
             CatalogItemType::View => CommentObjectId::View(id),
             CatalogItemType::MaterializedView => CommentObjectId::MaterializedView(id),
             CatalogItemType::Sink
+            | CatalogItemType::MetricSink
             | CatalogItemType::Index
             | CatalogItemType::Type
             | CatalogItemType::Func

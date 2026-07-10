@@ -1232,6 +1232,7 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::MaterializedView(item_id)
             | CommentObjectId::Source(item_id)
             | CommentObjectId::Sink(item_id)
+            | CommentObjectId::MetricSink(item_id)
             | CommentObjectId::Index(item_id)
             | CommentObjectId::Func(item_id)
             | CommentObjectId::Connection(item_id)
@@ -1292,6 +1293,7 @@ pub enum CommentObjectId {
     MaterializedView(CatalogItemId),
     Source(CatalogItemId),
     Sink(CatalogItemId),
+    MetricSink(CatalogItemId),
     Index(CatalogItemId),
     Func(CatalogItemId),
     Connection(CatalogItemId),

@@ -386,6 +386,9 @@ pub fn show_objects<'a>(
         ShowObjectType::Subsource { on_source } => show_subsources(scx, from, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
         ShowObjectType::Sink { in_cluster } => show_sinks(scx, from, in_cluster, filter),
+        ShowObjectType::MetricSink { in_cluster } => {
+            show_metric_sinks(scx, from, in_cluster, filter)
+        }
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => {
@@ -623,6 +626,39 @@ fn show_sinks<'a>(
     )
 }
 
+fn show_metric_sinks<'a>(
+    scx: &'a StatementContext<'a>,
+    from: Option<ResolvedSchemaName>,
+    in_cluster: Option<ResolvedClusterName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let schema_spec = if let Some(ResolvedSchemaName::Schema { schema_spec, .. }) = from {
+        schema_spec.to_string()
+    } else {
+        scx.resolve_active_schema()?.to_string()
+    };
+
+    let mut where_clause = format!("schema_id = '{schema_spec}'");
+
+    if let Some(cluster) = in_cluster {
+        write!(where_clause, " AND cluster_id = '{}'", cluster.id)
+            .expect("write on string cannot fail");
+    }
+
+    let query = format!(
+        "SELECT name, cluster, comment
+        FROM mz_internal.mz_show_metric_sinks
+        WHERE {where_clause}"
+    );
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "cluster", "comment"]),
+    )
+}
+
 fn show_types<'a>(
     scx: &'a StatementContext<'a>,
     from: Option<ResolvedSchemaName>,
@@ -724,7 +760,8 @@ pub fn show_columns<'a>(
         | ty @ CatalogItemType::Func
         | ty @ CatalogItemType::Secret
         | ty @ CatalogItemType::Type
-        | ty @ CatalogItemType::Sink => {
+        | ty @ CatalogItemType::Sink
+        | ty @ CatalogItemType::MetricSink => {
             sql_bail!("{full_name} is a {ty} and so does not have columns");
         }
     }

@@ -57,7 +57,7 @@ pub(crate) fn validate_read_then_write_dependencies(
                 }
                 Source | Secret | Connection => false,
                 // Cannot select from sinks or indexes.
-                Sink | Index => unreachable!(),
+                Sink | MetricSink | Index => unreachable!(),
                 Table => {
                     if !id.is_user() {
                         // We can't read from non-user tables

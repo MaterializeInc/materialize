@@ -847,6 +847,7 @@ mz_show_databases
 mz_show_default_privileges
 mz_show_indexes
 mz_show_materialized_views
+mz_show_metric_sinks
 mz_show_my_cluster_privileges
 mz_show_my_database_privileges
 mz_show_my_default_privileges

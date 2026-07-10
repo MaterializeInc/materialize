@@ -650,7 +650,8 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => {}
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::MetricSink(_) => {}
                 }
             }
         }
@@ -1462,7 +1463,8 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => (),
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::MetricSink(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -1639,6 +1641,13 @@ impl Catalog {
                                         .map(|id| id.to_string()),
                                 },
                             )
+                        }
+                        CatalogItem::MetricSink(ms) => {
+                            EventDetails::CreateMetricSinkV1(mz_audit_log::CreateMetricSinkV1 {
+                                id: id.to_string(),
+                                cluster_id: Some(ms.cluster_id.to_string()),
+                                name,
+                            })
                         }
                         CatalogItem::Table(_)
                         | CatalogItem::Log(_)

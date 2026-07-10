@@ -52,6 +52,7 @@ fn parse_catalog_audit_log_details<'a>(a: JsonbRef<'a>) -> Result<Jsonb, EvalErr
         ("CreateSourceSinkV3", "", "name", None),
         ("CreateSourceSinkV4", "", "name", None),
         ("CreateIndexV1", "", "name", None),
+        ("CreateMetricSinkV1", "", "name", None),
         ("CreateMaterializedViewV1", "", "name", None),
         ("AlterSourceSinkV1", "", "name", None),
         ("AlterSetClusterV1", "", "name", None),

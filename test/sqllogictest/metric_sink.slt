@@ -1,0 +1,242 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the CREATE METRIC SINK / DROP METRIC SINK plan layer: the
+# `enable_metric_sink` feature flag gate, schema validation of the source
+# relation, item-type validation of the source, and durable catalog
+# install/drop. Rendering the metric sink's compute dataflow is out of scope
+# here.
+
+mode cockroach
+
+statement ok
+CREATE VIEW good AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement error CREATE METRIC SINK is not available
+CREATE METRIC SINK s IN CLUSTER quickstart FROM good
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_metric_sink = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE METRIC SINK s IN CLUSTER quickstart FROM good
+
+statement ok
+CREATE VIEW bad AS SELECT 1 AS x
+
+statement error metric sink source must expose column "metric_name"
+CREATE METRIC SINK s2 IN CLUSTER quickstart FROM bad
+
+statement ok
+CREATE VIEW missing_column AS SELECT
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement error metric sink source must expose column "metric_name"
+CREATE METRIC SINK s3 IN CLUSTER quickstart FROM missing_column
+
+statement ok
+CREATE VIEW wrong_type AS SELECT
+    1 AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement error metric sink source column "metric_name" is not of the required type
+CREATE METRIC SINK s4 IN CLUSTER quickstart FROM wrong_type
+
+# Nullability is a runtime concern for the sink operator (null value => the
+# series gaps until a non-null value arrives), not a plan-time rejection.
+# `map_build` always reports a nullable result, and `val` here is a nullable
+# column, so this view exercises nullable `labels` and `value` without a
+# `coalesce` workaround, and the sink still plans.
+statement ok
+CREATE TABLE nullable_src (k text NOT NULL, val double)
+
+statement ok
+CREATE VIEW nullable_ok AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    map_build(LIST[ROW('k', k)])::map[text=>text] AS labels,
+    val AS value,
+    'h'::text AS help
+FROM nullable_src
+
+statement ok
+CREATE METRIC SINK s5 IN CLUSTER quickstart FROM nullable_ok
+
+statement ok
+CREATE SECRET metric_secret AS 'password'
+
+statement error cannot create metric sink from metric_secret because it is a secret
+CREATE METRIC SINK s6 IN CLUSTER quickstart FROM metric_secret
+
+statement error unknown catalog item 's7'
+DROP METRIC SINK s7
+
+statement ok
+DROP METRIC SINK IF EXISTS s7
+
+statement ok
+DROP METRIC SINK s
+
+statement error unknown catalog item 's'
+DROP METRIC SINK s
+
+# Regression: mutating the owner of a metric sink must not panic environmentd.
+# Metric sinks are durably persisted like any other catalog item, so REASSIGN
+# OWNED routes the owner change through the normal durable transaction path.
+
+statement ok
+CREATE ROLE metric_role_1
+
+statement ok
+CREATE ROLE metric_role_2
+
+statement ok
+CREATE METRIC SINK s_owned IN CLUSTER quickstart FROM good
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY materialize TO metric_role_1;
+----
+COMPLETE 0
+
+query T
+SELECT r.name
+  FROM mz_metric_sinks ms
+  JOIN mz_roles r ON ms.owner_id = r.id
+  WHERE ms.name = 's_owned'
+----
+metric_role_1
+
+# Reassign again, this time from a non-default owner, exercising the same
+# durable path once more.
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY metric_role_1 TO metric_role_2;
+----
+COMPLETE 0
+
+query T
+SELECT r.name
+  FROM mz_metric_sinks ms
+  JOIN mz_roles r ON ms.owner_id = r.id
+  WHERE ms.name = 's_owned'
+----
+metric_role_2
+
+# DROP OWNED BY the owning role must tear the sink down without panicking.
+simple conn=mz_system,user=mz_system
+DROP OWNED BY metric_role_2 CASCADE;
+----
+COMPLETE 0
+
+query I
+SELECT count(*) FROM mz_metric_sinks WHERE name = 's_owned'
+----
+0
+
+# Regression: ALTER SCHEMA ... RENAME must not panic environmentd when a metric
+# sink is reachable. Metric sinks are durably persisted like any other catalog
+# item, so the rename routes the rewritten item through the normal durable
+# `tx.update_item` path.
+
+# A fresh source view: earlier `DROP OWNED BY ... CASCADE` reassigned and
+# dropped the views created above.
+statement ok
+CREATE VIEW good2 AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+# Path 1: the metric sink is itself a member of the renamed schema.
+statement ok
+CREATE SCHEMA sink_schema
+
+statement ok
+CREATE METRIC SINK sink_schema.ms_member IN CLUSTER quickstart FROM good2
+
+statement ok
+ALTER SCHEMA sink_schema RENAME TO sink_schema2
+
+query T
+SELECT s.name
+  FROM mz_metric_sinks ms
+  JOIN mz_schemas s ON ms.schema_id = s.id
+  WHERE ms.name = 'ms_member'
+----
+sink_schema2
+
+# Path 2: the metric sink's FROM object lives in the renamed schema, so the
+# sink is reached via the dependee's `referenced_by` sweep, not as a member.
+statement ok
+CREATE SCHEMA src_schema
+
+statement ok
+CREATE VIEW src_schema.metric_src AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement ok
+CREATE METRIC SINK ms_dependent IN CLUSTER quickstart FROM src_schema.metric_src
+
+statement ok
+ALTER SCHEMA src_schema RENAME TO src_schema2
+
+query I
+SELECT count(*) FROM mz_metric_sinks WHERE name = 'ms_dependent'
+----
+1
+
+# The rename was applied durably: the sink's create_sql now references the
+# renamed schema.
+query I
+SELECT count(*)
+  FROM mz_metric_sinks
+  WHERE name = 'ms_dependent' AND create_sql LIKE '%src_schema2%'
+----
+1
+
+# Regression: renaming an item that a metric sink reads from (ALTER ... RENAME)
+# rewrites the sink's create_sql via the same durable path. This exercises the
+# dependent (`referenced_by`) rename.
+statement ok
+CREATE VIEW rename_src AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement ok
+CREATE METRIC SINK ms_rename_dep IN CLUSTER quickstart FROM rename_src
+
+statement ok
+ALTER VIEW rename_src RENAME TO rename_src2
+
+query I
+SELECT count(*)
+  FROM mz_metric_sinks
+  WHERE name = 'ms_rename_dep' AND create_sql LIKE '%rename_src2%'
+----
+1

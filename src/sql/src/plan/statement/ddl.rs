@@ -58,10 +58,10 @@ use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
     CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateMaterializedViewStatement, CreateMetricSinkStatement, CreateNetworkPolicyStatement,
+    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
+    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
+    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
     CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
@@ -156,18 +156,19 @@ use crate::plan::{
     ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
-    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation, literal, plan_utils, query, transform_ast,
+    CreateMetricSinkPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
+    MaterializedView, MetricSink, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext,
+    ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View,
+    WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
+    plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
-    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
-    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
+    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_METRIC_SINK,
+    ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -3285,7 +3286,7 @@ fn plan_sink(
                     });
                 }
             }
-            Sink | View | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | View | Index | Type | Func | Secret | Connection => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
@@ -4066,6 +4067,122 @@ fn kafka_sink_builder(
     }))
 }
 
+pub fn describe_create_metric_sink(
+    _: &StatementContext,
+    _: CreateMetricSinkStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+/// Columns a metric sink source relation must expose, and the predicate its scalar type must
+/// satisfy. Order-independent. Columns may be nullable: null input is a runtime concern handled
+/// by the sink operator, not a plan-time rejection.
+const METRIC_SINK_SOURCE_COLUMNS: &[(&str, fn(&SqlScalarType) -> bool)] = &[
+    ("metric_name", |t| matches!(t, SqlScalarType::String)),
+    ("metric_type", |t| matches!(t, SqlScalarType::String)),
+    (
+        "labels",
+        |t| matches!(t, SqlScalarType::Map { value_type, .. } if matches!(**value_type, SqlScalarType::String)),
+    ),
+    ("value", |t| matches!(t, SqlScalarType::Float64)),
+    ("help", |t| matches!(t, SqlScalarType::String)),
+];
+
+fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
+    for (name, type_ok) in METRIC_SINK_SOURCE_COLUMNS {
+        let col = ColumnName::from(*name);
+        let (_, column_type) = desc
+            .get_by_name(&col)
+            .ok_or_else(|| sql_err!("metric sink source must expose column {:?}", name))?;
+        if !type_ok(&column_type.scalar_type) {
+            return Err(sql_err!(
+                "metric sink source column {:?} is not of the required type",
+                name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Plans a metric sink over `stmt.from`, a relation exposing the columns in
+/// `METRIC_SINK_SOURCE_COLUMNS`.
+///
+/// The sink emits one Prometheus series per distinct `(metric_name, labels)` row, so a source
+/// with high-cardinality labels produces a correspondingly large series count. A null `value`
+/// does not publish as zero: it leaves that series absent from the exposition (a gap) until a
+/// non-null value arrives for the same `(metric_name, labels)`. Callers who want zero-fill
+/// instead of a gap write `coalesce(value, 0)` themselves.
+pub fn plan_create_metric_sink(
+    scx: &StatementContext,
+    mut stmt: CreateMetricSinkStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&ENABLE_METRIC_SINK)?;
+
+    let CreateMetricSinkStatement {
+        name,
+        in_cluster,
+        if_not_exists,
+        from,
+    } = &mut stmt;
+
+    let Some(name) = name.clone() else {
+        return Err(PlanError::MissingName(CatalogItemType::MetricSink));
+    };
+    let if_not_exists = *if_not_exists;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    let from_item = scx.get_item_by_resolved_name(from)?;
+    {
+        use CatalogItemType::*;
+        match from_item.item_type() {
+            Table | Source | View | MaterializedView | Index => {}
+            Sink | MetricSink | Type | Func | Secret | Connection => {
+                sql_bail!(
+                    "cannot create metric sink from {} because it is a {}",
+                    scx.catalog.minimal_qualification(from_item.name()),
+                    from_item.item_type(),
+                );
+            }
+        }
+    }
+
+    let desc = from_item
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
+    validate_metric_sink_desc(&desc)?;
+
+    let cluster_id = match in_cluster {
+        None => scx.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    };
+    *in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+    let from_global_id = from_item.global_id();
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateMetricSink(stmt))?;
+
+    Ok(Plan::CreateMetricSink(CreateMetricSinkPlan {
+        name,
+        metric_sink: MetricSink {
+            create_sql,
+            from: from_global_id,
+            cluster_id,
+        },
+        if_not_exists,
+        in_cluster: cluster_id,
+    }))
+}
+
 pub fn describe_create_index(
     _: &StatementContext,
     _: CreateIndexStatement<Aug>,
@@ -4099,7 +4216,7 @@ pub fn plan_create_index(
                     );
                 }
             }
-            Sink | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | Index | Type | Func | Secret | Connection => {
                 sql_bail!(
                     "index cannot be created on {} because it is a {}",
                     on_name.full_name_str(),
@@ -5706,6 +5823,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         | ObjectType::MaterializedView
         | ObjectType::Source
         | ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster
@@ -5722,6 +5840,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Sink
+            | CatalogItemType::MetricSink
             | CatalogItemType::Type
             | CatalogItemType::Secret
             | CatalogItemType::Connection => true,
@@ -6426,7 +6545,7 @@ pub fn plan_alter_item_set_cluster(
     // Prevent access to `SET CLUSTER` for unsupported objects.
     match object_type {
         ObjectType::MaterializedView => {}
-        ObjectType::Index | ObjectType::Sink | ObjectType::Source => {
+        ObjectType::Index | ObjectType::Sink | ObjectType::MetricSink | ObjectType::Source => {
             bail_unsupported!(29606, format!("ALTER {object_type} SET CLUSTER"))
         }
         ObjectType::Table
@@ -6874,6 +6993,7 @@ pub fn plan_alter_object_swap(
             | ObjectType::MaterializedView
             | ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Role
@@ -7910,6 +8030,7 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::MaterializedView
         | ObjectType::Source
         | ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster
