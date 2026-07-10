@@ -1336,6 +1336,7 @@ async fn execute_query(
     debug!(cluster = %cluster, cluster_replica = ?cluster_replica, "Executing user query");
 
     validate_readonly_query(sql_query)?;
+    validate_cluster_replica(cluster_replica)?;
 
     // READ ONLY prevents mutations; SET CLUSTER (and, when requested,
     // SET CLUSTER_REPLICA) scope the placement to this read.
@@ -1360,6 +1361,21 @@ fn query_set_clause(cluster: &str, cluster_replica: Option<&str>) -> String {
         ));
     }
     set_clause
+}
+
+/// Rejects an empty or whitespace-only `cluster_replica`. Such a name would
+/// otherwise produce `SET CLUSTER_REPLICA = ''`, which fails deep in the engine
+/// as a generic execution error rather than a clean validation error. `None`
+/// (no replica pin requested) is always valid.
+fn validate_cluster_replica(cluster_replica: Option<&str>) -> Result<(), McpRequestError> {
+    if let Some(replica) = cluster_replica {
+        if replica.trim().is_empty() {
+            return Err(McpRequestError::QueryValidationFailed(
+                "cluster_replica must not be empty".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn query_system_catalog(
@@ -2376,6 +2392,30 @@ mod tests {
             clause,
             "SET CLUSTER = 'c'; SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'"
         );
+    }
+
+    /// A `None` replica (no pinning requested) is always valid, and a normal
+    /// replica name passes validation.
+    #[mz_ore::test]
+    fn test_validate_cluster_replica_accepts_none_and_names() {
+        assert!(validate_cluster_replica(None).is_ok());
+        assert!(validate_cluster_replica(Some("r1")).is_ok());
+    }
+
+    /// An empty or whitespace-only replica name is rejected as a validation
+    /// error up front, rather than producing `SET CLUSTER_REPLICA = ''` that
+    /// fails deep in the engine as a generic execution error.
+    #[mz_ore::test]
+    fn test_validate_cluster_replica_rejects_empty() {
+        for name in ["", "   ", "\t\n"] {
+            assert!(
+                matches!(
+                    validate_cluster_replica(Some(name)),
+                    Err(McpRequestError::QueryValidationFailed(_))
+                ),
+                "expected validation error for {name:?}",
+            );
+        }
     }
 
     // ── build_read_query tests (DEX-27) ────────────────────────────────

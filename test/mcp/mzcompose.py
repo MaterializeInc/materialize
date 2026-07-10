@@ -684,6 +684,38 @@ def workflow_endpoints(c: Composition) -> None:
             err["data"]["error_type"] == "ExecutionError"
         ), f"unexpected error_type: {err}"
 
+        # Replica pinning is not part of the agent surface. The agent `query`
+        # dispatch arm drops `cluster_replica`, so supplying one there is
+        # silently accepted-and-ignored rather than honored or rejected. If it
+        # were honored, this nonexistent replica would fail with an
+        # ExecutionError. Because it is dropped, the plain read succeeds. A plain
+        # SELECT does not need replica targeting, so success here proves the pin
+        # was never applied.
+        r = post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "tools/call",
+                {
+                    "name": "query",
+                    "arguments": {
+                        "cluster": "qar136_two_replicas",
+                        "cluster_replica": "no_such_replica",
+                        "sql_query": "SELECT 1",
+                    },
+                },
+                req_id=2903,
+            ),
+        )
+        assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
+        body = r.json()
+        assert "error" not in body, (
+            "agent endpoint should ignore cluster_replica, so the read should "
+            f"succeed rather than fail on the bogus replica: {body}"
+        )
+        rows = json.loads(body["result"]["content"][0]["text"])
+        assert rows == [["1"]], f"unexpected rows: {rows}"
+
         c.sql(
             "DROP CLUSTER IF EXISTS qar136_two_replicas CASCADE",
             user="mz_system",
