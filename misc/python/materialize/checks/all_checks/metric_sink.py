@@ -63,6 +63,17 @@ class MetricSink(Check):
                 > SHOW METRIC SINKS
                 metric_sink_s {self._default_cluster()} ""
 
+                # Reading the per-replica Prometheus log source requires the session to
+                # target a single replica. Platform-check scenarios can run the cluster
+                # with more than one replica, and each replica ghosts its own registry,
+                # so pin the session to one replica of the sink's cluster.
+                > SET cluster = {self._default_cluster()}
+
+                $ set-from-sql var=metric-sink-replica
+                SELECT r.name FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = '{self._default_cluster()}' ORDER BY r.name LIMIT 1;
+
+                > SET cluster_replica = ${{metric-sink-replica}}
+
                 # The dataflow was re-shipped and the collector re-registered on boot: the
                 # emitted series is visible again through the cluster's scraped registry,
                 # one row per distinct label set.

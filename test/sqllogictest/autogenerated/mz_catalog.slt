@@ -470,6 +470,7 @@ mz_kafka_sources
 mz_list_types
 mz_map_types
 mz_materialized_views
+mz_metric_sinks
 mz_objects
 mz_operators
 mz_pseudo_types
