@@ -42,6 +42,7 @@ uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 criterion.workspace = true
+prost-types.workspace = true
 tokio.workspace = true
 
 [build-dependencies]

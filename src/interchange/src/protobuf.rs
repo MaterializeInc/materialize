@@ -17,6 +17,12 @@ use prost_reflect::{
     ReflectMessage, Value,
 };
 
+/// Maximum Protobuf message nesting depth accepted when deriving a relation
+/// type. A message nested deeper than this is rejected rather than recursed
+/// into, so that a pathological (non-cyclic) message chain cannot overflow the
+/// stack while deriving the source's `RelationDesc`.
+const MAX_MESSAGE_NESTING_DEPTH: usize = 128;
+
 /// A decoded description of the schema of a Protobuf message.
 #[derive(Debug, PartialEq)]
 pub struct DecodedDescriptors {
@@ -152,6 +158,17 @@ fn derive_inner_type(
             if seen_messages.contains(m.name()) {
                 bail!("Recursive types are not supported: {}", m.name());
             }
+            // `seen_messages` holds the ancestor messages currently being
+            // resolved, so its length is the current nesting depth. Bounding it
+            // prevents a stack overflow from a deeply nested (but non-cyclic)
+            // message chain, whose descriptor set is a flat, cheap-to-encode
+            // list of messages that reference each other by name.
+            if seen_messages.len() >= MAX_MESSAGE_NESTING_DEPTH {
+                bail!(
+                    "Protobuf message nesting depth exceeds limit of {}",
+                    MAX_MESSAGE_NESTING_DEPTH
+                );
+            }
             seen_messages.insert(m.name().to_owned());
             let mut fields = Vec::with_capacity(m.fields().len());
             for field in m.fields() {
@@ -237,4 +254,71 @@ fn pack_value(
         ),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod stack_overflow_verification {
+    // Regression test: a deep, non-cyclic protobuf message chain
+    // (`m0 -> m1 -> ... -> mN`) must not overflow the stack while deriving the
+    // relation type in `DecodedDescriptors::from_bytes` (reached during
+    // `CREATE SOURCE ... FORMAT PROTOBUF`). `derive_inner_type` bounds the
+    // nesting depth, so this returns a graceful error rather than aborting the
+    // process with a stack overflow.
+    use prost::Message;
+    use prost_types::field_descriptor_proto::{Label, Type};
+    use prost_types::{
+        DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet,
+    };
+
+    use super::DecodedDescriptors;
+
+    fn deep_chain_fds(n: usize) -> Vec<u8> {
+        let message_type = (0..n)
+            .map(|i| {
+                let field = if i + 1 < n {
+                    FieldDescriptorProto {
+                        name: Some("f".into()),
+                        number: Some(1),
+                        label: Some(Label::Optional.into()),
+                        r#type: Some(Type::Message.into()),
+                        type_name: Some(format!(".test.m{}", i + 1)),
+                        ..Default::default()
+                    }
+                } else {
+                    FieldDescriptorProto {
+                        name: Some("f".into()),
+                        number: Some(1),
+                        label: Some(Label::Optional.into()),
+                        r#type: Some(Type::Int32.into()),
+                        ..Default::default()
+                    }
+                };
+                DescriptorProto {
+                    name: Some(format!("m{}", i)),
+                    field: vec![field],
+                    ..Default::default()
+                }
+            })
+            .collect();
+        let file = FileDescriptorProto {
+            name: Some("test.proto".into()),
+            package: Some("test".into()),
+            message_type,
+            syntax: Some("proto2".into()),
+            ..Default::default()
+        };
+        FileDescriptorSet { file: vec![file] }.encode_to_vec()
+    }
+
+    #[mz_ore::test]
+    fn deep_chain_does_not_overflow() {
+        let bytes = deep_chain_fds(50_000);
+        // Must return an error (nesting-depth limit), not abort with a stack
+        // overflow. Before the fix this recursed once per message and aborted.
+        let res = DecodedDescriptors::from_bytes(&bytes, ".test.m0".to_string());
+        assert!(
+            res.is_err(),
+            "expected a nesting-depth error for a deep message chain"
+        );
+    }
 }
