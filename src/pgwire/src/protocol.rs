@@ -67,7 +67,7 @@ use tokio::select;
 use tokio::time::{self};
 use tokio_metrics::TaskMetrics;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{Instrument, debug, debug_span, warn};
+use tracing::{Instrument, debug, debug_span, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{
@@ -947,6 +947,10 @@ where
         // only a few message types seem useful.
         let message_name = message.as_ref().map(|m| m.name()).unwrap_or_default();
 
+        if let Some(message) = &message {
+            self.maybe_log_message_arrival(message).await;
+        }
+
         let start = message.as_ref().map(|_| Instant::now());
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => {
@@ -1181,6 +1185,82 @@ where
             .with_label_values(&[message_type])
             .observe(start.elapsed().as_secs_f64());
         Ok(())
+    }
+
+    /// Logs an arriving frontend message at info level, when
+    /// `enable_statement_arrival_logging` is on. Runs before the message is
+    /// processed, so a message whose processing crashes the process still
+    /// appears in the log. The `kind` field says which message it is, and
+    /// thereby also whether the statement came in through the simple protocol
+    /// (`query`) or the extended protocol (`parse`, `bind`, `execute`, ...).
+    /// The prepared statement and portal names, together with the connection
+    /// id, allow connecting a `bind` or `execute` back to the `parse` that
+    /// carried the SQL text.
+    ///
+    /// Authentication payloads are never logged. COPY data is logged as its
+    /// length only.
+    async fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
+        if !self
+            .adapter_client
+            .statement_arrival_logging_enabled()
+            .await
+        {
+            return;
+        }
+        let session = self.adapter_client.session();
+        let conn_id = session.conn_id();
+        let session_uuid = session.uuid();
+        let kind = message.name();
+        match message {
+            // Bind parameters arrive as raw bytes. Decode them for
+            // readability instead of Debug-printing byte arrays.
+            FrontendMessage::Bind {
+                portal_name,
+                statement_name,
+                raw_params,
+                ..
+            } => {
+                let params: Vec<_> = raw_params
+                    .iter()
+                    .map(|p| p.as_ref().map(|p| String::from_utf8_lossy(p)))
+                    .collect();
+                info!(
+                    %conn_id, %session_uuid, kind, portal_name, statement_name, ?params,
+                    "statement arrival"
+                );
+            }
+            // COPY payloads would flood the log. Log only their length.
+            FrontendMessage::CopyData(data) => {
+                info!(%conn_id, %session_uuid, kind, len = data.len(), "statement arrival");
+            }
+            // Authentication payloads must never be logged.
+            FrontendMessage::Password { .. }
+            | FrontendMessage::RawAuthentication(_)
+            | FrontendMessage::SASLInitialResponse { .. }
+            | FrontendMessage::SASLResponse(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
+            // Log the full Debug representation for all other variants.
+            FrontendMessage::Query { .. }
+            | FrontendMessage::Parse { .. }
+            | FrontendMessage::DescribeStatement { .. }
+            | FrontendMessage::DescribePortal { .. }
+            | FrontendMessage::Execute { .. }
+            | FrontendMessage::Flush
+            | FrontendMessage::Sync
+            | FrontendMessage::CloseStatement { .. }
+            | FrontendMessage::ClosePortal { .. }
+            | FrontendMessage::Terminate
+            | FrontendMessage::CopyDone
+            | FrontendMessage::CopyFail(_) => {
+                // WARNING: When adding a variant here, consider whether its payload is sensitive or
+                // bulky!
+                //
+                // (The field must not be named `message`, that name is
+                // reserved for the event text in tracing.)
+                info!(%conn_id, %session_uuid, kind, contents = ?message, "statement arrival");
+            }
+        }
     }
 
     fn parse_sql<'b>(&self, sql: &'b str) -> Result<Vec<StatementParseResult<'b>>, ErrorResponse> {

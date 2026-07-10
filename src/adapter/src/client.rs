@@ -1121,6 +1121,12 @@ impl SessionClient {
         self.peek_client.catalog_snapshot(context).await
     }
 
+    /// Reports whether `enable_statement_arrival_logging` is on.
+    pub async fn statement_arrival_logging_enabled(&mut self) -> bool {
+        let catalog = self.catalog_snapshot("statement_arrival_logging").await;
+        catalog.system_config().enable_statement_arrival_logging()
+    }
+
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal

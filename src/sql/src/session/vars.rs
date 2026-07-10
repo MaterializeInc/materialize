@@ -1289,6 +1289,7 @@ impl SystemVars {
             &STATEMENT_LOGGING_TARGET_DATA_RATE,
             &STATEMENT_LOGGING_MAX_DATA_CREDIT,
             &ENABLE_INTERNAL_STATEMENT_LOGGING,
+            &ENABLE_STATEMENT_ARRIVAL_LOGGING,
             &OPTIMIZER_STATS_TIMEOUT,
             &OPTIMIZER_ONESHOT_STATS_TIMEOUT,
             &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
@@ -2244,6 +2245,11 @@ impl SystemVars {
     /// Returns the `enable_internal_statement_logging` configuration parameter.
     pub fn enable_internal_statement_logging(&self) -> bool {
         *self.expect_value(&ENABLE_INTERNAL_STATEMENT_LOGGING)
+    }
+
+    /// Returns the `enable_statement_arrival_logging` configuration parameter.
+    pub fn enable_statement_arrival_logging(&self) -> bool {
+        *self.expect_value(&ENABLE_STATEMENT_ARRIVAL_LOGGING)
     }
 
     /// Returns the `optimizer_stats_timeout` configuration parameter.

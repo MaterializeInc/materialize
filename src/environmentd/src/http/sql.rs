@@ -1245,6 +1245,28 @@ pub(in crate::http) async fn execute_request<S: ResultSender>(
 ) -> Result<(), Error> {
     let client = &mut client.client;
 
+    if client.statement_arrival_logging_enabled().await {
+        let session = client.session();
+        let conn_id = session.conn_id();
+        let session_uuid = session.uuid();
+        match &request {
+            SqlRequest::Simple { query } => {
+                info!(
+                    %conn_id, %session_uuid, kind = "http_simple", sql = query.as_str(),
+                    "statement arrival"
+                );
+            }
+            SqlRequest::Extended { queries } => {
+                for ExtendedRequest { query, params } in queries {
+                    info!(
+                        %conn_id, %session_uuid, kind = "http_extended", sql = query, ?params,
+                        "statement arrival"
+                    );
+                }
+            }
+        }
+    }
+
     // This API prohibits executing statements with responses whose
     // semantics are at odds with an HTTP response.
     fn check_prohibited_stmts<S: ResultSender>(
