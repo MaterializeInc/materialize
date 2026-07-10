@@ -2607,7 +2607,14 @@ impl Catalog {
                         })?;
 
                     // Queue updates for Catalog storage and Builtin Tables.
-                    if !new_entry.item().is_temporary() {
+                    if let CatalogItem::MetricSink(_) = new_entry.item() {
+                        // A metric sink reached here is either a member of the renamed
+                        // schema or a dependent whose `FROM` object lives in it. It is
+                        // never durably persisted, so its rewritten references live only
+                        // in `CatalogState` via `MetricSinkOp`, never in `tx`. See
+                        // `CatalogItem::MetricSink` and `Op::CreateItem`.
+                        metric_sink_updates.push(MetricSinkOp::Update(Box::new(new_entry)));
+                    } else if !new_entry.item().is_temporary() {
                         items_to_update.insert(*id, new_entry.into());
                     } else {
                         temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
@@ -2863,6 +2870,11 @@ impl Catalog {
                 )?;
             }
             Op::UpdateItem { id, name, to_item } => {
+                // NOTE: This durably serializes the item via `tx.update_item`, which
+                // panics for a `CatalogItem::MetricSink` (see `Op::CreateItem`). It is
+                // unreachable for metric sinks: every producer redefines a specific
+                // non-metric-sink item (source, sink, connection, secret), and metric
+                // sinks expose no `ALTER` that redefines the item.
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();

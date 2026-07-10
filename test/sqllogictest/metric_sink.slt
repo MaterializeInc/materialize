@@ -143,3 +143,95 @@ query I
 SELECT count(*) FROM mz_metric_sinks WHERE name = 's_owned'
 ----
 0
+
+# Regression: ALTER SCHEMA ... RENAME must not panic environmentd when a metric
+# sink is reachable. Metric sinks are non-durable (never serialized), so the
+# rename routes the rewritten item through the in-memory catalog only, never a
+# durable `tx.update_item`. Before the fix, both reachability paths below hit
+# the `unreachable!` serialization arm.
+
+# A fresh source view: earlier `DROP OWNED BY ... CASCADE` reassigned and
+# dropped the views created above.
+statement ok
+CREATE VIEW good2 AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+# Path 1: the metric sink is itself a member of the renamed schema.
+statement ok
+CREATE SCHEMA sink_schema
+
+statement ok
+CREATE METRIC SINK sink_schema.ms_member IN CLUSTER quickstart FROM good2
+
+statement ok
+ALTER SCHEMA sink_schema RENAME TO sink_schema2
+
+query T
+SELECT s.name
+  FROM mz_metric_sinks ms
+  JOIN mz_schemas s ON ms.schema_id = s.id
+  WHERE ms.name = 'ms_member'
+----
+sink_schema2
+
+# Path 2: the metric sink's FROM object lives in the renamed schema, so the
+# sink is reached via the dependee's `referenced_by` sweep, not as a member.
+statement ok
+CREATE SCHEMA src_schema
+
+statement ok
+CREATE VIEW src_schema.metric_src AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement ok
+CREATE METRIC SINK ms_dependent IN CLUSTER quickstart FROM src_schema.metric_src
+
+statement ok
+ALTER SCHEMA src_schema RENAME TO src_schema2
+
+query I
+SELECT count(*) FROM mz_metric_sinks WHERE name = 'ms_dependent'
+----
+1
+
+# The rename was applied in-memory: the sink's create_sql now references the
+# renamed schema.
+query I
+SELECT count(*)
+  FROM mz_metric_sinks
+  WHERE name = 'ms_dependent' AND create_sql LIKE '%src_schema2%'
+----
+1
+
+# Regression: renaming an item that a metric sink reads from (ALTER ... RENAME)
+# rewrites the sink's create_sql via the same in-memory path. This exercises the
+# dependent (`referenced_by`) rename that would otherwise hit an `unreachable!`
+# in the SQL rename transform.
+statement ok
+CREATE VIEW rename_src AS SELECT
+    'm'::text AS metric_name,
+    'gauge'::text AS metric_type,
+    '{}'::map[text=>text] AS labels,
+    1.0::double AS value,
+    'h'::text AS help
+
+statement ok
+CREATE METRIC SINK ms_rename_dep IN CLUSTER quickstart FROM rename_src
+
+statement ok
+ALTER VIEW rename_src RENAME TO rename_src2
+
+query I
+SELECT count(*)
+  FROM mz_metric_sinks
+  WHERE name = 'ms_rename_dep' AND create_sql LIKE '%rename_src2%'
+----
+1
