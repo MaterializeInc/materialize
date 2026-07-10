@@ -3311,7 +3311,7 @@ class EnvdCpuSweep(Scenario):
                 "enable",
                 "--environmentd-cpu-allocation",
                 "2",
-                *ENABLE_EXTRA_ARGS,
+                *enable_extra_args(target),
                 *version_args,
                 rm=True,
             )
@@ -3391,9 +3391,20 @@ def disable_region(composition: Composition, hard: bool) -> None:
 # default of 10 minutes, during which a soft-disabled region serves nothing. Keep
 # the soak out of the critical path for test regions, like mzcompose does for
 # Docker-based tests.
-ENABLE_EXTRA_ARGS = [
+_STABILITY_SOAK_OVERRIDE = [
     "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
 ]
+
+
+def enable_extra_args(target: "CloudTarget") -> list[str]:
+    """
+    Extra `mz region enable` args, applied to staging only.
+
+    Production Cloud forbids callers from injecting environmentd args and rejects
+    `--environmentd-extra-arg` with a 403 Forbidden, so the stability-soak override
+    cannot be used there.
+    """
+    return _STABILITY_SOAK_OVERRIDE if target.is_staging else []
 
 
 def cloud_disable_enable_and_wait(
@@ -3440,7 +3451,7 @@ def cloud_disable_enable_and_wait(
 
     if environmentd_cpu_allocation is None:
         target.composition.run(
-            "mz", "region", "enable", *ENABLE_EXTRA_ARGS, *version_args, rm=True
+            "mz", "region", "enable", *enable_extra_args(target), *version_args, rm=True
         )
     else:
         target.composition.run(
@@ -3449,7 +3460,7 @@ def cloud_disable_enable_and_wait(
             "enable",
             "--environmentd-cpu-allocation",
             str(environmentd_cpu_allocation),
-            *ENABLE_EXTRA_ARGS,
+            *enable_extra_args(target),
             *version_args,
             rm=True,
         )
