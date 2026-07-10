@@ -124,6 +124,9 @@ impl Coordinator {
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = self.allocate_user_id().await?;
+        // A transient id for the view the optimizer builds over `from` to shape its rows (see
+        // `optimize::metric_sink::shape_metric_sink_source`); scoped to this dataflow, not durable.
+        let (_, view_id) = self.allocate_transient_id();
 
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster_id).config.features())
@@ -133,6 +136,7 @@ impl Coordinator {
         let mut optimizer = optimize::metric_sink::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
+            view_id,
             global_id,
             optimizer_config,
             self.optimizer_metrics(),

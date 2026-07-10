@@ -20,8 +20,12 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, MetricSinkConnection};
-use mz_repr::GlobalId;
+use mz_expr::func::variadic::Coalesce;
+use mz_expr::{MirRelationExpr, MirScalarExpr, func};
 use mz_repr::explain::trace_plan;
+use mz_repr::{
+    ColumnName, Datum, GlobalId, RelationDesc, ReprRelationType, ReprScalarType, Row, SqlScalarType,
+};
 use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_transform::TransformCtx;
@@ -35,8 +39,14 @@ use crate::optimize::dataflows::{
 };
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerCatalog, OptimizerConfig,
-    OptimizerError,
+    OptimizerError, optimize_mir_local,
 };
+
+/// Matches Prometheus's metric name grammar: `[a-zA-Z_:][a-zA-Z0-9_:]*`.
+///
+/// Mirrors `mz_compute`'s (former) `is_valid_metric_name`, now expressed in MIR instead of
+/// parsed from a `&str` on the operator's hot path (see `shape_metric_sink_source`).
+const METRIC_NAME_PATTERN: &str = "^[a-zA-Z_:][a-zA-Z0-9_:]*$";
 
 pub struct Optimizer {
     /// A representation typechecking context to use throughout the optimizer pipeline.
@@ -45,6 +55,9 @@ pub struct Optimizer {
     catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflow.
     compute_instance: ComputeInstanceSnapshot,
+    /// A transient GlobalId for the shaped view built over the sink's source relation (see
+    /// `shape_metric_sink_source`).
+    view_id: GlobalId,
     /// A durable GlobalId to be used with the exported metric sink.
     sink_id: GlobalId,
     /// Optimizer config.
@@ -59,6 +72,7 @@ impl Optimizer {
     pub fn new(
         catalog: Arc<dyn OptimizerCatalog>,
         compute_instance: ComputeInstanceSnapshot,
+        view_id: GlobalId,
         sink_id: GlobalId,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
@@ -67,6 +81,7 @@ impl Optimizer {
             typecheck_ctx: empty_typechecking_context(),
             catalog,
             compute_instance,
+            view_id,
             sink_id,
             config,
             metrics,
@@ -143,13 +158,35 @@ impl Optimize<MetricSink> for Optimizer {
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
+        let mut df_meta = DataflowMetainfo::default();
 
         df_builder.import_into_dataflow(&metric_sink.from, &mut df_desc, &self.config.features)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
+        // Push the pure row-wise shaping (coalesce identity elements, classify the metric kind,
+        // validate the metric name) into MIR, so the operator only does the cross-row logic
+        // (dedup/collision/family-conflict) that needs the fold. See `shape_metric_sink_source`.
+        let (shaped_expr, shaped_desc) = shape_metric_sink_source(metric_sink.from, &from_desc);
+        let mut local_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&mut self.metrics),
+            Some(self.view_id),
+        );
+        let shaped_expr = optimize_mir_local(shaped_expr, &mut local_ctx)?;
+
+        df_builder.import_view_into_dataflow(
+            &self.view_id,
+            &shaped_expr,
+            &mut df_desc,
+            &self.config.features,
+        )?;
+        df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
+
         let sink_description = ComputeSinkDesc {
-            from: metric_sink.from,
-            from_desc: from_desc.clone(),
+            from: self.view_id,
+            from_desc: shaped_desc,
             connection: ComputeSinkConnection::MetricSink(MetricSinkConnection {}),
             with_snapshot: true,
             up_to: Antichain::new(),
@@ -166,7 +203,6 @@ impl Optimize<MetricSink> for Optimizer {
         )?;
 
         // Construct TransformCtx for global optimization.
-        let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
@@ -227,4 +263,121 @@ impl GlobalLirPlan {
     pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
         (self.df_desc, self.df_meta)
     }
+}
+
+/// Extends the metric sink's imported relation with the row-wise shaping the operator otherwise
+/// has to do in Rust: coalesces `labels`/`help` to their identity element, and adds two columns
+/// the operator reads instead of parsing strings on its hot path:
+///
+/// * `metric_kind` (`Int32`, nullable): `0` for `gauge`, `1` for `counter`, `NULL` for any other
+///   `metric_type`.
+/// * `name_valid` (`Bool`, nullable): whether `metric_name` matches the Prometheus metric-name
+///   grammar (see `METRIC_NAME_PATTERN`). The operator treats a `NULL` the same as `false`.
+///
+/// No row is dropped or filtered here: the operator still needs every row, including the ones
+/// this marks invalid, to count `skipped`/`null_values`. Only the pure per-row shaping moves to
+/// MIR; dedup, collision detection, and family-conflict counting stay in the operator, because
+/// they need cross-row state (the frontier-gated fold) that a `Map` can't express.
+///
+/// TODO: A full move would also express the dedup/collision/family-conflict logic in MIR (e.g.
+/// via `Reduce` + `FirstValue`), collapsing the operator to a plain fold over the live set. That
+/// full move is deferred: the tiebreak fidelity that logic needs is easier to keep correct
+/// hand-written and unit-tested for now.
+fn shape_metric_sink_source(
+    from_id: GlobalId,
+    from_desc: &RelationDesc,
+) -> (MirRelationExpr, RelationDesc) {
+    let get_idx = |name: &str| {
+        from_desc
+            .get_by_name(&ColumnName::from(name))
+            .expect("column existence validated by validate_metric_sink_desc")
+    };
+    let (metric_name_idx, metric_name_ct) = get_idx("metric_name");
+    let (metric_type_idx, metric_type_ct) = get_idx("metric_type");
+    let (labels_idx, labels_ct) = get_idx("labels");
+    let (value_idx, value_ct) = get_idx("value");
+    let (help_idx, help_ct) = get_idx("help");
+
+    let repr_typ = ReprRelationType::from(from_desc.typ());
+    let arity = repr_typ.column_types.len();
+    let labels_repr_type = ReprScalarType::from(&labels_ct.scalar_type);
+
+    let empty_map_row = {
+        let mut row = Row::default();
+        row.packer().push_dict_with(|_| {});
+        row
+    };
+    let labels_coalesced = MirScalarExpr::call_variadic(
+        Coalesce,
+        vec![
+            MirScalarExpr::column(labels_idx),
+            MirScalarExpr::literal_from_single_element_row(empty_map_row, labels_repr_type),
+        ],
+    );
+    let help_coalesced = MirScalarExpr::call_variadic(
+        Coalesce,
+        vec![
+            MirScalarExpr::column(help_idx),
+            MirScalarExpr::literal_ok(Datum::String(""), ReprScalarType::String),
+        ],
+    );
+
+    let metric_type_literal = |s: &'static str| {
+        MirScalarExpr::column(metric_type_idx).call_binary(
+            MirScalarExpr::literal_ok(Datum::String(s), ReprScalarType::String),
+            func::Eq,
+        )
+    };
+    let metric_kind = metric_type_literal("gauge").if_then_else(
+        MirScalarExpr::literal_ok(Datum::Int32(0), ReprScalarType::Int32),
+        metric_type_literal("counter").if_then_else(
+            MirScalarExpr::literal_ok(Datum::Int32(1), ReprScalarType::Int32),
+            MirScalarExpr::literal_null(ReprScalarType::Int32),
+        ),
+    );
+
+    let name_valid = MirScalarExpr::column(metric_name_idx)
+        .call_is_null()
+        .not()
+        .and(MirScalarExpr::column(metric_name_idx).call_binary(
+            MirScalarExpr::literal_ok(Datum::String(""), ReprScalarType::String),
+            func::NotEq,
+        ))
+        .and(MirScalarExpr::column(metric_name_idx).call_binary(
+            MirScalarExpr::literal_ok(Datum::String(METRIC_NAME_PATTERN), ReprScalarType::String),
+            func::IsRegexpMatchCaseSensitive,
+        ));
+
+    let shaped_expr = MirRelationExpr::global_get(from_id, repr_typ)
+        .map(vec![
+            labels_coalesced,
+            help_coalesced,
+            metric_kind,
+            name_valid,
+        ])
+        .project(vec![
+            metric_name_idx,
+            metric_type_idx,
+            arity, // coalesced labels
+            value_idx,
+            arity + 1, // coalesced help
+            arity + 2, // metric_kind
+            arity + 3, // name_valid
+        ]);
+
+    let mut labels_shaped_ct = labels_ct.clone();
+    labels_shaped_ct.nullable = false;
+    let mut help_shaped_ct = help_ct.clone();
+    help_shaped_ct.nullable = false;
+    let shaped_desc = RelationDesc::from_names_and_types([
+        ("metric_name", metric_name_ct.clone()),
+        ("metric_type", metric_type_ct.clone()),
+        ("labels", labels_shaped_ct),
+        ("value", value_ct.clone()),
+        ("help", help_shaped_ct),
+        ("metric_kind", SqlScalarType::Int32.nullable(true)),
+        ("name_valid", SqlScalarType::Bool.nullable(true)),
+    ]);
+
+    (shaped_expr, shaped_desc)
 }

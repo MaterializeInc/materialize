@@ -3750,10 +3750,14 @@ impl Coordinator {
                         }
                         Some(_) | None => {
                             let (optimized_plan, global_lir_plan) = {
+                                // A transient id for the view the optimizer builds over `ms.from`
+                                // to shape its rows; scoped to this dataflow, not durable.
+                                let (_, view_id) = self.allocate_transient_id();
                                 // Build an optimizer for this METRIC SINK.
                                 let mut optimizer = optimize::metric_sink::Optimizer::new(
                                     self.owned_catalog(),
                                     compute_instance.clone(),
+                                    view_id,
                                     global_id,
                                     optimizer_config.clone(),
                                     self.optimizer_metrics(),

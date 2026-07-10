@@ -16,6 +16,13 @@
 //! `Arc<Mutex<_>>`. Both sides only ever hold the lock across a short, synchronous section: the
 //! operator has no `await` points (it is a synchronous `builder_rc` operator), and the collector
 //! only clones out the data it needs to build `MetricFamily` protos before releasing the lock.
+//!
+//! The planner (`optimize::metric_sink::shape_metric_sink_source`) does the pure row-wise
+//! shaping: it coalesces `labels`/`help` to their identity element and computes the `metric_kind`
+//! and `name_valid` columns `extract_row` reads below, so this module no longer parses
+//! `metric_type` strings or validates `metric_name` itself. Dedup, collision detection, and
+//! family-conflict counting stay here because they need the cross-row state of the fold, which a
+//! per-row `Map` in MIR can't express.
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -25,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_types::sinks::{ComputeSinkDesc, MetricSinkConnection};
 use mz_ore::cast::{CastFrom, CastLossy};
-use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{ColumnName, Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use prometheus::core::{Collector, Desc};
@@ -93,6 +100,9 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         );
 
         op.build(move |_capabilities| {
+            // Recycled across activations: unpacking a row into `Datum`s otherwise allocates a
+            // fresh `Vec` per row on this hot path.
+            let mut datum_vec = DatumVec::new();
             move |frontiers| {
                 if worker_id != active_worker_id {
                     // Drain so the operator isn't rescheduled forever. There is no state to
@@ -110,11 +120,14 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
                 // closed (see `integrate`).
                 ok_input.for_each(|_, data| {
                     for (row, time, diff) in data.drain(..) {
-                        let (name, metric_type, labels, value, help) = extract_row(&cols, &row);
+                        let datums = datum_vec.borrow_with(&row);
+                        let (name, metric_kind, name_valid, labels, value, help) =
+                            extract_row(&cols, &datums);
                         st.stage_ok(
                             name,
-                            metric_type,
-                            labels,
+                            metric_kind,
+                            name_valid,
+                            &labels,
                             value,
                             help,
                             time,
@@ -151,14 +164,17 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
 /// Column indices resolved once from the sink's source relation.
 ///
 /// The SQL planner guarantees (`validate_metric_sink_desc`) that the relation exposes
-/// `metric_name`, `metric_type`, `labels`, `value`, and `help` columns of the required type, but
-/// any of them may be `Datum::Null` and their position within the row is unconstrained.
+/// `metric_name`, `labels`, `value`, and `help` of the required type, and the shaping `Map` it
+/// adds (`shape_metric_sink_source`) guarantees `metric_kind` and `name_valid`. `metric_name` and
+/// `value` may still be `Datum::Null`; the rest are non-null by construction. Column position
+/// within the row is unconstrained.
 struct ColumnIndices {
     metric_name: usize,
-    metric_type: usize,
     labels: usize,
     value: usize,
     help: usize,
+    metric_kind: usize,
+    name_valid: usize,
 }
 
 impl ColumnIndices {
@@ -170,57 +186,61 @@ impl ColumnIndices {
         };
         ColumnIndices {
             metric_name: idx("metric_name"),
-            metric_type: idx("metric_type"),
             labels: idx("labels"),
             value: idx("value"),
             help: idx("help"),
+            metric_kind: idx("metric_kind"),
+            name_valid: idx("name_valid"),
         }
     }
 }
 
-/// Extracts `(metric_name, metric_type, sorted labels, value, help)` from one source row.
+/// Extracts `(metric_name, metric_kind, name_valid, sorted labels, value, help)` from one shaped
+/// source row.
 ///
-/// Every column may be `Datum::Null`. `metric_name` and `metric_type` are passed through as
-/// `Datum::Null`'s own signal: null (or an empty/unsupported string) already fails
-/// `is_valid_metric_name`/`MetricKind::parse`, so it takes the same skip path as any other
-/// invalid value without special-casing here. `labels` and `help` have an obvious identity
-/// element, so null becomes `{}` and `""` respectively. `value` has no identity element (there is
-/// no numeric value that means "absent"), so it stays `Option<f64>`. A null value is a real row
-/// identity, just one that never contributes to a series' published value.
-fn extract_row(
+/// The planner already did the row-wise shaping (see `optimize::metric_sink::
+/// shape_metric_sink_source`): `labels`/`help` are coalesced to their identity element, and
+/// `metric_kind`/`name_valid` classify the row without this needing to parse `metric_type` or
+/// validate `metric_name` itself. `metric_name` may still be `Datum::Null`; that takes the same
+/// skip path as any other invalid name because `name_valid` is computed from it upstream and is
+/// `false` (or, defensively, `Datum::Null`, treated the same as `false`) whenever `metric_name`
+/// is. `value` has no identity element (there is no numeric value that means "absent"), so it
+/// stays `Option<f64>`; a null value is a real row identity, just one that never contributes to a
+/// series' published value. Strings borrow from `datums`, so the caller must own what it needs
+/// (see `SinkState::stage_ok`) before the row backing `datums` is dropped.
+fn extract_row<'a>(
     cols: &ColumnIndices,
-    row: &Row,
-) -> (String, String, Vec<(String, String)>, Option<f64>, String) {
-    let datums: Vec<_> = row.iter().collect();
+    datums: &[Datum<'a>],
+) -> (
+    &'a str,
+    Option<MetricKind>,
+    bool,
+    Vec<(&'a str, &'a str)>,
+    Option<f64>,
+    &'a str,
+) {
     let metric_name = match datums[cols.metric_name] {
-        Datum::Null => String::new(),
-        d => d.unwrap_str().to_string(),
+        Datum::Null => "",
+        d => d.unwrap_str(),
     };
-    let metric_type = match datums[cols.metric_type] {
-        Datum::Null => String::new(),
-        d => d.unwrap_str().to_string(),
-    };
-    let mut labels: Vec<(String, String)> = match datums[cols.labels] {
-        Datum::Null => Vec::new(),
-        d => d
-            .unwrap_map()
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.unwrap_str().to_string()))
-            .collect(),
-    };
+    let metric_kind = MetricKind::from_datum(datums[cols.metric_kind]);
+    let name_valid = matches!(datums[cols.name_valid], Datum::True);
+    let mut labels: Vec<(&str, &str)> = datums[cols.labels]
+        .unwrap_map()
+        .iter()
+        .map(|(k, v)| (k, v.unwrap_str()))
+        .collect();
     labels.sort();
     let value = match datums[cols.value] {
         Datum::Null => None,
         d => Some(d.unwrap_float64()),
     };
-    let help = match datums[cols.help] {
-        Datum::Null => String::new(),
-        d => d.unwrap_str().to_string(),
-    };
-    (metric_name, metric_type, labels, value, help)
+    let help = datums[cols.help].unwrap_str();
+    (metric_name, metric_kind, name_valid, labels, value, help)
 }
 
-/// Full identity of one source row: metric name, sorted labels, value, metric type, and help.
+/// Full identity of one source row: metric name, sorted labels, value, metric kind, name
+/// validity, and help.
 ///
 /// The value is stored as `Option<u64>`, the `f64::to_bits` pattern of a real value or `None` for
 /// a null `value` column. A null value is its own distinct row identity, not a stand-in for any
@@ -229,7 +249,19 @@ fn extract_row(
 /// the tuple is still usable as a map key. Recover a real value with `f64::from_bits`. The name
 /// and labels lead the tuple so that a `BTreeMap<RowKey, _>` keeps all rows of one `(metric_name,
 /// labels)` series adjacent.
-type RowKey = (String, Vec<(String, String)>, Option<u64>, String, String);
+///
+/// `metric_kind` is the planner's classification (`None` for any unsupported `metric_type`), not
+/// the raw string: two source rows that differ only in *which* unsupported type they carry (e.g.
+/// `"histogram"` vs. `"summary"`) now share one identity instead of two. That only affects the
+/// granularity of the `skipped` count for rows that are never published either way.
+type RowKey = (
+    String,
+    Vec<(String, String)>,
+    Option<u64>,
+    Option<MetricKind>,
+    bool,
+    String,
+);
 
 /// Key into [`SinkState::published`]: a metric name paired with its sorted label vector.
 type PublishedKey = (String, Vec<(String, String)>);
@@ -266,17 +298,21 @@ struct SinkState {
     null_values: u64,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MetricKind {
     Gauge,
     Counter,
 }
 
 impl MetricKind {
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "gauge" => Some(MetricKind::Gauge),
-            "counter" => Some(MetricKind::Counter),
+    /// Recovers the classification the planner's `metric_kind` column already computed (`0` =
+    /// gauge, `1` = counter). Anything else, including `Datum::Null` for an unsupported
+    /// `metric_type`, is treated as unsupported: `shape_metric_sink_source` only ever emits
+    /// those three values, so this is a defensive fallback, not an expected case.
+    fn from_datum(d: Datum) -> Option<Self> {
+        match d {
+            Datum::Int32(0) => Some(MetricKind::Gauge),
+            Datum::Int32(1) => Some(MetricKind::Counter),
             _ => None,
         }
     }
@@ -289,18 +325,12 @@ impl MetricKind {
     }
 }
 
-/// Matches Prometheus's metric name grammar: `[a-zA-Z_:][a-zA-Z0-9_:]*`.
-fn is_valid_metric_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':' => {
-            chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
-        }
-        _ => false,
-    }
-}
-
 /// Matches Prometheus's label name grammar: `[a-zA-Z_][a-zA-Z0-9_]*`.
+///
+/// Unlike the metric-name grammar (`name_valid`, computed in MIR), this stays in Rust: it
+/// applies to every key of the `labels` map, an unbounded per-row collection that doesn't fit a
+/// scalar `Map` expression. See the TODO on `shape_metric_sink_source` for the full move this is
+/// part of.
 fn is_valid_label_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
@@ -316,23 +346,29 @@ impl SinkState {
     ///
     /// `diff` follows differential dataflow sign conventions and is accumulated per full row
     /// identity, so an un-consolidated input carrying the same identity twice sums rather than
-    /// being mistaken for a second live row.
+    /// being mistaken for a second live row. Takes borrowed strings (see `extract_row`) and owns
+    /// them only here, once, at the point the identity is committed to `pending_ok`.
     fn stage_ok(
         &mut self,
-        metric_name: String,
-        metric_type: String,
-        labels: Vec<(String, String)>,
+        metric_name: &str,
+        metric_kind: Option<MetricKind>,
+        name_valid: bool,
+        labels: &[(&str, &str)],
         value: Option<f64>,
-        help: String,
+        help: &str,
         time: Timestamp,
         diff: i64,
     ) {
         let key = (
-            metric_name,
-            labels,
+            metric_name.to_string(),
+            labels
+                .iter()
+                .map(|&(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             value.map(f64::to_bits),
-            metric_type,
-            help,
+            metric_kind,
+            name_valid,
+            help.to_string(),
         );
         *self
             .pending_ok
@@ -401,13 +437,12 @@ impl SinkState {
 /// metric or label name.
 fn count_skipped(working: &BTreeMap<RowKey, i64>) -> u64 {
     let mut skipped = 0u64;
-    for ((name, labels, _bits, metric_type, _help), acc) in working {
+    for ((_name, labels, _bits, metric_kind, name_valid, _help), acc) in working {
         if *acc <= 0 {
             continue;
         }
-        let unsupported = MetricKind::parse(metric_type).is_none();
-        let invalid =
-            !is_valid_metric_name(name) || !labels.iter().all(|(k, _)| is_valid_label_name(k));
+        let unsupported = metric_kind.is_none();
+        let invalid = !name_valid || !labels.iter().all(|(k, _)| is_valid_label_name(k));
         if unsupported || invalid {
             skipped += 1;
         }
@@ -433,20 +468,20 @@ fn rebuild_published(
     // `working` orders rows by `(name, labels, ...)`, so all rows of one series are adjacent.
     let mut grouped: BTreeMap<PublishedKey, Vec<(Option<f64>, MetricKind, String)>> =
         BTreeMap::new();
-    for ((name, labels, bits, metric_type, help), acc) in working {
+    for ((name, labels, bits, metric_kind, name_valid, help), acc) in working {
         if *acc <= 0 {
             continue;
         }
-        let Some(kind) = MetricKind::parse(metric_type) else {
+        let Some(kind) = metric_kind else {
             continue;
         };
-        if !is_valid_metric_name(name) || !labels.iter().all(|(k, _)| is_valid_label_name(k)) {
+        if !name_valid || !labels.iter().all(|(k, _)| is_valid_label_name(k)) {
             continue;
         }
         grouped
             .entry((name.clone(), labels.clone()))
             .or_default()
-            .push((bits.map(f64::from_bits), kind, help.clone()));
+            .push((bits.map(f64::from_bits), *kind, help.clone()));
     }
 
     let mut published = BTreeMap::new();
@@ -667,6 +702,9 @@ mod tests {
         vec![("a".into(), "1".into())]
     }
 
+    /// `label_a()`, borrowed: what `stage_ok` now takes (see `extract_row`).
+    const LABEL_A: &[(&str, &str)] = &[("a", "1")];
+
     fn key_m() -> PublishedKey {
         ("m".into(), label_a())
     }
@@ -674,11 +712,12 @@ mod tests {
     /// Stages one gauge update for the `(m, {a:1})` series.
     fn stage_m(st: &mut SinkState, value: f64, time: u64, diff: i64) {
         st.stage_ok(
-            "m".into(),
-            "gauge".into(),
-            label_a(),
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            LABEL_A,
             Some(value),
-            "h".into(),
+            "h",
             Timestamp::from(time),
             diff,
         );
@@ -687,11 +726,12 @@ mod tests {
     /// Stages one gauge update with a null `value` for the `(m, {a:1})` series.
     fn stage_m_null(st: &mut SinkState, time: u64, diff: i64) {
         st.stage_ok(
-            "m".into(),
-            "gauge".into(),
-            label_a(),
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            LABEL_A,
             None,
-            "h".into(),
+            "h",
             Timestamp::from(time),
             diff,
         );
@@ -706,16 +746,8 @@ mod tests {
         assert_eq!(st.published.len(), 1);
         assert_eq!(st.published[&key_m()].0, 2.0);
 
-        // Unsupported type is skipped and counted.
-        st.stage_ok(
-            "h1".into(),
-            "histogram".into(),
-            vec![],
-            Some(1.0),
-            "h".into(),
-            Timestamp::from(1),
-            1,
-        );
+        // Unsupported type (metric_kind = None) is skipped and counted.
+        st.stage_ok("h1", None, true, &[], Some(1.0), "h", Timestamp::from(1), 1);
         st.integrate(&frontier(2));
         assert_eq!(st.skipped, 1);
 
@@ -816,14 +848,15 @@ mod tests {
     #[mz_ore::test]
     fn null_labels_become_empty() {
         let mut st = SinkState::default();
-        // Null labels are normalized to `{}` upstream of `stage_ok` (see `extract_row`); this
-        // checks the empty label vector keys and publishes correctly.
+        // An empty label vector (the shaped relation's `{}` for a source row with no labels)
+        // keys and publishes correctly.
         st.stage_ok(
-            "m".into(),
-            "gauge".into(),
-            vec![],
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            &[],
             Some(1.0),
-            "h".into(),
+            "h",
             Timestamp::from(1),
             1,
         );
@@ -836,27 +869,43 @@ mod tests {
     fn extract_row_normalizes_null_datums() {
         use mz_repr::SqlScalarType;
 
+        // Mirrors the shaped relation `shape_metric_sink_source` builds: `labels`/`help` are
+        // non-null by construction, `metric_name`/`value` stay nullable, and `metric_kind`/
+        // `name_valid` are the planner's computed classification columns.
         let desc = RelationDesc::builder()
             .with_column("metric_name", SqlScalarType::String.nullable(true))
-            .with_column("metric_type", SqlScalarType::String.nullable(true))
             .with_column(
                 "labels",
                 SqlScalarType::Map {
                     value_type: Box::new(SqlScalarType::String),
                     custom_id: None,
                 }
-                .nullable(true),
+                .nullable(false),
             )
             .with_column("value", SqlScalarType::Float64.nullable(true))
-            .with_column("help", SqlScalarType::String.nullable(true))
+            .with_column("help", SqlScalarType::String.nullable(false))
+            .with_column("metric_kind", SqlScalarType::Int32.nullable(true))
+            .with_column("name_valid", SqlScalarType::Bool.nullable(true))
             .finish();
         let cols = ColumnIndices::resolve(&desc);
 
-        let row = Row::pack_slice(&[Datum::Null; 5]);
-        let (name, metric_type, labels, value, help) = extract_row(&cols, &row);
+        let mut row = Row::default();
+        {
+            let mut packer = row.packer();
+            packer.push(Datum::Null); // metric_name
+            packer.push_dict_with(|_| {}); // labels: always non-null by construction
+            packer.push(Datum::Null); // value
+            packer.push(Datum::String("")); // help: always non-null by construction
+            packer.push(Datum::Null); // metric_kind: defensively treated as unsupported
+            packer.push(Datum::Null); // name_valid: defensively treated as invalid
+        }
+
+        let datums: Vec<Datum> = row.iter().collect();
+        let (name, metric_kind, name_valid, labels, value, help) = extract_row(&cols, &datums);
         assert_eq!(name, "");
-        assert_eq!(metric_type, "");
-        assert_eq!(labels, Vec::<(String, String)>::new());
+        assert_eq!(metric_kind, None);
+        assert!(!name_valid);
+        assert_eq!(labels, Vec::<(&str, &str)>::new());
         assert_eq!(value, None);
         assert_eq!(help, "");
     }
