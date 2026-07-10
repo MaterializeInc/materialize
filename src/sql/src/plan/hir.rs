@@ -2087,8 +2087,12 @@ impl HirRelationExpr {
         F: FnMut(&mut Self, usize) -> Result<(), E>,
     {
         #[allow(deprecated)]
-        self.visit1_mut(depth, |e: &mut HirRelationExpr, depth: usize| {
-            e.visit_mut_fallible(depth, f)
+        // Grow the stack: this recurses over the relation tree, whose depth is
+        // user-controlled (e.g. a long JOIN chain or a chain of CTEs).
+        stack::maybe_grow(|| {
+            self.visit1_mut(depth, |e: &mut HirRelationExpr, depth: usize| {
+                e.visit_mut_fallible(depth, f)
+            })
         })?;
         f(self, depth)
     }
