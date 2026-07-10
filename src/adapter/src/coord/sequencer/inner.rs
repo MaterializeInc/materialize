@@ -75,7 +75,7 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
+    self, ENABLE_RBAC_CHECKS, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
     TRANSACTION_ISOLATION_VAR_NAME, Var, VarError, VarInput,
 };
 use mz_sql::{plan, rbac};
@@ -4181,6 +4181,14 @@ impl Coordinator {
             }
         };
         self.catalog_transact(Some(session), vec![op]).await?;
+
+        // Read the value back from the catalog rather than parsing `value`,
+        // so all accepted spellings of false are covered.
+        if name.eq_ignore_ascii_case(ENABLE_RBAC_CHECKS.name())
+            && !self.catalog().system_config().enable_rbac_checks()
+        {
+            session.add_notice(AdapterNotice::RbacDisableDeprecated);
+        }
 
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
