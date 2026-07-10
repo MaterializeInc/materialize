@@ -879,6 +879,12 @@ pub mod v1alpha1 {
 pub mod v1 {
     use super::*;
 
+    /// Serde default for spec fields that are on unless explicitly disabled.
+    /// Also surfaced as the schema default in the generated CRD.
+    fn default_true() -> bool {
+        true
+    }
+
     #[derive(
         CustomResource,
         Clone,
@@ -995,8 +1001,8 @@ pub mod v1 {
         /// How to authenticate with Materialize.
         #[serde(default)]
         pub authenticator_kind: AuthenticatorKind,
-        /// Whether to enable role based access control. Defaults to false.
-        #[serde(default)]
+        /// Whether to enable role based access control. Defaults to true.
+        #[serde(default = "default_true")]
         pub enable_rbac: bool,
 
         /// The value used by environmentd (via the --environment-id flag) to
@@ -1849,6 +1855,32 @@ mod tests {
             &serde_json::json!(DEFAULT_ROLLOUT_REQUEST_TIMEOUT),
             "rolloutRequestTimeout schema default missing/wrong in generated CRD",
         );
+    }
+
+    #[mz_ore::test]
+    fn enable_rbac_schema_defaults() {
+        // RBAC defaults on in v1. v1alpha1 keeps the historical default of
+        // off, since flipping the default of an already-served version would
+        // silently enable RBAC for existing deployments that omit the field.
+        for (crd, expected) in [
+            (
+                <super::v1::Materialize as kube::CustomResourceExt>::crd(),
+                true,
+            ),
+            (
+                <super::v1alpha1::Materialize as kube::CustomResourceExt>::crd(),
+                false,
+            ),
+        ] {
+            let crd = serde_json::to_value(crd).expect("CRD serializes");
+            let default = &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+                ["properties"]["enableRbac"]["default"];
+            assert_eq!(
+                default,
+                &serde_json::json!(expected),
+                "enableRbac schema default missing/wrong in generated CRD",
+            );
+        }
     }
 
     #[mz_ore::test]
