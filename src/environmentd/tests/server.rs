@@ -239,16 +239,12 @@ impl Drop for TestServerWithStatementLoggingChecks {
             return;
         }
 
+        // mz_system is a superuser and can query mz_internal tables with RBAC
+        // enforced.
         let mut mz_client = self
             .server
             .connect_internal(postgres::NoTls)
             .expect("Failed to connect to internal SQL port for statement logging check");
-
-        // Disable RBAC checks so we can query mz_internal tables.
-        // (We don't need to restore this afterwards, since no more tests run in the same system.)
-        mz_client
-            .batch_execute("ALTER SYSTEM SET enable_rbac_checks = false")
-            .expect("Failed to disable RBAC checks");
 
         // The statement log has a 5-second buffer flush interval, so allow sufficient time.
         Retry::default()
