@@ -2726,10 +2726,9 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_) => {}
-                // Metric sinks are never durably persisted, so no bootstrapped entry is ever one.
-                CatalogItem::MetricSink(_) => {
-                    unreachable!("metric sinks are never durably serialized")
-                }
+                // Metric sinks are durable catalog items, but re-optimizing and shipping their
+                // dataflow on boot is deferred to bootstrap rehydration; skip for now.
+                CatalogItem::MetricSink(_) => {}
             }
         }
 
@@ -3299,10 +3298,9 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => (),
-                // Metric sinks are never durably persisted, so no bootstrapped entry is ever one.
-                CatalogItem::MetricSink(_) => {
-                    unreachable!("metric sinks are never durably serialized")
-                }
+                // A metric sink writes to the in-process metrics registry, not to persist, so it
+                // has no storage collection to bootstrap. Same treatment as `Index`.
+                CatalogItem::MetricSink(_) => (),
             }
         }
 
@@ -3702,10 +3700,9 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => (),
-                // Metric sinks are never durably persisted, so no bootstrapped entry is ever one.
-                CatalogItem::MetricSink(_) => {
-                    unreachable!("metric sinks are never durably serialized")
-                }
+                // No physical plan is built for a metric sink on boot; re-optimizing and shipping
+                // its dataflow is deferred to bootstrap rehydration.
+                CatalogItem::MetricSink(_) => (),
             }
         }
 
@@ -3738,10 +3735,9 @@ impl Coordinator {
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
                 | CatalogItem::Connection(_) => continue,
-                // Metric sinks are never durably persisted, so no bootstrapped entry is ever one.
-                CatalogItem::MetricSink(_) => {
-                    unreachable!("metric sinks are never durably serialized")
-                }
+                // A metric sink has no persist dependency and no physical plan on boot (see
+                // `bootstrap_dataflow_plans`), so there is no as-of to select for it yet.
+                CatalogItem::MetricSink(_) => continue,
             };
             if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
                 catalog_ids.push(gid);
