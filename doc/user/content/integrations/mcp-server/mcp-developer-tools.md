@@ -58,6 +58,7 @@ queries against user objects.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `cluster` | string | Yes | Exact cluster name the query should run on. |
+| `cluster_replica` | string | No | Replica name (e.g. `r1`) to pin the read to one replica of the cluster. Required for `EXPLAIN ANALYZE` on clusters with more than one replica. Find replica names in `mz_catalog.mz_cluster_replicas`. |
 | `sql_query` | string | Yes | `SELECT`, `SHOW`, or `EXPLAIN` statement. |
 
 Only one statement per call is allowed. Write operations (`INSERT`, `UPDATE`,
