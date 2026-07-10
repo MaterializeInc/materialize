@@ -95,50 +95,51 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         op.build(move |_capabilities| {
             move |frontiers| {
                 if worker_id != active_worker_id {
-                    // Drain so the operator isn't rescheduled forever; there is no state to
+                    // Drain so the operator isn't rescheduled forever. There is no state to
                     // fold into on this worker.
                     ok_input.for_each(|_, _| {});
                     err_input.for_each(|_, _| {});
                     return;
                 }
 
-                let mut ok_updates = Vec::new();
-                ok_input.for_each(|_, data| {
-                    for (row, _time, diff) in data.drain(..) {
-                        ok_updates.push((row, diff));
-                    }
-                });
-                let mut err_diff_total: i64 = 0;
-                err_input.for_each(|_, data| {
-                    for (_err, _time, diff) in data.drain(..) {
-                        err_diff_total += diff.into_inner();
-                    }
-                });
-
                 let mut st = state.lock().expect("sink state mutex poisoned");
 
-                // Apply retractions before insertions. A row's value changing at a single
-                // timestamp arrives as a retraction of the old row followed by an insertion of
-                // the new one, both keyed by the same (metric_name, labels). Clearing the slot
-                // first means this legitimate update isn't mistaken by `apply_row` for two rows
-                // racing for the same series.
-                ok_updates.sort_by_key(|(_, diff)| diff.into_inner() > 0);
-                for (row, diff) in &ok_updates {
-                    let (name, kind, labels, value, help) = extract_row(&cols, row);
-                    st.apply_row(&name, &kind, &labels, value, &help, diff.into_inner());
-                }
+                // Buffer every incoming update under its timestamp. The input is not
+                // consolidated and timely does not guarantee that all diffs at a timestamp arrive
+                // in one activation, so nothing is folded into `working` until the timestamp is
+                // closed (see `integrate`).
+                ok_input.for_each(|_, data| {
+                    for (row, time, diff) in data.drain(..) {
+                        let (name, metric_type, labels, value, help) = extract_row(&cols, &row);
+                        st.stage_ok(
+                            name,
+                            metric_type,
+                            labels,
+                            value,
+                            help,
+                            time,
+                            diff.into_inner(),
+                        );
+                    }
+                });
+                err_input.for_each(|_, data| {
+                    for (_err, time, diff) in data.drain(..) {
+                        st.stage_err(time, diff.into_inner());
+                    }
+                });
 
-                st.errors += err_diff_total;
-
+                // Combined ok+err input frontier. A timestamp is closed once neither input can
+                // still produce data at it, so folding a closed time observes all of its diffs.
                 let mut frontier = Antichain::new();
                 for f in frontiers {
                     frontier.extend(f.frontier().iter().copied());
                 }
+
+                st.integrate(&frontier);
                 st.frontier_ms = frontier
                     .as_option()
                     .map(|t| u64::from(*t))
                     .unwrap_or(u64::MAX);
-
                 st.publish_if_healthy();
             }
         });
@@ -196,21 +197,34 @@ fn extract_row(
     (metric_name, metric_type, labels, value, help)
 }
 
-/// Key into [`SinkState::working`] / [`SinkState::published`]: a metric name paired with its
-/// sorted label vector.
+/// Full identity of one source row: metric name, sorted labels, value, metric type, and help.
+///
+/// The value is stored as its `f64::to_bits` pattern so the tuple is totally ordered and usable
+/// as a map key. Recover the value with `f64::from_bits`. The name and labels lead the tuple so
+/// that a `BTreeMap<RowKey, _>` keeps all rows of one `(metric_name, labels)` series adjacent.
+type RowKey = (String, Vec<(String, String)>, u64, String, String);
+
+/// Key into [`SinkState::published`]: a metric name paired with its sorted label vector.
 type PublishedKey = (String, Vec<(String, String)>);
-/// Value in [`SinkState::working`] / [`SinkState::published`]: the series' current value, kind,
-/// and help string.
+/// Value in [`SinkState::published`]: the series' value, kind, and help string.
 type PublishedValue = (f64, MetricKind, String);
 
 /// Working and published metric state for one metric sink.
 ///
-/// The working map always integrates ok-collection diffs. `published` is what the collector
-/// exposes and is refreshed from `working` only while `errors` is zero, so an errored dataflow
-/// freezes the last healthy values.
+/// Because the input is not consolidated and a timestamp's diffs may span several operator
+/// activations, incoming updates are buffered by timestamp in `pending_ok`/`pending_err` and only
+/// folded into `working` once the input frontier has closed that timestamp. `working` accumulates
+/// a signed multiplicity per full row identity, and a row is live iff its accumulated diff is
+/// positive. `published` is what the collector exposes and is rebuilt from the live set of
+/// `working` only while `errors` is zero, so an errored dataflow freezes the last healthy values.
 #[derive(Default)]
 struct SinkState {
-    working: BTreeMap<PublishedKey, PublishedValue>,
+    /// Ok-collection updates awaiting their timestamp closing, accumulated per identity.
+    pending_ok: BTreeMap<Timestamp, BTreeMap<RowKey, i64>>,
+    /// Err-collection diffs awaiting their timestamp closing.
+    pending_err: BTreeMap<Timestamp, i64>,
+    /// Accumulated multiplicity per row identity over all closed timestamps.
+    working: BTreeMap<RowKey, i64>,
     published: BTreeMap<PublishedKey, PublishedValue>,
     /// Net count of live errors on the sink's input (can rise and fall as errors are
     /// retracted); publication is frozen while this is nonzero.
@@ -221,7 +235,7 @@ struct SinkState {
     collisions: u64,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MetricKind {
     Gauge,
     Counter,
@@ -267,61 +281,149 @@ fn is_valid_label_name(name: &str) -> bool {
 }
 
 impl SinkState {
-    /// Folds one row-level update into the working state.
+    /// Buffers one ok-collection update under its timestamp.
     ///
-    /// `diff` follows differential dataflow sign conventions: positive inserts or overwrites the
-    /// `(metric_name, labels)` entry, non-positive retracts it. Rows with an unsupported
-    /// `metric_type` (anything but `gauge`/`counter`) or an invalid Prometheus metric or label
-    /// name are dropped and counted in `skipped`.
-    ///
-    /// Overwriting an entry that is already present, i.e. an insertion for a key that was never
-    /// retracted, counts as a collision: two source rows are live for the same series at once.
-    /// Callers are expected to apply retractions before insertions within a timestamp so that
-    /// ordinary value updates don't trigger a false positive here.
-    fn apply_row(
+    /// `diff` follows differential dataflow sign conventions and is accumulated per full row
+    /// identity, so an un-consolidated input carrying the same identity twice sums rather than
+    /// being mistaken for a second live row.
+    fn stage_ok(
         &mut self,
-        metric_name: &str,
-        metric_type: &str,
-        labels: &[(String, String)],
+        metric_name: String,
+        metric_type: String,
+        labels: Vec<(String, String)>,
         value: f64,
-        help: &str,
+        help: String,
+        time: Timestamp,
         diff: i64,
     ) {
-        let Some(kind) = MetricKind::parse(metric_type) else {
-            self.skipped += 1;
-            return;
-        };
-        let valid_name = is_valid_metric_name(metric_name);
-        let valid_labels = labels.iter().all(|(k, _)| is_valid_label_name(k));
-        if !valid_name || !valid_labels {
-            self.skipped += 1;
-            return;
-        }
-
-        let key = (metric_name.to_string(), labels.to_vec());
-        if diff > 0 {
-            if self
-                .working
-                .insert(key, (value, kind, help.to_string()))
-                .is_some()
-            {
-                self.collisions += 1;
-            }
-        } else if diff < 0 {
-            self.working.remove(&key);
-        }
+        let key = (metric_name, labels, value.to_bits(), metric_type, help);
+        *self
+            .pending_ok
+            .entry(time)
+            .or_default()
+            .entry(key)
+            .or_default() += diff;
     }
 
-    /// Refreshes `published` (and the `conflicts` count derived from it) from `working`, but only
-    /// while the dataflow is free of live errors. While `errors > 0`, publication stays frozen at
-    /// the last healthy snapshot; `working` keeps integrating updates in the meantime, so the
-    /// next healthy publish reflects everything that happened during the freeze.
+    /// Buffers one err-collection diff under its timestamp.
+    fn stage_err(&mut self, time: Timestamp, diff: i64) {
+        *self.pending_err.entry(time).or_default() += diff;
+    }
+
+    /// Folds every buffered timestamp the `frontier` has closed into `working` and `errors`.
+    ///
+    /// A timestamp is closed once the combined ok+err frontier can no longer produce data at it,
+    /// which guarantees all of its diffs are already buffered. Accumulated entries that reach a
+    /// multiplicity of zero are dropped. `skipped` is recomputed here from the live set, so it
+    /// counts the input rows currently dropped for an unsupported type or invalid name.
+    fn integrate(&mut self, frontier: &Antichain<Timestamp>) {
+        let closed_ok: Vec<Timestamp> = self
+            .pending_ok
+            .keys()
+            .filter(|t| !frontier.less_equal(t))
+            .copied()
+            .collect();
+        for time in closed_ok {
+            let rows = self.pending_ok.remove(&time).expect("key from keys()");
+            for (key, diff) in rows {
+                *self.working.entry(key).or_default() += diff;
+            }
+        }
+
+        let closed_err: Vec<Timestamp> = self
+            .pending_err
+            .keys()
+            .filter(|t| !frontier.less_equal(t))
+            .copied()
+            .collect();
+        for time in closed_err {
+            self.errors += self.pending_err.remove(&time).expect("key from keys()");
+        }
+
+        self.working.retain(|_, acc| *acc != 0);
+        self.skipped = count_skipped(&self.working);
+    }
+
+    /// Rebuilds `published` and the `collisions`/`conflicts` counts from the live set of
+    /// `working`, but only while the dataflow is free of live errors. While `errors > 0`,
+    /// publication stays frozen at the last healthy snapshot. `working` keeps integrating closed
+    /// timestamps in the meantime, so the next healthy publish reflects everything that happened
+    /// during the freeze.
     fn publish_if_healthy(&mut self) {
         if self.errors == 0 {
-            self.published = self.working.clone();
+            let (published, collisions) = rebuild_published(&self.working);
+            self.published = published;
+            self.collisions = collisions;
             self.conflicts = count_conflicts(&self.published);
         }
     }
+}
+
+/// Counts live working rows dropped for an unsupported `metric_type` or an invalid Prometheus
+/// metric or label name.
+fn count_skipped(working: &BTreeMap<RowKey, i64>) -> u64 {
+    let mut skipped = 0u64;
+    for ((name, labels, _bits, metric_type, _help), acc) in working {
+        if *acc <= 0 {
+            continue;
+        }
+        let unsupported = MetricKind::parse(metric_type).is_none();
+        let invalid =
+            !is_valid_metric_name(name) || !labels.iter().all(|(k, _)| is_valid_label_name(k));
+        if unsupported || invalid {
+            skipped += 1;
+        }
+    }
+    skipped
+}
+
+/// Collapses the live, representable rows of `working` into one published entry per
+/// `(metric_name, labels)` series and counts colliding series.
+///
+/// A series collides when more than one distinct live value exists for its `(metric_name,
+/// labels)`. That is a genuine conflict of two source rows, unlike an ordinary value update whose
+/// old row is retracted and new row inserted within the same closed timestamp, which leaves a
+/// single live value. When a series collides the winner is chosen deterministically as the row
+/// with the numerically smallest value, breaking ties by metric type then help.
+fn rebuild_published(
+    working: &BTreeMap<RowKey, i64>,
+) -> (BTreeMap<PublishedKey, PublishedValue>, u64) {
+    // `working` orders rows by `(name, labels, ...)`, so all rows of one series are adjacent.
+    let mut grouped: BTreeMap<PublishedKey, Vec<PublishedValue>> = BTreeMap::new();
+    for ((name, labels, bits, metric_type, help), acc) in working {
+        if *acc <= 0 {
+            continue;
+        }
+        let Some(kind) = MetricKind::parse(metric_type) else {
+            continue;
+        };
+        if !is_valid_metric_name(name) || !labels.iter().all(|(k, _)| is_valid_label_name(k)) {
+            continue;
+        }
+        grouped
+            .entry((name.clone(), labels.clone()))
+            .or_default()
+            .push((f64::from_bits(*bits), kind, help.clone()));
+    }
+
+    let mut published = BTreeMap::new();
+    let mut collisions = 0u64;
+    for (key, mut candidates) in grouped {
+        let mut distinct: Vec<u64> = candidates.iter().map(|(v, _, _)| v.to_bits()).collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        if distinct.len() > 1 {
+            collisions += 1;
+        }
+        candidates.sort_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then(a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+        let winner = candidates.into_iter().next().expect("group is non-empty");
+        published.insert(key, winner);
+    }
+    (published, collisions)
 }
 
 /// Counts published series whose own `metric_type`/`help` disagree with their family's winning
@@ -492,32 +594,126 @@ impl Collector for SinkCollector {
 mod tests {
     use super::*;
 
+    /// A frontier that has closed every timestamp strictly below `bound`.
+    fn frontier(bound: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(Timestamp::from(bound))
+    }
+
+    fn label_a() -> Vec<(String, String)> {
+        vec![("a".into(), "1".into())]
+    }
+
+    fn key_m() -> PublishedKey {
+        ("m".into(), label_a())
+    }
+
+    /// Stages one gauge update for the `(m, {a:1})` series.
+    fn stage_m(st: &mut SinkState, value: f64, time: u64, diff: i64) {
+        st.stage_ok(
+            "m".into(),
+            "gauge".into(),
+            label_a(),
+            value,
+            "h".into(),
+            Timestamp::from(time),
+            diff,
+        );
+    }
+
     #[mz_ore::test]
     fn fold_and_publish() {
         let mut st = SinkState::default();
-        st.apply_row("m", "gauge", &[("a".into(), "1".into())], 2.0, "h", 1);
+        stage_m(&mut st, 2.0, 0, 1);
+        st.integrate(&frontier(1));
         st.publish_if_healthy();
         assert_eq!(st.published.len(), 1);
+        assert_eq!(st.published[&key_m()].0, 2.0);
 
         // Unsupported type is skipped and counted.
-        st.apply_row("h1", "histogram", &[], 1.0, "h", 1);
+        st.stage_ok(
+            "h1".into(),
+            "histogram".into(),
+            vec![],
+            1.0,
+            "h".into(),
+            Timestamp::from(1),
+            1,
+        );
+        st.integrate(&frontier(2));
         assert_eq!(st.skipped, 1);
 
-        // Error freezes publication.
+        // Error freezes publication. The update at time 2 retracts the old value and inserts the
+        // new one, both fold into `working` while frozen.
         st.errors = 1;
-        st.apply_row("m", "gauge", &[("a".into(), "1".into())], 9.0, "h", 1);
+        stage_m(&mut st, 2.0, 2, -1);
+        stage_m(&mut st, 9.0, 2, 1);
+        st.integrate(&frontier(3));
         st.publish_if_healthy();
-        assert_eq!(
-            st.published[&("m".into(), vec![("a".into(), "1".into())])].0,
-            2.0
-        );
+        assert_eq!(st.published[&key_m()].0, 2.0);
 
         // Recovery republishes the integrated value.
         st.errors = 0;
         st.publish_if_healthy();
-        assert_eq!(
-            st.published[&("m".into(), vec![("a".into(), "1".into())])].0,
-            9.0
-        );
+        assert_eq!(st.published[&key_m()].0, 9.0);
+        assert_eq!(st.collisions, 0);
+    }
+
+    #[mz_ore::test]
+    fn value_update_split_across_activations_no_collision() {
+        let mut st = SinkState::default();
+        // Establish the series at value 5.
+        stage_m(&mut st, 5.0, 0, 1);
+        st.integrate(&frontier(1));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 5.0);
+
+        // A value update 5 -> 9 at time 1 arrives insert-first, split across two activations. The
+        // timestamp stays open until both diffs are buffered.
+        stage_m(&mut st, 9.0, 1, 1);
+        st.integrate(&frontier(1));
+        st.publish_if_healthy();
+        assert_eq!(st.collisions, 0);
+        stage_m(&mut st, 5.0, 1, -1);
+
+        // Close the timestamp: the series is present at value 9 with no collision.
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 9.0);
+        assert_eq!(st.collisions, 0);
+    }
+
+    #[mz_ore::test]
+    fn duplicate_multiplicity_consolidates() {
+        let mut st = SinkState::default();
+        // The same identity at multiplicity 2 consolidates to a single live row.
+        stage_m(&mut st, 5.0, 0, 1);
+        stage_m(&mut st, 5.0, 0, 1);
+        st.integrate(&frontier(1));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 5.0);
+        assert_eq!(st.collisions, 0);
+
+        // A second, distinct live value for the same series is a genuine collision.
+        stage_m(&mut st, 7.0, 1, 1);
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert_eq!(st.collisions, 1);
+        // The smallest value wins deterministically.
+        assert_eq!(st.published[&key_m()].0, 5.0);
+    }
+
+    #[mz_ore::test]
+    fn no_publish_before_time_closed() {
+        let mut st = SinkState::default();
+        // An update at time 5 must not appear while the frontier still allows data at time 5.
+        stage_m(&mut st, 2.0, 5, 1);
+        st.integrate(&frontier(5));
+        st.publish_if_healthy();
+        assert!(st.published.is_empty());
+
+        // Once the frontier advances past time 5, the update publishes.
+        st.integrate(&frontier(6));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 2.0);
     }
 }
