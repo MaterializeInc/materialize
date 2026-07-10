@@ -24,3 +24,452 @@ INSERT INTO t (a, b, c) VALUES (3, 'test', 1)
 # Regression test for database-issues#1555
 statement error Evaluation error: division by zero
 SELECT recip - 1 FROM (SELECT b, 1/a as recip, max(c) from t GROUP BY b, 1/a)
+
+# Regression test for a deep chain of custom LIST types: resolving it must
+# fail gracefully at a depth limit, not overflow the stack (STACK-4).
+statement ok
+CREATE TYPE l0 AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE TYPE l1 AS LIST (ELEMENT TYPE = l0)
+
+statement ok
+CREATE TYPE l2 AS LIST (ELEMENT TYPE = l1)
+
+statement ok
+CREATE TYPE l3 AS LIST (ELEMENT TYPE = l2)
+
+statement ok
+CREATE TYPE l4 AS LIST (ELEMENT TYPE = l3)
+
+statement ok
+CREATE TYPE l5 AS LIST (ELEMENT TYPE = l4)
+
+statement ok
+CREATE TYPE l6 AS LIST (ELEMENT TYPE = l5)
+
+statement ok
+CREATE TYPE l7 AS LIST (ELEMENT TYPE = l6)
+
+statement ok
+CREATE TYPE l8 AS LIST (ELEMENT TYPE = l7)
+
+statement ok
+CREATE TYPE l9 AS LIST (ELEMENT TYPE = l8)
+
+statement ok
+CREATE TYPE l10 AS LIST (ELEMENT TYPE = l9)
+
+statement ok
+CREATE TYPE l11 AS LIST (ELEMENT TYPE = l10)
+
+statement ok
+CREATE TYPE l12 AS LIST (ELEMENT TYPE = l11)
+
+statement ok
+CREATE TYPE l13 AS LIST (ELEMENT TYPE = l12)
+
+statement ok
+CREATE TYPE l14 AS LIST (ELEMENT TYPE = l13)
+
+statement ok
+CREATE TYPE l15 AS LIST (ELEMENT TYPE = l14)
+
+statement ok
+CREATE TYPE l16 AS LIST (ELEMENT TYPE = l15)
+
+statement ok
+CREATE TYPE l17 AS LIST (ELEMENT TYPE = l16)
+
+statement ok
+CREATE TYPE l18 AS LIST (ELEMENT TYPE = l17)
+
+statement ok
+CREATE TYPE l19 AS LIST (ELEMENT TYPE = l18)
+
+statement ok
+CREATE TYPE l20 AS LIST (ELEMENT TYPE = l19)
+
+statement ok
+CREATE TYPE l21 AS LIST (ELEMENT TYPE = l20)
+
+statement ok
+CREATE TYPE l22 AS LIST (ELEMENT TYPE = l21)
+
+statement ok
+CREATE TYPE l23 AS LIST (ELEMENT TYPE = l22)
+
+statement ok
+CREATE TYPE l24 AS LIST (ELEMENT TYPE = l23)
+
+statement ok
+CREATE TYPE l25 AS LIST (ELEMENT TYPE = l24)
+
+statement ok
+CREATE TYPE l26 AS LIST (ELEMENT TYPE = l25)
+
+statement ok
+CREATE TYPE l27 AS LIST (ELEMENT TYPE = l26)
+
+statement ok
+CREATE TYPE l28 AS LIST (ELEMENT TYPE = l27)
+
+statement ok
+CREATE TYPE l29 AS LIST (ELEMENT TYPE = l28)
+
+statement ok
+CREATE TYPE l30 AS LIST (ELEMENT TYPE = l29)
+
+statement ok
+CREATE TYPE l31 AS LIST (ELEMENT TYPE = l30)
+
+statement ok
+CREATE TYPE l32 AS LIST (ELEMENT TYPE = l31)
+
+statement ok
+CREATE TYPE l33 AS LIST (ELEMENT TYPE = l32)
+
+statement ok
+CREATE TYPE l34 AS LIST (ELEMENT TYPE = l33)
+
+statement ok
+CREATE TYPE l35 AS LIST (ELEMENT TYPE = l34)
+
+statement ok
+CREATE TYPE l36 AS LIST (ELEMENT TYPE = l35)
+
+statement ok
+CREATE TYPE l37 AS LIST (ELEMENT TYPE = l36)
+
+statement ok
+CREATE TYPE l38 AS LIST (ELEMENT TYPE = l37)
+
+statement ok
+CREATE TYPE l39 AS LIST (ELEMENT TYPE = l38)
+
+statement ok
+CREATE TYPE l40 AS LIST (ELEMENT TYPE = l39)
+
+statement ok
+CREATE TYPE l41 AS LIST (ELEMENT TYPE = l40)
+
+statement ok
+CREATE TYPE l42 AS LIST (ELEMENT TYPE = l41)
+
+statement ok
+CREATE TYPE l43 AS LIST (ELEMENT TYPE = l42)
+
+statement ok
+CREATE TYPE l44 AS LIST (ELEMENT TYPE = l43)
+
+statement ok
+CREATE TYPE l45 AS LIST (ELEMENT TYPE = l44)
+
+statement ok
+CREATE TYPE l46 AS LIST (ELEMENT TYPE = l45)
+
+statement ok
+CREATE TYPE l47 AS LIST (ELEMENT TYPE = l46)
+
+statement ok
+CREATE TYPE l48 AS LIST (ELEMENT TYPE = l47)
+
+statement ok
+CREATE TYPE l49 AS LIST (ELEMENT TYPE = l48)
+
+statement ok
+CREATE TYPE l50 AS LIST (ELEMENT TYPE = l49)
+
+statement ok
+CREATE TYPE l51 AS LIST (ELEMENT TYPE = l50)
+
+statement ok
+CREATE TYPE l52 AS LIST (ELEMENT TYPE = l51)
+
+statement ok
+CREATE TYPE l53 AS LIST (ELEMENT TYPE = l52)
+
+statement ok
+CREATE TYPE l54 AS LIST (ELEMENT TYPE = l53)
+
+statement ok
+CREATE TYPE l55 AS LIST (ELEMENT TYPE = l54)
+
+statement ok
+CREATE TYPE l56 AS LIST (ELEMENT TYPE = l55)
+
+statement ok
+CREATE TYPE l57 AS LIST (ELEMENT TYPE = l56)
+
+statement ok
+CREATE TYPE l58 AS LIST (ELEMENT TYPE = l57)
+
+statement ok
+CREATE TYPE l59 AS LIST (ELEMENT TYPE = l58)
+
+statement ok
+CREATE TYPE l60 AS LIST (ELEMENT TYPE = l59)
+
+statement ok
+CREATE TYPE l61 AS LIST (ELEMENT TYPE = l60)
+
+statement ok
+CREATE TYPE l62 AS LIST (ELEMENT TYPE = l61)
+
+statement ok
+CREATE TYPE l63 AS LIST (ELEMENT TYPE = l62)
+
+statement ok
+CREATE TYPE l64 AS LIST (ELEMENT TYPE = l63)
+
+statement ok
+CREATE TYPE l65 AS LIST (ELEMENT TYPE = l64)
+
+statement ok
+CREATE TYPE l66 AS LIST (ELEMENT TYPE = l65)
+
+statement ok
+CREATE TYPE l67 AS LIST (ELEMENT TYPE = l66)
+
+statement ok
+CREATE TYPE l68 AS LIST (ELEMENT TYPE = l67)
+
+statement ok
+CREATE TYPE l69 AS LIST (ELEMENT TYPE = l68)
+
+statement ok
+CREATE TYPE l70 AS LIST (ELEMENT TYPE = l69)
+
+statement ok
+CREATE TYPE l71 AS LIST (ELEMENT TYPE = l70)
+
+statement ok
+CREATE TYPE l72 AS LIST (ELEMENT TYPE = l71)
+
+statement ok
+CREATE TYPE l73 AS LIST (ELEMENT TYPE = l72)
+
+statement ok
+CREATE TYPE l74 AS LIST (ELEMENT TYPE = l73)
+
+statement ok
+CREATE TYPE l75 AS LIST (ELEMENT TYPE = l74)
+
+statement ok
+CREATE TYPE l76 AS LIST (ELEMENT TYPE = l75)
+
+statement ok
+CREATE TYPE l77 AS LIST (ELEMENT TYPE = l76)
+
+statement ok
+CREATE TYPE l78 AS LIST (ELEMENT TYPE = l77)
+
+statement ok
+CREATE TYPE l79 AS LIST (ELEMENT TYPE = l78)
+
+statement ok
+CREATE TYPE l80 AS LIST (ELEMENT TYPE = l79)
+
+statement ok
+CREATE TYPE l81 AS LIST (ELEMENT TYPE = l80)
+
+statement ok
+CREATE TYPE l82 AS LIST (ELEMENT TYPE = l81)
+
+statement ok
+CREATE TYPE l83 AS LIST (ELEMENT TYPE = l82)
+
+statement ok
+CREATE TYPE l84 AS LIST (ELEMENT TYPE = l83)
+
+statement ok
+CREATE TYPE l85 AS LIST (ELEMENT TYPE = l84)
+
+statement ok
+CREATE TYPE l86 AS LIST (ELEMENT TYPE = l85)
+
+statement ok
+CREATE TYPE l87 AS LIST (ELEMENT TYPE = l86)
+
+statement ok
+CREATE TYPE l88 AS LIST (ELEMENT TYPE = l87)
+
+statement ok
+CREATE TYPE l89 AS LIST (ELEMENT TYPE = l88)
+
+statement ok
+CREATE TYPE l90 AS LIST (ELEMENT TYPE = l89)
+
+statement ok
+CREATE TYPE l91 AS LIST (ELEMENT TYPE = l90)
+
+statement ok
+CREATE TYPE l92 AS LIST (ELEMENT TYPE = l91)
+
+statement ok
+CREATE TYPE l93 AS LIST (ELEMENT TYPE = l92)
+
+statement ok
+CREATE TYPE l94 AS LIST (ELEMENT TYPE = l93)
+
+statement ok
+CREATE TYPE l95 AS LIST (ELEMENT TYPE = l94)
+
+statement ok
+CREATE TYPE l96 AS LIST (ELEMENT TYPE = l95)
+
+statement ok
+CREATE TYPE l97 AS LIST (ELEMENT TYPE = l96)
+
+statement ok
+CREATE TYPE l98 AS LIST (ELEMENT TYPE = l97)
+
+statement ok
+CREATE TYPE l99 AS LIST (ELEMENT TYPE = l98)
+
+statement ok
+CREATE TYPE l100 AS LIST (ELEMENT TYPE = l99)
+
+statement ok
+CREATE TYPE l101 AS LIST (ELEMENT TYPE = l100)
+
+statement ok
+CREATE TYPE l102 AS LIST (ELEMENT TYPE = l101)
+
+statement ok
+CREATE TYPE l103 AS LIST (ELEMENT TYPE = l102)
+
+statement ok
+CREATE TYPE l104 AS LIST (ELEMENT TYPE = l103)
+
+statement ok
+CREATE TYPE l105 AS LIST (ELEMENT TYPE = l104)
+
+statement ok
+CREATE TYPE l106 AS LIST (ELEMENT TYPE = l105)
+
+statement ok
+CREATE TYPE l107 AS LIST (ELEMENT TYPE = l106)
+
+statement ok
+CREATE TYPE l108 AS LIST (ELEMENT TYPE = l107)
+
+statement ok
+CREATE TYPE l109 AS LIST (ELEMENT TYPE = l108)
+
+statement ok
+CREATE TYPE l110 AS LIST (ELEMENT TYPE = l109)
+
+statement ok
+CREATE TYPE l111 AS LIST (ELEMENT TYPE = l110)
+
+statement ok
+CREATE TYPE l112 AS LIST (ELEMENT TYPE = l111)
+
+statement ok
+CREATE TYPE l113 AS LIST (ELEMENT TYPE = l112)
+
+statement ok
+CREATE TYPE l114 AS LIST (ELEMENT TYPE = l113)
+
+statement ok
+CREATE TYPE l115 AS LIST (ELEMENT TYPE = l114)
+
+statement ok
+CREATE TYPE l116 AS LIST (ELEMENT TYPE = l115)
+
+statement ok
+CREATE TYPE l117 AS LIST (ELEMENT TYPE = l116)
+
+statement ok
+CREATE TYPE l118 AS LIST (ELEMENT TYPE = l117)
+
+statement ok
+CREATE TYPE l119 AS LIST (ELEMENT TYPE = l118)
+
+statement ok
+CREATE TYPE l120 AS LIST (ELEMENT TYPE = l119)
+
+statement ok
+CREATE TYPE l121 AS LIST (ELEMENT TYPE = l120)
+
+statement ok
+CREATE TYPE l122 AS LIST (ELEMENT TYPE = l121)
+
+statement ok
+CREATE TYPE l123 AS LIST (ELEMENT TYPE = l122)
+
+statement ok
+CREATE TYPE l124 AS LIST (ELEMENT TYPE = l123)
+
+statement ok
+CREATE TYPE l125 AS LIST (ELEMENT TYPE = l124)
+
+statement ok
+CREATE TYPE l126 AS LIST (ELEMENT TYPE = l125)
+
+statement ok
+CREATE TYPE l127 AS LIST (ELEMENT TYPE = l126)
+
+statement ok
+CREATE TYPE l128 AS LIST (ELEMENT TYPE = l127)
+
+statement error custom type nesting depth exceeds limit
+CREATE TYPE l129 AS LIST (ELEMENT TYPE = l128)
+
+# Regression test for a record custom type whose fields reference the same
+# sub-type: its resolved type is exponential in depth, so resolution must be
+# rejected with a graceful error rather than hanging / OOMing (STACK-5).
+statement ok
+CREATE TYPE d0 AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE TYPE d1 AS (a d0, b d0)
+
+statement ok
+CREATE TYPE d2 AS (a d1, b d1)
+
+statement ok
+CREATE TYPE d3 AS (a d2, b d2)
+
+statement ok
+CREATE TYPE d4 AS (a d3, b d3)
+
+statement ok
+CREATE TYPE d5 AS (a d4, b d4)
+
+statement ok
+CREATE TYPE d6 AS (a d5, b d5)
+
+statement ok
+CREATE TYPE d7 AS (a d6, b d6)
+
+statement ok
+CREATE TYPE d8 AS (a d7, b d7)
+
+statement ok
+CREATE TYPE d9 AS (a d8, b d8)
+
+statement ok
+CREATE TYPE d10 AS (a d9, b d9)
+
+statement ok
+CREATE TYPE d11 AS (a d10, b d10)
+
+statement ok
+CREATE TYPE d12 AS (a d11, b d11)
+
+statement ok
+CREATE TYPE d13 AS (a d12, b d12)
+
+statement ok
+CREATE TYPE d14 AS (a d13, b d13)
+
+statement ok
+CREATE TYPE d15 AS (a d14, b d14)
+
+statement ok
+CREATE TYPE d16 AS (a d15, b d15)
+
+statement error custom type is too complex to resolve
+CREATE TYPE d17 AS (a d16, b d16)

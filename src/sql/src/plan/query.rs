@@ -6075,11 +6075,44 @@ pub fn scalar_type_from_sql(
     }
 }
 
+/// Maximum nesting depth of a custom type. A deeper type is rejected rather than
+/// recursed into, so a long `CREATE TYPE` chain (`l0 <- l1 <- ... <- lN`) cannot
+/// overflow the stack while resolving.
+const MAX_TYPE_NESTING_DEPTH: usize = 128;
+
+/// Maximum number of sub-type resolutions performed while resolving a single
+/// custom type. A record whose fields reference the same sub-type produces a
+/// type tree that is exponential in its depth (fields hold owned copies, not
+/// shared references), so bound the total work to reject such a type before it
+/// exhausts memory / CPU rather than after.
+const MAX_TYPE_RESOLUTION_NODES: usize = 100_000;
+
 pub fn scalar_type_from_catalog(
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
     modifiers: &[i64],
 ) -> Result<SqlScalarType, PlanError> {
+    let mut budget = MAX_TYPE_RESOLUTION_NODES;
+    scalar_type_from_catalog_inner(catalog, id, modifiers, 0, &mut budget)
+}
+
+fn scalar_type_from_catalog_inner(
+    catalog: &dyn SessionCatalog,
+    id: CatalogItemId,
+    modifiers: &[i64],
+    depth: usize,
+    budget: &mut usize,
+) -> Result<SqlScalarType, PlanError> {
+    if depth > MAX_TYPE_NESTING_DEPTH {
+        sql_bail!(
+            "custom type nesting depth exceeds limit of {}",
+            MAX_TYPE_NESTING_DEPTH
+        );
+    }
+    *budget = match budget.checked_sub(1) {
+        Some(remaining) => remaining,
+        None => sql_bail!("custom type is too complex to resolve"),
+    };
     let entry = catalog.get_item(&id);
     let type_details = match entry.type_details() {
         Some(type_details) => type_details,
@@ -6178,19 +6211,25 @@ pub fn scalar_type_from_catalog(
             match t {
                 CatalogType::Array {
                     element_reference: element_id,
-                } => Ok(SqlScalarType::Array(Box::new(scalar_type_from_catalog(
-                    catalog,
-                    *element_id,
-                    modifiers,
-                )?))),
+                } => Ok(SqlScalarType::Array(Box::new(
+                    scalar_type_from_catalog_inner(
+                        catalog,
+                        *element_id,
+                        modifiers,
+                        depth + 1,
+                        budget,
+                    )?,
+                ))),
                 CatalogType::List {
                     element_reference: element_id,
                     element_modifiers,
                 } => Ok(SqlScalarType::List {
-                    element_type: Box::new(scalar_type_from_catalog(
+                    element_type: Box::new(scalar_type_from_catalog_inner(
                         catalog,
                         *element_id,
                         element_modifiers,
+                        depth + 1,
+                        budget,
                     )?),
                     custom_id: Some(id),
                 }),
@@ -6200,26 +6239,36 @@ pub fn scalar_type_from_catalog(
                     value_reference: value_id,
                     value_modifiers,
                 } => Ok(SqlScalarType::Map {
-                    value_type: Box::new(scalar_type_from_catalog(
+                    value_type: Box::new(scalar_type_from_catalog_inner(
                         catalog,
                         *value_id,
                         value_modifiers,
+                        depth + 1,
+                        budget,
                     )?),
                     custom_id: Some(id),
                 }),
                 CatalogType::Range {
                     element_reference: element_id,
                 } => Ok(SqlScalarType::Range {
-                    element_type: Box::new(scalar_type_from_catalog(catalog, *element_id, &[])?),
+                    element_type: Box::new(scalar_type_from_catalog_inner(
+                        catalog,
+                        *element_id,
+                        &[],
+                        depth + 1,
+                        budget,
+                    )?),
                 }),
                 CatalogType::Record { fields } => {
                     let scalars: Box<[(ColumnName, SqlColumnType)]> = fields
                         .iter()
                         .map(|f| {
-                            let scalar_type = scalar_type_from_catalog(
+                            let scalar_type = scalar_type_from_catalog_inner(
                                 catalog,
                                 f.type_reference,
                                 &f.type_modifiers,
+                                depth + 1,
+                                budget,
                             )?;
                             Ok((
                                 f.name.clone(),
