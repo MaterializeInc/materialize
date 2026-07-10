@@ -144,6 +144,10 @@ describe("UsagePage", () => {
     expect(accountRows).toHaveLength(2);
     expect(within(accountRows[0]).getByText(formatCurrency(14))).toBeVisible();
     expect(within(accountRows[1]).getByText(formatCurrency(5))).toBeVisible();
+    // Each account row also shows its share of the period total (SAS-144):
+    // parent 14/19 ≈ 73.7%, child 5/19 ≈ 26.3%.
+    expect(within(accountRows[0]).getByText("73.7%")).toBeVisible();
+    expect(within(accountRows[1]).getByText("26.3%")).toBeVisible();
     // Accounts render expanded, so every cluster row is visible inline,
     // region-qualified ("aws/us-east-1 / <cluster>").
     for (const cluster of ["quickstart.r1", "compute.r1", "prod.r1"]) {
@@ -173,6 +177,56 @@ describe("UsagePage", () => {
     const range = within(await breakdown.findByTestId("account-spend-range"));
     expect(range.getByText("Spend between", { exact: false })).toBeVisible();
     expect(range.getAllByText("01-15-24")).toHaveLength(2);
+  });
+
+  it("renders 0.0% shares for an all-zero period instead of NaN (SAS-144)", async () => {
+    server.use(
+      buildDailyCostBreakdownResponse({
+        payload: {
+          days: oneDay([
+            {
+              external_customer_id: "parent-org",
+              clusters: [
+                {
+                  environment_id: "environment-parent-0",
+                  cluster_grouping_key: "quickstart.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "0.00" },
+                },
+              ],
+            },
+            {
+              external_customer_id: "child-org",
+              clusters: [
+                {
+                  environment_id: "environment-child-0",
+                  cluster_grouping_key: "prod.r1",
+                  category: "",
+                  region: "aws/us-east-1",
+                  amounts: { "price-compute": "0.00" },
+                },
+              ],
+            },
+          ]),
+        },
+      }),
+    );
+    renderComponent(<UsagePage />);
+
+    const breakdown = within(
+      await screen.findByTestId(
+        "account-spend-breakdown",
+        {},
+        { timeout: 5_000 },
+      ),
+    );
+    const accountRows = await breakdown.findAllByTestId("account-row");
+    expect(accountRows).toHaveLength(2);
+    for (const row of accountRows) {
+      expect(within(row).getByText("0.0%")).toBeVisible();
+    }
+    expect(breakdown.queryByText(/NaN/)).not.toBeInTheDocument();
   });
 
   it("shows a plan-details box beside the breakdown, itemizing last 30 days by account", async () => {
