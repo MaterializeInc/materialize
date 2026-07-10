@@ -2136,15 +2136,6 @@ impl Catalog {
                         }
                     }
                 }
-                // Skip the audit log for temporary items, matching `Op::CreateItem`.
-                // Metric sinks are not temporary, so they are audited here like any
-                // other item, via `UpdatePrivilegeV1`.
-                let should_log = match &target_id {
-                    SystemObjectId::Object(ObjectId::Item(item_id)) => {
-                        Self::should_audit_log_item(state.get_entry(item_id).item())
-                    }
-                    _ => true,
-                };
                 let object_type = state.get_system_object_type(&target_id);
                 let object_id_str = match &target_id {
                     SystemObjectId::System => "SYSTEM".to_string(),
@@ -2152,9 +2143,6 @@ impl Catalog {
                 };
                 // One audit event per grantee, even though the batch is a single durable write.
                 for privilege in &privileges {
-                    if !should_log {
-                        break;
-                    }
                     CatalogState::add_to_audit_log(
                         &state.system_configuration,
                         oracle_write_ts,
@@ -2634,32 +2622,21 @@ impl Catalog {
                     }
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 }
-                // Skip the audit log for temporary items, matching `Op::CreateItem`.
-                // Metric sinks are not temporary, so they are audited here like any
-                // other item, via `UpdateOwnerV1`.
-                let should_log = match &id {
-                    ObjectId::Item(item_id) => {
-                        Self::should_audit_log_item(state.get_entry(item_id).item())
-                    }
-                    _ => true,
-                };
-                if should_log {
-                    let object_type = state.get_object_type(&id);
-                    CatalogState::add_to_audit_log(
-                        &state.system_configuration,
-                        oracle_write_ts,
-                        session,
-                        tx,
-                        audit_events,
-                        EventType::Alter,
-                        object_type_to_audit_object_type(object_type),
-                        EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
-                            object_id: id.to_string(),
-                            old_owner_id: old_owner.to_string(),
-                            new_owner_id: new_owner.to_string(),
-                        }),
-                    )?;
-                }
+                let object_type = state.get_object_type(&id);
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    object_type_to_audit_object_type(object_type),
+                    EventDetails::UpdateOwnerV1(mz_audit_log::UpdateOwnerV1 {
+                        object_id: id.to_string(),
+                        old_owner_id: old_owner.to_string(),
+                        new_owner_id: new_owner.to_string(),
+                    }),
+                )?;
             }
             Op::UpdateClusterConfig { id, name, config } => {
                 let mut cluster = state.get_cluster(id).clone();
