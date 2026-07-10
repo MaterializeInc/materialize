@@ -23,7 +23,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, MetricSink, Sink, Source, Table, TableDataSource, Type,
+    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_expr::{
     CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
@@ -129,6 +129,7 @@ mod cluster;
 mod copy_from;
 mod create_index;
 mod create_materialized_view;
+mod create_metric_sink;
 mod create_view;
 mod explain_timestamp;
 mod peek;
@@ -1243,40 +1244,6 @@ impl Coordinator {
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
-            Err(err) => Err(err),
-        }
-    }
-
-    /// Installs the catalog entry for a `CREATE METRIC SINK` statement.
-    ///
-    /// This only performs the (non-durable) catalog install. It does not build or ship a
-    /// dataflow, so the metric sink does not yet scrape or export any metrics.
-    #[instrument]
-    pub(super) async fn sequence_create_metric_sink(
-        &mut self,
-        session: &Session,
-        plan: plan::CreateMetricSinkPlan,
-        resolved_ids: ResolvedIds,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let (item_id, global_id) = self.allocate_user_id().await?;
-        let metric_sink = MetricSink {
-            create_sql: plan.metric_sink.create_sql,
-            global_id,
-            from: plan.metric_sink.from,
-            resolved_ids,
-            cluster_id: plan.in_cluster,
-            optimized_plan: None,
-            physical_plan: None,
-            dataflow_metainfo: None,
-        };
-        let op = catalog::Op::CreateItem {
-            id: item_id,
-            name: plan.name,
-            item: CatalogItem::MetricSink(metric_sink),
-            owner_id: *session.current_role_id(),
-        };
-        match self.catalog_transact(Some(session), vec![op]).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedMetricSink),
             Err(err) => Err(err),
         }
     }

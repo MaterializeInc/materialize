@@ -170,6 +170,9 @@ impl Coordinator {
             Message::CreateIndexStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
+            Message::CreateMetricSinkStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
             Message::CreateViewStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }

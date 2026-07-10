@@ -603,6 +603,7 @@ fn augment(
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 anyhow::bail!("copy-to-s3 sink {id} is not implemented")
             }
+            ComputeSinkConnection::MetricSink(conn) => ComputeSinkConnection::MetricSink(conn),
         };
         sink_exports.insert(
             id,
