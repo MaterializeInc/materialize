@@ -764,18 +764,6 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - id: mz-deploy
-    label: "mz-deploy"
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [src/mz-deploy, test/mz-deploy]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: mz-deploy
-          ci-builder: stable
-    agents:
-      queue: hetzner-x86-64-4cpu-8gb
-
   - group: Docs
     key: docs-tests
     steps:

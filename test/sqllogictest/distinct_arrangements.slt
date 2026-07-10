@@ -84,7 +84,6 @@ SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_intros
 ----
 ArrangeBy[[Column(0), Column(1)]]
 ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
 Arranged DistinctBy
 Arranged DistinctBy
 DistinctBy
