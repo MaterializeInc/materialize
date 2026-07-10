@@ -867,7 +867,7 @@ where
         }
         let mut watch_fut = std::pin::pin!(
             watch
-                .wait_for_seqno_ge(seqno.next())
+                .wait_for_upper_seqno_ge(seqno.next())
                 .map(Wake::Watch)
                 .instrument(trace_span!("snapshot::watch"))
         );
@@ -956,7 +956,7 @@ where
                 Wake::Watch(watch) => {
                     watch_fut.set(
                         watch
-                            .wait_for_seqno_ge(seqno.next())
+                            .wait_for_upper_seqno_ge(seqno.next())
                             .map(Wake::Watch)
                             .instrument(trace_span!("snapshot::watch")),
                     );

@@ -2299,6 +2299,7 @@ pub struct WatchMetrics {
     pub(crate) wait_resolved_via_watch: IntCounter,
     pub(crate) wait_resolved_via_sleep: IntCounter,
     pub(crate) notify_sent: IntCounter,
+    pub(crate) notify_upper_sent: IntCounter,
     pub(crate) notify_noop: IntCounter,
     pub(crate) notify_recv: IntCounter,
     pub(crate) notify_lagged: IntCounter,
@@ -2328,6 +2329,10 @@ impl WatchMetrics {
             notify_sent: registry.register(metric!(
                 name: "mz_persist_watch_notify_sent",
                 help: "count of watch notifications sent to a non-empty broadcast channel",
+            )),
+            notify_upper_sent: registry.register(metric!(
+                name: "mz_persist_watch_notify_upper_sent",
+                help: "count of upper-advance watch notifications sent to a non-empty broadcast channel",
             )),
             notify_noop: registry.register(metric!(
                 name: "mz_persist_watch_notify_noop",

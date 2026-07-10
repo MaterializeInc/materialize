@@ -2670,6 +2670,10 @@ metrics:
   help: count of watch notifications sent to a non-empty broadcast channel
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_watch_notify_upper_sent
+  help: count of upper-advance watch notifications sent to a non-empty broadcast channel
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_watch_notify_wait_finished
   help: count of watch wait calls resolved
   source: src/persist-client/src/internal/metrics.rs

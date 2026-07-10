@@ -30,6 +30,7 @@ use mz_persist::location::{
     VersionedData,
 };
 use mz_persist_types::{Codec, Codec64};
+use timely::PartialOrder;
 use timely::progress::Timestamp;
 use tokio::sync::{Mutex, OnceCell};
 use tracing::debug;
@@ -696,11 +697,16 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         f(&state)
     }
 
-    pub(crate) fn write_lock<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(
-        &self,
-        metrics: &LockMetrics,
-        f: F,
-    ) -> R {
+    pub(crate) fn write_lock<R, F>(&self, metrics: &LockMetrics, f: F) -> R
+    where
+        F: FnOnce(&mut TypedState<K, V, T, D>) -> R,
+        // Bounds needed to read the shard upper. All callers are in contexts that
+        // already satisfy these (they mutate a fully-typed shard state).
+        K: Codec,
+        V: Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Codec64,
+    {
         metrics.acquire_count.inc();
         let mut state = match self.state.try_write() {
             Ok(x) => x,
@@ -716,11 +722,18 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
             Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
         };
         let seqno_before = state.seqno;
+        // Snapshot the upper before the modification so we can tell whether it
+        // advanced. Cheap: the upper is typically a single-element antichain.
+        let upper_before = state.upper().clone();
         let ret = f(&mut state);
         let seqno_after = state.seqno;
         debug_assert!(seqno_after >= seqno_before);
         if seqno_after > seqno_before {
-            self.notifier.notify(seqno_after);
+            // Only wake upper waiters when the upper actually advanced. The seqno
+            // bumps for many non-data reasons (GC, rollups, since-downgrades,
+            // other writers' CaAs) and those must not re-activate upper waiters.
+            let upper_advanced = PartialOrder::less_than(&upper_before, state.upper());
+            self.notifier.notify(seqno_after, upper_advanced);
         }
         // For now, make sure to notify while under lock. It's possible to move
         // this out of the lock window, see [StateWatchNotifier::notify].
