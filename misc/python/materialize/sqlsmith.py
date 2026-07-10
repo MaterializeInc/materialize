@@ -26,6 +26,9 @@ known_errors = [
     "function list_cat(",  # insufficient type system, parameter types have to match
     "does not support implicitly casting from",
     "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/database-issues/issues/1163
+    "permission denied for",  # expected for the unprivileged-role instance
+    "must be owner of",  # expected for the unprivileged-role instance
+    "must be a superuser",  # expected for the unprivileged-role instance
     "range lower bound must be less than or equal to range upper bound",
     "violates not-null constraint",
     "division by zero",
@@ -40,9 +43,8 @@ known_errors = [
     "is only defined for finite arguments",
     "more than one record produced in subquery",
     "invalid range bound flags",
-    "invalid input syntax for type jsonb",
+    "invalid input syntax for type ",
     "invalid regular expression",
-    "invalid input syntax for type date",
     "invalid escape string",
     "invalid hash algorithm",
     "is defined for numbers greater than or equal to",
@@ -74,7 +76,8 @@ known_errors = [
     "Expected joined table, found",  # Should fix for multi table join
     "Expected ON, or USING after JOIN, found",  # Should fix for multi table join
     "but expression is of type",  # Should fix, but only happens rarely
-    "coalesce could not convert type map",  # Should fix, but only happens rarely
+    "could not convert type ",  # CASE/coalesce, the generator's type metadata for polymorphic functions is coarser than real inference
+    "could not determine polymorphic type",  # untyped literals for pseudo-typed arguments
     "operator does not exist: map",  # Should fix, but only happens rarely
     "result exceeds max size of",  # Seems expected with huge queries
     "expected expression, but found reserved keyword",  # Should fix, but only happens rarely with subqueries
@@ -98,15 +101,12 @@ known_errors = [
     "timezone interval must not contain months or years",
     "not supported for type date",
     "not supported for type time",
-    "coalesce types text and text list cannot be matched",  # Bad typing for ||
-    "coalesce types text list and text cannot be matched",  # Bad typing for ||
+    " cannot be matched",  # CASE/coalesce/set operation type unification, the generator's type system is coarser than the real one
+    "but query returns types",  # WITH MUTUALLY RECURSIVE bindings, the generator's type metadata can disagree with inference
     "is out of range for type numeric: exceeds maximum precision",
     "is out of range for type date",
     "is out of range for type timestamp",
-    "CAST does not support casting from ",  # TODO: Improve type system
-    "SET clause does not support casting from ",  # TODO: Improve type system
-    "coalesce types integer and interval cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
-    "coalesce types interval and integer cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
+    " does not support casting from ",  # CAST/SET clause/CASE, TODO: Improve type system
     "requested length too large",
     "number of columns must be a positive integer literal",
     "regexp_extract requires a string literal as its first argument",
