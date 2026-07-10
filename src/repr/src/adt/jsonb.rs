@@ -586,42 +586,46 @@ impl Serialize for JsonbDatum<'_> {
     where
         S: Serializer,
     {
-        match self.0 {
-            Datum::JsonNull => serializer.serialize_none(),
-            Datum::True => serializer.serialize_bool(true),
-            Datum::False => serializer.serialize_bool(false),
-            Datum::Numeric(n) => {
-                // To serialize an arbitrary-precision number, we present
-                // serde_json with the following magic struct:
-                //
-                //     struct $serde_json::private::Number {
-                //          $serde_json::private::Number: <NUMBER VALUE>,
-                //     }
-                //
-                let mut s = serializer.serialize_struct(SERDE_JSON_NUMBER_TOKEN, 1)?;
-                s.serialize_field(
-                    SERDE_JSON_NUMBER_TOKEN,
-                    &n.into_inner().to_standard_notation_string(),
-                )?;
-                s.end()
-            }
-            Datum::String(s) => serializer.serialize_str(s),
-            Datum::List(list) => {
-                let mut seq = serializer.serialize_seq(None)?;
-                for e in list.iter() {
-                    seq.serialize_element(&JsonbDatum(e))?;
+        // Grow the stack as needed: a jsonb value can be arbitrarily deeply
+        // nested, and this serializes it recursively.
+        mz_ore::stack::maybe_grow(move || {
+            match self.0 {
+                Datum::JsonNull => serializer.serialize_none(),
+                Datum::True => serializer.serialize_bool(true),
+                Datum::False => serializer.serialize_bool(false),
+                Datum::Numeric(n) => {
+                    // To serialize an arbitrary-precision number, we present
+                    // serde_json with the following magic struct:
+                    //
+                    //     struct $serde_json::private::Number {
+                    //          $serde_json::private::Number: <NUMBER VALUE>,
+                    //     }
+                    //
+                    let mut s = serializer.serialize_struct(SERDE_JSON_NUMBER_TOKEN, 1)?;
+                    s.serialize_field(
+                        SERDE_JSON_NUMBER_TOKEN,
+                        &n.into_inner().to_standard_notation_string(),
+                    )?;
+                    s.end()
                 }
-                seq.end()
-            }
-            Datum::Map(dict) => {
-                let mut map = serializer.serialize_map(None)?;
-                for (k, v) in dict.iter() {
-                    map.serialize_entry(k, &JsonbDatum(v))?;
+                Datum::String(s) => serializer.serialize_str(s),
+                Datum::List(list) => {
+                    let mut seq = serializer.serialize_seq(None)?;
+                    for e in list.iter() {
+                        seq.serialize_element(&JsonbDatum(e))?;
+                    }
+                    seq.end()
                 }
-                map.end()
+                Datum::Map(dict) => {
+                    let mut map = serializer.serialize_map(None)?;
+                    for (k, v) in dict.iter() {
+                        map.serialize_entry(k, &JsonbDatum(v))?;
+                    }
+                    map.end()
+                }
+                d => unreachable!("not a json-compatible datum: {:?}", d),
             }
-            d => unreachable!("not a json-compatible datum: {:?}", d),
-        }
+        })
     }
 }
 

@@ -1139,130 +1139,135 @@ impl<'a> Datum<'a> {
     /// See [`Datum<'a>::is_instance_of`] for comparing `Datum`s to `ReprColumnType`s.
     pub fn is_instance_of_sql(self, column_type: &SqlColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &SqlScalarType) -> bool {
-            if let SqlScalarType::Jsonb = scalar_type {
-                // json type checking
-                match datum {
-                    Datum::Dummy => false,
-                    Datum::JsonNull
-                    | Datum::False
-                    | Datum::True
-                    | Datum::Numeric(_)
-                    | Datum::String(_) => true,
-                    Datum::List(list) => list
-                        .iter()
-                        .all(|elem| is_instance_of_scalar(elem, scalar_type)),
-                    Datum::Map(dict) => dict
-                        .iter()
-                        .all(|(_key, val)| is_instance_of_scalar(val, scalar_type)),
-                    _ => false,
-                }
-            } else {
-                // sql type checking
-                match (datum, scalar_type) {
-                    (Datum::Dummy, _) => false,
-                    (Datum::Null, _) => false,
-                    (Datum::False, SqlScalarType::Bool) => true,
-                    (Datum::False, _) => false,
-                    (Datum::True, SqlScalarType::Bool) => true,
-                    (Datum::True, _) => false,
-                    (Datum::Int16(_), SqlScalarType::Int16) => true,
-                    (Datum::Int16(_), _) => false,
-                    (Datum::Int32(_), SqlScalarType::Int32) => true,
-                    (Datum::Int32(_), _) => false,
-                    (Datum::Int64(_), SqlScalarType::Int64) => true,
-                    (Datum::Int64(_), _) => false,
-                    (Datum::UInt8(_), SqlScalarType::PgLegacyChar) => true,
-                    (Datum::UInt8(_), _) => false,
-                    (Datum::UInt16(_), SqlScalarType::UInt16) => true,
-                    (Datum::UInt16(_), _) => false,
-                    (Datum::UInt32(_), SqlScalarType::Oid) => true,
-                    (Datum::UInt32(_), SqlScalarType::RegClass) => true,
-                    (Datum::UInt32(_), SqlScalarType::RegProc) => true,
-                    (Datum::UInt32(_), SqlScalarType::RegType) => true,
-                    (Datum::UInt32(_), SqlScalarType::UInt32) => true,
-                    (Datum::UInt32(_), _) => false,
-                    (Datum::UInt64(_), SqlScalarType::UInt64) => true,
-                    (Datum::UInt64(_), _) => false,
-                    (Datum::Float32(_), SqlScalarType::Float32) => true,
-                    (Datum::Float32(_), _) => false,
-                    (Datum::Float64(_), SqlScalarType::Float64) => true,
-                    (Datum::Float64(_), _) => false,
-                    (Datum::Date(_), SqlScalarType::Date) => true,
-                    (Datum::Date(_), _) => false,
-                    (Datum::Time(_), SqlScalarType::Time) => true,
-                    (Datum::Time(_), _) => false,
-                    (Datum::Timestamp(_), SqlScalarType::Timestamp { .. }) => true,
-                    (Datum::Timestamp(_), _) => false,
-                    (Datum::TimestampTz(_), SqlScalarType::TimestampTz { .. }) => true,
-                    (Datum::TimestampTz(_), _) => false,
-                    (Datum::Interval(_), SqlScalarType::Interval) => true,
-                    (Datum::Interval(_), _) => false,
-                    (Datum::Bytes(_), SqlScalarType::Bytes) => true,
-                    (Datum::Bytes(_), _) => false,
-                    (Datum::String(_), SqlScalarType::String)
-                    | (Datum::String(_), SqlScalarType::VarChar { .. })
-                    | (Datum::String(_), SqlScalarType::Char { .. })
-                    | (Datum::String(_), SqlScalarType::PgLegacyName) => true,
-                    (Datum::String(_), _) => false,
-                    (Datum::Uuid(_), SqlScalarType::Uuid) => true,
-                    (Datum::Uuid(_), _) => false,
-                    (Datum::Array(array), SqlScalarType::Array(t)) => {
-                        array.elements.iter().all(|e| match e {
-                            Datum::Null => true,
-                            _ => is_instance_of_scalar(e, t),
-                        })
+            // Grow the stack as needed: `jsonb` (and nested list/map/record/range)
+            // values can be arbitrarily deep, and this checks them recursively.
+            mz_ore::stack::maybe_grow(|| {
+                if let SqlScalarType::Jsonb = scalar_type {
+                    // json type checking
+                    match datum {
+                        Datum::Dummy => false,
+                        Datum::JsonNull
+                        | Datum::False
+                        | Datum::True
+                        | Datum::Numeric(_)
+                        | Datum::String(_) => true,
+                        Datum::List(list) => list
+                            .iter()
+                            .all(|elem| is_instance_of_scalar(elem, scalar_type)),
+                        Datum::Map(dict) => dict
+                            .iter()
+                            .all(|(_key, val)| is_instance_of_scalar(val, scalar_type)),
+                        _ => false,
                     }
-                    (Datum::Array(array), SqlScalarType::Int2Vector) => {
-                        array.has_int2vector_dims()
-                            && array
-                                .elements
-                                .iter()
-                                .all(|e| is_instance_of_scalar(e, &SqlScalarType::Int16))
-                    }
-                    (Datum::Array(_), _) => false,
-                    (Datum::List(list), SqlScalarType::List { element_type, .. }) => list
-                        .iter()
-                        .all(|e| e.is_null() || is_instance_of_scalar(e, element_type)),
-                    (Datum::List(list), SqlScalarType::Record { fields, .. }) => {
-                        if list.iter().count() != fields.len() {
-                            return false;
+                } else {
+                    // sql type checking
+                    match (datum, scalar_type) {
+                        (Datum::Dummy, _) => false,
+                        (Datum::Null, _) => false,
+                        (Datum::False, SqlScalarType::Bool) => true,
+                        (Datum::False, _) => false,
+                        (Datum::True, SqlScalarType::Bool) => true,
+                        (Datum::True, _) => false,
+                        (Datum::Int16(_), SqlScalarType::Int16) => true,
+                        (Datum::Int16(_), _) => false,
+                        (Datum::Int32(_), SqlScalarType::Int32) => true,
+                        (Datum::Int32(_), _) => false,
+                        (Datum::Int64(_), SqlScalarType::Int64) => true,
+                        (Datum::Int64(_), _) => false,
+                        (Datum::UInt8(_), SqlScalarType::PgLegacyChar) => true,
+                        (Datum::UInt8(_), _) => false,
+                        (Datum::UInt16(_), SqlScalarType::UInt16) => true,
+                        (Datum::UInt16(_), _) => false,
+                        (Datum::UInt32(_), SqlScalarType::Oid) => true,
+                        (Datum::UInt32(_), SqlScalarType::RegClass) => true,
+                        (Datum::UInt32(_), SqlScalarType::RegProc) => true,
+                        (Datum::UInt32(_), SqlScalarType::RegType) => true,
+                        (Datum::UInt32(_), SqlScalarType::UInt32) => true,
+                        (Datum::UInt32(_), _) => false,
+                        (Datum::UInt64(_), SqlScalarType::UInt64) => true,
+                        (Datum::UInt64(_), _) => false,
+                        (Datum::Float32(_), SqlScalarType::Float32) => true,
+                        (Datum::Float32(_), _) => false,
+                        (Datum::Float64(_), SqlScalarType::Float64) => true,
+                        (Datum::Float64(_), _) => false,
+                        (Datum::Date(_), SqlScalarType::Date) => true,
+                        (Datum::Date(_), _) => false,
+                        (Datum::Time(_), SqlScalarType::Time) => true,
+                        (Datum::Time(_), _) => false,
+                        (Datum::Timestamp(_), SqlScalarType::Timestamp { .. }) => true,
+                        (Datum::Timestamp(_), _) => false,
+                        (Datum::TimestampTz(_), SqlScalarType::TimestampTz { .. }) => true,
+                        (Datum::TimestampTz(_), _) => false,
+                        (Datum::Interval(_), SqlScalarType::Interval) => true,
+                        (Datum::Interval(_), _) => false,
+                        (Datum::Bytes(_), SqlScalarType::Bytes) => true,
+                        (Datum::Bytes(_), _) => false,
+                        (Datum::String(_), SqlScalarType::String)
+                        | (Datum::String(_), SqlScalarType::VarChar { .. })
+                        | (Datum::String(_), SqlScalarType::Char { .. })
+                        | (Datum::String(_), SqlScalarType::PgLegacyName) => true,
+                        (Datum::String(_), _) => false,
+                        (Datum::Uuid(_), SqlScalarType::Uuid) => true,
+                        (Datum::Uuid(_), _) => false,
+                        (Datum::Array(array), SqlScalarType::Array(t)) => {
+                            array.elements.iter().all(|e| match e {
+                                Datum::Null => true,
+                                _ => is_instance_of_scalar(e, t),
+                            })
                         }
+                        (Datum::Array(array), SqlScalarType::Int2Vector) => {
+                            array.has_int2vector_dims()
+                                && array
+                                    .elements
+                                    .iter()
+                                    .all(|e| is_instance_of_scalar(e, &SqlScalarType::Int16))
+                        }
+                        (Datum::Array(_), _) => false,
+                        (Datum::List(list), SqlScalarType::List { element_type, .. }) => list
+                            .iter()
+                            .all(|e| e.is_null() || is_instance_of_scalar(e, element_type)),
+                        (Datum::List(list), SqlScalarType::Record { fields, .. }) => {
+                            if list.iter().count() != fields.len() {
+                                return false;
+                            }
 
-                        list.iter().zip_eq(fields).all(|(e, (_, t))| {
-                            (e.is_null() && t.nullable) || is_instance_of_scalar(e, &t.scalar_type)
-                        })
-                    }
-                    (Datum::List(_), _) => false,
-                    (Datum::Map(map), SqlScalarType::Map { value_type, .. }) => map
-                        .iter()
-                        .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
-                    (Datum::Map(_), _) => false,
-                    (Datum::JsonNull, _) => false,
-                    (Datum::Numeric(_), SqlScalarType::Numeric { .. }) => true,
-                    (Datum::Numeric(_), _) => false,
-                    (Datum::MzTimestamp(_), SqlScalarType::MzTimestamp) => true,
-                    (Datum::MzTimestamp(_), _) => false,
-                    (Datum::Range(Range { inner }), SqlScalarType::Range { element_type }) => {
-                        match inner {
-                            None => true,
-                            Some(inner) => {
-                                true && match inner.lower.bound {
-                                    None => true,
-                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
-                                } && match inner.upper.bound {
-                                    None => true,
-                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                            list.iter().zip_eq(fields).all(|(e, (_, t))| {
+                                (e.is_null() && t.nullable)
+                                    || is_instance_of_scalar(e, &t.scalar_type)
+                            })
+                        }
+                        (Datum::List(_), _) => false,
+                        (Datum::Map(map), SqlScalarType::Map { value_type, .. }) => map
+                            .iter()
+                            .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
+                        (Datum::Map(_), _) => false,
+                        (Datum::JsonNull, _) => false,
+                        (Datum::Numeric(_), SqlScalarType::Numeric { .. }) => true,
+                        (Datum::Numeric(_), _) => false,
+                        (Datum::MzTimestamp(_), SqlScalarType::MzTimestamp) => true,
+                        (Datum::MzTimestamp(_), _) => false,
+                        (Datum::Range(Range { inner }), SqlScalarType::Range { element_type }) => {
+                            match inner {
+                                None => true,
+                                Some(inner) => {
+                                    true && match inner.lower.bound {
+                                        None => true,
+                                        Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                    } && match inner.upper.bound {
+                                        None => true,
+                                        Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                    }
                                 }
                             }
                         }
+                        (Datum::Range(_), _) => false,
+                        (Datum::MzAclItem(_), SqlScalarType::MzAclItem) => true,
+                        (Datum::MzAclItem(_), _) => false,
+                        (Datum::AclItem(_), SqlScalarType::AclItem) => true,
+                        (Datum::AclItem(_), _) => false,
                     }
-                    (Datum::Range(_), _) => false,
-                    (Datum::MzAclItem(_), SqlScalarType::MzAclItem) => true,
-                    (Datum::MzAclItem(_), _) => false,
-                    (Datum::AclItem(_), SqlScalarType::AclItem) => true,
-                    (Datum::AclItem(_), _) => false,
                 }
-            }
+            })
         }
         if column_type.nullable {
             if let Datum::Null = self {
@@ -5906,6 +5911,22 @@ mod tests {
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
+
+    // Regression: type-checking a deeply nested jsonb value must not overflow the
+    // stack (STACK-8). `is_instance_of_sql` recurses per nesting level.
+    #[mz_ore::test]
+    fn is_instance_of_deep_jsonb_does_not_overflow() {
+        // Build a value nested 50k deep. `push_list` byte-copies the inner value,
+        // so constructing the deep value does not itself recurse.
+        let mut row = crate::Row::pack_slice(&[Datum::JsonNull]);
+        for _ in 0..50_000 {
+            let mut next = crate::Row::default();
+            next.packer().push_list([row.unpack_first()]);
+            row = next;
+        }
+        let deep = row.unpack_first();
+        assert!(deep.is_instance_of_sql(&SqlScalarType::Jsonb.nullable(true)));
+    }
 
     proptest! {
        #[mz_ore::test]
