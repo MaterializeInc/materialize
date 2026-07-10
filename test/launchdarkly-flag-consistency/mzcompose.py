@@ -484,7 +484,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "max_aws_privatelink_connections",
     "max_tables",
     # Cloud-only infrastructure / performance tuning.
-    "arrangement_size_history_collection_interval",
     "cluster_topology_spread_min_domains",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
@@ -529,12 +528,13 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
 KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     allow_real_time_recency
     allowed_cluster_replica_sizes
-    column_paged_batcher_budget_fraction
-    column_paged_batcher_lz4
+    column_paged_batcher_swap_pageout
     compute_dataflow_max_inflight_bytes
     compute_peek_response_stash_threshold_bytes
     compute_subscribe_snapshot_optimization
     enable_cluster_schedule_refresh
+    enable_column_paged_batcher
+    enable_column_paged_batcher_spill
     enable_compute_correction_v2
     enable_create_table_from_source
     enable_eager_delta_joins
