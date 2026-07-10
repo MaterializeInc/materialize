@@ -4075,7 +4075,8 @@ pub fn describe_create_metric_sink(
 }
 
 /// Columns a metric sink source relation must expose, and the predicate its scalar type must
-/// satisfy. Order-independent; all columns must be `NOT NULL`.
+/// satisfy. Order-independent. Columns may be nullable: null input is a runtime concern handled
+/// by the sink operator, not a plan-time rejection.
 const METRIC_SINK_SOURCE_COLUMNS: &[(&str, fn(&SqlScalarType) -> bool)] = &[
     ("metric_name", |t| matches!(t, SqlScalarType::String)),
     ("metric_type", |t| matches!(t, SqlScalarType::String)),
@@ -4093,9 +4094,9 @@ fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
         let (_, column_type) = desc
             .get_by_name(&col)
             .ok_or_else(|| sql_err!("metric sink source must expose column {:?}", name))?;
-        if column_type.nullable || !type_ok(&column_type.scalar_type) {
+        if !type_ok(&column_type.scalar_type) {
             return Err(sql_err!(
-                "metric sink source column {:?} must be NOT NULL and of the required type",
+                "metric sink source column {:?} is not of the required type",
                 name
             ));
         }

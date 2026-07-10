@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_types::sinks::{ComputeSinkDesc, MetricSinkConnection};
 use mz_ore::cast::{CastFrom, CastLossy};
-use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use prometheus::core::{Collector, Desc};
@@ -151,8 +151,8 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
 /// Column indices resolved once from the sink's source relation.
 ///
 /// The SQL planner guarantees (`validate_metric_sink_desc`) that the relation exposes
-/// `metric_name`, `metric_type`, `labels`, `value`, and `help` columns, each `NOT NULL` and of
-/// the required type, but their position within the row is unconstrained.
+/// `metric_name`, `metric_type`, `labels`, `value`, and `help` columns of the required type, but
+/// any of them may be `Datum::Null` and their position within the row is unconstrained.
 struct ColumnIndices {
     metric_name: usize,
     metric_type: usize,
@@ -179,30 +179,57 @@ impl ColumnIndices {
 }
 
 /// Extracts `(metric_name, metric_type, sorted labels, value, help)` from one source row.
+///
+/// Every column may be `Datum::Null`. `metric_name` and `metric_type` are passed through as
+/// `Datum::Null`'s own signal: null (or an empty/unsupported string) already fails
+/// `is_valid_metric_name`/`MetricKind::parse`, so it takes the same skip path as any other
+/// invalid value without special-casing here. `labels` and `help` have an obvious identity
+/// element, so null becomes `{}` and `""` respectively. `value` has no identity element (there is
+/// no numeric value that means "absent"), so it stays `Option<f64>`; a null value is a real row
+/// identity, just one that never contributes to a series' published value.
 fn extract_row(
     cols: &ColumnIndices,
     row: &Row,
-) -> (String, String, Vec<(String, String)>, f64, String) {
+) -> (String, String, Vec<(String, String)>, Option<f64>, String) {
     let datums: Vec<_> = row.iter().collect();
-    let metric_name = datums[cols.metric_name].unwrap_str().to_string();
-    let metric_type = datums[cols.metric_type].unwrap_str().to_string();
-    let mut labels: Vec<(String, String)> = datums[cols.labels]
-        .unwrap_map()
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.unwrap_str().to_string()))
-        .collect();
+    let metric_name = match datums[cols.metric_name] {
+        Datum::Null => String::new(),
+        d => d.unwrap_str().to_string(),
+    };
+    let metric_type = match datums[cols.metric_type] {
+        Datum::Null => String::new(),
+        d => d.unwrap_str().to_string(),
+    };
+    let mut labels: Vec<(String, String)> = match datums[cols.labels] {
+        Datum::Null => Vec::new(),
+        d => d
+            .unwrap_map()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.unwrap_str().to_string()))
+            .collect(),
+    };
     labels.sort();
-    let value = datums[cols.value].unwrap_float64();
-    let help = datums[cols.help].unwrap_str().to_string();
+    let value = match datums[cols.value] {
+        Datum::Null => None,
+        d => Some(d.unwrap_float64()),
+    };
+    let help = match datums[cols.help] {
+        Datum::Null => String::new(),
+        d => d.unwrap_str().to_string(),
+    };
     (metric_name, metric_type, labels, value, help)
 }
 
 /// Full identity of one source row: metric name, sorted labels, value, metric type, and help.
 ///
-/// The value is stored as its `f64::to_bits` pattern so the tuple is totally ordered and usable
-/// as a map key. Recover the value with `f64::from_bits`. The name and labels lead the tuple so
-/// that a `BTreeMap<RowKey, _>` keeps all rows of one `(metric_name, labels)` series adjacent.
-type RowKey = (String, Vec<(String, String)>, u64, String, String);
+/// The value is stored as `Option<u64>`, the `f64::to_bits` pattern of a real value or `None` for
+/// a null `value` column. A null value is its own distinct row identity, not a stand-in for any
+/// particular number, so it is kept apart from every `Some(_)` identity rather than coerced to
+/// one. `Option<u64>` stays totally ordered (derived `Ord` places `None` before every `Some`), so
+/// the tuple is still usable as a map key; recover a real value with `f64::from_bits`. The name
+/// and labels lead the tuple so that a `BTreeMap<RowKey, _>` keeps all rows of one `(metric_name,
+/// labels)` series adjacent.
+type RowKey = (String, Vec<(String, String)>, Option<u64>, String, String);
 
 /// Key into [`SinkState::published`]: a metric name paired with its sorted label vector.
 type PublishedKey = (String, Vec<(String, String)>);
@@ -233,6 +260,10 @@ struct SinkState {
     skipped: u64,
     conflicts: u64,
     collisions: u64,
+    /// Count of live `(metric_name, labels)` groups whose only live rows carry a null `value`,
+    /// so the series is currently absent from `published` (a gap) rather than published as some
+    /// number.
+    null_values: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -291,12 +322,18 @@ impl SinkState {
         metric_name: String,
         metric_type: String,
         labels: Vec<(String, String)>,
-        value: f64,
+        value: Option<f64>,
         help: String,
         time: Timestamp,
         diff: i64,
     ) {
-        let key = (metric_name, labels, value.to_bits(), metric_type, help);
+        let key = (
+            metric_name,
+            labels,
+            value.map(f64::to_bits),
+            metric_type,
+            help,
+        );
         *self
             .pending_ok
             .entry(time)
@@ -351,9 +388,10 @@ impl SinkState {
     /// during the freeze.
     fn publish_if_healthy(&mut self) {
         if self.errors == 0 {
-            let (published, collisions) = rebuild_published(&self.working);
+            let (published, collisions, null_values) = rebuild_published(&self.working);
             self.published = published;
             self.collisions = collisions;
+            self.null_values = null_values;
             self.conflicts = count_conflicts(&self.published);
         }
     }
@@ -378,18 +416,23 @@ fn count_skipped(working: &BTreeMap<RowKey, i64>) -> u64 {
 }
 
 /// Collapses the live, representable rows of `working` into one published entry per
-/// `(metric_name, labels)` series and counts colliding series.
+/// `(metric_name, labels)` series and counts colliding and null-suppressed series.
 ///
-/// A series collides when more than one distinct live value exists for its `(metric_name,
-/// labels)`. That is a genuine conflict of two source rows, unlike an ordinary value update whose
-/// old row is retracted and new row inserted within the same closed timestamp, which leaves a
-/// single live value. When a series collides the winner is chosen deterministically as the row
-/// with the numerically smallest value, breaking ties by metric type then help.
+/// A series collides when more than one distinct live *non-null* value exists for its
+/// `(metric_name, labels)`. That is a genuine conflict of two source rows, unlike an ordinary
+/// value update whose old row is retracted and new row inserted within the same closed
+/// timestamp, which leaves a single live value. When a series collides the winner is chosen
+/// deterministically as the row with the numerically smallest value, breaking ties by metric type
+/// then help. A null `value` carries no number to compare or publish: a series whose live rows
+/// are all null-valued is absent from `published` (a gap) and counted in the returned
+/// `null_values` instead of `collisions`. A series with at least one live non-null value publishes
+/// normally and is not counted in `null_values`, even if null-valued rows are also live for it.
 fn rebuild_published(
     working: &BTreeMap<RowKey, i64>,
-) -> (BTreeMap<PublishedKey, PublishedValue>, u64) {
+) -> (BTreeMap<PublishedKey, PublishedValue>, u64, u64) {
     // `working` orders rows by `(name, labels, ...)`, so all rows of one series are adjacent.
-    let mut grouped: BTreeMap<PublishedKey, Vec<PublishedValue>> = BTreeMap::new();
+    let mut grouped: BTreeMap<PublishedKey, Vec<(Option<f64>, MetricKind, String)>> =
+        BTreeMap::new();
     for ((name, labels, bits, metric_type, help), acc) in working {
         if *acc <= 0 {
             continue;
@@ -403,27 +446,39 @@ fn rebuild_published(
         grouped
             .entry((name.clone(), labels.clone()))
             .or_default()
-            .push((f64::from_bits(*bits), kind, help.clone()));
+            .push((bits.map(f64::from_bits), kind, help.clone()));
     }
 
     let mut published = BTreeMap::new();
     let mut collisions = 0u64;
-    for (key, mut candidates) in grouped {
-        let mut distinct: Vec<u64> = candidates.iter().map(|(v, _, _)| v.to_bits()).collect();
+    let mut null_values = 0u64;
+    for (key, candidates) in grouped {
+        let mut non_null: Vec<PublishedValue> = candidates
+            .into_iter()
+            .filter_map(|(value, kind, help)| value.map(|v| (v, kind, help)))
+            .collect();
+        if non_null.is_empty() {
+            null_values += 1;
+            continue;
+        }
+        let mut distinct: Vec<u64> = non_null.iter().map(|(v, _, _)| v.to_bits()).collect();
         distinct.sort_unstable();
         distinct.dedup();
         if distinct.len() > 1 {
             collisions += 1;
         }
-        candidates.sort_by(|a, b| {
+        non_null.sort_by(|a, b| {
             a.0.total_cmp(&b.0)
                 .then(a.1.cmp(&b.1))
                 .then_with(|| a.2.cmp(&b.2))
         });
-        let winner = candidates.into_iter().next().expect("group is non-empty");
+        let winner = non_null
+            .into_iter()
+            .next()
+            .expect("checked non-empty above");
         published.insert(key, winner);
     }
-    (published, collisions)
+    (published, collisions, null_values)
 }
 
 /// Counts published series whose own `metric_type`/`help` disagree with their family's winning
@@ -525,6 +580,7 @@ struct SinkCollector {
     skipped_gauge: Gauge,
     conflicts_gauge: Gauge,
     collisions_gauge: Gauge,
+    null_values_gauge: Gauge,
 }
 
 impl SinkCollector {
@@ -555,18 +611,23 @@ impl SinkCollector {
                 "mz_metric_sink_collisions",
                 "The number of series with more than one distinct live value for the same metric name and labels.",
             ),
+            null_values_gauge: gauge(
+                "mz_metric_sink_null_values",
+                "The number of series currently suppressed because their value is null.",
+            ),
         }
     }
 }
 
 impl Collector for SinkCollector {
     fn desc(&self) -> Vec<&Desc> {
-        let mut descs = Vec::with_capacity(5);
+        let mut descs = Vec::with_capacity(6);
         descs.extend(self.frontier_gauge.desc());
         descs.extend(self.errors_gauge.desc());
         descs.extend(self.skipped_gauge.desc());
         descs.extend(self.conflicts_gauge.desc());
         descs.extend(self.collisions_gauge.desc());
+        descs.extend(self.null_values_gauge.desc());
         descs
     }
 
@@ -578,6 +639,8 @@ impl Collector for SinkCollector {
             self.skipped_gauge.set(f64::cast_lossy(state.skipped));
             self.conflicts_gauge.set(f64::cast_lossy(state.conflicts));
             self.collisions_gauge.set(f64::cast_lossy(state.collisions));
+            self.null_values_gauge
+                .set(f64::cast_lossy(state.null_values));
             build_families(&state.published)
         };
 
@@ -586,6 +649,7 @@ impl Collector for SinkCollector {
         families.extend(self.skipped_gauge.collect());
         families.extend(self.conflicts_gauge.collect());
         families.extend(self.collisions_gauge.collect());
+        families.extend(self.null_values_gauge.collect());
         families
     }
 }
@@ -613,7 +677,20 @@ mod tests {
             "m".into(),
             "gauge".into(),
             label_a(),
-            value,
+            Some(value),
+            "h".into(),
+            Timestamp::from(time),
+            diff,
+        );
+    }
+
+    /// Stages one gauge update with a null `value` for the `(m, {a:1})` series.
+    fn stage_m_null(st: &mut SinkState, time: u64, diff: i64) {
+        st.stage_ok(
+            "m".into(),
+            "gauge".into(),
+            label_a(),
+            None,
             "h".into(),
             Timestamp::from(time),
             diff,
@@ -634,7 +711,7 @@ mod tests {
             "h1".into(),
             "histogram".into(),
             vec![],
-            1.0,
+            Some(1.0),
             "h".into(),
             Timestamp::from(1),
             1,
@@ -715,5 +792,72 @@ mod tests {
         st.integrate(&frontier(6));
         st.publish_if_healthy();
         assert_eq!(st.published[&key_m()].0, 2.0);
+    }
+
+    #[mz_ore::test]
+    fn null_value_gaps_series() {
+        let mut st = SinkState::default();
+        // A null-valued row for (m,{a}) at a closed time: no series, counted in null_values.
+        stage_m_null(&mut st, 1, 1);
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert!(!st.published.contains_key(&key_m()));
+        assert_eq!(st.null_values, 1);
+
+        // A later non-null value republishes the series (gap closes) and clears the count, even
+        // though the null-valued row is still live alongside it.
+        stage_m(&mut st, 5.0, 3, 1);
+        st.integrate(&frontier(4));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 5.0);
+        assert_eq!(st.null_values, 0);
+    }
+
+    #[mz_ore::test]
+    fn null_labels_become_empty() {
+        let mut st = SinkState::default();
+        // Null labels are normalized to `{}` upstream of `stage_ok` (see `extract_row`); this
+        // checks the empty label vector keys and publishes correctly.
+        st.stage_ok(
+            "m".into(),
+            "gauge".into(),
+            vec![],
+            Some(1.0),
+            "h".into(),
+            Timestamp::from(1),
+            1,
+        );
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&("m".into(), vec![])].0, 1.0);
+    }
+
+    #[mz_ore::test]
+    fn extract_row_normalizes_null_datums() {
+        use mz_repr::SqlScalarType;
+
+        let desc = RelationDesc::builder()
+            .with_column("metric_name", SqlScalarType::String.nullable(true))
+            .with_column("metric_type", SqlScalarType::String.nullable(true))
+            .with_column(
+                "labels",
+                SqlScalarType::Map {
+                    value_type: Box::new(SqlScalarType::String),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .with_column("value", SqlScalarType::Float64.nullable(true))
+            .with_column("help", SqlScalarType::String.nullable(true))
+            .finish();
+        let cols = ColumnIndices::resolve(&desc);
+
+        let row = Row::pack_slice(&[Datum::Null; 5]);
+        let (name, metric_type, labels, value, help) = extract_row(&cols, &row);
+        assert_eq!(name, "");
+        assert_eq!(metric_type, "");
+        assert_eq!(labels, Vec::<(String, String)>::new());
+        assert_eq!(value, None);
+        assert_eq!(help, "");
     }
 }
