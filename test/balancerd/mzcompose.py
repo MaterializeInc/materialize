@@ -26,7 +26,6 @@ from typing import Any
 from urllib.parse import quote
 
 import pg8000
-import psycopg
 import requests
 from pg8000.exceptions import InterfaceError
 from psycopg import Cursor
@@ -126,19 +125,12 @@ SERVICES = [
             # balancerd.
             DnsmasqEntry(
                 type="cname",
-                key="sni.test",
+                key="materialized",
                 value="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
             ),
             DnsmasqEntry(
                 type="address",
                 key="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
-                value=STATIC_IPS["materialized"],
-            ),
-            # An A record with no CNAME, to exercise the resolver's no-CNAME
-            # fallback path (see workflow_pgwire_with_sni_no_cname).
-            DnsmasqEntry(
-                type="address",
-                key="direct.test",
                 value=STATIC_IPS["materialized"],
             ),
         ],
@@ -155,8 +147,8 @@ SERVICES = [
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
-            "--https-sni-resolver-template=sni.test:6876",
-            "--pgwire-sni-resolver-template=sni.test:6875",
+            "--https-sni-resolver-template=materialized:6876",
+            "--pgwire-sni-resolver-template=materialized:6875",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
             "--internal-tls",
@@ -244,29 +236,6 @@ def sql_cursor(
         sslmode="require",
         startup_params=startup_params,
     )
-
-
-def sni_sql_cursor(
-    c: Composition, service="balancerd", email="u1@example.com"
-) -> Cursor:
-    """Connect so that the client sends TLS SNI, unlike sql_cursor.
-
-    libpq only sends SNI when host is a hostname, so connecting to 127.0.0.1
-    silently takes balancerd's Frontegg resolver path instead of the SNI
-    path. host=localhost supplies the SNI while hostaddr pins the TCP
-    connection to 127.0.0.1.
-    """
-    conn = psycopg.connect(
-        host="localhost",
-        hostaddr="127.0.0.1",
-        port=c.default_port(service),
-        user=email,
-        password=app_password(email),
-        dbname="materialize",
-        sslmode="require",
-    )
-    conn.autocommit = True
-    return conn.cursor()
 
 
 def pg8000_sql_cursor(
@@ -704,8 +673,9 @@ def workflow_user(c: Composition) -> None:
                 "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
                 f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
                 f"--frontegg-admin-role={ADMIN_ROLE}",
-                "--https-sni-resolver-template=sni.test:6876",
-                "--pgwire-sni-resolver-template=sni.test:6875",
+                "--https-sni-resolver-template=materialized:6876",
+                # We want to use the frontegg resolver in this
+                "--pgwire-sni-resolver-template=materialized:6875",
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
                 "--internal-tls",
@@ -803,71 +773,10 @@ def workflow_pgwire_with_sni(c: Composition) -> None:
         "materialized",
         Service("testdrive", idle=True),
     )
-    # The cursor must send SNI for balancerd to take the SNI resolution path,
-    # and frontegg mock is not necessarily up, so Frontegg resolution cannot
-    # be relied on as a fallback.
-    cursor = sni_sql_cursor(c)
+    # We're going to run this using ssl and, notably, without frontegg mock.
+    # This should mean that we need to rely on SNI to do tenant resolution
+    cursor = sql_cursor(c)
     cursor.execute("select 1;")
-    # The tenant is extracted from the CNAME behind the SNI template (see the
-    # dnsmasq entries).
-    assert_metrics(
-        c,
-        'mz_balancer_tenant_pgwire_sni_count{has_sni="true",tenant="58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"}',
-    )
-
-
-def workflow_pgwire_with_sni_no_cname(c: Composition) -> None:
-    """Like workflow_pgwire_with_sni, but the SNI templates resolve directly
-    to an A record with no CNAME, exercising the resolver's no-CNAME fallback
-    path (no tenant can be extracted, but routing must still work).
-
-    This mirrors self-managed deployments, where orchestratord points the
-    resolver templates at plain Kubernetes services that resolve to A records
-    without a CNAME. It is also the degraded path in cloud when a CNAME
-    lookup transiently fails."""
-    with c.override(
-        Balancerd(
-            command=[
-                "--startup-log-filter=debug",
-                "service",
-                "--pgwire-listen-addr=0.0.0.0:6875",
-                "--https-listen-addr=0.0.0.0:6876",
-                "--internal-http-listen-addr=0.0.0.0:6878",
-                "--frontegg-resolver-template=materialized:6875",
-                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
-                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
-                f"--frontegg-admin-role={ADMIN_ROLE}",
-                "--https-sni-resolver-template=direct.test:6876",
-                "--pgwire-sni-resolver-template=direct.test:6875",
-                "--tls-key=/secrets/balancerd.key",
-                "--tls-cert=/secrets/balancerd.crt",
-                "--internal-tls",
-                "--tls-mode=require",
-                "--default-config=balancerd_inject_proxy_protocol_header_http=true",
-                # Nonsensical but we don't need cancellations here
-                "--cancellation-resolver-dir=/secrets/",
-            ],
-            depends_on=["test-certs"],
-            volumes=[
-                "secrets:/secrets",
-            ],
-            dns=[STATIC_IPS["dnsmasq"]],
-            networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
-        ),
-    ):
-        c.up(
-            "balancerd",
-            "dnsmasq",
-            "materialized",
-            Service("testdrive", idle=True),
-        )
-        cursor = sni_sql_cursor(c)
-        cursor.execute("select 1;")
-        # Routing worked, but with no CNAME there is no tenant to extract.
-        assert_metrics(
-            c,
-            'mz_balancer_tenant_pgwire_sni_count{has_sni="true",tenant="unknown"}',
-        )
 
 
 def workflow_split_proxy_header(c: Composition) -> None:

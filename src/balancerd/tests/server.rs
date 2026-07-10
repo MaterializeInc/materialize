@@ -18,11 +18,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use domain::resolv::StubResolver;
 use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
-    BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
-    FronteggResolver, SniTemplate, TenantDnsResolver,
+    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
+    SniResolver,
 };
 use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
@@ -143,23 +144,21 @@ async fn test_balancer() {
 
     let resolvers = vec![
         (
-            BalancerResolver::Static(envd_server.sql_local_addr().to_string()),
+            Resolver::Static(envd_server.sql_local_addr().to_string()),
             CancellationResolver::Static(envd_server.sql_local_addr().to_string()),
         ),
         (
-            BalancerResolver::MultiTenant {
-                dns: Arc::new(
-                    TenantDnsResolver::new().expect("system DNS configuration is readable"),
-                ),
-                frontegg: FronteggResolver {
+            Resolver::MultiTenant(
+                FronteggResolver {
                     auth: frontegg_auth,
                     addr_template: envd_server.sql_local_addr().to_string(),
                 },
-                sni: Some(SniTemplate {
+                Some(SniResolver {
+                    resolver: StubResolver::new(),
                     template: envd_server.sql_local_addr().ip().to_string(),
                     port: envd_server.sql_local_addr().port(),
                 }),
-            },
+            ),
             CancellationResolver::Directory(cancel_dir.path().to_owned()),
         ),
     ];
@@ -181,7 +180,7 @@ async fn test_balancer() {
     for (resolver, cancellation_resolver) in resolvers {
         let (mut reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
         let ticker = Box::pin(reload_rx);
-        let is_multi_tenant_resolver = matches!(resolver, BalancerResolver::MultiTenant { .. });
+        let is_multi_tenant_resolver = matches!(resolver, Resolver::MultiTenant(_, _));
         let balancer_cfg = BalancerConfig::new(
             &BUILD_INFO,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -230,30 +229,6 @@ async fn test_balancer() {
 
         let res: i32 = pg_client.query_one("SELECT 2", &[]).await.unwrap().get(0);
         assert_eq!(res, 2);
-
-        // A wrong password on the Frontegg (multi-tenant) path must fail with
-        // SQLSTATE 28P01 and the exact opaque message "invalid password", with
-        // no internal detail leaked to the client.
-        if is_multi_tenant_resolver {
-            let wrong_password = format!("mzp_{}{}", Uuid::new_v4(), Uuid::new_v4());
-            let bad_conn_str = format!(
-                "user={frontegg_user} password={wrong_password} host={} port={} sslmode=require",
-                balancer_pgwire_listen.ip(),
-                balancer_pgwire_listen.port()
-            );
-            let err = match tokio_postgres::connect(&bad_conn_str, tls.clone()).await {
-                Ok(_) => panic!("connection with wrong password should have failed"),
-                Err(e) => e,
-            };
-            let db_err = err
-                .as_db_error()
-                .expect("expected a database error from the server");
-            assert_eq!(
-                db_err.code(),
-                &tokio_postgres::error::SqlState::INVALID_PASSWORD
-            );
-            assert_eq!(db_err.message(), "invalid password");
-        }
 
         // Assert cancellation is propagated.
         let cancel = pg_client.cancel_token();

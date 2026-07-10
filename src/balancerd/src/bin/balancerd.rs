@@ -15,14 +15,14 @@
 use std::error::Error;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use domain::resolv::StubResolver;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
-    BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
-    FronteggResolver, SniTemplate, TenantDnsResolver,
+    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
+    SniResolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -253,15 +253,13 @@ pub async fn run(
             if !cancellation_resolver_dir.is_dir() {
                 anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
             }
-
             (
-                BalancerResolver::MultiTenant {
-                    dns: Arc::new(TenantDnsResolver::new()?),
-                    frontegg: FronteggResolver {
+                Resolver::MultiTenant(
+                    FronteggResolver {
                         auth,
                         addr_template,
                     },
-                    sni: match args.pgwire_sni_resolver_template {
+                    match args.pgwire_sni_resolver_template {
                         None => None,
                         Some(template) => {
                             let (template, port) = template
@@ -275,10 +273,14 @@ pub async fn run(
                                     )
                                 })
                                 .expect("invalid port for pgwire_sni_resolver_template");
-                            Some(SniTemplate { template, port })
+                            Some(SniResolver {
+                                resolver: StubResolver::new(),
+                                template,
+                                port,
+                            })
                         }
                     },
-                },
+                ),
                 CancellationResolver::Directory(cancellation_resolver_dir),
             )
         }
@@ -295,7 +297,7 @@ pub async fn run(
             drop(addrs);
 
             (
-                BalancerResolver::Static(addr.clone()),
+                Resolver::Static(addr.clone()),
                 CancellationResolver::Static(addr),
             )
         }
