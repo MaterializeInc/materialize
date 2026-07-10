@@ -228,6 +228,9 @@ fn default_read_limit() -> u32 {
 #[derive(Debug, Deserialize)]
 struct QueryParams {
     cluster: String,
+    /// Only honored on the developer endpoint. The agent endpoint's dispatch
+    /// arm drops it, since replica pinning is not part of the agent surface.
+    cluster_replica: Option<String>,
     sql_query: String,
 }
 
@@ -904,6 +907,10 @@ async fn handle_tools_list(
                                 "type": "string",
                                 "description": "Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."
                             },
+                            "cluster_replica": {
+                                "type": "string",
+                                "description": "Optional replica name (e.g. 'r1') to target one replica of the cluster. Required for EXPLAIN ANALYZE on clusters with more than one replica. Find replica names in mz_catalog.mz_cluster_replicas."
+                            },
                             "sql_query": {
                                 "type": "string",
                                 "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Multi-statement queries are rejected."
@@ -964,7 +971,9 @@ async fn handle_tools_call(
             ))
         }
         (McpEndpointType::Agent, ToolsCallParams::Query(p)) => {
-            execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
+            // Replica pinning is deliberately not part of the agent surface:
+            // drop `cluster_replica` even if a client supplies it.
+            execute_query(client, &p.cluster, None, &p.sql_query, max_response_size).await
         }
         (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
             query_system_catalog(client, &p.sql_query, max_response_size).await
@@ -975,7 +984,14 @@ async fn handle_tools_call(
             ))
         }
         (McpEndpointType::Developer, ToolsCallParams::Query(p)) => {
-            execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
+            execute_query(
+                client,
+                &p.cluster,
+                p.cluster_replica.as_deref(),
+                &p.sql_query,
+                max_response_size,
+            )
+            .await
         }
         // Tool called on wrong endpoint
         (endpoint, tool) => Err(McpRequestError::ToolNotFound(format!(
@@ -1313,22 +1329,53 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
 async fn execute_query(
     client: &mut AuthedClient,
     cluster: &str,
+    cluster_replica: Option<&str>,
     sql_query: &str,
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
-    debug!(cluster = %cluster, "Executing user query");
+    debug!(cluster = %cluster, cluster_replica = ?cluster_replica, "Executing user query");
 
     validate_readonly_query(sql_query)?;
+    validate_cluster_replica(cluster_replica)?;
 
-    // READ ONLY prevents mutations; SET CLUSTER scopes the cluster to this read.
-    let combined_query = read_only_txn(
-        &format!("SET CLUSTER = {}", escaped_string_literal(cluster)),
-        sql_query,
-    );
+    // READ ONLY prevents mutations; SET CLUSTER (and, when requested,
+    // SET CLUSTER_REPLICA) scope the placement to this read.
+    let combined_query = read_only_txn(&query_set_clause(cluster, cluster_replica), sql_query);
 
     let rows = execute_sql(client, &combined_query).await?;
 
     format_rows_response(rows, max_response_size)
+}
+
+/// Builds the `SET` clause for `execute_query`: always `SET CLUSTER`, plus
+/// `SET CLUSTER_REPLICA` when a replica is requested (e.g. for
+/// `EXPLAIN ANALYZE` on a cluster with multiple replicas). Both names pass
+/// through `escaped_string_literal` since they are interpolated into SQL
+/// string literals.
+fn query_set_clause(cluster: &str, cluster_replica: Option<&str>) -> String {
+    let mut set_clause = format!("SET CLUSTER = {}", escaped_string_literal(cluster));
+    if let Some(replica) = cluster_replica {
+        set_clause.push_str(&format!(
+            "; SET CLUSTER_REPLICA = {}",
+            escaped_string_literal(replica)
+        ));
+    }
+    set_clause
+}
+
+/// Rejects an empty or whitespace-only `cluster_replica`. Such a name would
+/// otherwise produce `SET CLUSTER_REPLICA = ''`, which fails deep in the engine
+/// as a generic execution error rather than a clean validation error. `None`
+/// (no replica pin requested) is always valid.
+fn validate_cluster_replica(cluster_replica: Option<&str>) -> Result<(), McpRequestError> {
+    if let Some(replica) = cluster_replica {
+        if replica.trim().is_empty() {
+            return Err(McpRequestError::QueryValidationFailed(
+                "cluster_replica must not be empty or whitespace-only".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn query_system_catalog(
@@ -2312,6 +2359,63 @@ mod tests {
             sql.contains("\n; COMMIT;"),
             "COMMIT must sit on its own line: {sql}",
         );
+    }
+
+    // ── query_set_clause tests (QAR-136) ───────────────────────────────
+
+    /// Without a replica, only `SET CLUSTER` is emitted.
+    #[mz_ore::test]
+    fn test_query_set_clause_without_replica() {
+        let clause = query_set_clause("prod_cluster", None);
+        assert_eq!(clause, "SET CLUSTER = 'prod_cluster'");
+    }
+
+    /// With a replica, `SET CLUSTER_REPLICA` follows `SET CLUSTER`, scoping
+    /// the read to one replica (what makes EXPLAIN ANALYZE usable on
+    /// clusters with multiple replicas).
+    #[mz_ore::test]
+    fn test_query_set_clause_with_replica() {
+        let clause = query_set_clause("prod_cluster", Some("r1"));
+        assert_eq!(
+            clause,
+            "SET CLUSTER = 'prod_cluster'; SET CLUSTER_REPLICA = 'r1'"
+        );
+    }
+
+    /// Replica names are interpolated into a SQL string literal, so they get
+    /// the same escaping treatment as cluster names. Defends against
+    /// injection via adversarial replica names.
+    #[mz_ore::test]
+    fn test_query_set_clause_escapes_replica_name() {
+        let clause = query_set_clause("c", Some("evil'; DROP TABLE secrets; --"));
+        assert_eq!(
+            clause,
+            "SET CLUSTER = 'c'; SET CLUSTER_REPLICA = 'evil''; DROP TABLE secrets; --'"
+        );
+    }
+
+    /// A `None` replica (no pinning requested) is always valid, and a normal
+    /// replica name passes validation.
+    #[mz_ore::test]
+    fn test_validate_cluster_replica_accepts_none_and_names() {
+        assert!(validate_cluster_replica(None).is_ok());
+        assert!(validate_cluster_replica(Some("r1")).is_ok());
+    }
+
+    /// An empty or whitespace-only replica name is rejected as a validation
+    /// error up front, rather than producing `SET CLUSTER_REPLICA = ''` that
+    /// fails deep in the engine as a generic execution error.
+    #[mz_ore::test]
+    fn test_validate_cluster_replica_rejects_empty() {
+        for name in ["", "   ", "\t\n"] {
+            assert!(
+                matches!(
+                    validate_cluster_replica(Some(name)),
+                    Err(McpRequestError::QueryValidationFailed(_))
+                ),
+                "expected validation error for {name:?}",
+            );
+        }
     }
 
     // ── build_read_query tests (DEX-27) ────────────────────────────────
