@@ -38,8 +38,8 @@ use regex::Regex;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::action::file::Compression;
+use crate::action::file::Contents;
 use crate::action::file::build_compression;
-use crate::action::file::build_contents;
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
@@ -223,8 +223,13 @@ pub async fn run_upload(
     };
 
     let compression = build_compression(&mut cmd)?;
-    let body = build_contents(&mut cmd)?;
+    let contents = Contents::parse(&mut cmd)?;
     cmd.args.done()?;
+
+    // S3 puts need the full body in memory, so materialize the streamed
+    // contents into a buffer before compressing and uploading.
+    let mut body = Vec::new();
+    contents.write_to(&mut body).await?;
 
     let aws_client = mz_aws_util::s3::new_client(&state.aws_config);
 

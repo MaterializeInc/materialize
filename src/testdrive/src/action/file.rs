@@ -49,35 +49,70 @@ pub(crate) fn build_compression(cmd: &mut BuiltinCommand) -> Result<Compression,
     }
 }
 
-/// Returns the full contents of a file: an optional header line, then the
-/// input lines repeated `repeat` times, each line followed by a newline. With
-/// `trailing-newline=false` the final newline is omitted.
-pub(crate) fn build_contents(cmd: &mut BuiltinCommand) -> Result<Vec<u8>, anyhow::Error> {
-    let header = cmd.args.opt_string("header");
-    let trailing_newline = cmd.args.opt_bool("trailing-newline")?.unwrap_or(true);
-    let repeat: usize = cmd.args.opt_parse("repeat")?.unwrap_or(1);
+/// The parsed contents of a file to be written: an optional header line
+/// followed by the input lines repeated `repeat` times. Every line is
+/// terminated by a newline, except that with `trailing_newline == false` the
+/// final newline is omitted.
+///
+/// Lines are streamed on write (see [`Contents::write_to`]) rather than
+/// materialized, so a large `repeat` generates a large file without holding
+/// the whole file in memory.
+pub(crate) struct Contents {
+    header: Option<String>,
+    /// Input lines with their escape sequences already resolved.
+    lines: Vec<Vec<u8>>,
+    repeat: usize,
+    trailing_newline: bool,
+}
 
-    let mut lines = vec![];
-    for line in &cmd.input {
-        lines.push(bytes::unescape(line.as_bytes())?);
-    }
+impl Contents {
+    pub(crate) fn parse(cmd: &mut BuiltinCommand) -> Result<Contents, anyhow::Error> {
+        let header = cmd.args.opt_string("header");
+        let trailing_newline = cmd.args.opt_bool("trailing-newline")?.unwrap_or(true);
+        let repeat: usize = cmd.args.opt_parse("repeat")?.unwrap_or(1);
 
-    let mut contents = vec![];
-    if let Some(header) = header {
-        contents.extend_from_slice(header.as_bytes());
-        contents.push(b'\n');
-    }
-    for _ in 0..repeat {
-        for line in &lines {
-            contents.extend_from_slice(line);
-            contents.push(b'\n');
+        let mut lines = vec![];
+        for line in &cmd.input {
+            lines.push(bytes::unescape(line.as_bytes())?);
         }
-    }
-    if !trailing_newline {
-        contents.pop();
+
+        Ok(Contents {
+            header,
+            lines,
+            repeat,
+            trailing_newline,
+        })
     }
 
-    Ok(contents)
+    /// The output lines in order: the header, if any, then the input lines
+    /// repeated `repeat` times. Newlines are not included.
+    fn output_lines(&self) -> impl Iterator<Item = &[u8]> {
+        let header = self.header.as_deref().map(str::as_bytes).into_iter();
+        let body = (0..self.repeat).flat_map(move |_| self.lines.iter().map(Vec::as_slice));
+        header.chain(body)
+    }
+
+    /// Streams the contents to `writer`, terminating each line with a newline
+    /// and suppressing the final newline when `trailing_newline` is false.
+    pub(crate) async fn write_to<W>(&self, writer: &mut W) -> Result<(), anyhow::Error>
+    where
+        W: AsyncWrite + Unpin,
+    {
+        let mut wrote_line = false;
+        for line in self.output_lines() {
+            // Emit the newline that terminates the previous line only once we
+            // know another line follows, so the final newline can be dropped.
+            if wrote_line {
+                writer.write_all(b"\n").await?;
+            }
+            writer.write_all(line).await?;
+            wrote_line = true;
+        }
+        if wrote_line && self.trailing_newline {
+            writer.write_all(b"\n").await?;
+        }
+        Ok(())
+    }
 }
 
 fn build_path(state: &State, cmd: &mut BuiltinCommand) -> Result<PathBuf, anyhow::Error> {
@@ -102,7 +137,7 @@ pub async fn run_append(
 ) -> Result<ControlFlow, anyhow::Error> {
     let path = build_path(state, &mut cmd)?;
     let compression = build_compression(&mut cmd)?;
-    let contents = build_contents(&mut cmd)?;
+    let contents = Contents::parse(&mut cmd)?;
     cmd.args.done()?;
 
     println!("Appending to file {}", path.display());
@@ -120,7 +155,7 @@ pub async fn run_append(
         Compression::None => Box::new(file),
     };
 
-    file.write_all(&contents).await?;
+    contents.write_to(&mut file).await?;
     file.shutdown().await?;
 
     Ok(ControlFlow::Continue)

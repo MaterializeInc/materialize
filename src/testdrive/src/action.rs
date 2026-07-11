@@ -453,13 +453,20 @@ impl State {
     /// background failures fail the test.
     pub(crate) async fn join_background_tasks(&mut self) -> Vec<anyhow::Error> {
         let mut errors = Vec::new();
-        for (desc, handle) in self.background_tasks.drain(..) {
-            match tokio::time::timeout(self.default_timeout, handle).await {
+        for (desc, mut handle) in self.background_tasks.drain(..) {
+            // Poll the handle by reference so it survives a timeout. Dropping a
+            // `JoinHandle` only detaches the task, it does not stop it, and a
+            // detached background query would keep running SQL against the same
+            // Materialize instance while later files execute.
+            match tokio::time::timeout(self.default_timeout, &mut handle).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => errors.push(e.context(format!("background query failed: {desc}"))),
-                Err(_) => errors.push(anyhow!(
-                    "background query did not complete before the end of the file: {desc}"
-                )),
+                Err(_) => {
+                    handle.abort_and_wait().await;
+                    errors.push(anyhow!(
+                        "background query did not complete before the end of the file: {desc}"
+                    ));
+                }
             }
         }
         errors
