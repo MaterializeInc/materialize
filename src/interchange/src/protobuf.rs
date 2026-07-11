@@ -208,22 +208,118 @@ fn derive_inner_type(
     }
 }
 
-/// Rejects a `FileDescriptorSet` whose wire encoding nests message or group
-/// fields deeper than [`MAX_DESCRIPTOR_WIRE_NESTING_DEPTH`], which would
-/// otherwise overflow the stack inside `DescriptorPool::decode`.
+/// The `descriptor.proto` message type that a region of the wire is being
+/// parsed as. [`check_descriptor_set_nesting_depth`] uses it to descend only
+/// into fields that are message-typed, mirroring what `DescriptorPool::decode`
+/// recurses into.
+#[derive(Clone, Copy)]
+enum WireCtx {
+    FileDescriptorSet,
+    FileDescriptorProto,
+    DescriptorProto,
+    ExtensionRange,
+    FieldDescriptorProto,
+    OneofDescriptorProto,
+    EnumDescriptorProto,
+    EnumValueDescriptorProto,
+    ServiceDescriptorProto,
+    MethodDescriptorProto,
+    /// Any of the `*Options` messages. The only message-typed field they carry
+    /// that matters here is `uninterpreted_option` (tag 999).
+    Options,
+    UninterpretedOption,
+    SourceCodeInfo,
+    /// A message with no message-typed fields, or an opaque group region. Only
+    /// nested groups increase depth from here.
+    Leaf,
+}
+
+impl WireCtx {
+    /// Returns the context in which to parse the payload of the message-typed
+    /// field with the given `tag`, or `None` if the field is not message-typed
+    /// in this context (a scalar, `string`, `bytes`, or unknown field), in which
+    /// case the scan treats the payload as an opaque leaf.
+    ///
+    /// This encodes the message structure of the `descriptor.proto` schema that
+    /// `prost-reflect` decodes. `DescriptorPool::decode` recurses into exactly
+    /// these fields, so mirroring them keeps the scan's depth in lockstep with
+    /// the decoder's recursion depth.
+    fn child(self, tag: u32) -> Option<WireCtx> {
+        use WireCtx::*;
+        Some(match (self, tag) {
+            (FileDescriptorSet, 1) => FileDescriptorProto,
+            (FileDescriptorProto, 4) => DescriptorProto,
+            (FileDescriptorProto, 5) => EnumDescriptorProto,
+            (FileDescriptorProto, 6) => ServiceDescriptorProto,
+            (FileDescriptorProto, 7) => FieldDescriptorProto,
+            (FileDescriptorProto, 8) => Options,
+            (FileDescriptorProto, 9) => SourceCodeInfo,
+            (DescriptorProto, 2) => FieldDescriptorProto,
+            (DescriptorProto, 3) => DescriptorProto,
+            (DescriptorProto, 4) => EnumDescriptorProto,
+            (DescriptorProto, 5) => ExtensionRange,
+            (DescriptorProto, 6) => FieldDescriptorProto,
+            (DescriptorProto, 7) => Options,
+            (DescriptorProto, 8) => OneofDescriptorProto,
+            (DescriptorProto, 9) => Leaf, // ReservedRange
+            (ExtensionRange, 3) => Options,
+            (FieldDescriptorProto, 8) => Options,
+            (OneofDescriptorProto, 2) => Options,
+            (EnumDescriptorProto, 2) => EnumValueDescriptorProto,
+            (EnumDescriptorProto, 3) => Options,
+            (EnumDescriptorProto, 4) => Leaf, // EnumReservedRange
+            (EnumValueDescriptorProto, 3) => Options,
+            (ServiceDescriptorProto, 2) => MethodDescriptorProto,
+            (ServiceDescriptorProto, 3) => Options,
+            (MethodDescriptorProto, 4) => Options,
+            (Options, 999) => UninterpretedOption,
+            (UninterpretedOption, 2) => Leaf, // NamePart
+            (SourceCodeInfo, 1) => Leaf,      // Location
+            _ => return None,
+        })
+    }
+}
+
+/// Rejects a `FileDescriptorSet` whose wire encoding nests messages or groups
+/// deeper than [`MAX_DESCRIPTOR_WIRE_NESTING_DEPTH`], which would otherwise
+/// overflow the stack inside `DescriptorPool::decode`.
 ///
-/// The scan is iterative (it tracks open regions on an explicit stack), so it
-/// cannot itself overflow. It descends into every length-delimited field and
-/// every group, which is a superset of what Prost recurses into while decoding,
-/// so any input that would drive Prost past the limit is rejected here first. A
-/// length-delimited field that is not actually a nested message (a string or a
-/// packed field) fails to parse as one within a few bytes and is skipped as an
-/// opaque leaf, so realistic descriptor sets are not rejected.
+/// `DescriptorPool::decode` recurses in exactly two ways, both unbounded because
+/// the workspace builds Prost with `no-recursion-limit`:
+///
+///  * It recursively decodes message-typed fields. In `descriptor.proto` the
+///    only self-referential message field is `DescriptorProto.nested_type`, so a
+///    `nested_type` chain drives this recursion arbitrarily deep.
+///  * It skips unknown group fields recursively (`prost::encoding::skip_field`
+///    recurses once per level of nested group), so a chain of `StartGroup` keys
+///    drives the recursion arbitrarily deep as well.
+///
+/// The scan mirrors that recursion with an explicit stack, so it cannot itself
+/// overflow. It is schema-aware: it descends only into length-delimited fields
+/// that are message-typed according to `descriptor.proto` (tracked by
+/// [`WireCtx`]) and into groups. A length-delimited field that is a `string`,
+/// `bytes`, or unknown field is skipped as an opaque leaf, because
+/// `DescriptorPool::decode` does not parse its contents as a message either.
+///
+/// Treating opaque payloads as leaves is essential, not just an optimization: a
+/// `string` may contain byte sequences that are valid protobuf keys (an option
+/// string of `0x4b` bytes reads as a chain of `StartGroup` keys), so a scan that
+/// parsed string contents as nested protobuf would reject valid, shallow
+/// descriptors.
+///
+/// Because the scan descends into every message-typed field the decoder decodes
+/// and into every group the decoder skips, any input that would drive the
+/// decoder past the limit trips the limit here first.
 fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error> {
     use bytes::Buf;
     use prost::encoding::{WireType, decode_key, decode_varint};
 
-    enum Frame {
+    struct Frame {
+        kind: FrameKind,
+        /// The context in which fields inside this frame are parsed.
+        ctx: WireCtx,
+    }
+    enum FrameKind {
         /// A length-delimited region that ends once `buf.remaining()` has
         /// dropped to this value.
         Len(usize),
@@ -236,7 +332,7 @@ fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error>
     // length-delimited region to recover into, in which case scanning must stop.
     let recover = |frames: &mut Vec<Frame>, buf: &mut &[u8]| -> bool {
         while let Some(frame) = frames.pop() {
-            if let Frame::Len(end_remaining) = frame {
+            if let FrameKind::Len(end_remaining) = frame.kind {
                 let skip = buf.remaining().saturating_sub(end_remaining);
                 buf.advance(skip);
                 return true;
@@ -250,7 +346,11 @@ fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error>
 
     loop {
         // Close every length-delimited region that ends at the current position.
-        while let Some(Frame::Len(end_remaining)) = frames.last() {
+        while let Some(Frame {
+            kind: FrameKind::Len(end_remaining),
+            ..
+        }) = frames.last()
+        {
             if buf.remaining() <= *end_remaining {
                 frames.pop();
             } else {
@@ -263,6 +363,12 @@ fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error>
             // way.
             return Ok(());
         }
+
+        // The context for the field about to be read is that of the innermost
+        // open frame, or the root `FileDescriptorSet` at the top level.
+        let ctx = frames
+            .last()
+            .map_or(WireCtx::FileDescriptorSet, |frame| frame.ctx);
 
         let (tag, wire_type) = match decode_key(&mut buf) {
             Ok(key) => key,
@@ -313,14 +419,27 @@ fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error>
                     }
                     return Ok(());
                 }
-                if frames.len() >= MAX_DESCRIPTOR_WIRE_NESTING_DEPTH {
-                    bail!(
-                        "Protobuf descriptor set nesting depth exceeds limit of {}",
-                        MAX_DESCRIPTOR_WIRE_NESTING_DEPTH
-                    );
+                match ctx.child(tag) {
+                    // A message-typed field: descend, mirroring the decoder
+                    // recursing into the nested message.
+                    Some(child) => {
+                        if frames.len() >= MAX_DESCRIPTOR_WIRE_NESTING_DEPTH {
+                            bail!(
+                                "Protobuf descriptor set nesting depth exceeds limit of {}",
+                                MAX_DESCRIPTOR_WIRE_NESTING_DEPTH
+                            );
+                        }
+                        let end_remaining = buf.remaining() - len as usize;
+                        frames.push(Frame {
+                            kind: FrameKind::Len(end_remaining),
+                            ctx: child,
+                        });
+                    }
+                    // A string, bytes, scalar, or unknown field. The decoder does
+                    // not parse its contents as a message, so skip it as an
+                    // opaque leaf rather than recursing into it.
+                    None => buf.advance(len as usize),
                 }
-                let end_remaining = buf.remaining() - len as usize;
-                frames.push(Frame::Len(end_remaining));
             }
             WireType::StartGroup => {
                 if frames.len() >= MAX_DESCRIPTOR_WIRE_NESTING_DEPTH {
@@ -329,10 +448,18 @@ fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error>
                         MAX_DESCRIPTOR_WIRE_NESTING_DEPTH
                     );
                 }
-                frames.push(Frame::Group(tag));
+                // Group contents are skipped as unknown wire data by the decoder,
+                // so only further nested groups increase depth from here.
+                frames.push(Frame {
+                    kind: FrameKind::Group(tag),
+                    ctx: WireCtx::Leaf,
+                });
             }
             WireType::EndGroup => match frames.last() {
-                Some(Frame::Group(open_tag)) if *open_tag == tag => {
+                Some(Frame {
+                    kind: FrameKind::Group(open_tag),
+                    ..
+                }) if *open_tag == tag => {
                     frames.pop();
                 }
                 _ => {
@@ -427,10 +554,10 @@ mod stack_overflow_verification {
     use prost::Message;
     use prost_types::field_descriptor_proto::{Label, Type};
     use prost_types::{
-        DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet,
+        DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, FileOptions,
     };
 
-    use super::DecodedDescriptors;
+    use super::{DecodedDescriptors, MAX_DESCRIPTOR_WIRE_NESTING_DEPTH};
 
     fn deep_chain_fds(n: usize) -> Vec<u8> {
         let message_type = (0..n)
@@ -539,6 +666,73 @@ mod stack_overflow_verification {
         assert!(
             res.is_err(),
             "expected a nesting-depth error for a deeply nested descriptor"
+        );
+    }
+
+    /// A valid, shallow descriptor whose `FileOptions.java_package` is a long
+    /// string of `0x4b` ('K') bytes. Each `0x4b` is a valid protobuf key
+    /// (`StartGroup`, tag 9), so a scanner that parsed opaque string contents as
+    /// nested protobuf would count one level of phantom nesting per byte and
+    /// reject this descriptor once the string exceeds the depth limit.
+    fn message_like_option_bytes_fds() -> Vec<u8> {
+        let options = FileOptions {
+            java_package: Some("K".repeat(MAX_DESCRIPTOR_WIRE_NESTING_DEPTH * 2)),
+            ..Default::default()
+        };
+        let file = FileDescriptorProto {
+            name: Some("test.proto".into()),
+            package: Some("test".into()),
+            message_type: vec![DescriptorProto {
+                name: Some("m0".into()),
+                ..Default::default()
+            }],
+            options: Some(options),
+            syntax: Some("proto2".into()),
+            ..Default::default()
+        };
+        FileDescriptorSet { file: vec![file] }.encode_to_vec()
+    }
+
+    #[mz_ore::test]
+    fn message_like_option_bytes_accepted() {
+        let bytes = message_like_option_bytes_fds();
+        // The wire scan must treat `java_package` as an opaque string, not
+        // recurse into it, so this valid shallow descriptor is accepted just as
+        // `DescriptorPool::decode` accepts it.
+        let res = DecodedDescriptors::from_bytes(&bytes, ".test.m0".to_string());
+        assert!(
+            res.is_ok(),
+            "valid descriptor with message-like option bytes must be accepted, got: {:?}",
+            res.err()
+        );
+    }
+
+    /// A chain of `depth` bare `StartGroup` keys at the top level of the
+    /// descriptor set. `DescriptorPool::decode` skips unknown groups recursively
+    /// (`skip_field`), so this drives that recursion `depth` levels deep.
+    fn deep_group_fds(depth: usize) -> Vec<u8> {
+        use prost::encoding::{WireType, encode_key};
+
+        let mut fds = vec![];
+        // Tag 2 is not a field of `FileDescriptorSet` (which defines only field
+        // 1), so the decoder skips it via `skip_field`, which recurses per nested
+        // group. The scan bounds depth by the number of open groups regardless of
+        // their tags.
+        for _ in 0..depth {
+            encode_key(2, WireType::StartGroup, &mut fds);
+        }
+        fds
+    }
+
+    #[mz_ore::test]
+    fn deep_group_does_not_overflow() {
+        let bytes = deep_group_fds(50_000);
+        // Must return an error (wire nesting-depth limit), not abort with a stack
+        // overflow inside `skip_field`'s recursive group skipping.
+        let res = DecodedDescriptors::from_bytes(&bytes, ".test.m0".to_string());
+        assert!(
+            res.is_err(),
+            "expected a nesting-depth error for a deeply nested group chain"
         );
     }
 }
