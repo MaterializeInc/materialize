@@ -6096,6 +6096,49 @@ pub fn scalar_type_from_catalog(
     scalar_type_from_catalog_inner(catalog, id, modifiers, 0, &mut budget)
 }
 
+/// Bounds the total resolution work while resolving one root custom type into a
+/// `SqlScalarType`. A single budget must span the entire root type: a record's
+/// fields, and any containers nested within them, all draw from one shared pool.
+/// A type that is small field-by-field but enormous in aggregate is therefore
+/// still rejected. Resetting the budget per field would let a wide record of
+/// individually-cheap fields resolve into an unbounded type tree and exhaust
+/// memory, which is the denial of service this bound exists to prevent.
+///
+/// Use this when resolving a type that is being assembled from its parts (for
+/// example at `CREATE TYPE` time, before the root exists in the catalog) so that
+/// creation-time validation rejects exactly the types a later direct
+/// [`scalar_type_from_catalog`] call would reject.
+pub struct TypeResolutionBudget {
+    /// Sub-type resolutions remaining before the root type is rejected as too
+    /// complex.
+    remaining: usize,
+}
+
+impl TypeResolutionBudget {
+    /// Creates a budget for resolving one root type, charging the root node
+    /// itself against the budget. Children resolved through
+    /// [`TypeResolutionBudget::resolve_child`] begin at nesting depth one,
+    /// mirroring a direct [`scalar_type_from_catalog`] call.
+    pub fn for_root() -> TypeResolutionBudget {
+        TypeResolutionBudget {
+            // The root type counts as one node.
+            remaining: MAX_TYPE_RESOLUTION_NODES - 1,
+        }
+    }
+
+    /// Resolves a type referenced directly by the root (a record field, list
+    /// element, or map value) into a `SqlScalarType`, drawing from this shared
+    /// budget so that all such children of one root are bounded together.
+    pub fn resolve_child(
+        &mut self,
+        catalog: &dyn SessionCatalog,
+        id: CatalogItemId,
+        modifiers: &[i64],
+    ) -> Result<SqlScalarType, PlanError> {
+        scalar_type_from_catalog_inner(catalog, id, modifiers, 1, &mut self.remaining)
+    }
+}
+
 fn scalar_type_from_catalog_inner(
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,

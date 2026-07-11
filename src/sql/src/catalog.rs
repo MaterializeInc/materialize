@@ -1155,13 +1155,14 @@ impl CatalogType<IdReference> {
         match &self {
             CatalogType::Record { fields } => {
                 let mut desc = RelationDesc::builder();
+                // Share one budget across every field. Resolving each field with
+                // a fresh budget would let a wide record materialize an
+                // unbounded type tree here even though each field is individually
+                // within the bound.
+                let mut budget = query::TypeResolutionBudget::for_root();
                 for f in fields {
                     let name = f.name.clone();
-                    let ty = query::scalar_type_from_catalog(
-                        catalog,
-                        f.type_reference,
-                        &f.type_modifiers,
-                    )?;
+                    let ty = budget.resolve_child(catalog, f.type_reference, &f.type_modifiers)?;
                     // TODO: support plumbing `NOT NULL` constraints through
                     // `CREATE TYPE`.
                     let ty = ty.nullable(true);

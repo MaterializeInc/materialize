@@ -411,11 +411,18 @@ CREATE TYPE l126 AS LIST (ELEMENT TYPE = l125)
 statement ok
 CREATE TYPE l127 AS LIST (ELEMENT TYPE = l126)
 
-statement ok
+# `l128` is rejected at creation, not just when later referenced: resolving its
+# element chain reaches the primitive leaf one level past the depth limit. The
+# whole root type is resolved under one budget, so creation rejects exactly the
+# types a later cast or column reference would.
+statement error custom type nesting depth exceeds limit
 CREATE TYPE l128 AS LIST (ELEMENT TYPE = l127)
 
-statement error custom type nesting depth exceeds limit
-CREATE TYPE l129 AS LIST (ELEMENT TYPE = l128)
+# The deepest list type that was created must actually be usable in a cast.
+query T
+SELECT pg_typeof(NULL::l127)
+----
+l127
 
 # Regression test for a record custom type whose fields reference the same
 # sub-type: its resolved type is exponential in depth, so resolution must be
@@ -468,8 +475,21 @@ CREATE TYPE d14 AS (a d13, b d13)
 statement ok
 CREATE TYPE d15 AS (a d14, b d14)
 
-statement ok
+# `d16` is rejected at creation: its two `d15` fields draw from one shared node
+# budget, so although each field is individually valid they exceed the budget
+# together. Resolving each field with a fresh budget would let `d16` be stored
+# yet be too large to ever materialize.
+statement error custom type is too complex to resolve
 CREATE TYPE d16 AS (a d15, b d15)
 
+# The deepest record type that was created must actually be usable in a cast.
+query T
+SELECT pg_typeof(NULL::d15)
+----
+d15
+
+# A wide record whose fields are each individually valid (`d14` resolves well
+# within the budget) but collectively exceed the shared node budget is rejected,
+# rather than materializing an unbounded type tree during sequencing.
 statement error custom type is too complex to resolve
-CREATE TYPE d17 AS (a d16, b d16)
+CREATE TYPE wide AS (a d14, b d14, c d14)

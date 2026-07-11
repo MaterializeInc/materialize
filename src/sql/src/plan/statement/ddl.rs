@@ -138,7 +138,7 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::query::{
-    ExprContext, QueryLifetime, plan_expr, scalar_type_from_catalog, scalar_type_from_sql,
+    ExprContext, QueryLifetime, TypeResolutionBudget, plan_expr, scalar_type_from_sql,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
@@ -4254,11 +4254,19 @@ pub fn plan_create_type(
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
     let CreateTypeStatement { name, as_type, .. } = stmt;
 
+    // The type being created does not yet exist in the catalog, so its children
+    // (list element, map value, record fields) are validated directly. They all
+    // draw from one shared budget that also accounts for the root, so creation
+    // rejects exactly the types a later direct `scalar_type_from_catalog` call
+    // would reject. In particular a wide record whose fields are individually
+    // valid but collectively enormous is rejected here rather than materializing
+    // an unbounded type tree during sequencing.
     fn validate_data_type(
         scx: &StatementContext,
         data_type: ResolvedDataType,
         as_type: &str,
         key: &str,
+        budget: &mut TypeResolutionBudget,
     ) -> Result<(CatalogItemId, Vec<i64>), PlanError> {
         let (id, modifiers) = match data_type {
             ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
@@ -4286,14 +4294,16 @@ pub fn plan_create_type(
                 bail_unsupported!("embedding char type in a list or map")
             }
             _ => {
-                // Validate that the modifiers are actually valid.
-                scalar_type_from_catalog(scx.catalog, id, &modifiers)?;
+                // Validate that the modifiers are actually valid, and that the
+                // referenced type resolves within the shared budget.
+                budget.resolve_child(scx.catalog, id, &modifiers)?;
 
                 Ok((id, modifiers))
             }
         }
     }
 
+    let mut budget = TypeResolutionBudget::for_root();
     let inner = match as_type {
         CreateTypeAs::List { options } => {
             let CreateTypeListOptionExtracted {
@@ -4302,7 +4312,8 @@ pub fn plan_create_type(
             } = CreateTypeListOptionExtracted::try_from(options)?;
             let element_type =
                 element_type.ok_or_else(|| sql_err!("ELEMENT TYPE option is required"))?;
-            let (id, modifiers) = validate_data_type(scx, element_type, "LIST ", "ELEMENT TYPE")?;
+            let (id, modifiers) =
+                validate_data_type(scx, element_type, "LIST ", "ELEMENT TYPE", &mut budget)?;
             CatalogType::List {
                 element_reference: id,
                 element_modifiers: modifiers,
@@ -4316,9 +4327,18 @@ pub fn plan_create_type(
             } = CreateTypeMapOptionExtracted::try_from(options)?;
             let key_type = key_type.ok_or_else(|| sql_err!("KEY TYPE option is required"))?;
             let value_type = value_type.ok_or_else(|| sql_err!("VALUE TYPE option is required"))?;
-            let (key_id, key_modifiers) = validate_data_type(scx, key_type, "MAP ", "KEY TYPE")?;
+            // A map's resolved type ignores the key (map keys are always text at
+            // runtime), so it is not part of the root's materialized tree and is
+            // validated under its own budget.
+            let (key_id, key_modifiers) = validate_data_type(
+                scx,
+                key_type,
+                "MAP ",
+                "KEY TYPE",
+                &mut TypeResolutionBudget::for_root(),
+            )?;
             let (value_id, value_modifiers) =
-                validate_data_type(scx, value_type, "MAP ", "VALUE TYPE")?;
+                validate_data_type(scx, value_type, "MAP ", "VALUE TYPE", &mut budget)?;
             CatalogType::Map {
                 key_reference: key_id,
                 key_modifiers,
@@ -4331,7 +4351,7 @@ pub fn plan_create_type(
             for column_def in column_defs {
                 let data_type = column_def.data_type;
                 let key = ident(column_def.name.clone());
-                let (id, modifiers) = validate_data_type(scx, data_type, "", &key)?;
+                let (id, modifiers) = validate_data_type(scx, data_type, "", &key, &mut budget)?;
                 fields.push(CatalogRecordField {
                     name: ColumnName::from(key.clone()),
                     type_reference: id,
