@@ -23,6 +23,24 @@ use prost_reflect::{
 /// stack while deriving the source's `RelationDesc`.
 const MAX_MESSAGE_NESTING_DEPTH: usize = 128;
 
+/// Maximum Protobuf wire nesting depth accepted when decoding a
+/// `FileDescriptorSet`.
+///
+/// `DescriptorPool::decode` decodes the descriptor set recursively, descending
+/// once per level of wire nesting. `DescriptorProto.nested_type` is
+/// self-referential and unknown group fields are skipped recursively, so a
+/// deeply nested (but cheap to encode) descriptor set drives that recursion
+/// arbitrarily deep. The workspace builds Prost with `no-recursion-limit`, so
+/// the recursion is unbounded and such input aborts the process with a stack
+/// overflow before any of our own validation runs.
+///
+/// We therefore reject descriptor sets nested deeper than this on the wire,
+/// before decoding them. This is distinct from [`MAX_MESSAGE_NESTING_DEPTH`],
+/// which bounds how far message *type references* (`m0 -> m1 -> ...` by name)
+/// are followed while deriving the relation type. Those references are a flat
+/// list on the wire, so a reference chain does not nest here.
+const MAX_DESCRIPTOR_WIRE_NESTING_DEPTH: usize = 128;
+
 /// A decoded description of the schema of a Protobuf message.
 #[derive(Debug, PartialEq)]
 pub struct DecodedDescriptors {
@@ -35,6 +53,10 @@ impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded `FileDescriptorSet` and
     /// the fully qualified name of a message inside that file descriptor set.
     pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
+        // Reject pathologically nested input before `DescriptorPool::decode`
+        // recurses into it and overflows the stack. See
+        // `MAX_DESCRIPTOR_WIRE_NESTING_DEPTH`.
+        check_descriptor_set_nesting_depth(bytes)?;
         let fds = DescriptorPool::decode(bytes).context("decoding file descriptor set")?;
         let message_descriptor = fds.get_message_by_name(&message_name).ok_or_else(|| {
             anyhow!(
@@ -186,6 +208,144 @@ fn derive_inner_type(
     }
 }
 
+/// Rejects a `FileDescriptorSet` whose wire encoding nests message or group
+/// fields deeper than [`MAX_DESCRIPTOR_WIRE_NESTING_DEPTH`], which would
+/// otherwise overflow the stack inside `DescriptorPool::decode`.
+///
+/// The scan is iterative (it tracks open regions on an explicit stack), so it
+/// cannot itself overflow. It descends into every length-delimited field and
+/// every group, which is a superset of what Prost recurses into while decoding,
+/// so any input that would drive Prost past the limit is rejected here first. A
+/// length-delimited field that is not actually a nested message (a string or a
+/// packed field) fails to parse as one within a few bytes and is skipped as an
+/// opaque leaf, so realistic descriptor sets are not rejected.
+fn check_descriptor_set_nesting_depth(bytes: &[u8]) -> Result<(), anyhow::Error> {
+    use bytes::Buf;
+    use prost::encoding::{WireType, decode_key, decode_varint};
+
+    enum Frame {
+        /// A length-delimited region that ends once `buf.remaining()` has
+        /// dropped to this value.
+        Len(usize),
+        /// A group that ends at an `EndGroup` key carrying this tag.
+        Group(u32),
+    }
+
+    // Skips the remainder of the innermost length-delimited region, treating it
+    // as opaque bytes. Returns `false` when there is no enclosing
+    // length-delimited region to recover into, in which case scanning must stop.
+    let recover = |frames: &mut Vec<Frame>, buf: &mut &[u8]| -> bool {
+        while let Some(frame) = frames.pop() {
+            if let Frame::Len(end_remaining) = frame {
+                let skip = buf.remaining().saturating_sub(end_remaining);
+                buf.advance(skip);
+                return true;
+            }
+        }
+        false
+    };
+
+    let mut buf: &[u8] = bytes;
+    let mut frames: Vec<Frame> = Vec::new();
+
+    loop {
+        // Close every length-delimited region that ends at the current position.
+        while let Some(Frame::Len(end_remaining)) = frames.last() {
+            if buf.remaining() <= *end_remaining {
+                frames.pop();
+            } else {
+                break;
+            }
+        }
+        if !buf.has_remaining() {
+            // Any frames still open mean truncated input, which
+            // `DescriptorPool::decode` will reject. The depth is bounded either
+            // way.
+            return Ok(());
+        }
+
+        let (tag, wire_type) = match decode_key(&mut buf) {
+            Ok(key) => key,
+            Err(_) => {
+                if recover(&mut frames, &mut buf) {
+                    continue;
+                }
+                return Ok(());
+            }
+        };
+
+        match wire_type {
+            WireType::Varint => {
+                if decode_varint(&mut buf).is_err() {
+                    if recover(&mut frames, &mut buf) {
+                        continue;
+                    }
+                    return Ok(());
+                }
+            }
+            WireType::SixtyFourBit | WireType::ThirtyTwoBit => {
+                let width = if wire_type == WireType::SixtyFourBit {
+                    8
+                } else {
+                    4
+                };
+                if buf.remaining() < width {
+                    if recover(&mut frames, &mut buf) {
+                        continue;
+                    }
+                    return Ok(());
+                }
+                buf.advance(width);
+            }
+            WireType::LengthDelimited => {
+                let len = match decode_varint(&mut buf) {
+                    Ok(len) => len,
+                    Err(_) => {
+                        if recover(&mut frames, &mut buf) {
+                            continue;
+                        }
+                        return Ok(());
+                    }
+                };
+                if len > buf.remaining() as u64 {
+                    if recover(&mut frames, &mut buf) {
+                        continue;
+                    }
+                    return Ok(());
+                }
+                if frames.len() >= MAX_DESCRIPTOR_WIRE_NESTING_DEPTH {
+                    bail!(
+                        "Protobuf descriptor set nesting depth exceeds limit of {}",
+                        MAX_DESCRIPTOR_WIRE_NESTING_DEPTH
+                    );
+                }
+                let end_remaining = buf.remaining() - len as usize;
+                frames.push(Frame::Len(end_remaining));
+            }
+            WireType::StartGroup => {
+                if frames.len() >= MAX_DESCRIPTOR_WIRE_NESTING_DEPTH {
+                    bail!(
+                        "Protobuf descriptor set nesting depth exceeds limit of {}",
+                        MAX_DESCRIPTOR_WIRE_NESTING_DEPTH
+                    );
+                }
+                frames.push(Frame::Group(tag));
+            }
+            WireType::EndGroup => match frames.last() {
+                Some(Frame::Group(open_tag)) if *open_tag == tag => {
+                    frames.pop();
+                }
+                _ => {
+                    if recover(&mut frames, &mut buf) {
+                        continue;
+                    }
+                    return Ok(());
+                }
+            },
+        }
+    }
+}
+
 fn pack_message(packer: &mut RowPacker, message: &DynamicMessage) -> Result<(), anyhow::Error> {
     for field_desc in message.descriptor().fields() {
         if !message.has_field(&field_desc) {
@@ -319,6 +479,66 @@ mod stack_overflow_verification {
         assert!(
             res.is_err(),
             "expected a nesting-depth error for a deep message chain"
+        );
+    }
+
+    /// The `type_name` reference chain above is flat on the wire, so it stresses
+    /// the relation-type derivation. A `DescriptorProto.nested_type` chain is
+    /// instead recursive on the wire, so it stresses `DescriptorPool::decode`
+    /// itself, which decodes the descriptor set recursively without a depth
+    /// limit (`no-recursion-limit`). This must be rejected before that decode
+    /// overflows the stack.
+    fn deep_nested_type_fds(depth: usize) -> Vec<u8> {
+        use prost::encoding::{WireType, encode_key, encode_varint, encoded_len_varint};
+
+        // Build the wire encoding directly. Materializing the nested
+        // `DescriptorProto` values would overflow Prost's *encoder* (and the
+        // recursive `Drop`) for the same reason we are guarding the decoder.
+        //
+        // `lens[k]` is the encoded size of the `DescriptorProto` nested `k`
+        // levels deep. Level 0 is an empty message (0 bytes); each further level
+        // wraps the previous one in a single `nested_type` field (field 3).
+        const NESTED_TYPE_FIELD: u32 = 3;
+        let key_len = {
+            let mut probe = vec![];
+            encode_key(NESTED_TYPE_FIELD, WireType::LengthDelimited, &mut probe);
+            probe.len()
+        };
+        let mut lens = vec![0usize; depth + 1];
+        for k in 1..=depth {
+            lens[k] = key_len + encoded_len_varint(lens[k - 1] as u64) + lens[k - 1];
+        }
+
+        let mut dp = Vec::with_capacity(lens[depth]);
+        for k in (1..=depth).rev() {
+            encode_key(NESTED_TYPE_FIELD, WireType::LengthDelimited, &mut dp);
+            encode_varint(lens[k - 1] as u64, &mut dp);
+        }
+
+        // Wrap the chain: FileDescriptorProto.message_type (field 4), then
+        // FileDescriptorSet.file (field 1).
+        let mut fdp = vec![];
+        encode_key(4, WireType::LengthDelimited, &mut fdp);
+        encode_varint(dp.len() as u64, &mut fdp);
+        fdp.extend_from_slice(&dp);
+
+        let mut fds = vec![];
+        encode_key(1, WireType::LengthDelimited, &mut fds);
+        encode_varint(fdp.len() as u64, &mut fds);
+        fds.extend_from_slice(&fdp);
+        fds
+    }
+
+    #[mz_ore::test]
+    fn deep_nested_type_does_not_overflow() {
+        let bytes = deep_nested_type_fds(50_000);
+        // Must return an error (wire nesting-depth limit), not abort with a
+        // stack overflow. Before the fix `DescriptorPool::decode` recursed once
+        // per `nested_type` level and aborted the process.
+        let res = DecodedDescriptors::from_bytes(&bytes, ".test.m0".to_string());
+        assert!(
+            res.is_err(),
+            "expected a nesting-depth error for a deeply nested descriptor"
         );
     }
 }
