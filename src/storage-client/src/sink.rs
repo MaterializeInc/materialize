@@ -528,6 +528,7 @@ mod tests {
     /// A version that registers as `Pending` is polled until Glue reports it
     /// `Available`.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     async fn publish_glue_schema_waits_for_pending_version() {
         let lookup = definition_not_found();
         let register = register_returns(SchemaVersionStatus::Pending);
@@ -557,6 +558,7 @@ mod tests {
     /// A version whose asynchronous compatibility check fails surfaces an
     /// error instead of an id that consumers could never resolve.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     async fn publish_glue_schema_errors_on_failed_compatibility_check() {
         let lookup = definition_not_found();
         let register = register_returns(SchemaVersionStatus::Pending);
@@ -579,6 +581,7 @@ mod tests {
     /// A definition match in `Available` state is reused as-is, with no
     /// registration and no status polling.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     async fn publish_glue_schema_reuses_available_definition_match() {
         let lookup = mock!(aws_sdk_glue::Client::get_schema_by_definition).then_output(|| {
             GetSchemaByDefinitionOutput::builder()
@@ -596,6 +599,7 @@ mod tests {
     /// A definition match whose version failed its compatibility check is not
     /// reused: the definition is registered anew.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     async fn publish_glue_schema_skips_failed_definition_match() {
         let lookup = mock!(aws_sdk_glue::Client::get_schema_by_definition).then_output(|| {
             GetSchemaByDefinitionOutput::builder()

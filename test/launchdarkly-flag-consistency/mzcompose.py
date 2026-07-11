@@ -549,7 +549,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
     enable_upsert_paged_spill
-    enable_upsert_v2
     enable_variadic_left_join_lowering
     grpc_client_http2_keep_alive_timeout
     max_connections

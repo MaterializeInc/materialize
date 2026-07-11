@@ -720,6 +720,7 @@ mod tests {
     /// Glue validates versions asynchronously, so callers gate on it before
     /// using a version's id.
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
     async fn write_methods_surface_lifecycle_status() {
         let register = mock!(aws_sdk_glue::Client::register_schema_version).then_output(|| {
             RegisterSchemaVersionOutput::builder()

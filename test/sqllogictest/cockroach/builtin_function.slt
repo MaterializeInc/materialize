@@ -1762,7 +1762,7 @@ timestamptz
 bytes
 int[]
 
-# TODO(def-): Reenable after database-issues#6599 is fixed
+# TODO(def-): Reenable after DB-165 is fixed
 # query T
 # VALUES (format_type('anyelement'::regtype, -1)),
 #        (format_type('bit'::regtype, -1)),
