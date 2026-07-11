@@ -4303,7 +4303,7 @@ pub fn plan_create_type(
         }
     }
 
-    let mut budget = TypeResolutionBudget::for_root();
+    let mut budget = TypeResolutionBudget::for_root(scx.catalog);
     let inner = match as_type {
         CreateTypeAs::List { options } => {
             let CreateTypeListOptionExtracted {
@@ -4335,7 +4335,7 @@ pub fn plan_create_type(
                 key_type,
                 "MAP ",
                 "KEY TYPE",
-                &mut TypeResolutionBudget::for_root(),
+                &mut TypeResolutionBudget::for_root(scx.catalog),
             )?;
             let (value_id, value_modifiers) =
                 validate_data_type(scx, value_type, "MAP ", "VALUE TYPE", &mut budget)?;

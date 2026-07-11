@@ -6092,8 +6092,32 @@ pub fn scalar_type_from_catalog(
     id: CatalogItemId,
     modifiers: &[i64],
 ) -> Result<SqlScalarType, PlanError> {
-    let mut budget = MAX_TYPE_RESOLUTION_NODES;
-    scalar_type_from_catalog_inner(catalog, id, modifiers, 0, &mut budget)
+    let (depth_limit, mut budget) = type_resolution_limits(catalog);
+    scalar_type_from_catalog_inner(catalog, id, modifiers, 0, depth_limit, &mut budget)
+}
+
+/// The `(nesting-depth, resolution-node)` limits to apply while resolving one
+/// root custom type. See [`MAX_TYPE_NESTING_DEPTH`] and
+/// [`MAX_TYPE_RESOLUTION_NODES`] for what each guards against.
+///
+/// The limits are lifted while re-planning a persisted catalog item. The
+/// `unsafe_enable_unbounded_custom_type_resolution` flag signals this, and
+/// `SystemVars::enable_for_item_parsing` force-enables it during bootstrap. A
+/// type that an earlier version already accepted resolves to a finite tree, so
+/// its persisted `create_sql` must keep re-planning after these limits were
+/// introduced. Rejecting such a grandfathered type during rehydration would
+/// turn a graceful planning error into a fatal bootstrap panic. A later
+/// resolution in a normal user session still applies the limits and returns the
+/// graceful error.
+fn type_resolution_limits(catalog: &dyn SessionCatalog) -> (usize, usize) {
+    if catalog
+        .system_vars()
+        .unsafe_enable_unbounded_custom_type_resolution()
+    {
+        (usize::MAX, usize::MAX)
+    } else {
+        (MAX_TYPE_NESTING_DEPTH, MAX_TYPE_RESOLUTION_NODES)
+    }
 }
 
 /// Bounds the total resolution work while resolving one root custom type into a
@@ -6112,17 +6136,23 @@ pub struct TypeResolutionBudget {
     /// Sub-type resolutions remaining before the root type is rejected as too
     /// complex.
     remaining: usize,
+    /// Nesting depth past which the root type is rejected. Shared by every
+    /// child so the whole root type is bounded consistently.
+    depth_limit: usize,
 }
 
 impl TypeResolutionBudget {
     /// Creates a budget for resolving one root type, charging the root node
     /// itself against the budget. Children resolved through
     /// [`TypeResolutionBudget::resolve_child`] begin at nesting depth one,
-    /// mirroring a direct [`scalar_type_from_catalog`] call.
-    pub fn for_root() -> TypeResolutionBudget {
+    /// mirroring a direct [`scalar_type_from_catalog`] call. The limits are
+    /// relaxed for grandfathered persisted items, see [`type_resolution_limits`].
+    pub fn for_root(catalog: &dyn SessionCatalog) -> TypeResolutionBudget {
+        let (depth_limit, budget) = type_resolution_limits(catalog);
         TypeResolutionBudget {
             // The root type counts as one node.
-            remaining: MAX_TYPE_RESOLUTION_NODES - 1,
+            remaining: budget.saturating_sub(1),
+            depth_limit,
         }
     }
 
@@ -6135,7 +6165,14 @@ impl TypeResolutionBudget {
         id: CatalogItemId,
         modifiers: &[i64],
     ) -> Result<SqlScalarType, PlanError> {
-        scalar_type_from_catalog_inner(catalog, id, modifiers, 1, &mut self.remaining)
+        scalar_type_from_catalog_inner(
+            catalog,
+            id,
+            modifiers,
+            1,
+            self.depth_limit,
+            &mut self.remaining,
+        )
     }
 }
 
@@ -6144,13 +6181,11 @@ fn scalar_type_from_catalog_inner(
     id: CatalogItemId,
     modifiers: &[i64],
     depth: usize,
+    depth_limit: usize,
     budget: &mut usize,
 ) -> Result<SqlScalarType, PlanError> {
-    if depth > MAX_TYPE_NESTING_DEPTH {
-        sql_bail!(
-            "custom type nesting depth exceeds limit of {}",
-            MAX_TYPE_NESTING_DEPTH
-        );
+    if depth > depth_limit {
+        sql_bail!("custom type nesting depth exceeds limit of {}", depth_limit);
     }
     *budget = match budget.checked_sub(1) {
         Some(remaining) => remaining,
@@ -6260,6 +6295,7 @@ fn scalar_type_from_catalog_inner(
                         *element_id,
                         modifiers,
                         depth + 1,
+                        depth_limit,
                         budget,
                     )?,
                 ))),
@@ -6272,6 +6308,7 @@ fn scalar_type_from_catalog_inner(
                         *element_id,
                         element_modifiers,
                         depth + 1,
+                        depth_limit,
                         budget,
                     )?),
                     custom_id: Some(id),
@@ -6287,6 +6324,7 @@ fn scalar_type_from_catalog_inner(
                         *value_id,
                         value_modifiers,
                         depth + 1,
+                        depth_limit,
                         budget,
                     )?),
                     custom_id: Some(id),
@@ -6299,6 +6337,7 @@ fn scalar_type_from_catalog_inner(
                         *element_id,
                         &[],
                         depth + 1,
+                        depth_limit,
                         budget,
                     )?),
                 }),
@@ -6311,6 +6350,7 @@ fn scalar_type_from_catalog_inner(
                                 f.type_reference,
                                 &f.type_modifiers,
                                 depth + 1,
+                                depth_limit,
                                 budget,
                             )?;
                             Ok((

@@ -493,3 +493,26 @@ d15
 # rather than materializing an unbounded type tree during sequencing.
 statement error custom type is too complex to resolve
 CREATE TYPE wide AS (a d14, b d14, c d14)
+
+# The bound is lifted while re-planning persisted catalog items during bootstrap,
+# so a type created before the bound existed keeps loading after upgrade instead
+# of crash-looping the environment. `unsafe_enable_unbounded_custom_type_resolution`
+# is the signal, force-enabled during item parsing. With it on, the otherwise
+# rejected `wide` type resolves.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unbounded_custom_type_resolution = on
+----
+COMPLETE 0
+
+statement ok
+CREATE TYPE wide AS (a d14, b d14, c d14)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET unsafe_enable_unbounded_custom_type_resolution
+----
+COMPLETE 0
+
+# Once the bound is back in force a normal session still rejects resolving the
+# grandfathered type, returning the graceful planning error rather than panicking.
+query error custom type is too complex to resolve
+SELECT NULL::wide

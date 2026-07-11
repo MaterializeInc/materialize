@@ -1159,7 +1159,7 @@ impl CatalogType<IdReference> {
                 // a fresh budget would let a wide record materialize an
                 // unbounded type tree here even though each field is individually
                 // within the bound.
-                let mut budget = query::TypeResolutionBudget::for_root();
+                let mut budget = query::TypeResolutionBudget::for_root(catalog);
                 for f in fields {
                     let name = f.name.clone();
                     let ty = budget.resolve_child(catalog, f.type_reference, &f.type_modifiers)?;
