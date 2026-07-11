@@ -1,6 +1,6 @@
 ---
 source: src/clusterd/src/lib.rs
-revision: 34effa9dc0
+revision: 7ffd40e1ab
 ---
 
 # clusterd

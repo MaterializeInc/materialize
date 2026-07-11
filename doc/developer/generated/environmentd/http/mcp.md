@@ -1,12 +1,12 @@
 ---
 source: src/environmentd/src/http/mcp.rs
-revision: be4e00849a
+revision: a0599e5620
 ---
 
 # environmentd::http::mcp
 
 Implements Model Context Protocol (MCP) HTTP handlers that expose Materialize data products to AI agents via JSON-RPC 2.0.
-Provides two endpoints: `/api/mcp/agent` (tools: `get_data_products`, `get_data_product_details`, `read_data_product`, `query`) for user data products discovered via `mz_internal.mz_mcp_data_products`, and `/api/mcp/developer` (tools: `query_system_catalog`, `query`) for read-only access to system catalog tables in schemas from `SYSTEM_SCHEMAS` (excluding `mz_unsafe`).
+Provides two endpoints: `/api/mcp/agent` (tools: `get_data_products`, `get_data_product_details`, `read_data_product`, `query`) for user data products discovered via `mz_internal.mz_mcp_data_products`, and `/api/mcp/developer` (tools: `query_system_catalog`, `query`) for read-only access to system catalog tables in schemas from `SYSTEM_SCHEMAS` (excluding `mz_unsafe`). The developer endpoint's `query` tool accepts an optional `cluster_replica` parameter to pin execution to a named replica (e.g. for `EXPLAIN ANALYZE` on a cluster with multiple replicas); the agent endpoint's `query` tool does not expose this parameter.
 Each endpoint is gated by a dynamic feature flag (`ENABLE_MCP_AGENT`, `ENABLE_MCP_DEVELOPER`, `ENABLE_MCP_AGENT_QUERY_TOOL`, `ENABLE_MCP_DEVELOPER_QUERY_TOOL`, `ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL`); `ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL` gates the `read_data_product` tool independently of the per-endpoint query tool flag. Response size is bounded by `MCP_MAX_RESPONSE_SIZE`.
 Each request tags the session's `application_name` with `mz_mcp_agents` or `mz_mcp_developer` (via `set_default`, so a caller-supplied value still takes precedence) to make MCP-originated sessions visible in `mz_session_history` and `mz_statement_execution_history`.
 Implements MCP protocol version `2025-11-25`: the `initialize` response includes a `protocolVersion` field set to `MCP_PROTOCOL_VERSION`, tool definitions carry `title`, `annotations` (`ToolAnnotations` with `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), and `ToolContentResult` includes an `isError` field.
