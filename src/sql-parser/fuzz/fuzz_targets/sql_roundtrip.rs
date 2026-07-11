@@ -54,10 +54,13 @@
 //! re-execution, so it is out of reach for *any* parser-level oracle. The
 //! statement's printer is still covered for the bugs this target can catch.)
 //!
-//! Each generated query that parses is checked against the same two oracles as
-//! `parse_pretty_roundtrip` (full-AST equality through `pretty_str_simple`,
-//! verified at two line widths so wrapping can't perturb the AST) and
-//! `parse_display_roundtrip` (stable-string equality through `AstDisplay`).
+//! Each generated query that parses is checked against two oracles, both
+//! comparing the normalized AST structurally: `check_pretty` (full-AST equality
+//! through `pretty_str_simple`, verified at two line widths so wrapping can't
+//! perturb the AST) and `check_display` (full-AST equality through `AstDisplay`).
+//! Structural comparison is required because stable-string rendering is not
+//! injective: a printer precedence bug can map two different trees to the same
+//! text, so comparing re-rendered strings would pass a changed statement.
 
 #![no_main]
 
@@ -156,14 +159,35 @@ fn check_display(orig_ast: &Statement<Raw>) {
             panic!("AstDisplay output failed to reparse: displayed={displayed:?} err={e}");
         }
     };
-    if reparsed.len() != 1 {
-        return;
-    }
-    let reparsed_ast = reparsed.into_iter().next().unwrap().ast;
+    // One statement must print as exactly one statement. Any other count means
+    // the printer emitted text that reparses to a different number of
+    // statements, itself a round-trip violation, so it must fail rather than
+    // silently pass.
     assert_eq!(
+        reparsed.len(),
+        1,
+        "AstDisplay output reparsed to {} statements, expected 1\ndisplayed: {displayed:?}",
+        reparsed.len(),
+    );
+    let mut reparsed_ast = reparsed.into_iter().next().unwrap().ast;
+    // Normalize the reparse too (mirroring `check_pretty`): the parser may
+    // re-insert a semantically-redundant `Expr::Nested` (e.g. it parenthesizes a
+    // cast under unary minus), and per the oracle's contract those parens are
+    // free to add or drop. Stripping them from both sides leaves a genuine
+    // structural drift to still trip the assert.
+    normalize(&mut reparsed_ast);
+    // Compare ASTs *structurally*, not by re-printed string. A printer that drops
+    // a needed paren can map two distinct ASTs onto the same string (e.g.
+    // `IsExpr(a, DistinctFrom(Or(b, c)))` and `Or(IsExpr(a, DistinctFrom(b)), c)`
+    // both print `a IS DISTINCT FROM b OR c`). A stable-string comparison is blind
+    // to those collisions, but the structural comparison catches them. The stable
+    // strings are still shown for a readable diff.
+    assert_eq!(
+        *orig_ast,
+        reparsed_ast,
+        "AstDisplay roundtrip drifted\ndisplayed: {displayed:?}\norig:     {}\nreparsed: {}",
         orig_ast.to_ast_string_stable(),
         reparsed_ast.to_ast_string_stable(),
-        "AstDisplay roundtrip drifted\ndisplayed: {displayed:?}"
     );
 }
 
@@ -2078,13 +2102,14 @@ fuzz_target!(|data: &[u8]| {
     if stmts.len() != 1 {
         return;
     }
-    let orig_ast = stmts.into_iter().next().unwrap().ast;
+    let mut orig_ast = stmts.into_iter().next().unwrap().ast;
+    normalize(&mut orig_ast);
 
-    // Display oracle works on the unnormalized AST (stable-string equality).
+    // Both oracles compare the normalized AST against a normalized reparse.
+    // Normalizing before the display oracle prints it makes the printer
+    // re-derive precedence parens: the generator's explicit `Nested` parens
+    // would otherwise print literally and mask a dropped-paren bug, the very
+    // collision the structural comparison is there to catch.
     check_display(&orig_ast);
-
-    // Pretty oracle compares normalized ASTs for full structural equality.
-    let mut normalized = orig_ast;
-    normalize(&mut normalized);
-    check_pretty(&sql, &normalized);
+    check_pretty(&sql, &orig_ast);
 });
