@@ -13,7 +13,7 @@ use std::str::FromStr;
 use anyhow::bail;
 use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use tokio::fs::{self, OpenOptions};
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncWrite, AsyncWriteExt, BufWriter};
 
 use crate::action::{ControlFlow, State};
 use crate::format::bytes;
@@ -152,7 +152,11 @@ pub async fn run_append(
         Compression::Bzip2 => Box::new(BzEncoder::new(file)),
         Compression::Xz => Box::new(XzEncoder::new(file)),
         Compression::Zstd => Box::new(ZstdEncoder::new(file)),
-        Compression::None => Box::new(file),
+        // The compression encoders buffer their writes, but a bare
+        // `tokio::fs::File` turns every per-line `write_all` into a separate
+        // blocking filesystem job. Buffer it so a large `repeat` issues writes
+        // in bounded chunks rather than two jobs per line.
+        Compression::None => Box::new(BufWriter::new(file)),
     };
 
     contents.write_to(&mut file).await?;
