@@ -18,7 +18,7 @@ use mz_expr::WindowFrame;
 use mz_expr::func::variadic::RecordCreate;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{ColumnOrder, UnaryFunc, VariadicFunc};
-use mz_ore::stack::RecursionLimitError;
+use mz_ore::stack::{RecursionLimitError, maybe_grow};
 use mz_repr::{ColumnName, SqlColumnType, SqlRelationType, SqlScalarType};
 
 use crate::plan::hir::{
@@ -185,7 +185,7 @@ pub fn try_simplify_quantified_comparisons(
         simplify_join_on: bool,
     ) -> Result<(), RecursionLimitError> {
         // Grow the stack: recurses over a user-controlled-depth relation tree.
-        mz_ore::stack::maybe_grow(|| {
+        maybe_grow(|| {
             match expr {
                 HirRelationExpr::Map { scalars, input } => {
                     walk_relation(input, outers, simplify_join_on)?;
@@ -518,25 +518,23 @@ fn resolve_local_columns(expr: &HirScalarExpr, env: &[HirScalarExpr]) -> Option<
 }
 
 /// Returns whether `expr` contains any subquery (`HirScalarExpr::Exists` or
-/// `HirScalarExpr::Select`). The relation tree is traversed iteratively so this
-/// is stack-safe on deeply nested inputs; the per-scalar walk is bounded by the
-/// parser's expression-depth limit.
+/// `HirScalarExpr::Select`). Both the relation tree and the per-node scalars are
+/// traversed iteratively, so this is stack-safe on deeply nested inputs: a long
+/// JOIN/CTE chain grows the relation tree, and a flat `CASE` with many arms
+/// lowers to a deep right-nested `If` chain in a single scalar. `visit_pre` on
+/// `HirScalarExpr` stops at `Exists`/`Select` (they are scalar leaves), so the
+/// scan never descends into subquery bodies. The relation walk already yields
+/// those bodies as its own children.
 fn relation_contains_subquery(expr: &HirRelationExpr) -> bool {
-    fn scalar_contains_subquery(s: &HirScalarExpr) -> bool {
-        if matches!(s, HirScalarExpr::Exists(..) | HirScalarExpr::Select(..)) {
-            return true;
-        }
-        let mut found = false;
-        VisitChildren::<HirScalarExpr>::visit_children(s, |c| {
-            found = found || scalar_contains_subquery(c);
-        });
-        found
-    }
     let mut found = false;
     expr.visit_post(&mut |r: &HirRelationExpr| {
         if !found {
             VisitChildren::<HirScalarExpr>::visit_children(r, |s| {
-                found = found || scalar_contains_subquery(s);
+                s.visit_pre(&mut |e: &HirScalarExpr| {
+                    if matches!(e, HirScalarExpr::Exists(..) | HirScalarExpr::Select(..)) {
+                        found = true;
+                    }
+                });
             });
         }
     });
@@ -1019,6 +1017,7 @@ mod tests {
     /// recurse over its full, user-controlled depth, and the latter would
     /// otherwise recompute `input.typ()` at every level (O(depth^2)).
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn deep_relation_chain_does_not_overflow() {
         const DEPTH: usize = 100_000;
         let mut expr = HirRelationExpr::constant(vec![], SqlRelationType::empty());
@@ -1037,5 +1036,86 @@ mod tests {
         while let HirRelationExpr::Filter { input, .. } = expr {
             expr = *input;
         }
+    }
+
+    /// A shallow relation whose scalar is a deeply nested `If` chain must plan
+    /// without overflowing the stack. A flat `CASE` with many arms consumes no
+    /// per-arm parser recursion but lowers to a right-nested `If` chain of that
+    /// depth, so the subquery scan in `try_simplify_quantified_comparisons` must
+    /// scan the scalar iteratively, not once per `If` node.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn deep_scalar_if_chain_does_not_overflow() {
+        const DEPTH: usize = 100_000;
+        let mut scalar = HirScalarExpr::literal_true();
+        for _ in 0..DEPTH {
+            scalar = HirScalarExpr::if_then_else(
+                HirScalarExpr::literal_true(),
+                HirScalarExpr::literal_true(),
+                scalar,
+            );
+        }
+        let mut expr = HirRelationExpr::Map {
+            input: Box::new(HirRelationExpr::constant(vec![], SqlRelationType::empty())),
+            scalars: vec![scalar],
+        };
+
+        try_simplify_quantified_comparisons(&mut expr, false).unwrap();
+
+        // Dismantle the `If` chain iteratively: dropping it recursively would
+        // itself overflow the stack.
+        let HirRelationExpr::Map { mut scalars, .. } = expr else {
+            unreachable!()
+        };
+        let mut scalar = scalars.pop().unwrap();
+        while let HirScalarExpr::If { els, .. } = scalar {
+            scalar = *els;
+        }
+    }
+
+    /// Once a subquery defeats the early bail in
+    /// `try_simplify_quantified_comparisons`, `walk_relation` recurses over the
+    /// full depth of the relation tree and must not overflow.
+    ///
+    /// The depth stays modest because `walk_relation` recomputes `input.typ()`
+    /// at every level, which is O(depth^2). Running on a thread whose stack is
+    /// smaller than `mz_ore::stack::STACK_RED_ZONE` is what makes the walk's
+    /// `maybe_grow` load-bearing at that depth: without it, the walk overflows.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn deep_relation_chain_with_subquery_does_not_overflow() {
+        const DEPTH: usize = 3_000;
+        const THREAD_STACK_SIZE: usize = 256 << 10;
+
+        std::thread::Builder::new()
+            .stack_size(THREAD_STACK_SIZE)
+            .spawn(|| {
+                let mut expr = HirRelationExpr::constant(vec![], SqlRelationType::empty());
+                for _ in 0..DEPTH {
+                    expr = HirRelationExpr::Filter {
+                        predicates: vec![],
+                        input: Box::new(expr),
+                    };
+                }
+                // A single subquery anywhere in the tree is enough to make the
+                // full-depth walk run.
+                expr = HirRelationExpr::Filter {
+                    predicates: vec![
+                        HirRelationExpr::constant(vec![], SqlRelationType::empty()).exists(),
+                    ],
+                    input: Box::new(expr),
+                };
+
+                try_simplify_quantified_comparisons(&mut expr, false).unwrap();
+
+                // Dismantle iteratively: dropping the deep tree recursively
+                // would itself overflow this thread's small stack.
+                while let HirRelationExpr::Filter { input, .. } = expr {
+                    expr = *input;
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

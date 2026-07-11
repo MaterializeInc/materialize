@@ -2008,8 +2008,12 @@ impl HirRelationExpr {
         F: FnMut(&'a Self, usize) -> Result<(), E>,
     {
         #[allow(deprecated)]
-        self.visit1(depth, |e: &HirRelationExpr, depth: usize| {
-            e.visit_fallible(depth, f)
+        // Grow the stack: this recurses over the relation tree, whose depth is
+        // user-controlled (e.g. a long JOIN chain or a chain of CTEs).
+        stack::maybe_grow(|| {
+            self.visit1(depth, |e: &HirRelationExpr, depth: usize| {
+                e.visit_fallible(depth, f)
+            })
         })?;
         f(self, depth)
     }
