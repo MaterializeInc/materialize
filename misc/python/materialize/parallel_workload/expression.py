@@ -43,6 +43,7 @@ from materialize.data_ingest.data_type import (
 from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
+    LoadGeneratorColumn,
     MySqlColumn,
     PostgresColumn,
     SqlServerColumn,
@@ -326,7 +327,10 @@ def expression(
     data_type: type[DataType],
     columns: list[Column] | (
         list[MySqlColumn]
-        | (list[PostgresColumn] | (list[SqlServerColumn] | list[KafkaColumn]))
+        | (
+            list[PostgresColumn]
+            | (list[SqlServerColumn] | (list[KafkaColumn] | list[LoadGeneratorColumn]))
+        )
     ),
     rng: random.Random,
     kind: ExprKind = ExprKind.ALL,
