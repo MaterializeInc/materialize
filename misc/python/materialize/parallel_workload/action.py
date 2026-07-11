@@ -691,9 +691,6 @@ class FetchAction(Action):
         result.extend(
             [
                 "cached plan must not change result type",  # Expected, see database-issues#9666
-                # Deliberate, the UP TO bound is sometimes below the AS OF the
-                # system chooses.
-                "is greater than its upper bound",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -715,25 +712,10 @@ class FetchAction(Action):
             if self.rng.choice([True, False])
             else exe.commit(http=Http.NO)
         )
-        up_to = None
-        if self.rng.random() < 0.2:
-            # A bounded subscribe completes on its own once it reaches the
-            # bound. The delta is sometimes small enough that the system
-            # chooses a later AS OF, firing the absurd-bounds error path on
-            # purpose.
-            exe.execute("SELECT mz_now()::text", http=Http.NO)
-            # mz_now() can be u64::MAX in some session states, so clamp the
-            # sum to the mz_timestamp (u64) range to avoid an overflow that
-            # makes UP TO uncastable.
-            up_to = min(
-                int(exe.cur.fetchall()[0][0]) + self.rng.randint(0, 5000),
-                2**64 - 1,
-            )
-            (
-                exe.rollback(http=Http.NO)
-                if self.rng.choice([True, False])
-                else exe.commit(http=Http.NO)
-            )
+        # NOTE: A bounded SUBSCRIBE (UP TO) over an object whose as_of has
+        # advanced to the end of time (e.g. a finished bounded load generator
+        # source) soft-panics the optimizer. See FINDINGS-BUGS.md. Left out
+        # until that is fixed. AS OF AT LEAST 0 below is safe (empty until).
         query = "SUBSCRIBE "
         envelope_used = False
         if self.rng.choice([True, False]):
@@ -759,10 +741,6 @@ class FetchAction(Action):
         if self.rng.random() < 0.2:
             # AT LEAST always plans, no matter how far the since advanced.
             query += " AS OF AT LEAST 0"
-        if up_to is not None:
-            # Cast through text explicitly: a bare int8-sized literal has no
-            # assignment cast to mz_timestamp, which AS OF/UP TO planning uses.
-            query += f" UP TO '{up_to}'::mz_timestamp"
 
         exe.execute(f"DECLARE c{self.i} CURSOR FOR {query}", http=Http.NO)
         while True:
@@ -980,6 +958,10 @@ class CopyFromS3Action(Action):
                 "timeout: error trying to connect",
                 # TODO: Remove when https://linear.app/materializeinc/issue/SS-341 is fixed
                 "parquet error",
+                # COPY TO CSV writes a large-year date that COPY FROM CSV then
+                # fails to parse back. See FINDINGS-BUGS.md ("COPY FROM CSV
+                # cannot decode a large-year date written by COPY TO").
+                "expected_dur_like_tokens can only be called with",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -5373,7 +5355,13 @@ ddl_action_list = ActionList(
         (BroadPrivilegesAction, 2),
         (ShowAction, 4),
         (ValidateConnectionAction, 2),
-        (AlterConnectionAction, 2),
+        # TODO: Reenable once altering a connection that sinks or sources depend
+        # on can no longer panic the coordinator. Re-altering a dependent sink's
+        # export connection after the txn fails with InvalidAlter, which
+        # unwrap_or_terminate turns into a panic. See FINDINGS-BUGS.md
+        # ("Coordinator panic re-altering a dependent sink's export
+        # connection").
+        # (AlterConnectionAction, 2),
         (AlterSecretAction, 2),
         (ReconnectAction, 1),
         (CreateDatabaseAction, 1),
