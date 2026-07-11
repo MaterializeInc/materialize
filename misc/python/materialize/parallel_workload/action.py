@@ -3347,7 +3347,11 @@ class AlterOwnerAction(Action):
             for cluster in exe.db.clusters:
                 candidates.append(("CLUSTER", str(cluster)))
             candidates.append(("SECRET", "materialize.public.pgpass"))
-            candidates.append(("CONNECTION", "materialize.public.kafka_conn"))
+            # NOTE: No CONNECTION target. Changing a connection's owner emits a
+            # Connection(Altered) implication, which re-alters every dependent
+            # sink's export connection; that re-alter can fail with InvalidAlter
+            # and panic the coordinator. See FINDINGS-BUGS.md ("Coordinator
+            # panic re-altering a dependent sink's export connection").
             kind, name = self.rng.choice(candidates)
         with role.lock:
             if role not in exe.db.roles:
@@ -3436,7 +3440,12 @@ class BroadPrivilegesAction(Action):
             targets: list[tuple[str, list[str]]] = [
                 ("SYSTEM", ["CREATEDB", "CREATECLUSTER", "CREATEROLE", "ALL"]),
                 ("SECRET materialize.public.pgpass", ["USAGE", "ALL"]),
-                ("CONNECTION materialize.public.kafka_conn", ["USAGE", "ALL"]),
+                # NOTE: No CONNECTION target. GRANT/REVOKE on a connection emits
+                # a Connection(Altered) implication, which re-alters every
+                # dependent sink's export connection; that re-alter can fail
+                # with InvalidAlter and panic the coordinator. See
+                # FINDINGS-BUGS.md ("Coordinator panic re-altering a dependent
+                # sink's export connection").
             ]
             if exe.db.schemas:
                 targets.append(
@@ -4964,6 +4973,9 @@ class DropTypeAction(Action):
         return [
             "still depended upon by",
             "cannot be dropped",
+            # Another worker (or a CASCADE drop of the schema/database) can
+            # drop the type first.
+            "does not exist",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
