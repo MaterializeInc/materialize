@@ -62,6 +62,14 @@ pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 /// real one via [`merge_batcher::ColumnMergeBatcher::set_pager`].
 pub type Col2ValPagedBatcher<K, V, T, R> = merge_batcher::ColumnMergeBatcher<(K, V), T, R>;
 
+/// Temporal-bucketing counterpart of [`Col2ValPagedBatcher`]: paged chains
+/// plus far-future updates held in a bucket chain instead of being re-merged
+/// at every seal.
+pub type Col2ValPagedTemporalBatcher<K, V, T, R> =
+    crate::merge_batcher::TemporalBucketingMergeBatcher<
+        merge_batcher::PagedColumnMerger<(K, V), T, R>,
+    >;
+
 /// A container based on a columnar store, encoded in aligned bytes.
 ///
 /// The type can represent typed data, bytes from Timely, or an aligned allocation. The name
