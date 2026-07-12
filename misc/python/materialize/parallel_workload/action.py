@@ -2941,6 +2941,9 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["kafka_sink_emit_sink_id_header"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_sync_mv_sink_shared_batches"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         # Applies to replicas provisioned after the flip.
         self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
