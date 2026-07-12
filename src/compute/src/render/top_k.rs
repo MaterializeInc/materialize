@@ -168,10 +168,11 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     );
                     err_collection = err_collection.concat(errs);
 
-                    // Build the group-key-keyed arrangement flavor that Task 3 will advertise via
-                    // lowering, mirroring `render_reduce_plan`'s `ArrangementFlavor::Local`. The
-                    // key is the arbitrary column set `group_key` (not a `0..k` prefix), and the
-                    // arrangement value is the winning row thinned to `thinning`.
+                    // Build the group-key-keyed arrangement flavor that lowering advertises (see
+                    // the `MirRelationExpr::TopK` arm in `lowering.rs`), mirroring
+                    // `render_reduce_plan`'s `ArrangementFlavor::Local`. The key is the arbitrary
+                    // column set `group_key` (not a `0..k` prefix), and the arrangement value is
+                    // the winning row thinned to `thinning`.
                     let key: Vec<LirScalarExpr> = group_key
                         .iter()
                         .map(|c| LirScalarExpr::column(*c))
@@ -184,13 +185,25 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         );
                     let flavor = ArrangementFlavor::Local(arrangement.clone(), err_arrangement);
 
-                    // Reconstruct the raw collection from the arrangement so consumers planned
-                    // before the arrangement is advertised (i.e. any `input_key = None` reader,
-                    // such as a `Reduce` over a `DISTINCT ON`) still find a collection. `Reduce`
-                    // can be arrangement-only because its key is a `0..k` prefix, so the concat of
-                    // key and value already yields the logical row. Here `group_key` is arbitrary,
-                    // so we apply `permutation` to recover the original column order. Task 3 flips
-                    // consumers to the arrangement and can then drop this reconstruction.
+                    // Reconstruct the raw collection from the arrangement too. Lowering's
+                    // advertisement is trustworthy only when the MIR-level monotonicity analysis
+                    // already picked `MonotonicTop1` before lowering ran: `TopKPlan::as_monotonic`
+                    // can also *upgrade* a `Basic` plan into `MonotonicTop1` after lowering, for
+                    // single-time (one-shot SELECT) dataflows (see
+                    // `LirRelationExpr::refine_single_time_operator_selection`). In that case
+                    // lowering advertised `raw` (since the plan was still `Basic` when the
+                    // `AvailableCollections` were computed), so any consumer of this node's output
+                    // still expects `bundle.collection` to be populated directly, without going
+                    // through `ensure_collections`. Unlike `Reduce::keys()` (which advertises the
+                    // same group-key arrangement for every `Hierarchical` sub-variant, so its
+                    // arrangement-only bundle is always consistent with what lowering promised),
+                    // `TopK`'s `Basic`/`MonotonicTopK` variants don't produce a group-key
+                    // arrangement at all. So we can't tell, from here, whether we're in the
+                    // advertised or the upgraded case, and must always supply the raw collection
+                    // to avoid violating the `keys.raw <= collection.collection.is_some()`
+                    // invariant checked at render time. `Reduce`'s key is a `0..k` prefix, so the
+                    // concat of key and value already yields the logical row; here `group_key` is
+                    // arbitrary, so we apply `permutation` to recover the original column order.
                     let mut datums = mz_repr::DatumVec::new();
                     let oks = arrangement.as_collection(move |k: DatumSeq, v: DatumSeq| {
                         let temp_storage = mz_repr::RowArena::new();

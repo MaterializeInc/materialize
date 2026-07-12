@@ -181,3 +181,54 @@ Explained Query:
 Target cluster: quickstart
 
 EOF
+
+# Regression test: `TopK::MonotonicTop1` advertises the arrangement it builds
+# on its group key (see `render_top1_monotonic`), so joining two `DISTINCT ON`
+# queries over the same monotonic source on their group key should reuse that
+# arrangement instead of forcing a separate `ArrangeBy`. The two views order in
+# opposite directions so they pick different winning rows and the optimizer
+# can't collapse the join into a trivial self-join projection.
+
+statement ok
+CREATE VIEW distinct_asc AS
+  SELECT DISTINCT ON (counter % 3) counter % 3 AS k, counter
+  FROM counter
+  ORDER BY counter % 3, counter ASC;
+
+statement ok
+CREATE VIEW distinct_desc AS
+  SELECT DISTINCT ON (counter % 3) counter % 3 AS k, counter
+  FROM counter
+  ORDER BY counter % 3, counter DESC;
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+  SELECT a.k, a.counter, b.counter
+  FROM distinct_asc a
+  JOIN distinct_desc b ON a.k = b.k
+----
+Explained Query:
+  With
+    cte l0 =
+      Get::Collection materialize.public.counter
+        raw=true
+  Return
+    Join::Linear
+      linear_stage[0]
+        lookup={ relation=1, key=[#1{k}] }
+        stream={ key=[#1], thinning=(#0) }
+      source={ relation=0, key=[#1] }
+      TopK::MonotonicTop1 group_by=[#1] order_by=[#0 asc nulls_last]
+        Get::PassArrangements l0
+          raw=true
+      TopK::MonotonicTop1 group_by=[#1] order_by=[#0 desc nulls_first]
+        Get::PassArrangements l0
+          raw=true
+
+Source materialize.public.counter
+  project=(#0, #1)
+  map=((#0{counter} % 3))
+
+Target cluster: quickstart
+
+EOF

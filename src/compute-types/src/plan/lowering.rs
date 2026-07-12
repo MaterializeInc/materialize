@@ -935,7 +935,25 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } else {
                     input
                 };
-                // Return the plan, and no arrangements.
+                // Return the plan, and the keys it produces. `MonotonicTop1` arranges its
+                // output by the group key (see `render_top1_monotonic`), so a downstream
+                // consumer keyed the same way can reuse that arrangement instead of forcing
+                // another `ArrangeBy`.
+                let out_keys = match &top_k_plan {
+                    TopKPlan::MonotonicTop1(_) => {
+                        let key = group_key
+                            .iter()
+                            .map(|c| LirScalarExpr::column(*c))
+                            .collect::<Vec<_>>();
+                        let (permutation, thinning) = permutation_for_arrangement(&key, arity);
+                        AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
+                    }
+                    // MonotonicTopK / Basic key their arrangements by (hash, group_key), which is
+                    // not reusable by a group-key consumer, so they advertise no arrangement.
+                    TopKPlan::MonotonicTopK(_) | TopKPlan::Basic(_) => {
+                        AvailableCollections::new_raw()
+                    }
+                };
                 let temporal_bucketing_strategy = strategy_from_future(input_future);
                 let lir_id = self.allocate_lir_id();
                 LoweredExpr {
@@ -945,7 +963,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         temporal_bucketing_strategy,
                     }
                     .as_plan(lir_id),
-                    keys: AvailableCollections::new_raw(),
+                    keys: out_keys,
                     has_future_updates: false,
                 }
             }
