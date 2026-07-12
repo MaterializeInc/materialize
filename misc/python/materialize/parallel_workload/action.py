@@ -1531,10 +1531,12 @@ class DropIndexAction(Action):
                 # The indexed object or its schema may have been dropped
                 # concurrently, taking the index with it. Untrack the index
                 # either way so stale entries don't fill up the set and choke
-                # off CreateIndexAction.
-                exe.db.indexes.remove(index)
+                # off CreateIndexAction. Use discard, not remove: a concurrent
+                # CASCADE drop's untrack_objects_in_schemas may have already
+                # removed it, and remove would raise KeyError.
+                exe.db.indexes.discard(index)
                 raise
-            exe.db.indexes.remove(index)
+            exe.db.indexes.discard(index)
             return True
 
 
@@ -1598,7 +1600,12 @@ class DropTableAction(Action):
 
             query = f"DROP TABLE {table}"
             exe.execute(query, http=Http.RANDOM)
-            exe.db.tables.remove(table)
+            # A concurrent CASCADE drop's untrack_objects_in_schemas may have
+            # already filtered this table out of the list; tolerate that.
+            try:
+                exe.db.tables.remove(table)
+            except ValueError:
+                pass
         return True
 
 
@@ -2917,7 +2924,12 @@ class DropViewAction(Action):
             else:
                 query = f"DROP VIEW {view}"
             exe.execute(query, http=Http.RANDOM)
-            exe.db.views.remove(view)
+            # A concurrent CASCADE drop's untrack_objects_in_schemas may have
+            # already filtered this view out of the list; tolerate that.
+            try:
+                exe.db.views.remove(view)
+            except ValueError:
+                pass
         return True
 
 
