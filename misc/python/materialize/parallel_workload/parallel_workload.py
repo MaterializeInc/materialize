@@ -26,10 +26,6 @@ from materialize.parallel_workload.action import (
     ActionList,
     BackupRestoreAction,
     CancelAction,
-    DropClusterAction,
-    DropDatabaseAction,
-    DropRoleAction,
-    DropSchemaAction,
     ExplainAnalyzeAction,
     KillAction,
     StatisticsAction,
@@ -535,23 +531,20 @@ def print_stats(
         for action_list in action_lists
         for action_class in action_list.action_classes
     }
-    # These use RESTRICT and their targets practically always contain
-    # objects (schemas and databases their items, clusters their sources,
-    # sinks, and indexes), so they exercise the rejection path and are not
-    # expected to ever succeed.
-    #
-    # DropRoleAction and ExplainAnalyzeAction have strict runtime preconditions
-    # that a churny run frequently denies: a dependency-free role (AlterOwner
-    # reassigns ownership to roles) and a hydrated MV/index on the active
-    # cluster (renames/drops keep retiring the target). They can and do succeed,
-    # so they aren't broken, but a given seed can see zero successes with only
-    # legitimate rejections, which would false-positive the assertion below.
-    action_classes -= {
-        DropClusterAction,
-        DropDatabaseAction,
-        DropSchemaAction,
-        DropRoleAction,
-        ExplainAnalyzeAction,
+    # A given churny seed can legitimately see zero successes for two families,
+    # so the broken-action assertion must not fire on them:
+    #   * Drop* actions: RESTRICT rejections (targets usually contain objects),
+    #     or a concurrent CASCADE untrack/drop removes the target first, or the
+    #     dependency-free precondition (roles after AlterOwner) is never met.
+    #   * ExplainAnalyzeAction: needs a hydrated MV/index on the active cluster,
+    #     which renames/drops keep retiring.
+    # These succeed in normal runs, so they aren't broken. The assertion below
+    # then targets CREATE/ALTER/write actions, where never-succeeding does mean
+    # broken SQL or an impossible precondition.
+    action_classes = {
+        c
+        for c in action_classes
+        if not c.__name__.startswith("Drop") and c is not ExplainAnalyzeAction
     }
     never_succeeded = []
     for action_class in sorted(action_classes, key=lambda cls: cls.__name__):
