@@ -508,7 +508,17 @@ def print_stats(
     # rarely-run action that never lands a lucky owner-matching session (e.g.
     # DropClusterReplicaAction, gated on an unmanaged cluster having a spare
     # replica) doesn't trip the broken-action assertion below.
-    ownership_noise = {"must be owner of", "permission denied for"}
+    #
+    # "cannot be dropped because some objects depend on it" is a legitimate
+    # RESTRICT rejection, not brokenness: AlterOwnerAction reassigns object
+    # ownership to random roles, so a role usually owns something and DROP ROLE
+    # is rejected. Without this a short run can see DropRoleAction never land a
+    # dependency-free role and falsely look broken.
+    ownership_noise = {
+        "must be owner of",
+        "permission denied for",
+        "cannot be dropped because some objects depend on it",
+    }
     num_errored_real: Counter[type[Action]] = Counter()
     for worker in workers:
         num_successes.update(worker.num_successes)
