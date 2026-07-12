@@ -71,6 +71,11 @@ pub(super) struct Context {
     enable_reduce_mfp_fusion: bool,
     /// Metrics recorded during lowering, if any are being collected.
     metrics: Option<LoweringMetrics>,
+    /// Whether the current expression is subject to single-time (one-shot
+    /// `SELECT`) monotonic operator selection. Initialized from the dataflow's
+    /// `is_single_time()` and forced to `false` while lowering the recursive
+    /// bindings of a `LetRec`, whose values are not restricted to a single time.
+    single_time: bool,
 }
 
 impl Context {
@@ -89,6 +94,8 @@ impl Context {
             },
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
             metrics: metrics.cloned(),
+            // Set from the dataflow in `lower` before any expression is lowered.
+            single_time: false,
         }
     }
 
@@ -136,6 +143,12 @@ impl Context {
                 .entry(Id::Global(*id))
                 .or_insert_with(AvailableCollections::new_raw);
         }
+
+        // One-shot `SELECT` dataflows run at a single time, which lets us select
+        // monotonic operator variants during lowering (see the `TopK` and `Reduce`
+        // arms). This absorbs what used to be a post-lowering in-place rewrite, so
+        // that `AvailableCollections` reflect the final operator variant.
+        self.single_time = desc.is_single_time();
 
         // Build each object in order, registering the arrangements it forms.
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
@@ -393,6 +406,11 @@ impl Context {
                 // as we cannot circulate an arrangement through a `Variable` yet.
                 let mut lir_values = Vec::with_capacity(values.len());
                 let mut any_v_future = false;
+                // The recursive bindings of a `LetRec` are not restricted to a single
+                // time, so single-time monotonic selection must not apply to them. Only
+                // the `body`, lowered below, inherits the enclosing scope's flag.
+                let outer_single_time = self.single_time;
+                self.single_time = false;
                 for (id, value) in ids.iter().zip_eq(values) {
                     let LoweredExpr {
                         plan: mut lir_value,
@@ -478,6 +496,7 @@ impl Context {
                 }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
+                self.single_time = outer_single_time;
                 let LoweredExpr {
                     plan: body,
                     keys: b_keys,
@@ -883,7 +902,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     has_future_updates: input_future,
                 } = self.lower_mir_expr(input)?;
 
-                let top_k_plan = TopKPlan::create_from(
+                let mut top_k_plan = TopKPlan::create_from(
                     group_key.clone(),
                     order_key.clone(),
                     *offset,
@@ -894,6 +913,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     *monotonic,
                     *expected_group_size,
                 );
+
+                // For single-time dataflows, upgrade to the monotonic variant with
+                // mandatory consolidation. `refine_single_time_consolidation` later
+                // relaxes `must_consolidate` where the input is physically monotonic.
+                if self.single_time {
+                    top_k_plan.as_monotonic(true);
+                }
 
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
@@ -1286,12 +1312,27 @@ This is not expected to cause incorrect results, but could indicate a performanc
             aggregates,
             permutation_and_new_arity,
         );
-        let reduce_plan = ReducePlan::create_from(
+        let mut reduce_plan = ReducePlan::create_from(
             aggregates.clone(),
             *monotonic,
             *expected_group_size,
             fused_unnest_list,
         );
+
+        // For single-time dataflows, upgrade a hierarchical reduce to its monotonic
+        // variant with mandatory consolidation. `refine_single_time_consolidation`
+        // later relaxes `must_consolidate` where the input is physically monotonic.
+        // Selecting the variant here (rather than mutating the LIR node after
+        // lowering) keeps the advertised `AvailableCollections` consistent with the
+        // final plan. `Reduce::keys()` is the same for every hierarchical sub-variant,
+        // so this does not change what is advertised, but it removes the in-place
+        // structural rewrite.
+        if self.single_time {
+            if let ReducePlan::Hierarchical(hierarchical) = &mut reduce_plan {
+                hierarchical.as_monotonic(true);
+            }
+        }
+
         // Return the plan, and the keys it produces.
         let mfp_after;
         let output_arity;

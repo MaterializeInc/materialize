@@ -594,7 +594,9 @@ impl LirRelationExpr {
         // available.
 
         if dataflow.is_single_time() {
-            Self::refine_single_time_operator_selection(&mut dataflow);
+            // Monotonic operator selection for single-time dataflows happens during
+            // lowering (see the `TopK` and `Reduce` arms in `lowering.rs`), so the
+            // advertised `AvailableCollections` already reflect the final variant.
 
             // The relaxation of the `must_consolidate` flag performs an LIR-based
             // analysis and transform under checked recursion. By a similar argument
@@ -763,55 +765,6 @@ impl LirRelationExpr {
                         }
                     }
                     todo.extend(expression.node.children_mut());
-                }
-            }
-        }
-        mz_repr::explain::trace_plan(dataflow);
-    }
-
-    /// Refines the plans of objects to be built as part of `dataflow` to take advantage
-    /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
-    /// one-shot SELECT query.
-    #[mz_ore::instrument(
-        target = "optimizer",
-        level = "debug",
-        fields(path.segment = "refine_single_time_operator_selection")
-    )]
-    fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
-        // We should only reach here if we have a one-shot SELECT query, i.e.,
-        // a single-time dataflow.
-        assert!(dataflow.is_single_time());
-
-        // Upgrade single-time plans to monotonic.
-        for build_desc in dataflow.objects_to_build.iter_mut() {
-            let mut todo = vec![&mut build_desc.plan];
-            while let Some(expression) = todo.pop() {
-                let node = &mut expression.node;
-                match node {
-                    LirRelationNode::Reduce { plan, .. } => {
-                        // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
-                        match plan {
-                            ReducePlan::Hierarchical(hierarchical) => {
-                                hierarchical.as_monotonic(true);
-                            }
-                            _ => {
-                                // Nothing to do for other plans, and doing nothing is safe for future variants.
-                            }
-                        }
-                        todo.extend(node.children_mut());
-                    }
-                    LirRelationNode::TopK { top_k_plan, .. } => {
-                        top_k_plan.as_monotonic(true);
-                        todo.extend(node.children_mut());
-                    }
-                    LirRelationNode::LetRec { body, .. } => {
-                        // Only the non-recursive `body` is restricted to a single time.
-                        todo.push(body);
-                    }
-                    _ => {
-                        // Nothing to do for other expressions, and doing nothing is safe for future expressions.
-                        todo.extend(node.children_mut());
-                    }
                 }
             }
         }
