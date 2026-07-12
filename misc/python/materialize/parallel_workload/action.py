@@ -1362,9 +1362,18 @@ class UpdateAction(Action):
 
 class DeleteAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        errors = [
-            "canceling statement due to statement timeout",
-        ] + super().errors_to_ignore(exe)
+        errors = (
+            [
+                "canceling statement due to statement timeout",
+                # DELETE .. USING lowers to a semijoin whose DistinctBy can surface
+                # negative-accumulation errors for some generated WHERE clauses,
+                # outside the RepeatRow scenario. This is the known class tracked in
+                # database-issues#9308. See FINDINGS-BUGS.md ("DELETE .. USING
+                # surfaces a negative-accumulation error").
+            ]
+            + NEGATIVE_ACCUMULATION_ERRORS
+            + super().errors_to_ignore(exe)
+        )
         if exe.db.scenario == Scenario.Rename:
             errors += ["does not exist"]
         return errors
