@@ -242,6 +242,33 @@ pub struct Controller {
 ///
 /// With better parallelism during startup this would likely be unnecessary, but empirically we see
 /// some nice speedups with this relatively simple function.
+/// What `create_collections_for_bootstrap` opens per collection: a write handle for collections
+/// the controller writes directly, or just a recent, linearized upper for txns-managed tables,
+/// whose writes go through the table-write worker (which opens its own handles per
+/// registration).
+enum WriteHandleOrUpper {
+    Handle(WriteHandle<SourceData, (), Timestamp, StorageDiff>),
+    Upper(Antichain<Timestamp>),
+}
+
+impl WriteHandleOrUpper {
+    fn upper(&self) -> Antichain<Timestamp> {
+        match self {
+            Self::Handle(handle) => handle.upper().clone(),
+            Self::Upper(upper) => upper.clone(),
+        }
+    }
+
+    /// Returns the write handle, panicking for the `Upper` variant. Only call for data sources
+    /// that are never tables.
+    fn expect_handle(self, context: &str) -> WriteHandle<SourceData, (), Timestamp, StorageDiff> {
+        match self {
+            Self::Handle(handle) => handle,
+            Self::Upper(_) => panic!("write handle required: {context}"),
+        }
+    }
+}
+
 fn warm_persist_state_in_background(
     client: PersistClient,
     shard_ids: impl Iterator<Item = ShardId> + Send + 'static,
@@ -840,14 +867,34 @@ impl StorageController for Controller {
                     // but for now, it's helpful to have this mapping written down somewhere
                     debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
-                    let write = this
-                        .open_data_handles(
-                            &id,
-                            metadata.data_shard,
-                            metadata.relation_desc.clone(),
-                            persist_client,
-                        )
-                        .await;
+                    // Tables are written through the txns table-write worker, which opens its
+                    // own write handles per registration, so opening one here would be pure
+                    // overhead (an extra persist open per table on the startup path). The
+                    // controller only needs a recent upper for them.
+                    let write = if matches!(description.data_source, DataSource::Table) {
+                        let diagnostics = Diagnostics {
+                            shard_name: id.to_string(),
+                            handle_purpose: format!("controller data for {}", id),
+                        };
+                        let upper = persist_client
+                            .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                                metadata.data_shard,
+                                diagnostics,
+                            )
+                            .await
+                            .expect("invalid persist usage");
+                        WriteHandleOrUpper::Upper(upper)
+                    } else {
+                        let write = this
+                            .open_data_handles(
+                                &id,
+                                metadata.data_shard,
+                                metadata.relation_desc.clone(),
+                                persist_client,
+                            )
+                            .await;
+                        WriteHandleOrUpper::Handle(write)
+                    };
 
                     Ok::<_, StorageError>((id, description, write, metadata))
                 }
@@ -973,7 +1020,7 @@ impl StorageController for Controller {
                     mz_ore::soft_assert_or_log!(
                         write_frontier.elements() == &[Timestamp::MIN]
                             || write_frontier.is_empty()
-                            || PartialOrder::less_than(&dependency_since, write_frontier),
+                            || PartialOrder::less_than(&dependency_since, &write_frontier),
                         "dependency since has advanced past dependent ({id}) upper \n
                             dependent ({id}): upper {:?} \n
                             dependency since {:?} \n
@@ -1002,7 +1049,7 @@ impl StorageController for Controller {
                     self.register_introspection_collection(
                         id,
                         *typ,
-                        write,
+                        write.expect_handle("introspection collections are not tables"),
                         persist_client.clone(),
                     )?;
                 }
@@ -1019,8 +1066,12 @@ impl StorageController for Controller {
                     // NOTE: Maybe this shouldn't be in the collection manager,
                     // and collection manager should only be responsible for
                     // built-in introspection collections?
-                    self.collection_manager
-                        .register_append_only_collection(id, write, false, None);
+                    self.collection_manager.register_append_only_collection(
+                        id,
+                        write.expect_handle("webhook collections are not tables"),
+                        false,
+                        None,
+                    );
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
@@ -1437,6 +1488,11 @@ impl StorageController for Controller {
         if self.read_only {
             tables.retain(|table| self.migrated_storage_collections.contains(&table.id));
         }
+        // NOTE: Skipping the register when no tables remain also skips the txns-shard
+        // compare-and-append that acts as a cross-generation write barrier (see the module docs
+        // of the adapter's coord/appends.rs). That is safe only because a writable bootstrap
+        // always registers at least the builtin system tables, so its register set is never
+        // empty.
         if tables.is_empty() {
             return Ok(());
         }
@@ -1472,6 +1528,17 @@ impl StorageController for Controller {
                     data_shard: metadata.data_shard,
                     relation_desc: metadata.relation_desc.clone(),
                 });
+            }
+        }
+        Ok(tables)
+    }
+
+    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError> {
+        let mut tables = Vec::with_capacity(ids.len());
+        for id in ids {
+            let collection = self.collection(id)?;
+            if matches!(collection.data_source, DataSource::Table) {
+                tables.push(id);
             }
         }
         Ok(tables)
@@ -3090,13 +3157,10 @@ where
         Ok(())
     }
 
-    /// Opens a write and critical since handles for the given `shard`.
+    /// Opens a write handle for the given `shard` and fetches a recent upper for it.
     ///
-    /// `since` is an optional `since` that the read handle will be forwarded to if it is less than
-    /// its current since.
-    ///
-    /// This will `halt!` the process if we cannot successfully acquire a critical handle with our
-    /// current epoch.
+    /// Used for collections the controller itself writes to. Tables are not opened through this,
+    /// see `create_collections_for_bootstrap`.
     async fn open_data_handles(
         &self,
         id: &GlobalId,
@@ -3119,12 +3183,9 @@ where
             .await
             .expect("invalid persist usage");
 
-        // N.B.
-        // Fetch the most recent upper for the write handle. Otherwise, this may be behind
-        // the since of the since handle. Its vital this happens AFTER we create
-        // the since handle as it needs to be linearized with that operation. It may be true
-        // that creating the write handle after the since handle already ensures this, but we
-        // do this out of an abundance of caution.
+        // Fetch the most recent upper for the write handle, so callers reading the cached
+        // upper (e.g. for collection-state init) see a linearized, recent value rather than
+        // whatever the handle was opened with.
         //
         // Note that this returns the upper, but also sets it on the handle to be fetched later.
         write.fetch_recent_upper().await;

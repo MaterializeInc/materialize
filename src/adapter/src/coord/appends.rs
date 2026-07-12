@@ -18,12 +18,12 @@
 //! timestamp, per command:
 //!
 //! 1. allocate a write timestamp from the oracle,
-//! 2. advance the catalog shard upper to the timestamp's `advance_to`, which keeps the catalog
-//!    readable at the read timestamp the oracle moves to in step 4 and, when the advance
-//!    actually writes, re-checks leadership before user data is written (see
+//! 2. advance the catalog shard upper to the timestamp's [`WriteTimestamp::advance_to`], which
+//!    keeps the catalog readable at the read timestamp the oracle moves to in step 4 and, when
+//!    the advance actually writes, re-checks leadership before user data is written (see
 //!    materialize#28216; an advance that finds the upper already past the target short-circuits
 //!    without a durable check, so this is defense in depth, not a per-attempt guarantee),
-//! 3. issue the txns-shard write; an `InvalidUppers` conflict means another process advanced
+//! 3. issue the txns-shard write. An `InvalidUppers` conflict means another process advanced
 //!    the txns shard past our timestamp, so retry from step 1 at a fresh timestamp (a wasted
 //!    timestamp is harmless, `apply_write` is a high-water mark),
 //! 4. apply the write to the oracle, so no read ever observes a timestamp at which the write is
@@ -35,12 +35,33 @@
 //! overtake it. See the corresponding section in `doc/developer/guide-adapter.md` for why, and
 //! for the cross-process story.
 //!
+//! # Cross-generation safety
+//!
+//! A fenced-out process can keep this task alive for a moment, so a stale generation's txns
+//! write must never land above the new generation's system-table snapshot timestamp, where it
+//! would go unobserved. That holds because of three load-bearing invariants:
+//!
+//! - the shared timestamp oracle is strictly increasing across generations, so a write above
+//!   the snapshot timestamp requires a timestamp allocated after the fence,
+//! - every attempt advances the catalog upper before the txns-shard write, and a post-fence
+//!   timestamp forces a durable catalog check (the stale generation's cached upper is frozen
+//!   below the fence point, growing it requires a successful durable commit), which observes
+//!   the fence and halts before the txns write,
+//! - the new generation's bootstrap registers table collections in the txns shard, an
+//!   unconditional compare-and-append, before taking its system-table snapshot, so the txns
+//!   upper is a barrier: a stale generation's write can only land below the snapshot, where it
+//!   is observed (retracted for system tables, visible to reads for user tables).
+//!
+//! Reordering bootstrap or making the register's compare-and-append conditional would silently
+//! reopen this hole.
+//!
 //! Finalization that needs coordinator state (statement-logging timestamps, retiring client
-//! responses, downgrading read holds) is handed back to the loop via
+//! responses, downgrading read holds) is handed back to the coordinator loop via
 //! [`Message::GroupCommitApplied`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
@@ -52,6 +73,7 @@ use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS};
 use mz_expr::CollectionPlan;
 use mz_ore::assert_none;
 use mz_ore::halt;
+use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
@@ -91,8 +113,8 @@ pub enum DeferredOp {
 impl DeferredOp {
     /// Certain operations, e.g. "blind writes"/`INSERT` statements, can be optimistically retried
     /// because we can share a write lock between multiple operations. In this case we wait to
-    /// acquire the locks until [`stage_group_commit`], where writes are groupped by collection and
-    /// comitted at a single timestamp.
+    /// acquire the locks until [`stage_group_commit`], where writes are grouped by collection and
+    /// committed at a single timestamp.
     ///
     /// Other operations, e.g. read-then-write plans/`UPDATE` statements, must uniquely hold their
     /// write locks and thus we should acquire the locks in [`try_deferred`] to prevent multiple
@@ -241,6 +263,12 @@ pub(crate) struct GroupCommitRequest {
     /// Client transmitters for user writes, retired once the commit is durable.
     responses: Vec<CompletedClientTransmitter>,
     /// Statement-logging ids for user writes, paired with the commit timestamp once we know it.
+    ///
+    /// Invariant: no execution-ended event may be emitted for these ids while they sit here. The
+    /// contexts that could end them are in `responses`, and the coordinator records the
+    /// timestamps before retiring those contexts when handling [`Message::GroupCommitApplied`].
+    /// A path that ends one of these executions early would turn the timestamp recording into a
+    /// write to an ended execution, see `set_statement_execution_timestamp`.
     statement_logging_ids: Vec<StatementLoggingId>,
     /// Notifiers for system-table writes (DDL, background heartbeats).
     notifies: Vec<oneshot::Sender<()>>,
@@ -293,6 +321,10 @@ impl GroupCommitRequest {
 /// in-process, and the table write handle stays valid for the controller's lifetime. The catalog
 /// upper handle shares the durable-storage mutex with catalog transactions, so upper advancement
 /// stays serialized with DDL commits.
+///
+/// No graceful shutdown: when the process shuts down, in-flight and queued responses are
+/// dropped, which retires the clients with a shutdown error, see the drop backstop on
+/// [`ExecuteContext`].
 pub(crate) struct GroupCommitter {
     rx: mpsc::UnboundedReceiver<TableWriteCmd>,
     oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync>,
@@ -313,7 +345,10 @@ impl GroupCommitter {
                 match cmd {
                     TableWriteCmd::GroupCommit(request) => {
                         let span = request.span.clone();
-                        next = self.commit(request).instrument(span).await;
+                        match self.commit(request).instrument(span).await {
+                            ControlFlow::Continue(deferred) => next = deferred,
+                            ControlFlow::Break(()) => return,
+                        }
                     }
                     TableWriteCmd::Register { tables, result } => {
                         let Some(write_ts) = self
@@ -347,14 +382,26 @@ impl GroupCommitter {
     /// Writes to the txns shard at a fresh oracle timestamp and applies the write to the oracle,
     /// implementing steps 1-4 of the protocol in the module docs.
     ///
-    /// Returns `None` if the table write worker shut down, which only happens at process
-    /// shutdown.
+    /// Returns `None` when the table write worker is gone, which only happens at process
+    /// shutdown. The caller must wind the committer down then, see the `Err(_recv)` arm.
     async fn write_to_txns(
         &self,
         op_duration_metric: Option<&prometheus::Histogram>,
         mut op: impl FnMut(Timestamp, Timestamp) -> oneshot::Receiver<Result<(), StorageError>>,
     ) -> Option<WriteTimestamp> {
+        // In-process conflicts are impossible (single writer), and the only conflicting writer
+        // we understand today is another generation, whose fence stops us via `advance_upper`
+        // within a retry or two. A conflict that persists past this cap means a writer we don't
+        // understand, so we convert it into the halt-and-rebuild path instead of spinning
+        // forever. The cap is generous on purpose: halting is disruptive, and each retry warns,
+        // so a misbehaving writer is visible in the logs long before we give up.
+        const MAX_ATTEMPTS: usize = 100;
+        let mut attempt = 0;
         let write_ts = loop {
+            attempt += 1;
+            if attempt > MAX_ATTEMPTS {
+                halt!("txns-shard write conflicted {MAX_ATTEMPTS} times, rebuilding");
+            }
             let write_ts = self.oracle.write_ts().await;
 
             let catalog_upper_start = Instant::now();
@@ -377,19 +424,38 @@ impl GroupCommitter {
                 Ok(Err(StorageError::InvalidUppers(_))) => {
                     // Another process advanced the txns shard past us; retry at a fresh
                     // timestamp.
+                    warn!(
+                        write_ts = %write_ts.timestamp,
+                        attempt,
+                        "txns-shard write conflicted with another writer, retrying at a fresh timestamp"
+                    );
                     continue;
                 }
                 Ok(Err(other)) => {
-                    // Any other error is fatal, matching the previous on-loop behavior.
+                    // Only another writer's upper conflict is retryable, anything else is fatal.
                     Err::<(), _>(other).unwrap_or_terminate("cannot fail to write to txns shard");
                     unreachable!("unwrap_or_terminate does not return on Err");
                 }
                 Err(_recv) => {
-                    warn!("table write worker terminated with writes in indefinite state");
+                    // The worker replies to every command, so a dropped reply means its task
+                    // was cancelled, which only happens at process shutdown (a worker panic
+                    // aborts the process through the panic hook). The write is in an indefinite
+                    // state, but so is everything else at this point. Wind the committer down
+                    // instead of processing more writes during teardown: dropped responses
+                    // retire their clients via the `ExecuteContext` drop backstop, dropped
+                    // register/forget waiters halt, matching the storage controller's shutdown
+                    // posture on the bootstrap register path.
+                    warn!("table write worker gone (process shutting down), winding down");
                     return None;
                 }
             }
         };
+
+        // The committer bypasses `apply_local_write`, so run the runaway-timeline check here:
+        // a write timestamp far ahead of the wall clock is the signal that the timeline has run
+        // away (e.g. after a clock regression).
+        let now: Timestamp = (self.now)().into();
+        crate::coord::timeline::check_runaway_write_ts(&now, write_ts.timestamp);
 
         // Mark the write complete on the oracle so reads can advance to it.
         self.oracle.apply_write(write_ts.timestamp).await;
@@ -405,16 +471,20 @@ impl GroupCommitter {
     /// user-only batch. Merging stops at the first register or forget command, which is returned
     /// to the caller to process next, preserving queue order (an append staged after a register
     /// may target the newly registered table and must not commit before it).
-    async fn commit(&mut self, mut request: GroupCommitRequest) -> Option<TableWriteCmd> {
+    ///
+    /// `Break` means the table write worker is gone and the committer must wind down.
+    async fn commit(
+        &mut self,
+        mut request: GroupCommitRequest,
+    ) -> ControlFlow<(), Option<TableWriteCmd>> {
         let mut deferred_cmd = None;
         // Once the channel is closed, `recv` resolves immediately with `None`. Disable that
         // select branch then, so the throttle sleep still runs instead of busy-looping.
         let mut rx_closed = false;
 
-        // Throttle: keep the global write timeline from running ahead of the wall clock. We peek
-        // and sleep off the loop, so a slow oracle backend does not stall the coordinator. The
-        // internal system-write case bypasses this so tests with a mocked wall clock still make
-        // progress.
+        // Throttle: keep the global write timeline from running ahead of the wall clock. The
+        // peek and the sleep happen here in the committer task, so a slow oracle backend does
+        // not stall the coordinator loop.
         loop {
             while deferred_cmd.is_none() {
                 match self.rx.try_recv() {
@@ -424,27 +494,40 @@ impl GroupCommitter {
                 }
             }
 
+            // Check the bypasses before peeking the oracle, so bypassed batches (every DDL
+            // builtin-table commit, for one) skip that round trip. An internal system write
+            // bypasses the throttle so tests with a mocked wall clock still make progress. A
+            // deferred register or forget means a DDL statement is blocked on the coordinator
+            // loop behind this batch. DDL was never subject to the wall-clock throttle (its
+            // timestamp allocations advanced the timeline directly when they ran on the
+            // coordinator loop), so rather than stall the whole control plane until the clock
+            // catches up, we let the batch through.
+            if request.contains_internal_system_write || deferred_cmd.is_some() {
+                break;
+            }
             let ts = self.oracle.peek_write_ts().await;
             let now: Timestamp = (self.now)().into();
-            // A deferred register or forget means a DDL statement is blocked on the coordinator
-            // loop behind this batch. DDL was never subject to the wall-clock throttle (its
-            // timestamp allocations advanced the timeline directly when it ran on the loop), so
-            // rather than stall the whole control plane until the clock catches up, we let the
-            // batch through, the same way an internal system write does.
-            if ts <= now || request.contains_internal_system_write || deferred_cmd.is_some() {
+            if ts <= now {
                 break;
             }
             // Cap the wait at 1s so a wall clock that jumped far ahead and then back does not
-            // stall us for a long time.
+            // stall us for a long time. The deadline is fixed per peek: merge wakeups below
+            // re-check the bypasses but do not re-peek the oracle.
             let remaining_ms = std::cmp::min(ts.saturating_sub(now), Timestamp::from(1_000u64));
             let sleep = tokio::time::sleep(Duration::from_millis(remaining_ms.into()));
-            tokio::select! {
-                _ = sleep => {}
-                cmd = self.rx.recv(), if deferred_cmd.is_none() && !rx_closed => match cmd {
-                    Some(TableWriteCmd::GroupCommit(other)) => request.merge(other),
-                    Some(other) => deferred_cmd = Some(other),
-                    None => rx_closed = true,
-                },
+            tokio::pin!(sleep);
+            loop {
+                tokio::select! {
+                    _ = &mut sleep => break,
+                    cmd = self.rx.recv(), if deferred_cmd.is_none() && !rx_closed => match cmd {
+                        Some(TableWriteCmd::GroupCommit(other)) => request.merge(other),
+                        Some(other) => deferred_cmd = Some(other),
+                        None => rx_closed = true,
+                    },
+                }
+                if request.contains_internal_system_write || deferred_cmd.is_some() {
+                    break;
+                }
             }
         }
 
@@ -467,7 +550,9 @@ impl GroupCommitter {
             })
             .await
         else {
-            return deferred_cmd;
+            // Winding down at shutdown. Dropping the batch retires the clients with a shutdown
+            // error via the `ExecuteContext` drop backstop.
+            return ControlFlow::Break(());
         };
         let timestamp = write_ts.timestamp;
 
@@ -488,7 +573,7 @@ impl GroupCommitter {
         // IMPORTANT: Release the in-progress permits and write locks now, after the write is
         // applied at the oracle, so no other write goes through at a timestamp we have not yet
         // applied. Retiring the client responses does not need these locks, so we hand that back
-        // to the loop.
+        // to the coordinator loop.
         drop(permits);
         drop(write_locks);
 
@@ -498,23 +583,30 @@ impl GroupCommitter {
             let _ = notify.send(());
         }
 
-        // Hand the parts that need coordinator state back to the loop: recording statement
-        // execution timestamps, retiring client responses, and downgrading read holds. Retiring
-        // must happen on the loop after the timestamps are recorded, because it ends the statement
-        // execution.
+        // Hand the parts that need coordinator state back to the coordinator loop: recording
+        // statement execution timestamps, retiring client responses, and downgrading read holds.
+        // Retiring must happen there after the timestamps are recorded, because it ends the
+        // statement execution.
         //
         // NOTE: After `apply_write(timestamp)` the oracle read ts is at least `timestamp`, and
-        // reads at `timestamp` observe this commit, so the loop can downgrade the
+        // reads at `timestamp` observe this commit, so the coordinator can downgrade the
         // EpochMilliseconds read holds to `timestamp` without an oracle round trip.
-        if let Err(e) = self.internal_cmd_tx.send(Message::GroupCommitApplied {
-            responses,
-            statement_logging_ids,
-            write_ts: timestamp,
-        }) {
-            warn!("coordinator shut down before a group commit could be finalized: {e}");
+        if self
+            .internal_cmd_tx
+            .send(Message::GroupCommitApplied {
+                responses,
+                statement_logging_ids,
+                write_ts: timestamp,
+            })
+            .is_err()
+        {
+            // The coordinator loop is gone, which only happens at process shutdown. Dropping
+            // the responses retires the clients with a shutdown error, see the drop backstop on
+            // `ExecuteContext`.
+            warn!("coordinator shut down before a group commit could be finalized");
         }
 
-        deferred_cmd
+        ControlFlow::Continue(deferred_cmd)
     }
 }
 
@@ -646,7 +738,8 @@ impl Coordinator {
     }
 
     /// Stages all pending write transactions into a [`GroupCommitRequest`] and hands it to the
-    /// group committer, which allocates the write timestamp and applies the commit off the loop.
+    /// group committer, which allocates the write timestamp and applies the commit off the
+    /// coordinator loop.
     ///
     /// If the caller holds the write lock they can pass it in. Writes whose locks are held by
     /// another operation are deferred (only system writes and table advancement proceed). Writes
@@ -655,7 +748,8 @@ impl Coordinator {
     /// All included pending writes are combined into a single append committed at one timestamp,
     /// and all involved tables advance to a timestamp larger than the write's. This does no
     /// timestamp-oracle round trips itself: the committer does the throttle, allocation, and apply
-    /// off the loop.
+    /// off the coordinator loop.
+    #[instrument(name = "coord::stage_group_commit")]
     pub(crate) fn stage_group_commit(&mut self, permit: Option<GroupCommitPermit>) {
         let mut validated_writes = Vec::new();
         let mut deferred_writes = Vec::new();
@@ -797,8 +891,8 @@ impl Coordinator {
                             appends.entry(id).or_default().extend(table_data);
                         }
                     }
-                    // The commit timestamp is allocated off the loop, so we record it for statement
-                    // logging once the committer reports it back.
+                    // The commit timestamp is allocated by the committer, so we record it for
+                    // statement logging once the committer reports it back.
                     if let Some(id) = ctx.extra().contents() {
                         statement_logging_ids.push(id);
                     }
@@ -845,8 +939,8 @@ impl Coordinator {
             })
             .collect();
 
-        // Hand the staged commit to the committer, which allocates the timestamp and applies it off
-        // the loop.
+        // Hand the staged commit to the committer, which allocates the timestamp and applies it
+        // off the coordinator loop.
         //
         // NOTE: We always send, even with no appends, so the committer periodically bumps the upper
         // of all tables, which is required to keep them readable at the latest oracle read ts.
@@ -860,11 +954,17 @@ impl Coordinator {
             contains_internal_system_write,
             span: Span::current(),
         };
-        if let Err(e) = self
+        if self
             .group_committer_tx
             .send(TableWriteCmd::GroupCommit(request))
+            .is_err()
         {
-            warn!("group committer task gone, dropping group commit: {e}");
+            // The committer is gone, which only happens at process shutdown. Dropping the
+            // request retires the clients with a shutdown error, see the drop backstop on
+            // `ExecuteContext`. The notify senders are dropped too, which their
+            // waiters observe as completion. We cannot signal failure through them, and the
+            // process is shutting down regardless.
+            warn!("group committer task gone, dropping staged group commit");
         }
     }
 
@@ -1098,8 +1198,8 @@ impl<'a> BuiltinTableAppend<'a> {
     /// Submit a write to a system table and trigger a group commit.
     ///
     /// Returns a `Future` that completes once the write has been applied. Does not block the
-    /// coordinator on the timestamp oracle: the write timestamp is allocated by the group committer
-    /// off the loop.
+    /// coordinator on the timestamp oracle: the write timestamp is allocated by the group
+    /// committer off the coordinator loop.
     ///
     /// Note: When in read-only mode, this buffers the update and the returned future resolves
     /// immediately, without the update actually having been written.
@@ -1356,5 +1456,206 @@ pub(crate) fn waiting_on_startup_appends(
             Some((depends_on, wait_future.boxed()))
         }
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use timely::progress::Antichain;
+
+    use super::*;
+    use crate::catalog::Catalog;
+
+    /// A minimal in-memory [`TimestampOracle`] for driving the committer in tests. Counts
+    /// `apply_write` calls so tests can assert how often the committer applies.
+    #[derive(Debug, Default)]
+    struct MemTimestampOracle {
+        read_write_ts: Mutex<(Timestamp, Timestamp)>,
+        apply_writes: AtomicUsize,
+    }
+
+    impl MemTimestampOracle {
+        fn starting_at(ts: Timestamp) -> Self {
+            Self {
+                read_write_ts: Mutex::new((ts, ts)),
+                apply_writes: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl TimestampOracle<Timestamp> for MemTimestampOracle {
+        async fn write_ts(&self) -> WriteTimestamp {
+            let (read_ts, write_ts) = &mut *self.read_write_ts.lock().expect("lock poisoned");
+            let new_write_ts = std::cmp::max(*read_ts, *write_ts).step_forward();
+            *write_ts = new_write_ts;
+            WriteTimestamp {
+                timestamp: new_write_ts,
+                advance_to: new_write_ts.step_forward(),
+            }
+        }
+
+        async fn peek_write_ts(&self) -> Timestamp {
+            let (_, write_ts) = &*self.read_write_ts.lock().expect("lock poisoned");
+            *write_ts
+        }
+
+        async fn read_ts(&self) -> Timestamp {
+            let (read_ts, _) = &*self.read_write_ts.lock().expect("lock poisoned");
+            *read_ts
+        }
+
+        async fn apply_write(&self, lower_bound: Timestamp) {
+            self.apply_writes.fetch_add(1, Ordering::SeqCst);
+            let (read_ts, write_ts) = &mut *self.read_write_ts.lock().expect("lock poisoned");
+            *read_ts = std::cmp::max(*read_ts, lower_bound);
+            *write_ts = std::cmp::max(*read_ts, *write_ts);
+        }
+    }
+
+    /// A [`TableWriteHandle`] that reports an `InvalidUppers` conflict for the first
+    /// `conflicts` calls and succeeds afterwards, recording the write timestamp of every call.
+    #[derive(Debug)]
+    struct ConflictingTableWriteHandle {
+        conflicts: usize,
+        calls: AtomicUsize,
+        write_timestamps: Mutex<Vec<Timestamp>>,
+    }
+
+    impl ConflictingTableWriteHandle {
+        fn new(conflicts: usize) -> Self {
+            Self {
+                conflicts,
+                calls: AtomicUsize::new(0),
+                write_timestamps: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn respond(&self, write_ts: Timestamp) -> oneshot::Receiver<Result<(), StorageError>> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.write_timestamps
+                .lock()
+                .expect("lock poisoned")
+                .push(write_ts);
+            let (tx, rx) = oneshot::channel();
+            let result = if call < self.conflicts {
+                Err(StorageError::InvalidUppers(vec![
+                    mz_storage_types::controller::InvalidUpper {
+                        id: GlobalId::User(1),
+                        current_upper: Antichain::from_elem(write_ts.step_forward()),
+                    },
+                ]))
+            } else {
+                Ok(())
+            };
+            tx.send(result).expect("receiver still in scope");
+            rx
+        }
+    }
+
+    impl TableWriteHandle for ConflictingTableWriteHandle {
+        fn append(
+            &self,
+            write_ts: Timestamp,
+            _advance_to: Timestamp,
+            _commands: Vec<(GlobalId, Vec<TableData>)>,
+        ) -> oneshot::Receiver<Result<(), StorageError>> {
+            self.respond(write_ts)
+        }
+
+        fn register(
+            &self,
+            register_ts: Timestamp,
+            _tables: Vec<TableRegistration>,
+        ) -> oneshot::Receiver<Result<(), StorageError>> {
+            self.respond(register_ts)
+        }
+
+        fn forget(
+            &self,
+            forget_ts: Timestamp,
+            _ids: Vec<GlobalId>,
+        ) -> oneshot::Receiver<Result<(), StorageError>> {
+            self.respond(forget_ts)
+        }
+    }
+
+    /// Tests the committer's txns-shard conflict retry protocol: on `InvalidUppers` it retries
+    /// at a fresh, strictly larger oracle timestamp, durably advances the catalog upper, and
+    /// applies the write to the oracle exactly once, for the attempt that succeeds.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_write_to_txns_conflict_retry() {
+        Catalog::with_debug(|catalog| async move {
+            // Seed the oracle from the catalog upper, so the committer's `advance_upper` calls
+            // target timestamps past the freshly bootstrapped catalog and must take the durable
+            // compare-and-append path rather than the already-covered short-circuit.
+            let initial_upper = catalog.current_upper().await;
+            let oracle = Arc::new(MemTimestampOracle::starting_at(initial_upper));
+            let handle = Arc::new(ConflictingTableWriteHandle::new(1));
+            let oracle_dyn: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =
+                Arc::<MemTimestampOracle>::clone(&oracle);
+            let handle_dyn: Arc<dyn TableWriteHandle> =
+                Arc::<ConflictingTableWriteHandle>::clone(&handle);
+            let (_tx, rx) = mpsc::unbounded_channel();
+            let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+            let committer = GroupCommitter {
+                rx,
+                oracle: oracle_dyn,
+                table_write_handle: handle_dyn,
+                catalog_upper: catalog.upper_handle(),
+                internal_cmd_tx,
+                now: SYSTEM_TIME.clone(),
+                metrics: Metrics::register_into(&MetricsRegistry::new()),
+            };
+
+            let write_ts = committer
+                .write_to_txns(None, |ts, advance_to| {
+                    assert_eq!(advance_to, ts.step_forward());
+                    handle.append(ts, advance_to, Vec::new())
+                })
+                .await
+                .expect("worker stays alive in this test");
+
+            let attempts = handle
+                .write_timestamps
+                .lock()
+                .expect("lock poisoned")
+                .clone();
+            assert_eq!(attempts.len(), 2, "one conflict, one success");
+            assert!(
+                attempts[0] > initial_upper,
+                "attempts start past the initial catalog upper: {attempts:?} vs {initial_upper}"
+            );
+            assert!(
+                attempts[0] < attempts[1],
+                "retry must use a fresh, larger timestamp: {attempts:?}"
+            );
+            assert_eq!(write_ts.timestamp, attempts[1]);
+
+            // The write was applied to the oracle exactly once, and the successful timestamp is
+            // readable.
+            assert_eq!(oracle.apply_writes.load(Ordering::SeqCst), 1);
+            assert_eq!(oracle.read_ts().await, write_ts.timestamp);
+
+            // The catalog upper was durably advanced to (at least) the successful attempt's
+            // `advance_to`, which started beyond the bootstrap upper, so this fails if
+            // `write_to_txns` stops advancing the catalog upper.
+            let catalog_upper = catalog.current_upper().await;
+            assert!(
+                catalog_upper >= write_ts.advance_to,
+                "catalog upper {catalog_upper} must cover the write's advance_to {}",
+                write_ts.advance_to
+            );
+
+            catalog.expire().await;
+        })
+        .await;
     }
 }

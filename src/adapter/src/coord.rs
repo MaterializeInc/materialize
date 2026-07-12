@@ -354,14 +354,15 @@ pub enum Message {
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
-    /// Finalizes a group commit that the committer applied off the loop. The committer does the
-    /// oracle round trips, table append, oracle write application, and catalog upper advancement off
-    /// the loop, then hands back the cheap work that needs coordinator state: record statement
+    /// Finalizes a group commit that the committer applied off the coordinator loop. The
+    /// committer does the oracle round trips, table append, oracle write application, and
+    /// catalog upper advancement, then hands back the cheap work that needs coordinator state:
+    /// record statement
     /// execution timestamps, retire client responses, and downgrade local read holds.
     ///
     /// NOTE: Statement timestamps must be recorded before the responses are retired, because
     /// retiring ends the statement execution and drops its logging record. That is why retiring
-    /// happens here on the loop rather than in the committer.
+    /// happens here on the coordinator loop rather than in the committer.
     GroupCommitApplied {
         /// Client responses to retire, once statement timestamps are recorded.
         responses: Vec<crate::util::CompletedClientTransmitter>,
@@ -1643,21 +1644,51 @@ impl Drop for ExecuteContextGuard {
 /// (e.g., recording the time at which the statement finished
 /// executing). The state necessary to perform this work is bundled in
 /// the `ExecuteContextGuard` object.
+///
+/// Dropping one without calling [`Self::retire`] (or [`Self::into_parts`]) retires the client
+/// with an error instead. That backstop matters because contexts travel through queues and
+/// tasks (the group committer, internal messages): at process shutdown they get dropped
+/// wherever they are, and a raw drop would panic in `ClientTransmitter::drop`, and a panic
+/// inside a destructor aborts the process.
 #[derive(Debug)]
 pub struct ExecuteContext {
-    inner: Box<ExecuteContextInner>,
+    // `None` only after `retire`/`into_parts` consumed the context.
+    inner: Option<Box<ExecuteContextInner>>,
 }
 
 impl std::ops::Deref for ExecuteContext {
     type Target = ExecuteContextInner;
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        self.inner.as_ref().expect("only consumed by value")
     }
 }
 
 impl std::ops::DerefMut for ExecuteContext {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.inner
+        self.inner.as_mut().expect("only consumed by value")
+    }
+}
+
+impl Drop for ExecuteContext {
+    fn drop(&mut self) {
+        let Some(inner) = self.inner.take() else {
+            return;
+        };
+        // We were dropped without `retire`. That legitimately happens at process shutdown,
+        // when queues and tasks holding contexts get dropped with executions still in flight.
+        // Anywhere else it is a bug (a response silently never sent), which the warning below
+        // keeps visible. Retire the client with an error, fully synchronously: we bypass
+        // `retire` because it can spawn a task (response barriers), which must not happen in a
+        // destructor during runtime shutdown. The dropped `extra` guard best-effort-reports the
+        // retirement for statement logging.
+        tracing::warn!("execute context dropped without retirement, failing the client");
+        let ExecuteContextInner { tx, session, .. } = *inner;
+        tx.send(
+            Err(AdapterError::Internal(
+                "statement execution abandoned, outcome unknown (server shutting down)".into(),
+            )),
+            session,
+        );
     }
 }
 
@@ -1706,14 +1737,16 @@ impl ExecuteContext {
         response_barriers: Vec<BuiltinTableAppendNotify>,
     ) -> Self {
         Self {
-            inner: ExecuteContextInner {
-                tx,
-                session,
-                extra,
-                response_barriers,
-                internal_cmd_tx,
-            }
-            .into(),
+            inner: Some(
+                ExecuteContextInner {
+                    tx,
+                    session,
+                    extra,
+                    response_barriers,
+                    internal_cmd_tx,
+                }
+                .into(),
+            ),
         }
     }
 
@@ -1727,7 +1760,7 @@ impl ExecuteContext {
     /// eventual retirement. The returned response barriers must stay attached
     /// to the user-visible response path.
     pub fn into_parts(
-        self,
+        mut self,
     ) -> (
         ClientTransmitter<ExecuteResponse>,
         mpsc::UnboundedSender<Message>,
@@ -1741,20 +1774,20 @@ impl ExecuteContext {
             session,
             extra,
             response_barriers,
-        } = *self.inner;
+        } = *self.inner.take().expect("only consumed by value");
         (tx, internal_cmd_tx, session, extra, response_barriers)
     }
 
     /// Retire the execution, by sending a message to the coordinator.
     #[instrument(level = "debug")]
-    pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
+    pub fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
         let ExecuteContextInner {
             tx,
             internal_cmd_tx,
             session,
             extra,
             response_barriers,
-        } = *self.inner;
+        } = *self.inner.take().expect("only consumed by value");
         if response_barriers.is_empty() {
             retire_execution_context(tx, internal_cmd_tx, session, extra, result);
         } else {
@@ -2006,7 +2039,7 @@ pub struct Coordinator {
     reconcile_now: Arc<Notify>,
     /// Hands staged group commits and DDL table registration/forgetting to the
     /// [`appends::GroupCommitter`] task, the single in-process writer to the txns shard, which
-    /// allocates timestamps and applies the writes off the loop.
+    /// allocates timestamps and applies the writes off the coordinator loop.
     group_committer_tx: mpsc::UnboundedSender<appends::TableWriteCmd>,
 
     /// Channel for strict serializable reads ready to commit.
@@ -3126,8 +3159,8 @@ impl Coordinator {
 
         info!("coordinator init: sending builtin table updates");
         let builtin_updates_fut = self.builtin_table_update().execute(builtin_table_updates);
-        // Wait for the committer to apply the write off the loop, so the builtin tables are readable
-        // before we start serving. The committer allocates the timestamp and advances the oracle.
+        // Wait for the committer to apply the write, so the builtin tables are readable before
+        // we start serving. The committer allocates the timestamp and advances the oracle.
         builtin_updates_fut.await;
     }
 
@@ -5136,7 +5169,8 @@ pub fn serve(
                     persist_client,
                 };
 
-                // Spawn the group committer, which applies txns-shard writes off the loop. It holds
+                // Spawn the group committer, which applies txns-shard writes off the
+                // coordinator loop. It holds
                 // handles that stay valid for the process lifetime: the oracle is never replaced
                 // in-process, and the table write handle lives as long as the controller. Promotion
                 // out of read-only mode is a process restart, so a fresh committer is spawned then.

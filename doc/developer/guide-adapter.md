@@ -213,7 +213,8 @@ compare-and-append. It is a time-of-check to time-of-use gap.
 
 - It is safe today only by the fragile accident that the coordinator loop does
   not yield between the check and the durable commit. Any await later inserted
-  between them, or any move of the check off the loop, reopens the race.
+  between them, or any move of the check off the coordinator loop, reopens
+  the race.
 - It does not hold across writers. Another `environmentd` that commits a
   conflicting change to the durable store between this node's in-memory check and
   its durable commit is not detected. The durable layer does not re-validate a
@@ -222,7 +223,8 @@ compare-and-append. It is a time-of-check to time-of-use gap.
 
 If you need conflict detection, evaluate the precondition atomically with the
 commit, a real compare-and-append against the durable store. A check that merely
-precedes the write on the loop is not that, even when it reads the right state.
+precedes the write on the coordinator loop is not that, even when it reads the
+right state.
 
 ### Catalog mutations must bump the transient revision or stay invisible
 
@@ -246,9 +248,10 @@ shard to write to and panics, and only queue order provides this (DROP TABLE
 takes no write locks). Single-writer also makes in-process txns-shard
 conflicts impossible, so `InvalidUppers` from the worker always means another
 process wrote the shard, handled by retrying at a fresh oracle timestamp.
-Bootstrap's `register_table_collections` is the one exception, safe because
-nothing else runs during bootstrap. The catalog shard's analogous conflict
-protocol lives in the compare-and-append itself (`commit_transaction` and
+Bootstrap is the one exception (`register_table_collections` and its direct
+table appends), safe because nothing else runs during bootstrap. The catalog
+shard's analogous conflict protocol lives in the compare-and-append itself
+(`commit_transaction` and
 `advance_upper` in `src/catalog/src/durable/persist.rs`): empty progress is
 rebased over, foreign content surfaces as the graceful `CatalogOutOfSync`.
 Full protocol in the module docs of `src/adapter/src/coord/appends.rs`.

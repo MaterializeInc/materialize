@@ -36,9 +36,8 @@ use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Conf
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{
-    BootstrapArgs, DurableCatalogState, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
-    TestCatalogStateBuilder, USER_CLUSTER_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
-    USER_REPLICA_ID_ALLOC_KEY, test_bootstrap_args,
+    BootstrapArgs, DurableCatalogState, STORAGE_USAGE_ID_ALLOC_KEY, TestCatalogStateBuilder,
+    test_bootstrap_args,
 };
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -622,20 +621,18 @@ impl Catalog {
         self.storage().await.current_upper().await
     }
 
+    /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`], delegating to
+    /// [`DurableCatalogState::allocate_user_id`].
     pub async fn allocate_user_id(
         &self,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<(CatalogItemId, GlobalId), Error> {
-        use mz_ore::collections::CollectionExt;
-
-        let ids = self
+        Ok(self
             .storage()
             .await
-            .allocate_id(USER_ITEM_ALLOC_KEY, 1, commit_ts)
+            .allocate_user_id(commit_ts)
             .await
-            .maybe_terminate("allocating user ids")?;
-        let id = ids.into_element();
-        Ok((CatalogItemId::User(id), GlobalId::User(id)))
+            .maybe_terminate("allocating user ids")?)
     }
 
     /// Allocate `amount` many user IDs. See [`DurableCatalogState::allocate_user_ids`].
@@ -644,16 +641,12 @@ impl Catalog {
         amount: u64,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, Error> {
-        let ids = self
+        Ok(self
             .storage()
             .await
-            .allocate_id(USER_ITEM_ALLOC_KEY, amount, commit_ts)
+            .allocate_user_ids(amount, commit_ts)
             .await
-            .maybe_terminate("allocating user ids")?;
-        Ok(ids
-            .iter()
-            .map(|id| (CatalogItemId::User(*id), GlobalId::User(*id)))
-            .collect())
+            .maybe_terminate("allocating user ids")?)
     }
 
     pub async fn allocate_user_id_for_test(&self) -> Result<(CatalogItemId, GlobalId), Error> {
@@ -720,20 +713,18 @@ impl Catalog {
             .err_into()
     }
 
+    /// Allocates and returns a user [`ClusterId`], delegating to
+    /// [`DurableCatalogState::allocate_user_cluster_id`].
     pub async fn allocate_user_cluster_id(
         &self,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<ClusterId, Error> {
-        use mz_ore::collections::CollectionExt;
-
-        let ids = self
+        Ok(self
             .storage()
             .await
-            .allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1, commit_ts)
+            .allocate_user_cluster_id(commit_ts)
             .await
-            .maybe_terminate("allocating user cluster ids")?;
-        let id = ids.into_element();
-        Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
+            .maybe_terminate("allocating user cluster ids")?)
     }
 
     /// Allocate `amount` many user replica IDs. See
@@ -743,13 +734,12 @@ impl Catalog {
         amount: u64,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<Vec<ReplicaId>, Error> {
-        let ids = self
+        Ok(self
             .storage()
             .await
-            .allocate_id(USER_REPLICA_ID_ALLOC_KEY, amount, commit_ts)
+            .allocate_user_replica_ids(amount, commit_ts)
             .await
-            .maybe_terminate("allocating user replica ids")?;
-        Ok(ids.into_iter().map(ReplicaId::User).collect())
+            .maybe_terminate("allocating user replica ids")?)
     }
 
     /// Allocate `amount` many system replica IDs. See
@@ -759,13 +749,12 @@ impl Catalog {
         amount: u64,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<Vec<ReplicaId>, Error> {
-        let ids = self
+        Ok(self
             .storage()
             .await
-            .allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, amount, commit_ts)
+            .allocate_system_replica_ids(amount, commit_ts)
             .await
-            .maybe_terminate("allocating system replica ids")?;
-        Ok(ids.into_iter().map(ReplicaId::System).collect())
+            .maybe_terminate("allocating system replica ids")?)
     }
 
     /// Allocate `amount` many replica IDs for `cluster_id`, picking user or
@@ -1185,8 +1174,9 @@ impl Catalog {
     /// Advances the catalog upper to at least `new_upper`, tolerating an upper that is already
     /// past it.
     ///
-    /// A no-op when the catalog upper already reached `new_upper`: the group committer allocates
-    /// its write timestamp off the loop, so by the time it advances the catalog upper to match,
+    /// A no-op when the catalog upper already reached `new_upper`: the group committer
+    /// allocates its write timestamp off the coordinator loop, so by the time it advances the
+    /// catalog upper to match,
     /// an on-loop catalog transaction may already have advanced it past that timestamp. Content
     /// committed by another writer in between surfaces as a `CatalogOutOfSync` error, on which we
     /// must restart and rebuild from durable state.

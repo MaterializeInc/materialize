@@ -633,14 +633,11 @@ impl Coordinator {
         // committer is the single in-process txns-shard writer, so the forget is ordered after
         // all staged appends (a staged INSERT into a table being dropped still lands before the
         // forget), and conflicts with concurrent processes are retried there.
-        let forget_ids: Vec<_> = self
+        let forget_ids = self
             .controller
             .storage
-            .table_registrations(table_gids.clone())
-            .unwrap_or_terminate("cannot fail to look up table registrations")
-            .into_iter()
-            .map(|registration| registration.id)
-            .collect();
+            .txns_table_ids(table_gids.clone())
+            .unwrap_or_terminate("cannot fail to look up txns-registered tables");
         if !forget_ids.is_empty() {
             self.forget_tables_via_committer(forget_ids).await;
         }
@@ -746,8 +743,8 @@ impl Coordinator {
         // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
         // before telling the subscribing client that the sink is gone. The returned notify
         // lets statements that caused the retirement also wait before sending their response.
-        // The wait must not happen on the loop, since that would block every other session
-        // on the group-commit oracle round trip.
+        // The wait must not happen on the coordinator loop, since that would block every
+        // other session on the group-commit oracle round trip.
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         task::spawn(|| "retire_compute_sinks", async move {
             for (sink, write_notify, reason) in to_retire {

@@ -7250,3 +7250,49 @@ fn test_inject_audit_events_malformed() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+// Regression test for a shutdown abort: dropping the server while user INSERTs are in flight
+// used to drop un-retired `CompletedClientTransmitter`s, queued in `GroupCommitApplied`
+// messages that the coordinator loop never received. Dropping one panics in
+// `ClientTransmitter::drop`, and a panic in a destructor aborts the process, so this test's
+// only assertion is surviving the rounds.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_shutdown_with_inflight_writes() {
+    for round in 0..3 {
+        let server = test_util::TestHarness::default().start_blocking();
+        {
+            let mut client = server.connect(postgres::NoTls).unwrap();
+            client.batch_execute("CREATE TABLE t (a int)").unwrap();
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let pg_config = server.pg_config();
+            let stop = Arc::clone(&stop);
+            handles.push(thread::spawn(move || {
+                let Ok(mut client) = pg_config.connect(postgres::NoTls) else {
+                    return;
+                };
+                while !stop.load(Ordering::Relaxed) {
+                    // Errors are expected once the server goes away.
+                    if client.batch_execute("INSERT INTO t VALUES (1)").is_err() {
+                        return;
+                    }
+                }
+            }));
+        }
+
+        // Let the insert threads get going, then shut the server down under write load.
+        thread::sleep(Duration::from_millis(500));
+        drop(server);
+
+        stop.store(true, Ordering::Relaxed);
+        for handle in handles {
+            let _ = handle.join();
+        }
+        tracing::info!("round {round} survived");
+    }
+}

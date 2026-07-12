@@ -143,15 +143,7 @@ impl Coordinator {
         timestamp: Timestamp,
     ) -> impl Future<Output = ()> + Send + 'static {
         let now = self.now().into();
-
-        let upper_bound = upper_bound(&now);
-        if timestamp > upper_bound {
-            error!(
-                %now,
-                "Setting local read timestamp to {timestamp}, which is more than \
-                the desired upper bound {upper_bound}."
-            );
-        }
+        check_runaway_write_ts(&now, timestamp);
 
         let oracle = self.get_local_timestamp_oracle();
 
@@ -279,14 +271,38 @@ impl Coordinator {
         became_empty
     }
 
-    #[instrument(level = "debug")]
-    /// Downgrades read holds on all timelines to the current read ts.
+    /// Downgrades the [`EpochMilliseconds`](Timeline::EpochMilliseconds) timeline's read holds
+    /// to `read_ts`.
     ///
-    /// For the [`EpochMilliseconds`](Timeline::EpochMilliseconds) timeline, the group committer
-    /// applies writes off the loop and passes the resulting `local_read_ts` in, so we downgrade to
-    /// it without a round trip. When it is `None` (read-only mode, driven by the periodic tick) we
-    /// read the ts from the oracle here. Other timelines are advanced from their objects' uppers.
-    pub(crate) async fn advance_timelines(&mut self, local_read_ts: Option<Timestamp>) {
+    /// `read_ts` must not exceed the local oracle's read frontier, i.e. it must come from the
+    /// oracle's `read_ts()` or from a write that was already applied with `apply_write`.
+    /// Downgrading past the oracle's read frontier could let compaction pass timestamps the
+    /// oracle can still serve reads at.
+    pub(crate) fn downgrade_local_read_holds(&mut self, read_ts: Timestamp) {
+        let TimelineState { read_holds, .. } = self
+            .global_timelines
+            .get_mut(&Timeline::EpochMilliseconds)
+            .expect("no realtime timeline");
+        read_holds.downgrade(read_ts);
+    }
+
+    /// Advances all timelines other than [`EpochMilliseconds`](Timeline::EpochMilliseconds) to
+    /// their objects' uppers and downgrades their read holds accordingly.
+    ///
+    /// The `EpochMilliseconds` oracle is advanced by group commits, so it is not touched here.
+    /// Its read holds are downgraded separately via [`Self::downgrade_local_read_holds`].
+    #[instrument(level = "debug")]
+    pub(crate) async fn advance_custom_timelines(&mut self) {
+        // Common case: only the EpochMilliseconds timeline exists, nothing to do.
+        if !self
+            .global_timelines
+            .keys()
+            .any(|timeline| *timeline != Timeline::EpochMilliseconds)
+        {
+            return;
+        }
+
+        // Take the map so we can call `&self` methods while mutating the timeline states.
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (
             timeline,
@@ -296,37 +312,34 @@ impl Coordinator {
             },
         ) in global_timelines
         {
-            let read_ts = if timeline == Timeline::EpochMilliseconds {
-                // The EpochMilliseconds timeline is advanced by group commits, not here.
-                match local_read_ts {
-                    Some(read_ts) => read_ts,
-                    None => oracle.read_ts().await,
-                }
-            } else {
-                if !self.read_only_controllers {
-                    // For non realtime sources, we define now as the largest timestamp, not in
-                    // advance of any object's upper. This is the largest timestamp that is closed
-                    // to writes.
-                    let id_bundle = self.catalog().ids_in_timeline(&timeline);
+            if timeline == Timeline::EpochMilliseconds {
+                self.global_timelines
+                    .insert(timeline, TimelineState { oracle, read_holds });
+                continue;
+            }
+            if !self.read_only_controllers {
+                // For non realtime sources, we define now as the largest timestamp, not in
+                // advance of any object's upper. This is the largest timestamp that is closed
+                // to writes.
+                let id_bundle = self.catalog().ids_in_timeline(&timeline);
 
-                    // Advance the timeline if-and-only-if there are objects in it.
-                    // Otherwise we'd advance to the empty frontier, meaning we
-                    // close it off for ever.
-                    if !id_bundle.is_empty() {
-                        let least_valid_write = self.least_valid_write(&id_bundle);
-                        let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
-                        oracle.apply_write(now).await;
-                        debug!(
-                            least_valid_write = ?least_valid_write,
-                            oracle_read_ts = ?oracle.read_ts().await,
-                            "advanced {:?} to {}",
-                            timeline,
-                            now,
-                        );
-                    }
+                // Advance the timeline if-and-only-if there are objects in it.
+                // Otherwise we'd advance to the empty frontier, meaning we
+                // close it off for ever.
+                if !id_bundle.is_empty() {
+                    let least_valid_write = self.least_valid_write(&id_bundle);
+                    let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
+                    oracle.apply_write(now).await;
+                    debug!(
+                        least_valid_write = ?least_valid_write,
+                        oracle_read_ts = ?oracle.read_ts().await,
+                        "advanced {:?} to {}",
+                        timeline,
+                        now,
+                    );
                 }
-                oracle.read_ts().await
-            };
+            }
+            let read_ts = oracle.read_ts().await;
             read_holds.downgrade(read_ts);
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
@@ -341,6 +354,20 @@ fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
     const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
 
     now.saturating_add(TIMESTAMP_INTERVAL_MS * TIMESTAMP_INTERVAL_UPPER_BOUND)
+}
+
+/// Logs an error when `timestamp` is further ahead of `now` than a local write timestamp
+/// should ever be, the signal that the `EpochMilliseconds` timeline has run away (e.g. after a
+/// wall-clock regression).
+pub(crate) fn check_runaway_write_ts(now: &mz_repr::Timestamp, timestamp: mz_repr::Timestamp) {
+    let upper_bound = upper_bound(now);
+    if timestamp > upper_bound {
+        error!(
+            %now,
+            "Setting local read timestamp to {timestamp}, which is more than \
+            the desired upper bound {upper_bound}."
+        );
+    }
 }
 
 /// Return the set of ids in a timedomain and verify timeline correctness.

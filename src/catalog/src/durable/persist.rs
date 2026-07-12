@@ -479,6 +479,29 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         Ok(())
     }
 
+    /// Classifies an [`UpperMismatch`] from a compare-and-append attempt: pure empty progress
+    /// (safe to rebase over and retry) returns `Ok(())`, foreign content returns the graceful
+    /// [`DurableCatalogError::CatalogOutOfSync`].
+    ///
+    /// `updates_applied_before` must be captured from `self.updates_applied` before the attempt.
+    /// The compare-and-append syncs the handle to the current upper on mismatch, so any raw
+    /// update applied since means another writer committed content this handle's owner has not
+    /// planned against.
+    fn classify_upper_mismatch(
+        &self,
+        updates_applied_before: u64,
+        actual_upper: Timestamp,
+    ) -> Result<(), DurableCatalogError> {
+        if self.updates_applied != updates_applied_before {
+            Err(DurableCatalogError::CatalogOutOfSync {
+                update_count: usize::cast_from(self.updates_applied - updates_applied_before),
+                upper: actual_upper,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
     /// catalog state up to, and including, `as_of`.
     #[mz_ore::instrument]
@@ -1844,19 +1867,12 @@ impl DurableCatalogState for PersistCatalogState {
                         Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
                         Err(CompareAndAppendError::UpperMismatch { actual_upper, .. }) => {
                             // Another writer got in between our snapshot of the upper and the
-                            // compare-and-append. `compare_and_append_inner` synced us to the
-                            // current upper. Zero applied updates means pure empty progress, so
-                            // we rebase the commit timestamp and retry. Anything else means the
-                            // transaction was planned against stale state.
-                            if catalog.updates_applied != updates_applied_before {
-                                return Err(DurableCatalogError::CatalogOutOfSync {
-                                    update_count: usize::cast_from(
-                                        catalog.updates_applied - updates_applied_before,
-                                    ),
-                                    upper: actual_upper,
-                                }
-                                .into());
-                            }
+                            // compare-and-append, which synced us to the current upper. Empty
+                            // progress means we can rebase the commit timestamp and retry,
+                            // foreign content means the transaction was planned against stale
+                            // state.
+                            catalog
+                                .classify_upper_mismatch(updates_applied_before, actual_upper)?;
                             commit_ts = max(commit_ts, catalog.upper);
                         }
                     }
@@ -1889,7 +1905,12 @@ impl DurableCatalogState for PersistCatalogState {
         loop {
             if self.upper >= new_upper {
                 // Someone (an on-loop catalog transaction, or another process) already advanced
-                // the upper to or past `new_upper`. Advancing is "to at least", so nothing to do.
+                // the upper to or past `new_upper`. Advancing is "to at least", so nothing to
+                // write. The short-circuit must not mask a fence though: a sync since the last
+                // durable check may have observed a new generation's fence token (and bumped the
+                // cached upper past our target at the same time), and callers rely on the
+                // advance to re-check leadership before user data is written.
+                self.fenceable_token.validate()?;
                 return Ok(());
             }
 
@@ -1916,22 +1937,11 @@ impl DurableCatalogState for PersistCatalogState {
                 }
                 Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
                 Err(CompareAndAppendError::UpperMismatch { actual_upper, .. }) => {
-                    // Another writer advanced the shard between our snapshot of the upper and the
-                    // compare-and-append. `compare_and_append_inner` already synced us to the
-                    // current upper. If that sync applied any updates, the other writer committed
-                    // content we have not planned against, and the caller must rebuild from
-                    // durable state. If it applied none, the interval was pure empty progress
-                    // (e.g. another upper bump) and we can simply re-evaluate against the new
-                    // upper.
-                    if self.updates_applied != updates_applied_before {
-                        return Err(DurableCatalogError::CatalogOutOfSync {
-                            update_count: usize::cast_from(
-                                self.updates_applied - updates_applied_before,
-                            ),
-                            upper: actual_upper,
-                        }
-                        .into());
-                    }
+                    // Another writer advanced the shard between our snapshot of the upper and
+                    // the compare-and-append, which synced us to the current upper. Empty
+                    // progress means we simply re-evaluate against the new upper, foreign
+                    // content means the caller must rebuild from durable state.
+                    self.classify_upper_mismatch(updates_applied_before, actual_upper)?;
                 }
             }
         }

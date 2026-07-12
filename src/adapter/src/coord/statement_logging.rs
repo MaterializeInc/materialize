@@ -572,12 +572,27 @@ impl Coordinator {
         });
     }
 
-    /// Set the `execution_timestamp` for a statement, once it's known
+    /// Set the `execution_timestamp` for a statement, once it's known.
+    ///
+    /// Unlike the other record mutations, this tolerates the execution having already ended.
+    /// Group commit records the timestamp asynchronously, after the write is durable, and the
+    /// end sink deliberately tolerates duplicate ends (see `end_statement_execution`). If a
+    /// duplicate end ever ends one of these executions early, this update is a lost update on a
+    /// record whose ended row was already emitted, not corruption, so we warn instead of
+    /// panicking.
     pub(crate) fn set_statement_execution_timestamp(
         &mut self,
         id: StatementLoggingId,
         timestamp: Timestamp,
     ) {
+        let StatementLoggingId(uuid) = id;
+        if !self.statement_logging.executions_begun.contains_key(&uuid) {
+            tracing::warn!(
+                statement_uuid = %uuid,
+                "execution already ended, skipping execution timestamp update",
+            );
+            return;
+        }
         self.mutate_record(id, |record| {
             record.execution_timestamp = Some(u64::from(timestamp));
         });

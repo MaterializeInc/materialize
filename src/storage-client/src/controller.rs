@@ -630,6 +630,14 @@ pub trait StorageController: Debug {
         ids: Vec<GlobalId>,
     ) -> Result<Vec<TableRegistration>, StorageError>;
 
+    /// Returns the subset of `ids` that are `DataSource::Table` collections, i.e. the ones
+    /// written via the txns table-write path and registered in the txns shard.
+    ///
+    /// Like [`Self::table_registrations`], non-table collections among `ids` are silently
+    /// skipped, so callers can pass all the table catalog items they have without pre-filtering.
+    /// Use this to decide which collections need a txns-shard forget on drop.
+    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError>;
+
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError>;
 

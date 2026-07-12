@@ -127,11 +127,17 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 // The committer applied `write_ts` to the oracle, so the read ts is at least
-                // that and we can downgrade read holds without an oracle round trip.
-                self.advance_timelines(Some(write_ts)).boxed_local().await;
+                // that and we can downgrade the local read holds without an oracle round trip.
+                self.downgrade_local_read_holds(write_ts);
+                self.advance_custom_timelines().boxed_local().await;
             }
             Message::AdvanceTimelines => {
-                self.advance_timelines(None).boxed_local().await;
+                // Only sent by the periodic tick in read-only mode, where group commits (which
+                // otherwise drive the local timeline) don't run. Fetch the oracle's read ts here,
+                // it is the freshest timestamp the read holds may downgrade to.
+                let read_ts = self.get_local_read_ts().await;
+                self.downgrade_local_read_holds(read_ts);
+                self.advance_custom_timelines().boxed_local().await;
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
